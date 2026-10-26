@@ -1609,3 +1609,67 @@ tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
   .tf-sub { grid-template-columns: minmax(0, 1fr) auto 52px; } .tf-sub .tf-who { display: none; }
   .tf-subs { padding-left: 14px; }
 }
+
+/* ── 🆕 НОВА ЗАДАЧА — КОМПАКТНИЙ ДІАЛОГ (варіант А, 26.10.2026) ── */
+.tc-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 2000; display: flex; align-items: flex-start; justify-content: center;
+  padding: 60px 16px; overflow-y: auto; }
+.tc { width: 100%; max-width: 640px; background: var(--card-bg); color: var(--text); border-radius: 16px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
+  padding: 18px 20px; display: grid; gap: 14px; }
+.tc-top { display: flex; align-items: center; gap: 10px; }
+.tc-h { font-size: 17px; }
+.tc-x { margin-left: auto; border: 0; background: none; font-size: 22px; line-height: 1; color: var(--text-muted); cursor: pointer; }
+.tc-seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px;
+  background: color-mix(in srgb, var(--text-muted) 7%, var(--card-bg)); }
+.tc-seg button { border: 0; background: transparent; border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 14px; cursor: pointer; color: var(--text-muted); }
+.tc-seg button[aria-pressed="true"] { background: var(--card-bg); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); }
+.tc-seg button.goal[aria-pressed="true"] { color: #4f46e5; }
+.tc-sub { display: flex; align-items: center; gap: 8px; font-size: 14px; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, #4f46e5 9%, var(--card-bg)); }
+.tc-sub button { margin-left: auto; border: 0; background: none; color: var(--text-muted); cursor: pointer; }
+.tc-title { width: 100%; border: 0; background: transparent; color: var(--text); font-family: inherit; font-size: 19px; font-weight: 600; line-height: 1.35;
+  resize: vertical; min-height: 56px; outline: none; padding: 2px 0; }
+.tc-title::placeholder { color: var(--text-muted); font-weight: 500; }
+.tc-res { display: grid; gap: 5px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, #4f46e5 8%, var(--card-bg)); }
+.tc-res label { font-size: 13px; font-weight: 600; color: #4f46e5; }
+.tc-req { font-weight: 500; color: var(--brand); margin-left: 4px; }
+.tc-res input { border: 1px solid color-mix(in srgb, #4f46e5 40%, transparent); border-radius: 8px; padding: 8px 10px; background: var(--card-bg); color: var(--text); font: inherit; }
+.tc-res input.bad { border-color: var(--brand); }
+.tc-hint { font-size: 13px; color: var(--brand); }
+.tc-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.tc-anchor { position: relative; }
+.tc-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);
+  border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 14px; cursor: pointer; white-space: nowrap; }
+.tc-chip:hover { border-color: var(--text-muted); }
+.tc-chip.set { background: color-mix(in srgb, var(--text-muted) 10%, var(--card-bg)); font-weight: 600; }
+.tc-chip.req { border-style: dashed; border-color: var(--brand); color: var(--brand); }
+.tc-ava { width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, #4f46e5 14%, var(--card-bg)); color: #4f46e5;
+  font-size: 10px; font-weight: 700; display: inline-grid; place-items: center; flex: 0 0 auto; }
+.tc-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 10; width: 290px; background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18); padding: 8px; display: grid; gap: 4px; }
+.tc-pop-sm { width: 180px; }
+.tc-search { border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 14px; background: var(--card-bg); color: var(--text); }
+.tc-scroll { max-height: 300px; overflow-y: auto; display: grid; gap: 1px; }
+.tc-grp { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); padding: 8px 8px 3px; }
+.tc-it { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; color: var(--text);
+  font: inherit; font-size: 14px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+.tc-it:hover { background: color-mix(in srgb, var(--text-muted) 10%, transparent); }
+.tc-empty { margin: 6px 8px; font-size: 13px; color: var(--text-muted); }
+.tc-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tc-dates button { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: 8px; padding: 7px 8px; font: inherit;
+  font-size: 13px; cursor: pointer; text-align: left; }
+.tc-dates button small { color: var(--text-muted); }
+.tc-dates button.on, .tc-dates button:hover { border-color: var(--text-muted); }
+.tc-cal { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); padding: 4px 2px; }
+.tc-morebtn { justify-self: start; border: 0; background: none; color: var(--text-muted); font: inherit; font-size: 14px; cursor: pointer; padding: 0; }
+.tc-morebtn:hover { color: var(--text); }
+.tc-more { display: grid; gap: 10px; }
+.tc-more label { display: grid; gap: 4px; font-size: 13px; color: var(--text-muted); }
+.tc-more textarea, .tc-more select { font-family: inherit; font-size: 14px; color: var(--text); }
+.tc-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 12px; }
+.tc-spacer { flex: 1; }
+.tc-kbd { font-size: 12px; color: var(--text-muted); }
+.tc-why { font-size: 13px; color: var(--brand); }
+.tc-btn { border-radius: 10px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+.tc-btn.ghost { border: 1px solid var(--border); background: transparent; color: var(--text); }
+.tc-btn.pri { border: 0; background: var(--brand); color: #fff; }
+.tc-btn.pri:disabled { background: color-mix(in srgb, var(--text-muted) 22%, var(--card-bg)); color: var(--text-muted); cursor: not-allowed; }
+@media (max-width: 600px) { .tc { padding: 14px; } .tc-kbd { display: none; } .tc-pop { width: min(290px, 80vw); } }

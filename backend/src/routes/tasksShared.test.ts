@@ -820,10 +820,14 @@ test("#400s СПІЛЬНА ЗАДАЧА: кнопка без підстанов�
   assert.match(src, /🤝 Поставити задачу/, "🔴 кнопки «Поставити задачу» на вкладці «Спільні» немає");
   assert.match(src, /setSharedIntent\(true\); setTaskForm\(\{ \.\.\.emptyTaskForm \}\)/,
     "🔴 «Поставити задачу» підставляє автора виконавцем — зі «Спільних» знову створюється задача собі");
-  assert.match(src, /Спільна задача — кому ставите\?/, "🔴 форма не каже, що зараз ставиш задачу комусь");
-  assert.match(src, /value=\{taskForm\.assigneeUserId\}/, "🔴 у формі створення немає селекта акаунта (HR, бухгалтерія)");
-  assert.match(src, /sharedIntent && taskForm\.assigneeId === "" && taskForm\.assigneeUserId === ""/,
-    "🔴 зі «Спільних» можна створити задачу без виконавця — тобто собі, мовчки");
+  // 🆕 26.10.2026 форма створення переїхала в `TaskCreateDialog.tsx` (варіант А) — твердження те саме,
+  // будову звіряємо там, де вона тепер живе.
+  const dlg = codeOf("pages", "dashboard", "sections", "TaskCreateDialog.tsx");
+  assert.match(src, /sharedIntent=\{sharedIntent\}/, "🔴 діалог не знає, що задачу ставлять зі «Спільних»");
+  assert.match(dlg, /Спільна задача — кому ставите\?/, "🔴 форма не каже, що зараз ставиш задачу комусь");
+  assert.match(dlg, /\? \{ \.\.\.f, assigneeUserId: p\.id, assigneeId: "", assigneeId2: "" \}/, "🔴 у формі створення не можна обрати акаунт (HR, бухгалтерія)");
+  assert.match(dlg, /const missing = formMissing\(form, \{ sharedIntent \}\);/, "🔴 «чого бракує» не знає про «Спільні»");
+  assert.match(dlg, /disabled=\{missing\.length > 0\}/, "🔴 кнопка створення не зважає на те, чого бракує");
   // Форма справді шле акаунт — контейнер має гілку.
   const cont = codeOf("pages", "Dashboard.tsx");
   assert.match(cont, /assigneeUserId: Number\(taskForm\.assigneeUserId\)/, "🔴 обраний акаунт не доїжджає до POST /tasks");
@@ -955,8 +959,14 @@ test("#493 СЕЛЕКТ ВИКОНАВЦЯ: моя команда першою, 
   assert.ok(!teamGroups(opts, 14, 2).flatMap(([, ms]) => ms).some((m) => m.id === 2), "🔴 skipId не вирізає першого виконавця");
 
   const src = codeOf("pages", "dashboard", "sections", "TasksSection.tsx");
+  // 🆕 26.10.2026 вибір виконавця у формі створення — пошуковий список діалогу (`TaskCreateDialog.tsx`),
+  // і він бере ТІ САМІ групи `teamGroups` (моя команда першою). Селекти з групуванням лишились у формі
+  // KPI-плану, картці й клітинці рядка.
   const groups = src.split("<AssigneeOptgroups options=").length - 1;
-  assert.ok(groups >= 4, `🔴 селектів виконавця з групуванням ${groups}, чекали ≥4 (форма ×2, картка, клітинка)`);
+  assert.ok(groups >= 3, `🔴 селектів виконавця з групуванням ${groups}, чекали ≥3 (форма KPI, картка, клітинка)`);
+  const dlg = codeOf("pages", "dashboard", "sections", "TaskCreateDialog.tsx");
+  assert.match(dlg, /pickGroups\(teamGroups\(managerOptions, myTeamId\), plainAccounts, query\)/, "🔴 вибір виконавця в діалозі не ставить мою команду першою");
+  assert.match(dlg, /pickGroups\(teamGroups\(managerOptions, myTeamId, form\.assigneeId\), \[\], query\)/, "🔴 другий виконавець не вирізає першого");
   assert.equal(src.split("managerOptions.map((m) => <option").length - 1, 1, "🔴 якийсь селект знову плоский (дозволено лише фільтр у шапці)");
   assert.ok(src.split("<InactiveTeamHint people={myTeamInactive} />").length - 1 >= 2, "🔴 підказки про неактивних немає у формі чи картці");
 

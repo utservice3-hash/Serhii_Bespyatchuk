@@ -64,6 +64,7 @@ import { DatePicker } from "../../../components/DatePicker";
 import { StatusPicker } from "../../../components/StatusPicker";
 import type { TaskForm } from "../taskForm";
 import { TasksFocusView } from "./TasksFocusView";
+import { TaskCreateDialog } from "./TaskCreateDialog";
 import { browserStorage, kyivDate, readDesign, writeDesign, type TasksDesign } from "../tasksFocus";
 
 const METRIC_LBL: Record<string, string> = {
@@ -2028,7 +2029,41 @@ export function TasksSection({
         </div>
       )}
 
-      {taskModalOpen && (
+      {/* 🆕 НОВА ЗАДАЧА / 🎯 ЦІЛЬ — компактний діалог (варіант А, Роман 26.10.2026). KPI-план і Реактивація — стара
+          форма нижче: перемикач у діалозі лише перемикає `taskType`. 📎 Зона файла, «список не завантажився» й
+          «неактивні з команди» — ті самі компоненти, що в картці, передані слотами. */}
+      {taskModalOpen && taskForm.taskType === "simple" && (
+        <TaskCreateDialog
+          form={taskForm}
+          setForm={setTaskForm}
+          sharedIntent={sharedIntent}
+          managerOptions={managerOptions}
+          myTeamId={myTeamId}
+          accounts={accounts}
+          currentUserId={currentUserId}
+          deptOptions={deptOptions}
+          goalTitle={taskForm.goalId !== "" ? tasks.find((t) => t.id === taskForm.goalId)?.title ?? null : null}
+          canReactivation={role === "admin" || role === "team_lead"}
+          assigneeStatus={<><AssigneeListStatus empty={managerOptions.length === 0} failed={managerOptionsFailed} onRetry={onReloadManagerOptions} /><InactiveTeamHint people={myTeamInactive} /></>}
+          fileZone={
+            <AttachmentZone
+                    files={taskForm.pendingFile
+                      ? [{ key: "pending", name: taskForm.pendingFile.name, sizeBytes: taskForm.pendingFile.size, mime: taskForm.pendingFile.type, canRemove: true }]
+                      : []}
+                    /* У формі — один файл: другий докладається вже в картці. */
+                    remaining={taskForm.pendingFile ? 0 : 1}
+                    onPickClick={() => createFileRef.current?.click()}
+                    onFile={acceptCreateFile}
+                    onRemove={() => setTaskForm((cur) => ({ ...cur, pendingFile: null }))}
+                    note={createErr}
+                  />
+          }
+          onKind={(k) => setTaskForm((f) => ({ ...f, taskType: k === "kpi" ? "weekly_kpi" : "reactivation", strategic: false, goalResult: "", pendingFile: null }))}
+          onSubmit={handleSubmitTaskModal}
+          onClose={() => setTaskModalOpen(false)}
+        />
+      )}
+      {taskModalOpen && taskForm.taskType !== "simple" && (
         <div
           onClick={() => setTaskModalOpen(false)}
           style={{
@@ -2049,7 +2084,7 @@ export function TasksSection({
             style={{ width: "100%", maxWidth: 560, background: "var(--card-bg, #fff)" }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 18 }}>{sharedIntent ? "Спільна задача — кому ставите?" : "Нова задача"}</h2>
+              <h2 style={{ margin: 0, fontSize: 18 }}>Новий план або реактивація</h2>
               <button
                 onClick={() => setTaskModalOpen(false)}
                 style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)" }}
@@ -2089,70 +2124,6 @@ export function TasksSection({
                   canPickTeam={true} /* 🔓 14.09.2026: команду обирає будь-хто */
                   onDone={async () => { await refreshTasks?.(); setTaskForm(emptyTaskForm); setTaskModalOpen(false); }}
                 />
-              ) : taskForm.taskType === "simple" ? (
-                <>
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                    Опис задачі
-                    <textarea
-                      autoFocus
-                      value={taskForm.title}
-                      onChange={(e) => setTaskForm((f) => ({ ...f, title: e.target.value }))}
-                      rows={4}
-                      placeholder="Опишіть задачу детально…"
-                      style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, lineHeight: 1.4 }}
-                    />
-                  </label>
-
-                  {/* 🎯 СТРАТЕГІЧНА / ПІДЗАДАЧА (рішення Романа 23–26.10.2026): ставить будь-хто; результат обовʼязковий.
-                      Підзадача відкривається з картки цілі кнопкою «+ Підзадача» — ціль тут уже вибрана. */}
-                  {taskForm.goalId !== "" ? (
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, padding: "8px 10px", borderRadius: 8,
-                      background: "color-mix(in srgb, #4f46e5 8%, transparent)", color: "var(--text)" }}>
-                      <span>🎯 Підзадача до цілі «{tasks.find((t) => t.id === taskForm.goalId)?.title ?? `№${taskForm.goalId}`}»</span>
-                      <button type="button" onClick={() => setTaskForm((f) => ({ ...f, goalId: "" }))} title="Відвʼязати від цілі"
-                        style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)" }}>✕</button>
-                    </div>
-                  ) : (
-                    <>
-                      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
-                        <input type="checkbox" checked={taskForm.strategic}
-                          onChange={(e) => setTaskForm((f) => ({ ...f, strategic: e.target.checked }))} />
-                        🎯 Стратегічна задача — ціль, завжди вгорі задачника, з підзадачами
-                      </label>
-                      {taskForm.strategic && (
-                        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                          Результат — як зрозуміти, що ціль досягнута
-                          <input value={taskForm.goalResult} onChange={(e) => setTaskForm((f) => ({ ...f, goalResult: e.target.value }))}
-                            placeholder="Напр.: гроші РПК за грудень ≥ 3 млн ₴ у Звіті КВП" maxLength={500} />
-                        </label>
-                      )}
-                    </>
-                  )}
-
-                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                      Дедлайн
-                      <input
-                        type="date"
-                        value={taskForm.deadline}
-                        onChange={(e) => setTaskForm((f) => ({ ...f, deadline: e.target.value }))}
-                      />
-                    </label>
-                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                      Пріоритет
-                      <select
-                        value={taskForm.priority}
-                        onChange={(e) => setTaskForm((f) => ({ ...f, priority: e.target.value as TaskPriority }))}
-                      >
-                        {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                </>
               ) : (
                 <>
                   {taskForm.taskType === "weekly_kpi" ? (
@@ -2289,7 +2260,7 @@ export function TasksSection({
               {taskForm.taskType !== "reactivation" && (<>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                  Виконавець{taskForm.taskType !== "simple" ? " (менеджер)" : ""}
+                  Виконавець (менеджер)
                   {/* 🔓 Рішення власника 14.09.2026: «всі можуть ставити один одному
                       задачі» — селект однаковий для всіх ролей. Доти менеджер бачив
                       плашку «Ви (собі)», тобто не міг поставити задачу нікому. */}
@@ -2305,115 +2276,17 @@ export function TasksSection({
                     <AssigneeListStatus empty={managerOptions.length === 0} failed={managerOptionsFailed} onRetry={onReloadManagerOptions} />
                     <InactiveTeamHint people={myTeamInactive} />
                 </label>
-                {taskForm.taskType === "simple" && (
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                    Або акаунт <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>(HR, бухгалтерія — кого немає в CRM)</span>
-                    <select
-                      value={taskForm.assigneeUserId}
-                      onChange={(e) => setTaskForm((f) => ({
-                        ...f,
-                        assigneeUserId: e.target.value === "" ? "" : Number(e.target.value),
-                        // Один виконавець на задачу (CHECK): обрав акаунт — менеджери знімаються.
-                        assigneeId: e.target.value === "" ? f.assigneeId : "",
-                        assigneeId2: e.target.value === "" ? f.assigneeId2 : "",
-                      }))}
-                    >
-                      <option value="">—</option>
-                      {accounts.map((a) => (
-                        <option key={a.id} value={a.id}>{a.name}{a.nameIsLogin ? " (логін)" : ""}</option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {/* ✅ «ПРИЙМАЄ» — хто закриває задачу. Порожнє = «я» (автор). */}
-                {taskForm.taskType === "simple" && (
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                    Приймає <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>(хто ставить «Готово»)</span>
-                    <select
-                      value={taskForm.reviewerId}
-                      onChange={(e) => setTaskForm((f) => ({ ...f, reviewerId: e.target.value === "" ? "" : Number(e.target.value) }))}
-                    >
-                      <option value="">— я (автор)</option>
-                      {accounts.filter((a) => a.id !== currentUserId).map((a) => (
-                        <option key={a.id} value={a.id}>{a.name}{a.nameIsLogin ? " (логін)" : ""}</option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {/* 🔓 Другий виконавець тепер і менеджеру: «всі можуть ставити один одному» (14.09.2026). */}
-                {taskForm.taskType === "simple" && (
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                    2-й виконавець (необовʼязково)
-                    <select
-                      value={taskForm.assigneeId2}
-                      onChange={(e) => setTaskForm((f) => ({ ...f, assigneeId2: e.target.value === "" ? "" : Number(e.target.value) }))}
-                      title="Задача одразу для двох менеджерів — створиться копія кожному"
-                    >
-                      <option value="">— (одному)</option>
-                      <AssigneeOptgroups options={managerOptions} myTeamId={myTeamId} skipId={taskForm.assigneeId} />
-                    </select>
-                  </label>
-                )}
-                {taskForm.taskType === "simple" && (
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                    Департамент
-                    <select
-                      value={taskForm.department}
-                      onChange={(e) => setTaskForm((f) => ({ ...f, department: e.target.value }))}
-                    >
-                      <option value="">—</option>
-                      {taskForm.department && !deptOptions.includes(taskForm.department) && (
-                        <option value={taskForm.department}>{taskForm.department}</option>
-                      )}
-                      {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
-                    </select>
-                  </label>
-                )}
               </div>
 
-              {taskForm.taskType === "simple" && (
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                  Коментарі
-                  <textarea
-                    value={taskForm.comments}
-                    onChange={(e) => setTaskForm((f) => ({ ...f, comments: e.target.value }))}
-                    rows={2}
-                    style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, lineHeight: 1.4 }}
-                  />
-                </label>
-              )}
 
-              {/* 📎 ФАЙЛ ЩЕ НА ЕТАПІ СТВОРЕННЯ (вимога власника 14.09.2026).
-                  Доти вкладення можна було покласти лише до вже створеної задачі —
-                  тобто «створи, знайди в списку, потім прикріпи». Файл тримається у
-                  формі й їде окремим запитом ПІСЛЯ того, як сервер назвав id. */}
-              {taskForm.taskType === "simple" && (
-                <div style={{ display: "grid", gap: 4, fontSize: 13 }}>
-                  <span>Вкладення <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>· не обовʼязково</span></span>
-                  <AttachmentZone
-                    files={taskForm.pendingFile
-                      ? [{ key: "pending", name: taskForm.pendingFile.name, sizeBytes: taskForm.pendingFile.size, mime: taskForm.pendingFile.type, canRemove: true }]
-                      : []}
-                    /* У формі — один файл: другий докладається вже в картці. */
-                    remaining={taskForm.pendingFile ? 0 : 1}
-                    onPickClick={() => createFileRef.current?.click()}
-                    onFile={acceptCreateFile}
-                    onRemove={() => setTaskForm((cur) => ({ ...cur, pendingFile: null }))}
-                    note={createErr}
-                  />
-                </div>
-              )}
 
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
                 <button onClick={() => setTaskModalOpen(false)}>Скасувати</button>
                 <button
                   className="btn-primary"
                   onClick={handleSubmitTaskModal}
-                  disabled={(taskForm.taskType === "simple" && (!taskForm.title.trim() || (taskForm.strategic && !taskForm.goalResult.trim())))
-                    || (sharedIntent && taskForm.assigneeId === "" && taskForm.assigneeUserId === "")}
-                  title={sharedIntent && taskForm.assigneeId === "" && taskForm.assigneeUserId === "" ? "Оберіть, кому ставите задачу" : undefined}
                 >
-                  {taskForm.taskType === "simple" ? "Створити задачу" : "Поставити план"}
+                  Поставити план
                 </button>
               </div>
               </>)}
