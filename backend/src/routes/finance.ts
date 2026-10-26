@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { pool } from "../db/pool.js";
+import { config } from "../config.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import {
@@ -17,6 +18,7 @@ import { runApprovalsSyncNow } from "../jobs/syncApprovals.js";
 import { setOverride } from "../core/monthResult.js";
 import { monthResultOrPending, monthResultXlsx, dropMonthResultCache } from "../jobs/monthResultData.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
+import { loadUnpaidFx } from "../core/unpaidSync.js";
 
 /**
  * 💰 ФІНАНСИ, прохід 1 (29.09.2026): «План/факт витрат» і «Статті».
@@ -160,6 +162,13 @@ financeRouter.post("/restore", async (req, res) => {
 // ── Цифри, коментарі, погодження ─────────────────────────────────────────────
 // 🏁 «Результат місяця» (задача Тетяни #5583, 23.10.2026): угод і Σ бюджету Kommo по тих, хто закривав; перевірки й
 // рішення Тетяни по угоді. Перегляд — як решта «Фінансів»; рішення — право вносити.
+// 💱 «Валютна дебіторка» — які саме рахунки (26.10.2026, Роман: «щоб можна було глянути, що там не так»). Межа — як у «Тиждень і місяць».
+financeRouter.get("/fx-unpaid", async (req, res) => {
+  try {
+    onlyFinance(req);
+    res.json(await loadUnpaidFx(pool as unknown as Db, config.kommo.baseUrl));
+  } catch (e) { fail(res, e); }
+});
 financeRouter.get("/month-result", async (req, res) => {
   try {
     onlyFinance(req);

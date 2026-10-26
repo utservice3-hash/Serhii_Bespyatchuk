@@ -529,6 +529,29 @@ export async function fetchLeadsByIds(ids: number[]): Promise<KommoDeal[]> {
   return data._embedded?.leads ?? [];
 }
 
+/**
+ * 💾 Угоди за фільтром, БЕЗ контактів і компаній (`syncDealFinance`, 26.10.2026): потрібні лише поля угоди. `query` —
+ * готові параметри фільтра (`filter[statuses]…&filter[updated_at][from]=…`). Сторінка недобрана — кінець; понад
+ * `maxPages` — помилка, а не тихо обрізаний результат (той самий принцип, що в `fetchLeadsByIds`).
+ */
+export async function fetchLeadsLean(query: string, maxPages = 60): Promise<KommoDeal[]> {
+  const out: KommoDeal[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const data = await kommoRequest<KommoListResponse<KommoDeal>>(`/api/v4/leads?limit=250&page=${page}&${query}`);
+    const batch = data?._embedded?.leads ?? [];
+    out.push(...batch);
+    if (batch.length < 250) return dedupeById(out);
+  }
+  throw new Error(`Kommo: фільтр «${query.slice(0, 80)}…» дав понад ${maxPages} сторінок — зупинено, щоб не обрізати мовчки`);
+}
+/** Конкретні угоди без контактів (до 250 за запит) — для тих небагатьох, яких ще немає в `deal_fin_fields`. */
+export async function fetchLeadsByIdsLean(ids: number[]): Promise<KommoDeal[]> {
+  if (ids.length === 0) return [];
+  assertLeadIdsWithinLimit(ids.length);
+  const data = await kommoRequest<KommoListResponse<KommoDeal>>(`/api/v4/leads?limit=250&${ids.map((id) => `filter[id][]=${id}`).join("&")}`);
+  return data._embedded?.leads ?? [];
+}
+
 /** 🚚 Угоди, що зараз на етапі (розбір сторінок — `stageLeads.ts`, без конфігу, щоб гейт міг його ганяти). */
 export async function fetchLeadsOnStage(pipelineId: number, statusId: number, maxPages = 4): Promise<KommoDeal[]> {
   return pageStageLeads<KommoDeal>(kommoRequest, pipelineId, statusId, maxPages);
