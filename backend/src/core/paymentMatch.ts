@@ -297,7 +297,7 @@ export function invoicePaymentsSql(paramIdx: number): string {
    WHERE t.direction = 'in' AND NOT t.is_bank_fee
      -- Сейф і особисті картки («лише фінанси», прохід 2г) — не оплати клієнтів; видалений ручний запис — ніщо.
      AND NOT a.finance_only AND a.company <> 'staff' AND t.deleted_at IS NULL
-     -- Переказ від НАШОЇ ж компанії (ЮТС → ЄЛОГІСТ тощо) — не оплата клієнта: код платника = ЄДРПОУ/ІПН нашого рахунку (#2427).
+     -- Переказ від НАШОЇ ж компанії (ЮТС → ЄЛОГІСТ тощо) — не оплата клієнта: код платника = ЄДРПОУ/ІПН однієї з наших компаній (#2427).
      AND NOT EXISTS (
        SELECT 1 FROM bank_accounts o
         WHERE NULLIF(ltrim(regexp_replace(COALESCE(o.edrpou_ipn, ''), '\\D', '', 'g'), '0'), '')
