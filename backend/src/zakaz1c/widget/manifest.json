@@ -1,0 +1,33 @@
+{
+  "widget": {
+    "name": "widget.name",
+    "description": "widget.description",
+    "short_description": "widget.short_description",
+    "version": "0.1.0",
+    "interface_version": 2,
+    "init_once": false,
+    "locale": ["ru", "en"],
+    "installation": true,
+    "support": {
+      "link": "https://dashboard.uts.ua",
+      "email": "drv@uts.ua"
+    }
+  },
+  "settings": {
+    "api_url": {
+      "name": "settings.api_url",
+      "type": "text",
+      "required": true
+    },
+    "testers": {
+      "name": "settings.testers",
+      "type": "text",
+      "required": false
+    }
+  },
+  "locations": [
+    "settings",
+    "lcard-0",
+    "card_sdk"
+  ]
+}

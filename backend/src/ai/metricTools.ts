@@ -88,6 +88,8 @@ export const FORBIDDEN_TABLES = [
   "kommo_declined_forms",
   // 🏛 Prozorro-ліди (#5299): ПІБ, телефони й пошти контактних осіб переможців тендерів. REVOKE у схемі. Тримає #2355.
   "prozorro_tenders", "prozorro_leads",
+  // 🧾 «ТЕСТ ЗАКАЗ 1С» (26.10.2026): рахунки 1С з вкладки угоди — контрагенти й суми. REVOKE у схемі. Тримає `МАНІФЕСТ: динамічні тести безпеки`.
+  "zakaz_onec_invoices",
 ];
 
 /**

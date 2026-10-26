@@ -6683,3 +6683,18 @@ CREATE TABLE IF NOT EXISTS deal_fin_state (
 );
 REVOKE ALL ON deal_fin_fields FROM ai_readonly;
 REVOKE ALL ON deal_fin_state FROM ai_readonly;
+
+-- 🧾 «ТЕСТ ЗАКАЗ 1С» — журнал рахунків, виставлених із вкладки угоди Kommo (`zakaz1c/`, 26.10.2026). Джерело правди
+-- про рахунок — 1С (`POST /createInvoice`); тут — що потрібно вікну: рахунки угоди, хто, де PDF у Kommo. Ключ —
+-- `invoice_uid` 1С: повторне натискання повертає той самий рахунок (`existed`), рядок оновлюється, а не дублюється.
+CREATE TABLE IF NOT EXISTS zakaz_onec_invoices (
+  invoice_uid TEXT PRIMARY KEY, lead_id BIGINT NOT NULL,
+  number TEXT NOT NULL, number_print TEXT NOT NULL, invoice_date TEXT NOT NULL DEFAULT '',
+  organization TEXT NOT NULL DEFAULT '', agreement TEXT NOT NULL DEFAULT '', currency TEXT NOT NULL DEFAULT '',
+  vat_type TEXT NOT NULL DEFAULT '', total NUMERIC(14,2) NOT NULL DEFAULT 0, existed BOOLEAN NOT NULL DEFAULT false,
+  mode TEXT NOT NULL CHECK (mode IN ('test', 'live')), kommo_user_id BIGINT NOT NULL,
+  kommo_file_uuid TEXT, attach_error TEXT, warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS zakaz_onec_invoices_lead_idx ON zakaz_onec_invoices (lead_id, created_at DESC);
+REVOKE ALL ON zakaz_onec_invoices FROM ai_readonly;

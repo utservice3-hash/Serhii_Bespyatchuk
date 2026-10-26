@@ -1806,6 +1806,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/minus-deals/:id/:action", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🧾 «ТЕСТ ЗАКАЗ 1С» (26.10.2026, `zakaz1c/`). Межа — підпис Kommo (`X-Auth-Token` від `$authorizedAjax`), а не роль
+  // дашборда: токен дашборда будь-якої ролі отримує 401, тож дозволених ролей тут немає і бути не може (як у вебхука бота).
+  { method: "GET", path: "/api/zakaz1c/lead/:leadId", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/zakaz1c/lead/:leadId/invoice", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "GET", path: "/api/zakaz1c/lead/:leadId/invoice/:uid/pdf", cls: "deny-only",
+    allow: [], deny: [] },
   // 🤝 Узгодження й перевірка контрагента (пакет Сергія 23.10.2026; ролі — `counterparty/mount.ts` → `cpRoleOf`).
   // HR / КВП / бізнес-асистент — «staff»: лише «Перевірка контрагента»; запити й бюджет — 403. Бюджет — лише Сергій (users.id 1).
   { method: "GET", path: "/api/counterparty/requests", cls: "GET",

@@ -107,6 +107,7 @@ import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
 import { clientLimitsMirror, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON } from "./jobs/counterpartyJobs.js";
 import { minusDealsRouter } from "./routes/minusRegistry.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
+import { zakaz1cRouter } from "./routes/zakaz1c.js";
 import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
@@ -198,6 +199,7 @@ app.use("/api/prozorro", prozorroRouter); // 🏛 «Тендери Prozorro» (#
 app.use("/api/minus-deals", minusDealsRouter); // 📒 Реєстр мінусових угод — пакет Сергія (20.10.2026), пункт меню «Реєстри»
 app.use("/api/counterparty", counterpartyRouter); // 🤝 Узгодження й перевірка контрагента — пакет Сергія (23.10.2026), «Реєстри та узгодження»
 app.use("/api/client-limits", clientLimitsRouter); // 💳 Ліміти клієнтів — той самий пакет, вкладка «Дебіторської заборгованості»
+app.use("/api/zakaz1c", zakaz1cRouter); // 🧾 «ТЕСТ ЗАКАЗ 1С» — рахунок у 1С з вкладки угоди Kommo; межа — підпис Kommo, не сесія (zakaz1c/)
 app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор вантажу — пакет Сергія (12.10.2026), вкладка «Калькулятора ставок та вантажу»
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
