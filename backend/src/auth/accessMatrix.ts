@@ -1582,6 +1582,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/payments/run", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  // ✋ «Погоджено» / коментар (26.10.2026): deny-only — проба дозволеної ролі писала б у прод.
+  { method: "POST", path: "/api/finance/payments/mark", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/month?m=2026-09", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   /* 📜 Реєстр змін (06.10.2026) — те саме читання, що й місяць. */
