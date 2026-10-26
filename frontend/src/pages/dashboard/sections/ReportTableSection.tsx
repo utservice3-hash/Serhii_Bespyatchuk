@@ -237,7 +237,20 @@ export function ReportTableSection({
       )}
 
       <div className="chart-card" style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
+        {/**
+          * 📌 ЛИПКА ШАПКА — ОДИН СКРОЛ-КОНТЕЙНЕР НА ОБИДВІ ОСІ (26.10.2026).
+          *
+          * 🔴 ЧОМУ ШАПКА ДОТИ НЕ ТРИМАЛАСЬ, хоч `th` мав `sticky; top: 0`. Обгортка
+          * мала лише `overflowX: auto`, а це за специфікацією робить скрол-контейнером
+          * і вертикальну вісь. `sticky` чіпляється до НАЙБЛИЖЧОГО скрол-контейнера —
+          * тобто до цієї обгортки, яка вертикально не скролилась ніколи (висота не
+          * обмежена). Сторінка їхала, обгортка — ні, і шапка їхала разом із нею.
+          *
+          * Тому висота обмежена вікном, а скрол — по обох осях: шапка (`top: 0`),
+          * колонка «Менеджер» (`left: 0`) і загальний підсумок (`bottom: 0`) липнуть
+          * в ОДНОМУ контейнері, а кут «Менеджер» має найвищий z-index.
+          */}
+        <div style={{ overflow: "auto", maxHeight: "calc(100vh - 120px)" }}>
           <table className="data-table rpt-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontVariantNumeric: "tabular-nums" }}>
             <thead>
               <tr>
@@ -245,7 +258,8 @@ export function ReportTableSection({
                   <th key={c.key} onClick={() => onSort(c.key)}
                     className={c.key === "name" ? "sticky-mgr" : undefined}
                     style={{
-                      position: "sticky", top: 0, zIndex: c.key === "name" ? 4 : 2,
+                      position: "sticky", top: 0, zIndex: c.key === "name" ? 5 : 3,
+                      // Фон НЕПРОЗОРИЙ (токен теми): без нього рядки просвічують крізь шапку.
                       background: "var(--surface-2)", cursor: c.key === "rank" ? "default" : "pointer",
                       textAlign: c.left ? "left" : "right", whiteSpace: "nowrap",
                       fontSize: 11, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase",
@@ -323,8 +337,9 @@ export function ReportTableSection({
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 11, lineHeight: 1.55 }}>
         <b style={{ color: "var(--text)" }}>Клік по менеджеру</b> розкриває його тижні: план кожного
         тижня — той, що був <b style={{ color: "var(--text)" }}>зафіксований у понеділок</b>, а не
-        перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу. Перша колонка залипає при
-        горизонтальному скролі. <b style={{ color: "var(--text)" }}>Сер. чек, Викон. % і Конв.</b> у
+        перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу. Таблиця прокручується
+        всередині себе: шапка залипає вгорі, загальний підсумок — унизу, колонка «Менеджер» — ліворуч
+        при горизонтальному скролі. <b style={{ color: "var(--text)" }}>Сер. чек, Викон. % і Конв.</b> у
         підсумку рахуються від сум чисельника й знаменника, а не складанням стовпчика — це частки,
         і додавати їх не можна.
       </div>
@@ -484,7 +499,11 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
     fontWeight: 700, fontSize: group ? 12.5 : 13,
     background: group ? "var(--surface-2)" : "var(--surface-2)",
     borderTop: `${group ? 1 : 2}px solid var(--border-strong)`, whiteSpace: "nowrap",
-    ...(col.key === "name" ? { position: "sticky", left: 0, zIndex: 1 } : null),
+    // 📌 ЗАГАЛЬНИЙ підсумок липне до низу контейнера — читається при будь-якій
+    // прокрутці. Підсумки КОМАНД (`group`) — ні: їх кілька, і стосом унизу вони
+    // закрили б саму таблицю.
+    ...(group ? null : { position: "sticky", bottom: 0, zIndex: 3 }),
+    ...(col.key === "name" ? { position: "sticky", left: 0, zIndex: group ? 1 : 4 } : null),
   };
   if (col.key === "rank") return <td style={st} />;
   if (col.key === "name") return <td style={st}>{scopeLabel} · {count}</td>;
@@ -529,8 +548,8 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
  * #85b. Тому це справжній елемент: `role="button"`, `tabIndex=0`, Enter/Пробіл.
  *
  * 🔴 ЧОМУ ПОРТАЛ У BODY, А НЕ `position:absolute` У ЗАГОЛОВКУ. Таблиця лежить у
- * контейнері з `overflow-x:auto`, а це за специфікацією робить НЕ-visible і другу
- * вісь: вікно, що виходить за межі контейнера, обрізається — і найдужче саме там,
+ * скрол-контейнері (`overflow: auto` по обох осях, з 26.10.2026 — заради липкої
+ * шапки), тож вікно, що виходить за межі контейнера, обрізається — і найдужче саме там,
  * де воно найпотрібніше (крайні праві колонки, куди треба скролити). Портал із
  * `position:fixed` виносить вікно з-під обрізання зовсім; координати беруться від
  * кнопки і перераховуються на скролі, щоб підказка не «відклеїлась».

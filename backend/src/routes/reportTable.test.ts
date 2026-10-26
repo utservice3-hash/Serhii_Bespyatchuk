@@ -511,3 +511,78 @@ test("#88 ТОКЕНИ СТАТУСІВ ВИЗНАЧЕНІ В ТЕМНІЙ ТЕ�
   for (const tok of ["--ok-bg:", "--danger-bg:"])
     assert.ok(dark.includes(tok), `🔴 ${tok} зник із темної теми`);
 });
+
+// ─────────────────── #2430 / #2431 · липка шапка й підсумок (26.10.2026) ───────────────────
+
+/**
+ * #2430 — ШАПКА ЛИПНЕ, БО Є ДО ЧОГО ЛИПНУТИ.
+ *
+ * 🔴 `th` мав `sticky; top: 0` і раніше — і не тримався. Обгортка мала лише
+ * `overflowX: auto`, а це робить її скрол-контейнером і по вертикалі; `sticky`
+ * чіпляється до найближчого такого контейнера, який при необмеженій висоті не
+ * скролиться ніколи. Тобто правильний `th` у неправильній обгортці — нуль ефекту,
+ * і жоден інший гейт цього не бачить. Тому стережеться ПАРА: обгортка + шапка.
+ *
+ * Межі змістові, не за довжиною: обгортка — це останній `<div` перед САМОЮ
+ * таблицею, шапка — тіло `<th key={c.key}`. Ключі — з межею слова зліва, щоб
+ * `overflowX: "auto"` не зарахувався як `overflow: "auto"`.
+ *
+ * 🧨 САБОТАЖ: повернути обгортці `overflowX: "auto"` без межі висоти → червоніє.
+ */
+test("#2430 ШАПКА ЛИПНЕ: обгортка таблиці скролиться по обох осях із межею висоти, th — top: 0", () => {
+  const s = readFileSync(TABLE_TSX, "utf8");
+  const parts = s.split('<table className="data-table rpt-table"');
+  assert.equal(parts.length, 2, "🔴 таблиці `data-table rpt-table` немає рівно однієї — розбір зламався");
+  const before = parts[0];
+  const wrapTag = before.slice(before.lastIndexOf("<div"));
+  const wrapStyle = wrapTag.split("style={{")[1]?.split("}}")[0] ?? "";
+  assert.ok(wrapStyle.length > 0, "🔴 обгортка таблиці без style — скрол-контейнера немає");
+  assert.match(wrapStyle, /(?<![\w$])maxHeight:\s*"calc\(100vh - \d+px\)"/,
+    "🔴 обгортка таблиці без межі висоти (maxHeight від вікна) — вона ніколи не скролиться "
+    + "вертикально, і липка шапка їде разом зі сторінкою");
+  assert.match(wrapStyle, /(?<![\w$])overflow:\s*"auto"/,
+    "🔴 обгортка не скролиться по ОБОХ осях — шапка й колонка «Менеджер» липнуть до різних контейнерів");
+  assert.equal(/(?<![\w$])overflow[XY]:/.test(wrapStyle), false,
+    "🔴 у обгортці окремий overflowX/overflowY — одна з осей знову без скролу");
+
+  const th = s.split("<th key={c.key}")[1]?.split("</th>")[0] ?? "";
+  assert.ok(th.length > 0, "🔴 шапки `<th key={c.key}` немає — розбір зламався");
+  assert.match(th, /(?<![\w$])position:\s*"sticky"/, "🔴 шапка не sticky");
+  assert.match(th, /(?<![\w$])top:\s*0(?![\w.$])/, "🔴 шапка не прибита до верху контейнера (top: 0)");
+  assert.match(th, /(?<![\w$])background:\s*"var\(--[\w-]+\)"/,
+    "🔴 у шапки немає непрозорого фону з токена теми — рядки просвічуватимуть крізь неї");
+});
+
+/**
+ * #2431 — ЗАГАЛЬНИЙ ПІДСУМОК ЛИПНЕ ДО НИЗУ, А КУТ — НАЙВИЩИЙ ШАР.
+ *
+ * Кут «Менеджер» у шапці липне по обох осях, тож під ним проїжджають і рядки
+ * (знизу), і клітинки шапки (збоку). Якщо хтось у тому самому контейнері має
+ * вищий шар — кут перекривається, і назва колонки зникає саме там, де видно
+ * найдовше. Числа беруться з коду `Cell` і `FootCell`, а не з домовленості.
+ *
+ * 🧨 САБОТАЖ: прибрати `bottom: 0` з підсумку → червоніє.
+ */
+test("#2431 ЗАГАЛЬНИЙ ПІДСУМОК ЛИПНЕ ДО НИЗУ, а кут «Менеджер» шапки — найвищий шар", () => {
+  const s = readFileSync(TABLE_TSX, "utf8");
+  const foot = s.split("function FootCell(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.ok(foot.length > 0, "🔴 компонента FootCell немає — розбір зламався");
+  assert.match(foot, /group \? null : \{[^}]*(?<![\w$])position: "sticky"[^}]*(?<![\w$])bottom: 0(?![\w.$])/,
+    "🔴 загальний підсумок не липне до низу — при довгому списку його не видно без прокрутки до кінця");
+  const tfoot = s.split("<tfoot>")[1]?.split("</tfoot>")[0] ?? "";
+  assert.ok(/<FootCell\b/.test(tfoot), "🔴 у tfoot немає FootCell — розбір зламався");
+  assert.equal(/(?<![\w$])group(?![\w$])/.test(tfoot), false,
+    "🔴 загальний підсумок рендериться як підсумок КОМАНДИ — він не липне");
+
+  const corner = s.split("<th key={c.key}")[1]?.match(/zIndex: c\.key === "name" \? (\d+) : (\d+)/);
+  assert.ok(corner, "🔴 у шапки немає окремого шару для кута «Менеджер»");
+  const top = Number(corner[1]);
+  assert.ok(top > Number(corner[2]), "🔴 кут шапки не вищий за решту шапки");
+  const cell = s.split("function Cell(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.ok(cell.length > 0, "🔴 компонента Cell немає — розбір зламався");
+  const others = [...`${cell}\n${foot}`.matchAll(/zIndex:([^,}\n]+)/g)]
+    .flatMap((m) => (m[1].match(/\d+/g) ?? []).map(Number));
+  assert.ok(others.length >= 3, `🔴 шарів у клітинках знайдено ${others.length} — розбір зламався`);
+  assert.ok(Math.max(...others) < top,
+    `🔴 клітинка таблиці має шар ${Math.max(...others)} ≥ кута шапки ${top} — вона перекриє назву колонки «Менеджер»`);
+});
