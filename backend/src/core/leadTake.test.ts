@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 import {
-  takeOf, bucketOf, statsOf, clockStart, kyivAt, weekRange, inColumn, NORM, isDuplicateLost, targetOf,
+  takeOf, bucketOf, statsOf, clockStart, kyivAt, weekRange, inColumn, NORM, isDuplicateLost, targetOf, kyivBucket, statsByBucket,
   type DealTake, type TakeRowInput,
 } from "./leadTakeRules.js";
 import { buildXlsx } from "./xlsxWrite.js";
@@ -318,4 +318,108 @@ test("#2442 МЕЖА ЦІЛІ: 100% — досягнуто, 99% — бракує
   assert.deepEqual([one.notTaken.met, one.notTaken.gap, one.notTaken.label], [false, 1, "понад ціль на 1"], "🔴 1 не взята не «понад ціль на 1»");
   const empty = targetOf(statsOf([], null));
   assert.deepEqual([empty.m5.met, empty.m5.label, empty.notTaken.label], [null, "немає заявок", "немає заявок"], "🔴 порожній вибір читається як «досягнуто»");
+});
+
+// ── 📈 СЕРІЯ «ЧАС ОПРАЦЮВАННЯ ЗАЯВКИ» У «СТАТИСТИКАХ» (Роман 26.10.2026) ─────────────────────────────
+/** Неділя 20.09.2026 23:30 за Києвом (UTC — та сама неділя 20:30) і понеділок 21.09 00:30 за Києвом (UTC — ще НЕДІЛЯ 21:30). */
+const SUN_LATE = kyivAt(2026, 9, 20, 23, 30), MON_EARLY = kyivAt(2026, 9, 21, 0, 30);
+const takeRow = (createdAt: number, minutes: number | null) =>
+  ({ createdAt, lost: false, take: { takenAt: minutes == null ? null : 1, event: minutes == null ? null : "stage" as const, minutes, bucket: bucketOf(minutes), offHours: false } });
+
+/**
+ * #2443 — КОШИК ТИЖНЯ ЗА КИЇВСЬКОЮ ДАТОЮ, МЕДІАНА З УГОД. Понеділок 00:30 за Києвом — це ще неділя за UTC; кошик за
+ * UTC-датою віддав би його попередньому тижню, і серія розійшлась би з вікном Звіту (воно ріже період київською датою).
+ * Кожен кошик — `statsOf` над угодами кошика; медіана місяця — з угод (3), а не медіана тижневих медіан (14.5).
+ * 🧨 Червоніє, якщо кошикувати UTC-датою або рахувати медіану кошика з медіан.
+ */
+test("#2443 КОШИК СЕРІЇ: тиждень — Пн–Нд за Києвом (обидва боки межі), кошик = statsOf своїх угод, медіана місяця — з угод", () => {
+  assert.equal(new Date(MON_EARLY).toISOString().slice(0, 10), "2026-09-20", "фікстура: понеділок 00:30 за Києвом мусить бути ще неділею за UTC");
+  assert.deepEqual([kyivBucket(SUN_LATE, "week"), kyivBucket(MON_EARLY, "week")], ["2026-09-14", "2026-09-21"],
+    "🔴 межа тижня не за Києвом: неділя 23:30 / понеділок 00:30 потрапили не у свої тижні");
+  assert.deepEqual([kyivBucket(MON_EARLY, "day"), kyivBucket(MON_EARLY, "month"), kyivBucket(kyivAt(2026, 10, 1, 0, 10), "month")],
+    ["2026-09-21", "2026-09-01", "2026-10-01"], "🔴 кошик дня / місяця не за київською датою");
+  const w14 = [takeRow(SUN_LATE, 1), takeRow(kyivAt(2026, 9, 15, 10, 0), 2), takeRow(kyivAt(2026, 9, 15, 11, 0), 3)];
+  const w21 = [takeRow(MON_EARLY, 4), takeRow(kyivAt(2026, 9, 23, 10, 0), 50), takeRow(kyivAt(2026, 9, 23, 11, 0), null)];
+  const weeks = statsByBucket([...w21, ...w14], "week");
+  assert.deepEqual(weeks.map((b) => b.bucket), ["2026-09-14", "2026-09-21"], "🔴 кошики не ті або не хронологічно");
+  assert.deepEqual(weeks[0].stats, statsOf(w14, null), "🔴 тиждень 14.09 ≠ statsOf його угод (Пн–Нд за Києвом)");
+  assert.deepEqual(weeks[1].stats, statsOf(w21, null), "🔴 тиждень 21.09 ≠ statsOf його угод (Пн–Нд за Києвом)");
+  const month = statsByBucket([...w14, ...w21], "month");
+  assert.equal(month.length, 1);
+  assert.equal(month[0].stats.medianMin, 3, "🔴 медіана місяця не з угод (1,2,3,4,50 → 3) — схоже на медіану тижневих медіан (14.5)");
+});
+
+/**
+ * #2444 — СЕРІЯ ЗА ТИЖДЕНЬ == ВІКНУ ЗВІТУ ЗА ТОЙ САМИЙ ТИЖДЕНЬ І ФІЛЬТР (живий SQL, scratch). Ліва частина — справжній
+ * обчислювач «Статистик» (`COMPUTERS` роуту `/statistics/series`), права — `leadTakeTable` вікна, рядок «ВІДДІЛ», з
+ * тим самим `SERIES_TAKE_FILTER`. Фікстура лежить по обидва боки межі тижня за Києвом: неділя 23:30 і понеділок 00:30.
+ * Порожньо — ПРОВАЛ: кожен тиждень мусить мати заявки.
+ * 🧨 Червоніє, якщо серія кошикує не київською датою, бере інший фільтр, ніж вікно, або йде повз ядро вікна.
+ */
+test("#2444 ЖИВИЙ SQL: серія «Статистик» за тиждень == рядок «ВІДДІЛ» вікна Звіту за той самий Пн–Нд і фільтр (обидва боки межі)", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const deal = (id: number, mgr: number, created: number) =>
+    x.c.query(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, created_at_kommo, client_source, lead_channel)
+               VALUES ($1, $2, $3, $4, 69693652, 0, $5, 'uts.ua', 'ad') ON CONFLICT (kommo_id) DO NOTHING`, [id, `заявка ${id}`, mgr, QUAL, iso(created)]);
+  const ev = (id: number, at: number) =>
+    x.c.query(`INSERT INTO deal_stage_events (kommo_id, pipeline_id, status_id, changed_at) VALUES ($1, $2, 69693652, $3)`, [id, QUAL, iso(at)]);
+  await deal(201, 1, SUN_LATE); await ev(201, SUN_LATE + 3 * MIN);
+  await deal(202, 1, MON_EARLY); await ev(202, kyivAt(2026, 9, 21, 8, 21));
+  await deal(203, 3, kyivAt(2026, 9, 22, 10, 0)); await ev(203, kyivAt(2026, 9, 22, 10, 40));
+  const { COMPUTERS } = await import("../routes/statisticsSeries.js");
+  for (const teamId of [null, 13]) {
+    const series = async (k: string) => new Map((await COMPUTERS[k]("week", "2026-09-14", "2026-09-27", teamId, null)).map((p) => [p.period, p.value]));
+    const [m5, med] = [await series("lead_take_m5_pct"), await series("lead_take_median")];
+    for (const wk of ["2026-09-14", "2026-09-21"]) {
+      const w = weekRange(wk);
+      const table: import("./leadTake.js").TakeTable = await x.lt.leadTakeTable({ ...w, ...x.lt.SERIES_TAKE_FILTER, teamId });
+      const dept = table.rows.find((r) => r.kind === "dept")!;
+      assert.ok(dept.n > 0, `🔴 тиждень ${wk} (команда ${teamId ?? "усі"}) порожній — звіряти нема що, це ПРОВАЛ`);
+      assert.equal(m5.get(wk), dept.m5Pct ?? undefined, `🔴 «Взято до 5 хв» тижня ${wk} (команда ${teamId ?? "усі"}): серія ≠ вікно Звіту`);
+      assert.equal(med.get(wk), dept.medianMin ?? undefined, `🔴 медіана тижня ${wk} (команда ${teamId ?? "усі"}): серія ≠ вікно Звіту`);
+    }
+  }
+  // Межа тижня справді по обидва боки: неділя 23:30 — у тижні 14.09 (8 заявок фікстури + вона), понеділок 00:30 — у 21.09.
+  const n = async (wk: string) => (await x.lt.leadTakeTable({ ...weekRange(wk), ...x.lt.SERIES_TAKE_FILTER })).rows.find((r) => r.kind === "dept")!.n;
+  assert.deepEqual([await n("2026-09-14"), await n("2026-09-21")], [9, 2], "🔴 заявки на межі тижня за Києвом не у своїх тижнях");
+});
+
+/**
+ * #2445 — ПОКАЗНИК Є В КАТАЛОЗІ Й У МЕНЮ ФРОНТУ. Серверний обчислювач без пункту меню — мертвий показник; пункт меню без
+ * обчислювача — порожній графік, що читається як «немає даних». Обидва показники — у `CRM_ABLE` (ряд від шва), у
+ * `COMPUTERS` через ядро вікна, у категорії «Ліди й канали» зі своєю одиницею, медіаною (не середнім) і застереженням
+ * про порожні до вересня поле й нотатки.
+ * 🧨 Червоніє, якщо прибрати пункт меню, обчислювач, запис у каталозі або застереження з ⓘ.
+ */
+test("#2445 КАТАЛОГ І МЕНЮ: «Медіана часу опрацювання заявки, хв» і «Взято до 5 хв, %» — у CRM_ABLE, COMPUTERS і меню «Статистик»", async () => {
+  const { isCrmAble } = await import("../statistics/seriesCatalog.js");
+  for (const k of ["lead_take_median", "lead_take_m5_pct"]) assert.ok(isCrmAble("sales", k), `🔴 ${k} не в каталозі CRM_ABLE`);
+  const route = readFileSync(path.join(ROOT, "backend", "src", "routes", "statisticsSeries.ts"), "utf8");
+  assert.match(route, /\blead_take_median: leadTakeC\(\(s\) => s\.medianMin\),/, "🔴 медіана не з medianMin ядра вікна");
+  assert.match(route, /\blead_take_m5_pct: leadTakeC\(\(s\) => s\.m5Pct\),/, "🔴 «до 5 хв» не з m5Pct ядра вікна");
+  assert.match(route, /await leadTakeSeries\(\{ from, to, \.\.\.SERIES_TAKE_FILTER, teamId, managerId \}, g\)/, "🔴 обчислювач іде повз ядро вікна або без фільтра вікна");
+  const fe = readFileSync(path.join(ROOT, "frontend", "src", "pages", "dashboard", "sections", "StatisticsChartsSection.tsx"), "utf8");
+  const leads = fe.slice(fe.indexOf(`{ key: "leads"`), fe.indexOf(`{ key: "clients"`));
+  assert.match(leads, /\{ key: "lead_take_median", block: "sales", label: "Медіана часу опрацювання заявки, хв", unit: "хв",/, "🔴 медіани немає в меню «Ліди й канали»");
+  assert.match(leads, /\{ key: "lead_take_m5_pct", block: "sales", label: "Взято до 5 хв, %", unit: "%",/, "🔴 «Взято до 5 хв» немає в меню «Ліди й канали»");
+  assert.ok(fe.includes("до вересня поле «Взято в роботу» й нотатки-дзвінки майже порожні — частка «взято» тоді спиралась на етап і Ringostat"),
+    "🔴 у ⓘ немає застереження про порожні до вересня поле й нотатки");
+  assert.doesNotMatch(leads, /lead_take_(avg|mean)|label: "[^"]*середн/i, "🔴 з'явилось середнє — рішення власника: лише медіана");
+});
+
+/**
+ * #2446 — ДОСТУП ТОЙ САМИЙ, ЩО В ІНШИХ СЕРІЙ: нового роуту немає (показники їдуть через наявний `GET /series`, межа —
+ * вкладка `statistics`), скоуп — `teamId`/`managerId` з `seriesSet` (серверний клам ролі). Отже матриця не змінюється.
+ * 🧨 Червоніє, якщо додати роут у `statsSeriesRouter`, або обчислювач перестане брати скоуп серії (тімлід побачив би компанію).
+ */
+test("#2446 ДОСТУП: нових роутів «Статистик» немає, показники — через наявний /series із клампом скоупу серії", () => {
+  const route = readFileSync(path.join(ROOT, "backend", "src", "routes", "statisticsSeries.ts"), "utf8");
+  const paths = [...route.matchAll(/statsSeriesRouter\.(get|post|put|patch|delete)\("([^"]+)"/g)].map((m) => `${m[1].toUpperCase()} ${m[2]}`);
+  assert.deepEqual(paths, ["GET /series", "GET /summary", "GET /plan-fact", "GET /lapsed-clients", "POST /series/manual"], "🔴 склад роутів «Статистик» змінився — потрібен запис у матриці");
+  assert.match(route, /const leadTakeC = \(pick: \(s: TakeStats\) => number \| null\): Computer => async \(g, from, to, teamId, managerId\) =>/,
+    "🔴 обчислювач не бере скоуп серії");
+  assert.match(route, /if \(metric in COMPUTERS\) crm = await COMPUTERS\[metric\]\(g, from > STATS_SEAM \? from : STATS_SEAM, to, sc\.teamId, sc\.managerId\);/,
+    "🔴 серію рахують не зі скоупу seriesSet або не від шва");
+  const matrix = readFileSync(path.join(ROOT, "backend", "src", "auth", "accessMatrix.ts"), "utf8");
+  assert.match(matrix, /\{ method: "GET", path: "\/api\/statistics\/series", cls: "GET",/, "🔴 /api/statistics/series зник із матриці");
 });

@@ -5,8 +5,8 @@ import { RNK_TEAM_IDS, NON_COMMERCIAL_TEAM_IDS } from "./metrics.js";
 import { teamAtSql } from "./teamAt.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import {
-  takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost,
-  type DealTake, type TakeRowInput, type TakeStats, type TakeColumn, type TakeTarget,
+  takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost, statsByBucket,
+  type DealTake, type TakeRowInput, type TakeStats, type TakeColumn, type TakeTarget, type TakeGran,
 } from "./leadTakeRules.js";
 
 /**
@@ -191,3 +191,22 @@ export async function leadTakeDeals(q: TakeQuery, rowKey: string, col: TakeColum
   };
   return rows.filter((r) => inRow(r) && inColumn(col, r)).map((r) => r.d);
 }
+
+/**
+ * 📈 СЕРІЯ ДЛЯ «СТАТИСТИК» — ТА САМА ВИБІРКА, ЩО ВІКНО ЗВІТУ (`loadRows` → `leadSelection` → `takeOf`), розкладена по
+ * кошиках за київською датою створення (`statsByBucket`). Кожен кошик — `statsOf` над угодами кошика, тож число тижня
+ * дорівнює рядку «ВІДДІЛ» вікна за той самий Пн–Нд і той самий фільтр. Копії SQL тут немає.
+ */
+export async function leadTakeSeries(q: TakeQuery, g: TakeGran): Promise<{ bucket: string; stats: TakeStats }[]> {
+  const rows = await loadRows(q);
+  return statsByBucket(rows.map((r) => ({ ...r, createdAt: Date.parse(r.d.createdAt) })), g);
+}
+
+/**
+ * Фільтр серій «Статистик» — ТОЙ, З ЯКИМ ВІКНО ЗВІТУ ВІДКРИВАЄТЬСЯ: усі джерела, увесь час доби
+ * (`LeadTakeCard`: `useState<LeadTakeSource>("all")`, `useState<LeadTakeTime>("all")`; роут теж за замовчуванням `all`).
+ * ⚠️ У постановці 26.10.2026 стояло «як у вікні Звіту: робочий час» — вікно ж за замовчуванням показує «Все». Узято
+ * фактичну поведінку вікна, щоб число на графіку збігалось із тим, що людина бачить, відкривши Звіт. Перейти на
+ * робочий час — змінити `time` тут (одне місце; гейт `#2444` звіряє серію з вікном саме за цим фільтром).
+ */
+export const SERIES_TAKE_FILTER: Pick<TakeQuery, "source" | "time"> = { source: "all", time: "all" };
