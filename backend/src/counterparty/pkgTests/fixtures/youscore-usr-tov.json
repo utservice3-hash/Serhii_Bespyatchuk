@@ -1,0 +1,19 @@
+{
+  "name": { "fullName": "ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ \"ЛІСОСТЕП АГРОХОЛД\"", "shortName": "ТОВ \"ЛІСОСТЕП АГРОХОЛД\"" },
+  "nameInEnglish": { "fullName": "LISOSTEP AGROHOLD LLC", "shortName": null },
+  "id": 1000001, "code": "41234567", "legalPersonName": "ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ \"ЛІСОСТЕП АГРОХОЛД\"",
+  "legalForm": "ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ",
+  "founders": [
+    { "name": "КОВАЛЬЧУК АНДРІЙ СТЕПАНОВИЧ", "code": null, "address": "Україна, Вінницька обл.", "capital": 1750000, "ownershipType": null, "ownershipPercent": null, "interest": null, "indirectInterest": null, "legalEntityInfluencer": null, "country": "Україна", "registrationCountry": null, "type": 1, "beneficiaryFalse": false },
+    { "name": "КОВАЛЬЧУК ОЛЕНА МИКОЛАЇВНА", "code": null, "address": "Україна, Вінницька обл.", "capital": 750000, "ownershipType": null, "ownershipPercent": null, "interest": null, "indirectInterest": null, "legalEntityInfluencer": null, "country": "Україна", "registrationCountry": null, "type": 1, "beneficiaryFalse": false },
+    { "name": "КОВАЛЬЧУК АНДРІЙ СТЕПАНОВИЧ", "code": null, "address": "Україна", "capital": 0, "ownershipType": "Прямий вирішальний вплив", "ownershipPercent": 70, "interest": 70, "indirectInterest": null, "legalEntityInfluencer": null, "country": "Україна", "registrationCountry": null, "type": 2, "beneficiaryFalse": false }
+  ],
+  "foundingCapital": { "date": null, "sum": 2500000 },
+  "signers": [ { "name": "КОВАЛЬЧУК АНДРІЙ СТЕПАНОВИЧ", "role": "керівник", "description": "", "appointDate": null, "raw": null } ],
+  "beneficiariesGeneralInfo": { "excluded": false, "isMissing": false, "reason": null },
+  "registrationAfterLaw": null,
+  "registrationBeforeLaw": { "entryDate": "2015-11-03T00:00:00", "entryNumber": "10001020000012345", "date": "2015-11-03T00:00:00" },
+  "status": "зареєстровано",
+  "address": "Україна, 22000, Вінницька обл., місто Хмільник, вул. Небесної Сотні, будинок 12",
+  "contractorType": "Юридична особа (ЮО)"
+}

@@ -174,6 +174,15 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   // тіла й ДО єдиного запиту в БД (тримає `#156`).
   "POST /api/dashboard/receivables/writeoff": "write_off_debt — рівно СЕО/ОД; admin, kvp і financier його не мають",
   "DELETE /api/dashboard/receivables/writeoff": "write_off_debt — те саме; скасування за тим самим правом",
+  // 🤝 Пакет Сергія 23.10.2026 (`counterparty/mount.ts` → `cpRoleOf`): роль пакета, а не право дашборда — але відмова
+  // ПЕРШИМ оператором обробника, до читання тіла й будь-якого запису (`canSubmit` / `approver(u)` у роутерах пакета).
+  "POST /api/counterparty/lookup": "подавати запити — лише менеджер і тім-лід (ТЗ §3); адмін-рівень — перегляд",
+  "POST /api/counterparty/requests": "подавати запити — лише менеджер і тім-лід (ТЗ §3); адмін-рівень — перегляд",
+  "POST /api/counterparty/files": "документи до запиту — лише менеджер і тім-лід (ТЗ §3)",
+  "POST /api/client-limits/:id/edit": "змінювати ліміти — лише Сергій (users.id 1, CP_APPROVER_IDS); адмін-рівень — перегляд",
+  "POST /api/client-limits/:id/keep": "«лишити ліміт» — лише Сергій (ТЗ §7)",
+  "POST /api/client-limits/set": "задати ліміт боржнику — лише Сергій (ТЗ §6.4)",
+  "POST /api/client-limits/import": "перенос лімітів — лише Сергій (ТЗ §6.3)",
 };
 
 const GHOST = "__zzz_neisnuyucha_cil_9999__";

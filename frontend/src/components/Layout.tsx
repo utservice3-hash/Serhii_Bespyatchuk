@@ -6,7 +6,8 @@ import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
 import { CommandPalette } from "./CommandPalette";
 import { heartbeat, trackerSsoUrl, surveysBadge, type SurveysBadge } from "../api";
-import { useMinusRegistryCount } from "../minusRegistry/client/minusRegistry/useMinusRegistryCount";
+import { useRegistriesCount } from "../minusRegistry/client/useRegistriesCount";
+import { useClientLimitsCount } from "../minusRegistry/client/clientLimits/useClientLimitsCount";
 import { usePolling } from "../hooks/usePolling";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
@@ -208,8 +209,10 @@ export function Layout({
   const surveysOn = !screens || screens.includes("surveys");
   usePolling(() => { surveysBadge().then(setSurveys).catch(() => undefined); }, 300000, { immediate: true, enabled: surveysOn });
   const showSurveys = !!surveys && (surveys.canManage || surveys.assigned > 0);
-  // 📒 Реєстри: лічильник пакета (раз на хвилину, при поверненні у вкладку й одразу після дії) — лише тим, кому вкладку видано.
-  const registriesCount = useMinusRegistryCount(60_000, !screens || screens.includes("registries"));
+  // 📒 Реєстри: лічильник пакета — мінусові угоди + узгодження контрагентів (раз на хвилину, при поверненні у вкладку й одразу
+  // після дії) — лише тим, кому вкладку видано. 💰 Дебіторка: «Ліміти клієнтів» — переліміт + прострочка + нова справа в суді.
+  const registriesCount = useRegistriesCount(60_000, !screens || screens.includes("registries"));
+  const limitsCount = useClientLimitsCount(5 * 60_000, !screens || screens.includes("receivables"));
   const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled)
     .map((g) => ({ ...g, items: g.items.filter((it) => it.key !== "surveys" || showSurveys) }))
     .filter((g) => g.items.length > 0);
@@ -326,13 +329,14 @@ export function Layout({
                 const badge = item.key === "messenger" ? messengerUnread
                             : item.key === "news" ? newsUnread
                             : item.key === "surveys" ? (surveys?.fresh ?? 0)
-                            : item.key === "registries" ? registriesCount : 0;
+                            : item.key === "registries" ? registriesCount
+                            : item.key === "receivables" ? limitsCount : 0;
                 return (
                 <button
                   key={item.key}
                   className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
                   onClick={() => onSelect(item.key as NavKey)}
-                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : item.key === "registries" ? "чекають вашої дії" : "непрочитаних"}` : item.label}
+                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : item.key === "registries" ? "чекають вашої дії" : item.key === "receivables" ? "у «Лімітах клієнтів»: переліміт, прострочка чи нова справа в суді" : "непрочитаних"}` : item.label}
                   style={{ position: "relative" }}
                 >
                   <span className="sidebar-nav-icon"><NavIcon k={item.key} /></span>

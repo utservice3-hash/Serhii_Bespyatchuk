@@ -39,10 +39,11 @@ export interface CrmDeal {
   exp: Line[];
   incTotal: number;  // «Расчет приходов»
   expTotal: number;  // «Расчет расходов»
-  budget: number;    // «Бюджет» угоди = маржа
+  budget: number;    // маржа = incTotal − expTotal. НЕ lead.price: Kommo зберігає «Бюджет» без знака (виправлення 23.10)
 }
 
-export interface RegUser { id: string; name: string; role: Role }
+/** team — users.id менеджерів команди тім-ліда (лише для role 'lead'; задає сервер через опцію teamOf). */
+export interface RegUser { id: string; name: string; role: Role; team?: string[] }
 
 export interface HistEvent {
   type: EventType;
@@ -108,7 +109,11 @@ export const ACTION_DONE: Record<Action | 'submit', string> = {
 // ---------- права ----------
 export const seesAll = (role: Role) => role === 'approver' || role === 'accounting' || role === 'viewer';
 export const canSubmit = (role: Role) => role === 'manager' || role === 'lead';
-export const canSee = (u: RegUser, q: Pick<RegRequest, 'createdBy'>) => seesAll(u.role) || q.createdBy === u.id;
+/** Тім-лід бачить ще й запити своєї команди — лише перегляд (дії — тільки над своїми, див. allowedActions). */
+export const inMyTeam = (u: RegUser, createdBy: string) => u.role === 'lead' && !!u.team && u.team.includes(createdBy);
+export const canSee = (u: RegUser, q: Pick<RegRequest, 'createdBy'>) => seesAll(u.role) || q.createdBy === u.id || inMyTeam(u, q.createdBy);
+/** Колонка «Менеджер»: тим, хто бачить чужі запити. */
+export const seesOthers = (u: RegUser) => seesAll(u.role) || (u.role === 'lead' && !!u.team && u.team.length > 0);
 
 /** Чи чекає запит саме цього користувача (лічильник у меню й на вкладці). */
 export function needsMe(u: RegUser, q: Pick<RegRequest, 'status' | 'createdBy'>): boolean {

@@ -17,7 +17,11 @@ import { Hint, Tip, TipLayer } from "../../../components/Hint";
 import { ReceivablesTiles } from "./ReceivablesTiles";
 import { ReceivablesFilters } from "./ReceivablesFilters";
 import { OwnerEditor } from "./OwnerEditor";
-import { LimitEditor } from "./LimitEditor";
+import { useLocation, useNavigate } from "react-router-dom";
+import DebtorLimitCell from "../../../minusRegistry/client/clientLimits/DebtorLimitCell";
+import ClientLimitsTab from "../../../minusRegistry/client/clientLimits/ClientLimitsTab";
+import { useDebtorLimits } from "../../../minusRegistry/client/clientLimits/useDebtorLimits";
+import { useClientLimitsCount } from "../../../minusRegistry/client/clientLimits/useClientLimitsCount";
 import { LimitRequestDialog } from "./LimitRequestDialog";
 import { MergeDialog } from "./MergeDialog";
 import { UnmergeDialog } from "./UnmergeDialog";
@@ -187,7 +191,6 @@ export function ReceivablesSection({
   canSetOwner,
   canMerge,
   canonicalOf,
-  canSetLimit,
   canRequestLimit,
   canWriteOff,
   canEditReceivables,
@@ -206,6 +209,7 @@ export function ReceivablesSection({
   receivablesTotals: ReceivableTotals | null;
   /** Право віддає СЕРВЕР (`isAdminScope`) — фронт свого правила не має. */
   canSetOwner: boolean;
+  /** ✏️ Старі олівці ліміту прибрано (ТЗ «Ліміти клієнтів» §6.4) — право тепер віддає `/client-limits/by-debtor` (`canEdit`, лише Сергій). */
   canSetLimit: boolean;
   /** 🧾 Чи малювати кнопку запиту ліміту. Право віддає СЕРВЕР і ним же гейтить роут. */
   canRequestLimit: boolean;
@@ -257,7 +261,20 @@ export function ReceivablesSection({
   // 🗄 Вкладка. Архів — окремий екран, а не фільтр: списаний борг зникає з
   // активного списку ПОВНІСТЮ, тож змішувати їх в одній таблиці означало б
   // повернути те, що власник щойно скасував.
-  const [tab, setTab] = useState<"active" | "registry" | "requests" | "archive">("active");
+  // 📒 П'ята вкладка «Ліміти клієнтів» (пакет Сергія 23–24.10) відкривається й адресою `?tab=limits` — туди ведуть переходи
+  // з «Реєстрів та узгодження» і з колонки «Ліміти»; інші вкладки адресу не займають.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const urlTab = new URLSearchParams(location.search).get("tab") === "limits" ? "limits" : null;
+  const [tab, setTabState] = useState<"active" | "registry" | "requests" | "archive" | "limits">(urlTab ?? "active");
+  useEffect(() => { if (urlTab) setTabState(urlTab); }, [urlTab, location.search]);
+  const setTab = (k: typeof tab) => {
+    setTabState(k);
+    if (k !== "limits" && location.search) navigate(location.pathname, { replace: true });
+  };
+  const limitsBadge = useClientLimitsCount();
+  // 💰 Колонка «Ліміти» — з «Лімітів клієнтів» (ТЗ §6.4): олівці лише Сергію (`canEdit` віддає сервер), своїм — «Запросити зміну».
+  const debtorLimits = useDebtorLimits();
   // 🗓 Один якір часу на весь рендер: інакше рядки, порахувані на різних
   // мілісекундах, могли б розійтись на самій межі понеділка.
   const now = new Date();
@@ -602,7 +619,6 @@ export function ReceivablesSection({
 
   // ✏️ Хто зараз редагується (ключ клієнта) і чи відкритий діалог склейки.
   const [ownerFor, setOwnerFor] = useState<string | null>(null);
-  const [limitFor, setLimitFor] = useState<string | null>(null);
   /** Який клієнт зараз редагує домовленість — редактор переїхав у поповер (прохід B). */
   const [agreeFor, setAgreeFor] = useState<string | null>(null);
   // 📞 4631: панель домовленості відкривається і з «▶ розмова» чи «переносили» — тоді вона гортає до свого блоку.
@@ -618,10 +634,10 @@ export function ReceivablesSection({
    * захистить себе мовчки — і це видно на першому ж саботажі, а не через місяць.
    */
   useEffect(() => {
-    const open = [ownerFor, limitFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor]
+    const open = [ownerFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor]
       .filter((x) => x != null).length;
     onEditorsChange?.(open);
-  }, [ownerFor, limitFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor, onEditorsChange]);
+  }, [ownerFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor, onEditorsChange]);
   const [mgrOptions, setMgrOptions] = useState<ManagerOption[]>([]);
   useEffect(() => {
     // Список тягнемо ОДИН раз і лише тим, хто має право призначати: інакше це
@@ -678,18 +694,24 @@ export function ReceivablesSection({
           Джерело те саме, що в розкритті клієнта, тож числа розійтись не можуть. */}
       <div role="tablist" aria-label="Розділи дебіторки"
         style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 16 }}>
-        {([["active", "Активна дебіторка"], ["registry", "Реєстр рахунків"], ["requests", "Заявки на оплату"], ["archive", "Архів"]] as const).map(([k, label]) => (
+        {([["active", "Активна дебіторка"], ["registry", "Реєстр рахунків"], ["requests", "Заявки на оплату"], ["archive", "Архів"], ["limits", "Ліміти клієнтів"]] as const).map(([k, label]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
             style={{ font: "inherit", fontSize: "var(--fs-base)", background: "none", border: "none",
                      borderBottom: `2px solid ${tab === k ? "var(--brand, #c5141c)" : "transparent"}`,
                      color: tab === k ? "var(--text)" : "var(--text-muted)",
                      fontWeight: tab === k ? 600 : 500, padding: "10px 12px", cursor: "pointer" }}>
             {label}
+            {k === "limits" && limitsBadge > 0 && (
+              <span title="Переліміт, прострочка чи нова справа в суді" style={{ marginLeft: 6, background: "var(--brand, #c5141c)", color: "#fff",
+                borderRadius: 9, padding: "0 6px", fontSize: "var(--fs-xs)", fontWeight: 600 }}>{limitsBadge}</span>
+            )}
           </button>
         ))}
       </div>
 
-      {tab === "registry" ? (
+      {tab === "limits" ? (
+        <ClientLimitsTab onNavigate={(_t, url) => navigate(url)} />
+      ) : tab === "registry" ? (
         <ReceivablesRegistry />
       ) : tab === "requests" ? (
         <ReceivablesPaymentRequests />
@@ -1129,46 +1151,41 @@ export function ReceivablesSection({
                               борг» кнопки немає — там сума по всьому екрану. */}
                           <td style={{ textAlign: "left", verticalAlign: "middle", position: "relative",
                                        fontSize: "var(--fs-xs)" }}>
-                            <div className="recv-limitcell">
-                              <span className="recv-limitval" style={{ display: "flex", gap: 6 }}>
-                                <span style={{ color: "var(--text-muted)", minWidth: 34 }}>дні</span>
-                                <span style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-2, inherit)" : "var(--warn)" }}>
-                                  <Tip body={limitHint(c.limitDays)}>{limitLabel(c.limitDays)}</Tip>
+                            {/* 📒 ЛІМІТ — З «ЛІМІТІВ КЛІЄНТІВ» (пакет Сергія, ТЗ §6.4, макет v7 K-18…K-20): дві строки, як були, але ліміт
+                                не зникає разом із рахунками; олівці лише Сергію з причиною (зміна йде в історію ліміту), своїм —
+                                «Запросити зміну». Старі олівці (`LimitEditor`) прибрано за ТЗ. Поки відповідь не прийшла (чи збій) —
+                                ті самі дві строки з дзеркала в `receivables`, без дій: не «не узгоджено» всім. */}
+                            {debtorLimits.loaded ? (
+                              <DebtorLimitCell debtor={{ key: c.clientKey, name: c.clientName }} cell={debtorLimits.cells[c.clientKey]}
+                                canEdit={debtorLimits.canEdit} onSaved={() => { debtorLimits.reload(); onRefresh?.(); }}
+                                onNavigate={(_t, url) => navigate(url)} />
+                            ) : (<>
+                              <div className="recv-limitcell">
+                                <span className="recv-limitval" style={{ display: "flex", gap: 6 }}>
+                                  <span style={{ color: "var(--text-muted)", minWidth: 34 }}>дні</span>
+                                  <span style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-2, inherit)" : "var(--warn)" }}>
+                                    <Tip body={limitHint(c.limitDays)}>{limitLabel(c.limitDays)}</Tip>
+                                  </span>
                                 </span>
-                              </span>
-                              {canSetLimit && (
-                                <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
-                                  title="Змінити узгоджену відстрочку" aria-label="Змінити узгоджену відстрочку"
-                                  className="recv-ico">✏️</button>
-                              )}
-                            </div>
-                            <div className="recv-limitcell" style={{ marginTop: 3 }}>
-                              <span className="recv-limitval" style={{ display: "flex", gap: 6 }}>
-                                <span style={{ color: "var(--text-muted)", minWidth: 34 }}>сума</span>
-                                <span className="recv-num"
-                                  style={{ color: isOverAmount(c) ? "#dc2626"
-                                                : amountLimitState(c.limitAmount) === "agreed" ? "var(--text-2, inherit)" : "var(--warn)" }}>
-                                  <Tip body={amountLimitHint(c.limitAmount)}>
-                                    {amountLimitLabel(c.limitAmount)}
-                                    {amountLimitState(c.limitAmount) === "agreed" && (
-                                      <span style={{ marginLeft: 4, color: isOverAmount(c) ? "#dc2626" : "var(--text-muted)" }}>
-                                        {isOverAmount(c) ? "переліміт" : "у межах"}
-                                      </span>
-                                    )}
-                                  </Tip>
+                              </div>
+                              <div className="recv-limitcell" style={{ marginTop: 3 }}>
+                                <span className="recv-limitval" style={{ display: "flex", gap: 6 }}>
+                                  <span style={{ color: "var(--text-muted)", minWidth: 34 }}>сума</span>
+                                  <span className="recv-num"
+                                    style={{ color: isOverAmount(c) ? "#dc2626"
+                                                  : amountLimitState(c.limitAmount) === "agreed" ? "var(--text-2, inherit)" : "var(--warn)" }}>
+                                    <Tip body={amountLimitHint(c.limitAmount)}>
+                                      {amountLimitLabel(c.limitAmount)}
+                                      {amountLimitState(c.limitAmount) === "agreed" && (
+                                        <span style={{ marginLeft: 4, color: isOverAmount(c) ? "#dc2626" : "var(--text-muted)" }}>
+                                          {isOverAmount(c) ? "переліміт" : "у межах"}
+                                        </span>
+                                      )}
+                                    </Tip>
+                                  </span>
                                 </span>
-                              </span>
-                              {canSetLimit && (
-                                <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
-                                  title="Змінити ліміт суми" aria-label="Змінити ліміт суми"
-                                  className="recv-ico">✏️</button>
-                              )}
-                            </div>
-                            {limitFor === c.clientKey && (
-                              <LimitEditor client={c}
-                                onClose={() => setLimitFor(null)}
-                                onDone={() => { setLimitFor(null); onRefresh?.(); }} />
-                            )}
+                              </div>
+                            </>)}
                           </td>
 
                           {/* 🗓 ДОМОВЛЕНІСТЬ — ТРИ ЯРУСИ, А НЕ ОДИН ФЛЕКС-РЯДОК.

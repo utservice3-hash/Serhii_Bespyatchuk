@@ -112,7 +112,11 @@ export function stageName(pipelines: KommoPipeline[], lead: Pick<KommoLead, 'pip
 
 const sumNet = (l: Line[]) => l.reduce((s, x) => s + x.net, 0);
 
-/** Угода Kommo → знімок для реєстру. Підсумки й бюджет — з CRM як є; порожнє поле підсумку → сума рядків. */
+/**
+ * Угода Kommo → знімок для реєстру. Підсумки — з CRM як є; порожнє поле підсумку → сума рядків.
+ * Маржа = «Расчет приходов» − «Расчет расходов». «Бюджет» угоди (lead.price) Kommo зберігає БЕЗ знака:
+ * угода 62774335 — price 1520 при 30 400 − 31 920 = −1 520. До 23.10 маржа бралась із price → мінусові угоди показувались з «+».
+ */
 export function leadToCrmDeal(lead: KommoLead, contacts: KommoContact[], stage: string): CrmDeal {
   const inc = leadLines(lead, 'inc'), exp = leadLines(lead, 'exp');
   const incTotal = num(first(lead.custom_fields_values, KOMMO_FIELDS.incTotal)) ?? sumNet(inc);
@@ -124,6 +128,6 @@ export function leadToCrmDeal(lead: KommoLead, contacts: KommoContact[], stage: 
     client: pickClient(lead, contacts),
     carrier: text(first(lead.custom_fields_values, KOMMO_FIELDS.carrier)),
     inc, exp, incTotal, expTotal,
-    budget: typeof lead.price === 'number' ? lead.price : incTotal - expTotal,
+    budget: Math.round((incTotal - expTotal) * 100) / 100,
   };
 }

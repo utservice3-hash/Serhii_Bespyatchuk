@@ -280,16 +280,6 @@ test("#180 ліміт у синку береться З ТАБЛИЦІ, а гу�
     "🔴 вік боргу більше не береться з ядра — він знову звідкись приходить");
 });
 
-test("#184 кнопки ліміту немає БЕЗ ПРАВА — умова у фронті, а не 403 після кліку", () => {
-  const route = readFileSync(SRC("routes/dashboard.ts"), "utf8");
-  assert.match(route, /canSetLimit:\s*roleHasPerm\(auth\.roleKey,\s*"manage_credit_limits"\)/,
-    "🔴 сервер не віддає canSetLimit тим самим виразом, що гейтить роут");
-  const sec = readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-  assert.match(sec, /\{canSetLimit &&/, "🔴 кнопка ліміту малюється без перевірки права");
-  assert.match(sec, /<LimitEditor/, "🔴 редактор не підключений");
-});
-
 test("#182 фронт і бек рахують прострочку ОДНАКОВО (дзеркало двох мов)", () => {
   const fe = readFileSync(FE("pages/dashboard/receivablesView.ts"), "utf8");
   // Той самий вираз двома мовами. Порівнюємо ПОВЕДІНКУ на спільних випадках,

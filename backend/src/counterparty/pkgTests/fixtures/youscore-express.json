@@ -1,0 +1,11 @@
+{
+  "actualDate": "2026-10-20T00:00:00", "code": "41234567", "url": "https://youcontrol.com.ua/contractor/?id=1",
+  "totalMaxCaution": 0, "totalAverageCaution": 1, "totalMinCaution": 3, "totalEmptyCaution": 1, "expressAnalysisIndex": "B",
+  "features": [
+    { "featureId": 1, "featureName": "Податковий борг", "actualDate": null, "group": "Фінанси", "groupId": 1, "caution": "min", "value": "Не виявлено", "valueCode": 0, "prompt": null, "data": null },
+    { "featureId": 2, "featureName": "Масова адреса реєстрації", "actualDate": null, "group": "Реєстр", "groupId": 2, "caution": "min", "value": "Ні", "valueCode": 0, "prompt": null, "data": null },
+    { "featureId": 3, "featureName": "Відкриті виконавчі провадження", "actualDate": null, "group": "Суди", "groupId": 3, "caution": "average", "value": "1 провадження", "valueCode": 1, "prompt": null, "data": null },
+    { "featureId": 4, "featureName": "Санкції", "actualDate": null, "group": "Санкції", "groupId": 4, "caution": "empty", "value": null, "valueCode": -1, "prompt": null, "data": null },
+    { "featureId": 5, "featureName": "Зміна керівника", "actualDate": null, "group": "Реєстр", "groupId": 2, "caution": "min", "value": "Не змінювався", "valueCode": 0, "prompt": null, "data": null }
+  ]
+}

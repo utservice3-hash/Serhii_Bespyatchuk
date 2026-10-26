@@ -1,0 +1,11 @@
+{
+  "nameChanges": [ { "dateChanges": "2015-11-03T00:00:00", "longName": "ТОВ \"ЛІСОСТЕП АГРОХОЛД\"", "shortName": null } ],
+  "contactsChanges": [],
+  "managerChanges": [ { "dateChanges": "2015-11-03T00:00:00", "name": "КОВАЛЬЧУК АНДРІЙ СТЕПАНОВИЧ" } ],
+  "mainActivityChanges": [],
+  "foundersChanges": [
+    { "dateChanges": "2015-11-03T00:00:00", "founders": [ { "name": "КОВАЛЬЧУК АНДРІЙ СТЕПАНОВИЧ", "code": null, "capital": 2500000, "type": 1 } ] },
+    { "dateChanges": "2018-04-11T00:00:00", "founders": [ { "name": "КОВАЛЬЧУК АНДРІЙ СТЕПАНОВИЧ", "code": null, "capital": 1750000, "type": 1 }, { "name": "КОВАЛЬЧУК ОЛЕНА МИКОЛАЇВНА", "code": null, "capital": 750000, "type": 1 } ] }
+  ],
+  "capitalChanges": [ { "dateChanges": "2015-11-03T00:00:00", "sum": 2500000 } ]
+}

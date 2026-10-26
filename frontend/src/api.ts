@@ -1923,6 +1923,8 @@ export interface AppSettings {
   loyaltyWindowMonths: number;
   sleepingWindowMonths: number;
   receivablesOverdueWarnDays: number;
+  /** 🧾 Період «без роботи», днів (задача 6455): немає ні угоди «від рахунку», ні оплати — клієнт «без роботи». */
+  noWorkDays: number;
   ratesFallbackFullPerKm: number;
   ratesFallbackPartPerKm: number;
   /** Мʼяка нижня межа плану, ₴. 0 = межу свідомо знято. `null` = повернути дефолт. */
@@ -4497,6 +4499,11 @@ export interface ClientPlanRow {
   historyInv: number[]; avg3: number;
   /** Без роботи (30 днів без контакту й без кроку з датою) · без задачі · задача прострочена — з сервера (`core/repeatScreenRules.ts`). */
   work: { noWork: boolean; noTask: boolean; overdue: boolean };
+  /** 🧾 Чим підтверджено роботу за період (задача 6455): угода «від рахунку» і / або оплата у Виписці; обидва `null` — «без роботи». */
+  workProof: {
+    invoice: { kommoId: number; stage: string; at: string | null; open: boolean; url: string } | null;
+    payment: { at: string; amount: number } | null;
+  };
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
   /** 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1) — з сервера (`core/clientTabs.ts`), фронт не рахує. */

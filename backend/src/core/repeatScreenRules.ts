@@ -42,16 +42,26 @@ export function deltaVsAvg(cur: number, prev: readonly number[]): { avg: number;
   return { avg: Math.round(avg), delta: Math.round(cur - avg) };
 }
 
+/**
+ * Період «без роботи», днів — ЗА ЗАМОВЧУВАННЯМ. Справжнє значення — налаштування `noWorkDays` (Налаштування → Загальні),
+ * роут читає його й передає сюди (ядро `app_settings` не читає — гейт `#6 КОНФІГ`). Остаточне число погоджується із
+ * Сергієм (задача 6455).
+ */
 export const NO_WORK_DAYS = 30;
+export const NO_WORK_DAYS_MIN = 7;
+export const NO_WORK_DAYS_MAX = 180;
 
-const daysBetween = (from: string, to: string) =>
-  Math.round((Date.parse(`${to.slice(0, 10)}T00:00:00Z`) - Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
+/** Перший день періоду «без роботи»: `today − days`, обидва кінці включно (за Києвом). */
+export function noWorkFrom(today: string, days: number): string {
+  const d = new Date(`${today.slice(0, 10)}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
 
 export interface WorkInput {
-  /** Остання розмова в Ringostat, YYYY-MM-DD; `null` — не було. */
-  lastTalk: string | null;
-  /** Останній ручний контакт (Viber, Telegram, email…), YYYY-MM-DD…; `null` — не було. */
-  lastManual: string | null;
+  /** Угода «від рахунку» за період або зараз у роботі на такому етапі (`clientWorkProof.invoiceProofByClientKey`). */
+  invoice: { kommoId: number } | null;
+  /** Оплата від клієнта у Виписці за період (`clientWorkProof.paymentProofByClientKey`). */
+  payment: { at: string } | null;
   /** Відкритий наступний крок у картці клієнта і його дата (може бути без дати). */
   stepOpen: boolean; stepDue: string | null;
   /** Відкрита задача по клієнту в Задачнику і її строк. */
@@ -60,19 +70,17 @@ export interface WorkInput {
 }
 
 /**
- * Позначки рядка. «Задача» по клієнту — відкритий наступний крок у картці АБО відкрита задача в Задачнику: обидва
- * кажуть «що зробити і до коли».
- *  · `noWork` (регламент ред. 2, п.4.2): за 30 днів ні розмови в Ringostat, ні ручного контакту, і немає наступного
- *    кроку чи задачі з датою від сьогодні;
+ * Позначки рядка. «Задача» по клієнту — відкритий наступний крок у картці АБО відкрита задача в Задачнику.
+ *  · `noWork` (задача 6455, правило Сергія 20.10.2026): за період НЕМАЄ ні угоди на етапі «Виставлення рахунку» або
+ *    далі, ні оплати від клієнта у Виписці. Розмови, ручні контакти, кроки й задачі роботу не підтверджують (до
+ *    23.10.2026 підтверджували — регламент ред. 2, п.4.2);
  *  · `noTask` — немає жодної відкритої задачі чи кроку;
  *  · `overdue` — дата відкритої задачі чи кроку вже минула.
  */
 export function workFlags(w: WorkInput): { noWork: boolean; noTask: boolean; overdue: boolean } {
-  const old = (d: string | null) => d == null || daysBetween(d, w.today) > NO_WORK_DAYS;
-  const ahead = (open: boolean, due: string | null) => open && due != null && due.slice(0, 10) >= w.today;
   const late = (open: boolean, due: string | null) => open && due != null && due.slice(0, 10) < w.today;
   return {
-    noWork: old(w.lastTalk) && old(w.lastManual) && !ahead(w.stepOpen, w.stepDue) && !ahead(w.taskOpen, w.taskDue),
+    noWork: w.invoice == null && w.payment == null,
     noTask: !w.stepOpen && !w.taskOpen,
     overdue: late(w.stepOpen, w.stepDue) || late(w.taskOpen, w.taskDue),
   };

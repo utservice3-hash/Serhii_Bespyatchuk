@@ -1,0 +1,26 @@
+{
+  "totalResults": 5,
+  "nextPageUrl": null,
+  "results": [
+    { "group": "g1", "caseNumber": "916/2231/26", "sideType": 2,
+      "autoCases": [ { "caseSideType": "Відповідач", "courtName": "Господарський суд Одеської області", "registrationDate": "2026-08-04T00:00:00", "courtPersonDate": null, "description": "стягнення заборгованості за договором транспортного експедирування", "sum": 148600, "sides": [], "courtPerson": [] } ],
+      "considerationDocuments": [ { "courtDate": "2026-11-12T10:00:00", "sides": [], "courtName": "Господарський суд Одеської області", "description": "стягнення заборгованості", "judgeName": "Петренко І. В.", "sum": 148600, "caseSideType": "Відповідач" } ],
+      "documents": [ { "id": 1, "decisionDate": "2026-08-06T00:00:00", "lawDate": null, "decisionForm": "Ухвала", "legalProcedureForm": "Господарське", "courtName": "Господарський суд Одеської області", "judgeName": "Петренко І. В.", "resolutionPart": "Відкрити провадження у справі.", "caseCategory": "Спори, що виникають з договорів перевезення", "urlToDocument": "https://youcontrol.com.ua/catalog/court-document/1/" } ] },
+    { "group": "g2", "caseNumber": "902/1180/25", "sideType": 2,
+      "autoCases": [ { "caseSideType": "Відповідач", "courtName": "Господарський суд Вінницької області", "registrationDate": "2025-02-10T00:00:00", "description": "відшкодування вартості вантажу, пошкодженого під час перевезення", "sum": 214500 } ],
+      "considerationDocuments": [],
+      "documents": [
+        { "id": 2, "decisionDate": "2025-08-01T00:00:00", "lawDate": "2025-09-02T00:00:00", "decisionForm": "Рішення", "legalProcedureForm": "Господарське", "courtName": "Господарський суд Вінницької області", "resolutionPart": "Позов задовольнити повністю. Стягнути з відповідача на користь позивача 214 500,00 грн.", "caseCategory": "Перевезення", "urlToDocument": "https://youcontrol.com.ua/catalog/court-document/2/" },
+        { "id": 3, "decisionDate": "2025-02-12T00:00:00", "lawDate": null, "decisionForm": "Ухвала", "resolutionPart": "Відкрити провадження.", "caseCategory": "Перевезення" } ] },
+    { "group": "g3", "caseNumber": "910/100/26", "sideType": 1,
+      "autoCases": [ { "caseSideType": "Позивач", "courtName": "Господарський суд міста Києва", "registrationDate": "2026-01-10T00:00:00", "description": "стягнення боргу за перевезення вантажу", "sum": 50000 } ],
+      "considerationDocuments": [], "documents": [] },
+    { "group": "g4", "caseNumber": "904/77/26", "sideType": 2,
+      "autoCases": [ { "caseSideType": "Відповідач", "courtName": "Господарський суд Дніпропетровської області", "registrationDate": "2026-03-01T00:00:00", "description": "стягнення орендної плати", "sum": 12000 } ],
+      "considerationDocuments": [ { "courtDate": "2026-12-01T10:00:00", "caseSideType": "Відповідач", "description": "оренда" } ], "documents": [] },
+    { "group": "g5", "caseNumber": "906/55/24", "sideType": 2,
+      "autoCases": [ { "caseSideType": "Відповідач", "courtName": "Господарський суд Житомирської області", "registrationDate": "2024-05-01T00:00:00", "description": "стягнення збитків за договором перевезення", "sum": 30000 } ],
+      "considerationDocuments": [],
+      "documents": [ { "id": 5, "decisionDate": "2024-10-01T00:00:00", "lawDate": "2024-11-05T00:00:00", "decisionForm": "Рішення", "resolutionPart": "У задоволенні позову відмовити повністю.", "caseCategory": "Перевезення" } ] }
+  ]
+}

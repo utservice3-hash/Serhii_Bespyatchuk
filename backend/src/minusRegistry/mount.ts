@@ -6,6 +6,7 @@ import { NAME_SQL } from "../surveys/surveyRules.js";
 import { minusRegistryRouter } from "./router.js";
 import type { DealSource } from "./kommoSource.js";
 import { approverIds, registryRoleOf } from "./roles.js";
+import { teamMemberUserIds } from "./team.js";
 import type { Role } from "./shared/minusRegistry.js";
 
 /**
@@ -29,10 +30,14 @@ export function buildMinusDealsRouter(deals: DealSource): Router {
     const role = registryRoleOf({ userId: a.userId, roleKey: a.roleKey, adminScope: isAdminScope(a) }, approverIds());
     if (!role) { res.status(403).json({ error: "Немає доступу до реєстру." }); return; }
     pool.query<{ name: string | null }>(`${NAME_SQL} WHERE u.id = $1`, [a.userId])
-      .then((q) => { (req as Request & { user?: unknown }).user = { id: String(a.userId), name: q.rows[0]?.name ?? "", role }; next(); })
+      .then((q) => { (req as Request & { user?: unknown }).user = { id: String(a.userId), name: q.rows[0]?.name ?? "", role, teamId: a.teamId }; next(); })
       .catch(next);
   });
-  r.use(minusRegistryRouter(pool, { deals, roleOf: (u) => (u.role as Role | undefined) ?? null }));
+  r.use(minusRegistryRouter(pool, {
+    deals, roleOf: (u) => (u.role as Role | undefined) ?? null,
+    // v1.1: тім-лід бачить запити команди (лише перегляд) — `managers.team_id` його сесії
+    teamOf: (u) => teamMemberUserIds((u as { teamId?: number | null }).teamId, Number(u.id)),
+  }));
   return r;
 }
 
