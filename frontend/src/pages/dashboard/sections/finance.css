@@ -34,3 +34,7 @@
   .fin-cell { width: 84px; }
   .fin-table td.ind2 { padding-left: 20px; }
 }
+
+/* 📒 «Угоди місяця» (26.10.2026): щільні рядки, як у таблиці «Сделки» — більше угод на екрані. */
+.mr-deals th, .mr-deals td { padding: 4px 8px; vertical-align: top; }
+.mr-deals tbody tr:hover td { background-color: var(--surface-2, var(--bg)); }

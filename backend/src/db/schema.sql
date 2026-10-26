@@ -6675,3 +6675,37 @@ SELECT v.company, 'privat', v.label, v.currency, 'PRIVAT_TOKEN_ELOGIST', true, D
     ('elogist', 'ТОВ ЄЛОГІСТ · EUR', 'EUR', 'UA353052990000026000015029239')
   ) AS v(company, label, currency, iban)
  WHERE EXISTS (SELECT 1 FROM step) AND NOT EXISTS (SELECT 1 FROM bank_accounts WHERE company = 'elogist');
+
+-- 💱 НЕОПЛАЧЕНІ РАХУНКИ 1С з 2026 року (сервіс `unpaid-invoices`, 1С 25.10.2026; задача #5297; рішення Романа 26.10.2026
+-- «лише 2026 рік і щоб можна було глянути, що там не так»). Пише лише `syncUnpaidInvoices` (щогодини о :15, заміна цілком).
+-- Звідси — «Валютна дебіторка» (журнал `receivables_fx_totals`, джерело `unpaid-2026`) і список рахунків під нею.
+CREATE TABLE IF NOT EXISTS onec_unpaid_invoices (
+  uid TEXT NOT NULL, number TEXT NOT NULL, invoice_date DATE NOT NULL, organization TEXT NOT NULL, contractor TEXT NOT NULL, edrpou TEXT,
+  currency TEXT NOT NULL, invoice_sum NUMERIC(14,2) NOT NULL, paid_sum NUMERIC(14,2) NOT NULL, remaining NUMERIC(14,2) NOT NULL,
+  realized BOOLEAN NOT NULL, partially_paid BOOLEAN NOT NULL, debt_account TEXT, due_date DATE, manager TEXT, deal_id BIGINT, comment TEXT
+);
+CREATE TABLE IF NOT EXISTS onec_unpaid_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), synced_at TIMESTAMPTZ, rows INTEGER, error TEXT, error_at TIMESTAMPTZ
+);
+-- Звідки підсумок журналу: NULL — рахунок 362 (до 26.10.2026), `unpaid-2026` — сервіс неоплачених рахунків.
+ALTER TABLE receivables_fx_totals ADD COLUMN IF NOT EXISTS source TEXT;
+REVOKE ALL ON onec_unpaid_invoices FROM ai_readonly;
+REVOKE ALL ON onec_unpaid_state FROM ai_readonly;
+
+-- 💾 ФІНАНСОВІ ПОЛЯ УГОД «ПОВНОГО ЦИКЛУ» З KOMMO (задача #5583, 26.10.2026) — щоб «Результат місяця» рахувався з бази
+-- за секунду, а не 55 с запитів до Kommo. Пише лише `syncDealFinance` (інкремент за датою зміни кожні 30 хв + разовий
+-- бекфіл з 01.01.2026). Рядок лише для успішних угод «Повного циклу»; хто вийшов з «Успішної» — рядок лишається, але
+-- екран його не бере (угоди відбирає `deals.status_id`).
+CREATE TABLE IF NOT EXISTS deal_fin_fields (
+  kommo_id BIGINT PRIMARY KEY, order_no TEXT, paid1c BOOLEAN NOT NULL DEFAULT false,
+  income NUMERIC(14,2), cash_expense NUMERIC(14,2),
+  in_vat NUMERIC(14,2) NOT NULL DEFAULT 0, in_novat NUMERIC(14,2) NOT NULL DEFAULT 0, in_cash NUMERIC(14,2) NOT NULL DEFAULT 0,
+  out_vat NUMERIC(14,2) NOT NULL DEFAULT 0, out_novat NUMERIC(14,2) NOT NULL DEFAULT 0, out_unload NUMERIC(14,2) NOT NULL DEFAULT 0,
+  out_cash NUMERIC(14,2) NOT NULL DEFAULT 0, untyped INTEGER NOT NULL DEFAULT 0,
+  kommo_updated_at TIMESTAMPTZ, synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS deal_fin_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), watermark TIMESTAMPTZ, synced_at TIMESTAMPTZ, last_count INTEGER, error TEXT, error_at TIMESTAMPTZ
+);
+REVOKE ALL ON deal_fin_fields FROM ai_readonly;
+REVOKE ALL ON deal_fin_state FROM ai_readonly;

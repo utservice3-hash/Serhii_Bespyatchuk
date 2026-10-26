@@ -1628,6 +1628,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/finance/kpi/plan", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 💱 Список валютних неоплачених рахунків (26.10.2026): хто бачить «Тиждень і місяць», той бачить і його.
+  { method: "GET", path: "/api/finance/fx-unpaid", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   // 🏁 «Результат місяця» (23.10.2026): перегляд — як «Тиждень і місяць»; рішення по угоді — deny-only (проба писала б у прод).
   { method: "GET", path: "/api/finance/month-result?m=2026-09", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
