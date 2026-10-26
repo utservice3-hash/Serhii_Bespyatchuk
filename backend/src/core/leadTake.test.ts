@@ -366,6 +366,8 @@ test("#2444 ЖИВИЙ SQL: серія «Статистик» за тижден�
   await deal(201, 1, SUN_LATE); await ev(201, SUN_LATE + 3 * MIN);
   await deal(202, 1, MON_EARLY); await ev(202, kyivAt(2026, 9, 21, 8, 21));
   await deal(203, 3, kyivAt(2026, 9, 22, 10, 0)); await ev(203, kyivAt(2026, 9, 22, 10, 40));
+  // Робочий час (серії «Статистик» — лише робочий, Роман 26.10.2026): у команди 13 тиждень 21.09 має свою заявку в робочі години.
+  await deal(204, 1, kyivAt(2026, 9, 23, 11, 0)); await ev(204, kyivAt(2026, 9, 23, 11, 3));
   const { COMPUTERS } = await import("../routes/statisticsSeries.js");
   for (const teamId of [null, 13]) {
     const series = async (k: string) => new Map((await COMPUTERS[k]("week", "2026-09-14", "2026-09-27", teamId, null)).map((p) => [p.period, p.value]));
@@ -379,9 +381,13 @@ test("#2444 ЖИВИЙ SQL: серія «Статистик» за тижден�
       assert.equal(med.get(wk), dept.medianMin ?? undefined, `🔴 медіана тижня ${wk} (команда ${teamId ?? "усі"}): серія ≠ вікно Звіту`);
     }
   }
-  // Межа тижня справді по обидва боки: неділя 23:30 — у тижні 14.09 (8 заявок фікстури + вона), понеділок 00:30 — у 21.09.
-  const n = async (wk: string) => (await x.lt.leadTakeTable({ ...weekRange(wk), ...x.lt.SERIES_TAKE_FILTER })).rows.find((r) => r.kind === "dept")!.n;
-  assert.deepEqual([await n("2026-09-14"), await n("2026-09-21")], [9, 2], "🔴 заявки на межі тижня за Києвом не у своїх тижнях");
+  // Межа тижня за Києвом — на ядрі серій із фільтром «Все» (заявки на межі неділя 23:30 / понеділок 00:30 — неробочі, тож
+  // під робочим фільтром серій їх не видно): неділя — у тижні 14.09 (8 заявок фікстури + вона), понеділок — у 21.09.
+  const all = { source: "all" as const, time: "all" as const };
+  const byWeek = new Map((await x.lt.leadTakeSeries({ from: "2026-09-14", to: "2026-09-27", ...all }, "week")).map((p) => [p.bucket, p.stats.n]));
+  const n = async (wk: string) => (await x.lt.leadTakeTable({ ...weekRange(wk), ...all })).rows.find((r) => r.kind === "dept")!.n;
+  assert.deepEqual([byWeek.get("2026-09-14"), byWeek.get("2026-09-21")], [await n("2026-09-14"), await n("2026-09-21")], "🔴 ядро серій кошикує тиждень інакше, ніж вікно");
+  assert.deepEqual([await n("2026-09-14"), await n("2026-09-21")], [9, 3], "🔴 заявки на межі тижня за Києвом не у своїх тижнях");
 });
 
 /**
