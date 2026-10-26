@@ -245,6 +245,87 @@ export const DEFAULT_OPT_ON: Record<string, boolean> = {
 export const OPTIONAL_COLS = REPORT_COLS.filter((c) => !c.core);
 
 /**
+ * 🗂 ГРУПИ КОЛОНОК У МЕНЮ «Колонки» (26.10.2026).
+ *
+ * Окрема мапа, а не поле в кожному записі реєстру: `Record<ColKey, …>` змушує
+ * tsc вимагати групу для КОЖНОЇ колонки — нова колонка без групи не збереться,
+ * а не тихо випаде з меню. І записи реєстру, які читають текстові гейти, не
+ * зсуваються.
+ */
+export type ColGroup = "base" | "leads" | "src" | "money" | "expect" | "auto" | "calls";
+export const COL_GROUPS: { key: ColGroup; title: string }[] = [
+  { key: "base", title: "Менеджер" },
+  { key: "money", title: "Гроші" },
+  { key: "expect", title: "Очікування й затор" },
+  { key: "leads", title: "Ліди й конверсія" },
+  { key: "src", title: "Створені за джерелом" },
+  { key: "auto", title: "Авто" },
+  { key: "calls", title: "Дзвінки й реакція" },
+];
+export const COL_GROUP_OF: Record<ColKey, ColGroup> = {
+  rank: "base", name: "base", status: "base",
+  fact: "money", plan: "money", pct: "money", avgCheck: "money",
+  factNew: "money", factRepeat: "money", factUndef: "money", projected: "money", needPerDay: "money", dobir: "money",
+  expectThisMonth: "expect", expectNew: "expect", expectRepeat: "expect", awaitNoDate: "expect",
+  jamDeals: "expect", jam: "expect",
+  created: "leads", ads: "leads", leadgen: "leads", conv: "leads", convAd: "leads", convLg: "leads",
+  srcAd: "src", srcLeadgen: "src", srcOther: "src", srcNoChannel: "src",
+  dispatch: "auto", dispRevenue: "auto",
+  talks: "calls", normDays: "calls", firstTouch: "calls", responseTime: "calls",
+};
+
+/**
+ * 💾 ВИБІР КОЛОНОК — ОСОБИСТИЙ ДЛЯ КОРИСТУВАЧА (26.10.2026).
+ *
+ * Доти ключ був один на браузер (`rptTableCols`): двоє людей за одним компʼютером
+ * перемикали колонки ОДНЕ ОДНОМУ. Тепер ключ — `rptTableCols:<userId>`. Старий
+ * ключ лишається ФОЛБЕКОМ на читання: інакше всі, хто вже налаштував таблицю,
+ * після викату побачили б типовий набір і вирішили б, що вибір «злетів». Старий
+ * ключ не стирається — ним можуть ще користуватись інші люди того ж браузера.
+ *
+ * Сховище передається параметром, а не береться глобально: модуль лишається
+ * чистим, і поведінку (а не текст) перевіряють гейти #2432–#2434. Кожне читання й
+ * запис — у try/catch: приватне вікно чи заблоковане сховище кидають на доступі,
+ * і таблиця мусить відмалюватись із типовим набором, а не впасти.
+ */
+export const COLS_LS_LEGACY = "rptTableCols";
+export interface ColsStore { getItem(key: string): string | null; setItem(key: string, value: string): void }
+export const colsStorageKey = (userId: number | null | undefined): string =>
+  userId != null ? `${COLS_LS_LEGACY}:${String(userId)}` : COLS_LS_LEGACY;
+
+export function readColPrefs(store: ColsStore | null, userId: number | null | undefined): Record<string, boolean> {
+  try {
+    if (!store) return { ...DEFAULT_OPT_ON };
+    const own = store.getItem(colsStorageKey(userId));
+    const raw: unknown = JSON.parse((own ?? store.getItem(COLS_LS_LEGACY)) || "null");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_OPT_ON };
+    const picked: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(raw)) if (typeof v === "boolean") picked[k] = v;
+    return { ...DEFAULT_OPT_ON, ...picked };
+  } catch {
+    return { ...DEFAULT_OPT_ON };
+  }
+}
+
+/** Пише ЛИШЕ особистий ключ. `false` — сховище недоступне (вибір живе до перезавантаження). */
+export function writeColPrefs(store: ColsStore | null, userId: number | null | undefined, prefs: Record<string, boolean>): boolean {
+  try {
+    if (!store) return false;
+    store.setItem(colsStorageKey(userId), JSON.stringify(prefs));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** «Скинути до типових» — рівно `DEFAULT_OPT_ON`, копією (щоб стан не ділив обʼєкт із реєстром). */
+export const resetColPrefs = (): Record<string, boolean> => ({ ...DEFAULT_OPT_ON });
+
+/** «Усі» — кожна опційна колонка увімкнена. */
+export const allColPrefs = (): Record<string, boolean> =>
+  Object.fromEntries(OPTIONAL_COLS.map((c) => [c.key, true]));
+
+/**
  * СОРТУВАННЯ. `null` — це «даних немає», і воно ЗАВЖДИ внизу, у будь-якому
  * напрямку: інакше перемикання ↑↓ піднімало б нагору порожні рядки, і таблиця
  * читалась би як «у цих найгірше», хоч про них просто нічого не відомо.

@@ -23,14 +23,14 @@ export interface MissingInput {
 /**
  * Чого бракує, щоб створити задачу — словами, у тому порядку, в якому людина заповнює форму.
  * - назва — завжди;
- * - результат — для стратегічної цілі (рішення 23.10.2026);
+ * - результат — для стратегічної задачі (рішення 23.10.2026);
  * - «кому ставите» — коли задачу ставлять зі «Спільних» (там виконавець обовʼязковий, себе не підставляємо).
  * Порожній масив — можна створювати. Тримає `#2390`.
  */
 export function formMissing(f: MissingInput, o: { sharedIntent: boolean }): string[] {
   const m: string[] = [];
   if (!f.title.trim()) m.push("опис задачі");
-  if (f.strategic && !f.goalResult.trim()) m.push("результат цілі");
+  if (f.strategic && !f.goalResult.trim()) m.push("результат стратегічної задачі");
   if (o.sharedIntent && f.assigneeId === "" && f.assigneeUserId === "") m.push("кому ставите");
   return m;
 }

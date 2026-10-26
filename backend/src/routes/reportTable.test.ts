@@ -511,3 +511,200 @@ test("#88 ТОКЕНИ СТАТУСІВ ВИЗНАЧЕНІ В ТЕМНІЙ ТЕ�
   for (const tok of ["--ok-bg:", "--danger-bg:"])
     assert.ok(dark.includes(tok), `🔴 ${tok} зник із темної теми`);
 });
+
+// ─────────────────── #2430 / #2431 · липка шапка й підсумок (26.10.2026) ───────────────────
+
+/**
+ * #2430 — ШАПКА ЛИПНЕ, БО Є ДО ЧОГО ЛИПНУТИ.
+ *
+ * 🔴 `th` мав `sticky; top: 0` і раніше — і не тримався. Обгортка мала лише
+ * `overflowX: auto`, а це робить її скрол-контейнером і по вертикалі; `sticky`
+ * чіпляється до найближчого такого контейнера, який при необмеженій висоті не
+ * скролиться ніколи. Тобто правильний `th` у неправильній обгортці — нуль ефекту,
+ * і жоден інший гейт цього не бачить. Тому стережеться ПАРА: обгортка + шапка.
+ *
+ * Межі змістові, не за довжиною: обгортка — це останній `<div` перед САМОЮ
+ * таблицею, шапка — тіло `<th key={c.key}`. Ключі — з межею слова зліва, щоб
+ * `overflowX: "auto"` не зарахувався як `overflow: "auto"`.
+ *
+ * 🧨 САБОТАЖ: повернути обгортці `overflowX: "auto"` без межі висоти → червоніє.
+ */
+test("#2430 ШАПКА ЛИПНЕ: обгортка таблиці скролиться по обох осях із межею висоти, th — top: 0", () => {
+  const s = readFileSync(TABLE_TSX, "utf8");
+  const parts = s.split('<table className="data-table rpt-table"');
+  assert.equal(parts.length, 2, "🔴 таблиці `data-table rpt-table` немає рівно однієї — розбір зламався");
+  const before = parts[0];
+  const wrapTag = before.slice(before.lastIndexOf("<div"));
+  const wrapStyle = wrapTag.split("style={{")[1]?.split("}}")[0] ?? "";
+  assert.ok(wrapStyle.length > 0, "🔴 обгортка таблиці без style — скрол-контейнера немає");
+  assert.match(wrapStyle, /(?<![\w$])maxHeight:\s*"calc\(100vh - \d+px\)"/,
+    "🔴 обгортка таблиці без межі висоти (maxHeight від вікна) — вона ніколи не скролиться "
+    + "вертикально, і липка шапка їде разом зі сторінкою");
+  assert.match(wrapStyle, /(?<![\w$])overflow:\s*"auto"/,
+    "🔴 обгортка не скролиться по ОБОХ осях — шапка й колонка «Менеджер» липнуть до різних контейнерів");
+  assert.equal(/(?<![\w$])overflow[XY]:/.test(wrapStyle), false,
+    "🔴 у обгортці окремий overflowX/overflowY — одна з осей знову без скролу");
+
+  const th = s.split("<th key={c.key}")[1]?.split("</th>")[0] ?? "";
+  assert.ok(th.length > 0, "🔴 шапки `<th key={c.key}` немає — розбір зламався");
+  assert.match(th, /(?<![\w$])position:\s*"sticky"/, "🔴 шапка не sticky");
+  assert.match(th, /(?<![\w$])top:\s*0(?![\w.$])/, "🔴 шапка не прибита до верху контейнера (top: 0)");
+  assert.match(th, /(?<![\w$])background:\s*"var\(--[\w-]+\)"/,
+    "🔴 у шапки немає непрозорого фону з токена теми — рядки просвічуватимуть крізь неї");
+});
+
+/**
+ * #2431 — ЗАГАЛЬНИЙ ПІДСУМОК ЛИПНЕ ДО НИЗУ, А КУТ — НАЙВИЩИЙ ШАР.
+ *
+ * Кут «Менеджер» у шапці липне по обох осях, тож під ним проїжджають і рядки
+ * (знизу), і клітинки шапки (збоку). Якщо хтось у тому самому контейнері має
+ * вищий шар — кут перекривається, і назва колонки зникає саме там, де видно
+ * найдовше. Числа беруться з коду `Cell` і `FootCell`, а не з домовленості.
+ *
+ * 🧨 САБОТАЖ: прибрати `bottom: 0` з підсумку → червоніє.
+ */
+test("#2431 ЗАГАЛЬНИЙ ПІДСУМОК ЛИПНЕ ДО НИЗУ, а кут «Менеджер» шапки — найвищий шар", () => {
+  const s = readFileSync(TABLE_TSX, "utf8");
+  const foot = s.split("function FootCell(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.ok(foot.length > 0, "🔴 компонента FootCell немає — розбір зламався");
+  assert.match(foot, /group \? null : \{[^}]*(?<![\w$])position: "sticky"[^}]*(?<![\w$])bottom: 0(?![\w.$])/,
+    "🔴 загальний підсумок не липне до низу — при довгому списку його не видно без прокрутки до кінця");
+  const tfoot = s.split("<tfoot>")[1]?.split("</tfoot>")[0] ?? "";
+  assert.ok(/<FootCell\b/.test(tfoot), "🔴 у tfoot немає FootCell — розбір зламався");
+  assert.equal(/(?<![\w$])group(?![\w$])/.test(tfoot), false,
+    "🔴 загальний підсумок рендериться як підсумок КОМАНДИ — він не липне");
+
+  const corner = s.split("<th key={c.key}")[1]?.match(/zIndex: c\.key === "name" \? (\d+) : (\d+)/);
+  assert.ok(corner, "🔴 у шапки немає окремого шару для кута «Менеджер»");
+  const top = Number(corner[1]);
+  assert.ok(top > Number(corner[2]), "🔴 кут шапки не вищий за решту шапки");
+  const cell = s.split("function Cell(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.ok(cell.length > 0, "🔴 компонента Cell немає — розбір зламався");
+  const others = [...`${cell}\n${foot}`.matchAll(/zIndex:([^,}\n]+)/g)]
+    .flatMap((m) => (m[1].match(/\d+/g) ?? []).map(Number));
+  assert.ok(others.length >= 3, `🔴 шарів у клітинках знайдено ${others.length} — розбір зламався`);
+  assert.ok(Math.max(...others) < top,
+    `🔴 клітинка таблиці має шар ${Math.max(...others)} ≥ кута шапки ${top} — вона перекриє назву колонки «Менеджер»`);
+});
+
+// ─────────────────── #2432…#2434 · меню колонок і особистий вибір (26.10.2026) ───────────────────
+
+/** Код без коментарів: пояснення в доккоментарі не має задовольняти гейт замість коду. */
+const codeOnly = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
+/** Сховище в памʼяті з лічильником записів — поведінку ключів перевіряємо виконанням. */
+function memStore(init: Record<string, unknown> = {}) {
+  const data = new Map<string, string>(Object.entries(init).map(([k, v]) => [k, JSON.stringify(v)]));
+  return {
+    data,
+    getItem: (k: string) => (data.has(k) ? data.get(k)! : null),
+    setItem: (k: string, v: string) => { data.set(k, v); },
+  };
+}
+
+/**
+ * #2432 — «СКИНУТИ ДО ТИПОВИХ» ПОВЕРТАЄ РІВНО `DEFAULT_OPT_ON`, «УСІ» — УСІ.
+ *
+ * Перевіряється ВИКОНАННЯМ реєстру: текст «Скинути» на кнопці нічого не каже про
+ * те, що вона ставить. І окремо — що кнопки меню викликають саме ці функції, що
+ * перелік галочок будується тим самим виразом, що й колись чипи (`#214b`), що меню
+ * закривається Escape і кліком поза ним, і що воно стоїть ПОЗА скрол-контейнером.
+ *
+ * 🧨 САБОТАЖ: `resetColPrefs` повертає типові + ще одну колонку → червоніє.
+ */
+test("#2432 МЕНЮ КОЛОНОК: «Скинути до типових» = DEFAULT_OPT_ON, «Усі» вмикає кожну опційну", async () => {
+  const { resetColPrefs, allColPrefs, DEFAULT_OPT_ON, OPTIONAL_COLS } = await loadCols();
+  const r = resetColPrefs();
+  assert.deepEqual(r, DEFAULT_OPT_ON,
+    "🔴 «Скинути до типових» ставить не DEFAULT_OPT_ON — людина отримає набір, якого ніхто не обирав");
+  assert.notEqual(r, DEFAULT_OPT_ON, "🔴 скидання віддає САМ обʼєкт реєстру — перша ж галочка зіпсує типові для всіх");
+  const all = allColPrefs();
+  const off = OPTIONAL_COLS.filter((c: any) => all[c.key] !== true).map((c: any) => c.key);
+  assert.deepEqual(off, [], "🔴 «Усі» лишає вимкненими: " + off.join(", "));
+
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(s, /onReset=\{\(\) => applyCols\(resetColPrefs\(\)\)\}/, "🔴 кнопка «Скинути» не кличе resetColPrefs");
+  assert.match(s, /onAll=\{\(\) => applyCols\(allColPrefs\(\)\)\}/, "🔴 кнопка «Усі» не кличе allColPrefs");
+  assert.match(s, /toggleable=\{OPTIONAL_COLS\.filter\(\(c\) => c\.key !== "factUndef"\)\}/,
+    "🔴 галочки меню будуються не тим виразом — умовна «Отримано · невизначено» стала б вимикатись");
+  assert.equal(/aria-pressed=\{!!optOn/.test(s), false, "🔴 ряд чипів колонок повернувся поруч із меню");
+
+  const pick = s.split("function ColumnPicker(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.ok(pick.length > 0, "🔴 компонента ColumnPicker немає");
+  assert.match(pick, /onClick=\{onReset\}>Скинути до типових</, "🔴 у меню немає «Скинути до типових»");
+  assert.match(pick, /onClick=\{onAll\}>Усі</, "🔴 у меню немає «Усі»");
+  assert.match(pick, /Колонки · \{shown\} з \{total\}/, "🔴 кнопка не каже, скільки колонок показано");
+  assert.match(pick, /<input type="checkbox" checked disabled \/>/, "🔴 обовʼязкові колонки не показані неактивними галочками");
+  assert.ok(pick.includes(">завжди<"), "🔴 обовʼязкові колонки без підпису «завжди»");
+  assert.ok(pick.includes('e.key === "Escape"'), "🔴 Escape не закриває меню");
+  assert.ok(pick.includes('addEventListener("mousedown"'), "🔴 клік поза меню його не закриває");
+  const at = s.indexOf("<ColumnPicker"), scroller = s.indexOf('<div className="chart-card"');
+  assert.ok(at > 0 && scroller > 0 && at < scroller,
+    "🔴 меню колонок опинилось усередині контейнера таблиці — скрол його обріже");
+});
+
+/**
+ * #2433 — КЛЮЧ ВИБОРУ КОЛОНОК ОСОБИСТИЙ.
+ *
+ * Доти ключ був один на браузер, і двоє людей за одним компʼютером перемикали
+ * колонки одне одному. Двоє користувачів у ОДНОМУ сховищі мусять читати своє й
+ * писати лише у своє — і не чіпати старий спільний ключ.
+ *
+ * 🧨 САБОТАЖ: `colsStorageKey` повертає старий спільний ключ → червоніє.
+ */
+test("#2433 КЛЮЧ ВИБОРУ КОЛОНОК ОСОБИСТИЙ: rptTableCols:<userId>, чужий вибір не читається й не пишеться", async () => {
+  const { colsStorageKey, readColPrefs, writeColPrefs } = await loadCols();
+  assert.equal(colsStorageKey(42), "rptTableCols:42", "🔴 ключ вибору колонок не особистий");
+  assert.notEqual(colsStorageKey(7), colsStorageKey(42), "🔴 двоє користувачів ділять один ключ");
+
+  const st = memStore({ "rptTableCols:7": { convAd: true }, "rptTableCols:42": { jam: true }, rptTableCols: { dobir: true } });
+  const mine = readColPrefs(st, 42), theirs = readColPrefs(st, 7);
+  assert.equal(mine.jam, true, "🔴 власний вибір користувача не прочитався");
+  assert.ok(!mine.convAd, "🔴 користувач 42 бачить вибір користувача 7");
+  assert.equal(theirs.convAd, true, "🔴 вибір користувача 7 не прочитався");
+  assert.ok(!theirs.jam, "🔴 користувач 7 бачить вибір користувача 42");
+
+  writeColPrefs(st, 42, { talks: true });
+  assert.equal(st.data.get("rptTableCols:42"), JSON.stringify({ talks: true }), "🔴 запис пішов не в особистий ключ");
+  assert.equal(st.data.get("rptTableCols:7"), JSON.stringify({ convAd: true }), "🔴 запис зачепив чужий ключ");
+  assert.equal(st.data.get("rptTableCols"), JSON.stringify({ dobir: true }), "🔴 запис переписав старий спільний ключ");
+
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(s, /readColPrefs\(colStore\(\), userId\)/, "🔴 таблиця читає вибір колонок не через особистий ключ");
+  assert.match(s, /writeColPrefs\(colStore\(\), userId, next\)/, "🔴 таблиця пише вибір колонок не через особистий ключ");
+  assert.match(s, /getAuthPayload\(\)\?\.userId/, "🔴 таблиця не знає, хто дивиться — ключ не може бути особистим");
+  assert.equal(/localStorage\.(get|set)Item\(/.test(s), false,
+    "🔴 таблиця ходить у localStorage напряму, повз особистий ключ і try/catch");
+});
+
+/**
+ * #2434 — ФОЛБЕК НА СТАРИЙ КЛЮЧ І СТІЙКІСТЬ ДО ЗБОЮ СХОВИЩА.
+ *
+ * Хто вже налаштував таблицю під старим ключем, після викату мусить побачити свій
+ * вибір, а не типовий — інакше це читається як «вибір злетів». Власний ключ має
+ * перевагу над старим. Зламане сховище (приватне вікно, квота, сміття) не валить
+ * таблицю — вона малюється з типовим набором.
+ *
+ * 🧨 САБОТАЖ: прибрати фолбек на старий ключ → червоніє.
+ */
+test("#2434 ФОЛБЕК НА СТАРИЙ КЛЮЧ rptTableCols і стійкість до збою сховища", async () => {
+  const { readColPrefs, writeColPrefs, DEFAULT_OPT_ON } = await loadCols();
+  const legacyOnly = readColPrefs(memStore({ rptTableCols: { jam: true, projected: false } }), 42);
+  assert.equal(legacyOnly.jam, true, "🔴 вибір під старим ключем загубився — після викату людина побачить типовий набір");
+  assert.equal(legacyOnly.projected, false, "🔴 вимкнена під старим ключем колонка знову увімкнулась");
+  const both = readColPrefs(memStore({ rptTableCols: { jam: true }, "rptTableCols:42": { dobir: true } }), 42);
+  assert.equal(both.dobir, true, "🔴 власний ключ не має переваги над старим");
+  assert.equal(both.jam, DEFAULT_OPT_ON.jam, "🔴 старий ключ домішується до власного — особистий вибір не особистий");
+  assert.equal(readColPrefs(memStore({ rptTableCols: { dobir: true } }), null).dobir, true,
+    "🔴 без користувача старий ключ не читається");
+
+  assert.deepEqual(readColPrefs(null, 42), DEFAULT_OPT_ON, "🔴 без сховища — не типовий набір");
+  const boom = { getItem: () => { throw new Error("SecurityError"); }, setItem: () => { throw new Error("QuotaExceeded"); } };
+  assert.deepEqual(readColPrefs(boom, 42), DEFAULT_OPT_ON, "🔴 збій читання сховища не перехоплено");
+  assert.equal(writeColPrefs(boom, 42, { jam: true }), false, "🔴 збій запису сховища не перехоплено");
+  const junk = memStore();
+  junk.data.set("rptTableCols:42", "{не json");
+  assert.deepEqual(readColPrefs(junk, 42), DEFAULT_OPT_ON, "🔴 сміття у сховищі не дає типового набору");
+  assert.equal(readColPrefs(memStore({ "rptTableCols:42": { jam: "так" } }), 42).jam, DEFAULT_OPT_ON.jam,
+    "🔴 не-булеве значення зі сховища потрапило у вибір колонок");
+});

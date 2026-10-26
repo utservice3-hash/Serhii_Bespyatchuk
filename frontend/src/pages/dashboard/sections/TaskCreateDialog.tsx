@@ -8,7 +8,7 @@ import { formMissing, pickGroups, quickDates, type PickPerson } from "../taskCre
 /**
  * 🆕 НОВА ЗАДАЧА — КОМПАКТНИЙ ДІАЛОГ (варіант А, рішення Романа 26.10.2026: «роби А»).
  *
- * Угорі — тип («Задача / 🎯 Ціль / KPI-план / Реактивація»), далі опис великим полем, для цілі —
+ * Угорі — тип («Задача / 🎯 Стратегічна задача / KPI-план / Реактивація»; назва — рішення Романа 26.10.2026), далі опис великим полем, для цілі —
  * фіолетовий блок «Результат», рядок пігулок (👤 Виконавець · 📅 Дедлайн · ⚑ Пріоритет · ✅ Приймає),
  * рідкісне — під «+ Ще». Унизу «Бракує: …» і бліда кнопка, поки форма неповна; Ctrl/⌘+Enter — створити.
  *
@@ -23,7 +23,7 @@ type Kind = "task" | "goal" | "kpi" | "react";
 
 export function TaskCreateDialog({
   form, setForm, sharedIntent, managerOptions, myTeamId, accounts, currentUserId, deptOptions, goalTitle,
-  canReactivation, assigneeStatus, fileZone, onKind, onSubmit, onClose,
+  canReactivation, assigneeStatus, fileZone, onKind, onSubmit, onClose, selfManagerId = null, selfName,
 }: {
   form: TaskForm;
   setForm: Dispatch<SetStateAction<TaskForm>>;
@@ -45,6 +45,13 @@ export function TaskCreateDialog({
   onKind: (k: "kpi" | "react") => void;
   onSubmit: () => void;
   onClose: () => void;
+  /**
+   * Моя картка менеджера і моє імʼя. Форма за замовчуванням ставить виконавцем МЕНЕ — але моєї картки може
+   * не бути серед активних менеджерів (Роман на неактивній №387273), і пігулка показувала «№387273»
+   * (26.10.2026). Тепер — «Я (імʼя)». Тримає `#2394`.
+   */
+  selfManagerId?: number | null;
+  selfName?: string;
 }) {
   const [pop, setPop] = useState<null | "who" | "who2" | "date" | "prio" | "review">(null);
   const [query, setQuery] = useState("");
@@ -57,7 +64,9 @@ export function TaskCreateDialog({
   const today = kyivDate(new Date());
 
   // Хто є хто — для підписів пігулок.
-  const managerName = (id: number | "") => (id === "" ? null : managerOptions.find((m) => m.id === id)?.name ?? `№${id}`);
+  const managerName = (id: number | "") => (id === "" ? null
+    : id === selfManagerId ? `Я${selfName ? ` (${selfName})` : ""}`
+    : managerOptions.find((m) => m.id === id)?.name ?? `№${id}`);
   const accountName = (id: number | "") => (id === "" ? null : accounts.find((a) => a.id === id)?.name ?? `№${id}`);
   const who = form.assigneeUserId !== "" ? accountName(form.assigneeUserId) : managerName(form.assigneeId);
   const who2 = managerName(form.assigneeId2);
@@ -115,7 +124,7 @@ export function TaskCreateDialog({
         <div className="tc-top">
           {sharedIntent ? <b className="tc-h">Спільна задача — кому ставите?</b> : (
             <div className="tc-seg" role="group" aria-label="Тип задачі">
-              {(([["task", "Задача"], ["goal", "🎯 Ціль"], ["kpi", "KPI-план"], ...(canReactivation ? [["react", "Реактивація"]] : [])]) as [Kind, string][])
+              {(([["task", "Задача"], ["goal", "🎯 Стратегічна задача"], ["kpi", "KPI-план"], ...(canReactivation ? [["react", "Реактивація"]] : [])]) as [Kind, string][])
                 .filter(([k]) => !(form.goalId !== "" && k === "goal"))
                 .map(([k, label]) => (
                   <button key={k} type="button" className={k === "goal" ? "goal" : ""} aria-pressed={kind === k} onClick={() => setKind(k)}>{label}</button>
@@ -127,22 +136,22 @@ export function TaskCreateDialog({
 
         {form.goalId !== "" && (
           <div className="tc-sub">
-            <span>🎯 Підзадача до цілі «{goalTitle ?? `№${form.goalId}`}»</span>
-            <button type="button" onClick={() => setForm((f) => ({ ...f, goalId: "" }))} title="Відвʼязати від цілі">✕</button>
+            <span>🎯 Підзадача до стратегічної задачі «{goalTitle ?? `№${form.goalId}`}»</span>
+            <button type="button" onClick={() => setForm((f) => ({ ...f, goalId: "" }))} title="Відвʼязати від стратегічної задачі">✕</button>
           </div>
         )}
 
         <textarea ref={titleRef} className="tc-title" rows={2} value={form.title}
           onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-          placeholder={kind === "goal" ? "Яка ціль? Напр.: вивести РПК на 3 млн на місяць" : "Що зробити? Опишіть задачу"} aria-label="Опис задачі" />
+          placeholder={kind === "goal" ? "Яка стратегічна задача? Напр.: вивести РПК на 3 млн на місяць" : "Що зробити? Опишіть задачу"} aria-label="Опис задачі" />
 
         {kind === "goal" && (
           <div className="tc-res">
-            <label htmlFor="tc-res">Результат — як зрозуміти, що ціль досягнута <span className="tc-req">обовʼязково</span></label>
+            <label htmlFor="tc-res">Результат — як зрозуміти, що задачу виконано <span className="tc-req">обовʼязково</span></label>
             <input id="tc-res" className={form.goalResult.trim() ? "" : "bad"} value={form.goalResult} maxLength={500}
               onChange={(e) => setForm((f) => ({ ...f, goalResult: e.target.value }))}
               placeholder="Напр.: гроші РПК за грудень ≥ 3 млн ₴ у Звіті КВП" />
-            {!form.goalResult.trim() && <span className="tc-hint">Без результату ціль не створиться</span>}
+            {!form.goalResult.trim() && <span className="tc-hint">Без результату стратегічна задача не створиться</span>}
           </div>
         )}
 
@@ -237,7 +246,7 @@ export function TaskCreateDialog({
           <button type="button" className="tc-btn ghost" onClick={onClose}>Скасувати</button>
           <button type="button" className="tc-btn pri" disabled={missing.length > 0} onClick={submit}
             title={missing.length ? `Бракує: ${missing.join(", ")}` : undefined}>
-            {kind === "goal" ? "Створити ціль" : form.goalId !== "" ? "Створити підзадачу" : "Створити задачу"}
+            {kind === "goal" ? "Створити стратегічну задачу" : form.goalId !== "" ? "Створити підзадачу" : "Створити задачу"}
           </button>
         </div>
       </div>

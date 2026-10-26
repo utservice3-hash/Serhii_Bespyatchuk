@@ -11,6 +11,8 @@ import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, type
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
 import { teamAtSql } from "../core/teamAt.js";
 import { leadgenBuckets, sumBuckets } from "../core/leadgenStats.js";
+import { leadTakeSeries, SERIES_TAKE_FILTER } from "../core/leadTake.js";
+import type { TakeStats } from "../core/leadTakeRules.js";
 import {
   STATS_SEAM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
 } from "../statistics/seriesCatalog.js";
@@ -44,7 +46,19 @@ const moneyC = (kind: "rev" | "deals" | "avg" | "recv"): Computer => async (g, f
   return rows.map((x) => P(x.bucket, kind === "rev" || kind === "recv" ? x.revenue : kind === "deals" ? x.deals : x.deals ? x.revenue / x.deals : 0));
 };
 
-const COMPUTERS: Record<string, Computer> = {
+/**
+ * ⏱ «ЧАС ОПРАЦЮВАННЯ ЗАЯВКИ» — ТЕ САМЕ ЯДРО, ЩО ВІКНО ЗВІТУ (`core/leadTake.leadTakeSeries`), з тим фільтром, з яким
+ * вікно відкривається (`SERIES_TAKE_FILTER`). Скоуп — `teamId`/`managerId` серії (команда на дату заявки, як у вікні).
+ * Кошик без заявок (або без жодної взятої — для медіани) точки не дає: «не було» ≠ «нуль».
+ */
+const leadTakeC = (pick: (s: TakeStats) => number | null): Computer => async (g, from, to, teamId, managerId) =>
+  (await leadTakeSeries({ from, to, ...SERIES_TAKE_FILTER, teamId, managerId }, g))
+    .flatMap((x) => { const v = pick(x.stats); return v == null ? [] : [P(x.bucket, v)]; });
+
+export const COMPUTERS: Record<string, Computer> = {
+  // Медіана, а не середнє (рішення власника): один «забутий» лід на добу тягнув би середнє на години.
+  lead_take_median: leadTakeC((s) => s.medianMin),
+  lead_take_m5_pct: leadTakeC((s) => s.m5Pct),
   revenue_success: moneyC("rev"),
   cars_success: moneyC("deals"),
   avg_check: moneyC("avg"),

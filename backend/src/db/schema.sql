@@ -1940,7 +1940,7 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
   id              SERIAL PRIMARY KEY,
   account_id      INTEGER NOT NULL REFERENCES bank_accounts(id),
   direction       TEXT NOT NULL CHECK (direction IN ('in','out')),
-  external_tx_id  TEXT NOT NULL UNIQUE,   -- ідемпотентність upsert
+  external_tx_id  TEXT NOT NULL UNIQUE,   -- ідемпотентність upsert; з 26.10.2026 унікальність — (account_id, external_tx_id), див. «КЛЮЧ РУХУ»
   booked_at       TIMESTAMPTZ,
   processed_at    TIMESTAMPTZ,
   counterparty_name TEXT,
@@ -5757,7 +5757,7 @@ ALTER TABLE feedback ADD CONSTRAINT feedback_impact_check
 --    вимкненою; токен — рядком `MONO_TOKEN_…` у .env, сервер бачить його без рестарту, `bankSources/token.ts`).
 -- ══════════════════════════════════════════════════════════════════════════
 ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_company_check;
-ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff'));
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff','elogist'));
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_pan_last4 TEXT;
 ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_mono_pan_last4_check;
 ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHECK (mono_pan_last4 IS NULL OR mono_pan_last4 ~ '^[0-9]{4}$');
@@ -6650,6 +6650,34 @@ UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
    AND NOT COALESCE((SELECT (data->>'cpCheckTabGranted')::boolean FROM app_settings WHERE id = 1), false);
 UPDATE app_settings SET data = data || '{"cpCheckTabGranted":true}'::jsonb WHERE id = 1 AND NOT (data ? 'cpCheckTabGranted');
 
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏦 ТОВ «ЄЛОГІСТ» У «ВИПИСЦІ» (задача 6458; Сергій 22.10.2026: «повністю все аналогічно ЮТС, включно з API банків»;
+--  Роман 26.10.2026: «з сьогодні виписку з банку»). Компанію `elogist` дозволено в CHECK вище.
+--  · `sync_from` — нижня межа історії рахунку за Києвом: раніших рухів синк не тягне й не пише НІКОЛИ (не лише на першому
+--    проході — порожній валютний рахунок інакше щоразу тягнув би 60 днів, `core/bankSyncWindow.ts`). NULL — як було.
+--  · Три рахунки Привату під одним ключем `PRIVAT_TOKEN_ELOGIST` (як Автомув); доступ до всіх трьох IBAN перевірено пробним
+--    запитом 26.10.2026, реквізити — від Романа 26.10.2026. Створюються ВИМКНЕНИМИ: між міграцією й рестартом ще живе СТАРИЙ
+--    процес, і його синк не знає `sync_from` — увімкнений рахунок він встиг би засипати 60 днями. Вмикається в панелі після рестарту.
+--  · IBAN у рахунках робить перекази ЮТС ↔ ЄЛОГІСТ «своїми» в «Надходження / Витрати» (#1221) без окремих правил.
+--  · Разовий крок (позначка в `fin_kpi_imports`, як Сейф і картки): рахунки створюються рівно один раз на базу — повтор
+--    не дублює, правку адміна не перетирає, а видалені адміном НЕ воскрешає на наступному викаті (#2423).
+--  · ВІДКАТ: рядок CHECK вище з `'elogist'` НЕ відкочувати — старий CHECK упав би на цих рахунках і зупинив міграцію. Решту
+--    коду відкочувати можна; рахунки спершу вимкнути в панелі (старий синк тягнув би 60 днів). Видалити — лише поки рухів немає.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS sync_from DATE;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('elogist-accounts-2026-10-26', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, is_active, sync_from, iban,
+                           legal_name, edrpou_ipn, vat_ipn, bank_name, mfo, legal_address, director)
+SELECT v.company, 'privat', v.label, v.currency, 'PRIVAT_TOKEN_ELOGIST', false, DATE '2026-10-26', v.iban,
+       'ТОВ «ЄЛОГІСТ»', '45149289', '451492826513', 'АТ КБ «ПриватБанк»', '305299',
+       'Україна, 02141, м. Київ, вул. Лариси Руденко, буд. 6-А', 'Протас Дар''я В''ячеславівна'
+  FROM (VALUES
+    ('elogist', 'ТОВ ЄЛОГІСТ',       'UAH', 'UA873052990000026008035031953'),
+    ('elogist', 'ТОВ ЄЛОГІСТ · USD', 'USD', 'UA883052990000026003035023375'),
+    ('elogist', 'ТОВ ЄЛОГІСТ · EUR', 'EUR', 'UA353052990000026000015029239')
+  ) AS v(company, label, currency, iban)
+ WHERE EXISTS (SELECT 1 FROM step) AND NOT EXISTS (SELECT 1 FROM bank_accounts WHERE company = 'elogist');
+
 -- 💱 НЕОПЛАЧЕНІ РАХУНКИ 1С з 2026 року (сервіс `unpaid-invoices`, 1С 25.10.2026; задача #5297; рішення Романа 26.10.2026
 -- «лише 2026 рік і щоб можна було глянути, що там не так»). Пише лише `syncUnpaidInvoices` (щогодини о :15, заміна цілком).
 -- Звідси — «Валютна дебіторка» (журнал `receivables_fx_totals`, джерело `unpaid-2026`) і список рахунків під нею.
@@ -6683,3 +6711,26 @@ CREATE TABLE IF NOT EXISTS deal_fin_state (
 );
 REVOKE ALL ON deal_fin_fields FROM ai_readonly;
 REVOKE ALL ON deal_fin_state FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🔑 КЛЮЧ РУХУ — У МЕЖАХ РАХУНКУ (задача 6458, 26.10.2026; знайдено оглядом перед ЄЛОГІСТ).
+--  Переказ між двома НАШИМИ рахунками Привату має однаковий REF#NUM_DOC в обох виписках. Поки `external_tx_id` був унікальним
+--  на всю таблицю, друга сторона робила `ON CONFLICT … DO UPDATE` по рядку ПЕРШОЇ: одна нога зникала, у другої перевертався
+--  знак і контрагентом ставав сам рахунок. Заміряно на проді: переказ Автомув → ФОП Приват 01.10.2026 на 50 000 — у ФОП
+--  «надходження» −50 000, списання Автомуву немає (1 випадок з 1). Із ЄЛОГІСТ так було б із кожним переказом ЮТС ↔ ЄЛОГІСТ.
+--  · Унікальність тепер (account_id, external_tx_id); усі записувачі — `ON CONFLICT (account_id, external_tx_id)` (#2424, #2425).
+--  · Ремонт РАЗОВИЙ і чесний: не правимо рядки руками, а позначаємо зачеплені рахунки (свій рядок зі знаком навпаки до
+--    напрямку + рахунок-контрагент за IBAN) на повторне завантаження з дня до збою — `syncBank` перечитає їх, upsert поставить
+--    обидві ноги на місце, і позначка зніметься сама (#2426). Revert коду цього не повертає (і не має: повернувся б баг).
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_transactions DROP CONSTRAINT IF EXISTS bank_transactions_external_tx_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS bank_transactions_account_tx_uniq ON bank_transactions (account_id, external_tx_id);
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS resync_from DATE;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('privat-own-transfer-resync-2026-10-26', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
+broken AS (
+  SELECT t.account_id, t.raw_json->>'AUT_CNTR_ACC' AS cntr, (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date AS d
+    FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+   WHERE a.bank = 'privat' AND t.amount <> 0 AND (t.direction = 'in') <> (t.amount > 0) AND t.deleted_at IS NULL)
+UPDATE bank_accounts a SET resync_from = (SELECT min(d) - 1 FROM broken)
+ WHERE EXISTS (SELECT 1 FROM step) AND a.bank = 'privat'
+   AND (a.id IN (SELECT account_id FROM broken) OR a.iban IN (SELECT cntr FROM broken WHERE cntr IS NOT NULL));

@@ -13,7 +13,9 @@ import { FinError } from "./finance.js";
 import { TOKEN_NAME } from "../bankSources/token.js";
 import { normLast4, normIban } from "../bankSources/mono.js";
 
-export const COMPANIES = ["uts", "automuv", "fop_privat", "fop_mono", "staff"] as const;
+// `elogist` — ТОВ «ЄЛОГІСТ», робоча компанія з ПДВ на рівні ЮТС (Сергій 22.10.2026, задача 6458). Той самий список —
+// у CHECK `bank_accounts_company_check` (`db/schema.sql`) і в кольорах «Виписки»; розбіжність тримає #2420.
+export const COMPANIES = ["uts", "automuv", "fop_privat", "fop_mono", "staff", "elogist"] as const;
 export const CURRENCIES = ["UAH", "USD", "EUR"] as const;
 type Bank = "mono" | "privat";
 
