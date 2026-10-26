@@ -289,7 +289,7 @@ export const COL_GROUP_OF: Record<ColKey, ColGroup> = {
  * і таблиця мусить відмалюватись із типовим набором, а не впасти.
  */
 export const COLS_LS_LEGACY = "rptTableCols";
-export interface ColsStore { getItem(key: string): string | null; setItem(key: string, value: string): void }
+export interface ColsStore { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem?(key: string): void }
 export const colsStorageKey = (userId: number | null | undefined): string =>
   userId != null ? `${COLS_LS_LEGACY}:${String(userId)}` : COLS_LS_LEGACY;
 
@@ -324,6 +324,123 @@ export const resetColPrefs = (): Record<string, boolean> => ({ ...DEFAULT_OPT_ON
 /** «Усі» — кожна опційна колонка увімкнена. */
 export const allColPrefs = (): Record<string, boolean> =>
   Object.fromEntries(OPTIONAL_COLS.map((c) => [c.key, true]));
+
+/**
+ * ↔️ ПОРЯДОК КОЛОНОК — ОСОБИСТИЙ, ПОРУЧ ІЗ ВИБОРОМ (задача 7087, 26.10.2026).
+ *
+ * 🔴 ОКРЕМИЙ КЛЮЧ `rptTableColOrder:<userId>`, А НЕ ПОЛЕ У ЗАПИСІ ВИБОРУ. Запис
+ * вибору — `Record<string, boolean>`, і `readColPrefs` свідомо викидає все
+ * не-булеве (#2434). Масив у тому самому обʼєкті або зламав би цей фільтр, або
+ * був би ним мовчки викинутий. Два ключі — дві незалежні речі: зіпсований порядок
+ * не губить вибору, і навпаки.
+ *
+ * 🔴 ЗАКРІПЛЕНІ «#» І «Менеджер» (`PINNED_COLS`) ЗАВЖДИ ПЕРШІ, у порядку реєстру,
+ * що б не лежало у сховищі. «Менеджер» — липкий кут (`sticky-mgr`, `left: 0`):
+ * зсунутий углиб таблиці, він липнув би поверх чужих колонок.
+ *
+ * 🔴 НОВА КОЛОНКА СТАЄ НА СВОЄ ТИПОВЕ МІСЦЕ — одразу за найближчим сусідом зліва з
+ * реєстру, а не в хвіст. Інакше кожна нова колонка в людей із налаштованим порядком
+ * зʼявлялась би десь праворуч за скролом і читалась би як «її не додали». Ключі,
+ * яких у реєстрі більше немає, відкидаються.
+ *
+ * Порядок завжди ПОВНИЙ — усі колонки реєстру, і показані, і сховані: увімкнена
+ * пізніше колонка стає туди, де людина її колись поставила.
+ */
+export const PINNED_COLS: ColKey[] = ["rank", "name"];
+export const isPinnedCol = (k: ColKey): boolean => PINNED_COLS.includes(k);
+/** Типовий порядок — рівно порядок реєстру. */
+export const defaultColOrder = (): ColKey[] => REPORT_COLS.map((c) => c.key);
+
+/** Будь-що зі сховища → повний порядок реєстру без дублів, закріплені спереду. */
+export function normalizeColOrder(saved: unknown): ColKey[] {
+  const def = defaultColOrder();
+  const known = new Set<ColKey>(def);
+  const out: ColKey[] = [...PINNED_COLS];
+  const seen = new Set<ColKey>(PINNED_COLS);
+  if (Array.isArray(saved)) {
+    for (const k of saved) {
+      if (typeof k !== "string" || !known.has(k as ColKey) || seen.has(k as ColKey)) continue;
+      out.push(k as ColKey); seen.add(k as ColKey);
+    }
+  }
+  // Відсутні в збереженому — на типове місце: за найближчим уже поставленим сусідом зліва.
+  def.forEach((k, i) => {
+    if (seen.has(k)) return;
+    let at = PINNED_COLS.length;
+    for (let j = i - 1; j >= 0; j--) {
+      const p = out.indexOf(def[j]);
+      if (p >= 0) { at = Math.max(p + 1, PINNED_COLS.length); break; }
+    }
+    out.splice(at, 0, k); seen.add(k);
+  });
+  return out;
+}
+
+/** Упорядковує список колонок за збереженим порядком. Єдине місце, де порядок застосовується. */
+export function applyColOrder<T extends { key: ColKey }>(cols: T[], order: readonly ColKey[]): T[] {
+  const pos = new Map<ColKey, number>(normalizeColOrder(order).map((k, i) => [k, i]));
+  return [...cols].sort((a, b) => (pos.get(a.key) ?? 0) - (pos.get(b.key) ?? 0));
+}
+
+/**
+ * Перемістити колонку `from` НА МІСЦЕ `to` (перетягування): `from` стає на індекс,
+ * який займала `to`, решта зсувається. Закріплену не рухаємо й на її місце не ставимо —
+ * повертається нормалізований порядок без змін.
+ */
+export function moveCol(order: readonly ColKey[], from: ColKey, to: ColKey): ColKey[] {
+  const cur = normalizeColOrder(order);
+  if (from === to || isPinnedCol(from) || isPinnedCol(to)) return cur;
+  const i = cur.indexOf(from), j = cur.indexOf(to);
+  if (i < 0 || j < 0) return cur;
+  cur.splice(i, 1);
+  cur.splice(j, 0, from);
+  return cur;
+}
+
+/**
+ * Крок ↑/↓ (клавіатура, телефон): на місце СУСІДНЬОЇ ПОКАЗАНОЇ колонки. Сховані
+ * колонки між ними не рахуються — інакше кнопка «нічого не робила б» кілька натискань
+ * поспіль. `visible` — показані колонки в поточному порядку.
+ */
+export function moveColStep(order: readonly ColKey[], key: ColKey, dir: -1 | 1, visible: readonly ColKey[]): ColKey[] {
+  const i = visible.indexOf(key);
+  const to = i < 0 ? undefined : visible[i + dir];
+  return to == null ? normalizeColOrder(order) : moveCol(order, key, to);
+}
+
+export const COL_ORDER_LS = "rptTableColOrder";
+export const colOrderStorageKey = (userId: number | null | undefined): string =>
+  userId != null ? `${COL_ORDER_LS}:${String(userId)}` : COL_ORDER_LS;
+
+export function readColOrder(store: ColsStore | null, userId: number | null | undefined): ColKey[] {
+  try {
+    if (!store) return defaultColOrder();
+    return normalizeColOrder(JSON.parse(store.getItem(colOrderStorageKey(userId)) || "null"));
+  } catch {
+    return defaultColOrder();
+  }
+}
+
+/**
+ * Пише ЛИШЕ особистий ключ порядку; ключ вибору колонок не чіпає. Порядок, що
+ * збігається з типовим, ключ ПРИБИРАЄ: людина, яка скинула порядок, далі йде за
+ * реєстром, а не за застиглою копією сьогоднішнього типового.
+ */
+export function writeColOrder(store: ColsStore | null, userId: number | null | undefined, order: readonly ColKey[]): boolean {
+  try {
+    if (!store) return false;
+    const key = colOrderStorageKey(userId);
+    const norm = normalizeColOrder(order);
+    if (norm.join() === defaultColOrder().join() && store.removeItem) store.removeItem(key);
+    else store.setItem(key, JSON.stringify(norm));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** «Скинути до типових» для порядку — порядок реєстру, новою копією. */
+export const resetColOrder = (): ColKey[] => defaultColOrder();
 
 /**
  * СОРТУВАННЯ. `null` — це «даних немає», і воно ЗАВЖДИ внизу, у будь-якому

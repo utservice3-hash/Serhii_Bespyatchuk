@@ -4,6 +4,7 @@ import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanM
 import {
   REPORT_COLS, OPTIONAL_COLS, sortRows, footValue, firstTouchLabel,
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
+  applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
   type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
@@ -91,6 +92,13 @@ export function ReportTableSection({
     setOptOn(next);
     writeColPrefs(colStore(), userId, next);
   };
+  // ↔️ Порядок колонок — теж особистий, окремим ключем `rptTableColOrder:<userId>`
+  // (див. reportTableCols.ts). Зберігається повним: і показані, і сховані колонки.
+  const [order, setOrder] = useState<ColKey[]>(() => readColOrder(colStore(), userId));
+  const applyOrder = (next: ColKey[]) => {
+    setOrder(next);
+    writeColOrder(colStore(), userId, next);
+  };
 
   // Обраний менеджер зник із набору (змінили період/команду) — фільтр знімаємо,
   // інакше екран лишився б порожнім без пояснення.
@@ -110,9 +118,48 @@ export function ReportTableSection({
   const undefMoney = useMemo(
     () => data.managers.reduce((a, m) => a + Math.abs(m.factUndef ?? 0), 0), [data.managers]);
   const showUndef = undefMoney > 0;
+  /**
+   * 🔴 ОДИН УПОРЯДКОВАНИЙ СПИСОК НА ВСЮ ТАБЛИЦЮ. Шапка, рядки, підсумки команд,
+   * загальний `tfoot` і список «Порядок» у меню беруть САМЕ `cols`. Порядок
+   * застосовується тут і більше ніде: друге місце, що впорядковує колонки
+   * по-своєму, — і шапка поїде від клітинок (#2462).
+   */
   const cols = useMemo(
-    () => REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : c.core || optOn[c.key])),
-    [optOn, showUndef]);
+    () => applyColOrder(REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : c.core || optOn[c.key])), order),
+    [optOn, showUndef, order]);
+  const colKeys = cols.map((c) => c.key);
+  const moveTo = (from: ColKey, to: ColKey) => applyOrder(moveCol(order, from, to));
+  const moveStep = (k: ColKey, dir: -1 | 1) => applyOrder(moveColStep(order, k, dir, colKeys));
+
+  /**
+   * ✋ ПЕРЕТЯГУВАННЯ — НАТИВНЕ HTML5, ОДНЕ НА ШАПКУ Й МЕНЮ. Закріплені («#»,
+   * «Менеджер») не тягнуться і не приймають скидання: `dragover` без
+   * `preventDefault` браузер читає як «сюди не можна». Що тягнемо — у ref, а не
+   * лише в `dataTransfer`: під час `dragover` браузер даних не віддає.
+   */
+  const dragCol = useRef<ColKey | null>(null);
+  const [dropOn, setDropOn] = useState<ColKey | null>(null);
+  const dnd = (k: ColKey) => (isPinnedCol(k) ? { draggable: false } : {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      dragCol.current = k;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", k);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragCol.current) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (dropOn !== k) setDropOn(k);
+    },
+    onDragLeave: () => setDropOn((d) => (d === k ? null : d)),
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (dragCol.current) moveTo(dragCol.current, k);
+      dragCol.current = null; setDropOn(null);
+    },
+    onDragEnd: () => { dragCol.current = null; setDropOn(null); },
+  });
   const rows = useMemo(() => {
     const picked = mgrFilter === "" ? data.managers : data.managers.filter((m) => m.managerId === mgrFilter);
     /**
@@ -227,7 +274,9 @@ export function ReportTableSection({
           core={REPORT_COLS.filter((c) => c.core)}
           optOn={optOn} onToggle={toggleCol}
           onReset={() => applyCols(resetColPrefs())}
+          onResetOrder={() => applyOrder(resetColOrder())}
           onAll={() => applyCols(allColPrefs())}
+          ordered={cols} onStep={moveStep} dnd={dnd} dropOn={dropOn}
           shown={cols.length} total={REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : true)).length}
         />
       </div>
@@ -265,8 +314,9 @@ export function ReportTableSection({
             <thead>
               <tr>
                 {cols.map((c, i) => (
-                  <th key={c.key} onClick={() => onSort(c.key)}
+                  <th key={c.key} onClick={() => onSort(c.key)} {...dnd(c.key)}
                     className={c.key === "name" ? "sticky-mgr" : undefined}
+                    title={isPinnedCol(c.key) ? undefined : "Клік — сортування; перетягніть, щоб змінити порядок"}
                     style={{
                       position: "sticky", top: 0, zIndex: c.key === "name" ? 5 : 3,
                       // Фон НЕПРОЗОРИЙ (токен теми): без нього рядки просвічують крізь шапку.
@@ -275,6 +325,7 @@ export function ReportTableSection({
                       fontSize: 11, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase",
                       color: c.key === sortKey ? "var(--brand)" : "var(--text-muted)",
                       padding: "10px 12px", borderBottom: "1px solid var(--border-strong)",
+                      ...(dropOn === c.key ? { boxShadow: "inset 3px 0 0 var(--brand)" } : null),
                       ...(c.key === "name" ? { left: 0, boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)" } : null),
                     }}>
                     {c.title}
@@ -347,7 +398,9 @@ export function ReportTableSection({
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 11, lineHeight: 1.55 }}>
         <b style={{ color: "var(--text)" }}>Клік по менеджеру</b> розкриває його тижні: план кожного
         тижня — той, що був <b style={{ color: "var(--text)" }}>зафіксований у понеділок</b>, а не
-        перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу. Таблиця прокручується
+        перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу.
+        Заголовок можна <b style={{ color: "var(--text)" }}>перетягнути</b>, щоб змінити порядок колонок
+        («#» і «Менеджер» закріплені); на телефоні — кнопками ↑/↓ у меню «Колонки» → «Порядок». Таблиця прокручується
         всередині себе: шапка залипає вгорі, загальний підсумок — унизу, колонка «Менеджер» — ліворуч
         при горизонтальному скролі. <b style={{ color: "var(--text)" }}>Сер. чек, Викон. % і Конв.</b> у
         підсумку рахуються від сум чисельника й знаменника, а не складанням стовпчика — це частки,
@@ -798,13 +851,27 @@ function ScopePicker({ teams, isAdmin, teamIds, onTeamIds, mgrFilter, onMgrFilte
  * (`OPTIONAL_COLS.filter((c) => c.key !== "factUndef")`): умовна колонка
  * «Отримано · невизначено» вимикатись користувачем не може (`#214b`).
  * Закривається кліком поза меню й Escape — як «Обсяг».
+ *
+ * ↔️ ВКЛАДКА «ПОРЯДОК» (задача 7087). Галочки згруповані ЗА ЗМІСТОМ, тож тягнути
+ * їх для порядку не можна: позиція в групі нічого не каже про місце в таблиці.
+ * Тому порядок — окремим плоским списком ТИХ САМИХ `cols`, що малює таблиця:
+ * перетягування (той самий `dnd`, що й у шапці) + кнопки ↑/↓ для клавіатури й
+ * телефону, де HTML5-перетягування на тачі ненадійне. «Скинути до типових»
+ * скидає І вибір, І порядок — два колбеки, одна кнопка.
  */
-function ColumnPicker({ toggleable, core, optOn, onToggle, onReset, onAll, shown, total }: {
+function ColumnPicker({ toggleable, core, optOn, onToggle, onReset: resetCols, onResetOrder, onAll, shown, total, ordered, onStep, dnd, dropOn }: {
   toggleable: ColDef[]; core: ColDef[];
   optOn: Record<string, boolean>; onToggle: (k: string) => void;
-  onReset: () => void; onAll: () => void;
+  onReset: () => void; onResetOrder: () => void; onAll: () => void;
   shown: number; total: number;
+  /** Показані колонки в ПОТОЧНОМУ порядку — рівно `cols` таблиці. */
+  ordered: ColDef[];
+  onStep: (k: ColKey, dir: -1 | 1) => void;
+  dnd: (k: ColKey) => React.HTMLAttributes<HTMLElement> & { draggable: boolean };
+  dropOn: ColKey | null;
 }) {
+  const onReset = () => { resetCols(); onResetOrder(); };
+  const [tab, setTab] = useState<"pick" | "order">("pick");
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -819,6 +886,11 @@ function ColumnPicker({ toggleable, core, optOn, onToggle, onReset, onAll, shown
   const linkBtn: React.CSSProperties = {
     border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
     borderRadius: "var(--r-pill)", padding: "3px 10px", fontSize: 12, cursor: "pointer",
+  };
+  // ↑/↓ — не менше 28 px: на телефоні це основний спосіб змінити порядок.
+  const stepBtn: React.CSSProperties = {
+    border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
+    borderRadius: "var(--r-md)", minWidth: 28, height: 28, fontSize: 13, cursor: "pointer", padding: 0,
   };
 
   return (
@@ -838,7 +910,46 @@ function ColumnPicker({ toggleable, core, optOn, onToggle, onReset, onAll, shown
             <button type="button" style={linkBtn} onClick={onReset}>Скинути до типових</button>
             <button type="button" style={linkBtn} onClick={onAll}>Усі</button>
           </div>
-          {COL_GROUPS.map((g) => {
+          <div role="tablist" style={{ display: "flex", gap: 4, padding: "8px 12px 2px" }}>
+            {([["pick", "Вибір"], ["order", "Порядок"]] as const).map(([k, lbl]) => (
+              <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+                style={{ ...linkBtn, fontWeight: tab === k ? 700 : 400,
+                  borderColor: tab === k ? "var(--brand)" : "var(--border)", color: tab === k ? "var(--brand)" : "var(--text)" }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+          {tab === "order" && (
+            <div>
+              <div style={{ padding: "6px 12px 4px", fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                Перетягніть назву або тисніть ↑/↓. Вище в списку — лівіше в таблиці. Сховані колонки
+                при увімкненні стануть туди, де стояли.
+              </div>
+              {ordered.map((c, i) => {
+                const pinned = isPinnedCol(c.key);
+                const prevPinned = i === 0 || isPinnedCol(ordered[i - 1].key);
+                const last = i === ordered.length - 1;
+                const label = c.key === "rank" ? "# (номер рядка)" : c.title;
+                return (
+                  <div key={c.key} {...dnd(c.key)}
+                    style={{ ...row, cursor: pinned ? "default" : "grab", color: pinned ? "var(--text-muted)" : undefined,
+                      boxShadow: dropOn === c.key ? "inset 0 2px 0 var(--brand)" : undefined }}>
+                    <span aria-hidden="true" style={{ width: 12, color: "var(--text-muted)", opacity: pinned ? 0.3 : 0.8 }}>{pinned ? "🔒" : "⋮⋮"}</span>
+                    <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+                    {pinned ? <span style={{ fontSize: 11 }}>закріплена</span> : (
+                      <>
+                        <button type="button" style={{ ...stepBtn, opacity: prevPinned ? 0.35 : 1 }} disabled={prevPinned} onClick={() => onStep(c.key, -1)}
+                          aria-label={`«${label}» — вище (лівіше в таблиці)`}>↑</button>
+                        <button type="button" style={{ ...stepBtn, opacity: last ? 0.35 : 1 }} disabled={last} onClick={() => onStep(c.key, 1)}
+                          aria-label={`«${label}» — нижче (правіше в таблиці)`}>↓</button>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {tab === "pick" && COL_GROUPS.map((g) => {
             const req = core.filter((c) => COL_GROUP_OF[c.key] === g.key);
             const opt = toggleable.filter((c) => COL_GROUP_OF[c.key] === g.key);
             if (req.length + opt.length === 0) return null;
