@@ -164,11 +164,12 @@ test("#1283f ПРОВОДКА: синк 1С :45 під наглядом, адр�
   const x = SRC("jobs/monthResultData.ts");
   assert.match(x, /DEAL_HEAD = \["Сделка", "Дата создания", "Дата закрытия", "Дата акта", "ID відповідального",\s*"Бюджет Коммо", "Прихід: Безнал с НДС"/, "🔴 Excel — не в порядку «Сделки»");
   assert.match(x, /"Бюджет Коммо-1С", "Organization", "1С прихід: Безнал с НДС"/, "🔴 блок 1С в Excel — не в її порядку");
-  const fe = FE("pages/dashboard/sections/FinanceMonthResultTab.tsx");
+  // 26.10.2026: угоди переїхали в окрему вкладку «Угоди місяця», спільне — у `financeMonthShared.tsx`; твердження те саме.
+  const fe = ["FinanceMonthResultTab.tsx", "FinanceMonthDealsTab.tsx", "financeMonthShared.tsx"].map((f) => FE(`pages/dashboard/sections/${f}`)).join("\n");
   assert.match(fe, /BLOCKS: \[Block, string\]\[\] = \[\["kommo", "Kommo"\], \["onec", "1С"\], \["paid", "Оплати клієнтів \(1С\)"\]\]/, "🔴 блоків на екрані не три");
   assert.match(fe, /onClick=\{\(\) => toggleBlock\(b\)\}/, "🔴 блоки не згортаються");
   assert.match(fe, /position: "sticky", left: 0/, "🔴 угода не закріплена");
   assert.match(fe, /Math\.abs\(d\.price - d\.onec\.budget\) >= 1/, "🔴 розбіжність Kommo ↔ 1С не підсвічена");
-  assert.match(fe, />Разом · \{list\.length\}</, "🔴 немає рядка «Разом»");
+  assert.match(fe, /sums\(shown, <>Разом · \{m\.name\.split\(" "\)\[0\]\} · \{shown\.length\}<\/>\)/, "🔴 немає рядка «Разом»");
   assert.match(fe, /data\.onecSince \? `1С по угодах — станом на/, "🔴 не видно, станом на коли 1С");
 });
