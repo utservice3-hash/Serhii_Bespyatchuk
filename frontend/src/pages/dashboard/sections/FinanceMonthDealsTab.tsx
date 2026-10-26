@@ -21,9 +21,11 @@ const FLAGS: [Flag, string, (d: MRDeal) => boolean][] = [
   ["no1c", "Без 1С", (d) => !d.onec],
 ];
 const ROW1 = 30;
+/** Напівпрозорий колір блоку поверх суцільного фону — інакше крізь закріплену шапку просвічують рядки. */
+const solid = (c: string) => `linear-gradient(${c}, ${c}), var(--card-bg)`;
 const TH: React.CSSProperties = { position: "sticky", top: 0, zIndex: 3, background: "var(--card-bg)" };
 const STICKY_TH: React.CSSProperties = { ...TH, left: 0, zIndex: 4, minWidth: 210 };
-const STICKY_TD: React.CSSProperties = { position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", minWidth: 210, maxWidth: 260, boxShadow: "1px 0 0 var(--border)" };
+const STICKY_TD: React.CSSProperties = { position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", minWidth: 240, maxWidth: 300, boxShadow: "1px 0 0 var(--border)" };
 
 /** Менеджер у фільтрі: id з Kommo, `null` — без відповідального, `"all"` — усі. */
 export type ManagerPick = number | null | "all";
@@ -119,14 +121,14 @@ export function FinanceMonthDealsTab({ ask, toast, ym, setYm, manager, setManage
               <tr style={{ height: ROW1 }}>
                 <th rowSpan={2} style={STICKY_TH}>Угода</th>
                 <th rowSpan={2} style={TH}>Закрито</th>
-                {spans.map((s) => <th key={s.g} colSpan={s.n} style={{ ...TH, textAlign: "left", background: BLOCK_BG[s.g], borderLeft: "2px solid var(--border)" }}>{BLOCKS.find((b) => b[0] === s.g)![1]}</th>)}
+                {spans.map((s) => <th key={s.g} colSpan={s.n} style={{ ...TH, textAlign: "left", background: solid(BLOCK_BG[s.g]), borderLeft: "2px solid var(--border)" }}>{BLOCKS.find((b) => b[0] === s.g)![1]}</th>)}
                 <th rowSpan={2} style={{ ...TH, textAlign: "right" }} title="Прихід 1С + розхід 1С без «оплати на вигрузці» — колонка «Плановий профіт PNL»">Плановий PNL</th>
                 <th rowSpan={2} style={{ ...TH, textAlign: "right" }}>У результаті</th>
                 <th rowSpan={2} style={TH}>Перевірити</th>
                 <th rowSpan={2} style={TH}>Рішення</th>
                 {data.canEdit && <th rowSpan={2} style={TH} />}
               </tr>
-              <tr>{cols.map((c) => <th key={c.k} style={{ ...TH, top: ROW1, textAlign: c.text ? "left" : "right", ...edge(c.k), background: BLOCK_BG[c.g], fontWeight: 500, fontSize: 11.5, whiteSpace: "nowrap" }}>{c.h}</th>)}</tr>
+              <tr>{cols.map((c) => <th key={c.k} style={{ ...TH, top: ROW1, textAlign: c.text ? "left" : "right", ...edge(c.k), background: solid(BLOCK_BG[c.g]), fontWeight: 500, fontSize: 11.5, whiteSpace: "nowrap" }}>{c.h}</th>)}</tr>
             </thead>
             <tbody>
               {groups.map(({ m, all, shown }) => {
@@ -147,10 +149,12 @@ export function FinanceMonthDealsTab({ ask, toast, ym, setYm, manager, setManage
                     {!shut && shown.map((d) => (
                       <tr key={d.id} style={!d.included ? { color: MUTED } : d.checks.length ? { background: "rgba(217,119,6,0.06)" } : undefined}>
                         <td style={STICKY_TD}>
-                          <div style={{ whiteSpace: "nowrap" }}>{link(d.id)}{d.isMinus && <span style={{ ...pill("rgba(220,38,38,0.12)", "#dc2626"), marginLeft: 6 }}>мінус</span>}</div>
-                          <div style={{ fontSize: 11.5 }}>{d.client ?? d.name}</div>
-                          {d.paymentType && <div style={{ fontSize: 11, color: MUTED }}>{d.paymentType}</div>}
-                          {d.reassigned && <div style={{ fontSize: 11, color: MUTED }} title="Відповідального змінили після закриття — угода рахується тому, хто закривав">зараз: {name(d.current).split(" ")[0]}</div>}
+                          <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={d.client ?? d.name}>
+                            {link(d.id)}{d.isMinus && <span style={{ ...pill("rgba(220,38,38,0.12)", "#dc2626"), marginLeft: 6 }}>мінус</span>} <span style={{ fontSize: 11.5 }}>{d.client ?? d.name}</span>
+                          </div>
+                          {(d.paymentType || d.reassigned) && <div style={{ fontSize: 11, color: MUTED, whiteSpace: "nowrap" }}>
+                            {d.paymentType}{d.reassigned && <span title="Відповідального змінили після закриття — угода рахується тому, хто закривав">{d.paymentType ? " · " : ""}зараз: {name(d.current).split(" ")[0]}</span>}
+                          </div>}
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>{dmy(d.closedAt)}{d.closedMonth.slice(0, 7) !== ym && <div style={{ fontSize: 11, color: MUTED }}>з {ymName(d.closedMonth.slice(0, 7))}</div>}</td>
                         {cols.map((c) => cell(c, d))}
