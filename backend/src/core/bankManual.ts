@@ -209,7 +209,7 @@ export function parseSafeCsv(rows: readonly string[][], from: string): { rows: S
 /**
  * Записати розібрані рядки в ручний рахунок Сейфу як операції (`manual_kind = 'op'`). Категорія таблиці — у
  * `counterparty_name` (її й видно в «Виписці»), «на що» + № угоди — у призначенні. Гривня без «суми в грн» і курсу —
- * за НБУ на дату (`rateOf`). Повторний прогін: `ON CONFLICT (external_tx_id) DO NOTHING` — 0 нових.
+ * за НБУ на дату (`rateOf`). Повторний прогін: `ON CONFLICT (account_id, external_tx_id) DO NOTHING` — 0 нових.
  * ⚠️ Правило «тиждень — або операції, або підсумок» тут не перевіряється по рядку: перенесення пише лише операції, а
  * тижні з уже внесеним підсумком відмовляють ЦІЛКОМ (`conflicts`), щоб тиждень не порахувався двічі.
  */
@@ -226,7 +226,7 @@ export async function importSafe(db: Db, accountArg: unknown, rows: readonly Saf
     const res = await db.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, processed_at, counterparty_name,
         purpose, amount, currency, fx_rate, amount_uah, manual_kind)
       VALUES ($1, $2, $3, $4::timestamptz, $4::timestamptz, $5, $6, $7, $8, $9, $10, 'op')
-      ON CONFLICT (external_tx_id) DO NOTHING RETURNING id`,
+      ON CONFLICT (account_id, external_tx_id) DO NOTHING RETURNING id`,
     [acc.id, r.amount >= 0 ? "in" : "out", r.key, kyivNoon(r.day), r.category || "Сейф",
       [r.purpose, r.deal ? `угода ${r.deal}` : ""].filter(Boolean).join(" · ") || null, r.amount, r.currency, rate, uah]);
     if (res.rows.length) inserted++; else existing++;

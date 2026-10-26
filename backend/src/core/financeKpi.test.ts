@@ -1775,3 +1775,204 @@ test("#1275c ПРОВОДКА ПЛАНУ: GET /kpi — plan після стар�
   assert.match(fe, /kind === "month" && partial && <th[^>]*>Прогноз/, "🔴 прогноз місяця не показано");
   assert.match(fe, /setFinKpiPlan\(/, "🔴 ручний план не зберігається з екрана");
 });
+
+/**
+ * ТОВ «ЄЛОГІСТ» У «ВИПИСЦІ» (задача 6458, 26.10.2026) — гейти `#2420`–`#2423` (вільні в `main` і в усіх гілках на 26.10.2026).
+ *
+ * #2420 — СПИСОК КОМПАНІЙ ОДИН: `COMPANIES` (перевірка рахунку в роуті) == останній CHECK `bank_accounts_company_check`
+ * у схемі, і рахунок Привату для `elogist` проходить перевірку, а картка працівника на Приваті — так само ні (дзеркало).
+ * 🧨 Червоніє, якщо `elogist` додати лише в одне з двох місць (роут пустив би, база відповіла б 500) або випустити зі списку.
+ */
+test("#2420 КОМПАНІЇ: список у коді == CHECK у схемі, ЄЛОГІСТ — рахунок Привату проходить, чужа комбінація — ні", async () => {
+  const v = await import("./bankAccounts.js");
+  const checks = [...SRC("db/schema.sql").matchAll(/bank_accounts_company_check\s+CHECK\s*\(company IN \(([^)]*)\)\)/g)];
+  assert.ok(checks.length >= 1, "🔴 у схемі не знайдено CHECK компаній — гейту нічого перевіряти");
+  const inDb = [...checks[checks.length - 1][1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
+  assert.deepEqual(inDb, [...v.COMPANIES].sort(), "🔴 компанії в коді й у CHECK бази розійшлись");
+  assert.ok(inDb.includes("elogist"), "🔴 ЄЛОГІСТ випав зі списку компаній");
+  const acc = { company: "elogist", bank: "privat", label: "ТОВ ЄЛОГІСТ", currency: "USD", envKeyName: "PRIVAT_TOKEN_ELOGIST" };
+  assert.equal(v.validateNewAccount(acc).company, "elogist", "🔴 рахунок Привату ЄЛОГІСТ не проходить перевірку");
+  // З IBAN, щоб відмовити могло ЛИШЕ правило «картка працівника — тільки моно» (а не «потрібні цифри або IBAN»).
+  assert.throws(() => v.validateNewAccount({ ...acc, company: "staff", iban: "UA" + "1".repeat(27) }),
+    (e: unknown) => (e as { status?: number }).status === 400 && /лише з monobank/.test((e as Error).message),
+    "🔴 картку працівника на Приваті пропущено — правило #1224 зламалось разом зі списком");
+});
+
+/**
+ * #2421 — КОЖНА КОМПАНІЯ МАЄ ВИГЛЯД У «ВИПИСЦІ»: ключі `ACC_COLOR` == `COMPANIES` (не менше — бейдж порожній; не більше —
+ * мертвий запис), і плитка підсумку ЄЛОГІСТ читає `byCo.elogist`. 🧨 Червоніє, якщо прибрати колір чи плитку ЄЛОГІСТ.
+ */
+test("#2421 «ВИПИСКА»: колір на кожну компанію, плитка «ТОВ ЄЛОГІСТ» з підсумку сервера", async () => {
+  const v = await import("./bankAccounts.js");
+  const fe = FE("pages/dashboard/sections/BankSection.tsx");
+  const block = /const ACC_COLOR[^=]*=\s*\{([\s\S]*?)\n\};/.exec(fe);
+  assert.ok(block, "🔴 мапу кольорів рахунків не знайдено");
+  const keys = [...block[1].matchAll(/^\s*([a-z_]+):\s*\{/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(keys, [...v.COMPANIES].sort(), "🔴 кольори «Виписки» не збігаються зі списком компаній");
+  assert.match(fe, /<Stat label="ТОВ ЄЛОГІСТ" value=\{fmtUah\(byCo\.elogist \?\? 0\)\}/, "🔴 плитки «ТОВ ЄЛОГІСТ» у підсумках немає");
+});
+
+/**
+ * #2422 — НИЖНЯ МЕЖА ІСТОРІЇ РАХУНКУ (`core/bankSyncWindow.ts`), по обидва боки кожної межі. Без рухів і з рухами,
+ * старшими за межу, — від межі (а НЕ 60 днів: інакше порожній валютний рахунок щоразу тягнув би вересень); з рухами
+ * після межі — як було (мінус день); без межі — як було. Рух за Києвом 25.10 23:50 — ні, 26.10 00:10 — так (зима, UTC+2).
+ * 🧨 Червоніє, якщо межа діє лише на першому проході, рахується за UTC або ламає рахунки без межі.
+ */
+test("#2422 МЕЖА ІСТОРІЇ: від sync_from завжди (і для порожнього рахунку), без межі — як було; день за Києвом", async () => {
+  const w = await import("./bankSyncWindow.js");
+  const now = new Date("2026-10-27T08:00:00Z");
+  const floor = "2026-10-25T00:00:00.000Z";
+  assert.equal(w.syncSince(null, "2026-10-26", now).toISOString(), floor, "🔴 рахунок без рухів із межею тягне не від межі");
+  assert.equal(w.syncSince(new Date("2026-09-10T10:00:00Z"), "2026-10-26", now).toISOString(), floor, "🔴 старий рух відсунув межу назад");
+  assert.equal(w.syncSince(new Date("2026-10-27T06:00:00Z"), "2026-10-26", now).toISOString(), "2026-10-26T06:00:00.000Z", "🔴 рух після межі — не «мінус день»");
+  assert.equal(w.syncSince(null, null, now).toISOString(), "2026-08-28T08:00:00.000Z", "🔴 рахунок без межі тягне не 60 днів");
+  assert.equal(w.syncSince(new Date("2026-09-10T10:00:00Z"), null, now).toISOString(), "2026-09-09T10:00:00.000Z", "🔴 рахунок без межі — не «мінус день»");
+  assert.equal(w.onOrAfterSyncFrom(new Date("2026-10-25T21:50:00Z"), "2026-10-26"), false, "🔴 рух 25.10 23:50 за Києвом пропущено в історію");
+  assert.equal(w.onOrAfterSyncFrom(new Date("2026-10-25T22:10:00Z"), "2026-10-26"), true, "🔴 рух 26.10 00:10 за Києвом відкинуто (межа за UTC)");
+  assert.equal(w.onOrAfterSyncFrom(new Date("2020-01-01T00:00:00Z"), null), true, "🔴 рахунок без межі відкидає рухи");
+});
+
+/**
+ * #2422b — ПРОВОДКА МЕЖІ: синк читає `sync_from` датою (не обʼєктом Date з поясом сервера), рахує вікно через `syncSince`
+ * і пише рух лише після `onOrAfterSyncFrom`; власної формули «60 днів» у синку не лишилось. 🧨 Червоніє, якщо синк
+ * повернеться до своєї формули чи пише рухи до межі.
+ */
+test("#2422b ПРОВОДКА МЕЖІ: синк бере sync_from датою, вікно — syncSince, запис — лише після onOrAfterSyncFrom", () => {
+  const sync = SRC("jobs/syncBank.ts");
+  assert.match(sync, /to_char\(sync_from, 'YYYY-MM-DD'\) AS sync_from\b/, "🔴 синк не читає межу рахунку (або читає Date із поясом сервера)");
+  assert.match(sync, /const since = syncSince\(/, "🔴 вікно синку рахується повз syncSince");
+  assert.match(sync, /if \(!onOrAfterSyncFrom\(tx\.bookedAt, acc\.sync_from \?\? null\)\) continue;\s*\n\s*if \(await upsertTx\(/, "🔴 рух пишеться без перевірки межі");
+  assert.doesNotMatch(sync, /INITIAL_LOOKBACK_DAYS \* 24/, "🔴 у синку лишилась власна формула «60 днів» повз межу");
+});
+
+/**
+ * #2423 — ЖИВИЙ SQL: схема з нуля заводить рівно три рахунки ЄЛОГІСТ (UAH / USD / EUR, свій IBAN кожному, ключ
+ * `PRIVAT_TOKEN_ELOGIST`, ВИМКНЕНІ до рестарту, межа 26.10.2026, реквізити) РАЗОВО: повтор схеми не дублює, не перетирає правку
+ * адміна і не воскрешає рахунки, які адмін видалив (інакше відкат «видалити» скасовувався б наступним викатом); база не пускає
+ * вигадану компанію. 🧨 Червоніє, якщо зняти разову позначку, переплутати IBAN чи забути межу.
+ */
+test("#2423 ЖИВИЙ SQL: три рахунки ЄЛОГІСТ із межею 26.10 разово — повтор не дублює, не перетирає правку й не воскрешає видалені", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const rows = async () => (await c.query(`SELECT currency, iban, env_key_name, is_active, to_char(sync_from, 'YYYY-MM-DD') AS sync_from,
+      edrpou_ipn, vat_ipn, director, label FROM bank_accounts WHERE company = 'elogist' ORDER BY currency`)).rows;
+  try {
+    const first = await rows();
+    assert.deepEqual(first.map((r) => [r.currency, r.iban]), [
+      ["EUR", "UA353052990000026000015029239"], ["UAH", "UA873052990000026008035031953"], ["USD", "UA883052990000026003035023375"],
+    ], "🔴 рахунки ЄЛОГІСТ заведено не ті або IBAN переплутано з валютою");
+    for (const r of first) {
+      assert.deepEqual([r.env_key_name, r.is_active, r.sync_from, r.edrpou_ipn, r.vat_ipn, r.director],
+        ["PRIVAT_TOKEN_ELOGIST", false, "2026-10-26", "45149289", "451492826513", "Протас Дар'я В'ячеславівна"], `🔴 рахунок ${r.currency}: ключ, стан (має бути вимкнений до рестарту), межа чи реквізити не ті`);
+    }
+    await c.query(`UPDATE bank_accounts SET label = 'ЄЛОГІСТ · правка адміна' WHERE company = 'elogist' AND currency = 'UAH'`);
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    const again = await rows();
+    assert.equal(again.length, 3, "🔴 повтор схеми задублював рахунки ЄЛОГІСТ");
+    assert.equal(again.find((r) => r.currency === "UAH")?.label, "ЄЛОГІСТ · правка адміна", "🔴 повтор схеми перетер правку адміна");
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM bank_accounts WHERE sync_from IS NOT NULL AND company <> 'elogist'`)).rows[0].n, 0,
+      "🔴 межа історії дісталась рахункам, яким її не ставили");
+    await assert.rejects(c.query(`UPDATE bank_accounts SET company = 'nobody' WHERE company = 'elogist' AND currency = 'EUR'`), "🔴 база пустила невідому компанію");
+    await c.query(`DELETE FROM bank_accounts WHERE company = 'elogist'`);
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    assert.equal((await rows()).length, 0, "🔴 видалені адміном рахунки ЄЛОГІСТ воскресли на повторі схеми");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #2424 — КЛЮЧ РУХУ В МЕЖАХ РАХУНКУ, У ВСІХ ЗАПИСУВАЧІВ. Жоден файл бекенда не робить `ON CONFLICT (external_tx_id)` по
+ * всій таблиці; синк, перекодування Привату, Сейф і перенесення операцій — `ON CONFLICT (account_id, external_tx_id)`.
+ * 🧨 Червоніє, якщо хоч один записувач повернеться до ключа на всю таблицю (друга нога переказу знову перепише першу).
+ */
+test("#2424 КЛЮЧ РУХУ: жоден записувач не тримає ключ на всю таблицю — усі в межах рахунку", async () => {
+  const { readdirSync, statSync: st } = await import("node:fs");
+  const root = path.join(import.meta.dirname, "..", "..", "src");
+  const files: string[] = [];
+  const walk = (d: string) => { for (const n of readdirSync(d)) { const p = path.join(d, n); if (st(p).isDirectory()) walk(p); else if (n.endsWith(".ts") && !n.endsWith(".test.ts")) files.push(p); } };
+  walk(root);
+  assert.ok(files.length > 100, `🔴 обхід знайшов лише ${files.length} файлів — гейту нічого перевіряти`);
+  const global = files.filter((f) => /ON CONFLICT \(\s*external_tx_id\s*\)/.test(readFileSync(f, "utf8"))).map((f) => path.relative(root, f));
+  assert.deepEqual(global, [], "🔴 рух пишеться з ключем на всю таблицю");
+  for (const f of ["jobs/syncBank.ts", "tools/rekeyPrivat.ts", "core/bankManual.ts", "core/safeSync.ts"])
+    assert.match(SRC(f), /ON CONFLICT \(account_id, external_tx_id\)/, `🔴 ${f} не пише рух із ключем рахунку`);
+});
+
+/**
+ * #2425 — ЖИВИЙ SQL: ОДИН НОМЕР ОПЕРАЦІЇ НА ДВОХ РАХУНКАХ — ДВА РЯДКИ, кожен зі своїм знаком; на ОДНОМУ рахунку — дубль
+ * відхиляється. Разова позначка ремонту ставить `resync_from` (день до збою − 1) рахунку зі зламаним рядком і рахунку-
+ * контрагенту за IBAN, чужі рахунки не чіпає, а повтор схеми нічого не змінює.
+ * 🧨 Червоніє, якщо лишити унікальність на всю таблицю, позначити не ті рахунки чи ставити позначку щовикату.
+ */
+test("#2425 ЖИВИЙ SQL: переказ між нашими рахунками — два рядки; ремонт позначає саме зачеплені рахунки й разово", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    const acc = async (company: string, label: string, iban: string) => (await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, iban)
+      VALUES ($1, 'privat', $2, 'UAH', $3) RETURNING id`, [company, label, iban])).rows[0].id as number;
+    const a = await acc("automuv", "А · тест", "UA100000000000000000000000001");
+    const f = await acc("fop_privat", "Ф · тест", "UA100000000000000000000000002");
+    const o = await acc("uts", "Чужий · тест", "UA100000000000000000000000003");
+    const up = (accountId: number, dir: string, amount: number, raw: object) => c.query(`INSERT INTO bank_transactions
+        (account_id, direction, external_tx_id, booked_at, amount, currency, fx_rate, amount_uah, raw_json)
+      VALUES ($1, $2, 'privat:REF1#7', '2026-10-01T14:39:00Z', $3, 'UAH', 1, $3, $4)
+      ON CONFLICT (account_id, external_tx_id) DO UPDATE SET amount = EXCLUDED.amount RETURNING (xmax = 0) AS inserted`, [accountId, dir, amount, JSON.stringify(raw)]);
+    assert.equal((await up(a, "out", -500, {})).rows[0].inserted, true);
+    assert.equal((await up(f, "in", 500, {})).rows[0].inserted, true, "🔴 друга нога переказу злилась із першою (ключ на всю таблицю)");
+    assert.deepEqual((await c.query(`SELECT account_id, amount::int AS amount FROM bank_transactions WHERE external_tx_id = 'privat:REF1#7' ORDER BY account_id`)).rows,
+      [{ account_id: a, amount: -500 }, { account_id: f, amount: 500 }], "🔴 у ноги переказу не свій знак");
+    assert.equal((await up(f, "in", 500, {})).rows[0].inserted, false, "🔴 повтор на тому самому рахунку дав дубль");
+
+    // Ремонт: зламаний рядок (знак навпаки до напрямку) на Ф, контрагент — А за IBAN; позначка разова.
+    await c.query(`UPDATE bank_transactions SET amount = -500, raw_json = $2 WHERE account_id = $1`, [f, JSON.stringify({ AUT_CNTR_ACC: "UA100000000000000000000000001" })]);
+    await c.query(`DELETE FROM fin_kpi_imports WHERE key = 'privat-own-transfer-resync-2026-10-26'`);
+    const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+    await c.query(schema);
+    const marks = async () => (await c.query(`SELECT id, to_char(resync_from, 'YYYY-MM-DD') AS r FROM bank_accounts WHERE id = ANY($1) ORDER BY id`, [[a, f, o]])).rows.map((x) => x.r);
+    assert.deepEqual(await marks(), ["2026-09-30", "2026-09-30", null], "🔴 ремонт позначив не ті рахунки або не з дня до збою");
+    await c.query(`UPDATE bank_accounts SET resync_from = NULL WHERE id = ANY($1)`, [[a, f]]);
+    await c.query(schema);
+    assert.deepEqual(await marks(), [null, null, null], "🔴 позначка ремонту ставиться на кожному викаті, а не разово");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #2426 — РАЗОВЕ ПОВТОРНЕ ЗАВАНТАЖЕННЯ. `resync_from` тягне вікно назад, навіть якщо рухи вже є пізніше, але не нижче
+ * `sync_from`; без позначки — як було. Синк передає позначку у вікно й знімає РІВНО її після успіху.
+ * 🧨 Червоніє, якщо позначку ігнорувати, дати їй перетнути межу ЄЛОГІСТ чи не знімати (вічний повтор 26 днів).
+ */
+test("#2426 ПОВТОРНЕ ЗАВАНТАЖЕННЯ: тягне від resync_from, не нижче sync_from; синк знімає позначку після успіху", async () => {
+  const w = await import("./bankSyncWindow.js");
+  const now = new Date("2026-10-27T08:00:00Z");
+  const last = new Date("2026-10-26T10:00:00Z");
+  assert.equal(w.syncSince(last, null, now, "2026-09-30").toISOString(), "2026-09-29T00:00:00.000Z", "🔴 позначка повторного завантаження не потягла вікно назад");
+  assert.equal(w.syncSince(last, null, now, null).toISOString(), "2026-10-25T10:00:00.000Z", "🔴 без позначки вікно змінилось");
+  assert.equal(w.syncSince(last, "2026-10-26", now, "2026-09-30").toISOString(), "2026-10-25T00:00:00.000Z", "🔴 повторне завантаження перетнуло нижню межу рахунку");
+  const sync = SRC("jobs/syncBank.ts");
+  assert.match(sync, /to_char\(resync_from, 'YYYY-MM-DD'\) AS resync_from\b/, "🔴 синк не читає позначку");
+  assert.match(sync, /syncSince\([^;]*acc\.resync_from \?\? null\)/, "🔴 позначка не доходить до вікна синку");
+  assert.match(sync, /UPDATE bank_accounts SET resync_from = NULL WHERE id = \$1 AND resync_from = \$2::date/, "🔴 синк не знімає позначку (або знімає чужу)");
+});
+
+/**
+ * #2427 — ЖИВИЙ SQL: ПЕРЕКАЗ ВІД НАШОЇ КОМПАНІЇ — НЕ ОПЛАТА КЛІЄНТА. Вхідний із кодом платника = ЄДРПОУ/ІПН нашого рахунку
+ * (ЮТС → ЄЛОГІСТ) у добір оплат (`invoicePaymentsSql`: звірка рахунків, «гроші зайшли», доказ роботи 6455) не йде;
+ * платіж клієнта з іншим кодом — іде (дзеркало), і з ведучими нулями код теж упізнається.
+ * 🧨 Червоніє, якщо прибрати виключення або воно зачепить клієнтів.
+ */
+test("#2427 ЖИВИЙ SQL: вхідний від нашої компанії не рахується оплатою клієнта; клієнтський — рахується", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    const { invoicePaymentsSql } = await import("./paymentMatch.js");
+    const id = (await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, edrpou_ipn) VALUES ('uts', 'privat', 'ЮТС · тест', 'UAH', '04418623') RETURNING id`)).rows[0].id;
+    const pay = (key: string, code: string) => c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, amount, currency, fx_rate, amount_uah, raw_json)
+      VALUES ($1, 'in', $2, now() - interval '1 day', 1000, 'UAH', 1, 1000, $3)`, [id, key, JSON.stringify({ AUT_CNTR_CRF: code })]);
+    await pay("own", "4418623");
+    await pay("client", "12345678");
+    const got = (await c.query(invoicePaymentsSql(1), ["30"])).rows.map((r) => r.payer_edrpou).sort();
+    assert.deepEqual(got, ["12345678"], "🔴 переказ від нашої компанії пораховано оплатою клієнта (або клієнтський платіж загублено)");
+  } finally { await s.dispose(); }
+});

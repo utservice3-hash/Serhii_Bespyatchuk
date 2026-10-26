@@ -12,6 +12,10 @@ export interface BankAccountRow {
   mono_type?: string | null;
   /** Моно: останні 4 цифри картки — точний вибір рахунку під токеном (обовʼязково для картки працівника `staff`). */
   mono_pan_last4?: string | null;
+  /** Нижня межа історії рахунку, `YYYY-MM-DD` за Києвом: раніших рухів синк не тягне й не пише (`core/bankSyncWindow.ts`). */
+  sync_from?: string | null;
+  /** Разове повторне завантаження з цієї дати (`YYYY-MM-DD`); синк знімає після успіху. */
+  resync_from?: string | null;
 }
 
 export interface NormalizedTx {

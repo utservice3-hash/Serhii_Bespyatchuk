@@ -20,6 +20,7 @@ const ACC_COLOR: Record<string, { bg: string; fg: string; short: string }> = {
   fop_privat: { bg: "rgba(22,163,74,0.14)", fg: "#16a34a", short: "ФОП·П" },
   fop_mono: { bg: "rgba(217,119,6,0.14)", fg: "#d97706", short: "ФОП·М" },
   staff: { bg: "rgba(13,148,136,0.14)", fg: "#0d9488", short: "Картка" },
+  elogist: { bg: "rgba(219,39,119,0.14)", fg: "#db2777", short: "ЄЛ" },
 };
 // детерміноване групування пробілом (без locale/.replace(/,/g) — там була помилка з комою)
 const fmtUah = (n: number) => {
@@ -254,6 +255,7 @@ export default function BankSection() {
           <Stat label="транзакцій за період" value={String(summary.count)} hint="Кількість транзакцій за вибраний період. Список показує всю утриману історію." />
           <Stat label="ТОВ ЮТС" value={fmtUah(byCo.uts ?? 0)} hint="Σ по рахунку ТОВ ЮТС за період, UAH. Джерело — банк." />
           <Stat label="ТОВ Автомув" value={fmtUah(byCo.automuv ?? 0)} hint="Σ по рахунку ТОВ Автомув за період, UAH. Джерело — банк." />
+          <Stat label="ТОВ ЄЛОГІСТ" value={fmtUah(byCo.elogist ?? 0)} hint="Σ по рахунках ТОВ ЄЛОГІСТ за період, UAH (валютні — за курсом). Джерело — банк, з 26.10.2026." />
           <Stat label="ФОП Беспятчук" value={fmtUah(fopSum)} hint="Σ по рахунках ФОП (Приват+Моно) за період, UAH. Джерело — банк." />
           <Stat label="найбільший платіж" value={fmtUah(summary.maxPayment)} hint="Найбільша транзакція за період, UAH." />
           <span style={{ marginLeft: "auto", alignSelf: "flex-start", fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише адмін</span>
@@ -370,7 +372,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
 // ─────────── «+ Картка»: будь-яка картка monobank без програміста (Роман 07.10.2026) ───────────
 // Токен — лише рядком у серверному .env (`MONO_TOKEN_…`); сервер бачить його без рестарту. Картка створюється
 // вимкненою: вмикається перемикачем, коли в її картці вже «API ✓». Правила полів — на сервері (`core/bankAccounts.ts`).
-const CARD_OWNERS: [string, string][] = [["staff", "Картка працівника"], ["uts", "ТОВ ЮТС"], ["automuv", "ТОВ Автомув"], ["fop_mono", "ФОП Беспятчук"]];
+const CARD_OWNERS: [string, string][] = [["staff", "Картка працівника"], ["uts", "ТОВ ЮТС"], ["automuv", "ТОВ Автомув"], ["elogist", "ТОВ ЄЛОГІСТ"], ["fop_mono", "ФОП Беспятчук"]];
 function AddCardForm({ onAdded }: { onAdded: (text: string) => void | Promise<void> }) {
   const empty = { label: "", company: "staff", currency: "UAH", last4: "", iban: "", env: "MONO_TOKEN_", outPrivate: true };
   const [open, setOpen] = useState(false);
