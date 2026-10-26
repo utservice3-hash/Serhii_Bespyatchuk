@@ -297,6 +297,11 @@ export function invoicePaymentsSql(paramIdx: number): string {
    WHERE t.direction = 'in' AND NOT t.is_bank_fee
      -- Сейф і особисті картки («лише фінанси», прохід 2г) — не оплати клієнтів; видалений ручний запис — ніщо.
      AND NOT a.finance_only AND a.company <> 'staff' AND t.deleted_at IS NULL
+     -- Переказ від НАШОЇ ж компанії (ЮТС → ЄЛОГІСТ тощо) — не оплата клієнта: код платника = ЄДРПОУ/ІПН нашого рахунку (#2427).
+     AND NOT EXISTS (
+       SELECT 1 FROM bank_accounts o
+        WHERE NULLIF(ltrim(regexp_replace(COALESCE(o.edrpou_ipn, ''), '\\D', '', 'g'), '0'), '')
+            = NULLIF(ltrim(regexp_replace(COALESCE(t.raw_json->>'AUT_CNTR_CRF', t.raw_json->>'counterEdrpou', ''), '\\D', '', 'g'), '0'), ''))
      AND t.booked_at >= now() - ($${paramIdx} || ' days')::interval
    ORDER BY t.booked_at DESC`;
 }

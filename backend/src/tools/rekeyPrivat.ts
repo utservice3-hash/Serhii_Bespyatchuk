@@ -63,7 +63,7 @@ async function main(): Promise<void> {
              (account_id, direction, external_tx_id, booked_at, processed_at, counterparty_name,
               counterparty_iban, purpose, amount, currency, fx_rate, amount_uah, unmatched_account, raw_json, is_bank_fee)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false,$13,$14)
-           ON CONFLICT (external_tx_id) DO UPDATE SET
+           ON CONFLICT (account_id, external_tx_id) DO UPDATE SET
              booked_at=EXCLUDED.booked_at, processed_at=EXCLUDED.processed_at,
              counterparty_name=EXCLUDED.counterparty_name, counterparty_iban=EXCLUDED.counterparty_iban,
              purpose=EXCLUDED.purpose, amount=EXCLUDED.amount, currency=EXCLUDED.currency,

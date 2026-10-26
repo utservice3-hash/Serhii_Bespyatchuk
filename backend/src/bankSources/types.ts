@@ -14,6 +14,8 @@ export interface BankAccountRow {
   mono_pan_last4?: string | null;
   /** Нижня межа історії рахунку, `YYYY-MM-DD` за Києвом: раніших рухів синк не тягне й не пише (`core/bankSyncWindow.ts`). */
   sync_from?: string | null;
+  /** Разове повторне завантаження з цієї дати (`YYYY-MM-DD`); синк знімає після успіху. */
+  resync_from?: string | null;
 }
 
 export interface NormalizedTx {

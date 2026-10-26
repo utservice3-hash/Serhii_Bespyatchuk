@@ -98,7 +98,7 @@ export async function reconcileSafe(db: Db, accountId: number, sheet: SafeSheet,
       const res = await db.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, processed_at, counterparty_name,
           purpose, amount, currency, fx_rate, amount_uah, manual_kind, deal_ref, deal_kommo_id, fin_checked)
         VALUES ($1, $2, $3, ($4::date + time '12:00') AT TIME ZONE 'Europe/Kyiv', ($4::date + time '12:00') AT TIME ZONE 'Europe/Kyiv', $5, $6, $7, $8, $9, $10, 'op', $11, $12, $13)
-        ON CONFLICT (external_tx_id) DO NOTHING RETURNING id`,
+        ON CONFLICT (account_id, external_tx_id) DO NOTHING RETURNING id`,
         [accountId, r.amount >= 0 ? "in" : "out", r.key, r.day, r.category || "Сейф", r.purpose || null, r.amount, r.currency, rate, uah,
           r.deal || null, did, r.fin ?? null]);
       if (res.rows.length) inserted++;
