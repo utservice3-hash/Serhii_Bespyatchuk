@@ -1650,7 +1650,10 @@ export interface LeadTakeRow {
   n: number; m1Pct: number | null; m5Pct: number | null; m30Pct: number | null; m60Pct: number | null; h1Pct: number | null;
   notTaken: number; medianMin: number | null; slowLost: number; loss: number | null;
   red: { m1: boolean; m5: boolean; notTaken: boolean };
+  /** Ціль проти факту цього рядка — рахує сервер (`leadTakeRules.targetOf`), фронт лише показує. */
+  target: { m1: LeadTakeTargetPart; m5: LeadTakeTargetPart; notTaken: LeadTakeTargetPart };
 }
+export interface LeadTakeTargetPart { norm: number; fact: number | null; met: boolean | null; gap: number | null; label: string }
 export interface LeadTakeTable {
   rows: LeadTakeRow[]; avgCheck: number | null; avgCheckDeals: number;
   campaigns: { campaign: string; n: number }[];

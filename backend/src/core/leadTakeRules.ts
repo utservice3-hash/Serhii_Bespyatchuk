@@ -196,3 +196,39 @@ export function weekRange(ymd: string, offset = 0): { from: string; to: string }
   const end = new Date(d); end.setUTCDate(end.getUTCDate() + 6);
   return { from: d.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
 }
+
+/**
+ * 🎯 ЦІЛЬ ПРОТИ ФАКТУ (Роман 26.10.2026: ціль була лише дрібним сірим підписом у шапці колонки — її не видно).
+ * Ціль — ЧИННИЙ норматив `NORM`, нового правила тут немає: «досягнуто» = НЕ червоне за тим самим `statsOf(...).red`,
+ * тож рядок цілі не може розійтись із підсвічуванням клітинок. Ціль і розрив беруться з `NORM`, а не з літералів.
+ */
+export interface TargetPart {
+  /** Ціль із `NORM`. */
+  norm: number;
+  /** Факт того самого рядка (частка, % — або кількість для «не взято»); `null` — заявок немає. */
+  fact: number | null;
+  /** `null` — заявок немає, судити нема про що. */
+  met: boolean | null;
+  /** Відставання від цілі: п.п. для часток, штуки для «не взято»; 0 — досягнуто. */
+  gap: number | null;
+  /** Готовий підпис: «досягнуто» / «бракує N п.п.» / «понад ціль на N» / «немає заявок». */
+  label: string;
+}
+export interface TakeTarget { m1: TargetPart; m5: TargetPart; notTaken: TargetPart }
+
+const round1 = (x: number) => Math.round(x * 10) / 10;
+
+export function targetOf(s: TakeStats): TakeTarget {
+  const none = (norm: number): TargetPart => ({ norm, fact: null, met: null, gap: null, label: "немає заявок" });
+  const share = (norm: number, fact: number | null, red: boolean): TargetPart => {
+    if (s.n === 0 || fact == null) return none(norm);
+    const gap = red ? round1(norm - fact) : 0;
+    return { norm, fact, met: !red, gap, label: red ? `бракує ${gap} п.п.` : "досягнуто" };
+  };
+  const notTaken = ((): TargetPart => {
+    if (s.n === 0) return none(NORM.notTaken);
+    const gap = s.red.notTaken ? s.notTaken - NORM.notTaken : 0;
+    return { norm: NORM.notTaken, fact: s.notTaken, met: !s.red.notTaken, gap, label: s.red.notTaken ? `понад ціль на ${gap}` : "досягнуто" };
+  })();
+  return { m1: share(NORM.m1Pct, s.m1Pct, s.red.m1), m5: share(NORM.m5Pct, s.m5Pct, s.red.m5), notTaken };
+}

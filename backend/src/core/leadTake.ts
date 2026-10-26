@@ -5,8 +5,8 @@ import { RNK_TEAM_IDS, NON_COMMERCIAL_TEAM_IDS } from "./metrics.js";
 import { teamAtSql } from "./teamAt.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import {
-  takeOf, statsOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost,
-  type DealTake, type TakeRowInput, type TakeStats, type TakeColumn,
+  takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost,
+  type DealTake, type TakeRowInput, type TakeStats, type TakeColumn, type TakeTarget,
 } from "./leadTakeRules.js";
 
 /**
@@ -133,7 +133,11 @@ async function loadRows(q: TakeQuery): Promise<Row[]> {
   return rows;
 }
 
-export interface TakeTableRow extends TakeStats { kind: "manager" | "group" | "dept"; key: string; label: string; group?: string }
+export interface TakeTableRow extends TakeStats {
+  kind: "manager" | "group" | "dept"; key: string; label: string; group?: string;
+  /** Ціль проти факту ЦЬОГО рядка (`targetOf` над його ж `statsOf`) — рядок «ВІДДІЛ» дає шапку картки. */
+  target: TakeTarget;
+}
 export interface TakeTable {
   rows: TakeTableRow[];
   avgCheck: number | null;
@@ -148,12 +152,14 @@ const groupOrder = (g: string) => (g === "Інші" ? 2 : g === "РПК" ? 1 : 0
 export async function leadTakeTable(q: TakeQuery): Promise<TakeTable> {
   const [rows, succ] = await Promise.all([loadRows(q), successForSources({ from: q.from, to: q.to }, AD_SOURCES)]);
   const avgCheck = succ.deals > 0 ? Math.round(succ.revenue / succ.deals) : null;
+  /** Числа рядка і його ціль — з ОДНОГО `statsOf`: ціль не може судити інші числа, ніж показані в рядку. */
+  const statsWithTarget = (rs: Row[]) => { const s = statsOf(rs, avgCheck); return { ...s, target: targetOf(s) }; };
   const byGroup = new Map<string, Row[]>();
   for (const r of rows) byGroup.set(r.d.group, [...(byGroup.get(r.d.group) ?? []), r]);
   const out: TakeTableRow[] = [];
   for (const g of [...byGroup.keys()].sort((a, b) => groupOrder(a) - groupOrder(b) || a.localeCompare(b, "uk"))) {
     const gr = byGroup.get(g)!;
-    out.push({ kind: "group", key: `g:${g}`, label: g, ...statsOf(gr, avgCheck) });
+    out.push({ kind: "group", key: `g:${g}`, label: g, ...statsWithTarget(gr) });
     const byMgr = new Map<string, Row[]>();
     for (const r of gr) {
       const k = r.d.managerId == null ? "∅" : String(r.d.managerId);
@@ -161,11 +167,11 @@ export async function leadTakeTable(q: TakeQuery): Promise<TakeTable> {
     }
     const mgrRows = [...byMgr].map(([k, rs]) => ({
       kind: "manager" as const, key: `m:${k}:${g}`, group: g,
-      label: rs[0].d.manager ?? "Без відповідального", ...statsOf(rs, avgCheck),
+      label: rs[0].d.manager ?? "Без відповідального", ...statsWithTarget(rs),
     }));
     out.push(...mgrRows.sort((a, b) => a.label.localeCompare(b.label, "uk")));
   }
-  out.push({ kind: "dept", key: "dept", label: "ВІДДІЛ", ...statsOf(rows, avgCheck) });
+  out.push({ kind: "dept", key: "dept", label: "ВІДДІЛ", ...statsWithTarget(rows) });
   const camp = new Map<string, number>();
   if (q.source === "ad" && !q.campaign) for (const r of rows) camp.set(r.d.campaign, (camp.get(r.d.campaign) ?? 0) + 1);
   return {

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 import {
-  takeOf, bucketOf, statsOf, clockStart, kyivAt, weekRange, inColumn, NORM, isDuplicateLost,
+  takeOf, bucketOf, statsOf, clockStart, kyivAt, weekRange, inColumn, NORM, isDuplicateLost, targetOf,
   type DealTake, type TakeRowInput,
 } from "./leadTakeRules.js";
 import { buildXlsx } from "./xlsxWrite.js";
@@ -244,4 +244,78 @@ test("#1491 «ДУБЛЬ» ЛИШЕ ДЗВІНОК АБО ПОЛЕ: етап з�
   assert.equal(isDuplicateLost("143", null), false);
   const core = readFileSync(path.join(ROOT, "backend", "src", "core", "leadTake.ts"), "utf8");
   assert.match(core, /duplicate: isDuplicateLost\(x\.status_id, x\.reject_reason\)/, "🔴 вікно не передає ознаку «Дубля» в ядро");
+});
+
+// ── 🎯 ЦІЛЬ ПРОТИ ФАКТУ (Роман 26.10.2026) ─────────────────────────────────────────────────────────
+/** 100 рядків: `k5` взято до 5 хв (із них `k1` — до 1 хв), `none` не взято, решта — за 20 хв. */
+const shareRows = (k1: number, k5: number, none = 0): TakeRowInput[] => {
+  const mk = (bucket: DealTake["bucket"], minutes: number | null): TakeRowInput =>
+    ({ lost: false, take: { takenAt: minutes == null ? null : 1, event: minutes == null ? null : "stage", minutes, bucket, offHours: false } });
+  return [...Array(k1).fill(0).map(() => mk("m1", 0.5)), ...Array(k5 - k1).fill(0).map(() => mk("m5", 3)),
+    ...Array(100 - k5 - none).fill(0).map(() => mk("m30", 20)), ...Array(none).fill(0).map(() => mk("none", null))];
+};
+const CARD = () => readFileSync(path.join(ROOT, "frontend", "src", "pages", "dashboard", "sections", "LeadTakeCard.tsx"), "utf8");
+const CORE = () => readFileSync(path.join(ROOT, "backend", "src", "core", "leadTake.ts"), "utf8");
+const RULES = () => readFileSync(path.join(ROOT, "backend", "src", "core", "leadTakeRules.ts"), "utf8");
+/** Тіло функції від заголовка до першого `}` на початку рядка — змістова межа, а не вікно в N символів. */
+const fnBody = (src: string, head: string) => {
+  const i = src.indexOf(head);
+  assert.ok(i >= 0, `🔴 не знайдено ${head}`);
+  return src.slice(i, src.indexOf("\n}", i));
+};
+
+/**
+ * #2440 — ЦІЛЬ БЕРЕТЬСЯ З `NORM`, А НЕ З ЛІТЕРАЛІВ. Ціль на екрані — те саме число, що підсвічує клітинки; літерал
+ * «100» у рядку цілі збігся б із нормативом сьогодні й тихо розійшовся б із ним першої ж зміни нормативу.
+ * 🧨 Червоніє, якщо в `targetOf` підставити число замість `NORM.*`, або в рядок цілі на екрані — «90» / «100» / «0».
+ */
+test("#2440 ЦІЛЬ = NORM: targetOf бере ціль із NORM, рядок цілі на екрані — лише з відповіді сервера, без літералів", () => {
+  const body = fnBody(RULES(), "export function targetOf(");
+  for (const k of ["NORM.m1Pct", "NORM.m5Pct", "NORM.notTaken"]) assert.ok(body.includes(k), `🔴 targetOf не бере ціль із ${k}`);
+  assert.doesNotMatch(body, /share\(\s*\d/, "🔴 ціль частки в targetOf задана літералом");
+  assert.doesNotMatch(body, /norm:\s*\d/, "🔴 ціль «не взято» в targetOf задана літералом");
+  const t = targetOf(statsOf(shareRows(50, 80), null));
+  assert.deepEqual([t.m1.norm, t.m5.norm, t.notTaken.norm], [NORM.m1Pct, NORM.m5Pct, NORM.notTaken], "🔴 ціль у відповіді ≠ NORM");
+  const line = fnBody(CARD(), "function TargetLine(");
+  for (const k of ["t.m5.norm", "t.m1.norm", "t.notTaken.norm"]) assert.ok(line.includes(`{${k}}`), `🔴 рядок цілі не показує ${k}`);
+  assert.doesNotMatch(line.replace(/fontSize: \d+|fontWeight: \d+|gap: \d+|margin: "[^"]*"|lineHeight: [\d.]+/g, ""), /[—:]\s*\d+%?/,
+    "🔴 у рядку цілі є число-літерал замість цілі з сервера");
+});
+
+/**
+ * #2441 — ФАКТ = ЧАСТКА РЯДКА «ВІДДІЛ». Ціль судить рівно ті числа, що стоять у рядку: `target` будується з того самого
+ * `statsOf`, а шапка картки бере рядок `kind === "dept"`, не перший і не останній.
+ * 🧨 Червоніє, якщо шапка візьме `data.rows[0]` / групу, або ядро порахує ціль з інших угод, ніж рядок.
+ */
+test("#2441 ФАКТ ЦІЛІ = РЯДОК «ВІДДІЛ»: факт = частка того самого statsOf, шапка бере рядок dept", () => {
+  const s = statsOf(shareRows(35, 35, 10), null);
+  const t = targetOf(s);
+  assert.deepEqual([t.m5.fact, t.m1.fact, t.notTaken.fact], [s.m5Pct, s.m1Pct, s.notTaken], "🔴 факт цілі ≠ числам рядка");
+  assert.deepEqual([t.m5.met, t.m1.met, t.notTaken.met], [!s.red.m5, !s.red.m1, !s.red.notTaken], "🔴 «досягнуто» розійшлось із підсвічуванням клітинок");
+  assert.match(CORE(), /const statsWithTarget = \(rs: Row\[\]\) => \{ const s = statsOf\(rs, avgCheck\); return \{ \.\.\.s, target: targetOf\(s\) \}; \};/,
+    "🔴 ціль рядка рахується не з його ж statsOf");
+  assert.match(CORE(), /kind: "dept", key: "dept", label: "ВІДДІЛ", \.\.\.statsWithTarget\(rows\)/, "🔴 рядок «ВІДДІЛ» не несе цілі над усім вибором");
+  const card = CARD();
+  assert.match(card, /const dept = data\?\.rows\.find\(\(r\) => r\.kind === "dept"\);/, "🔴 шапка цілі бере не рядок «ВІДДІЛ»");
+  assert.match(card, /\{dept && <TargetLine dept=\{dept\} \/>\}/, "🔴 рядок цілі не змонтовано або змонтовано не з рядка «ВІДДІЛ»");
+});
+
+/**
+ * #2442 — МЕЖА ЦІЛІ ПО ОБИДВА БОКИ: 100% «до 5 хв» — «досягнуто», 99% — «бракує 1 п.п.»; 90% «до 1 хв» — досягнуто,
+ * 89% — «бракує 1 п.п.»; 0 не взятих — досягнуто, 1 — «понад ціль на 1». Порожній вибір — «немає заявок», а не «досягнуто».
+ * 🧨 Червоніє, якщо зсунути порівняння або рахувати розрив не від цілі.
+ */
+test("#2442 МЕЖА ЦІЛІ: 100% — досягнуто, 99% — бракує 1 п.п.; 90/89 до 1 хв; 0/1 не взято; порожньо — немає заявок", () => {
+  const at = targetOf(statsOf(shareRows(90, 100), null));
+  assert.deepEqual([at.m5.met, at.m5.gap, at.m5.label], [true, 0, "досягнуто"], "🔴 100% до 5 хв не «досягнуто»");
+  assert.deepEqual([at.m1.met, at.m1.label], [true, "досягнуто"], "🔴 90% до 1 хв не «досягнуто»");
+  const below = targetOf(statsOf(shareRows(89, 99), null));
+  assert.deepEqual([below.m5.met, below.m5.gap, below.m5.label], [false, 1, "бракує 1 п.п."], "🔴 99% до 5 хв — не «бракує 1 п.п.»");
+  assert.deepEqual([below.m1.met, below.m1.label], [false, "бракує 1 п.п."], "🔴 89% до 1 хв — не «бракує 1 п.п.»");
+  assert.equal(targetOf(statsOf(shareRows(20, 35), null)).m5.label, "бракує 65 п.п.", "🔴 розрив 35% від цілі 100% не 65 п.п.");
+  assert.deepEqual([at.notTaken.met, at.notTaken.label], [true, "досягнуто"], "🔴 0 не взятих не «досягнуто»");
+  const one = targetOf(statsOf(shareRows(90, 99, 1), null));
+  assert.deepEqual([one.notTaken.met, one.notTaken.gap, one.notTaken.label], [false, 1, "понад ціль на 1"], "🔴 1 не взята не «понад ціль на 1»");
+  const empty = targetOf(statsOf([], null));
+  assert.deepEqual([empty.m5.met, empty.m5.label, empty.notTaken.label], [null, "немає заявок", "немає заявок"], "🔴 порожній вибір читається як «досягнуто»");
 });
