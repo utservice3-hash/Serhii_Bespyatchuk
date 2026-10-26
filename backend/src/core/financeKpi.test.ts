@@ -418,78 +418,8 @@ test("#993 ЖИВИЙ SQL: закриття фіксує операційні, �
   } finally { await s.dispose(); }
 });
 
-/**
- * #994 — ВАЛЮТНА ДЕБІТОРКА З 1С (рахунок 362). `fxTotals`: Σ у гривні й у валюті в копійках, плюс друге число —
- * рахунки з боргом у валюті й нульовим гривневим еквівалентом. `receivablesFxAt` (живий SQL): період отримує
- * останній підсумок НЕ пізніше свого кінця; підсумок старший за добу — немає числа, а не старе. Адреса 362 ніколи не
- * збігається з 361. 🧨 Червоніє, якщо взяти сьогоднішній підсумок для минулого тижня, показати добове мовчання синку
- * старим числом або тягнути валютну з гривневого рахунку.
- */
-test("#994 ВАЛЮТНА ДЕБІТОРКА: підсумок 1С (362) на кінець періоду, застаре — порожньо, адреса ≠ 361", async (t) => {
-  const rc = await import("./receivables1c.js");
-  const rows = rc.parse1cPayload([{ Contractor: "А ТОВ", DetailInfo: [{ Account: "Рахунок 1 від 01.09.2026", Sum: 100000.1, SumVal: 2400.5 }, { Sum: 0, SumVal: 15 }] },
-    { Contractor: "Б ТОВ", DetailInfo: [{ Sum: 0.2, SumVal: 0 }] }]).rows;
-  const tot = rc.fxTotals(rows);
-  assert.deepEqual([tot.rows, tot.totalUah, tot.totalVal, tot.zeroUah], [3, 100000.3, 2415.5, 1], "🔴 підсумок валютної дебіторки хибний або загубив рахунок із нульовим ₴");
-  const cfg = SRC("config.ts");
-  assert.match(cfg, /receivables1cFxUrl:[\s\S]*?debit-balance-account-362"/, "🔴 валютна дебіторка не з рахунку 362");
-  assert.match(cfg, /\/-361\$\/\.test\(process\.env\.RECEIVABLES_1C_URL/, "🔴 перевизначений URL 361 може потрапити у валютну без заміни");
-
-  const s = await scratchDb(t);
-  if (!s) return;
-  const k = await import("./financeKpi.js");
-  const { db, c } = s;
-  try {
-    const put = (at: string, uah: number) => c.query(`INSERT INTO receivables_fx_totals (synced_at, rows, total_uah, total_val) VALUES ($1, 1, $2, 1)`, [at, uah]);
-    await put("2026-10-11T20:50:00Z", 111);   // нд 11.10 23:50 Київ — кінець тижня 05.10
-    await put("2026-10-11T21:10:00Z", 222);   // пн 12.10 00:10 Київ — уже наступний тиждень
-    await put("2026-10-14T09:00:00Z", 333);
-    const now = new Date("2026-10-14T10:00:00Z");
-    assert.equal((await k.receivablesFxAt(db, "2026-10-11", now))?.uah, 111, "🔴 минулий тиждень отримав пізніший підсумок");
-    assert.equal((await k.receivablesFxAt(db, "2026-10-18", now))?.uah, 333, "🔴 поточний тиждень не взяв свіжий підсумок");
-    assert.equal(await k.receivablesFxAt(db, "2026-10-18", new Date("2026-10-15T10:00:00Z")), null, "🔴 добове мовчання синку показане старим числом");
-    assert.equal(await k.receivablesFxAt(db, "2026-10-04", now), null, "🔴 період до журналу отримав чуже число");
-  } finally { await s.dispose(); }
-});
-
-/**
- * #995 — РАЗОВИЙ КРОК СХЕМИ ПРОХОДУ 2в і СИНК 362. На базі з рядками «ФМ» старого вигляду: три операційні стають
- * авто з розділом, «Загальновиробничі» → «Загальні витрати», зʼявляється рівно один «ЗП + Податки на ЗП», «Валютна
- * дебіторка» — з 1С; повторний прогін схеми нічого не міняє: свідомо повернутий у ручний рядок і видалений «ЗП» не відроджуються. Синк 362 — окремо
- * від 361: його збій не зупиняє гривневу дебіторку. 🧨 Червоніє, якщо крок повторюється, дублює «ЗП» або збій 362
- * валить синк 361.
- */
-test("#995 ЖИВИЙ SQL: разовий крок 2в — авто-операційні, «Загальні», один «ЗП», валютна з 1С; синк 362 ізольований", async (t) => {
-  const sync = SRC("jobs/syncReceivables.ts");
-  const body = sync.slice(sync.indexOf("export async function syncReceivables(): Promise<void> {"));
-  assert.match(body.split("\n")[1], /await syncReceivablesFx\(\)\.catch\(/, "🔴 збій 362 може зупинити синк 361 (або 362 не синкається)");
-  assert.match(sync, /INSERT INTO receivables_fx_totals \(rows, total_uah, total_val, zero_uah[,)]/, "🔴 синк 362 не пише журнал підсумків");
-
-  const s = await scratchDb(t);
-  if (!s) return;
-  const { c } = s;
-  try {
-    await c.query(`DELETE FROM fin_kpi_imports WHERE key = 'opex-fx-2026-10-05'`);
-    const sec = (await c.query(`INSERT INTO fin_kpi_sections (name) VALUES ('Операційні витрати') RETURNING id`)).rows[0].id;
-    const rest = (await c.query(`INSERT INTO fin_kpi_sections (name) VALUES ('Залишки на дату') RETURNING id`)).rows[0].id;
-    for (const [n, i] of [["Разом", 0], ["Комерційні витрати", 1], ["Загальновиробничі витрати", 2], ["Адміністративні витрати", 3]] as const)
-      await c.query(`INSERT INTO fin_kpis (section_id, name, kind, sort) VALUES ($1, $2, $3, $4)`, [sec, n, n === "Разом" ? "sum" : "manual", i]);
-    await c.query(`INSERT INTO fin_kpis (section_id, name, kind) VALUES ($1, 'Валютна дебіторка', 'manual')`, [rest]);
-    const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
-    await c.query(schema);
-    const rows = async () => (await c.query(`SELECT name, kind, ref_source FROM fin_kpis WHERE deleted_at IS NULL ORDER BY section_id, sort, id`)).rows.map((x) => `${x.name}|${x.kind}|${x.ref_source ?? ""}`);
-    const once = await rows();
-    assert.deepEqual(once, ["Разом|sum|", "Комерційні витрати|auto|opex_commercial", "Загальні витрати|auto|opex_general", "Адміністративні витрати|auto|opex_admin",
-      "ЗП + Податки на ЗП|auto|opex_payroll", "Валютна дебіторка|auto|receivables_fx"], "🔴 разовий крок 2в зробив не те");
-    // Свідомі правки після кроку: «Комерційні» знову ручні, «ЗП» видалено. Повторний прогін схеми не має їх відродити.
-    await c.query(`UPDATE fin_kpis SET kind = 'manual', ref_source = NULL WHERE name = 'Комерційні витрати'`);
-    await c.query(`UPDATE fin_kpis SET deleted_at = now() WHERE name = 'ЗП + Податки на ЗП'`);
-    const edited = await rows();
-    await c.query(schema);
-    assert.deepEqual(await rows(), edited, "🔴 повторний прогін схеми повторив крок — свідомі правки відкочено або «ЗП» відроджено");
-    assert.equal((await c.query(`SELECT count(*)::int AS n FROM fin_kpis WHERE name = 'ЗП + Податки на ЗП'`)).rows[0].n, 1, "🔴 «ЗП» продубльовано");
-  } finally { await s.dispose(); }
-});
+// #994 і #995 знято 26.10.2026 (валютна дебіторка — із сервісу неоплачених рахунків 1С, не з 362) — див. `RETIRED_GATES`;
+// наступники — `core/unpaidInvoices.test.ts` (`#1286`–`#1286d`).
 
 /**
  * #996 — ФРОНТ РОЗДІЛІВ: вибір — рівно чотири розділи сервера (ключі й назви збігаються з `ITEM_SECTIONS`) і «без

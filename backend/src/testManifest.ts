@@ -56,6 +56,7 @@ export const MANIFEST_FILES: string[] = [
   "core/paymentApprovals.test.js",
   "core/monthResult.test.js",
   "core/dealLedger.test.js",
+  "core/unpaidInvoices.test.js",
   "core/taskVisibility.test.js",
   "core/taskStatusRights.test.js",
   "routes/taskStatusPatch.test.js",
@@ -367,7 +368,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "strategic_creators", "fin_import_months",
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
@@ -2382,6 +2383,11 @@ export const MANIFEST_TESTS: string[] = [
   "#1283d ЖИВИЙ SQL: синк 1С — заміна цілком, порожньо й понад −10% — відмова без змін, причина в стані",
   "#1283e ЖИВИЙ SQL: угода з 1С — блоки, плановий PNL, Kommo ≠ 1С і валюта на перевірку, без 1С — мовчить",
   "#1283f ПРОВОДКА: синк 1С :45 під наглядом, адреса з сервісу дебіторки, AI закрито, Excel і фронт — блоки як у «Сделки»",
+  // core/unpaidInvoices.test.ts — валютна дебіторка з сервісу неоплачених рахунків 1С, лише 2026 рік (Роман 26.10.2026).
+  "#1286 РОЗБІР НЕОПЛАЧЕНИХ: state false — помилка, лише 2026 рік із залишком, угода — 8 цифр, підсумок за валютою, без курсу — окремо",
+  "#1286b ЖИВИЙ SQL: список і журнал однією транзакцією, нуль рахунків — відмова без змін, період — свій підсумок, застаре — порожньо",
+  "#1286c ПРОВОДКА: синк :15 під наглядом, адреса поруч із 361 і з 2026, без 362, список — межа «Фінансів» і матриця, фронт — рахунки з угодою",
+  "#1286d ЖИВИЙ SQL: разовий крок 2в — авто-операційні, «Загальні», один «ЗП», «Валютна дебіторка» — авто",
   // core/creditLimits.test.ts — ліміти готівкового рядка дебіторки (21.10.2026).
   "#1280 ГОТІВКОВИЙ РЯДОК ДЕБІТОРКИ — ліміти днів і суми з таблиці лімітів за ключем рядка, як у безготівкових",
   // core/paymentApprovals.test.ts — тестову вкладку «План/факт · авто» прибрано (Тетяна 21.10.2026).
@@ -2628,8 +2634,6 @@ export const MANIFEST_TESTS: string[] = [
   // core/financeKpi.test.ts — Фінанси, прохід 2в: розділи статей → операційні витрати, валютна дебіторка з 1С (05.10.2026).
   "#991 ЖИВИЙ SQL: розділ статті — чотири значення, усе або нічого, «Повернути» тим самим викликом",
   "#993 ЖИВИЙ SQL: закриття фіксує операційні, вночі — ні; відкриття оживляє лише їх",
-  "#994 ВАЛЮТНА ДЕБІТОРКА: підсумок 1С (362) на кінець періоду, застаре — порожньо, адреса ≠ 361",
-  "#995 ЖИВИЙ SQL: разовий крок 2в — авто-операційні, «Загальні», один «ЗП», валютна з 1С; синк 362 ізольований",
   "#996 ФРОНТ РОЗДІЛІВ: чотири розділи як на сервері, «всім у групі» з «Повернути», безрозділові видно",
   // core/financeKpi.test.ts — Фінанси, прохід 2г: Сейф, картки, «Надходження / Витрати загальні» з «Виписки», валюта (05.10.2026).
   "#997 ЖИВИЙ SQL: Сейф — тиждень або операції, або один підсумок; банк руками не пишеться; «Повернути»",
@@ -3022,6 +3026,12 @@ export interface RetiredGate {
 }
 
 export const RETIRED_GATES: RetiredGate[] = [
+  { name: "#994 ВАЛЮТНА ДЕБІТОРКА: підсумок 1С (362) на кінець періоду, застаре — порожньо, адреса ≠ 361",
+    since: "2026-10-26", decidedBy: "Роман 26.10.2026 — валютна дебіторка з сервісу неоплачених рахунків 1С: «роби лише 2026 рік і щоб можна було глянути що сам там не так»",
+    reason: "змінилось твердження: валютна дебіторка більше не з рахунку 362 (він не бачив рахунків без проведеної реалізації). А ДЕ ЦЕ ТЕПЕР: розбір і підсумок за валютою — `#1286`; період отримує свій підсумок журналу, застаре — порожньо — `#1286b`; адреса поруч із 361, з 2026 року і без 362 — `#1286c`." },
+  { name: "#995 ЖИВИЙ SQL: разовий крок 2в — авто-операційні, «Загальні», один «ЗП», валютна з 1С; синк 362 ізольований",
+    since: "2026-10-26", decidedBy: "Роман 26.10.2026 — валютна дебіторка з сервісу неоплачених рахунків 1С (те саме рішення, що зняло `#994`)",
+    reason: "змінилось твердження: синку 362 у синку дебіторки більше немає. А ДЕ ЦЕ ТЕПЕР: разовий крок 2в (те саме тіло) — `#1286d`; окремість валютної від 361 — окрема джоба й крон, `#1286c`." },
   { name: "#1080b «ПРИЙМАЄ» ЛИШЕ У ЗВИЧАЙНИХ ЗАДАЧ: поза ними він не учасник, виконавець закриває як і було",
     since: "2026-10-23", decidedBy: "Роман 23.10.2026 — стратегічні задачі: «стратегічну закриває Приймає», «роби»",
     reason: "змінилось твердження: «Приймає» тепер і у стратегічних задачах. А ДЕ ЦЕ ТЕПЕР: `#2380` — те саме правило «поза типами з «Приймає» він не учасник, виконавець закриває як і було», склад типів {simple, strategic}; закриття стратегічної лише «Приймає» — `#2381`." },

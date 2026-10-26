@@ -7,6 +7,7 @@ import {
   type FinKpiPeriod, type FinKpi, type FinKpiCard, type FinPeriodKind, type FinKpiRefSource, type FinKpiThing,
 } from "../../../api";
 import { asInput } from "./financeView";
+import { FxNote } from "./FinanceFxUnpaid";
 
 /**
  * 💰 «ТИЖДЕНЬ І МІСЯЦЬ» (прохід 2а, 01.10.2026) — аркуш «ФМ» у дашборді. Показники вносяться руками; «Комісійні» й
@@ -42,7 +43,7 @@ export const REF_HINT: Record<FinKpiRefSource, string> = {
   opex_general: "З таблиці «Утверждение оплат» за датою оплати (тиждень і місяць): статті з розділом «Загальні» + «ЗП - Загальні»",
   opex_admin: "З таблиці «Утверждение оплат» за датою оплати (тиждень і місяць): статті з розділом «Адміністративні» + «ЗП - Адміністративні»",
   opex_payroll: "Місяць: Σ факту статей «План/факт» з розділом «ЗП + Податки на ЗП»; поки таких статей немає — вручну",
-  receivables_fx: "1С, рахунок 362: гривневий еквівалент валютних рахунків на кінець періоду (журнал кожного синку)",
+  receivables_fx: "1С, неоплачені рахунки 2026 року у валюті (з 26.10.2026; раніше — рахунок 362): гривневий еквівалент за курсом НБУ на кінець періоду (журнал кожного синку); які саме рахунки — під таблицею",
   bank_in: "«Виписка»: усі рахунки разом із картками й Сейфом, дати за Києвом. Перекази між нашими рахунками входять — їхню суму видно під таблицею",
   bank_out: "«Виписка»: усі рахунки разом із картками й Сейфом, включно з банківськими комісіями. Перекази між нашими рахунками входять — їхню суму видно під таблицею",
 };
@@ -274,13 +275,7 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
       {data.opexUnassigned && data.opexUnassigned.items > 0 && <div className="hr-note" style={{ margin: "10px 16px 0" }}>
         Статей без розділу (як «Податки ТОВ») з оплатами за цей період: <b>{data.opexUnassigned.items}</b> на <b>{money(data.opexUnassigned.fact)}</b> — в «Операційні витрати» вони не потрапили. Розділ ставиться на вкладці «Статті».
       </div>}
-      {data.receivablesFx && <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
-        Валютна дебіторка з 1С на {new Date(data.receivablesFx.at).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}: {money(data.receivablesFx.uah)} у гривні · {money(data.receivablesFx.val)} у валюті (1С не каже, у якій — це сума різних валют)
-        {data.receivablesFx.zeroUah > 0 && <> · <b>{data.receivablesFx.zeroUah}</b> рах. мають борг у валюті з нульовим гривневим еквівалентом — у гривневу суму вони не ввійшли</>}
-        {data.receivablesFx.usd != null && <> · у валюті: <b>{money(data.receivablesFx.usd)} USD</b> · <b>{money(data.receivablesFx.eur)} EUR</b>
-          {data.receivablesFx.unknownVal ? <> · валюту не визначено: <b>{money(data.receivablesFx.unknownVal)}</b></> : null}
-          <span title="1С не віддає валюту рахунку; її визначено за курсом рядка (сума ₴ ÷ сума у валюті), найближчим до курсу НБУ"> (валюту визначено за курсом ⓘ)</span></>}
-      </div>}
+      {data.receivablesFx && <FxNote fx={data.receivablesFx} />}
       {data.bankOwn && (data.bankOwn.in > 0 || data.bankOwn.out > 0) && <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
         «Надходження / Витрати загальні» з «Виписки» включають перекази між нашими рахунками: <b>{money(data.bankOwn.in)}</b> прийшло й <b>{money(data.bankOwn.out)}</b> пішло за період.
         Чи їх виключати — питання до фінансиста, поки рахуємо все.

@@ -825,15 +825,15 @@ export async function receivablesRef(db: Db, kind: PeriodKind, start: string, no
  * «зараз», якщо період ще йде). Підсумок старший за добу від цієї межі — немає числа (синк мовчав), а не старе число.
  */
 export async function receivablesFxAt(db: Db, end: string, now: Date): Promise<{ uah: number; val: number; zeroUah: number; at: string;
-  usd: number | null; eur: number | null; unknownVal: number | null } | null> {
+  usd: number | null; eur: number | null; unknownVal: number | null; source: string | null; rows: number } | null> {
   const r = await db.query(`WITH cut AS (SELECT LEAST($2::timestamptz, (($1::date + 1)::timestamp AT TIME ZONE 'Europe/Kyiv')) AS t)
-    SELECT total_uah::text AS uah, total_val::text AS val, zero_uah, synced_at, usd::text AS usd, eur::text AS eur, unknown_val::text AS unk
+    SELECT total_uah::text AS uah, total_val::text AS val, zero_uah, synced_at, usd::text AS usd, eur::text AS eur, unknown_val::text AS unk, source, rows
       FROM receivables_fx_totals, cut
      WHERE synced_at <= cut.t AND synced_at > cut.t - interval '1 day' ORDER BY synced_at DESC LIMIT 1`, [end, now.toISOString()]);
   const x = r.rows[0];
   // usd / eur / unknownVal — null у підсумках ДО проходу 2г (тоді валюту ще не визначали), а не нуль.
   return x ? { uah: Number(x.uah), val: Number(x.val), zeroUah: x.zero_uah, at: new Date(x.synced_at).toISOString(),
-    usd: num(x.usd), eur: num(x.eur), unknownVal: num(x.unk) } : null;
+    usd: num(x.usd), eur: num(x.eur), unknownVal: num(x.unk), source: x.source ?? null, rows: Number(x.rows) } : null;
 }
 
 /**

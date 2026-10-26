@@ -6658,3 +6658,19 @@ UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
  WHERE key IN ('hr', 'business_assistant')
    AND NOT COALESCE((SELECT (data->>'cpCheckTabGranted')::boolean FROM app_settings WHERE id = 1), false);
 UPDATE app_settings SET data = data || '{"cpCheckTabGranted":true}'::jsonb WHERE id = 1 AND NOT (data ? 'cpCheckTabGranted');
+
+-- 💱 НЕОПЛАЧЕНІ РАХУНКИ 1С з 2026 року (сервіс `unpaid-invoices`, 1С 25.10.2026; задача #5297; рішення Романа 26.10.2026
+-- «лише 2026 рік і щоб можна було глянути, що там не так»). Пише лише `syncUnpaidInvoices` (щогодини о :15, заміна цілком).
+-- Звідси — «Валютна дебіторка» (журнал `receivables_fx_totals`, джерело `unpaid-2026`) і список рахунків під нею.
+CREATE TABLE IF NOT EXISTS onec_unpaid_invoices (
+  uid TEXT NOT NULL, number TEXT NOT NULL, invoice_date DATE NOT NULL, organization TEXT NOT NULL, contractor TEXT NOT NULL, edrpou TEXT,
+  currency TEXT NOT NULL, invoice_sum NUMERIC(14,2) NOT NULL, paid_sum NUMERIC(14,2) NOT NULL, remaining NUMERIC(14,2) NOT NULL,
+  realized BOOLEAN NOT NULL, partially_paid BOOLEAN NOT NULL, debt_account TEXT, due_date DATE, manager TEXT, deal_id BIGINT, comment TEXT
+);
+CREATE TABLE IF NOT EXISTS onec_unpaid_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), synced_at TIMESTAMPTZ, rows INTEGER, error TEXT, error_at TIMESTAMPTZ
+);
+-- Звідки підсумок журналу: NULL — рахунок 362 (до 26.10.2026), `unpaid-2026` — сервіс неоплачених рахунків.
+ALTER TABLE receivables_fx_totals ADD COLUMN IF NOT EXISTS source TEXT;
+REVOKE ALL ON onec_unpaid_invoices FROM ai_readonly;
+REVOKE ALL ON onec_unpaid_state FROM ai_readonly;

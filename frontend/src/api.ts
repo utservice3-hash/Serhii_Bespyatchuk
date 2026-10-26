@@ -5941,6 +5941,13 @@ export interface PayScreenDay {
   totals: { active: number; activeOk: number; activeOkSum: number; activeCheck: number; pending: number; archive: number; diff: number };
   days: { day: string; total: number; ok: number; okSum: number }[];
 }
+/** 💱 Валютні неоплачені рахунки 1С з 2026 року — що саме складає «Валютну дебіторку» (26.10.2026). */
+export interface FxUnpaidRow {
+  number: string; date: string; organization: string; contractor: string; currency: string; invoiceSum: number; paidSum: number; remaining: number;
+  realized: boolean; partiallyPaid: boolean; debtAccount: string | null; dueDate: string | null; manager: string | null; dealId: number | null; comment: string | null;
+}
+export interface FxUnpaid { syncedAt: string | null; error: string | null; from: string; rowsAll: number | null; kommoBase: string; invoices: FxUnpaidRow[] }
+export const fetchFxUnpaid = async () => (await api.get<FxUnpaid>("/finance/fx-unpaid")).data;
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
 export const runCarrierPayments = async () => (await api.post<{ ok: boolean; result: unknown }>("/finance/payments/run")).data;
 
@@ -6244,7 +6251,7 @@ export interface FinKpiPeriod {
   /** Місяць: статті «План/факт» без розділу, що мають факт цього місяця, — їхні гроші не в жодному рядку. */
   opexUnassigned: { items: number; fact: number } | null;
   /** Валютна дебіторка з 1С на кінець періоду: Σ у гривні, Σ у валюті (різні валюти разом), рядки з нульовим ₴. */
-  receivablesFx: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null } | null;
+  receivablesFx: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null; source: string | null; rows: number } | null;
   /** «З них перекази між нашими рахунками» біля «Надходження / Витрати загальні» (чи виключати — відкрите питання). */
   bankOwn: { in: number; out: number } | null;
   /** 🎯 План і прогноз надходжень / витрат (#5649); `null` — до старту автоматики. */
