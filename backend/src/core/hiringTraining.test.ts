@@ -958,3 +958,33 @@ test("#2240 виданий пароль не зникає: блок «Навча
   assert.ok(block.length > 0, "TrainingAccessBlock не знайдено");
   assert.match(block, /useEffect\(load, \[load, version\]\)/, "🔴 блок не перечитує дані, коли змінилась історія картки");
 });
+
+/**
+ * #2241 — «ВИЙШОВ НА РОБОТУ» → ПАРОЛЬ У КАРТЦІ СПІВРОБІТНИКА (26.10.2026, Гуназа). Після переходу в «менеджер» кнопка
+ * пароля в картці кандидата вимкнена — і ніщо не казало, куди йти. Тепер деталь навчання віддає `employeeId` (картка
+ * цього акаунта), а обидва місця з кнопкою — картка кандидата й шухляда «На навчанні» — на статусі «менеджер» показують
+ * підказку з посиланням замість вимкненої кнопки; на решті статусів кнопки лишаються.
+ * 🧨 Червоніє, якщо `employeeId` не той / не `null` без картки, або якщо хоч одне місце знову показує кнопку менеджеру
+ * чи ховає її від кандидата.
+ */
+test("#2241 після «Вийшов на роботу» картка кандидата веде в картку співробітника по пароль, а не показує вимкнену кнопку", async (t) => {
+  const fe = (rel: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", rel), "utf8");
+  const ui = fe("HiringTraining.tsx");
+  const branches = ui.match(/\{r\.status === "manager"\s*\?\s*<ManagerPasswordHint employeeId=\{d\.employeeId\} \/>\s*:\s*<InviteBox\b/g) ?? [];
+  assert.equal(branches.length, 2, "🔴 обидва місця (картка кандидата й «На навчанні») мусять на «менеджері» показувати підказку, а решті — InviteBox");
+  assert.equal((ui.match(/<InviteBox\b/g) ?? []).length, 2, "🔴 зʼявився InviteBox поза розгалуженням «менеджер → підказка»");
+  const hint = ui.slice(ui.indexOf("function ManagerPasswordHint"), ui.indexOf("export function TrainingAccessBlock"));
+  assert.match(hint, /href=\{`\/hiring\?tab=emp&employee=\$\{employeeId\}`\}/, "🔴 підказка не веде в картку співробітника");
+  assert.match(hint, /Картки співробітника ще немає/, "🔴 без картки підказка мусить казати це словами, а не мовчати");
+
+  const s = await scratchDb(t); if (!s) return;
+  const tr = await import("./hiringTraining.js");
+  try {
+    const id = await toCandidate(s.db, "Гуназа Тест", "0970002241");
+    assert.equal((await tr.trainingDetail(s.db, id, "edit", null)).employeeId, null, "🔴 картки немає, а employeeId не null");
+    const uid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id as number;
+    await s.c.query(`INSERT INTO employees (full_name, import_key) VALUES ('Чужа Картка', 'чужа картка')`);
+    const emp = (await s.c.query(`INSERT INTO employees (full_name, import_key, user_id) VALUES ('Гуназа Тест', 'гуназа тест', $1) RETURNING id`, [uid])).rows[0].id as number;
+    assert.equal((await tr.trainingDetail(s.db, id, "edit", null)).employeeId, emp, "🔴 employeeId не картка цього акаунта");
+  } finally { await s.done(); }
+});
