@@ -915,3 +915,139 @@ test("#2464 СКИДАННЯ Й КЛЮЧ ПОРЯДКУ: rptTableColOrder:<userI
     "🔴 «Скинути до типових» скидає лише вибір — порядок лишається");
   assert.match(pick, /onClick=\{onReset\}>Скинути до типових</, "🔴 кнопка «Скинути до типових» кличе не спільне скидання");
 });
+
+// ─────────────────── #2465…#2468 · будь-яку колонку можна вимкнути (рішення власника 26.10.2026) ───────────────────
+
+/**
+ * Набір, який таблиця показувала ДО рішення 26.10.2026 людині, що нічого не чіпала:
+ * тодішні обовʼязкові + опційні, увімкнені за замовчуванням. Записаний ЛІТЕРАЛОМ, а не
+ * виведений із реєстру: виведений рахувався б тим самим кодом, який перевіряємо.
+ */
+const DEFAULT_SHOWN_BEFORE_7087 = [
+  "rank", "name", "status", "created", "ads", "leadgen", "conv", "dispatch", "avgCheck", "fact", "plan", "pct",
+  "projected", "needPerDay", "expectThisMonth", "awaitNoDate", "jamDeals", "responseTime", "firstTouch",
+];
+
+/**
+ * #2465 — БУДЬ-ЯКУ КОЛОНКУ, КРІМ «МЕНЕДЖЕР», МОЖНА ВИМКНУТИ (задача 7087).
+ *
+ * Роман, 26.10.2026: «хочеться щоб можна було ставити порядок колонок і вибирати
+ * будь-які колонки». Перевіряється виконанням: кожна колонка реєстру, крім `name`,
+ * є в переліку вимикних і ховається, коли її вимкнули; `name` — дзеркало: не
+ * ховається навіть явним `false`, бо без неї рядок нічий.
+ *
+ * 🧨 САБОТАЖ: додати «#» до `LOCKED_COLS` → червоніє.
+ */
+test("#2465 БУДЬ-ЯКУ КОЛОНКУ, КРІМ «МЕНЕДЖЕР», МОЖНА ВИМКНУТИ: перелік вимикних = усі, крім name", async () => {
+  const { REPORT_COLS, OPTIONAL_COLS, LOCKED_COLS, DEFAULT_OPT_ON, colVisible } = await loadCols();
+  assert.deepEqual(LOCKED_COLS, ["name"], "🔴 невимикна не лише «Менеджер»");
+  const all = REPORT_COLS.map((c: any) => c.key);
+  assert.deepEqual(OPTIONAL_COLS.map((c: any) => c.key), all.filter((k: string) => k !== "name"),
+    "🔴 перелік вимикних колонок — не «усі, крім «Менеджер»»");
+  const stuck = all.filter((k: string) => k !== "name" && colVisible(k, { ...DEFAULT_OPT_ON, [k]: false }));
+  assert.deepEqual(stuck, [], "🔴 вимкнена колонка лишилась на екрані: " + stuck.join(", "));
+  for (const k of ["rank", "status", "fact", "plan", "pct"])
+    assert.equal(colVisible(k, { ...DEFAULT_OPT_ON, [k]: false }), false, `🔴 колишню обовʼязкову «${k}» не вимкнути`);
+  assert.equal(colVisible("name", { name: false }), true, "🔴 «Менеджер» сховалась — рядки таблиці стали нічиїми");
+
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(s, /c\.key === "factUndef" \? showUndef : colVisible\(c\.key, optOn\)/,
+    "🔴 таблиця вирішує видимість колонки не через colVisible — десь лишився старий замок на core");
+  assert.equal(/c\.core\b/.test(s), false, "🔴 таблиця досі дивиться на `core` — така колонка невимикна");
+  assert.match(s, /locked=\{REPORT_COLS\.filter\(\(c\) => isLockedCol\(c\.key\)\)\}/,
+    "🔴 неактивні галочки в меню — не рівно невимикні колонки");
+});
+
+/**
+ * #2466 — СТАРИЙ ЗБЕРЕЖЕНИЙ ВИБІР ЧИТАЄТЬСЯ З CORE-КОЛОНКАМИ УВІМКНЕНИМИ; ТИПОВИЙ НАБІР НЕ ЗМІНИВСЯ.
+ *
+ * До 26.10 у сховищі лежали лише опційні ключі. Якби core-колонки читались звідти
+ * «як є», у кожного, хто колись налаштовував таблицю, після викату зникли б «Отримано»,
+ * «План міс.» і решта. Дзеркало: core-колонку, яку вимкнули ВЖЕ ПІСЛЯ рішення, читання
+ * не вмикає назад. І людина, що нічого не чіпала, бачить рівно той набір, що до рішення.
+ *
+ * 🧨 САБОТАЖ: прибрати core-колонки з `DEFAULT_OPT_ON` → червоніє.
+ */
+test("#2466 СТАРИЙ ВИБІР (лише опційні) ДАЄ CORE УВІМКНЕНИМИ, а типовий набір той самий, що до рішення", async () => {
+  const { REPORT_COLS, readColPrefs, DEFAULT_OPT_ON, colVisible } = await loadCols();
+  const shownBy = (prefs: Record<string, boolean>) =>
+    REPORT_COLS.filter((c: any) => c.key !== "factUndef" && colVisible(c.key, prefs)).map((c: any) => c.key);
+  assert.deepEqual(shownBy(DEFAULT_OPT_ON).sort(), [...DEFAULT_SHOWN_BEFORE_7087].sort(),
+    "🔴 типовий набір колонок змінився — людина, що нічого не чіпала, побачить іншу таблицю");
+
+  const coreKeys = REPORT_COLS.filter((c: any) => c.core && c.key !== "name").map((c: any) => c.key);
+  assert.ok(coreKeys.length >= 10, `🔴 core-колонок ${coreKeys.length} — розбір реєстру зламався`);
+  for (const [label, st] of [
+    ["особистий ключ", memStore({ "rptTableCols:42": { jam: true, projected: false } })],
+    ["старий спільний ключ", memStore({ rptTableCols: { jam: true, projected: false } })],
+  ] as const) {
+    const p = readColPrefs(st, 42);
+    const lost = coreKeys.filter((k: string) => !colVisible(k, p));
+    assert.deepEqual(lost, [], `🔴 ${label}: старий вибір сховав колонки, яких людина не вимикала: ${lost.join(", ")}`);
+    assert.equal(p.jam, true, `🔴 ${label}: старий вибір опційної колонки загубився`);
+    assert.equal(p.projected, false, `🔴 ${label}: вимкнена в старому виборі колонка увімкнулась`);
+  }
+  const off = readColPrefs(memStore({ "rptTableCols:42": { fact: false, rank: false } }), 42);
+  assert.equal(colVisible("fact", off), false, "🔴 вимкнене «Отримано» після перезавантаження знову на екрані");
+  assert.equal(colVisible("rank", off), false, "🔴 вимкнений «#» після перезавантаження знову на екрані");
+});
+
+/**
+ * #2467 — «УСІ» ВМИКАЄ ВСЕ, «СКИНУТИ» — ТИПОВИЙ НАБІР І ТИПОВИЙ ПОРЯДОК.
+ *
+ * Тепер, коли вимкнути можна будь-що, «Усі» — єдиний спосіб повернути все одним
+ * кліком; якщо він вмикає лише колишні опційні, вимкнене «Отримано» не повертається
+ * нічим, окрім ручної галочки.
+ *
+ * 🧨 САБОТАЖ: `allColPrefs` бере лише `!c.core` колонки → червоніє.
+ */
+test("#2467 «УСІ» ВМИКАЄ КОЖНУ КОЛОНКУ, «СКИНУТИ» ПОВЕРТАЄ ТИПОВИЙ НАБІР І ПОРЯДОК", async () => {
+  const { REPORT_COLS, allColPrefs, resetColPrefs, resetColOrder, defaultColOrder, colVisible } = await loadCols();
+  const all = allColPrefs();
+  const hidden = REPORT_COLS.filter((c: any) => !colVisible(c.key, all)).map((c: any) => c.key);
+  assert.deepEqual(hidden, [], "🔴 «Усі» лишає вимкненими: " + hidden.join(", "));
+  const r = resetColPrefs();
+  const shown = REPORT_COLS.filter((c: any) => c.key !== "factUndef" && colVisible(c.key, r)).map((c: any) => c.key);
+  assert.deepEqual(shown.sort(), [...DEFAULT_SHOWN_BEFORE_7087].sort(), "🔴 «Скинути до типових» дає не типовий набір");
+  assert.deepEqual(resetColOrder(), defaultColOrder(), "🔴 «Скинути до типових» дає не типовий порядок");
+  // Дзеркало: «Скинути» вимикає те, що поза типовим набором (інакше це «Усі» під іншою назвою).
+  assert.equal(colVisible("jam", r), false, "🔴 «Скинути» лишає увімкненою колонку поза типовим набором");
+
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(s, /onAll=\{\(\) => applyCols\(allColPrefs\(\)\)\}/, "🔴 «Усі» кличе не allColPrefs");
+  const pick = s.split("function ColumnPicker(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.match(pick, /const onReset = \(\) => \{ resetCols\(\); onResetOrder\(\); \};/, "🔴 «Скинути» скидає не обидва — вибір і порядок");
+});
+
+/**
+ * #2468 — ВИМКНЕНА КОЛОНКА ЗНИКАЄ З ШАПКИ, РЯДКІВ І ПІДСУМКІВ РАЗОМ.
+ *
+ * Видимість вирішується ОДИН раз — у `cols`; шапка, клітинки, підсумки команд і
+ * `tfoot` ітерують саме `cols`, а кожен `colSpan` (рядок команди, розкриття тижнів,
+ * «немає менеджерів») — рівно `cols.length`. Клітинки й підсумки власної логіки
+ * видимості не мають: інакше вимкнена колонка зникла б із шапки й лишилась би
+ * в підсумку, і числа поїхали б під чужі заголовки.
+ *
+ * 🧨 САБОТАЖ: рядок назви команди тягнеться на `REPORT_COLS.length` → червоніє.
+ */
+test("#2468 ВИМКНЕНА КОЛОНКА ЗНИКАЄ З ШАПКИ, РЯДКІВ І ПІДСУМКІВ РАЗОМ: один cols, colSpan = cols.length", async () => {
+  const { REPORT_COLS, DEFAULT_OPT_ON, colVisible } = await loadCols();
+  const prefs = { ...DEFAULT_OPT_ON, fact: false, rank: false };
+  const keys = REPORT_COLS.filter((c: any) => c.key !== "factUndef" && colVisible(c.key, prefs)).map((c: any) => c.key);
+  assert.equal(keys.includes("fact") || keys.includes("rank"), false, "🔴 вимкнені колонки лишились у списку колонок таблиці");
+  assert.equal(keys[0], "name", "🔴 без «#» першою стала не «Менеджер»");
+
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  const fromCols = [...s.matchAll(/\{cols\.map\(\(c(?:, i)?\) => \(\s*<(th|Cell|FootCell) key=\{c\.key\}/g)].map((m) => m[1]);
+  assert.deepEqual([...fromCols].sort(), ["Cell", "FootCell", "FootCell", "th"],
+    `🔴 не всі рендери колонок ітерують \`cols\` (ітерують: ${fromCols.join(", ") || "жоден"})`);
+  const spans = [...s.matchAll(/colSpan=\{([^}]+)\}/g)].map((m) => m[1].trim());
+  assert.ok(spans.length >= 3, `🔴 colSpan знайдено ${spans.length} — розбір зламався`);
+  const bad = spans.filter((x) => x !== "cols.length");
+  assert.deepEqual(bad, [], "🔴 рядок таблиці тягнеться не на число ПОКАЗАНИХ колонок: " + bad.join(", "));
+  for (const fn of ["function Cell(", "function FootCell("]) {
+    const body = s.split(fn)[1]?.split("\nfunction ")[0] ?? "";
+    assert.ok(body.length > 0, `🔴 ${fn} не знайдено — розбір зламався`);
+    assert.equal(/optOn|colVisible|isLockedCol/.test(body), false, `🔴 ${fn} має власну логіку видимості колонок`);
+  }
+});

@@ -42,7 +42,12 @@ export interface ColDef {
   key: ColKey;
   /** Підпис у шапці. */
   title: string;
-  /** Колонка з набору «завжди видимих» (чипом не вимикається). */
+  /**
+   * Колонка ТИПОВОГО НАБОРУ: увімкнена, доки людина сама її не вимкнула.
+   * ⚠️ До 26.10.2026 це означало «завжди видима, не вимикається». Рішення власника
+   * (задача 7087): вимкнути можна БУДЬ-ЯКУ колонку, крім «Менеджер» (`LOCKED_COLS`).
+   * Поле лишилось — воно задає типовий набір (`DEFAULT_OPT_ON`), а не замок.
+   */
   core: boolean;
   /** Ліве вирівнювання (текстові колонки). */
   left?: boolean;
@@ -233,8 +238,27 @@ export const REPORT_COLS: ColDef[] = [
     help: "Частка вхідних лідів воронки Кваліфікації, опрацьованих понад годину (реакція на лід, не повний цикл). «—» якщо лідів немає. Джерело: metrics.responseTimeByManager (first_activity − created > 60 хв)." },
 ];
 
-/** Опційні колонки, увімкнені за замовчуванням (решта — вимкнені). */
+/**
+ * 🔒 НЕВИМИКНА ЛИШЕ «Менеджер» (рішення власника 26.10.2026, задача 7087: «вибирати
+ * будь-які колонки»). Без імені рядок таблиці — набір чисел нічий, і підсумок
+ * («Весь відділ · N») теж живе в цій колонці. «#» вимикається: номер рядка ні на що
+ * інше не впливає.
+ */
+export const LOCKED_COLS: ColKey[] = ["name"];
+export const isLockedCol = (k: ColKey): boolean => LOCKED_COLS.includes(k);
+
+/**
+ * ТИПОВИЙ НАБІР: усі колонки `core` + опційні, увімкнені за замовчуванням.
+ *
+ * 🔴 КОЛОНКИ `core` ТУТ ЯВНО `true` — і саме це береже старі збережені вибори.
+ * Доти у сховищі лежали лише опційні ключі (core були невимикні, їх не писали).
+ * `readColPrefs` накладає збережене поверх цього обʼєкта, тож у старому виборі
+ * core-колонки читаються увімкненими, і після викату ні в кого нічого не зникає.
+ * Ключі core виводяться з реєстру, а не перелічуються руками: нова core-колонка
+ * не випаде з типового набору.
+ */
 export const DEFAULT_OPT_ON: Record<string, boolean> = {
+  ...Object.fromEntries(REPORT_COLS.filter((c) => c.core && !isLockedCol(c.key)).map((c) => [c.key, true])),
   projected: true, needPerDay: true, expectThisMonth: true, awaitNoDate: true,
   jamDeals: true, responseTime: true,
   jam: false, dobir: false, talks: false, dispRevenue: false,
@@ -242,7 +266,12 @@ export const DEFAULT_OPT_ON: Record<string, boolean> = {
   firstTouch: true,
 };
 
-export const OPTIONAL_COLS = REPORT_COLS.filter((c) => !c.core);
+/** Колонки, які людина може вимкнути в меню, — усі, крім закритих замком (`LOCKED_COLS`). */
+export const OPTIONAL_COLS = REPORT_COLS.filter((c) => !isLockedCol(c.key));
+
+/** Чи показана колонка за вибором людини. Умовну «Отримано · невизначено» вирішує таблиця, не вибір. */
+export const colVisible = (k: ColKey, prefs: Record<string, boolean>): boolean =>
+  isLockedCol(k) || prefs[k] === true;
 
 /**
  * 🗂 ГРУПИ КОЛОНОК У МЕНЮ «Колонки» (26.10.2026).

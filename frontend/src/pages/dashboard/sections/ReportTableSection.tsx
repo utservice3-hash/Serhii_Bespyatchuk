@@ -5,6 +5,7 @@ import {
   REPORT_COLS, OPTIONAL_COLS, sortRows, footValue, firstTouchLabel,
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
   applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
+  isLockedCol, colVisible,
   type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
@@ -125,7 +126,7 @@ export function ReportTableSection({
    * по-своєму, — і шапка поїде від клітинок (#2462).
    */
   const cols = useMemo(
-    () => applyColOrder(REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : c.core || optOn[c.key])), order),
+    () => applyColOrder(REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : colVisible(c.key, optOn))), order),
     [optOn, showUndef, order]);
   const colKeys = cols.map((c) => c.key);
   const moveTo = (from: ColKey, to: ColKey) => applyOrder(moveCol(order, from, to));
@@ -271,7 +272,7 @@ export function ReportTableSection({
       <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <ColumnPicker
           toggleable={OPTIONAL_COLS.filter((c) => c.key !== "factUndef")}
-          core={REPORT_COLS.filter((c) => c.core)}
+          locked={REPORT_COLS.filter((c) => isLockedCol(c.key))}
           optOn={optOn} onToggle={toggleCol}
           onReset={() => applyCols(resetColPrefs())}
           onResetOrder={() => applyOrder(resetColOrder())}
@@ -843,9 +844,10 @@ function ScopePicker({ teams, isAdmin, teamIds, onTeamIds, mgrFilter, onMgrFilte
  * показано. Тепер одна кнопка з лічильником, а галочки — згруповані за змістом
  * (`COL_GROUPS` у реєстрі).
  *
- * 🔴 ОБОВʼЯЗКОВІ КОЛОНКИ ВИДНО В МЕНЮ — неактивними галочками з підписом
- * «завжди». Інакше людина шукала б «Отримано» серед галочок, не знаходила й
- * вирішувала б, що колонку прибрали.
+ * 🔴 НЕВИМИКНУ КОЛОНКУ ВИДНО В МЕНЮ — неактивною галочкою з підписом «завжди».
+ * З 26.10.2026 (задача 7087) така лише «Менеджер»: решта, включно з колишніми
+ * обовʼязковими («Отримано», «План міс.», «#»…), — звичайні галочки, увімкнені в
+ * типовому наборі.
  *
  * Перелік галочок приходить ТИМ САМИМ виразом, що й раніше чипи
  * (`OPTIONAL_COLS.filter((c) => c.key !== "factUndef")`): умовна колонка
@@ -859,8 +861,10 @@ function ScopePicker({ teams, isAdmin, teamIds, onTeamIds, mgrFilter, onMgrFilte
  * телефону, де HTML5-перетягування на тачі ненадійне. «Скинути до типових»
  * скидає І вибір, І порядок — два колбеки, одна кнопка.
  */
-function ColumnPicker({ toggleable, core, optOn, onToggle, onReset: resetCols, onResetOrder, onAll, shown, total, ordered, onStep, dnd, dropOn }: {
-  toggleable: ColDef[]; core: ColDef[];
+function ColumnPicker({ toggleable, locked, optOn, onToggle, onReset: resetCols, onResetOrder, onAll, shown, total, ordered, onStep, dnd, dropOn }: {
+  toggleable: ColDef[];
+  /** Невимикні колонки (лише «Менеджер») — неактивними галочками з «завжди». */
+  locked: ColDef[];
   optOn: Record<string, boolean>; onToggle: (k: string) => void;
   onReset: () => void; onResetOrder: () => void; onAll: () => void;
   shown: number; total: number;
@@ -950,7 +954,7 @@ function ColumnPicker({ toggleable, core, optOn, onToggle, onReset: resetCols, o
             </div>
           )}
           {tab === "pick" && COL_GROUPS.map((g) => {
-            const req = core.filter((c) => COL_GROUP_OF[c.key] === g.key);
+            const req = locked.filter((c) => COL_GROUP_OF[c.key] === g.key);
             const opt = toggleable.filter((c) => COL_GROUP_OF[c.key] === g.key);
             if (req.length + opt.length === 0) return null;
             return (
@@ -961,14 +965,14 @@ function ColumnPicker({ toggleable, core, optOn, onToggle, onReset: resetCols, o
                 {req.map((c) => (
                   <label key={c.key} style={{ ...row, cursor: "default", color: "var(--text-muted)" }} title="Обовʼязкова колонка — показується завжди">
                     <input type="checkbox" checked disabled />
-                    {c.key === "rank" ? "# (номер рядка)" : c.title}
+                    {c.title}
                     <span style={{ marginLeft: "auto", fontSize: 11 }}>завжди</span>
                   </label>
                 ))}
                 {opt.map((c) => (
                   <label key={c.key} style={row}>
                     <input type="checkbox" checked={!!optOn[c.key]} onChange={() => onToggle(c.key)} />
-                    {c.title}
+                    {c.key === "rank" ? "# (номер рядка)" : c.title}
                   </label>
                 ))}
               </div>
