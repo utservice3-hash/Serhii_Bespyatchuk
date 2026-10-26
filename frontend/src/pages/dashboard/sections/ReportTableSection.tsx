@@ -2,11 +2,13 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanManager, type Team } from "../../../api";
 import {
-  REPORT_COLS, OPTIONAL_COLS, DEFAULT_OPT_ON, sortRows, footValue, firstTouchLabel,
-  type ColDef, type ColKey,
+  REPORT_COLS, OPTIONAL_COLS, sortRows, footValue, firstTouchLabel,
+  COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
+  type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
 import { VacationMark } from "../VacationMark";
+import { getAuthPayload } from "../../../auth";
 
 /**
  * 📊 ТАБЛИЧНИЙ ВИГЛЯД ЗВІТУ — рядок на менеджера за обраний період.
@@ -25,7 +27,15 @@ import { VacationMark } from "../VacationMark";
 const nf = new Intl.NumberFormat("uk-UA");
 const money = (v: number) => nf.format(Math.round(v));
 const K = (v: number) => Math.round(v / 1000) + "к";
-const COLS_LS = "rptTableCols";
+
+/** Сховище вибору колонок. Сам доступ до `localStorage` може кинути (приватне вікно) — тоді `null`. */
+const colStore = (): ColsStore | null => {
+  try { return window.localStorage; } catch { return null; }
+};
+/** Хто дивиться — для ОСОБИСТОГО ключа вибору колонок. Немає токена/сховища — `null` (старий спільний ключ). */
+const viewerUserId = (): number | null => {
+  try { return getAuthPayload()?.userId ?? null; } catch { return null; }
+};
 
 /** Клас статусу → токен. Один вираз на весь файл. */
 const TOKEN: Record<string, string> = { g: "--ok", a: "--warn", r: "--danger" };
@@ -68,18 +78,19 @@ export function ReportTableSection({
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
   const [mgrFilter, setMgrFilter] = useState<number | "">("");
   const [open, setOpen] = useState<number | null>(null);
-  // Видимість колонок переживає перезавантаження — як пресети періоду в КВП.
-  const [optOn, setOptOn] = useState<Record<string, boolean>>(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem(COLS_LS) || "null");
-      return raw && typeof raw === "object" ? { ...DEFAULT_OPT_ON, ...raw } : { ...DEFAULT_OPT_ON };
-    } catch { return { ...DEFAULT_OPT_ON }; }
-  });
+  // Видимість колонок переживає перезавантаження — і вона ОСОБИСТА: ключ
+  // `rptTableCols:<userId>` з фолбеком на старий спільний (див. reportTableCols.ts).
+  const [userId] = useState<number | null>(viewerUserId);
+  const [optOn, setOptOn] = useState<Record<string, boolean>>(() => readColPrefs(colStore(), userId));
   const toggleCol = (k: string) => setOptOn((p) => {
     const next = { ...p, [k]: !p[k] };
-    localStorage.setItem(COLS_LS, JSON.stringify(next));
+    writeColPrefs(colStore(), userId, next);
     return next;
   });
+  const applyCols = (next: Record<string, boolean>) => {
+    setOptOn(next);
+    writeColPrefs(colStore(), userId, next);
+  };
 
   // Обраний менеджер зник із набору (змінили період/команду) — фільтр знімаємо,
   // інакше екран лишився б порожнім без пояснення.
@@ -208,18 +219,17 @@ export function ReportTableSection({
         </div>
       )}
 
-      {/* ── Чипи колонок */}
-      <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>Колонки:</span>
-        {OPTIONAL_COLS.filter((c) => c.key !== "factUndef").map((c) => (
-          <button key={c.key} onClick={() => toggleCol(c.key)} aria-pressed={!!optOn[c.key]}
-            style={{
-              border: `1px solid ${optOn[c.key] ? "var(--brand)" : "var(--border)"}`,
-              background: optOn[c.key] ? "var(--brand)" : "var(--card-bg)",
-              color: optOn[c.key] ? "#fff" : "var(--text-muted)",
-              borderRadius: "var(--r-pill)", padding: "4px 12px", fontSize: 12, cursor: "pointer",
-            }}>{c.title}</button>
-        ))}
+      {/* ── Вибір колонок: кнопка з меню галочок замість ряду з 22 чипів (26.10.2026).
+             Меню живе ПОЗА скрол-контейнером таблиці, як «Обсяг», тож нічого не обрізається. */}
+      <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <ColumnPicker
+          toggleable={OPTIONAL_COLS.filter((c) => c.key !== "factUndef")}
+          core={REPORT_COLS.filter((c) => c.core)}
+          optOn={optOn} onToggle={toggleCol}
+          onReset={() => applyCols(resetColPrefs())}
+          onAll={() => applyCols(allColPrefs())}
+          shown={cols.length} total={REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : true)).length}
+        />
       </div>
 
       {/**
@@ -767,6 +777,92 @@ function ScopePicker({ teams, isAdmin, teamIds, onTeamIds, mgrFilter, onMgrFilte
               <span style={{ width: 14 }}>{mgrFilter === m.managerId ? "•" : ""}</span>{m.name}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 🗂 «КОЛОНКИ · N з M» — МЕНЮ ГАЛОЧОК ЗАМІСТЬ РЯДУ ЧИПІВ (26.10.2026).
+ *
+ * 22 чипи займали над таблицею два-три рядки й не казали, скільки колонок
+ * показано. Тепер одна кнопка з лічильником, а галочки — згруповані за змістом
+ * (`COL_GROUPS` у реєстрі).
+ *
+ * 🔴 ОБОВʼЯЗКОВІ КОЛОНКИ ВИДНО В МЕНЮ — неактивними галочками з підписом
+ * «завжди». Інакше людина шукала б «Отримано» серед галочок, не знаходила й
+ * вирішувала б, що колонку прибрали.
+ *
+ * Перелік галочок приходить ТИМ САМИМ виразом, що й раніше чипи
+ * (`OPTIONAL_COLS.filter((c) => c.key !== "factUndef")`): умовна колонка
+ * «Отримано · невизначено» вимикатись користувачем не може (`#214b`).
+ * Закривається кліком поза меню й Escape — як «Обсяг».
+ */
+function ColumnPicker({ toggleable, core, optOn, onToggle, onReset, onAll, shown, total }: {
+  toggleable: ColDef[]; core: ColDef[];
+  optOn: Record<string, boolean>; onToggle: (k: string) => void;
+  onReset: () => void; onAll: () => void;
+  shown: number; total: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away); document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
+
+  const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", fontSize: 13, cursor: "pointer" };
+  const linkBtn: React.CSSProperties = {
+    border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
+    borderRadius: "var(--r-pill)", padding: "3px 10px", fontSize: 12, cursor: "pointer",
+  };
+
+  return (
+    <div ref={box} style={{ position: "relative" }}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true"
+        style={{ ...selStyle, minWidth: 0 }}>
+        Колонки · {shown} з {total} <span style={{ opacity: 0.5, marginLeft: 4 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div role="menu" style={{
+          position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 60,
+          width: "min(340px, calc(100vw - 32px))", maxHeight: "min(480px, 70vh)", overflowY: "auto",
+          background: "var(--card-bg)", border: "1px solid var(--border-strong)",
+          borderRadius: "var(--r-md)", boxShadow: "var(--shadow)", padding: "6px 0",
+        }}>
+          <div style={{ display: "flex", gap: 6, padding: "4px 12px 8px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
+            <button type="button" style={linkBtn} onClick={onReset}>Скинути до типових</button>
+            <button type="button" style={linkBtn} onClick={onAll}>Усі</button>
+          </div>
+          {COL_GROUPS.map((g) => {
+            const req = core.filter((c) => COL_GROUP_OF[c.key] === g.key);
+            const opt = toggleable.filter((c) => COL_GROUP_OF[c.key] === g.key);
+            if (req.length + opt.length === 0) return null;
+            return (
+              <div key={g.key}>
+                <div style={{ padding: "8px 12px 3px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--text-muted)" }}>
+                  {g.title}
+                </div>
+                {req.map((c) => (
+                  <label key={c.key} style={{ ...row, cursor: "default", color: "var(--text-muted)" }} title="Обовʼязкова колонка — показується завжди">
+                    <input type="checkbox" checked disabled />
+                    {c.key === "rank" ? "# (номер рядка)" : c.title}
+                    <span style={{ marginLeft: "auto", fontSize: 11 }}>завжди</span>
+                  </label>
+                ))}
+                {opt.map((c) => (
+                  <label key={c.key} style={row}>
+                    <input type="checkbox" checked={!!optOn[c.key]} onChange={() => onToggle(c.key)} />
+                    {c.title}
+                  </label>
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
