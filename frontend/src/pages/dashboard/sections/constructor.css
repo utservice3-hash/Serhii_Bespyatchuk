@@ -249,7 +249,7 @@
 .ctorx .docfmt .cell{position:relative;min-height:80px;font-size:9.5pt}
 .ctorx .docfmt .ln{border-bottom:1pt solid #14161c;margin-top:30pt}
 .ctorx .docfmt .simg{position:absolute;left:14pt;bottom:2pt;width:62pt;mix-blend-mode:multiply}
-.ctorx .docfmt .stimg{position:absolute;left:58pt;bottom:-10pt;width:82pt;transform:rotate(-8deg);mix-blend-mode:multiply}
+.ctorx .docfmt .stimg{position:absolute;left:52pt;bottom:-16pt;width:113pt;transform:rotate(-8deg);mix-blend-mode:multiply}
 .ctorx .docfmt .dband{background:#17181c;color:#fff;display:flex;align-items:center;gap:10pt;padding:8pt 14pt;
   font-size:8pt;-webkit-print-color-adjust:exact;print-color-adjust:exact;margin:0 0 10pt}
 .ctorx .docfmt .dband .dmk{background:#c5141c;font-weight:800;letter-spacing:.08em;padding:2pt 6pt;border-radius:4pt}
@@ -270,7 +270,7 @@
 .ctorx .docsm .cell{min-height:64px;font-size:7.6px}
 .ctorx .docsm .ln{margin-top:26px}
 .ctorx .docsm .simg{width:46px;left:10px;bottom:2px}
-.ctorx .docsm .stimg{width:62px;left:42px;bottom:-7px}
+.ctorx .docsm .stimg{width:85px;left:38px;bottom:-11px}
 .ctorx .docsm .dl, .ctorx .docsm h2, .ctorx .docsm .sub{padding:0 14px}
 
 /* ── Дашборд: те, чого в макеті немає, бо там окрема сторінка ── */

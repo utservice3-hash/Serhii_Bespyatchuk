@@ -26,7 +26,7 @@ export const DOC_CSS = `
 .docfmt .cell{position:relative;min-height:80px;font-size:9.5pt}
 .docfmt .ln{border-bottom:1pt solid #14161c;margin-top:30pt}
 .docfmt .simg{position:absolute;left:14pt;bottom:2pt;width:62pt;mix-blend-mode:multiply}
-.docfmt .stimg{position:absolute;left:58pt;bottom:-10pt;width:82pt;transform:rotate(-8deg);mix-blend-mode:multiply}
+.docfmt .stimg{position:absolute;left:52pt;bottom:-16pt;width:113pt;transform:rotate(-8deg);mix-blend-mode:multiply}
 .docfmt .dband{background:#17181c;color:#fff;display:flex;align-items:center;gap:10pt;padding:8pt 14pt; font-size:8pt;-webkit-print-color-adjust:exact;print-color-adjust:exact;margin:0 0 10pt}
 .docfmt .dband .dmk{background:#c5141c;font-weight:800;letter-spacing:.08em;padding:2pt 6pt;border-radius:4pt}
 .docfmt .dband .dco{color:#c9ccd2;font-weight:600}

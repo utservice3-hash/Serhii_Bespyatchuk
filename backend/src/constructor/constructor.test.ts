@@ -4,7 +4,7 @@ import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildDocx, expandOrgName, shortOrgName, mainUntilText, blockers, preambleSegs, type DocumentState } from "./services/docgen.js";
+import { buildDocx, STAMP_CM, expandOrgName, shortOrgName, mainUntilText, blockers, preambleSegs, type DocumentState } from "./services/docgen.js";
 import { genitiveName, resolveDirector } from "./services/names.js";
 import { ENTITIES } from "./data/entities.js";
 import { loadDocImages, docImageDataUris, AssetsMissing } from "./services/docAssets.js";
@@ -1255,4 +1255,33 @@ test("#1873 АДРЕСИ: транслітерація + англійські с
     ["Україна, Хмельницька обл., м. Кам'янець-Подільський", "Ukraine, Khmelnytskyi region, Kamianets-Podilskyi"],
   ];
   for (const [ua, en] of ex) assert.equal(translitAddress(ua), en, `🔴 «${ua}» → «${translitAddress(ua)}», а мало бути «${en}»`);
+});
+
+/**
+ * #2460 — ПЕЧАТКА 4 СМ (прохання Лілі 26.10.2026 «збільшіть печатку, бо кожен клієнт пише»; Роман: «4 см, роби»).
+ * Word: кожна авто-печатка (ЮТС і Автомув, усі документи фікстури) має ширину рівно 4 см; обидва місця вставки (звичайні
+ * документи й нерезиденти) беруть ОДНУ константу. PDF і прев'ю: `.stimg` 113pt (= 4 см) у CSS документа і в прев'ю фронту.
+ * 🧨 Червоніє, якщо повернути 3 см у будь-якому з трьох місць або розвести Word і PDF.
+ */
+test("#2460 ПЕЧАТКА 4 СМ: Word — кожна авто-печатка 4 см з однієї константи; PDF і прев'ю — 113pt", () => {
+  assert.equal(STAMP_CM, 4, "🔴 ширина печатки у Word не 4 см");
+  const a = fakeAssets();
+  try {
+    let seen = 0;
+    for (const [name, r] of Object.entries(ref)) {
+      const xml = new TextDecoder().decode(unzipStored(buildDocx(r.state, r.state.num, loadDocImages(a.dir, r.state.ent, r.state.stamp))).get("word/document.xml")!);
+      for (const m of xml.matchAll(/<w:drawing>((?:(?!<\/w:drawing>)[\s\S])*?r:embed="rIdSt"[\s\S]*?)<\/w:drawing>/g)) {
+        const cx = Number(/<wp:extent cx="(\d+)"/.exec(m[1])![1]);
+        assert.equal(cx, 4 * 360000, `🔴 «${name}»: печатка у Word ${cx / 360000} см, а не 4`);
+        seen++;
+      }
+    }
+    assert.equal(seen, 5, `🔴 печаток у Word ${seen} (чекали 5: шість документів фікстури, у ФОП печатки немає) — перевіряти нічого`);
+  } finally { a.dispose(); }
+  const gen = SRC("constructor/services/docgen.ts");
+  assert.equal((gen.match(/imgRun\('rIdSt', [^\n]*?, STAMP_CM\)/g) ?? []).length, 2, "🔴 одне з місць вставки печатки (звичайні документи / нерезиденти) не на константі");
+  assert.match(SRC("constructor/data/docCss.ts"), /\.docfmt \.stimg\{[^}]*width:113pt/, "🔴 печатка в PDF не 4 см (113pt)");
+  const fe = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "constructor.css"), "utf8");
+  assert.match(fe, /\.ctorx \.docfmt \.stimg\{[^}]*width:113pt/, "🔴 прев'ю конструктора показує печатку не того розміру, що PDF");
+  assert.ok(Math.abs(113 / 72 * 2.54 - STAMP_CM) < 0.02, "🔴 113pt — не 4 см");
 });
