@@ -3,6 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, ReferenceDot, Brush,
 } from "recharts";
 import { effGranOf } from "../statsGran";
+import { MAX_METRICS, canAdd, drawnScopes, multiLines, multiRows } from "../statsMulti";
 import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
 import { InfoHint } from "../widgets";
 import { ChartSkeleton, SkelBox, TableSkeleton } from "../Skeleton";
@@ -18,6 +19,10 @@ type Cat = { key: string; icon: string; label: string; metrics: Metric[]; manual
 const SEAM_CARS = "До лип 2026 — ручний лічильник таблиці; з лип 2026 — точний підрахунок CRM (тому рівень міг зміститись).";
 const CALLS_HINT = "Результативні дзвінки Ringostat (billsec>0); історія до лип 2026 — з таблиці (визначення могло відрізнятись).";
 const FINHR_HINT = "Історія з таблиці; оновиться після внесення через депстат-ввід.";
+/* ⏱ «Час опрацювання заявки» — той самий розрахунок, що вікно в Звіті (ядро `core/leadTake.ts`). */
+const LEAD_TAKE_HINT = "те саме ядро, що вікно «Час опрацювання заявки» у Звіті: «взято в роботу» — перша з подій (зміна етапу, вихідний дзвінок, поле «Взято в работу»); заявки з реклами, сайту й лідгенів, увесь час доби (як вікно за замовчуванням); неробочий час рахується від 08:15 наступного робочого дня; дата — створення заявки за Києвом; історії в ручній таблиці немає — ряд починається з 01.07.2026 · до вересня поле «Взято в роботу» й нотатки-дзвінки майже порожні — частка «взято» тоді спиралась на етап і Ringostat";
+const LEAD_TAKE_MEDIAN_HINT = `медіана хвилин від створення заявки до «взято в роботу» серед узятих — окремо за кожну точку (медіана точки — з угод, не середнє); ${LEAD_TAKE_HINT}`;
+const LEAD_TAKE_SHARE_HINT = `частка заявок, узятих у роботу не пізніше 5 хв («до 1 хв» включно), від усіх заявок точки; ${LEAD_TAKE_HINT}`;
 const DIR_HINT = "Напрямок (unit-серія). Історія з таблиці; CRM-продовження по sales_channel — у розробці (де ще нема — показуємо історію до шва). Лише для КВП/адміна.";
 
 const CATS: Cat[] = [
@@ -37,6 +42,9 @@ const CATS: Cat[] = [
   { key: "leads", icon: "📈", label: "Ліди й канали", metrics: [
     { key: "ad_leads", block: "marketing", label: "Ліди з реклами", hint: "угоди з каналом «реклама», за першим входом у «Взято в роботу» в межах періоду — кожна угода раз" },
     { key: "lg_transfers", block: "marketing", label: "Прорахунки лідгенів", hint: "входи угод у «Кваліфіковано» — як на екрані «Лідогенерація»; лише компанія, по командах не розрізається" },
+    /* Медіана, не середнє (рішення власника 26.10.2026): медіана кошика — з угод, а не медіана медіан. Лінії цілі немає (5708). */
+    { key: "lead_take_median", block: "sales", label: "Медіана часу опрацювання заявки, хв", unit: "хв", hint: LEAD_TAKE_MEDIAN_HINT },
+    { key: "lead_take_m5_pct", block: "sales", label: "Взято до 5 хв, %", unit: "%", hint: LEAD_TAKE_SHARE_HINT },
   ] },
   { key: "clients", icon: "👥", label: "Клієнти", metrics: [
     { key: "repeat_clients_active", block: "logistics", label: "Постійні в роботі", hint: "постійний = has_prior (≥1 попередня виграна)" },
@@ -85,8 +93,14 @@ const CATS: Cat[] = [
   ] },
 ];
 
+/** 📈 Показники, які можна додати на графік (5707 п.2): усі групи екрана, крім напрямків (власний розріз) і ручних. */
+const MULTI_POOL: { cat: Cat; m: Metric }[] = CATS.filter((c) => !c.manualForm)
+  .flatMap((c) => c.metrics.filter((m) => !m.unitScope).map((m) => ({ cat: c, m })));
+const MULTI_NOTE = "Збіг ліній не доводить, що один показник впливає на інший.";
+
 const fmt = (n: number, unit?: string) => {
   if (unit === "%") return Math.round(n) + "%";
+  if (unit === "хв") return `${Math.round(n * 10) / 10} хв`;
   const r = Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + " млн" : Math.abs(n) >= 1e3 ? Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ") : String(Math.round(n));
   return unit === "₴" ? r + " ₴" : r;
 };
@@ -156,6 +170,17 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const [win, setWin] = useState<{ lo: number; hi: number; key: string } | null>(null);
   const [drag, setDrag] = useState<{ a: string | null; b: string | null }>({ a: null, b: null });
 
+  /* 📈 ДОДАНІ ПОКАЗНИКИ (5707 п.2): до двох поверх основного, разом не більше 3 і не більше 2 одиниць (`statsMulti.ts`).
+     Зміна основного показника їх скидає — інакше на графіку лишились би лінії, яких людина вже не обирала. */
+  const [extraKeys, setExtraKeys] = useState<string[]>([]);
+  const [extraResp, setExtraResp] = useState<Record<string, StatsSeriesResp>>({});
+  const [extraErr, setExtraErr] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => { setExtraKeys([]); setPickerOpen(false); }, [metric?.key, metric?.unitScope]);
+  const extras: Metric[] = extraKeys.flatMap((k) => MULTI_POOL.filter((x) => x.m.key === k).slice(0, 1).map((x) => x.m));
+  const chosen: Metric[] = metric ? [metric, ...extras] : [];
+  const multi = extras.length > 0;
+
   const effGran = effGranOf(metric, gran); // напрямок без місячних (ВЛТ) → тиждень
   useEffect(() => {
     let alive = true; setChartLoading(true); setLoadErr(null); setWin(null);
@@ -169,6 +194,17 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
     return () => { alive = false; };
   }, [metric?.block, metric?.key, effGran, metric?.unitScope, nonce]);
 
+  // Додані показники — паралельними викликами тієї самої `/api/statistics/series` (нового бекенду немає).
+  useEffect(() => {
+    let alive = true; setExtraErr(null);
+    if (!extras.length) { setExtraResp({}); return; }
+    Promise.all(extras.map((m) => fetchStatsSeries({ block: m.block, metric: m.key, granularity: effGran }).then((d) => [m.key, d] as const)))
+      .then((pairs) => { if (alive) setExtraResp(Object.fromEntries(pairs)); })
+      .catch((e) => alive && setExtraErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером")));
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extraKeys.join("|"), effGran, nonce]);
+
   // Скоуп за замовчуванням: компанія (або перша серія, якщо компанії в скоупі немає).
   const visibleKeys = useMemo(() => {
     if (!resp) return new Set<string>();
@@ -178,7 +214,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   }, [resp, shown]);
 
   // усі періоди (вісь X) + рядки для recharts. Плану на графіку немає (ТЗ 14.10, п.1) — сервер його й далі віддає, екран не малює.
-  const { rows, seriesList } = useMemo(() => {
+  const { rows: singleRows, seriesList } = useMemo(() => {
     if (!resp) return { rows: [] as any[], seriesList: [] as StatsSeries[] };
     const periods = new Set<string>();
     resp.series.forEach((s) => s.points.forEach((p) => periods.add(p.period)));
@@ -187,6 +223,15 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
     resp.series.forEach((s, i) => s.points.forEach((p) => { map.get(p.period)![`s${i}`] = p.value; }));
     return { rows: sorted.map((p) => map.get(p)!), seriesList: resp.series };
   }, [resp]);
+
+  const legendKeys = seriesList.filter((s) => showArchived || !s.archived).map((s) => s.scopeKey);
+  /* 🎯 Кілька показників — ОДИН скоуп (компанія АБО одна команда): інакше 3 × 7 = 21 лінія. Клік по скоупу тоді лише перемикає. */
+  const multiScope = multi ? (drawnScopes(chosen.length, legendKeys, visibleKeys)[0] ?? null) : null;
+  const lines = multiLines(chosen);
+  const mRows = useMemo(() => (multi ? multiRows(chosen.map((m, j) => (j === 0 ? resp : extraResp[m.key])), multiScope) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [multi, resp, extraResp, multiScope, extraKeys.join("|")]);
+  const rows: any[] = multi ? mRows : singleRows;
 
   const winKey = `${range}:${rows.length}`;
   const eff = useMemo(() => {
@@ -204,9 +249,9 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const visibleSeries = seriesList.map((s, i) => ({ s, i })).filter(({ s }) => visibleKeys.has(s.scopeKey) && (showArchived || !s.archived));
   const toggle = (k: string) => setShown(() => { const n = new Set(visibleKeys); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const isolate = (k: string) => setShown(new Set([k]));
+  const isDrawn = (k: string) => (multi ? k === multiScope : visibleKeys.has(k));
   /** 👥 «Усі команди» одним кліком (Роман 16.10.2026: «щоб не клікати по одній») — рівно ті серії, що видно в легенді
    *  (розформовані — лише з «показати архівні»); коли ввімкнено все, той самий клік повертає дефолт — лише компанію. */
-  const legendKeys = seriesList.filter((s) => showArchived || !s.archived).map((s) => s.scopeKey);
   const allShown = legendKeys.length > 1 && legendKeys.every((k) => visibleKeys.has(k));
   const toggleAll = () => setShown(allShown ? null : new Set(legendKeys));
   const archivedCount = seriesList.filter((s) => s.archived).length;
@@ -221,9 +266,25 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
     return niceTicks(max);
   }, [rows, eff.lo, eff.hi, visibleSeries]);
 
+  /** Поділки кожної осі — по ЇЇ лініях у видимому вікні (гривні не стискають штуки до нуля). */
+  const axisTicks = useMemo(() => {
+    const windowRows = rows.slice(eff.lo, eff.hi + 1);
+    const maxOf = (axis: "left" | "right") => {
+      let max = 0;
+      for (const r of windowRows) for (const l of lines) if (l.yAxisId === axis) { const v = r[l.dataKey]; if (typeof v === "number" && v > max) max = v; }
+      return niceTicks(max);
+    };
+    return { left: maxOf("left"), right: lines.some((l) => l.yAxisId === "right") ? maxOf("right") : null };
+  }, [rows, eff.lo, eff.hi, lines]);
+  const axisUnit = (axis: "left" | "right") => lines.find((l) => l.yAxisId === axis)?.unit;
+  /** Одиниця значення в підказці: у кількох показників — одиниця ЛІНІЇ, а не основного показника. */
+  const unitOfKey = (dataKey: string) => (multi ? lines.find((l) => l.dataKey === dataKey)?.unit : metric?.unit);
+  const refAxis = multi ? "left" : 0;
   /** Чи є у вікні хоч одна точка видимих серій — інакше графік порожній, і це кажемо словами. */
-  const hasPoints = useMemo(() => rows.slice(eff.lo, eff.hi + 1).some((r) => visibleSeries.some(({ i }) => r[`s${i}`] != null)),
-    [rows, eff.lo, eff.hi, visibleSeries]);
+  const hasPoints = useMemo(() => rows.slice(eff.lo, eff.hi + 1).some((r) => (multi
+    ? lines.some((l) => r[l.dataKey] != null)
+    : visibleSeries.some(({ i }) => r[`s${i}`] != null))),
+  [rows, eff.lo, eff.hi, visibleSeries, multi, lines]);
 
   const anomalyAt = (period: string) => (resp?.anomalies ?? []).filter((a) => a.period === period && visibleKeys.has(a.scopeKey));
 
@@ -273,6 +334,39 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                 {m.label}
               </button>
             ))}
+            {/* 📈 «＋ Показник» (5707 п.2): галочки по групах; недоступний пункт — вимкнений із причиною словами. */}
+            {!metric.unitScope && (
+              <span style={{ position: "relative" }}>
+                <button type="button" onClick={() => setPickerOpen((o) => !o)} title={`до ${MAX_METRICS} показників на одному графіку`}
+                  style={{ fontSize: 13, fontWeight: 650, padding: "7px 13px", borderRadius: 20, cursor: "pointer", border: "1px dashed var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+                  ＋ Показник{extras.length ? ` (${chosen.length} з ${MAX_METRICS})` : ""}
+                </button>
+                {pickerOpen && (
+                  <div role="dialog" style={{ position: "absolute", zIndex: 30, top: "110%", left: 0, width: 340, maxWidth: "calc(100vw - 32px)", maxHeight: 380, overflowY: "auto", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 12px", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
+                    <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>До {MAX_METRICS} показників, не більше двох одиниць (ліва й права вісь).</div>
+                    {CATS.filter((c) => !c.manualForm && c.metrics.some((m) => !m.unitScope)).map((c) => (
+                      <div key={c.key} style={{ marginBottom: 6 }}>
+                        <div style={{ fontSize: 12, fontWeight: 750, margin: "4px 0 2px" }}>{c.icon} {c.label}</div>
+                        {c.metrics.filter((m) => !m.unitScope).map((m) => {
+                          const isMain = m.key === metric.key;
+                          const on = isMain || extraKeys.includes(m.key);
+                          const verdict = on ? null : canAdd(chosen, m);
+                          const off = isMain || (verdict != null && !verdict.ok);
+                          const why = isMain ? "основний показник графіка" : verdict && !verdict.ok ? verdict.reason : undefined;
+                          return (
+                            <label key={m.key} title={why} style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 12.5, padding: "2px 0", cursor: off ? "not-allowed" : "pointer", opacity: off && !on ? 0.5 : 1 }}>
+                              <input type="checkbox" checked={on} disabled={off}
+                                onChange={() => setExtraKeys((ks) => (ks.includes(m.key) ? ks.filter((k) => k !== m.key) : [...ks, m.key]))} />
+                              <span>{m.label}{m.unit ? `, ${m.unit}` : ""}{off && !isMain && why ? <span style={{ display: "block", fontSize: 11, color: MUTED }}>{why}</span> : null}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </span>
+            )}
           </div>
 
           {/* 🎛 КЕРУВАННЯ — ДВІ ПІДПИСАНІ ГРУПИ, однакові на всіх вкладках (ТЗ, блок 4, п.2). Недоступний крок
@@ -304,20 +398,22 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
 
           {/* Серії: дефолт — компанія; команди додаються кліком. Розформовані — лише з «показати архівні». */}
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-            {legendKeys.length > 1 && (
+            {!multi && legendKeys.length > 1 && (
               <button type="button" onClick={toggleAll}
                 style={{ fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
                 {allShown ? "Лише компанія" : "Усі команди"}
               </button>
             )}
             {seriesList.map((s, i) => (s.archived && !showArchived) ? null : (
-              <span key={s.scopeKey} onClick={() => toggle(s.scopeKey)} onDoubleClick={() => isolate(s.scopeKey)}
-                title={s.benchmark ? "бенчмарк — агрегат компанії (для порівняння)" : "клік — показати / сховати · подвійний — лише ця"}
-                style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 650, cursor: "pointer", opacity: visibleKeys.has(s.scopeKey) ? 1 : 0.4, userSelect: "none", color: s.benchmark ? MUTED : "var(--text)" }}>
-                {s.benchmark
+              <span key={s.scopeKey} onClick={() => (multi ? isolate(s.scopeKey) : toggle(s.scopeKey))} onDoubleClick={() => isolate(s.scopeKey)}
+                title={multi ? "кілька показників — один розріз: клік обирає цей" : s.benchmark ? "бенчмарк — агрегат компанії (для порівняння)" : "клік — показати / сховати · подвійний — лише ця"}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 650, cursor: "pointer", opacity: isDrawn(s.scopeKey) ? 1 : 0.4, userSelect: "none", color: s.benchmark ? MUTED : "var(--text)" }}>
+                {multi
+                  ? <span style={{ width: 11, height: 11, borderRadius: "50%", border: "2px solid var(--text)", background: isDrawn(s.scopeKey) ? "var(--text)" : "transparent" }} />
+                  : s.benchmark
                   ? <span style={{ width: 14, height: 0, borderTop: "2px dashed #94a3b8" }} />
                   : <span style={{ width: 11, height: 11, borderRadius: "50%", background: color(i) }} />}
-                {visibleKeys.has(s.scopeKey) ? "" : "+ "}{s.scopeName}{s.benchmark && " (бенчмарк)"}
+                {isDrawn(s.scopeKey) || multi ? "" : "+ "}{s.scopeName}{s.benchmark && " (бенчмарк)"}
               </span>
             ))}
             {archivedCount > 0 && (
@@ -333,6 +429,20 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
             {metric.label}
             <InfoHint text={[metric.hint, metric.seamHint, SEAM_NOTE].filter(Boolean).join(" · ")} />
           </div>
+          {multi && (
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, fontWeight: 650, margin: "2px 0 4px" }}>
+              {lines.map((l, j) => (
+                <span key={l.dataKey} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 14, height: 3, borderRadius: 2, background: color(j) }} />
+                  {l.label} <span style={{ color: MUTED, fontWeight: 500 }}>· {l.yAxisId === "left" ? "ліва" : "права"} вісь</span>
+                  {j > 0 && <InfoHint text={chosen[j]?.hint ?? ""} />}
+                  {j > 0 && <button type="button" title="прибрати з графіка" onClick={() => setExtraKeys((ks) => ks.filter((k) => k !== l.metricKey))}
+                    style={{ border: "none", background: "none", cursor: "pointer", color: MUTED, fontSize: 14, padding: 0 }}>×</button>}
+                </span>
+              ))}
+              {extraErr && <span role="alert" style={{ color: "#b91c1c" }}>⚠️ доданий показник не завантажився: {extraErr}</span>}
+            </div>
+          )}
 
           {loadErr ? (
             <div role="alert" style={{ padding: "18px 0", color: "#b91c1c", fontSize: 13 }}>
@@ -351,7 +461,12 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                     onMouseUp={onDragEnd}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                     <XAxis dataKey="period" tickFormatter={shortDate} tick={{ fontSize: 11, fill: MUTED }} minTickGap={40} axisLine={{ stroke: "var(--border)" }} tickLine={false} />
-                    <YAxis ticks={yTicks} domain={[0, yTicks[yTicks.length - 1]]} tick={{ fontSize: 11, fill: MUTED }} tickFormatter={(v) => axisFmt(Number(v), metric.unit)} axisLine={false} tickLine={false} width={58} />
+                    {multi ? (
+                      [<YAxis key="yl" yAxisId="left" ticks={axisTicks.left} domain={[0, axisTicks.left[axisTicks.left.length - 1]]} tick={{ fontSize: 11, fill: MUTED }} tickFormatter={(v) => axisFmt(Number(v), axisUnit("left"))} axisLine={false} tickLine={false} width={58} />,
+                       axisTicks.right && <YAxis key="yr" yAxisId="right" orientation="right" ticks={axisTicks.right} domain={[0, axisTicks.right[axisTicks.right.length - 1]]} tick={{ fontSize: 11, fill: MUTED }} tickFormatter={(v) => axisFmt(Number(v), axisUnit("right"))} axisLine={false} tickLine={false} width={58} />]
+                    ) : (
+                      <YAxis ticks={yTicks} domain={[0, yTicks[yTicks.length - 1]]} tick={{ fontSize: 11, fill: MUTED }} tickFormatter={(v) => axisFmt(Number(v), metric.unit)} axisLine={false} tickLine={false} width={58} />
+                    )}
                     <Tooltip
                       content={({ active, payload, label }: any) => {
                         if (!active || !payload?.length) return null;
@@ -359,7 +474,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                         return (
                           <div style={{ fontSize: 12, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", padding: "8px 10px", maxWidth: 320 }}>
                             <b>{shortDate(String(label))}</b>{String(label) < SEAM && <span style={{ color: MUTED }}> · ручна таблиця</span>}
-                            {payload.map((p: any) => <div key={p.dataKey} style={{ color: p.stroke }}>{p.name}: {fmt(Number(p.value), metric.unit)}</div>)}
+                            {payload.map((p: any) => <div key={p.dataKey} style={{ color: p.stroke }}>{p.name}: {fmt(Number(p.value), unitOfKey(String(p.dataKey)))}</div>)}
                             {an.map((a, k) => (
                               <div key={k} style={{ marginTop: 4, color: a.kind === "real" ? "#b45309" : a.kind === "corrected" ? "#1d4ed8" : "#b91c1c" }}>{a.kind === "corrected" ? "✏️" : "⚠️"} {a.note}<br /><span style={{ color: MUTED }}>{a.crm}</span></div>
                             ))}
@@ -369,10 +484,15 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                     {/* 🪡 ШОВ ДАНИХ — ПІДПИСАНИЙ НА ГРАФІКУ (ТЗ, блок 4, п.3), а не дрібним текстом унизу сторінки.
                         Лише коли шов ВСЕРЕДИНІ вікна: на самому краю (вікно «3 міс» з 06.07) підпис налазив на вісь Y і обрізався. */}
                     {rows[eff.lo]?.period < SEAM && (rows[eff.hi]?.period ?? "") >= SEAM && (
-                      <ReferenceLine x={rows.find((r) => r.period >= SEAM)?.period} stroke="#94a3b8" strokeDasharray="5 4"
+                      <ReferenceLine yAxisId={refAxis} x={rows.find((r) => r.period >= SEAM)?.period} stroke="#94a3b8" strokeDasharray="5 4"
                         label={{ value: "01.07", position: "insideTopRight", fontSize: 10.5, fill: MUTED }} />
                     )}
-                    {visibleSeries.map(({ s, i }) => (
+                    {/* Кілька показників: лінія на показник, вісь — за ОДИНИЦЕЮ показника (`multiLines`). */}
+                    {multi && lines.map((l, j) => (
+                      <Line key={l.dataKey} yAxisId={l.yAxisId} type="monotone" dataKey={l.dataKey} name={l.label}
+                        stroke={color(j)} strokeWidth={j === 0 ? 2.4 : 1.9} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+                    ))}
+                    {!multi && visibleSeries.map(({ s, i }) => (
                       <Line key={s.scopeKey} type="monotone" dataKey={`s${i}`} name={s.scopeName}
                         stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : i === 0 ? 2.4 : 1.8}
                         strokeDasharray={s.benchmark ? "6 4" : undefined} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
@@ -381,12 +501,13 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                     {(resp.anomalies ?? []).flatMap((a, k) => {
                       const si = seriesList.findIndex((s) => s.scopeKey === a.scopeKey);
                       if (si < 0 || !visibleKeys.has(a.scopeKey)) return [];
-                      const v = rows.find((r) => r.period === a.period)?.[`s${si}`];
+                      if (multi && a.scopeKey !== multiScope) return [];
+                      const v = rows.find((r) => r.period === a.period)?.[multi ? "m0" : `s${si}`];
                       const fill = a.kind === "real" ? "#f59e0b" : a.kind === "corrected" ? "#2563eb" : "#dc2626";
-                      return typeof v === "number" ? [<ReferenceDot key={`an${k}`} x={a.period} y={v} r={6} fill={fill} stroke="#fff"
+                      return typeof v === "number" ? [<ReferenceDot key={`an${k}`} yAxisId={refAxis} x={a.period} y={v} r={6} fill={fill} stroke="#fff"
                         label={{ value: a.kind === "corrected" ? "✎" : "!", position: "top", fontSize: 12, fontWeight: 800, fill }} />] : [];
                     })}
-                    {drag.a && drag.b && <ReferenceArea x1={drag.a} x2={drag.b} fill="#2f6fdb" fillOpacity={0.08} />}
+                    {drag.a && drag.b && <ReferenceArea yAxisId={refAxis} x1={drag.a} x2={drag.b} fill="#2f6fdb" fillOpacity={0.08} />}
                     <Brush dataKey="period" height={24} travellerWidth={9} stroke="#94a3b8" tickFormatter={shortDate}
                       startIndex={eff.lo} endIndex={eff.hi} gap={1}
                       onChange={(e: any) => {
@@ -402,6 +523,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                 </ResponsiveContainer>
               </div>
               {!hasPoints && <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>У вибраному вікні немає точок для цього показника.</div>}
+              {multi && <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>{MULTI_NOTE}</div>}
             </>
           )}
         </div>

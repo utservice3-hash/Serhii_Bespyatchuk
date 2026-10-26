@@ -196,3 +196,67 @@ export function weekRange(ymd: string, offset = 0): { from: string; to: string }
   const end = new Date(d); end.setUTCDate(end.getUTCDate() + 6);
   return { from: d.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
 }
+
+/**
+ * 🎯 ЦІЛЬ ПРОТИ ФАКТУ (Роман 26.10.2026: ціль була лише дрібним сірим підписом у шапці колонки — її не видно).
+ * Ціль — ЧИННИЙ норматив `NORM`, нового правила тут немає: «досягнуто» = НЕ червоне за тим самим `statsOf(...).red`,
+ * тож рядок цілі не може розійтись із підсвічуванням клітинок. Ціль і розрив беруться з `NORM`, а не з літералів.
+ */
+export interface TargetPart {
+  /** Ціль із `NORM`. */
+  norm: number;
+  /** Факт того самого рядка (частка, % — або кількість для «не взято»); `null` — заявок немає. */
+  fact: number | null;
+  /** `null` — заявок немає, судити нема про що. */
+  met: boolean | null;
+  /** Відставання від цілі: п.п. для часток, штуки для «не взято»; 0 — досягнуто. */
+  gap: number | null;
+  /** Готовий підпис: «досягнуто» / «бракує N п.п.» / «понад ціль на N» / «немає заявок». */
+  label: string;
+}
+export interface TakeTarget { m1: TargetPart; m5: TargetPart; notTaken: TargetPart }
+
+const round1 = (x: number) => Math.round(x * 10) / 10;
+
+export function targetOf(s: TakeStats): TakeTarget {
+  const none = (norm: number): TargetPart => ({ norm, fact: null, met: null, gap: null, label: "немає заявок" });
+  const share = (norm: number, fact: number | null, red: boolean): TargetPart => {
+    if (s.n === 0 || fact == null) return none(norm);
+    const gap = red ? round1(norm - fact) : 0;
+    return { norm, fact, met: !red, gap, label: red ? `бракує ${gap} п.п.` : "досягнуто" };
+  };
+  const notTaken = ((): TargetPart => {
+    if (s.n === 0) return none(NORM.notTaken);
+    const gap = s.red.notTaken ? s.notTaken - NORM.notTaken : 0;
+    return { norm: NORM.notTaken, fact: s.notTaken, met: !s.red.notTaken, gap, label: s.red.notTaken ? `понад ціль на ${gap}` : "досягнуто" };
+  })();
+  return { m1: share(NORM.m1Pct, s.m1Pct, s.red.m1), m5: share(NORM.m5Pct, s.m5Pct, s.red.m5), notTaken };
+}
+
+/**
+ * 📈 КОШИК ЗА КИЇВСЬКОЮ ДАТОЮ СТВОРЕННЯ — для серій «Статистик»: день / тиждень (понеділок) / місяць (1-ше число).
+ * Тиждень — той самий Пн–Нд, що `weekRange` вікна Звіту, за КИЇВСЬКОЮ датою: понеділок 00:30 за Києвом — уже новий
+ * тиждень, хоча за UTC це ще неділя 21:30 (кошик за UTC-датою поклав би його в попередній).
+ */
+export type TakeGran = "day" | "week" | "month";
+export function kyivBucket(ms: number, g: TakeGran): string {
+  const p = kyivParts(ms);
+  const ymd = `${p.y}-${String(p.mo).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
+  if (g === "day") return ymd;
+  if (g === "month") return `${ymd.slice(0, 7)}-01`;
+  return weekRange(ymd).from;
+}
+
+/**
+ * Статистика по кошиках: кожен кошик — `statsOf` над УГОДАМИ кошика, тож медіана кошика рахується з угод, а не як
+ * медіана медіан. Кошики — хронологічно; кошика без жодної заявки немає (точки не буде, а не нуль).
+ */
+export function statsByBucket<R extends TakeRowInput & { createdAt: number }>(rows: R[], g: TakeGran): { bucket: string; stats: TakeStats }[] {
+  const by = new Map<string, R[]>();
+  for (const r of rows) {
+    const k = kyivBucket(r.createdAt, g);
+    const arr = by.get(k);
+    if (arr) arr.push(r); else by.set(k, [r]);
+  }
+  return [...by.keys()].sort().map((bucket) => ({ bucket, stats: statsOf(by.get(bucket)!, null) }));
+}
