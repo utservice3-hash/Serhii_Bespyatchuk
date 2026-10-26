@@ -10,7 +10,7 @@ import {
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
-  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, receivablesFxAt, bankTotals, periodStart, shiftPeriod,
+  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, receivablesFxAt, bankTotals, periodStart, shiftPeriod, periodEnd,
 } from "../core/financeKpi.js";
 import { loadPlan, setManualPlan } from "../core/financePlan.js";
 import { opexFromApprovals } from "../core/paymentApprovals.js";
@@ -239,6 +239,9 @@ financeRouter.get("/kpi", async (req, res) => {
     // Друге число до предиката (правило 4): статті без розділу з фактом місяця і деталі валютної дебіторки.
     const opex = autoActive(p.kind, p.start) ? (await opexFromApprovals(pool as unknown as Db, p.start, p.end)).unassigned : null;
     const fx = autoActive(p.kind, p.start) ? await receivablesFxAt(pool as unknown as Db, p.end, new Date()) : null;
+    // Валюта в дужках і для стовпця «минулий» (Тетяна 26.10.2026): той самий журнал на кінець попереднього періоду.
+    const prevStart = shiftPeriod(p.kind, p.start, -1);
+    const fxPrev = autoActive(p.kind, prevStart) ? await receivablesFxAt(pool as unknown as Db, periodEnd(p.kind, prevStart), new Date()) : null;
     // «з них перекази між своїми рахунками» — друге число біля «Надходження / Витрати загальні» (питання відкрите).
     const bank = autoActive(p.kind, p.start) ? await bankTotals(pool as unknown as Db, p.start, p.end) : null;
     // 🎯 План і прогноз надходжень / витрат (#5649): факт — уже пораховане значення рядка цього періоду.
@@ -246,7 +249,7 @@ financeRouter.get("/kpi", async (req, res) => {
     const plan = autoActive(p.kind, p.start) ? await loadPlan(pool as unknown as Db, p.kind, p.start, new Date(), (id) => factById.get(id) ?? null) : null;
     res.json({
       plan,
-      opexUnassigned: opex, receivablesFx: fx, bankOwn: bank ? { in: bank.ownIn, out: bank.ownOut } : null,
+      opexUnassigned: opex, receivablesFx: fx, receivablesFxPrev: fxPrev, bankOwn: bank ? { in: bank.ownIn, out: bank.ownOut } : null,
       kind: p.kind, start: p.start, end: p.end, prev: p.prev, label: p.label, prevLabel: p.prevLabel, current: p.current,
       sections: p.sections, closed: p.closed, importedInterim: p.importedInterim, canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"),
     });
