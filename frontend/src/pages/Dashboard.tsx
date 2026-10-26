@@ -534,6 +534,9 @@ export function Dashboard() {
     priority?: TaskPriority;
     department?: string | null;
     comments?: string | null;
+    strategic?: boolean;
+    goalResult?: string | null;
+    goalId?: number | null;
   }) {
     const title = payload.title.trim();
     if (!title) return;
@@ -544,7 +547,12 @@ export function Dashboard() {
     const comments = payload.comments?.trim() || null;
     const assigneeUserId = payload.assigneeUserId ?? null;
     const reviewerId = payload.reviewerId ?? null;
-    const { id } = await createTask({ title, deadline, assigneeId, assigneeUserId, reviewerId, priority, department, comments });
+    // 🎯 Стратегічна / підзадача — поля їдуть лише коли задані, щоб звичайна задача лишалась як була.
+    const strategic = payload.strategic === true;
+    const goalResult = strategic ? (payload.goalResult?.trim() || null) : null;
+    const goalId = payload.goalId ?? null;
+    const { id } = await createTask({ title, deadline, assigneeId, assigneeUserId, reviewerId, priority, department, comments,
+      ...(strategic ? { strategic, goalResult } : {}), ...(goalId != null ? { goalId } : {}) });
     setTasks((prev) => [
       {
         id,
@@ -558,7 +566,9 @@ export function Dashboard() {
         priority,
         comments,
         department,
-        taskType: "simple",
+        taskType: strategic ? "strategic" : "simple",
+        goalId,
+        goalResult,
         metric: null,
         targetValue: null,
         actualValue: null,
@@ -644,6 +654,8 @@ export function Dashboard() {
           assigneeId: null,
           assigneeUserId: Number(taskForm.assigneeUserId),
           reviewerId: taskForm.reviewerId === "" ? null : taskForm.reviewerId,
+          strategic: taskForm.strategic, goalResult: taskForm.goalResult,
+          goalId: taskForm.goalId === "" ? null : Number(taskForm.goalId),
           priority: taskForm.priority,
           department: taskForm.department,
           comments: taskForm.comments,
@@ -657,6 +669,8 @@ export function Dashboard() {
           deadline: taskForm.deadline || null,
           assigneeIds: ids,
           reviewerId: taskForm.reviewerId === "" ? null : taskForm.reviewerId,
+          strategic: taskForm.strategic, goalResult: taskForm.goalResult,
+          goalId: taskForm.goalId === "" ? null : Number(taskForm.goalId),
           priority: taskForm.priority,
           department: taskForm.department?.trim() || null,
           comments: taskForm.comments?.trim() || null,
@@ -672,13 +686,15 @@ export function Dashboard() {
           deadline: taskForm.deadline,
           assigneeId: taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId),
           reviewerId: taskForm.reviewerId === "" ? null : taskForm.reviewerId,
+          strategic: taskForm.strategic, goalResult: taskForm.goalResult,
+          goalId: taskForm.goalId === "" ? null : Number(taskForm.goalId),
           priority: taskForm.priority,
           department: taskForm.department,
           comments: taskForm.comments,
         });
         await attachPendingFile(newId != null ? [newId] : []);
         // Оптимістичний рядок не знає ні імені «Приймає», ні прав на статус — їх рахує сервер.
-        if (taskForm.reviewerId !== "") setTasks(await fetchTasks());
+        if (taskForm.reviewerId !== "" || taskForm.strategic || taskForm.goalId !== "") setTasks(await fetchTasks());
       }
     } else {
       // Менеджер ставить план ЛИШЕ собі — виконавець форсується на себе.

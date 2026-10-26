@@ -3430,7 +3430,7 @@ export interface Task {
   priority: TaskPriority;
   comments: string | null;
   department: string | null;
-  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation" | "oneonone";
+  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation" | "oneonone" | "strategic";
   metric: "ads_count" | "avg_check" | "conversion" | null;
   targetValue: number | null;
   actualValue: number | null;
@@ -3593,6 +3593,10 @@ export async function createTask(payload: {
   assigneeUserId?: number | null;
   /** «Приймає» (`users.id`); не передано — приймає автор. */
   reviewerId?: number | null;
+  /** 🎯 Стратегічна задача з результатом; підзадача — з `goalId`. */
+  strategic?: boolean;
+  goalResult?: string | null;
+  goalId?: number | null;
 }): Promise<{ id: number; ids?: number[] }> {
   const { data } = await api.post<{ id: number; ids?: number[] }>("/tasks", payload);
   return data;
