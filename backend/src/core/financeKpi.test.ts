@@ -1845,3 +1845,105 @@ test("#1275c ПРОВОДКА ПЛАНУ: GET /kpi — plan після стар�
   assert.match(fe, /kind === "month" && partial && <th[^>]*>Прогноз/, "🔴 прогноз місяця не показано");
   assert.match(fe, /setFinKpiPlan\(/, "🔴 ручний план не зберігається з екрана");
 });
+
+/**
+ * ТОВ «ЄЛОГІСТ» У «ВИПИСЦІ» (задача 6458, 26.10.2026) — гейти `#2420`–`#2423` (вільні в `main` і в усіх гілках на 26.10.2026).
+ *
+ * #2420 — СПИСОК КОМПАНІЙ ОДИН: `COMPANIES` (перевірка рахунку в роуті) == останній CHECK `bank_accounts_company_check`
+ * у схемі, і рахунок Привату для `elogist` проходить перевірку, а картка працівника на Приваті — так само ні (дзеркало).
+ * 🧨 Червоніє, якщо `elogist` додати лише в одне з двох місць (роут пустив би, база відповіла б 500) або випустити зі списку.
+ */
+test("#2420 КОМПАНІЇ: список у коді == CHECK у схемі, ЄЛОГІСТ — рахунок Привату проходить, чужа комбінація — ні", async () => {
+  const v = await import("./bankAccounts.js");
+  const checks = [...SRC("db/schema.sql").matchAll(/bank_accounts_company_check\s+CHECK\s*\(company IN \(([^)]*)\)\)/g)];
+  assert.ok(checks.length >= 1, "🔴 у схемі не знайдено CHECK компаній — гейту нічого перевіряти");
+  const inDb = [...checks[checks.length - 1][1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
+  assert.deepEqual(inDb, [...v.COMPANIES].sort(), "🔴 компанії в коді й у CHECK бази розійшлись");
+  assert.ok(inDb.includes("elogist"), "🔴 ЄЛОГІСТ випав зі списку компаній");
+  const acc = { company: "elogist", bank: "privat", label: "ТОВ ЄЛОГІСТ", currency: "USD", envKeyName: "PRIVAT_TOKEN_ELOGIST" };
+  assert.equal(v.validateNewAccount(acc).company, "elogist", "🔴 рахунок Привату ЄЛОГІСТ не проходить перевірку");
+  assert.throws(() => v.validateNewAccount({ ...acc, company: "staff" }), (e: unknown) => (e as { status?: number }).status === 400,
+    "🔴 картку працівника на Приваті пропущено — правило #1224 зламалось разом зі списком");
+});
+
+/**
+ * #2421 — КОЖНА КОМПАНІЯ МАЄ ВИГЛЯД У «ВИПИСЦІ»: ключі `ACC_COLOR` == `COMPANIES` (не менше — бейдж порожній; не більше —
+ * мертвий запис), і плитка підсумку ЄЛОГІСТ читає `byCo.elogist`. 🧨 Червоніє, якщо прибрати колір чи плитку ЄЛОГІСТ.
+ */
+test("#2421 «ВИПИСКА»: колір на кожну компанію, плитка «ТОВ ЄЛОГІСТ» з підсумку сервера", async () => {
+  const v = await import("./bankAccounts.js");
+  const fe = FE("pages/dashboard/sections/BankSection.tsx");
+  const block = /const ACC_COLOR[^=]*=\s*\{([\s\S]*?)\n\};/.exec(fe);
+  assert.ok(block, "🔴 мапу кольорів рахунків не знайдено");
+  const keys = [...block[1].matchAll(/^\s*([a-z_]+):\s*\{/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(keys, [...v.COMPANIES].sort(), "🔴 кольори «Виписки» не збігаються зі списком компаній");
+  assert.match(fe, /<Stat label="ТОВ ЄЛОГІСТ" value=\{fmtUah\(byCo\.elogist \?\? 0\)\}/, "🔴 плитки «ТОВ ЄЛОГІСТ» у підсумках немає");
+});
+
+/**
+ * #2422 — НИЖНЯ МЕЖА ІСТОРІЇ РАХУНКУ (`core/bankSyncWindow.ts`), по обидва боки кожної межі. Без рухів і з рухами,
+ * старшими за межу, — від межі (а НЕ 60 днів: інакше порожній валютний рахунок щоразу тягнув би вересень); з рухами
+ * після межі — як було (мінус день); без межі — як було. Рух за Києвом 25.10 23:50 — ні, 26.10 00:10 — так (зима, UTC+2).
+ * 🧨 Червоніє, якщо межа діє лише на першому проході, рахується за UTC або ламає рахунки без межі.
+ */
+test("#2422 МЕЖА ІСТОРІЇ: від sync_from завжди (і для порожнього рахунку), без межі — як було; день за Києвом", async () => {
+  const w = await import("./bankSyncWindow.js");
+  const now = new Date("2026-10-27T08:00:00Z");
+  const floor = "2026-10-25T00:00:00.000Z";
+  assert.equal(w.syncSince(null, "2026-10-26", now).toISOString(), floor, "🔴 рахунок без рухів із межею тягне не від межі");
+  assert.equal(w.syncSince(new Date("2026-09-10T10:00:00Z"), "2026-10-26", now).toISOString(), floor, "🔴 старий рух відсунув межу назад");
+  assert.equal(w.syncSince(new Date("2026-10-27T06:00:00Z"), "2026-10-26", now).toISOString(), "2026-10-26T06:00:00.000Z", "🔴 рух після межі — не «мінус день»");
+  assert.equal(w.syncSince(null, null, now).toISOString(), new Date(now.getTime() - w.INITIAL_LOOKBACK_DAYS * 864e5).toISOString(), "🔴 рахунок без межі тягне не 60 днів");
+  assert.equal(w.syncSince(new Date("2026-09-10T10:00:00Z"), null, now).toISOString(), "2026-09-09T10:00:00.000Z", "🔴 рахунок без межі — не «мінус день»");
+  assert.equal(w.onOrAfterSyncFrom(new Date("2026-10-25T21:50:00Z"), "2026-10-26"), false, "🔴 рух 25.10 23:50 за Києвом пропущено в історію");
+  assert.equal(w.onOrAfterSyncFrom(new Date("2026-10-25T22:10:00Z"), "2026-10-26"), true, "🔴 рух 26.10 00:10 за Києвом відкинуто (межа за UTC)");
+  assert.equal(w.onOrAfterSyncFrom(new Date("2020-01-01T00:00:00Z"), null), true, "🔴 рахунок без межі відкидає рухи");
+});
+
+/**
+ * #2422b — ПРОВОДКА МЕЖІ: синк читає `sync_from` датою (не обʼєктом Date з поясом сервера), рахує вікно через `syncSince`
+ * і пише рух лише після `onOrAfterSyncFrom`; власної формули «60 днів» у синку не лишилось. 🧨 Червоніє, якщо синк
+ * повернеться до своєї формули чи пише рухи до межі.
+ */
+test("#2422b ПРОВОДКА МЕЖІ: синк бере sync_from датою, вікно — syncSince, запис — лише після onOrAfterSyncFrom", () => {
+  const sync = SRC("jobs/syncBank.ts");
+  assert.match(sync, /to_char\(sync_from, 'YYYY-MM-DD'\) AS sync_from\b/, "🔴 синк не читає межу рахунку (або читає Date із поясом сервера)");
+  assert.match(sync, /const since = syncSince\(/, "🔴 вікно синку рахується повз syncSince");
+  assert.match(sync, /if \(!onOrAfterSyncFrom\(tx\.bookedAt, acc\.sync_from \?\? null\)\) continue;\s*\n\s*if \(await upsertTx\(/, "🔴 рух пишеться без перевірки межі");
+  assert.doesNotMatch(sync, /INITIAL_LOOKBACK_DAYS \* 24/, "🔴 у синку лишилась власна формула «60 днів» повз межу");
+});
+
+/**
+ * #2423 — ЖИВИЙ SQL: схема з нуля заводить рівно три рахунки ЄЛОГІСТ (UAH / USD / EUR, свій IBAN кожному, ключ
+ * `PRIVAT_TOKEN_ELOGIST`, увімкнені, межа 26.10.2026, реквізити) РАЗОВО: повтор схеми не дублює, не перетирає правку
+ * адміна і не воскрешає рахунки, які адмін видалив (інакше відкат «видалити» скасовувався б наступним викатом); база не пускає
+ * вигадану компанію. 🧨 Червоніє, якщо зняти разову позначку, переплутати IBAN чи забути межу.
+ */
+test("#2423 ЖИВИЙ SQL: три рахунки ЄЛОГІСТ із межею 26.10 разово — повтор не дублює, не перетирає правку й не воскрешає видалені", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const rows = async () => (await c.query(`SELECT currency, iban, env_key_name, is_active, to_char(sync_from, 'YYYY-MM-DD') AS sync_from,
+      edrpou_ipn, vat_ipn, director, label FROM bank_accounts WHERE company = 'elogist' ORDER BY currency`)).rows;
+  try {
+    const first = await rows();
+    assert.deepEqual(first.map((r) => [r.currency, r.iban]), [
+      ["EUR", "UA353052990000026000015029239"], ["UAH", "UA873052990000026008035031953"], ["USD", "UA883052990000026003035023375"],
+    ], "🔴 рахунки ЄЛОГІСТ заведено не ті або IBAN переплутано з валютою");
+    for (const r of first) {
+      assert.deepEqual([r.env_key_name, r.is_active, r.sync_from, r.edrpou_ipn, r.vat_ipn, r.director],
+        ["PRIVAT_TOKEN_ELOGIST", true, "2026-10-26", "45149289", "451492826513", "Протас Дар'я В'ячеславівна"], `🔴 рахунок ${r.currency}: ключ, стан, межа чи реквізити не ті`);
+    }
+    await c.query(`UPDATE bank_accounts SET label = 'ЄЛОГІСТ · правка адміна' WHERE company = 'elogist' AND currency = 'UAH'`);
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    const again = await rows();
+    assert.equal(again.length, 3, "🔴 повтор схеми задублював рахунки ЄЛОГІСТ");
+    assert.equal(again.find((r) => r.currency === "UAH")?.label, "ЄЛОГІСТ · правка адміна", "🔴 повтор схеми перетер правку адміна");
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM bank_accounts WHERE sync_from IS NOT NULL AND company <> 'elogist'`)).rows[0].n, 0,
+      "🔴 межа історії дісталась рахункам, яким її не ставили");
+    await assert.rejects(c.query(`UPDATE bank_accounts SET company = 'nobody' WHERE company = 'elogist' AND currency = 'EUR'`), "🔴 база пустила невідому компанію");
+    await c.query(`DELETE FROM bank_accounts WHERE company = 'elogist'`);
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    assert.equal((await rows()).length, 0, "🔴 видалені адміном рахунки ЄЛОГІСТ воскресли на повторі схеми");
+  } finally { await s.dispose(); }
+});

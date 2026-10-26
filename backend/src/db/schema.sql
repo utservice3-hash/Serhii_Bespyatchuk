@@ -5757,7 +5757,7 @@ ALTER TABLE feedback ADD CONSTRAINT feedback_impact_check
 --    вимкненою; токен — рядком `MONO_TOKEN_…` у .env, сервер бачить його без рестарту, `bankSources/token.ts`).
 -- ══════════════════════════════════════════════════════════════════════════
 ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_company_check;
-ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff'));
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff','elogist'));
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_pan_last4 TEXT;
 ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_mono_pan_last4_check;
 ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHECK (mono_pan_last4 IS NULL OR mono_pan_last4 ~ '^[0-9]{4}$');
@@ -6649,3 +6649,29 @@ UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
  WHERE key IN ('hr', 'business_assistant')
    AND NOT COALESCE((SELECT (data->>'cpCheckTabGranted')::boolean FROM app_settings WHERE id = 1), false);
 UPDATE app_settings SET data = data || '{"cpCheckTabGranted":true}'::jsonb WHERE id = 1 AND NOT (data ? 'cpCheckTabGranted');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏦 ТОВ «ЄЛОГІСТ» У «ВИПИСЦІ» (задача 6458; Сергій 22.10.2026: «повністю все аналогічно ЮТС, включно з API банків»;
+--  Роман 26.10.2026: «з сьогодні виписку з банку»). Компанію `elogist` дозволено в CHECK вище.
+--  · `sync_from` — нижня межа історії рахунку за Києвом: раніших рухів синк не тягне й не пише НІКОЛИ (не лише на першому
+--    проході — порожній валютний рахунок інакше щоразу тягнув би 60 днів, `core/bankSyncWindow.ts`). NULL — як було.
+--  · Три рахунки Привату під одним ключем `PRIVAT_TOKEN_ELOGIST` (як Автомув). Увімкнені одразу: ключ уже в `.env`,
+--    доступ до всіх трьох IBAN перевірено пробним запитом 26.10.2026. Реквізити — від Романа 26.10.2026.
+--  · IBAN у рахунках робить перекази ЮТС ↔ ЄЛОГІСТ «своїми» в «Надходження / Витрати» (#1221) без окремих правил.
+--  · Разовий крок (позначка в `fin_kpi_imports`, як Сейф і картки): рахунки створюються рівно один раз на базу — повтор
+--    не дублює, правку адміна не перетирає, а видалені адміном НЕ воскрешає на наступному викаті (#2423).
+--  · Revert коду рядки НЕ прибирає: відкат — вимкнути їх у панелі (поки рухів немає — можна й видалити, і вони не повернуться).
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS sync_from DATE;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('elogist-accounts-2026-10-26', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, is_active, sync_from, iban,
+                           legal_name, edrpou_ipn, vat_ipn, bank_name, mfo, legal_address, director)
+SELECT v.company, 'privat', v.label, v.currency, 'PRIVAT_TOKEN_ELOGIST', true, DATE '2026-10-26', v.iban,
+       'ТОВ «ЄЛОГІСТ»', '45149289', '451492826513', 'АТ КБ «ПриватБанк»', '305299',
+       'Україна, 02141, м. Київ, вул. Лариси Руденко, буд. 6-А', 'Протас Дар''я В''ячеславівна'
+  FROM (VALUES
+    ('elogist', 'ТОВ ЄЛОГІСТ',       'UAH', 'UA873052990000026008035031953'),
+    ('elogist', 'ТОВ ЄЛОГІСТ · USD', 'USD', 'UA883052990000026003035023375'),
+    ('elogist', 'ТОВ ЄЛОГІСТ · EUR', 'EUR', 'UA353052990000026000015029239')
+  ) AS v(company, label, currency, iban)
+ WHERE EXISTS (SELECT 1 FROM step) AND NOT EXISTS (SELECT 1 FROM bank_accounts WHERE company = 'elogist');

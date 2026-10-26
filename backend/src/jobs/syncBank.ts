@@ -8,11 +8,12 @@ import { tokenFor } from "../bankSources/token.js";
 import * as privat from "../bankSources/privat.js";
 import type { BankAccountRow, NormalizedTx, BankAdapter } from "../bankSources/types.js";
 import { syncBankOutcome } from "./syncBankOutcome.js";
+import { syncSince, onOrAfterSyncFrom } from "../core/bankSyncWindow.js";
 
 const ADAPTERS: Partial<Record<BankAccountRow["bank"], BankAdapter>> = { mono, privat };
-// Історія ≥60 днів. mono statement обмежений 31 добою/запит → адаптер сам чанкує (2 вікна на 60д);
-// privat покриває вікно followId-пагінацією. Нічого молодшого за 60 днів не чистимо.
-const INITIAL_LOOKBACK_DAYS = 60;
+// Історія ≥60 днів (`INITIAL_LOOKBACK_DAYS`, `core/bankSyncWindow.ts`). mono statement обмежений 31 добою/запит →
+// адаптер сам чанкує (2 вікна на 60д); privat покриває вікно followId-пагінацією. Нічого молодшого за 60 днів не чистимо.
+// Рахунок із `sync_from` (ЄЛОГІСТ, 26.10.2026) раніше цієї дати не тягнеться й не пишеться ніколи.
 
 /** Upsert однієї транзакції. Повертає true, якщо вставлено НОВУ (для лічильника). */
 export async function upsertTx(accountId: number, tx: NormalizedTx, unmatched = false): Promise<boolean> {
@@ -39,7 +40,8 @@ export async function upsertTx(accountId: number, tx: NormalizedTx, unmatched = 
 export async function syncBank(): Promise<{ synced: number; inserted: number; skipped: string[] }> {
   const accounts = await pool.query<BankAccountRow>(
     // `manual` (Сейф) — без банку: записи вносить людина (`core/bankManual.ts`), синкати нічого.
-    `SELECT id, company, bank, label, currency, external_account_id, iban, env_key_name, mono_type, mono_pan_last4
+    `SELECT to_char(sync_from, 'YYYY-MM-DD') AS sync_from,
+            id, company, bank, label, currency, external_account_id, iban, env_key_name, mono_type, mono_pan_last4
        FROM bank_accounts WHERE is_active = true AND bank <> 'manual'`
   );
   let inserted = 0, synced = 0;
@@ -82,11 +84,13 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
       }
       const last = await pool.query<{ b: Date }>(
         `SELECT MAX(booked_at) AS b FROM bank_transactions WHERE account_id=$1`, [acc.id]);
-      const since = last.rows[0]?.b
-        ? new Date(new Date(last.rows[0].b).getTime() - 24 * 3600 * 1000) // −1 день перекриття
-        : new Date(Date.now() - INITIAL_LOOKBACK_DAYS * 24 * 3600 * 1000);
+      // −1 день перекриття від останнього руху; без рухів — 60 днів; і ніколи не раніше `sync_from` рахунку.
+      const since = syncSince(last.rows[0]?.b ? new Date(last.rows[0].b) : null, acc.sync_from ?? null, new Date());
       const txs = await adapter.fetchTransactions(acc, since);
-      for (const tx of txs) { if (await upsertTx(acc.id, tx)) inserted++; }
+      for (const tx of txs) {
+        if (!onOrAfterSyncFrom(tx.bookedAt, acc.sync_from ?? null)) continue;
+        if (await upsertTx(acc.id, tx)) inserted++;
+      }
       synced++;
     } catch (e) {
       // помилка банку (таймаут/ліміт) не валить синк ІНШИХ рахунків — цикл іде далі...
