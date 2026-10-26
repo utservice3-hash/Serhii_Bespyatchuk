@@ -366,7 +366,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "call_transcripts", "call_analyses", "ai_spend_ledger", "call_type_overrides", "first_touch_notes", "first_touch_closes", "first_touch_settings_log", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions", "carrier_review_tasks", "carrier_lead_tasks", "carrier_duty_assign_log", "carrier_client_moves", "carrier_duty_alerts", "carrier_task_sweeps", "minus_deal_requests", "minus_deal_events",
   "tldv_meetings",
   "workua_responses",
-  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "strategic_creators", "fin_import_months",
+  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
   "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
@@ -1378,7 +1378,10 @@ export const MANIFEST_TESTS: string[] = [
   "#1080 ГОТОВО СТАВИТЬ КОЖЕН, ХТО РУХАЄ СТАТУС: виконавець і тімлід теж; «Приймає» — учасник; стороння людина — нічого",
   "#2380 «ПРИЙМАЄ» У ЗВИЧАЙНИХ І СТРАТЕГІЧНИХ ЗАДАЧАХ: поза ними він не учасник, виконавець закриває як і було",
   "#2381 СТРАТЕГІЧНА: «Готово» ставить лише «Приймає», решта доводить до затвердження; звичайні — як і було",
-  "#2382 СТРАТЕГІЧНІ НА РОУТІ: лише власник, з результатом; підзадачі видно виконавцю; закриває «Приймає»; ціль не забирає підзадач",
+  "#2383 СТРАТЕГІЧНІ НА РОУТІ: ставить будь-хто, з результатом; виконавець підзадачі бачить ціль, сторонній — ні; закриває «Приймає»; ціль не забирає підзадач",
+  "#2384 ВИДИМІСТЬ ЦІЛІ: виконавець підзадачі (менеджер чи акаунт) бачить ціль, без підзадачі — ні, змінювати — ні",
+  "#2385 ЦІЛЬ: прогрес за виконаними підзадачами; колір — прострочено / усе виконано / відстає / вчасно, межа з обох боків",
+  "#2386 ЕКРАН СТРАТЕГІЧНИХ: блок угорі з тієї ж вибірки, цілі не в лічильниках, прогрес з усіх задач, «+ Підзадача» з ціллю, стара таблиця — цілі першими",
   "#1080c СИСТЕМНА ЗАДАЧА БЕЗ АВТОРА: виконавець закриває, як і до правила",
   "#1080d ПРАВА НА СТАТУС ⊆ ВИДИМІСТЬ, і закрити ⊆ рухати — по всіх ролях і видах задач",
   "#1080e ПЕРЕПРИЗНАЧИТИ «ПРИЙМАЄ» МОЖУТЬ АВТОР, «ПРИЙМАЄ» І АДМІН — виконавець і тімлід ні",
@@ -3022,6 +3025,9 @@ export interface RetiredGate {
 }
 
 export const RETIRED_GATES: RetiredGate[] = [
+  { name: "#2382 СТРАТЕГІЧНІ НА РОУТІ: лише власник, з результатом; підзадачі видно виконавцю; закриває «Приймає»; ціль не забирає підзадач",
+    since: "2026-10-26", decidedBy: "Роман 26.10.2026 — «всі можуть ставити стратегічні задачі будь хто», «виконавець підзадачі бачить ціль — так»",
+    reason: "змінилось твердження: стратегічні ставить будь-хто (поіменний список `strategic_creators` прибрано). А ДЕ ЦЕ ТЕПЕР: `#2383` — той самий роут проти бази з нуля: результат обовʼязковий, підзадачі видно виконавцю, закриває «Приймає», ціль не забирає підзадач, плюс виконавець підзадачі бачить ціль (сторонній — ні); чисте правило — `#2384`." },
   { name: "#1080b «ПРИЙМАЄ» ЛИШЕ У ЗВИЧАЙНИХ ЗАДАЧ: поза ними він не учасник, виконавець закриває як і було",
     since: "2026-10-23", decidedBy: "Роман 23.10.2026 — стратегічні задачі: «стратегічну закриває Приймає», «роби»",
     reason: "змінилось твердження: «Приймає» тепер і у стратегічних задачах. А ДЕ ЦЕ ТЕПЕР: `#2380` — те саме правило «поза типами з «Приймає» він не учасник, виконавець закриває як і було», склад типів {simple, strategic}; закриття стратегічної лише «Приймає» — `#2381`." },

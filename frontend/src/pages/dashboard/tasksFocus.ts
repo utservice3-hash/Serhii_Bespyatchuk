@@ -149,3 +149,41 @@ export function browserStorage(): Storage | null {
     return null;
   }
 }
+
+// ── 🎯 СТРАТЕГІЧНІ ЦІЛІ (рішення Романа 23–26.10.2026) ──
+
+/** Прогрес цілі — за ПІДЗАДАЧАМИ, які бачить глядач (межа видимості тримається побудовою: чужих тут немає). */
+export function goalProgress(subs: readonly FocusTask[]): { done: number; total: number } {
+  return { done: subs.filter((s) => s.status === "done").length, total: subs.length };
+}
+
+/**
+ * Стан цілі для кольору рамки:
+ * - `late` — дедлайн минув, а ціль не закрита;
+ * - `ready` — ціль закрита, або всі підзадачі виконані й вона чекає закриття «Приймає»;
+ * - `warn` — прогрес відстає від часу більше ніж на чверть (минуло 60% строку, а виконано 30%);
+ * - `ok` — інакше, зокрема без дедлайну чи без підзадач (нема з чим порівнювати — не лякаємо).
+ * `start` — день постановки цілі (київська дата). Тримає `#2385`.
+ */
+export type GoalState = "ok" | "warn" | "late" | "ready";
+export function goalState(goal: { status: string; deadline?: string | null; start?: string | null },
+  subs: readonly FocusTask[], today: string): GoalState {
+  // Закрита ціль — зелена, хоч би які підзадачі лишились: її прийняв «Приймає».
+  if (goal.status === "done") return "ready";
+  if (goal.deadline && goal.deadline < today) return "late";
+  const { done, total } = goalProgress(subs);
+  if (total > 0 && done === total) return "ready";
+  if (!goal.deadline || !goal.start || total === 0 || goal.deadline <= goal.start) return "ok";
+  const day = (d: string) => Date.parse(`${d}T12:00:00Z`) / 86_400_000;
+  const elapsed = Math.min(1, Math.max(0, (day(today) - day(goal.start)) / (day(goal.deadline) - day(goal.start))));
+  return done / total < elapsed - 0.25 ? "warn" : "ok";
+}
+
+/** Блок «🎯 Стратегічні» згорнуто? Вибір — у браузері, як і дизайн. Зламане сховище — розгорнуто. */
+export const GOALS_OPEN_KEY = "uts.tasks.goalsOpen";
+export function readGoalsOpen(store: Pick<Storage, "getItem"> | null | undefined): boolean {
+  try { return store?.getItem(GOALS_OPEN_KEY) !== "0"; } catch { return true; }
+}
+export function writeGoalsOpen(store: Pick<Storage, "setItem"> | null | undefined, open: boolean): void {
+  try { store?.setItem(GOALS_OPEN_KEY, open ? "1" : "0"); } catch { /* сховище недоступне */ }
+}

@@ -1256,7 +1256,8 @@ export function TasksSection({
                 const gDeadline = (r: Row) => r.kind === "task" ? (r.task.deadline ?? "9999-99-99") : r.synth.weekEnd;
                 // Закріплені задачі з 1×1 — ЗАВЖДИ вгорі, незалежно від обраного сортування.
                 // Серверного ORDER BY тут замало: клієнт пересортовує список під себе.
-                const gPinned = (r: Row) => (r.kind === "task" && r.task.pinned ? 0 : 1);
+                // 🎯 Активні стратегічні — теж угорі, разом із закріпленими з 1×1 (рішення 23.10.2026).
+                const gPinned = (r: Row) => (r.kind === "task" && (r.task.pinned || (r.task.taskType === "strategic" && r.task.status !== "done")) ? 0 : 1);
                 const visible: Row[] = [...base.map((t) => ({ kind: "task", task: t } as Row)), ...synths.map((s) => ({ kind: "synth", synth: s } as Row))].sort((a, b) => {
                   const ap = gPinned(a), bp = gPinned(b);
                   if (ap !== bp) return ap - bp;
@@ -1647,7 +1648,13 @@ export function TasksSection({
         const kpiSrc = tasks.filter((t) => t.taskType === "kpi_period" || t.taskType === "daily_kpi");
         const kpiPick = pickRows(kpiSrc, false);
         const kpiCount = kpiPick.base.filter((t) => t.taskType === "kpi_period").length + kpiPick.synths.length;
-        const rows = base.filter((t) => t.taskType !== "kpi_period");
+        // 🎯 Активні стратегічні — окремим блоком угорі, не в групах і не в лічильниках (рішення 23.10.2026).
+        // Виконані лишаються в «Виконано», як звичайні. Підзадачі — з УСІХ видимих задач, не з вкладки:
+        // інакше на «Своїх» прогрес цілі рахував би лише мої кроки.
+        const activeGoal = (t: Task) => t.taskType === "strategic" && t.status !== "done";
+        const goals = base.filter(activeGoal)
+          .sort((a, b) => (a.deadline ?? "9999-12-31").localeCompare(b.deadline ?? "9999-12-31"));
+        const rows = base.filter((t) => t.taskType !== "kpi_period" && !activeGoal(t));
         return (
           <TasksFocusView
             rows={rows}
@@ -1679,6 +1686,16 @@ export function TasksSection({
               // ↩ Повернути закриту задачу в роботу одним кліком — з групи «Виконано».
               patchTaskLocal(t.id, { status: "in_progress", doneAt: null });
               commitTask(t.id, { status: "in_progress" });
+            }}
+            goals={goals}
+            subsOf={(goalId) => tasks.filter((t) => t.goalId === goalId)}
+            goalTitleOf={(goalId) => tasks.find((t) => t.id === goalId)?.title ?? null}
+            onAddSub={(goalId) => {
+              // «+ Підзадача» — звичайна форма, ціль уже вибрана (знімається хрестиком у формі).
+              setCreateErr(null);
+              setSharedIntent(false);
+              setTaskForm({ ...emptyTaskForm, goalId });
+              setTaskModalOpen(true);
             }}
           />
         );
@@ -2086,6 +2103,32 @@ export function TasksSection({
                     />
                   </label>
 
+                  {/* 🎯 СТРАТЕГІЧНА / ПІДЗАДАЧА (рішення Романа 23–26.10.2026): ставить будь-хто; результат обовʼязковий.
+                      Підзадача відкривається з картки цілі кнопкою «+ Підзадача» — ціль тут уже вибрана. */}
+                  {taskForm.goalId !== "" ? (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, padding: "8px 10px", borderRadius: 8,
+                      background: "color-mix(in srgb, #4f46e5 8%, transparent)", color: "var(--text)" }}>
+                      <span>🎯 Підзадача до цілі «{tasks.find((t) => t.id === taskForm.goalId)?.title ?? `№${taskForm.goalId}`}»</span>
+                      <button type="button" onClick={() => setTaskForm((f) => ({ ...f, goalId: "" }))} title="Відвʼязати від цілі"
+                        style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)" }}>✕</button>
+                    </div>
+                  ) : (
+                    <>
+                      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
+                        <input type="checkbox" checked={taskForm.strategic}
+                          onChange={(e) => setTaskForm((f) => ({ ...f, strategic: e.target.checked }))} />
+                        🎯 Стратегічна задача — ціль, завжди вгорі задачника, з підзадачами
+                      </label>
+                      {taskForm.strategic && (
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                          Результат — як зрозуміти, що ціль досягнута
+                          <input value={taskForm.goalResult} onChange={(e) => setTaskForm((f) => ({ ...f, goalResult: e.target.value }))}
+                            placeholder="Напр.: гроші РПК за грудень ≥ 3 млн ₴ у Звіті КВП" maxLength={500} />
+                        </label>
+                      )}
+                    </>
+                  )}
+
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                       Дедлайн
@@ -2366,7 +2409,7 @@ export function TasksSection({
                 <button
                   className="btn-primary"
                   onClick={handleSubmitTaskModal}
-                  disabled={(taskForm.taskType === "simple" && !taskForm.title.trim())
+                  disabled={(taskForm.taskType === "simple" && (!taskForm.title.trim() || (taskForm.strategic && !taskForm.goalResult.trim())))
                     || (sharedIntent && taskForm.assigneeId === "" && taskForm.assigneeUserId === "")}
                   title={sharedIntent && taskForm.assigneeId === "" && taskForm.assigneeUserId === "" ? "Оберіть, кому ставите задачу" : undefined}
                 >

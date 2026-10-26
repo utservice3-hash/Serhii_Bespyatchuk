@@ -55,6 +55,13 @@ export interface TaskOwnerRow {
    * Необовʼязкове: `null`/відсутнє означає «приймає автор», а автор задачу й так бачить.
    */
   reviewerId?: number | null;
+  /**
+   * 🎯 Виконавці ПІДЗАДАЧ стратегічної цілі (`tasks.goal_id` → ця задача): менеджери з CRM і
+   * акаунти. Рішення Романа 26.10.2026: виконавець підзадачі бачить саму ціль. Необовʼязкові:
+   * відсутні — підзадач немає. БАЧИТИ — так, ЗМІНЮВАТИ — ні (`canTouchTask` їх не читає).
+   */
+  subtaskManagerIds?: readonly number[];
+  subtaskUserIds?: readonly number[];
 }
 
 /**
@@ -134,7 +141,10 @@ export const ASSIGNEE_TEAM_SQL = "COALESCE(m.team_id, am.team_id)";
 export function canSeeTask(v: TaskViewer, t: TaskOwnerRow): boolean {
   const mine = t.createdBy === v.userId;
   const toMyAccount = t.assigneeUserId != null && t.assigneeUserId === v.userId;
-  const iReview = t.reviewerId != null && t.reviewerId === v.userId;
+  // 🎯 Я виконую підзадачу цієї цілі — бачу ціль (26.10.2026). Тримає `#2384`.
+  const iContribute = (v.managerId != null && v.managerId > 0 && !!t.subtaskManagerIds?.includes(v.managerId))
+    || !!t.subtaskUserIds?.includes(v.userId);
+  const iReview = (t.reviewerId != null && t.reviewerId === v.userId) || iContribute;
   if (v.adminScope || v.role === "company") {
     return !isPersonalTask(t) || mine || iReview;
   }
@@ -175,18 +185,23 @@ export function canTouchTask(v: TaskViewer, t: TaskOwnerRow): boolean {
  * список колонок і значень у `#346`.
  */
 export function visibilityCondSql(v: TaskViewer, push: (value: unknown) => number): string {
+  // 🎯 Виконавець підзадачі бачить ціль — дзеркало `iContribute` у `canSeeTask` (26.10.2026).
+  const contributes = (mgr: number, me: number) =>
+    `EXISTS (SELECT 1 FROM tasks gs WHERE gs.goal_id = t.id AND (gs.assignee_id = $${mgr} OR gs.assignee_user_id = $${me}))`;
   if (v.adminScope || v.role === "company") {
     const me = push(v.userId);
-    return `(${ASSIGNED_TASK_SQL} OR t.created_by = $${me} OR t.reviewer_id = $${me})`;
+    const mgr = push(v.managerId);
+    return `(${ASSIGNED_TASK_SQL} OR t.created_by = $${me} OR t.reviewer_id = $${me} OR ${contributes(mgr, me)})`;
   }
   if (v.role === "team_lead") {
     const team = push(v.teamId);
     const me = push(v.userId);
-    return `((${ASSIGNED_TASK_SQL} AND ${ASSIGNEE_TEAM_SQL} = $${team}) OR t.created_by = $${me} OR t.assignee_user_id = $${me} OR t.reviewer_id = $${me})`;
+    const mgr = push(v.managerId);
+    return `((${ASSIGNED_TASK_SQL} AND ${ASSIGNEE_TEAM_SQL} = $${team}) OR t.created_by = $${me} OR t.assignee_user_id = $${me} OR t.reviewer_id = $${me} OR ${contributes(mgr, me)})`;
   }
   const mgr = push(v.managerId);
   const me = push(v.userId);
-  return `(t.assignee_id = $${mgr} OR t.created_by = $${me} OR t.assignee_user_id = $${me} OR t.reviewer_id = $${me})`;
+  return `(t.assignee_id = $${mgr} OR t.created_by = $${me} OR t.assignee_user_id = $${me} OR t.reviewer_id = $${me} OR ${contributes(mgr, me)})`;
 }
 
 /**

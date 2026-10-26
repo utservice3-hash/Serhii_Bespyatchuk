@@ -11,6 +11,12 @@ export type TaskForm = {
   assigneeUserId: number | "";
   /** ✅ «Приймає» (`users.id`) — хто закриває задачу. Порожнє — приймає автор. */
   reviewerId: number | "";
+  /** 🎯 Стратегічна задача (ціль із результатом, рішення Романа 23–26.10.2026). */
+  strategic: boolean;
+  /** 🎯 Результат стратегічної — як зрозуміти, що зроблено. Обовʼязковий для неї. */
+  goalResult: string;
+  /** 🎯 Ціль, до якої ставиться підзадача (кнопка «+ Підзадача» на картці цілі). */
+  goalId: number | "";
   /**
    * 📎 Файл, обраний ЩЕ НА ЕТАПІ СТВОРЕННЯ (вимога власника 14.09.2026).
    *
@@ -48,6 +54,9 @@ export const emptyTaskForm: TaskForm = {
   assigneeId2: "",
   assigneeUserId: "",
   reviewerId: "",
+  strategic: false,
+  goalResult: "",
+  goalId: "",
   pendingFile: null,
   priority: "medium",
   department: "",

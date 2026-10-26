@@ -5,7 +5,7 @@ import { writeFile, mkdir, unlink } from "fs/promises";
 import path from "path";
 import { pool } from "../db/pool.js";
 import { createReactivationPack } from "../core/reactivationPack.js";
-import { STRATEGIC_TASK_TYPE, canCreateStrategic, goalLinkError } from "../core/strategicTasks.js";
+import { STRATEGIC_TASK_TYPE, goalLinkError } from "../core/strategicTasks.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasPerm, isAdminScope } from "../auth/rbac.js";
 import { UPLOAD_DIR } from "./uploads.js";
@@ -82,7 +82,7 @@ const upsertSchema = z.object({
   groupId: z.number().nullable().optional(),
   /** «Приймає» (`users.id`) — хто закриває задачу. Порожнє — приймає автор. */
   reviewerId: z.number().nullable().optional(),
-  /** 🎯 Стратегічна задача (ставить лише власник, `strategic_creators`). Лише при створенні. */
+  /** 🎯 Стратегічна задача (ставить будь-хто, рішення Романа 26.10.2026). Лише при створенні. */
   strategic: z.boolean().optional(),
   /** 🎯 Результат стратегічної одним реченням — обовʼязковий для неї, заборонений іншим. */
   goalResult: z.string().max(500).nullable().optional(),
@@ -489,16 +489,13 @@ tasksRouter.post("/", async (req, res) => {
   }
 
   /**
-   * 🎯 СТРАТЕГІЧНА — лише власник (поіменно), з результатом, один виконавець, без власної цілі.
+   * 🎯 СТРАТЕГІЧНА — ставить будь-хто (рішення Романа 26.10.2026), з результатом, один виконавець, без власної цілі.
    * Підзадача — звичайна задача з `goalId`; ставити її може той, хто може змінювати саму ціль.
    */
   const strategic = parsed.data.strategic === true;
   const goalResult = parsed.data.goalResult?.trim() || null;
   const goalId = parsed.data.goalId ?? null;
   if (strategic) {
-    if (!(await canCreateStrategic(pool, auth.userId))) {
-      return res.status(403).json({ error: "Стратегічні задачі ставить лише власник" });
-    }
     if (!goalResult) return res.status(400).json({ error: "Для стратегічної задачі вкажіть результат: як зрозуміти, що зроблено" });
     if (goalId != null) return res.status(400).json({ error: "Стратегічна задача не може бути підзадачею іншої" });
     if ((parsed.data.assigneeIds?.length ?? 0) > 1) return res.status(400).json({ error: "У стратегічної задачі один відповідальний" });
@@ -608,9 +605,12 @@ async function loadTaskMeta(taskId: number): Promise<TaskMeta | null> {
   const r = await pool.query<{
     assignee_id: number | null; assignee_user_id: number | null; created_by: number | null;
     assignee_team_id: number | null; status: string; task_type: string; reviewer_id: number | null;
+    sub_mgr: number[]; sub_usr: number[];
   }>(
     `SELECT t.assignee_id, t.assignee_user_id, t.created_by, t.status, t.task_type, t.reviewer_id,
-            ${ASSIGNEE_TEAM_SQL} AS assignee_team_id
+            ${ASSIGNEE_TEAM_SQL} AS assignee_team_id,
+            ARRAY(SELECT gs.assignee_id FROM tasks gs WHERE gs.goal_id = t.id AND gs.assignee_id IS NOT NULL) AS sub_mgr,
+            ARRAY(SELECT gs.assignee_user_id FROM tasks gs WHERE gs.goal_id = t.id AND gs.assignee_user_id IS NOT NULL) AS sub_usr
        FROM tasks t${TASK_OWNER_JOINS}
       WHERE t.id = $1`,
     [taskId]
@@ -620,7 +620,7 @@ async function loadTaskMeta(taskId: number): Promise<TaskMeta | null> {
   return {
     assigneeId: t.assignee_id, assigneeUserId: t.assignee_user_id, createdBy: t.created_by,
     assigneeTeamId: t.assignee_team_id, status: t.status, taskType: t.task_type,
-    reviewerId: t.reviewer_id,
+    reviewerId: t.reviewer_id, subtaskManagerIds: t.sub_mgr, subtaskUserIds: t.sub_usr,
   };
 }
 
