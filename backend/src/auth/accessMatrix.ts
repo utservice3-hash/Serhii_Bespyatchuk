@@ -1911,6 +1911,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "candidate"] },
   { method: "PUT", path: "/api/org/people/:employeeId/unit", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "candidate"] },
+  /* 👥 КОМАНДИ KOMMO + ДАШБОРД (27.10.2026): список — усім, хто бачить орг-структуру; запис — право `manage_teams`
+     (керівництво й HR — рішення Романа 27.10). КВП і фінансист адмінського рівня, але права не мають: 403 по ПРАВУ. */
+  { method: "GET", path: "/api/org/teams", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
+  { method: "POST", path: "/api/org/teams", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "candidate"] },
+  { method: "PATCH", path: "/api/org/teams/:id", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "candidate"] },
+  { method: "PUT", path: "/api/org/teams/people/:employeeId", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "candidate"] },
   { method: "GET", path: "/api/surveys/badge", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: ["candidate"] },
   { method: "GET", path: "/api/surveys", cls: "GET",

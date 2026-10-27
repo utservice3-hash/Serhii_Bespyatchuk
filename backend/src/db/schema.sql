@@ -6864,6 +6864,88 @@ UPDATE roles SET permissions = permissions || '{"edit_org": true}'::jsonb
 UPDATE roles SET permissions = permissions - 'edit_org'
  WHERE key NOT IN ('admin', 'hr', 'business_assistant');
 REVOKE ALL ON org_units, org_log, org_migrations FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 👥 КОМАНДИ: KOMMO + ДАШБОРД (рішення Романа 27.10.2026; `core/teams.ts`).
+--  · Команди Kommo — `teams` (синк, назви лише в Kommo). Їх читають 116 запитів продажів (Звіт, КВП, плани…), тому
+--    команди дашборду живуть ОКРЕМО (`dashboard_teams`) і в `teams` не потрапляють ніколи — синк Kommo їх не чіпає.
+--  · Команда людини: звʼязаний із Kommo (менеджер/тімлід із групою) — команда Kommo, змінити в дашборді не можна;
+--    решта — `employees.team_id` (команда Kommo без акаунта Kommo) АБО `employees.dashboard_team_id`, не обидва.
+--  · «Зʼєднати»: `dashboard_teams.kommo_team_id` — люди такої команди дашборду показуються в команді Kommo.
+--  · Не видаляється нічого: команда архівується (`archived_at`), і лише порожня.
+--  ⚠️ Revert коду таблиці й стовпців не прибирає; `team_label` лишається (вітрина назви, історія).
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS dashboard_teams (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT NOT NULL CHECK (btrim(name) <> ''),
+  kommo_team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  archived_at   TIMESTAMPTZ,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_teams_name ON dashboard_teams (lower(btrim(name))) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_teams_kommo ON dashboard_teams (kommo_team_id) WHERE archived_at IS NULL AND kommo_team_id IS NOT NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
+ALTER TABLE org_units ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'employees_one_team') THEN
+    ALTER TABLE employees ADD CONSTRAINT employees_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'org_units_one_team') THEN
+    ALTER TABLE org_units ADD CONSTRAINT org_units_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_units_dashboard_team ON org_units (dashboard_team_id) WHERE dashboard_team_id IS NOT NULL;
+-- Офісні блоки з власною «Командою» (Керівництво, Бухгалтерія, IT…) стають командами дашборду. Ідемпотентно: блок, що вже
+-- має команду (будь-яку), не чіпається; однойменна жива команда дашборду — береться наявна, а не створюється друга.
+INSERT INTO dashboard_teams (name)
+SELECT DISTINCT ON (lower(btrim(u.label))) btrim(u.label) FROM org_units u
+ WHERE u.team_id IS NULL AND u.dashboard_team_id IS NULL AND u.label IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM dashboard_teams d WHERE d.archived_at IS NULL AND lower(btrim(d.name)) = lower(btrim(u.label)));
+UPDATE org_units u SET dashboard_team_id = d.id
+  FROM dashboard_teams d
+ WHERE u.team_id IS NULL AND u.dashboard_team_id IS NULL AND u.label IS NOT NULL
+   AND d.archived_at IS NULL AND lower(btrim(d.name)) = lower(btrim(u.label))
+   AND NOT EXISTS (SELECT 1 FROM org_units o WHERE o.dashboard_team_id = d.id);
+-- Людям БЕЗ команди Kommo — команда з тексту «Команди», лише за ТОЧНИМ збігом назви (регістр, пробіли, апостроф не
+-- різниця). Кожен викат, але лише кому ще нічого не вибрано: кому HR команду зняв, той має й порожній текст (`setEmployeeTeam`
+-- пише назву в `team_label`), тож назад не повернеться. Цифри «0/9/13» не збігаються ні з чим — лишаються «не вибрано».
+WITH kommo AS (
+  SELECT e.id FROM employees e
+    LEFT JOIN managers m1 ON m1.id = e.manager_id
+    LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m2 ON m2.id = u.manager_id
+   WHERE COALESCE(m1.team_id, m2.team_id) IS NOT NULL),
+cand AS (
+  SELECT e.id, lower(regexp_replace(translate(btrim(e.team_label), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) AS k
+    FROM employees e
+   WHERE e.team_id IS NULL AND e.dashboard_team_id IS NULL AND e.team_label IS NOT NULL
+     AND e.id NOT IN (SELECT id FROM kommo))
+UPDATE employees e SET team_id = t.id
+  FROM cand c JOIN teams t ON lower(regexp_replace(translate(btrim(t.name), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) = c.k
+ WHERE e.id = c.id;
+WITH kommo AS (
+  SELECT e.id FROM employees e
+    LEFT JOIN managers m1 ON m1.id = e.manager_id
+    LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m2 ON m2.id = u.manager_id
+   WHERE COALESCE(m1.team_id, m2.team_id) IS NOT NULL),
+cand AS (
+  SELECT e.id, lower(regexp_replace(translate(btrim(e.team_label), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) AS k
+    FROM employees e
+   WHERE e.team_id IS NULL AND e.dashboard_team_id IS NULL AND e.team_label IS NOT NULL
+     AND e.id NOT IN (SELECT id FROM kommo))
+UPDATE employees e SET dashboard_team_id = d.id
+  FROM cand c JOIN dashboard_teams d ON d.archived_at IS NULL
+   AND lower(regexp_replace(translate(btrim(d.name), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) = c.k
+ WHERE e.id = c.id;
+-- Створювати, перейменовувати, зʼєднувати й архівувати команди дашборду, міняти команду людини без Kommo — керівництво
+-- і HR (рішення Романа 27.10). Парою «видати / зняти» ПІСЛЯ синків ролей, як `edit_org`.
+UPDATE roles SET permissions = permissions || '{"manage_teams": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'hr');
+UPDATE roles SET permissions = permissions - 'manage_teams'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr');
+REVOKE ALL ON dashboard_teams FROM ai_readonly;
 -- 📅 КАЛЕНДАР ОПЛАТ (Тетяна, задача #6369, 27.10.2026; `core/finRecurring.ts`): нагадування про періодичні витрати —
 -- окремо від Плану/факту, нічого не рахує в результаті. `anchor_day` — «день оплати» з першої дати: 31-го в коротшому
 -- місяці нагадує в останній день, а наступного — знову 31-го (без «зʼїзду», як у `monthKeys`, борг 19). Нічого не

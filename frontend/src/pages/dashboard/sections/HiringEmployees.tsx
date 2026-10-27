@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
   startDismissal, dismissNeedsConfirm, finishDismissal, revertDismissal, setDismissDate, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
-  fetchPeoplePhotos, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles,
+  fetchPeoplePhotos, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles, setEmployeeTeam,
   type EmployeeAccount, type EmployeeAccountCan, type RoleDef,
   type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
@@ -12,6 +12,7 @@ import { EmployeePhoto, PhotoPanel } from "./EmployeePhotos";
 import { AddEmployeeDialog, BulkDocsDialog } from "./HiringEmployeeAdd";
 import type { Toast } from "./HiringShared";
 import { StatusBar, VaultPanel } from "./HiringSecrets";
+import { TeamOptions, useTeams } from "./OrgTeams";
 
 /**
  * 🗂 «НАЙМ → СПІВРОБІТНИКИ» — реєстр, доступи й імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
@@ -102,14 +103,14 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   useEffect(load, [load]);
 
   const inView = useMemo(() => (rows ?? []).filter((r) => view === "all" || (view === "dismissed" ? r.status === "dismissed" : r.status !== "dismissed")), [rows, view]);
-  const shown = useMemo(() => inView.filter((r) => (!team || (team === "—" ? !r.team_label : r.team_label === team))
+  const shown = useMemo(() => inView.filter((r) => (!team || (team === "—" ? !r.team_name : r.team_name === team))
     && (extra === "all" || (extra === "new" && (daysSince(r.hired_at) ?? 999) <= 30) || (extra === "noacc" && r.user_id == null)
       || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date))
       || (extra === "nonda" && !r.has_nda) || (extra === "nooffer" && !r.has_offer) || (extra === "nodocs" && r.docs === 0)
       || (extra === "nophoto" && !!photos && !photos.get(r.id)?.hasPhoto))
-    && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))),
+    && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_name ?? r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))),
   [inView, team, extra, q, photos]);
-  const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_label).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
+  const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_name).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
   if (err) return <div className="chart-card"><b>Реєстр недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
   const active = rows.filter((r) => r.status !== "dismissed"); // «завершує» ще працює
@@ -178,7 +179,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                         <div className="hr-muted">{r.position ?? "посада не вказана"}</div>
                         </div>
                       </div></td>
-                      <td>{r.team_label ? <span className="emp-team" style={{ ["--t" as string]: teamTone(r.team_label) }}>{teamName(r.team_label)}</span> : <span className="hr-muted">—</span>}</td>
+                      <td><TeamPill row={r} /></td>
                       <td>{r.phone ?? <span className={r.status === "active" ? "emp-miss" : "hr-muted"}>немає</span>}</td>
                       <td>{(r.status === "dismissed" ? d(r.dismissed_at) : d(r.hired_at)) ?? <span className="hr-muted">—</span>}
                         {r.status === "dismissed" && r.dismiss_reason && <div className="hr-muted">{r.dismiss_reason}</div>}</td>
@@ -208,7 +209,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
           </div>
         )}
       </div>
-      {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} teams={teams} status={status} toast={toast} photo={photos?.get(openRow.id)} photoErr={photos ? null : photosErr}
+      {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} status={status} toast={toast} photo={photos?.get(openRow.id)} photoErr={photos ? null : photosErr}
         onTab={(t) => setOpen({ id: openRow.id, tab: t })} onClose={() => setOpen(null)} onSaved={load} onPhoto={loadPhotos} />}
       {adding && <AddEmployeeDialog teams={teams} onClose={() => setAdding(false)}
         onOpenExisting={(id) => { setAdding(false); setOpen({ id, tab: "profile" }); }}
@@ -223,16 +224,58 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   );
 }
 
-const FIELDS: [keyof EmployeePatch, string, "text" | "date" | "team" | "status"][] = [
-  ["full_name", "ПІБ", "text"], ["position", "Посада", "text"], ["team_label", "Команда", "team"], ["status", "Статус", "status"],
+/**
+ * 👥 Команда в списку й картці (27.10.2026): справжня команда (`team_name`); без неї — старий текст «Команди» з позначкою
+ * «не вибрано», щоб було видно, що там «9», а не порожнеча.
+ */
+function TeamPill({ row }: { row: EmployeeRow }) {
+  if (row.team_name) return <span className="emp-team" style={{ ["--t" as string]: teamTone(row.team_name) }} title={row.team_locked ? "з Kommo" : undefined}>{row.team_name}</span>;
+  if (row.team_label) return <span className="hr-muted" title="Команду не вибрано — це старий текст із таблиці">{teamName(row.team_label)} · не вибрано</span>;
+  return <span className="hr-muted">—</span>;
+}
+
+/**
+ * Команда людини: у кого в Kommo є група — лише показ («з Kommo»), змінюють у Kommo; решті — вибір зі списку (продажі з
+ * Kommo + відділи дашборду), зберігається одразу, окремо від форми. Змінювати — право `manage_teams` (керівництво й HR).
+ */
+function TeamField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast; onSaved: () => void }) {
+  const [teams] = useTeams();
+  const [busy, setBusy] = useState(false);
+  if (row.team_locked) return (
+    <label className="wide"><span>Команда</span>
+      <span className="hr-inp" style={{ display: "flex", gap: 8, alignItems: "center", background: "transparent" }}>
+        <b>{row.team_name}</b><span className="emp-pill info">з Kommo</span>
+        <span className="hr-muted" style={{ fontSize: 12.5 }}>змінюють у Kommo — синк перенесе сам</span>
+      </span>
+    </label>
+  );
+  const change = async (v: string) => {
+    setBusy(true);
+    try { const n = await setEmployeeTeam(row.id, v || null); toast(n ? `${row.full_name}: команда «${n}»` : `${row.full_name}: команду знято`); onSaved(); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  return (
+    <label className="wide"><span>Команда</span>
+      <select className="hr-inp" value={row.team_ref ?? ""} disabled={busy || !teams?.canManage}
+        title={teams && !teams.canManage ? "Команду змінюють керівництво й HR" : undefined} onChange={(e) => void change(e.target.value)}>
+        <option value="">{row.team_label ? `не вибрано (у таблиці було «${row.team_label}»)` : "не вибрано"}</option>
+        <TeamOptions data={teams} current={row.team_ref} />
+      </select>
+    </label>
+  );
+}
+
+const FIELDS: [keyof EmployeePatch, string, "text" | "date" | "status"][] = [
+  ["full_name", "ПІБ", "text"], ["position", "Посада", "text"], ["status", "Статус", "status"],
   ["phone", "Телефон", "text"], ["email", "Пошта", "text"], ["telegram", "Telegram", "text"], ["birth_date", "Дата народження", "date"],
   ["hired_at", "Дата прийому", "date"], ["dismissed_at", "Дата звільнення", "date"], ["dismiss_reason", "Причина звільнення", "text"], ["note", "Примітка", "text"],
 ];
 
 type DrawerTab = "profile" | "access" | "docs";
 
-function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab, onClose, onSaved, onPhoto }: {
-  row: EmployeeRow; tab: DrawerTab; teams: string[]; status: SecretsStatus | null; toast: Toast; photo: PersonPhoto | undefined; photoErr: string | null;
+function EmployeeDrawer({ row, tab, status, toast, photo, photoErr, onTab, onClose, onSaved, onPhoto }: {
+  row: EmployeeRow; tab: DrawerTab; status: SecretsStatus | null; toast: Toast; photo: PersonPhoto | undefined; photoErr: string | null;
   onTab: (t: DrawerTab) => void; onClose: () => void; onSaved: () => void; onPhoto: () => void;
 }) {
   const [dismissing, setDismissing] = useState(false);
@@ -269,7 +312,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab
                 ? <span className="emp-pill warn" title="Поза розрахунком плинності">дата звільнення невідома</span>
                 : row.status === "dismissed" && row.dismissed_at ? <span className="emp-pill mute">звільнено {d(row.dismissed_at)}</span> : null)}
               {row.status !== "active" && <button className="hr-btn xs" onClick={() => setDateEdit(true)}>Змінити дату звільнення</button>}
-              {row.team_label && <span className="emp-team" style={{ ["--t" as string]: teamTone(row.team_label) }}>{teamName(row.team_label)}</span>}
+              <TeamPill row={row} />
               {row.user_id != null ? <span className="emp-pill ok">акаунт: {row.account_name}</span> : <span className="emp-pill warn">без акаунта в дашборді</span>}
               {row.kommo_name ? <span className="emp-pill info">Kommo: {row.kommo_name}</span> : <span className="emp-pill mute">не привʼязано до Kommo</span>}
             </div>
@@ -288,6 +331,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab
             <PhotoPanel employeeId={row.id} name={row.full_name} dismissed={row.status === "dismissed"} info={photo} unknown={photoErr} toast={toast} onChanged={onPhoto} />
             <AccountPanel employeeId={row.id} email={row.email} toast={toast} onChanged={onSaved} />
             <div className="emp-form">
+              <TeamField row={row} toast={toast} onSaved={onSaved} />
               {FIELDS.map(([k, label, kind]) => (
                 <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>
                   <span>{label}</span>
@@ -297,12 +341,11 @@ function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab
                       <option value="active">працює</option><option value="dismissed">звільнений</option>
                     </select>
                   ) : (
-                    <input className="hr-inp" type={kind === "date" ? "date" : "text"} value={form[k]} disabled={k === "dismissed_at" && !!row.offboarding} list={kind === "team" ? "emp-teams" : undefined}
+                    <input className="hr-inp" type={kind === "date" ? "date" : "text"} value={form[k]} disabled={k === "dismissed_at" && !!row.offboarding} 
                       onChange={(e) => setForm({ ...form, [k]: e.target.value, ...(k === "dismissed_at" && e.target.value ? { status: "dismissed" } : {}) })} />
                   )}
                 </label>
               ))}
-              <datalist id="emp-teams">{teams.map((t) => <option key={t} value={t}>{teamName(t)}</option>)}</datalist>
             </div>
             {msg && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{msg}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>

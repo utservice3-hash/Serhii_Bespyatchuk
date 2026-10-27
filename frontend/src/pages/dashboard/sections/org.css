@@ -90,6 +90,13 @@
 .org-form .hr-inp { width: 100%; box-sizing: border-box; }
 .org-log { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
 
+/* 👥 Відділи дашборду (27.10.2026) */
+.org-teams-tbl { overflow-x: auto; }
+.org-teams-tbl select.hr-inp { min-width: 0; max-width: 260px; }
+.org-teams-new { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.org-teams-new .hr-inp { flex: 1 1 200px; min-width: 0; }
+.org-teams-arch { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+
 @media (max-width: 600px) {
   .org-form { grid-template-columns: 1fr; }
   .org-tool .org-search { flex-basis: 100%; }

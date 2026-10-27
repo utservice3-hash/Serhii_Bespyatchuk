@@ -49,6 +49,7 @@ import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
 import { baRouter } from "./routes/businessAssistant.js";
 import { orgRouter } from "./routes/org.js";
+import { orgTeamsRouter } from "./routes/orgTeams.js";
 import { financeRouter } from "./routes/finance.js";
 import { financePaymentsRouter } from "./routes/financePayments.js";
 import { financeCalendarRouter } from "./routes/financeCalendar.js";
@@ -205,6 +206,7 @@ app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор ванта�
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
+app.use("/api/org/teams", orgTeamsRouter); // 👥 Команди Kommo + дашборд (27.10.2026) — ДО orgRouter, бо той теж під /api/org
 app.use("/api/org", orgRouter); // 🏢 Орг структура (задача 7062, 27.10.2026)
 app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
 app.use("/api/team-vault", teamVaultRouter); // 👥 тімлід: люди й паролі своєї команди (29.09.2026)

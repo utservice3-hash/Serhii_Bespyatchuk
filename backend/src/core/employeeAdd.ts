@@ -54,8 +54,8 @@ export async function createEmployee(db: Db, actorId: number, b: Record<string, 
  */
 export async function ensureEmployeeFromCandidate(db: Db, actorId: number | null, candidateId: number) {
   if ((await db.query(`SELECT 1 FROM employees WHERE candidate_id = $1`, [candidateId])).rowCount) return { created: false, linked: false };
-  const c = (await db.query<{ full_name: string; phone: string | null; email: string | null; telegram: string | null; user_id: number | null; team: string | null; position: string | null }>(
-    `SELECT c.full_name, c.phone, c.email, c.telegram, c.user_id, t.name AS team,
+  const c = (await db.query<{ full_name: string; phone: string | null; email: string | null; telegram: string | null; user_id: number | null; team: string | null; team_id: number | null; position: string | null }>(
+    `SELECT c.full_name, c.phone, c.email, c.telegram, c.user_id, t.name AS team, c.team_id,
             (SELECT COALESCE(NULLIF(v.position, ''), v.title) FROM hiring_candidate_vacancies cv JOIN hiring_vacancies v ON v.id = cv.vacancy_id
               WHERE cv.candidate_id = c.id ORDER BY cv.vacancy_id LIMIT 1) AS position
        FROM hiring_candidates c LEFT JOIN teams t ON t.id = c.team_id WHERE c.id = $1`, [candidateId])).rows[0];
@@ -72,9 +72,11 @@ export async function ensureEmployeeFromCandidate(db: Db, actorId: number | null
     return { created: false, linked: true, id: same.id };
   }
   const id = (await db.query<{ id: number }>(
-    `INSERT INTO employees (full_name, import_key, status, position, team_label, phone, email, telegram, hired_at, user_id, candidate_id, source, created_by)
-     VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10, 'hiring', $11) RETURNING id`,
-    [c.full_name.replace(/\s+/g, " ").trim(), key, c.position, c.team, c.phone, c.email, c.telegram, todayKyiv(), freeUser, candidateId, actorId])).rows[0].id;
+    // Команда кандидата — команда Kommo; тепер і ПОЛЕМ (`team_id`), а не лише текстом: орг-структура розставляє людей за
+    // командою (27.10.2026). Щойно людину привʼяжуть до Kommo, її команда прийде звідти (`core/teams.ts`).
+    `INSERT INTO employees (full_name, import_key, status, position, team_label, team_id, phone, email, telegram, hired_at, user_id, candidate_id, source, created_by)
+     VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10, $11, 'hiring', $12) RETURNING id`,
+    [c.full_name.replace(/\s+/g, " ").trim(), key, c.position, c.team, c.team_id, c.phone, c.email, c.telegram, todayKyiv(), freeUser, candidateId, actorId])).rows[0].id;
   await audit(db, actorId, id, c.full_name, "employees.create", { via: "hiring", candidateId });
   return { created: true, linked: false, id };
 }

@@ -5555,6 +5555,8 @@ export interface EmployeeRow {
   dismissed_at: string | null; dismiss_reason: string | null; note: string | null; extra: Record<string, string>;
   user_id: number | null; account_name: string | null; account_active: boolean | null; secrets: number; updated_at: string;
   manager_id: number | null; kommo_name: string | null;
+  /** 👥 Справжня команда (27.10.2026): з Kommo — `team_locked`; інакше вибрана в картці (`team_ref`: `k:<id>` / `d:<id>`). */
+  team_name: string | null; team_locked: boolean; team_ref: string | null;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
   /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
@@ -6360,11 +6362,15 @@ export const setFinKpiOff = async (id: number, off: boolean) => (await api.post<
 export type OrgDept = "top" | "hr" | "fin" | "it" | "sales";
 export interface OrgUnit {
   id: number; parentId: number | null; name: string; dept: OrgDept; teamId: number | null; teamName: string | null;
+  /** 👥 Команда блоку: Kommo (`teamId`) або дашборду (`dashTeamId`); `teamKey` — `k:<id>` / `d:<id>`, `null` — контейнер. */
+  dashTeamId: number | null; dashTeamName: string | null; teamKey: string | null;
   label: string | null; ownLabel: string | null; headId: number | null; headSource: "manual" | "team" | null;
   side: boolean; sort: number; memberIds: number[];
 }
 export interface OrgPerson {
   id: number; name: string; position: string | null; teamLabel: string | null; unitId: number | null; isHead: boolean;
+  /** Справжня команда людини; `teamLocked` — з Kommo, змінюють лише в Kommo. */
+  teamName: string | null; teamLocked: boolean;
   telegram: string | null; telegramInvalid: boolean; photo: PhotoRef | null; isMe: boolean;
 }
 export interface OrgTreeResp {
@@ -6372,7 +6378,7 @@ export interface OrgTreeResp {
   stats: { total: number; noTelegram: number; noPhoto: number; unassigned: number };
   depts: Record<OrgDept, string>; canEdit: boolean; meEmployeeId: number | null; teams: { id: number; name: string }[];
 }
-export interface OrgUnitInput { name?: string; parentId?: number | null; dept?: OrgDept; teamId?: number | null; label?: string | null; headEmployeeId?: number | null; side?: boolean; sort?: number }
+export interface OrgUnitInput { name?: string; parentId?: number | null; dept?: OrgDept; team?: string | null; headEmployeeId?: number | null; side?: boolean; sort?: number }
 export interface OrgLogRow { id: number; at: string; actor: string | null; action: string; summary: string }
 export const fetchOrgTree = async () => (await api.get<OrgTreeResp>("/org/tree")).data;
 export const setMyOrgTelegram = async (telegram: string) => (await api.put<{ telegram: string | null }>("/org/me/telegram", { telegram })).data.telegram;
@@ -6382,3 +6388,19 @@ export const createOrgUnit = async (body: OrgUnitInput) => (await api.post<{ id:
 export const updateOrgUnit = async (id: number, body: OrgUnitInput) => { await api.patch(`/org/units/${id}`, body); };
 export const deleteOrgUnit = async (id: number) => { await api.delete(`/org/units/${id}`); };
 export const fetchOrgLog = async () => (await api.get<{ rows: OrgLogRow[] }>("/org/log")).data.rows;
+
+// 👥 Команди Kommo + ВІДДІЛИ ДАШБОРДУ (27.10.2026) — дзеркало `routes/orgTeams.ts`. Список — усім, хто бачить орг-структуру;
+// запис — право `manage_teams` (керівництво й HR), сервер віддає `canManage`. ⚠️ Не плутати з «командою лише в дашборді»
+// з «Налаштування → Команди» (`createDashboardTeam`): та живе в `teams`, її бачать Звіт і КВП — це команда продажів.
+// Відділи дашборду (`dashboard_teams`) у звітах продажів не зʼявляються ніколи.
+export interface TeamOption {
+  key: string; kind: "kommo" | "dashboard"; id: number; name: string;
+  linkedKommoId: number | null; linkedKommoName: string | null; archived: boolean; members: number;
+}
+export interface TeamsResp { kommo: TeamOption[]; dashboard: TeamOption[]; canManage: boolean }
+export const fetchOrgTeams = async () => (await api.get<TeamsResp>("/org/teams")).data;
+export const createOrgTeam = async (body: { name: string; kommoTeamId?: number | null }) => (await api.post<{ id: number }>("/org/teams", body)).data.id;
+export const updateOrgTeam = async (id: number, body: { name?: string; kommoTeamId?: number | null; archived?: boolean }) => { await api.patch(`/org/teams/${id}`, body); };
+/** Команда людини без Kommo: `k:<id>` / `d:<id>` або `null` — зняти. */
+export const setEmployeeTeam = async (employeeId: number, team: string | null) =>
+  (await api.put<{ ok: true; name: string | null }>(`/org/teams/people/${employeeId}`, { team })).data.name;
