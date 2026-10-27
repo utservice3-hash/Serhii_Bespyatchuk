@@ -6108,7 +6108,7 @@ export interface CtorForm {
 }
 export const CTOR_EMPTY_FORM: CtorForm = {
   ent: "uts", doc: "once", party: "client", intl: false, stamp: true, fopAcc: 0,
-  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
+  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "" },   // порядок оплати менеджер обирає сам (задача 6475)
   dealNo: "", docDate: "", mainNo: "", mainDate: "", mainUntil: "",
 };
 export interface CtorEntityRow {
