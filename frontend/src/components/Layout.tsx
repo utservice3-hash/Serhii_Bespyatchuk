@@ -15,14 +15,6 @@ import { getAuthPayload } from "../auth";
 
 export const NAV_GROUPS = [
   {
-    // 🏢 «Компанія» (задача 7062, прототип Даші 23.10.2026): першою групою. Вкладка `org` — у всіх ролей (сид schema.sql),
-    // видимість, як скрізь, — зі `screen_access`.
-    label: "Компанія",
-    items: [
-      { key: "org", label: "Орг структура", icon: "🏢" },
-    ],
-  },
-  {
     label: "Аналітика",
     items: [
       { key: "overview", label: "Огляд", icon: "📊" },
@@ -102,6 +94,14 @@ export const NAV_GROUPS = [
       { key: "surveys", label: "Опитування", icon: "📋" },
       { key: "documents", label: "Регламенти та документи", icon: "📁" },
       { key: "training", label: "Навчання", icon: "📚" },
+    ],
+  },
+  {
+    // 🏢 «Компанія» (задача 7062): одразу під «Роботою» (рішення Романа 27.10.2026: «на низ … під роботою»; до того
+    // стояла першою, як у прототипі Даші). Вкладка `org` — у всіх ролей (сид schema.sql), видимість — зі `screen_access`.
+    label: "Компанія",
+    items: [
+      { key: "org", label: "Орг структура", icon: "🏢" },
     ],
   },
   {

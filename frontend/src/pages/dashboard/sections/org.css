@@ -91,6 +91,23 @@
 .org-form .hr-inp { width: 100%; box-sizing: border-box; }
 .org-log { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
 
+/* плавність (Роман 27.10.2026): картка виїжджає й ховається, люди блоку зʼявляються, вигляд перемикається без ривка */
+@keyframes org-fade { from { opacity: 0; } }
+@keyframes org-slide { from { transform: translateX(100%); } }
+@keyframes org-drop { from { opacity: 0; transform: translateY(-6px); } }
+.org-treebox, .org-tbl { animation: org-fade .22s ease-out; }
+.org-members { animation: org-drop .24s ease-out; }
+.org-node { transition: box-shadow .2s, border-color .2s, opacity .25s, transform .2s; }
+.org-node:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg, var(--shadow)); }
+.org-person, .org-seg button, .org-tog, .org-write { transition: background-color .15s, color .15s; }
+.org-scrim { animation: org-fade .2s ease-out; transition: opacity .2s ease-in; }
+.org-scrim.out { opacity: 0; }
+.org-drawer { animation: org-slide .28s cubic-bezier(.2, .8, .2, 1); transition: transform .2s ease-in; }
+.org-drawer.out { transform: translateX(100%); }
+@media (prefers-reduced-motion: reduce) {
+  .org *, .org-scrim, .org-drawer { animation: none !important; transition: none !important; }
+}
+
 @media (max-width: 600px) {
   .org-form { grid-template-columns: 1fr; }
   .org-tool .org-search { flex-basis: 100%; }

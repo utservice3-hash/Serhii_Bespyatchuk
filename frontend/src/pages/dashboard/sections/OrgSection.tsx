@@ -20,6 +20,9 @@ import "./org.css";
  *    не можна, діалогів і бота немає (рішення Романа 27.10.2026: «тільки відкривання телеграма»).
  */
 const narrow = () => typeof window !== "undefined" && window.innerWidth < 700;
+/** Плавність (Роман 27.10.2026): картка ховається за стільки ж, скільки виїжджає; без анімацій — якщо людина їх вимкнула в системі. */
+const CARD_OUT_MS = 200;
+const calm = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 type SortKey = "name" | "position" | "unit" | "telegram";
 
 /** Кольори ініціалів — палітра прототипу Даші; колір сталий для імені (сума кодів символів). */
@@ -254,7 +257,9 @@ export function OrgSection() {
 function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
   p: OrgPerson; data: OrgTreeResp; unitName: string; toast: Toast; onClose: () => void; onChanged: () => void;
 }) {
-  useEscape(onClose);
+  const [leaving, setLeaving] = useState(false);
+  const close = () => { if (calm()) return onClose(); setLeaving(true); window.setTimeout(onClose, CARD_OUT_MS); };
+  useEscape(close);
   const [nick, setNick] = useState(p.telegram ?? "");
   const [busy, setBusy] = useState(false);
   const [photoDlg, setPhotoDlg] = useState(false);
@@ -275,9 +280,9 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
   };
   return (
     <>
-      <div className="org-scrim" onClick={onClose} />
-      <aside className="org-drawer" role="dialog" aria-label={`Картка: ${p.name}`}>
-        <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="hr-btn xs" onClick={onClose}>Закрити ✕</button></div>
+      <div className={`org-scrim ${leaving ? "out" : ""}`} onClick={close} />
+      <aside className={`org-drawer ${leaving ? "out" : ""}`} role="dialog" aria-label={`Картка: ${p.name}`}>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="hr-btn xs" onClick={close}>Закрити ✕</button></div>
         <div className="org-dhead">
           <OrgAvatar p={p} size={76} />
           <div className="org-dname">{p.name}</div>

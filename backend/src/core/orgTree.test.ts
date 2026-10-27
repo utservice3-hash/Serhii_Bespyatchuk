@@ -280,15 +280,21 @@ test("#2705 ДОСТУП: org — усім, edit_org — admin/HR/БА післ�
 });
 
 /**
- * #2706 — ФРОНТ: «Компанія → Орг структура» першою групою меню з позначкою «НОВЕ» до дати; статичний імпорт (#225);
+ * #2710 — ФРОНТ: «Компанія → Орг структура» групою меню ОДРАЗУ ПІД «Роботою» (Роман 27.10.2026: «на низ … під роботою»;
+ * до того — першою, гейт `#2706` у відставці) з позначкою «НОВЕ» до дати; статичний імпорт (#225);
  * стартова вкладка ролі НЕ стає «org» (бухгалтерія й БА без «Звіту» лишаються на своїй першій вкладці); у секції немає
  * телефону й дат — лише те, що віддає API.
- * 🧨 Червоніє, якщо дозволити homeSection обрати «org», лінивий імпорт секції або показати телефон.
+ * 🧨 Червоніє, якщо повернути групу першою (чи будь-куди, крім місця під «Роботою»), дозволити homeSection обрати «org»,
+ * лінивий імпорт секції або показати телефон.
  */
-test("#2706 ФРОНТ: група «Компанія» першою, НОВЕ до дати, статичний імпорт, стартова вкладка не «org», без телефону", async () => {
+test("#2710 ФРОНТ: група «Компанія» одразу під «Роботою», НОВЕ до дати, статичний імпорт, стартова вкладка не «org», без телефону", async () => {
   const lay = FSRC("components/Layout.tsx");
-  const first = lay.slice(lay.indexOf("export const NAV_GROUPS = ["), lay.indexOf("label: \"Аналітика\""));
-  assert.match(first, /label: "Компанія"[\s\S]*key: "org", label: "Орг структура"/, "🔴 «Компанія → Орг структура» не першою групою");
+  const navSrc = lay.slice(lay.indexOf("export const NAV_GROUPS = ["), lay.indexOf("\n];", lay.indexOf("export const NAV_GROUPS = [")));
+  const groups = [...navSrc.matchAll(/^    label: "([^"]+)",$/gm)].map((m) => m[1]);
+  assert.ok(groups.length >= 5 && groups.includes("Робота"), `🔴 групи меню не прочитались: ${groups.join(", ")}`);
+  assert.equal(groups[groups.indexOf("Робота") + 1], "Компанія", `🔴 «Компанія» не одразу під «Роботою»: ${groups.join(" → ")}`);
+  const company = navSrc.slice(navSrc.indexOf('label: "Компанія"'));
+  assert.match(company.slice(0, company.indexOf("],")), /key: "org", label: "Орг структура"/, "🔴 «Орг структура» не в групі «Компанія»");
   assert.match(lay, /const ORG_NEW_UNTIL = "\d{4}-\d{2}-\d{2}"/, "🔴 позначка «НОВЕ» без кінцевої дати");
   const dash = FSRC("pages/Dashboard.tsx");
   assert.match(dash, /import \{ OrgSection \} from "\.\/dashboard\/sections\/OrgSection";/, "🔴 секція не статичним імпортом (#225)");
@@ -304,6 +310,25 @@ test("#2706 ФРОНТ: група «Компанія» першою, НОВЕ �
   const sec = FSRC("pages/dashboard/sections/OrgSection.tsx");
   assert.ok(!/phone|birth|телефон/i.test(sec), "🔴 у секції орг-структури телефон або дата народження");
   assert.match(sec, /href=\{`https:\/\/t\.me\/\$\{/, "🔴 немає кнопки «Telegram» на t.me/<нік>");
+});
+
+/**
+ * #2711 — ПЛАВНІСТЬ (Роман 27.10.2026): картка виїжджає й ховається (закриття чекає анімацію, а не обриває її), люди
+ * блоку зʼявляються з анімацією, і все це вимикається, якщо людина просила систему не рухати (`prefers-reduced-motion`).
+ * 🧨 Червоніє, якщо закриття знову миттєве, або прибрати повагу до «менше руху» — у CSS чи в закритті картки.
+ */
+test("#2711 ПЛАВНІСТЬ: картка виїжджає й ховається, люди блоку зʼявляються; «менше руху» вимикає все", () => {
+  const sec = FSRC("pages/dashboard/sections/OrgSection.tsx");
+  const card = sec.slice(sec.indexOf("function PersonCard("), sec.indexOf("function UnitDialog("));
+  assert.match(card, /const close = \(\) => \{ if \(calm\(\)\) return onClose\(\); setLeaving\(true\); window\.setTimeout\(onClose, CARD_OUT_MS\); \};/, "🔴 картка закривається без анімації або ігнорує «менше руху»");
+  assert.match(card, /useEscape\(close\)/, "🔴 Esc закриває картку ривком, повз анімацію");
+  assert.ok(!/onClick=\{onClose\}/.test(card.slice(0, card.indexOf("photoDlg &&"))), "🔴 фон чи «Закрити» обривають анімацію (onClose напряму)");
+  assert.match(sec, /matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)/, "🔴 закриття не питає систему про «менше руху»");
+  const css = FSRC("pages/dashboard/sections/org.css");
+  assert.match(css, /\.org-drawer \{ animation: org-slide/, "🔴 картка не виїжджає");
+  assert.match(css, /\.org-drawer\.out \{ transform: translateX\(100%\); \}/, "🔴 картка не ховається");
+  assert.match(css, /\.org-members \{ animation: org-drop/, "🔴 люди блоку зʼявляються ривком");
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.org \*, \.org-scrim, \.org-drawer \{ animation: none !important; transition: none !important; \}/, "🔴 «менше руху» не вимикає анімацій");
 });
 
 /**
