@@ -1,8 +1,8 @@
 /**
  * 🧮🚚 Екран «Калькулятор ставок та вантажу» (12.10.2026) — перейменований «Калькулятор ставок», дві вкладки
  * (пакет Сергія `client/RatesAndCargoPage.tsx`, макет v3, екран V-17):
- *   «Розрахунок ставки»           — наявний `RatesSection`, відкривається за замовчуванням; змінено лише одне:
- *                                   його власний заголовок прибрано (12.10, рішення Романа) — інакше два заголовки поспіль;
+ *   «Розрахунок ставки»           — з 27.10.2026 спрощений `RatesSimple` (одна відповідь + відгук; рішення Романа),
+ *                                   відкривається за замовчуванням; попередній `RatesSection` лишився джерелом спільних частин;
  *   «Конфігуратор вантажу в авто» — новий розділ.
  * Між собою не повʼязані (рішення 10.10). Вкладка — в адресі: `/rates?tab=cargo` відкриває конфігуратор.
  * Конфігуратор монтується при першому відкритті й далі лише ховається — розрахунок не губиться при перемиканні.
@@ -12,7 +12,7 @@
  */
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { RatesSection } from "./RatesSection";
+import { RatesSimple } from "./RatesSimple";
 import CargoConfiguratorTab, { CARGO_ADMIN_PERM } from "../../../cargo/client/cargo/CargoConfiguratorTab";
 import type { CargoUser } from "../../../cargo/client/cargo/configurator";
 import { getAuthPayload } from "../../../auth";
@@ -47,7 +47,7 @@ export function RatesAndCargoSection() {
             aria-selected={tab === t.id} tabIndex={tab === t.id ? 0 : -1} onClick={() => setTab(t.id)}>{t.label}</button>
         ))}
       </nav>
-      <div role="tabpanel" id="rc-panel-rate" aria-labelledby="rc-tab-rate" hidden={tab !== "rate"}><RatesSection /></div>
+      <div role="tabpanel" id="rc-panel-rate" aria-labelledby="rc-tab-rate" hidden={tab !== "rate"}><RatesSimple /></div>
       <div role="tabpanel" id="rc-panel-cargo" aria-labelledby="rc-tab-cargo" hidden={tab !== "cargo"}>
         {cargoOpened && <CargoConfiguratorTab user={user} />}
       </div>

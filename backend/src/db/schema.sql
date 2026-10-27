@@ -6893,3 +6893,27 @@ CREATE TABLE IF NOT EXISTS fin_recurring_paid (
 CREATE UNIQUE INDEX IF NOT EXISTS fin_recurring_paid_live_uniq ON fin_recurring_paid (recurring_id, due_date) WHERE cancelled_at IS NULL;
 REVOKE ALL ON fin_recurring FROM ai_readonly;
 REVOKE ALL ON fin_recurring_paid FROM ai_readonly;
+-- 🧮 КАЛЬКУЛЯТОР СТАВКИ: ВІДГУК «НАСКІЛЬКИ ДОПОМІГ» (Роман 27.10.2026; `core/rateFeedback.ts`). `calc` — що калькулятор
+-- ПОКАЗАВ (зонна карта: ставка клієнту, перевізнику, маржа, зона) у мить розрахунку: відгук порівнюється саме з ним, а
+-- не з перерахунком за сьогоднішніми тарифами. Старі розрахунки — без `calc`. Відгук — один на розрахунок, лише на свій.
+-- Відкат даних (код їх не прибирає): DROP TABLE rate_feedback; ALTER TABLE lardi_usage DROP COLUMN calc;
+--   UPDATE roles SET permissions = permissions - 'view_rate_feedback';
+ALTER TABLE lardi_usage ADD COLUMN IF NOT EXISTS calc JSONB;
+CREATE TABLE IF NOT EXISTS rate_feedback (
+  id SERIAL PRIMARY KEY,
+  usage_id INTEGER NOT NULL REFERENCES lardi_usage(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  rating TEXT NOT NULL CHECK (rating IN ('ok', 'high', 'low', 'no')),
+  agreed_rate NUMERIC(12,2) CHECK (agreed_rate IS NULL OR agreed_rate > 0),
+  comment TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS rate_feedback_usage_uniq ON rate_feedback (usage_id);
+CREATE INDEX IF NOT EXISTS idx_rate_feedback_user_created ON rate_feedback (user_id, created_at DESC);
+-- Зведення відгуків бачать адмін, СЕО, ОД, КВП (рішення Романа 27.10.2026). Склад фіксований кодом, парою «видати / зняти».
+UPDATE roles SET permissions = permissions || '{"view_rate_feedback": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp');
+UPDATE roles SET permissions = permissions - 'view_rate_feedback'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp');
+-- 🔒 Коментарі — вільний текст людей. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON rate_feedback FROM ai_readonly;

@@ -90,6 +90,8 @@ export const FORBIDDEN_TABLES = [
   "kommo_declined_forms",
   // 🏛 Prozorro-ліди (#5299): ПІБ, телефони й пошти контактних осіб переможців тендерів. REVOKE у схемі. Тримає #2355.
   "prozorro_tenders", "prozorro_leads",
+  // 🧮 Відгуки на розрахунок ставки (27.10.2026): коментарі людей вільним текстом. REVOKE у схемі. Тримає #2774.
+  "rate_feedback",
 ];
 
 /**

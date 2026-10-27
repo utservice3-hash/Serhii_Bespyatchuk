@@ -50,6 +50,8 @@ export const PERMISSION_CATALOG = [
   "manage_surveys",
   /** 🚚 Конфігуратор вантажу: довідник авто й палет і вся історія розрахунків (рішення Романа 12.10.2026) — admin, СЕО, ОД. */
   "manage_cargo",
+  /** 🧮 Калькулятор ставки: зведення відгуків «наскільки допоміг розрахунок» (рішення Романа 27.10.2026) — admin, СЕО, ОД, КВП. */
+  "view_rate_feedback",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",
