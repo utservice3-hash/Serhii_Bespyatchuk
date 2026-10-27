@@ -4,7 +4,8 @@
  * 1. ПЕРЕНОС (одноразово, idempotent за debtorKey): кожен рядок `client_credit_limits` (82 на 24.10: дні в усіх, сума в 50)
  *    стає лімітом `src='debt'` через `importLimit` пакета — з подією «перенесено» в історії. «Від чого рахувати» — ВІД
  *    РАХУНКУ: так ці ліміти діяли на екрані («узгоджена відстрочка N дн. від дати рахунку»), тож прострочка в них не зміниться.
- *    Юрособи — ЄДРПОУ з рахунків 1С клієнта. 0 днів («у відстрочці відмовлено») переноситься як 0.
+ *    Юрособи — ЄДРПОУ з рахунків 1С клієнта. 0 днів у дебіторці = «у відстрочці відмовлено», це НЕ ліміт на 0 днів (Роман 27.10):
+ *    дні не переносяться (у «Лімітах» — «не узгоджено», як і плитка дебіторки); без суми такий рядок не переноситься зовсім.
  *
  * 2. ДЗЕРКАЛО (після кожної дії в «Узгодженні» / «Лімітах» і раз на 10 хв): «Ліміти клієнтів» — джерело, а
  *    `client_credit_limits` + `receivables.limit_days/limit_amount` — його відбиток, з яким уже вміють працювати «Активна
@@ -47,7 +48,8 @@ const ddmmyyyy = (d: Date) => `${String(d.getDate()).padStart(2, "0")}.${String(
 
 export function legacyRow(r: { client_key: string; limit_days: number | null; limit_amount: string | null; note: string; set_at: Date;
   name: string; manager_id: string; manager_name: string; members: Array<{ code: string; name: string }> }): ImportRow | null {
-  const days = r.limit_days == null ? null : Number(r.limit_days);
+  // 0 днів — «відмовлено» (як `limitState` дебіторки), а не узгоджена відстрочка на 0 днів (гейт `#2483`)
+  const days = r.limit_days == null || Number(r.limit_days) === 0 ? null : Number(r.limit_days);
   const limit = r.limit_amount == null || Number(r.limit_amount) <= 0 ? null : Number(r.limit_amount);
   if (days == null && limit == null) return null;
   if (days != null && (days < 0 || days > 365)) return null;              // поза межами таблиці пакета — лишаємо як було
