@@ -1,10 +1,8 @@
 import { Router, type Request, type Response } from "express";
-import { randomUUID } from "node:crypto";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
-import { listPeoplePhotos, photoFileOf, applyPhotoAction, PeopleError } from "../core/people.js";
-import { checkPhoto, photoStoredName, photoDir } from "../core/peopleRules.js";
+import { listPeoplePhotos, photoFileOf, applyPhotoAction, uploadPhoto, PeopleError } from "../core/people.js";
+import { photoDir } from "../core/peopleRules.js";
 
 /**
  * 📷 ФОТО СПІВРОБІТНИКІВ (22.09.2026). Дві межі:
@@ -54,20 +52,7 @@ peopleRouter.get("/photos", requirePerm("view_employee_secrets"), safe(async (_r
 }));
 
 peopleRouter.post("/photo/:employeeId", requirePerm("view_employee_secrets"), safe(async (req, res) => {
-  const id = idOf(req.params.employeeId);
-  const buf = b64(req.body?.dataBase64);
-  const chk = checkPhoto(buf);
-  if (!chk.ok) return res.status(400).json({ error: chk.error });
-  const stored = photoStoredName(randomUUID(), chk.mime);
-  await mkdir(DOCS_DIR, { recursive: true });
-  await writeFile(path.join(DOCS_DIR, stored), buf!);
-  try {
-    res.status(201).json(await applyPhotoAction(id, { kind: "upload", file: stored }, req.auth!.userId));
-  } catch (e) {
-    // Відмова (немає людини, звільнений) — щойно записаний файл нікому не належить: прибираємо лише його.
-    await unlink(path.join(DOCS_DIR, stored)).catch(() => undefined);
-    throw e;
-  }
+  res.status(201).json(await uploadPhoto(idOf(req.params.employeeId), b64(req.body?.dataBase64), req.auth!.userId));
 }));
 
 peopleRouter.delete("/photo/:employeeId", requirePerm("view_employee_secrets"), safe(async (req, res) => {
