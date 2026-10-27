@@ -6622,6 +6622,14 @@ CREATE TABLE IF NOT EXISTS client_limit_events (
 );
 CREATE INDEX IF NOT EXISTS client_limit_events_idx ON client_limit_events (limit_id, at, id);
 
+-- 🧹 «0 ДНІВ» У ДЕБІТОРЦІ — ЦЕ «У ВІДСТРОЧЦІ ВІДМОВЛЕНО», А НЕ ЛІМІТ НА 0 ДНІВ (Роман 27.10.2026: «роби і техноген теж»).
+-- Перший перенос 25.10 приніс такі рядки в «Ліміти клієнтів» як ліміт 0 днів (ТЕХНОГЕН, ІНДЕКС): колонка писала «0 дн. від
+-- рахунку», а плитка «Активної дебіторки» — «ліміт не узгоджено». Тепер `legacyRow` не переносить 0 днів як дні; тут — разове
+-- прибирання вже перенесеного. Лише рядки ПЕРЕНОСУ (src='debt' з приміткою переносу); idempotent: другий прогін нічого не знаходить.
+-- Ліміт у дебіторці (`client_credit_limits` = 0) не чіпається — він і далі каже «відмовлено». Гейт `#2483`.
+DELETE FROM client_limits WHERE src = 'debt' AND days = 0 AND limit_sum IS NULL AND note LIKE 'діяв у дебіторці з%';
+UPDATE client_limits SET days = NULL, updated_at = now() WHERE src = 'debt' AND days = 0 AND limit_sum IS NOT NULL AND note LIKE 'діяв у дебіторці з%';
+
 -- Справи, які щомісячна перевірка вже бачила (нова = ще не бачили). case_no '*' — «базу для коду вже знято».
 CREATE TABLE IF NOT EXISTS cl_court_seen (
   code        text NOT NULL,

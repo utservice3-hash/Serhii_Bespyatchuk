@@ -95,7 +95,6 @@ test("#2406 ДЗЕРКАЛО ЛІМІТІВ У ДЕБІТОРКУ: ефекти�
   assert.equal(row.from, "inv", "перенесений ліміт рахується не від рахунку — прострочка на екрані зміниться");
   assert.equal(row.days, 14); assert.equal(row.limit, 200000); assert.equal(row.members[0].name, "ТОВ К");
   assert.match(row.note ?? "", /^діяв у дебіторці з 01\.09\.2026 \(стара\)$/);
-  assert.equal(legacyRow({ ...base, limit_days: 0 })!.days, 0, "«у відстрочці відмовлено» (0) загубився");
   assert.equal(legacyRow({ ...base, limit_days: 366 }), null);
   assert.equal(legacyRow({ ...base, limit_days: null, limit_amount: "0" }), null);
   assert.equal(legacyRow({ ...base, limit_days: null })!.limit, 200000);
@@ -295,4 +294,25 @@ test("#2409 🪞 ЛІМІТИ НАСКРІЗНО: наш вхід і ролі, �
     const { pool } = await import("../db/pool.js");
     await pool.end().catch(() => undefined);
   }
+});
+
+/**
+ * #2483 — «0 ДНІВ» ДЕБІТОРКИ = «У ВІДСТРОЧЦІ ВІДМОВЛЕНО», НЕ ЛІМІТ (Роман 27.10.2026: «роби і техноген теж»). Перенос не робить
+ * з нуля дні: без суми рядок не переноситься (у «Лімітах» — «не узгоджено», як плитка дебіторки), із сумою — переноситься лише
+ * сума; ненульові дні — як були. Разове прибирання вже перенесених (ТЕХНОГЕН, ІНДЕКС) — лише рядки переносу, idempotent.
+ * 🧨 Червоніє, якщо 0 знову стане днями, якщо прибирання зачепить ліміт не з переносу або зникне з схеми.
+ */
+test("#2483 0 ДНІВ = ВІДМОВЛЕНО: перенос не робить з нуля ліміт; разове прибирання — лише рядки переносу з 0 днів", () => {
+  const base = { client_key: "k", limit_days: 0, limit_amount: null as string | null, note: "", set_at: new Date("2026-08-25T10:00:00Z"),
+    name: "ТЕХНОГЕН ТОВ", manager_id: "2", manager_name: "Хомік Вікторія", members: [] as Array<{ code: string; name: string }> };
+  assert.equal(legacyRow(base), null, "🔴 0 днів без суми перенісся як ліміт на 0 днів (ТЕХНОГЕН)");
+  const withSum = legacyRow({ ...base, limit_amount: "250000" })!;
+  assert.deepEqual([withSum.days, withSum.limit], [null, 250000], "🔴 0 днів із сумою: дні не мають переноситись, сума — має");
+  assert.equal(legacyRow({ ...base, limit_days: 1 })!.days, 1, "🔴 ненульові дні загубились");
+  assert.equal(legacyRow({ ...base, limit_amount: "0" }), null);
+  const sql = SRC("db/schema.sql");
+  assert.match(sql, /DELETE FROM client_limits WHERE src = 'debt' AND days = 0 AND limit_sum IS NULL AND note LIKE 'діяв у дебіторці з%';/,
+    "🔴 немає разового прибирання 0-денних перенесених лімітів (або воно зачепить не лише перенос)");
+  assert.match(sql, /UPDATE client_limits SET days = NULL, updated_at = now\(\) WHERE src = 'debt' AND days = 0 AND limit_sum IS NOT NULL AND note LIKE 'діяв у дебіторці з%';/);
+  assert.ok(sql.indexOf("DELETE FROM client_limits WHERE src = 'debt'") > sql.indexOf("CREATE TABLE IF NOT EXISTS client_limit_events"), "🔴 прибирання стоїть до створення таблиць — з нуля схема впаде");
 });
