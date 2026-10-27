@@ -33,9 +33,15 @@
 .org-side .org-node { border-style: dashed; }
 /* багато блоків-команд — рядками по чотири, як у прототипі (комерційний відділ 4 + 3) */
 .org-vgrid { display: flex; flex-direction: column; align-items: center; position: relative; padding-top: 22px; }
-.org-vgrid::before { content: ""; position: absolute; top: 0; height: 22px; left: 50%; border-left: 1.5px solid var(--border-strong); }
-.org-vrow { display: flex; gap: 16px; align-items: flex-start; padding-top: 14px; border-top: 1.5px solid var(--border-strong); }
-.org-vrow + .org-vrow { margin-top: 18px; }
+/* одна вертикаль через усю сітку (видно в проміжку між блоками), останній ряд закриває її своїм тлом — як у прототипі */
+.org-vgrid::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1.5px solid var(--border-strong); }
+.org-vrow { display: flex; gap: 16px; align-items: flex-start; padding-top: 16px; position: relative; }
+/* горизонталь — від центру першого блоку до центру останнього (107px = половина ширини блоку) */
+.org-vrow::after { content: ""; position: absolute; top: 0; left: 107px; right: 107px; border-top: 1.5px solid var(--border-strong); }
+.org-vrow > .org-node { position: relative; }
+.org-vrow > .org-node::before { content: ""; position: absolute; top: -17.5px; left: 50%; height: 16px; border-left: 1.5px solid var(--border-strong); }
+.org-vrow + .org-vrow { margin-top: 20px; }
+.org-vrow:last-child { background: var(--card-bg); }
 
 .org-node { width: 214px; box-sizing: border-box; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--r-2xl); padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
 .org-node.hit { border-color: var(--brand); box-shadow: 0 0 0 3px var(--danger-bg); }
@@ -75,7 +81,7 @@
 .org-dname { font-size: 19px; font-weight: 800; line-height: 1.2; }
 .org-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--r-xl); background: var(--surface-2); }
 .org-lbl { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
-.org-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.org-acts { display: grid; grid-template-columns: 1fr; gap: 8px; }
 .org-acts a, .org-acts button { display: flex; justify-content: center; align-items: center; padding: 9px; border-radius: var(--r-xl); font-weight: 700; text-decoration: none; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); font: inherit; cursor: pointer; }
 .org-acts a { color: var(--info); }
 .org-mine { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }

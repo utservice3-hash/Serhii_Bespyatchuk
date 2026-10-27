@@ -212,7 +212,7 @@ export function OrgSection() {
             «Команда» цих людей у «Найм → Співробітники» не збігається з жодним блоком схеми. Блок людини — це її «Команда»:
             {data.canEdit ? " перетягни людину на блок або виправ «Команду» в «Наймі»." : " виправляє HR."}
           </span>
-          <div className="org-chips">{data.unknownLabels.map((x) => <span key={x.label} className="org-chip">{x.label} — {x.count}</span>)}</div>
+          <div className="org-chips">{data.unknownLabels.map((x) => <span key={x.label} className="org-chip">{x.label.startsWith("«") ? x.label : `«${x.label}»`} — {x.count} люд.</span>)}</div>
           <div className="org-people">{data.unassigned.filter((id) => match(people.get(id)!)).map((id) => personBtn(id, true))}</div>
         </div>
       )}
@@ -268,8 +268,7 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
         </div>
         {p.telegram && (
           <div className="org-acts">
-            <a href={`https://t.me/${p.telegram.slice(1)}`} target="_blank" rel="noopener noreferrer">Telegram</a>
-            <button onClick={copy}>Копіювати нік</button>
+            <a href={`https://t.me/${p.telegram.slice(1)}`} target="_blank" rel="noopener noreferrer">Написати в Telegram</a>
           </div>
         )}
         {p.isMe && (
@@ -283,7 +282,13 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
             <button className="hr-btn" onClick={() => setPhotoDlg(true)}>{p.photo ? "Змінити своє фото" : "Додати своє фото"}</button>
           </div>
         )}
-        {data.canEdit && (
+        {data.canEdit && p.isHead && (
+          <div className="org-mine">
+            <span className="org-lbl">Блок на схемі</span>
+            <span className="hr-muted">Керівник блоку «{unitName}» — змінюється в самому блоці (✎ у режимі «Редагувати»).</span>
+          </div>
+        )}
+        {data.canEdit && !p.isHead && (
           <div className="org-mine">
             <span className="org-lbl">Блок на схемі</span>
             <select className="hr-inp" disabled={busy} value={p.unitId ?? ""} onChange={(e) => void move(e.target.value)} aria-label="Блок на схемі">
