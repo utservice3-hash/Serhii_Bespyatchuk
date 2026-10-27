@@ -6734,3 +6734,14 @@ broken AS (
 UPDATE bank_accounts a SET resync_from = (SELECT min(d) - 1 FROM broken)
  WHERE EXISTS (SELECT 1 FROM step) AND a.bank = 'privat'
    AND (a.id IN (SELECT account_id FROM broken) OR a.iban IN (SELECT cntr FROM broken WHERE cntr IS NOT NULL));
+
+-- ✋ «ПОГОДЖЕНО» І КОМЕНТАР НА ЗАПИТІ «ОПЛАТИ ПЕРЕВІЗНИКАМ» (Тетяна 26.10.2026; `core/paymentMarks.ts`): рішення людини
+-- поверх рішення системи. Погодження привʼязане до суми (`amount`): змінили суму в Kommo — не діє. Автор погодження й
+-- автор коментаря — окремо (дописаний коментар не переписує, хто погодив). У Kommo нічого не пишемо.
+CREATE TABLE IF NOT EXISTS payment_request_marks (
+  request_id BIGINT PRIMARY KEY, approved BOOLEAN NOT NULL DEFAULT false, amount NUMERIC(14,2),
+  approved_by INTEGER REFERENCES users(id), approved_at TIMESTAMPTZ,
+  comment TEXT CHECK (comment IS NULL OR btrim(comment) <> ''), comment_by INTEGER REFERENCES users(id), comment_at TIMESTAMPTZ,
+  CHECK (approved = (amount IS NOT NULL)), CHECK (approved OR comment IS NOT NULL)
+);
+REVOKE ALL ON payment_request_marks FROM ai_readonly;

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchCarrierPayments, runCarrierPayments, downloadCarrierPaymentsXlsx, type PayScreenDay, type PayScreenRow } from "../../../api";
+import { fetchCarrierPayments, runCarrierPayments, downloadCarrierPaymentsXlsx, markCarrierPayment, type PayScreenDay, type PayScreenRow } from "../../../api";
+import { useDialogs } from "../../../components/Dialogs";
 import { getAuthPayload } from "../../../auth";
 import { useToast } from "../../../components/Toasts";
 
@@ -16,7 +17,7 @@ const MUTED = "var(--text-muted)";
 const money = (n: number | null | undefined) => (n == null ? "—" : Math.round(n).toLocaleString("uk-UA").replace(/ /g, " "));
 const dm = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}`;
 const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
-const BASIS = (r: PayScreenRow) => (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту");
+const BASIS = (r: PayScreenRow) => (r.paidBy === "вручну" ? `погоджено вручну — ${r.manual?.by ?? "?"}${r.manual?.at ? `, ${hhmm(r.manual.at)}` : ""}` : r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту");
 const pill = (bg: string, fg: string): React.CSSProperties => ({ fontSize: 11.5, padding: "1px 8px", borderRadius: 999, background: bg, color: fg, whiteSpace: "nowrap" });
 /** Закритий у Kommo запит («Оплачено» / «Отказано») — перекреслений і приглушений (Роман 16.10.2026). */
 const closedStyle = (r: PayScreenRow): React.CSSProperties | undefined =>
@@ -29,6 +30,7 @@ export const tsvOf = (rows: PayScreenRow[]) =>
 export function FinancePaymentsTab() {
   const canView = (getAuthPayload()?.perms ?? []).includes("view_private_finance");
   const toast = useToast();
+  const dlg = useDialogs();
   const [day, setDay] = useState<string | undefined>(undefined);
   const [data, setData] = useState<PayScreenDay | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -68,8 +70,39 @@ export function FinancePaymentsTab() {
     <span style={r.kommo === "paid" ? pill("rgba(22,163,74,0.14)", "#16a34a") : r.kommo === "rejected" ? pill("rgba(220,38,38,0.12)", "#dc2626") : pill("rgba(37,99,235,0.10)", "#2563eb")}>{r.stage}</span>
   );
   const decision = (r: PayScreenRow) => (r.pending ? <span style={pill("rgba(0,0,0,0.06)", MUTED)}>ще не перевірено</span>
+    : r.paidBy === "вручну" ? <span style={pill("rgba(37,99,235,0.12)", "#2563eb")}>погоджено</span>
     : r.ok ? <span style={pill("rgba(22,163,74,0.14)", "#16a34a")}>до оплати</span> : <span style={pill("rgba(217,119,6,0.14)", "#b45309")}>перевірити</span>);
-  const why = (r: PayScreenRow) => (<>{r.ok ? BASIS(r) : r.reasons.join("; ")}{r.notes.length > 0 && <div style={{ fontSize: 11.5, color: MUTED }}>{r.notes.join("; ")}</div>}</>);
+  // Погоджений вручну: підстава — хто погодив, а причина СИСТЕМИ лишається видно під нею.
+  const why = (r: PayScreenRow) => (<>{r.ok ? BASIS(r) : r.reasons.join("; ")}
+    {r.paidBy === "вручну" && r.reasons.length > 0 && <div style={{ fontSize: 11.5, color: MUTED }}>система: {r.reasons.join("; ")}</div>}
+    {r.notes.length > 0 && <div style={{ fontSize: 11.5, color: MUTED }}>{r.notes.join("; ")}</div>}
+    {r.comment && <div style={{ fontSize: 12, marginTop: 2 }}>💬 {r.comment}{r.commentBy && <span style={{ color: MUTED }}> — {r.commentBy}</span>}</div>}</>);
+  // ✋ «Погоджено» (Тетяна 26.10.2026): лише для «перевірити»; коментар необовʼязковий. Погоджується сума, що зараз у запиті.
+  const mark = async (body: { requestId: number; approved?: boolean; comment?: string | null }, ok: string) => {
+    try { await markCarrierPayment(body); toast(ok, { tone: "ok" }); load(); }
+    catch (e) { toast(`Не збережено: ${(e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "помилка"}`, { error: true }); }
+  };
+  const approve = async (r: PayScreenRow) => {
+    const c = await dlg.prompt({ title: `Погодити запит ${r.requestId} на ${money(r.amount)} ₴?`, label: "Коментар (необовʼязково)", initial: r.comment ?? "", okLabel: "Погоджено", multiline: true });
+    if (c === null) return;
+    await mark({ requestId: r.requestId, approved: true, comment: c }, "Погоджено — запит у «До оплати»");
+  };
+  const unapprove = async (r: PayScreenRow) => {
+    if (!(await dlg.confirm({ title: "Скасувати погодження?", text: `Запит ${r.requestId} повернеться в «перевірити». Коментар лишиться.`, okLabel: "Скасувати погодження" }))) return;
+    await mark({ requestId: r.requestId, approved: false }, "Погодження знято — запит знову «перевірити»");
+  };
+  const comment = async (r: PayScreenRow) => {
+    const c = await dlg.prompt({ title: `Коментар до запиту ${r.requestId}`, label: "Коментар (порожньо — прибрати)", initial: r.comment ?? "", multiline: true });
+    if (c === null) return;
+    await mark({ requestId: r.requestId, comment: c }, c.trim() ? "Коментар збережено" : "Коментар прибрано");
+  };
+  const actions = (r: PayScreenRow) => (
+    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+      {!r.pending && !r.ok && <button className="hr-btn p" style={{ whiteSpace: "nowrap" }} onClick={() => void approve(r)} title="Перенести в «До оплати» — рішення людини поверх системи">✓ Погоджено</button>}
+      {r.paidBy === "вручну" && <button className="hr-btn" style={{ whiteSpace: "nowrap" }} onClick={() => void unapprove(r)}>Скасувати</button>}
+      <button className="hr-btn" onClick={() => void comment(r)} title={r.comment ? "Змінити коментар" : "Додати коментар"} aria-label="Коментар">💬</button>
+    </span>
+  );
   const tile = (label: string, value: string, color?: string, sub?: string) => (
     <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px" }}>
       <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
@@ -111,7 +144,7 @@ export function FinancePaymentsTab() {
                   <td>{decision(r)}</td>
                   <td>{why(r)}</td>
                   <td style={{ whiteSpace: "nowrap" }}>{stagePill(r)}</td>
-                  <td style={{ textAlign: "right" }}>{openReq(r)}</td>
+                  <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 4, justifyContent: "flex-end", flexWrap: "wrap" }}>{actions(r)}{openReq(r)}</div></td>
                 </tr>
               ))}</tbody>
             </table>

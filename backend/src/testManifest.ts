@@ -57,6 +57,7 @@ export const MANIFEST_FILES: string[] = [
   "core/monthResult.test.js",
   "core/dealLedger.test.js",
   "core/unpaidInvoices.test.js",
+  "core/paymentMarks.test.js",
   "core/dealFinFields.test.js",
   "core/taskVisibility.test.js",
   "core/taskStatusRights.test.js",
@@ -371,7 +372,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "deal_fin_fields", "deal_fin_state",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
@@ -2381,7 +2382,6 @@ export const MANIFEST_TESTS: string[] = [
   "#1271 РОЗБІЖНІСТЬ ІЗ KOMMO: «перевірити»+оплачено і «до оплати»+відмовлено — так; збіг і «висить» — ні; підсумки",
   "#1271b ФАЙЛ І «КОПІЮВАТИ»: колонки Таниного файлу, лише затверджені, табуляцією; фронт — той самий порядок",
   "#1271c EXCEL ВІДКРИВАЄТЬСЯ: ZIP із правильними CRC і каталогом, шапка Тані, картка — текстом",
-  "#1271d МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: три роути під view_private_finance, матриця з дзеркалом, вкладка без права — напис",
   "#1273 АРХІВ ПЕРЕКРЕСЛЕНИЙ: що вийшло з фільтра («Оплачено» / «Отказано») — перекреслене й приглушене, розбіжність підсвічена",
   "#1278 ФІЛЬТР І АРХІВ ЗА ДНЕМ ЗАКРИТТЯ: фільтр без вікна дати; архів дня — закриті в Kommo цього дня за Києвом, незакриті — у день файлу",
   // core/paymentApprovals.test.ts — «План/факт · авто (тест)» з таблиці «Утверждение оплат» (Роман 20.10.2026).
@@ -2419,6 +2419,11 @@ export const MANIFEST_TESTS: string[] = [
   "#1286c ПРОВОДКА: синк :15 під наглядом, адреса поруч із 361 і з 2026, без 362, список — межа «Фінансів» і матриця, фронт — рахунки з угодою",
   "#1286d ЖИВИЙ SQL: разовий крок 2в — авто-операційні, «Загальні», один «ЗП», «Валютна дебіторка» — авто",
   "#1287 ВАЛЮТА В ДУЖКАХ І РАХУНКИ В РЯДКУ: обидва стовпці зі свого підсумку, «▾ рахунки» під рядком, минулий період — «стан зараз»",
+  // core/paymentMarks.test.ts — «Погоджено» і коментар в «Оплатах перевізникам» (Тетяна 26.10.2026).
+  "#1288 ПОГОДЖЕННЯ: та сама сума — «до оплати» вручну з причиною системи, інша — «погодьте знову», коментар нічого не переносить",
+  "#1288b ЖИВИЙ SQL: погодити лише перевірений «перевірити» з сумою, автор погодження й коментаря окремо, порожнє — видаляється",
+  "#1288c МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: чотири роути під view_private_finance, «Погоджено» в матриці, без права — напис",
+  "#1288d ПРОВОДКА: позначка до розподілу файлу, журнал — причини системи, екран — поточна позначка з живою сумою, кнопки лише де можна",
   // core/creditLimits.test.ts — ліміти готівкового рядка дебіторки (21.10.2026).
   "#1280 ГОТІВКОВИЙ РЯДОК ДЕБІТОРКИ — ліміти днів і суми з таблиці лімітів за ключем рядка, як у безготівкових",
   // core/paymentApprovals.test.ts — тестову вкладку «План/факт · авто» прибрано (Тетяна 21.10.2026).
@@ -3078,6 +3083,9 @@ export interface RetiredGate {
 }
 
 export const RETIRED_GATES: RetiredGate[] = [
+  { name: "#1271d МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: три роути під view_private_finance, матриця з дзеркалом, вкладка без права — напис",
+    since: "2026-10-26", decidedBy: "Роман 26.10.2026 — «Погоджено» і коментар на запиті (прохання Тетяни): «роби, коментар необов'язковий, погоджувати можуть обоє»",
+    reason: "змінилось твердження: роутів стало чотири (додано `POST /mark`). А ДЕ ЦЕ ТЕПЕР: `#1288c` — те саме тіло, чотири роути під `view_private_finance`, «Погоджено» в матриці deny-only." },
   { name: "#994 ВАЛЮТНА ДЕБІТОРКА: підсумок 1С (362) на кінець періоду, застаре — порожньо, адреса ≠ 361",
     since: "2026-10-26", decidedBy: "Роман 26.10.2026 — валютна дебіторка з сервісу неоплачених рахунків 1С: «роби лише 2026 рік і щоб можна було глянути що сам там не так»",
     reason: "змінилось твердження: валютна дебіторка більше не з рахунку 362 (він не бачив рахунків без проведеної реалізації). А ДЕ ЦЕ ТЕПЕР: розбір і підсумок за валютою — `#1286`; період отримує свій підсумок журналу, застаре — порожньо — `#1286b`; адреса поруч із 361, з 2026 року і без 362 — `#1286c`." },

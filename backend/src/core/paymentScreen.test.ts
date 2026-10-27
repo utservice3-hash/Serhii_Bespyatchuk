@@ -73,34 +73,7 @@ test("#1271c EXCEL ВІДКРИВАЄТЬСЯ: ZIP із правильними C
   assert.match(files.get("xl/workbook.xml")!, /<sheet name="До оплати" sheetId="1" r:id="rId1"\/><sheet name="Усі запити"/, "🔴 аркуші не на місці");
 });
 
-/**
- * #1271d — МЕЖА ЕКРАНА: на екрані номери карток і ПІБ, тож усі три роути — лише `view_private_finance` (Адмін,
- * фінансист) ПЕРШИМ middleware; у матриці — дозвіл адміну й фінансисту і заборона СЕО / ОД / КВП (дзеркало); вкладка
- * «Фінанси» рендерить екран, а без права — напис, і даних не просить.
- * 🧨 Червоніє, якщо зняти право з будь-якого роута, дати його СЕО/ОД/КВП у матриці чи показати екран без права.
- */
-test("#1271d МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: три роути під view_private_finance, матриця з дзеркалом, вкладка без права — напис", async () => {
-  const fin = SRC("routes/financePayments.ts");
-  const handlers = [...fin.matchAll(/financePaymentsRouter\.(get|post|put|patch|delete)\("([^"]+)",\s*([^,]+),/g)];
-  assert.equal(handlers.length, 3, "🔴 обробників не рівно три — гейт не бачить нового роута");
-  for (const [, m, p, first] of handlers) assert.equal(first.trim(), `requirePerm("view_private_finance")`, `🔴 ${m.toUpperCase()} ${p}: першим стоїть «${first.trim()}»`);
-  assert.match(SRC("index.ts"), /app\.use\("\/api\/finance\/payments", financePaymentsRouter\);/, "🔴 роутер не підключено");
-  const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js");
-  const m = (method: string, p: string) => ACCESS_MATRIX.find((x) => x.method === method && x.path.startsWith(p) && (x.path === p || x.path[p.length] === "?"));
-  for (const p of ["/api/finance/payments", "/api/finance/payments/export.xlsx"]) {
-    const r = m("GET", p);
-    assert.ok(r, `🔴 ${p} немає в матриці`);
-    assert.deepEqual([...r!.allow].sort(), ["admin", "financier"], `🔴 ${p}: дозвіл не рівно Адмін і фінансист`);
-    for (const role of ["ceo", "opdir", "kvp", "manager"]) assert.ok(r!.deny.includes(role), `🔴 ${p}: ${role} не в забороні`);
-  }
-  assert.ok(m("POST", "/api/finance/payments/run")?.deny.includes("kvp"), "🔴 «Перевірити зараз» не в матриці");
-  const sec = FE("pages/dashboard/sections/FinanceSection.tsx"), tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
-  assert.match(sec, /\{tab === "payments" && <FinancePaymentsTab \/>\}/, "🔴 вкладка не рендерить екран");
-  assert.match(sec, /\["payments", "Оплати перевізникам", false\]/, "🔴 вкладки немає в «Фінансах»");
-  assert.match(tab, /const canView = \(getAuthPayload\(\)\?\.perms \?\? \[\]\)\.includes\("view_private_finance"\);/, "🔴 екран не за view_private_finance");
-  assert.ok(tab.indexOf("if (!canView) return") < tab.indexOf("<table"), "🔴 таблиця рендериться до перевірки права");
-  assert.match(tab, /if \(!canView\) return;\n\s*fetchCarrierPayments/, "🔴 без права екран все одно просить дані");
-});
+// #1271d знято 26.10.2026 (роутів стало чотири — «Погоджено» / коментар) — наступник `#1288c` у `core/paymentMarks.test.ts`.
 
 /**
  * #1273 — АРХІВ ПЕРЕКРЕСЛЕНИЙ (Роман 16.10.2026: «закрита — типу перекреслена»). Запит, що вийшов із фільтра в «Оплачено»
@@ -145,7 +118,7 @@ test("#1278 ФІЛЬТР І АРХІВ ЗА ДНЕМ ЗАКРИТТЯ: філь�
   assert.match(screen, /const gone = log\.filter\(\(x\) => !activeSet\.has\(Number\(x\.request_id\)\)\);/, "🔴 в архів потрапляє те, що досі у фільтрі");
   assert.match(screen, /archiveDayOf\(leads\.get\(Number\(x\.request_id\)\)\?\.closed_at, x\.day!\) === day/, "🔴 архів не за днем закриття з Kommo");
   assert.match(screen, /const day = dayArg && .* \? dayArg : todayCal;/, "🔴 день архіву за замовчуванням — не сьогодні за календарем");
-  assert.match(job, /reasons: x \? x\.reasons \?\? \[\] : \["ще не перевірено — натисніть «↻ Перевірити зараз»"\]/, "🔴 новий запит без рішення не названо «ще не перевірено»");
+  assert.match(job, /reasons: v \? v\.reasons : \["ще не перевірено — натисніть «↻ Перевірити зараз»"\]/, "🔴 новий запит без рішення не названо «ще не перевірено»");
   const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
   assert.match(tab, /\{!data\.active\.length \? <p className="hr-muted" style=\{\{ margin: "8px 0" \}\}>У фільтрі зараз немає запитів/, "🔴 порожній фільтр не порожній");
   assert.match(tab, /href=\{`\$\{data\.kommoBase\}\/leads\/detail\/\$\{r\.requestId\}`\}/, "🔴 кнопка веде не на сам запит у воронці");

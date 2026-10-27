@@ -5940,6 +5940,9 @@ export interface PayScreenRow {
   stage: string;
   /** У фільтрі, але прогін його ще не бачив — рішення немає. */
   pending?: boolean;
+  /** ✋ Погоджено вручну (хто, коли); `stale` — погодили іншу суму, треба погодити знову. */
+  manual?: { by: string | null; at: string | null } | null; stale?: boolean;
+  comment?: string | null; commentBy?: string | null;
 }
 export interface PayScreenDay {
   day: string; today: string; todayCal: string; at: string | null; kommoBase: string;
@@ -5957,6 +5960,9 @@ export interface FxUnpaid { syncedAt: string | null; error: string | null; from:
 export const fetchFxUnpaid = async () => (await api.get<FxUnpaid>("/finance/fx-unpaid")).data;
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
 export const runCarrierPayments = async () => (await api.post<{ ok: boolean; result: unknown }>("/finance/payments/run")).data;
+/** ✋ «Погоджено» / «Скасувати» і коментар до запиту (26.10.2026). Не передане поле лишається як було. */
+export const markCarrierPayment = async (body: { requestId: number; approved?: boolean; comment?: string | null }) =>
+  (await api.post<{ ok: boolean; approved: boolean; comment: string | null }>("/finance/payments/mark", body)).data;
 
 /** 🧪 «План/факт · авто (тест)» (20.10.2026): факт із таблиці «UTS Утверждение оплат» поруч із ручним. Лише читання. */
 export interface FinApprLine { payDate: string | null; what: string; amount: number | null; direction: string; paid: boolean }
