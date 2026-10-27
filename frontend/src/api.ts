@@ -5979,6 +5979,37 @@ export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: 
   const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
   return { blob: res.data as Blob, filename: m?.[1] ?? `oplata_perevizny_${day}.xlsx` };
 }
+/** 📅 «Календар оплат» (задача #6369, 27.10.2026): періодичні витрати — нагадування, окремо від Плану/факту. */
+export type RecPeriod = "month" | "quarter" | "year";
+export interface RecItem {
+  id: number; name: string; amount: number; period: RecPeriod; anchorDay: number; next: string;
+  payerId: number | null; payer: string | null; note: string | null; active: boolean; upcoming: string[];
+}
+export interface RecEvent {
+  recurringId: number; date: string; amount: number; kind: "paid" | "overdue" | "soon" | "plan"; due: boolean;
+  paidId: number | null; planned: number | null; by: string | null; at: string | null; canUndo: boolean;
+}
+export interface RecMonth { ym: string; offset: number; sum: number; paid: number; overdue: number; events: RecEvent[] }
+export interface RecPaid {
+  id: number; recurringId: number; name: string; due: string; amount: number; planned: number;
+  by: string | null; at: string; cancelledBy: string | null; cancelledAt: string | null; canUndo: boolean;
+}
+export interface RecCalendar { today: string; leadDays: number; items: RecItem[]; months: RecMonth[]; history: RecPaid[]; payers: { id: number; name: string }[] }
+export interface RecReminder { id: number; name: string; amount: number; next: string; days: number }
+export const fetchFinCalendar = async () => (await api.get<RecCalendar>("/finance/calendar")).data;
+export const fetchFinCalendarDue = async () => (await api.get<{ today: string; leadDays: number; items: RecReminder[] }>("/finance/calendar/due")).data;
+export const createFinRecurring = async (body: { name: string; amount: string; period: RecPeriod; date: string; payerId: number; note: string }) =>
+  (await api.post<{ id: number }>("/finance/calendar", body)).data;
+export const updateFinRecurring = async (id: number, body: Partial<{ name: string; amount: string; period: RecPeriod; date: string; payerId: number; note: string; active: boolean }>) =>
+  (await api.patch<{ ok: boolean }>(`/finance/calendar/${id}`, body)).data;
+export const payFinRecurring = async (id: number, body: { due: string; amount?: string }) =>
+  (await api.post<{ next: string; paidId: number }>(`/finance/calendar/${id}/pay`, body)).data;
+export const undoFinRecurringPaid = async (paidId: number) => (await api.post<{ next: string }>(`/finance/calendar/paid/${paidId}/undo`)).data;
+export async function downloadFinCalendarHistory(): Promise<{ blob: Blob; filename: string }> {
+  const res = await api.get("/finance/calendar/history.xlsx", { responseType: "blob" });
+  const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
+  return { blob: res.data as Blob, filename: m?.[1] ?? "istoriya_oplat.xlsx" };
+}
 /** 🏁 «Результат місяця» (#5583, 23.10.2026): успішні угоди «Повного циклу» за менеджером, який закривав, і рішення Тетяни. */
 export interface MRCheckOverride { kommoId: number; action: "exclude" | "move" | "profit"; targetMonth: string | null; profit: number | null; note: string; setBy: string | null; setAt: string }
 export interface MRDeal {

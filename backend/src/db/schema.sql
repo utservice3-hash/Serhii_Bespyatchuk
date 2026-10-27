@@ -6749,3 +6749,33 @@ CREATE TABLE IF NOT EXISTS payment_request_marks (
   CHECK (approved = (amount IS NOT NULL)), CHECK (approved OR comment IS NOT NULL)
 );
 REVOKE ALL ON payment_request_marks FROM ai_readonly;
+
+-- 📅 КАЛЕНДАР ОПЛАТ (Тетяна, задача #6369, 27.10.2026; `core/finRecurring.ts`): нагадування про періодичні витрати —
+-- окремо від Плану/факту, нічого не рахує в результаті. `anchor_day` — «день оплати» з першої дати: 31-го в коротшому
+-- місяці нагадує в останній день, а наступного — знову 31-го (без «зʼїзду», як у `monthKeys`, борг 19). Нічого не
+-- видаляється: оплату вимикають (`active`), позначку «оплачено» скасовують (`cancelled_at`), рядок лишається в історії.
+CREATE TABLE IF NOT EXISTS fin_recurring (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL CHECK (btrim(name) <> ''),
+  amount NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+  period TEXT NOT NULL CHECK (period IN ('month', 'quarter', 'year')),
+  anchor_day SMALLINT NOT NULL CHECK (anchor_day BETWEEN 1 AND 31),
+  next_due DATE NOT NULL,
+  payer_id INTEGER REFERENCES users(id),
+  note TEXT,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_by INTEGER REFERENCES users(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by INTEGER REFERENCES users(id), updated_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS fin_recurring_paid (
+  id SERIAL PRIMARY KEY,
+  recurring_id INTEGER NOT NULL REFERENCES fin_recurring(id),
+  due_date DATE NOT NULL,
+  amount NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+  planned NUMERIC(14,2) NOT NULL,
+  paid_by INTEGER REFERENCES users(id), paid_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cancelled_by INTEGER REFERENCES users(id), cancelled_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS fin_recurring_paid_live_uniq ON fin_recurring_paid (recurring_id, due_date) WHERE cancelled_at IS NULL;
+REVOKE ALL ON fin_recurring FROM ai_readonly;
+REVOKE ALL ON fin_recurring_paid FROM ai_readonly;

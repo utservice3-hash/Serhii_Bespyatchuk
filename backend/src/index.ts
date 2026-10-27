@@ -50,6 +50,7 @@ import { hiringRouter } from "./routes/hiring.js";
 import { baRouter } from "./routes/businessAssistant.js";
 import { financeRouter } from "./routes/finance.js";
 import { financePaymentsRouter } from "./routes/financePayments.js";
+import { financeCalendarRouter } from "./routes/financeCalendar.js";
 import { constructorRouter } from "./routes/constructor.js";
 import { surveysRouter } from "./routes/surveys.js";
 import { cargoRouter } from "./routes/cargo.js";
@@ -190,6 +191,7 @@ app.use("/api/training/questions", hiringQuestionsRouter); // питання к�
 app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter);
 app.use("/api/ba", baRouter); // 🗂 Бізнес-асистент: претензії й судовий реєстр (задача 4314)
+app.use("/api/finance/calendar", financeCalendarRouter); // 📅 «Календар оплат» (27.10.2026) — лише view_private_finance
 app.use("/api/finance/payments", financePaymentsRouter); // 💸 «Оплати перевізникам» (16.10.2026) — лише view_private_finance
 app.use("/api/finance", financeRouter); // 💰 Фінанси: план/факт витрат і статті (29.09.2026)
 app.use("/api/constructor", constructorRouter); // 📄 Конструктор документів — пакет Сергія (30.09.2026)
