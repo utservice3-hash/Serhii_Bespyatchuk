@@ -1588,8 +1588,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // Запис — deny-only: проба дозволеної ролі писала б у прод.
   { method: "GET", path: "/api/finance/calendar", cls: "GET",
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
-  { method: "GET", path: "/api/finance/calendar/due", cls: "GET",
-    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/calendar/history.xlsx", cls: "GET",
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/calendar", cls: "deny-only",
@@ -1656,6 +1654,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "PUT", path: "/api/finance/kpi/plan", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   // 💱 Список валютних неоплачених рахунків (26.10.2026): хто бачить «Тиждень і місяць», той бачить і його.
+  // 📅 Підказки «Календаря оплат» у «План/факті» (27.10.2026): бачать «Таня + керівництво» (вкладка «Фінанси»);
+  // «додати в план» — deny-only: проба дозволеної ролі писала б план у прод.
+  { method: "GET", path: "/api/finance/plan-hints?m=2026-11", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/plan-hints/add", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/fx-unpaid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   // 🏁 «Результат місяця» (23.10.2026): перегляд — як «Тиждень і місяць»; рішення по угоді — deny-only (проба писала б у прод).
@@ -1892,6 +1896,32 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/cargo/history", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  /* 💳 «ВИПИСКА» — № рахунку й коментарі (пакет Сергія 27.10.2026). Вкладка `bank` — усі, крім HR (як /api/bank/incoming).
+     Номери й історію бачать усі з вкладкою; дії — за правами (сід — schema.sql, кінець файла):
+       вписати № — tag_bank_invoice (менеджер, тімлід) або fix_bank_invoice (фінансист); змінити / визнати неідентифікованим —
+       лише фінансист; «не оплата клієнта» й коментарі до вихідних ФОП — Бухгалтерія (не в ACCESS_ROLES) і адмін. */
+  { method: "POST", path: "/api/bank-ident/state", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "GET", path: "/api/bank-ident/counts", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/bank-ident/list?status=wait", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/bank-ident/:txId/history", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "POST", path: "/api/bank-ident/:txId/invoice", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr"] },
+  { method: "PATCH", path: "/api/bank-ident/:txId/invoice", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/:txId/unidentify", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/:txId/not-client", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/comments/summary", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "GET", path: "/api/bank-ident/:txId/comments", cls: "GET",
+    allow: ["admin"], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/:txId/comments", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   /* 🏢 ОРГ СТРУКТУРА (задача 7062, 27.10.2026): бачать УСІ ролі, включно з кандидатом (рішення Романа 27.10); свій нік і
      фото — теж усі (лише свій рядок «Найму», id з акаунта — #2703). Режим «Редагувати» — право `edit_org`: admin, HR, БА
      (ТЗ). Керівництво й фінансист вкладку мають, права — ні: 403 по ПРАВУ, тож записані в ADMIN_DENIED_BY_PERM. */

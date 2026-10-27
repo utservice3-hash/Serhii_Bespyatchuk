@@ -6003,8 +6003,8 @@ export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: 
 /** 📅 «Календар оплат» (задача #6369, 27.10.2026): періодичні витрати — нагадування, окремо від Плану/факту. */
 export type RecPeriod = "month" | "quarter" | "year";
 export interface RecItem {
-  id: number; name: string; amount: number; period: RecPeriod; anchorDay: number; next: string;
-  payerId: number | null; payer: string | null; note: string | null; active: boolean; upcoming: string[];
+  id: number; itemId: number; name: string; amount: number; period: RecPeriod; anchorDay: number; next: string;
+  note: string | null; active: boolean; upcoming: string[];
 }
 export interface RecEvent {
   recurringId: number; date: string; amount: number; kind: "paid" | "overdue" | "soon" | "plan"; due: boolean;
@@ -6015,17 +6015,24 @@ export interface RecPaid {
   id: number; recurringId: number; name: string; due: string; amount: number; planned: number;
   by: string | null; at: string; cancelledBy: string | null; cancelledAt: string | null; canUndo: boolean;
 }
-export interface RecCalendar { today: string; leadDays: number; items: RecItem[]; months: RecMonth[]; history: RecPaid[]; payers: { id: number; name: string }[] }
-export interface RecReminder { id: number; name: string; amount: number; next: string; days: number }
+export interface RecArticle { id: number; name: string; group: string; resp: string; offFrom: string | null }
+export interface RecCalendar { today: string; items: RecItem[]; months: RecMonth[]; history: RecPaid[]; articles: RecArticle[] }
 export const fetchFinCalendar = async () => (await api.get<RecCalendar>("/finance/calendar")).data;
-export const fetchFinCalendarDue = async () => (await api.get<{ today: string; leadDays: number; items: RecReminder[] }>("/finance/calendar/due")).data;
-export const createFinRecurring = async (body: { name: string; amount: string; period: RecPeriod; date: string; payerId: number; note: string }) =>
+export const createFinRecurring = async (body: { itemId: number; amount: string; period: RecPeriod; month: string; note: string }) =>
   (await api.post<{ id: number }>("/finance/calendar", body)).data;
-export const updateFinRecurring = async (id: number, body: Partial<{ name: string; amount: string; period: RecPeriod; date: string; payerId: number; note: string; active: boolean }>) =>
+export const updateFinRecurring = async (id: number, body: Partial<{ itemId: number; amount: string; period: RecPeriod; month: string; note: string; active: boolean }>) =>
   (await api.patch<{ ok: boolean }>(`/finance/calendar/${id}`, body)).data;
 export const payFinRecurring = async (id: number, body: { due: string; amount?: string }) =>
   (await api.post<{ next: string; paidId: number }>(`/finance/calendar/${id}/pay`, body)).data;
 export const undoFinRecurringPaid = async (paidId: number) => (await api.post<{ next: string }>(`/finance/calendar/paid/${paidId}/undo`)).data;
+/** 📅 Підказки «Календаря оплат» у «План/факті» місяця і «додати в план» (сума ДО наявного плану). */
+export interface PlanHint {
+  recurringId: number; itemId: number; name: string; note: string | null; amount: number; period: RecPeriod; paid: boolean;
+  added: { amount: number; by: string | null; at: string } | null;
+}
+export const fetchPlanHints = async (m: string) => (await api.get<{ hints: PlanHint[] }>("/finance/plan-hints", { params: { m } })).data.hints;
+export const addHintToPlan = async (recurringId: number, month: string) =>
+  (await api.post<{ before: number | null; after: number }>("/finance/plan-hints/add", { recurringId, month })).data;
 export async function downloadFinCalendarHistory(): Promise<{ blob: Blob; filename: string }> {
   const res = await api.get("/finance/calendar/history.xlsx", { responseType: "blob" });
   const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");

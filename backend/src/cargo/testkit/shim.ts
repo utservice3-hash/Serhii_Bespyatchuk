@@ -24,6 +24,13 @@ export const it = itFn;
 
 const norm = (v: unknown) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+function subset(a: any, e: any): boolean {
+  if (e === null || typeof e !== "object") return Object.is(a, e);
+  if (a === null || typeof a !== "object") return false;
+  if (Array.isArray(e)) return Array.isArray(a) && a.length === e.length && e.every((x, i) => subset(a[i], x));
+  return Object.keys(e).every((k) => subset(a[k], e[k]));
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function matchers(actual: any, negate: boolean) {
   const ok = (cond: boolean, msg: string) => { if (cond === negate) assert.fail((negate ? "НЕ очікувалось: " : "") + msg); };
   const show = (v: unknown) => JSON.stringify(v)?.slice(0, 300);
@@ -37,6 +44,15 @@ function matchers(actual: any, negate: boolean) {
     toBeGreaterThan: (n: number) => ok(actual > n, `${actual} > ${n}`),
     toBeGreaterThanOrEqual: (n: number) => ok(actual >= n, `${actual} >= ${n}`),
     toBeLessThanOrEqual: (n: number) => ok(actual <= n, `${actual} <= ${n}`),
+    // [27.10 — тести «Виписки»] підмножина полів (рекурсивно, як у vitest), undefined, кидання з повідомленням
+    toMatchObject: (e: unknown) => ok(subset(norm(actual), norm(e)), `${show(actual)} toMatchObject ${show(e)}`),
+    toBeUndefined: () => ok(actual === undefined, `${show(actual)} toBeUndefined`),
+    toThrow: (re?: RegExp | string) => {
+      let thrown: unknown = null, did = false;
+      try { (actual as () => unknown)(); } catch (x) { did = true; thrown = x; }
+      const msg = String((thrown as Error)?.message ?? thrown);
+      ok(did && (re === undefined || (typeof re === "string" ? msg.includes(re) : re.test(msg))), `throws ${String(re ?? "")} (кинуло: ${did ? msg : "нічого"})`);
+    },
   };
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

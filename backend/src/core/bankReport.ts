@@ -73,7 +73,8 @@ function whereClause(dir: "in" | "out", f: BankFilter, params: unknown[], opts: 
   if (f.company) { params.push(f.company); c.push(`a.company = $${params.length}`); }
   if (f.account) { params.push(f.account); c.push(`t.account_id = $${params.length}`); }
   if (f.currency) { params.push(f.currency); c.push(`t.currency = $${params.length}`); }
-  if (f.q) { params.push(`%${f.q}%`); const i = params.length; c.push(`(t.counterparty_name ILIKE $${i} OR t.purpose ILIKE $${i} OR t.external_tx_id ILIKE $${i})`); }
+  // 💳 + № рахунку, вписаний у «Виписці» (пакет Сергія 27.10.2026, ТЗ §6): шукається там само, де контрагент і підстава
+  if (f.q) { params.push(`%${f.q}%`); const i = params.length; c.push(`(t.counterparty_name ILIKE $${i} OR t.purpose ILIKE $${i} OR t.external_tx_id ILIKE $${i} OR EXISTS (SELECT 1 FROM bank_tx_ident bi WHERE bi.tx_id = t.id AND bi.invoice_no ILIKE $${i}))`); }
   if (opts.cursor) { params.push(opts.cursor.b); const bi = params.length; params.push(opts.cursor.id); c.push(`(t.booked_at, t.id) < ($${bi}::timestamptz, $${params.length}::int)`); }
   return c.join(" AND ");
 }

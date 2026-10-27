@@ -37,6 +37,13 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/ba/utb": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
   "PATCH /api/ba/utb/:id": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
   "POST /api/ba/utb/:id/files": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
+  // 💳 «Виписка» (пакет Сергія 27.10.2026): кожна дія — своє право, керівництво бачить номери й історію, але не діє.
+  "POST /api/bank-ident/:txId/invoice": "tag_bank_invoice / fix_bank_invoice — СЕО, ОД, КВП їх не мають (ТЗ Сергія 27.10: вписує менеджер, тімлід; змінює фінансист)",
+  "PATCH /api/bank-ident/:txId/invoice": "fix_bank_invoice — лише фінансист і адмін (ТЗ Сергія 27.10)",
+  "POST /api/bank-ident/:txId/unidentify": "fix_bank_invoice — лише фінансист і адмін (ТЗ Сергія 27.10)",
+  "POST /api/bank-ident/:txId/not-client": "mark_bank_not_client — лише Бухгалтерія й адмін (ТЗ Сергія 27.10)",
+  "POST /api/bank-ident/comments/summary": "bank_out_comments — лише Бухгалтерія й адмін; іншим коментарів не видно взагалі (ТЗ Сергія 27.10)",
+  "POST /api/bank-ident/:txId/comments": "bank_out_comments — лише Бухгалтерія й адмін (ТЗ Сергія 27.10)",
   // 🚚 Конфігуратор вантажу (12.10.2026): довідник змінює лише право `manage_cargo` (admin, СЕО, ОД).
   "PUT /api/cargo/reference/vehicles": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",
   "PUT /api/cargo/reference/pallets": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",

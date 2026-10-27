@@ -1,42 +1,33 @@
 /**
- * 📅 КАЛЕНДАР ОПЛАТ («Фінанси», Тетяна — задача #6369, 27.10.2026; макет «Г» затвердив Роман): нагадування про періодичні
- * витрати (оренда, сервіси, податки, страховки). ОКРЕМО від Плану/факту, Результату місяця й Каси — нічого не рахує в
- * результаті, лише нагадує, що й коли платити, і памʼятає, що вже оплачено.
+ * 📅 КАЛЕНДАР ОПЛАТ («Фінанси», Тетяна — задача #6369; макет «Г» затвердив Роман 27.10.2026): періодичні витрати (оренда,
+ * сервіси, податки, страховки) — що й коли платити, і що вже оплачено.
  *
- * Три правила, на яких усе стоїть:
- *  1. «День оплати» (`anchor_day`) береться з першої дати й НЕ зʼїжджає: 31.01 → 28.02 → 31.03. Наступна дата рахується
- *     від якоря, а не від попередньої дати (інакше лютий назавжди перетворив би 31-ше на 28-ме; той самий клас, що
- *     `monthKeys`, борг 19).
- *  2. «Оплачено» позначає рівно поточну дату (`next_due`) і зсуває її на один період; повторне натискання чи застаріла
- *     сторінка — 409, а не друга оплата.
+ * Прохід 2 (Тетяна 27.10.2026): оплата — це СТАТТЯ «План/факту» і МІСЯЦЬ (без дня), без «хто платить». Нагадування — не
+ * повідомлення, а підказка біля статті в «План/факті» потрібного місяця з кнопкою «додати в план» (Роман: бачать «Таня +
+ * керівництво», тобто всі, кому відкрито «Фінанси»; кнопка додає суму ДО наявного плану).
+ *
+ * Правила, на яких усе стоїть:
+ *  1. Дата — завжди 1-ше число місяця; наступна — + період (`addPeriod` від якоря, без «зʼїзду» — борг 19, `monthKeys`).
+ *  2. «Оплачено» позначає рівно поточний місяць (`next_due`) і зсуває його на один період; застаріла сторінка — 409.
  *  3. Історія не стирається: оплату вимикають (`active`), позначку скасовують (`cancelled_at`) — рядок лишається.
- *     Видалення з цих таблиць у коді немає взагалі (тримає гейт).
+ *  4. План календар пише ЛИШЕ через `saveValues` ядра «Фінансів» — з тим самим замком погодженого місяця, перевіркою
+ *     вимкненої статті й журналом змін; що вже додано — `fin_recurring_planned`, тож двічі одну суму не додати.
  */
-import { FinError, type Db } from "./finance.js";
+import { FinError, saveValues, type Db } from "./finance.js";
 import { xlsxBook } from "./xlsx.js";
 
 export type Period = "month" | "quarter" | "year";
 export const STEP: Record<Period, number> = { month: 1, quarter: 3, year: 12 };
 export const PERIOD_LABEL: Record<Period, string> = { month: "щомісяця", quarter: "щокварталу", year: "раз на рік" };
-/** Перше нагадування — за стільки днів до оплати (Роман 27.10.2026: «3 дні»); друге — у день оплати; прострочене — щодня. */
-export const LEAD_DAYS = 3;
-/** «Скоро» на екрані — жовтим (тиждень), окремо від нагадування. */
-export const SOON_DAYS = 7;
-/** Платить і бачить — те саме право, що «Оплати перевізникам» і Сейф (Адмін, фінансист). */
-export const PAYER_PERM = "view_private_finance";
 /** Смуга місяців: назад — до першої оплати, але не менше 6 міс.; уперед — 18 міс. */
 export const BACK_MIN = 6, AHEAD = 18;
 
-const ISO = /^\d{4}-\d{2}-\d{2}$/;
-const P = (s: string) => { const [y, m, d] = s.split("-").map(Number); return Date.UTC(y, m - 1, d); };
+const YM = /^\d{4}-(0[1-9]|1[0-2])$/;
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
 const isPeriod = (v: unknown): v is Period => v === "month" || v === "quarter" || v === "year";
 
 export function kyivToday(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
-}
-export function daysBetween(from: string, to: string): number {
-  return Math.round((P(to) - P(from)) / 864e5);
 }
 /** `ym` + n місяців — завжди від 1-го числа (без переповнення 31-го). */
 export function shiftYm(ym: string, n: number): string {
@@ -58,27 +49,29 @@ export function occurrences(next: string, period: Period, anchorDay: number, fro
 }
 
 export interface RecItem {
-  id: number; name: string; amount: number; period: Period; anchorDay: number; next: string;
-  payerId: number | null; payer: string | null; note: string | null; active: boolean;
+  id: number; itemId: number; name: string; amount: number; period: Period; anchorDay: number; next: string;
+  note: string | null; active: boolean;
 }
 export interface PaidRow {
   id: number; recurringId: number; name: string; due: string; amount: number; planned: number;
   by: string | null; at: string; cancelledBy: string | null; cancelledAt: string | null;
 }
+/** Місяць минув, а не позначено — «overdue»; поточний — «soon»; майбутній — «plan». */
 export type EventKind = "paid" | "overdue" | "soon" | "plan";
 export interface CalEvent {
   recurringId: number; date: string; amount: number; kind: EventKind;
-  /** Саме цю дату можна позначити «Оплачено» (це `next_due` увімкненої оплати). */
+  /** Саме цей місяць можна позначити «Оплачено» (це `next_due` увімкненої оплати). */
   due: boolean;
   paidId: number | null; planned: number | null; by: string | null; at: string | null; canUndo: boolean;
 }
 export interface CalMonth { ym: string; offset: number; sum: number; paid: number; overdue: number; events: CalEvent[] }
 
-/** Позначка, яку ще можна скасувати: жива й остання — саме від неї пораховано поточну дату. */
+/** Позначка, яку ще можна скасувати: жива й остання — саме від неї пораховано поточний місяць. */
 export function undoable(p: PaidRow, items: Map<number, RecItem>): boolean {
   const it = items.get(p.recurringId);
   return !p.cancelledAt && !!it && addPeriod(p.due, it.period, it.anchorDay) === it.next;
 }
+const kindOf = (date: string, cur: string): EventKind => (date.slice(0, 7) < cur ? "overdue" : date.slice(0, 7) === cur ? "soon" : "plan");
 
 /** Смуга місяців і події кожного: майбутнє — з графіка увімкнених оплат, минуле — лише те, що реально оплачено. */
 export function buildMonths(items: RecItem[], paid: PaidRow[], today: string): CalMonth[] {
@@ -91,11 +84,8 @@ export function buildMonths(items: RecItem[], paid: PaidRow[], today: string): C
   const ev: CalEvent[] = [];
   for (const i of items) {
     if (!i.active) continue;
-    for (const d of occurrences(i.next, i.period, i.anchorDay, from, to)) {
-      const n = daysBetween(today, d);
-      ev.push({ recurringId: i.id, date: d, amount: i.amount, kind: n < 0 ? "overdue" : n <= SOON_DAYS ? "soon" : "plan", due: d === i.next,
-        paidId: null, planned: null, by: null, at: null, canUndo: false });
-    }
+    for (const d of occurrences(i.next, i.period, i.anchorDay, from, to))
+      ev.push({ recurringId: i.id, date: d, amount: i.amount, kind: kindOf(d, cur), due: d === i.next, paidId: null, planned: null, by: null, at: null, canUndo: false });
   }
   for (const p of live) if (p.due >= from && p.due <= to)
     ev.push({ recurringId: p.recurringId, date: p.due, amount: p.amount, kind: "paid", due: false, paidId: p.id, planned: p.planned, by: p.by, at: p.at, canUndo: undoable(p, byId) });
@@ -110,13 +100,28 @@ export function buildMonths(items: RecItem[], paid: PaidRow[], today: string): C
   return months;
 }
 
-export interface Reminder { id: number; name: string; amount: number; next: string; days: number }
-/** Кому що нагадати сьогодні: лише тому, хто платить; за `lead` днів, у день оплати і щодня після. */
-export function remindersFor(items: RecItem[], userId: number, today: string, lead = LEAD_DAYS): Reminder[] {
-  return items
-    .filter((i) => i.active && i.payerId === userId && daysBetween(today, i.next) <= lead)
-    .map((i) => ({ id: i.id, name: i.name, amount: i.amount, next: i.next, days: daysBetween(today, i.next) }))
-    .sort((a, b) => (a.next < b.next ? -1 : a.next > b.next ? 1 : a.id - b.id));
+export interface PlanHint {
+  recurringId: number; itemId: number; name: string; note: string | null; amount: number; period: Period;
+  /** Оплачено в цьому місяці (жива позначка) — сума фактична. */
+  paid: boolean;
+  added: { amount: number; by: string | null; at: string } | null;
+}
+/**
+ * Підказки «План/факту» місяця `ym`: увімкнені оплати, що за графіком припадають на цей місяць, і ті, що в ньому вже
+ * оплачено (навіть якщо оплату потім вимкнули). Кілька оплат на одну статтю — окремими підказками.
+ */
+export function planHintsOf(items: RecItem[], paid: PaidRow[], added: Map<string, PlanHint["added"]>, ym: string): PlanHint[] {
+  const from = `${ym}-01`, to = lastDay(ym);
+  const out: PlanHint[] = [];
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const hint = (i: RecItem, amount: number, isPaid: boolean): PlanHint =>
+    ({ recurringId: i.id, itemId: i.itemId, name: i.name, note: i.note, amount, period: i.period, paid: isPaid, added: added.get(`${i.id}@${ym}`) ?? null });
+  for (const p of paid) {
+    const i = byId.get(p.recurringId);
+    if (i && !p.cancelledAt && p.due >= from && p.due <= to) out.push(hint(i, p.amount, true));
+  }
+  for (const i of items) if (i.active && occurrences(i.next, i.period, i.anchorDay, from, to).length && !out.some((h) => h.recurringId === i.id)) out.push(hint(i, i.amount, false));
+  return out.sort((a, b) => a.itemId - b.itemId || a.recurringId - b.recurringId);
 }
 
 const num = (v: unknown): number => Number(String(v ?? "").replace(/\s/g, "").replace(",", "."));
@@ -127,9 +132,9 @@ function text(v: unknown, max: number, what: string): string | null {
   if (s.length > max) throw new FinError(400, `${what} задовга (до ${max} символів)`);
   return s || null;
 }
-function validDate(v: unknown): string {
-  if (typeof v !== "string" || !ISO.test(v) || iso(P(v)) !== v) throw new FinError(400, "Вкажіть дату оплати");
-  return v;
+function monthOf(v: unknown): string {
+  if (typeof v !== "string" || !YM.test(v.trim().slice(0, 7)) || (v.trim().length !== 7 && v.trim().length !== 10)) throw new FinError(400, "Вкажіть місяць оплати");
+  return `${v.trim().slice(0, 7)}-01`;
 }
 function amountOf(v: unknown): number {
   const a = Math.round(num(v) * 100) / 100;
@@ -140,37 +145,37 @@ function amountOf(v: unknown): number {
 // ── База ─────────────────────────────────────────────────────────────────────
 const WHO = (col: string) => `(SELECT COALESCE(NULLIF(btrim(u.full_name), ''), mm.name, u.email) FROM users u LEFT JOIN managers mm ON mm.id = u.manager_id WHERE u.id = ${col})`;
 
+/** Назва оплати — назва СТАТТІ зараз (перейменували статтю — перейменувалась і оплата). */
 export async function loadItems(db: Db): Promise<RecItem[]> {
-  const r = await db.query(`SELECT r.id, r.name, r.amount::float8 AS amount, r.period, r.anchor_day AS anchor, r.next_due::text AS next,
-      r.payer_id, ${WHO("r.payer_id")} AS payer, r.note, r.active
-    FROM fin_recurring r ORDER BY r.active DESC, r.next_due, r.id`);
-  return (r.rows as any[]).map((x) => ({ id: x.id, name: x.name, amount: x.amount, period: x.period, anchorDay: x.anchor, next: x.next,
-    payerId: x.payer_id ?? null, payer: x.payer ?? null, note: x.note ?? null, active: !!x.active }));
+  const r = await db.query(`SELECT r.id, r.item_id, i.name, r.amount::float8 AS amount, r.period, r.anchor_day AS anchor, r.next_due::text AS next, r.note, r.active
+    FROM fin_recurring r JOIN fin_items i ON i.id = r.item_id ORDER BY r.active DESC, r.next_due, r.id`);
+  return (r.rows as any[]).map((x) => ({ id: x.id, itemId: x.item_id, name: x.name, amount: x.amount, period: x.period, anchorDay: x.anchor, next: x.next,
+    note: x.note ?? null, active: !!x.active }));
 }
 export async function loadPaid(db: Db): Promise<PaidRow[]> {
-  const r = await db.query(`SELECT p.id, p.recurring_id, r.name, p.due_date::text AS due, p.amount::float8 AS amount, p.planned::float8 AS planned,
+  const r = await db.query(`SELECT p.id, p.recurring_id, i.name, r.note, p.due_date::text AS due, p.amount::float8 AS amount, p.planned::float8 AS planned,
       ${WHO("p.paid_by")} AS by, p.paid_at, ${WHO("p.cancelled_by")} AS cancelled_by, p.cancelled_at
-    FROM fin_recurring_paid p JOIN fin_recurring r ON r.id = p.recurring_id ORDER BY p.due_date DESC, p.id DESC`);
-  return (r.rows as any[]).map((x) => ({ id: x.id, recurringId: x.recurring_id, name: x.name, due: x.due, amount: x.amount, planned: x.planned,
+    FROM fin_recurring_paid p JOIN fin_recurring r ON r.id = p.recurring_id JOIN fin_items i ON i.id = r.item_id ORDER BY p.due_date DESC, p.id DESC`);
+  return (r.rows as any[]).map((x) => ({ id: x.id, recurringId: x.recurring_id, name: x.note ? `${x.name} · ${x.note}` : x.name, due: x.due, amount: x.amount, planned: x.planned,
     by: x.by ?? null, at: new Date(x.paid_at).toISOString(), cancelledBy: x.cancelled_by ?? null, cancelledAt: x.cancelled_at ? new Date(x.cancelled_at).toISOString() : null }));
 }
-/** Хто може платити — активні користувачі з правом `view_private_finance` (Тетяна й адміни). */
-export async function loadPayers(db: Db): Promise<{ id: number; name: string }[]> {
-  const r = await db.query(`SELECT u.id, COALESCE(NULLIF(btrim(u.full_name), ''), mm.name, u.email) AS name
-    FROM users u JOIN roles ro ON ro.key = COALESCE(u.role_override, u.role) LEFT JOIN managers mm ON mm.id = u.manager_id
-    WHERE u.is_active AND (ro.permissions ->> '${PAYER_PERM}') = 'true' ORDER BY 2`);
-  return (r.rows as any[]).map((x) => ({ id: x.id, name: x.name }));
+/** Статті для списку «Назва»: усі неудалені, з відповідальним і групою; вимкнені — з місяцем вимкнення. */
+export async function loadArticles(db: Db): Promise<{ id: number; name: string; group: string; resp: string; offFrom: string | null }[]> {
+  const r = await db.query(`SELECT i.id, i.name, g.name AS grp, rs.name AS resp, i.off_from::text AS off_from
+    FROM fin_items i JOIN fin_groups g ON g.id = i.group_id JOIN fin_resps rs ON rs.id = g.resp_id
+    WHERE i.deleted_at IS NULL AND g.deleted_at IS NULL AND rs.deleted_at IS NULL ORDER BY rs.sort, rs.id, g.sort, g.id, i.sort, i.id`);
+  return (r.rows as any[]).map((x) => ({ id: x.id, name: x.name, group: x.grp, resp: x.resp, offFrom: x.off_from ?? null }));
 }
 
 export interface Calendar {
-  today: string; leadDays: number; items: (RecItem & { upcoming: string[] })[]; months: CalMonth[];
-  history: (PaidRow & { canUndo: boolean })[]; payers: { id: number; name: string }[];
+  today: string; items: (RecItem & { upcoming: string[] })[]; months: CalMonth[];
+  history: (PaidRow & { canUndo: boolean })[]; articles: Awaited<ReturnType<typeof loadArticles>>;
 }
 export async function loadCalendar(db: Db, today: string): Promise<Calendar> {
-  const [items, paid, payers] = [await loadItems(db), await loadPaid(db), await loadPayers(db)];
+  const [items, paid, articles] = [await loadItems(db), await loadPaid(db), await loadArticles(db)];
   const byId = new Map(items.map((i) => [i.id, i]));
   return {
-    today, leadDays: LEAD_DAYS,
+    today,
     items: items.map((i) => {
       const upcoming: string[] = [];
       for (let d = i.next; upcoming.length < 4; d = addPeriod(d, i.period, i.anchorDay)) upcoming.push(d);
@@ -178,51 +183,54 @@ export async function loadCalendar(db: Db, today: string): Promise<Calendar> {
     }),
     months: buildMonths(items, paid, today),
     history: paid.map((p) => ({ ...p, canUndo: undoable(p, byId) })),
-    payers,
+    articles,
   };
 }
-
-async function payerOk(db: Db, v: unknown): Promise<number> {
-  const id = Number(v);
-  if (!Number.isInteger(id) || !(await loadPayers(db)).some((p) => p.id === id)) throw new FinError(400, "Оберіть, хто платить (Тетяна чи адмін)");
-  return id;
+async function loadAdded(db: Db, ym: string): Promise<Map<string, PlanHint["added"]>> {
+  const r = await db.query(`SELECT a.recurring_id, a.amount::float8 AS amount, ${WHO("a.added_by")} AS by, a.added_at
+    FROM fin_recurring_planned a WHERE a.month = $1::date`, [`${ym}-01`]);
+  return new Map((r.rows as any[]).map((x) => [`${x.recurring_id}@${ym}`, { amount: x.amount, by: x.by ?? null, at: new Date(x.added_at).toISOString() }]));
+}
+/** Підказки «План/факту» за місяць `m` (`РРРР-ММ`). */
+export async function loadPlanHints(db: Db, m: unknown): Promise<PlanHint[]> {
+  const ym = monthOf(m).slice(0, 7);
+  return planHintsOf(await loadItems(db), await loadPaid(db), await loadAdded(db, ym), ym);
 }
 
-/** Нова періодична оплата: назва, сума, як часто, найближча дата (з неї — «день оплати»), хто платить, примітка. */
+async function itemOk(db: Db, v: unknown): Promise<{ id: number; name: string }> {
+  const id = Number(v);
+  const r = Number.isInteger(id) && id > 0 ? (await db.query(`SELECT id, name FROM fin_items WHERE id = $1 AND deleted_at IS NULL`, [id])).rows[0] : null;
+  if (!r) throw new FinError(400, "Оберіть статтю зі списку");
+  return r;
+}
+
+/** Нова періодична оплата: стаття, сума, як часто, перший місяць, примітка. */
 export async function createRecurring(db: Db, actor: number, b: any): Promise<number> {
-  const name = text(b?.name, 200, "Назва");
-  if (!name) throw new FinError(400, "Вкажіть назву оплати");
+  const item = await itemOk(db, b?.itemId);
   const amount = amountOf(b?.amount);
   if (!isPeriod(b?.period)) throw new FinError(400, "Оберіть, як часто платити");
-  const date = validDate(b?.date);
-  const payer = await payerOk(db, b?.payerId);
+  const month = monthOf(b?.month);
   const note = text(b?.note, 500, "Примітка");
-  const r = await db.query(`INSERT INTO fin_recurring (name, amount, period, anchor_day, next_due, payer_id, note, created_by)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, [name, amount, b.period, +date.slice(8, 10), date, payer, note, actor]);
+  const r = await db.query(`INSERT INTO fin_recurring (item_id, name, amount, period, anchor_day, next_due, note, created_by)
+    VALUES ($1, $2, $3, $4, 1, $5, $6, $7) RETURNING id`, [item.id, item.name, amount, b.period, month, note, actor]);
   return r.rows[0].id;
 }
 
 /**
- * Змінити оплату: назва / сума / хто платить / примітка; графік (`period` + `date`) — нова найближча дата і новий «день
- * оплати»; `active` — вимкнути / увімкнути нагадування. Не передане поле лишається як було. Історію не чіпає.
+ * Змінити оплату: стаття / сума / примітка; графік (`period` + `month`) — новий найближчий місяць; `active` — вимкнути /
+ * увімкнути. Не передане поле лишається як було. Історію не чіпає.
  */
 export async function updateRecurring(db: Db, actor: number, id: number, b: any): Promise<void> {
-  const cur = (await db.query(`SELECT id, period, next_due::text AS next FROM fin_recurring WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+  const cur = (await db.query(`SELECT id, period FROM fin_recurring WHERE id = $1 FOR UPDATE`, [id])).rows[0];
   if (!cur) throw new FinError(404, "Оплату не знайдено");
   const set: string[] = [], vals: unknown[] = [];
   const put = (col: string, v: unknown) => { vals.push(v); set.push(`${col} = $${vals.length}`); };
-  if (b?.name !== undefined) { const n = text(b.name, 200, "Назва"); if (!n) throw new FinError(400, "Вкажіть назву оплати"); put("name", n); }
+  if (b?.itemId !== undefined) { const it = await itemOk(db, b.itemId); put("item_id", it.id); put("name", it.name); }
   if (b?.amount !== undefined) put("amount", amountOf(b.amount));
-  if (b?.payerId !== undefined) put("payer_id", await payerOk(db, b.payerId));
   if (b?.note !== undefined) put("note", text(b.note, 500, "Примітка"));
   if (b?.active !== undefined) { if (typeof b.active !== "boolean") throw new FinError(400, "Некоректний стан"); put("active", b.active); }
-  if (b?.period !== undefined || b?.date !== undefined) {
-    const period = b?.period ?? cur.period;
-    if (!isPeriod(period)) throw new FinError(400, "Оберіть, як часто платити");
-    put("period", period);
-    // Нова дата — новий «день оплати»; лише період — якір той самий (інакше 28.02 зʼїло б 31-ше).
-    if (b?.date !== undefined) { const date = validDate(b.date); put("next_due", date); put("anchor_day", +date.slice(8, 10)); }
-  }
+  if (b?.period !== undefined) { if (!isPeriod(b.period)) throw new FinError(400, "Оберіть, як часто платити"); put("period", b.period); }
+  if (b?.month !== undefined) put("next_due", monthOf(b.month));
   if (!set.length) throw new FinError(400, "Нічого не змінено");
   put("updated_by", actor);
   vals.push(id);
@@ -230,15 +238,15 @@ export async function updateRecurring(db: Db, actor: number, id: number, b: any)
 }
 
 /**
- * «Оплачено»: лише поточна дата (`due` = `next_due`) увімкненої оплати; сума — фактична (за замовчуванням — планова).
- * Пише рядок історії й зсуває дату на один період. Сторінка застаріла / двічі натиснули — 409.
+ * «Оплачено»: лише поточний місяць (`due` = `next_due`) увімкненої оплати; сума — фактична (за замовчуванням — планова).
+ * Пише рядок історії й зсуває місяць на один період. Сторінка застаріла / двічі натиснули — 409.
  */
 export async function payRecurring(db: Db, actor: number, id: number, b: any): Promise<{ next: string; paidId: number }> {
   const it = (await db.query(`SELECT id, amount::float8 AS amount, period, anchor_day AS anchor, next_due::text AS next, active
     FROM fin_recurring WHERE id = $1 FOR UPDATE`, [id])).rows[0];
   if (!it) throw new FinError(404, "Оплату не знайдено");
   if (!it.active) throw new FinError(400, "Нагадування вимкнене — спершу увімкніть");
-  if (b?.due !== it.next) throw new FinError(409, "Цю оплату вже позначили або дату змінили — оновіть сторінку");
+  if (b?.due !== it.next) throw new FinError(409, "Цю оплату вже позначили або місяць змінили — оновіть сторінку");
   const amount = b?.amount == null || b.amount === "" ? it.amount : amountOf(b.amount);
   const ins = await db.query(`INSERT INTO fin_recurring_paid (recurring_id, due_date, amount, planned, paid_by) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
     [id, it.next, amount, it.amount, actor]);
@@ -247,7 +255,7 @@ export async function payRecurring(db: Db, actor: number, id: number, b: any): P
   return { next, paidId: ins.rows[0].id };
 }
 
-/** Скасувати позначку: лише останню (від якої пораховано поточну дату); рядок лишається в історії як «скасовано». */
+/** Скасувати позначку: лише останню (від якої пораховано поточний місяць); рядок лишається в історії як «скасовано». */
 export async function undoPaid(db: Db, actor: number, paidId: number): Promise<{ next: string }> {
   const p = (await db.query(`SELECT id, recurring_id, due_date::text AS due, cancelled_at FROM fin_recurring_paid WHERE id = $1 FOR UPDATE`, [paidId])).rows[0];
   if (!p) throw new FinError(404, "Позначку не знайдено");
@@ -259,13 +267,34 @@ export async function undoPaid(db: Db, actor: number, paidId: number): Promise<{
   return { next: p.due };
 }
 
+/**
+ * «Додати в план»: сума оплати ДОДАЄТЬСЯ до наявного плану статті цього місяця (Роман 27.10.2026). Лише якщо оплата
+ * справді припадає на цей місяць і ще не додавалась; запис — через `saveValues` (замок погодженого місяця, вимкнена
+ * стаття, журнал змін — ті самі, що в ручного «Зберегти»).
+ */
+export async function addToPlan(db: Db, actor: number, b: any): Promise<{ before: number | null; after: number }> {
+  const ym = monthOf(b?.month).slice(0, 7);
+  const id = Number(b?.recurringId);
+  if (!Number.isInteger(id) || id <= 0) throw new FinError(400, "Некоректна оплата");
+  await db.query(`SELECT id FROM fin_recurring WHERE id = $1 FOR UPDATE`, [id]);
+  const h = (await loadPlanHints(db, ym)).find((x) => x.recurringId === id);
+  if (!h) throw new FinError(400, "Ця оплата не припадає на цей місяць");
+  if (h.added) throw new FinError(409, `Уже додано в план (${h.added.by ?? "?"}) — вдруге не додається`);
+  const cur = (await db.query(`SELECT plan::float8 AS plan FROM fin_values WHERE item_id = $1 AND month = $2::date`, [h.itemId, `${ym}-01`])).rows[0];
+  const before = cur?.plan ?? null;
+  const after = Math.round(((before ?? 0) + h.amount) * 100) / 100;
+  await saveValues(db, actor, ym, [{ itemId: h.itemId, field: "plan", value: after }]);
+  await db.query(`INSERT INTO fin_recurring_planned (recurring_id, month, amount, plan_before, added_by) VALUES ($1, $2, $3, $4, $5)`, [id, `${ym}-01`, h.amount, before, actor]);
+  return { before, after };
+}
+
 const dmy = (s: string) => `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}`;
 const kyivAt = (s: string) => new Date(s).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 /** Excel історії: усі позначки, разом зі скасованими (з тим, хто й коли скасував). */
 export function historyXlsx(rows: PaidRow[]): Buffer {
   return xlsxBook([{ name: "Історія оплат", rows: [
-    ["Дата оплати", "Оплата", "Сплачено", "План", "Різниця", "Позначив", "Коли позначив", "Скасовано"],
-    ...rows.map((p) => [dmy(p.due), p.name, p.amount, p.planned, Math.round((p.amount - p.planned) * 100) / 100, p.by ?? "", kyivAt(p.at),
+    ["Місяць", "Оплата", "Сплачено", "План", "Різниця", "Позначив", "Коли позначив", "Скасовано"],
+    ...rows.map((p) => [dmy(p.due).slice(3), p.name, p.amount, p.planned, Math.round((p.amount - p.planned) * 100) / 100, p.by ?? "", kyivAt(p.at),
       p.cancelledAt ? `${p.cancelledBy ?? "?"}, ${kyivAt(p.cancelledAt)}` : ""]),
   ] }]);
 }

@@ -197,6 +197,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // `view_team_secrets` на роутері, третя — `teamMemberVerdict` у кожному обробнику.
     { test: pre("/api/team-vault"), tabs: ["hiring"] },
     { test: pre("/api/bank"), tabs: ["bank"] },
+    // 💳 № рахунку й коментарі «Виписки» (27.10.2026) — сусід через дефіс, `pre("/api/bank")` його НЕ ловить; та сама вкладка.
+    { test: pre("/api/bank-ident"), tabs: ["bank"] },
   ];
 })();
 
