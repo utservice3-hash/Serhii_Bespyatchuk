@@ -99,10 +99,10 @@ test("#211f чотири канали == створено по кожному м
   assert.ok(totCreated > 0, "🔴 за період нуль створених — партиція трималась би на нулях");
 
   for (const r of rows) {
-    const sum = r.adCount + r.leadgenCount + r.otherCount + r.noChannelCount;
+    const sum = r.adCount + r.leadgenCount + r.elogistCount + r.otherCount + r.noChannelCount;
     assert.equal(sum, r.created,
       `🔴 ${r.name}: Σ каналів ${sum} ≠ створено ${r.created} — партиція джерела розʼїхалась `
-      + `(ad ${r.adCount} · leadgen ${r.leadgenCount} · other ${r.otherCount} · noChannel ${r.noChannelCount})`);
+      + `(ad ${r.adCount} · leadgen ${r.leadgenCount} · elogist ${r.elogistCount} · other ${r.otherCount} · noChannel ${r.noChannelCount})`);
     const kl = r.newCount + r.repeatCount + r.undefCount;
     assert.equal(kl, r.created, `🔴 ${r.name}: Σ новизни ${kl} ≠ створено ${r.created}`);
   }
@@ -143,7 +143,8 @@ test("#211f чотири канали == створено по кожному м
     assert.ok("other" in cs && "noChannel" in cs,
       `🔴 ${m.name}: у відповіді немає полів \`other\`/\`noChannel\` — третій канал знову губиться в ПРОЄКЦІЇ, `
       + "хоч ядро його рахує");
-    assert.equal(cs.ad + cs.leadgen + cs.other + cs.noChannel, cs.created,
+    // 🟣 + eLogist — п'ятий кошик з 27.10.2026 (рішення власника); без нього сума недобирала б.
+    assert.equal(cs.ad + cs.leadgen + (cs.elogist ?? 0) + cs.other + cs.noChannel, cs.created,
       `🔴 ${m.name}: Σ каналів у ВІДПОВІДІ ≠ created`);
   }
   const otherInBody = withSplit.reduce((a, m) => a + (m.createdSplit!.other ?? 0), 0);

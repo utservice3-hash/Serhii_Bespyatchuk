@@ -77,7 +77,8 @@ const fmtUah = (v: number | null) => (v == null ? "—" : `${v.toLocaleString("u
 const fmtDt = (iso: string | null) => (iso == null ? "—"
   : new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }));
 
-const SOURCES: [LeadTakeSource, string][] = [["all", "Все"], ["ad", "Реклама"], ["leadgen", "Лідгени"], ["site", "Сайт"]];
+// 🟣 «eLogist» — окреме джерело з 27.10.2026 (рішення власника): заявки сестринського сайту, НЕ реклама UTS.
+const SOURCES: [LeadTakeSource, string][] = [["all", "Все"], ["ad", "Реклама"], ["leadgen", "Лідгени"], ["site", "Сайт"], ["elogist", "eLogist"]];
 const TIMES: [LeadTakeTime, string][] = [["work", "Робочий"], ["off", "Неробочий"], ["all", "Все"]];
 
 export function LeadTakeCard({ from: initFrom, to: initTo, teamId }: { from: string; to: string; teamId?: number }) {

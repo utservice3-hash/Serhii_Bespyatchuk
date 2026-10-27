@@ -4,6 +4,7 @@ import { FC_PIPELINES, successForSources } from "./money.js";
 import { RNK_TEAM_IDS, NON_COMMERCIAL_TEAM_IDS } from "./metrics.js";
 import { teamAtSql } from "./teamAt.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
+import { elogistMarkSql } from "./elogist.js";
 import {
   takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost, statsByBucket,
   type DealTake, type TakeRowInput, type TakeStats, type TakeColumn, type TakeTarget, type TakeGran,
@@ -21,7 +22,10 @@ import {
  *                 розбивка за `utm_campaign`, порожня — «кампанія не вказана» (заповнена лише в ~24% заявок);
  *   • `site`    — «Сайт»: джерела yalogist.com.ua (другий сайт);
  *   • `leadgen` — «Лідгени»: `lead_channel = 'leadgen'`;
- *   • `all`     — «Все»: три разом.
+ *   • `elogist` — «eLogist» (рішення власника 27.10.2026): заявки сестринського сайту — ЄДИНЕ
+ *                 означення `core/elogist.elogistMarkSql`. Із «Реклами» й «Сайту» вони виключені:
+ *                 eLogist — не реклама UTS, і одна заявка не може стояти у двох джерелах;
+ *   • `all`     — «Все»: чотири разом.
  * Воронки — «Кваліфікація» і «Повний цикл»: там живуть заявки. Період — за датою СТВОРЕННЯ за Києвом.
  *
  * КОМАНДИ (ТЗ: «групування по командах (Андрій, Дарина, РПК)»): кожна команда РНК окремо, усі продажні РПК —
@@ -31,7 +35,7 @@ import {
 export const AD_SOURCES = ["Дзвінок з uts.ua", "uts.ua", "Callback з uts.ua"] as const;
 export const SITE_SOURCES = ["Дзвінок з yalogist.com.ua", "yalogist.com.ua", "Callback з yalogist.com.ua"] as const;
 export const NO_CAMPAIGN = "(кампанія не вказана)";
-export type TakeSource = "all" | "ad" | "site" | "leadgen";
+export type TakeSource = "all" | "ad" | "site" | "leadgen" | "elogist";
 export type TakeTime = "all" | "work" | "off";
 
 export interface TakeQuery {
@@ -69,10 +73,12 @@ export function leadSelection(q: Pick<TakeQuery, "from" | "to" | "source" | "cam
   const conds = ["d.pipeline_id = ANY($1)", `(d.created_at_kommo ${K})::date BETWEEN $2::date AND $3::date`];
   const add = (v: unknown) => { p.push(v); return `$${p.length}`; };
   // Параметр джерела додається ЛИШЕ коли умова його вживає: зайвий параметр Postgres відкидає цілим запитом.
-  const ad = () => `d.client_source = ANY(${add([...AD_SOURCES])})`;
-  const site = () => `d.client_source = ANY(${add([...SITE_SOURCES])})`;
+  const el = elogistMarkSql("d");
+  const ad = () => `(d.client_source = ANY(${add([...AD_SOURCES])}) AND NOT ${el})`;
+  const site = () => `(d.client_source = ANY(${add([...SITE_SOURCES])}) AND NOT ${el})`;
   const lg = "(d.lead_channel = 'leadgen')";
-  conds.push(q.source === "ad" ? ad() : q.source === "site" ? site() : q.source === "leadgen" ? lg : `(${ad()} OR ${site()} OR ${lg})`);
+  conds.push(q.source === "ad" ? ad() : q.source === "site" ? site() : q.source === "leadgen" ? lg
+    : q.source === "elogist" ? el : `(${ad()} OR ${site()} OR ${lg} OR ${el})`);
   if (q.source === "ad" && q.campaign) {
     conds.push(q.campaign === NO_CAMPAIGN ? "d.utm_campaign IS NULL" : `d.utm_campaign = ${add(q.campaign)}`);
   }

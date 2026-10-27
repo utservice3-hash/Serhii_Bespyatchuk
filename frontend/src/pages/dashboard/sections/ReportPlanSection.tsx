@@ -78,6 +78,8 @@ function SrcChip({ src, source }: { src: DealKlass; source?: DealSource }) {
   const S: Record<string, { l: string; t: string; dim?: boolean }> = {
     "ad": { l: "рекл.", t: "джерело угоди — реклама. Окремий вимір: на новизну клієнта не впливає." },
     "leadgen": { l: "лідог.", t: "джерело угоди — лідогенератор. Окремий вимір: на новизну клієнта не впливає." },
+    // 🟣 eLogist — окремий канал з 27.10.2026 (рішення власника), НЕ реклама UTS.
+    "elogist": { l: "eLogist", t: "джерело угоди — eLogist (сайт elogist.com.ua, сестринський бренд). Окремий канал, НЕ реклама UTS (рішення власника 27.10.2026). На новизну клієнта не впливає." },
     "other": { l: "без джерела", t: "ані рекламного, ані лідоген-дотику не було — угоду завів менеджер сам. Це ВІДПОВІДЬ, а не прогалина; переважно робота з наявною базою." },
     "undef": { l: "канал не вказано", t: "канал угоди не заповнений у CRM — ми НЕ ЗНАЄМО джерела (на відміну від «без джерела», де відомо, що дотику не було).", dim: true },
   };
@@ -132,8 +134,9 @@ const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 // ── дати (Пн–Нд, локально) — ПЕРЕЇХАЛИ в `../periodRules`, бо їх просить і «Реклама».
 // Тіла не мінялись: переїзд, який «заодно покращує», неможливо прийняти.
 // Компактна розбивка авто за джерелом (пост/лід/рекл/невз), нулі приховані. «5пост · 3лід · 1рекл».
-const autoSplit = (repeat: number, leadgen: number, ad: number, undef: number): string =>
-  ([[repeat, "пост"], [leadgen, "лід"], [ad, "рекл"], [undef, "невз"]] as [number, string][])
+// 🟣 `elogist` — п'ята частина з 27.10.2026 (рішення власника): до того ці авто стояли в «рекл».
+const autoSplit = (repeat: number, leadgen: number, ad: number, elogist: number, undef: number): string =>
+  ([[repeat, "пост"], [leadgen, "лід"], [ad, "рекл"], [elogist, "eLogist"], [undef, "невз"]] as [number, string][])
     .filter(([n]) => n > 0).map(([n, l]) => `${n}${l}`).join(" · ");
 
 /** Режими живуть у `../periodNav` — щоб «Реклама» й Звіт не мали двох переліків. */
@@ -887,7 +890,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
             <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
             <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
             <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target} extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`}
-              hintTitle={`Авто за джерелом: ${autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}`} />
+              hintTitle={`Авто за джерелом: ${autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.elogist ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}`} />
             <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
               hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період». Σ signed ÷ Σ угод."} />
             <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
@@ -1296,7 +1299,7 @@ function DayDrill({ managerId, period, focusDay, today, weeksFirst }: { managerI
       { kind: "calls", n: x.talks + x.attempts, main: x.talks || "—", sub: x.attempts ? `${x.attempts} спроб` : undefined },
       // `kind: null` — колонка-довідка без власного складу: клікати нема що діставати.
       { kind: null, n: 0, main: `${x.newCount}/${x.repeatCount}` },
-      { kind: "dispatched", n: x.dispatched, main: x.dispatched, sub: x.dispatched ? autoSplit(x.dispRepeat, x.dispLeadgen, x.dispAd, x.dispUndef) : undefined },
+      { kind: "dispatched", n: x.dispatched, main: x.dispatched, sub: x.dispatched ? autoSplit(x.dispRepeat, x.dispLeadgen, x.dispAd, x.dispElogist, x.dispUndef) : undefined },
       { kind: "dispatched", n: x.dispSum, main: `${fmt(x.dispSum)} ₴` },
       { kind: "dispatched_paid", n: x.dispPaid.sum, main: fmt(x.dispPaid.sum), color: GREEN },
       { kind: "dispatched_awaiting", n: x.dispAwait.sum, main: fmt(x.dispAwait.sum), color: BAR },
@@ -1478,7 +1481,7 @@ function DayDrill({ managerId, period, focusDay, today, weeksFirst }: { managerI
               <td style={{ textAlign: "right" }}>{T.created}<div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{T.newCount}н · {T.repeatCount}п</div></td>
               <td style={{ textAlign: "right" }}>{T.talks || "—"}{T.attempts ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{T.attempts} спроб</div> : null}</td>
               <td style={{ textAlign: "right" }}>{T.newCount}/{T.repeatCount}</td>
-              <td style={{ textAlign: "right" }}>{T.dispatched || "—"}{T.dispatched ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{autoSplit(T.dispRepeat, T.dispLeadgen, T.dispAd, T.dispUndef)}</div> : null}</td>
+              <td style={{ textAlign: "right" }}>{T.dispatched || "—"}{T.dispatched ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{autoSplit(T.dispRepeat, T.dispLeadgen, T.dispAd, T.dispElogist, T.dispUndef)}</div> : null}</td>
               <td style={{ textAlign: "right" }}>{T.dispSum ? fmt(T.dispSum) + " ₴" : "—"}</td>
               <td style={{ textAlign: "right", color: T.dispPaid.sum ? GREEN : MUTED }}>{T.dispPaid.sum ? fmt(T.dispPaid.sum) : "—"}{T.dispSum ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{Math.round((T.dispPaid.sum / T.dispSum) * 100)}%</div> : null}</td>
               <td style={{ textAlign: "right", color: T.dispAwait.sum ? BAR : MUTED }}>{T.dispAwait.sum ? fmt(T.dispAwait.sum) : "—"}{T.dispSum ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{Math.round((T.dispAwait.sum / T.dispSum) * 100)}%</div> : null}</td>

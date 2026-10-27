@@ -170,7 +170,7 @@ export const METRICS: MetricDef[] = [
   { name: "received_by_segment", source: "core.money.receivedBySegment",
     desc: "Виручка в розрізі нові / постійні / лідоген.", run: (s) => money.receivedBySegment(s) },
   { name: "received_by_channel", source: "core.money.receivedByChannel",
-    desc: "Виручка в розрізі каналів реклама / лідоген.",
+    desc: "Виручка в розрізі каналів реклама / лідоген / eLogist (eLogist — окремий канал з 27.10.2026, НЕ реклама UTS).",
     run: (s, _a, src) => money.receivedByChannel(s, src) },
   { name: "success_money", source: "core.money.successMoney",
     desc: "Лише успішні угоди (142) за датою закриття — знаменник avg_check_success_only.",

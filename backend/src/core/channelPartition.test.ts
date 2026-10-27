@@ -52,10 +52,12 @@ test("#174 Σ каналів (реклама+лідген+без джерела+
   const bad: string[] = [];
   let sumCreated = 0, sumChannels = 0;
   for (const r of rows) {
-    const ch = r.adCount + r.leadgenCount + r.otherCount + r.noChannelCount;
+    // 🟣 eLogist — п'ятий кошик з 27.10.2026 (рішення власника). Без нього сума недобирала б
+    // рівно eLogist-угоди, і гейт червонів би на першому ж такому лідові.
+    const ch = r.adCount + r.leadgenCount + r.elogistCount + r.otherCount + r.noChannelCount;
     sumCreated += r.created; sumChannels += ch;
     if (ch !== r.created) {
-      bad.push(`${r.name}: канали ${r.adCount}+${r.leadgenCount}+${r.otherCount}+${r.noChannelCount}=${ch} проти створено ${r.created}`);
+      bad.push(`${r.name}: канали ${r.adCount}+${r.leadgenCount}+${r.elogistCount}+${r.otherCount}+${r.noChannelCount}=${ch} проти створено ${r.created}`);
     }
   }
   assert.deepEqual(bad, [],
@@ -121,7 +123,7 @@ test("#174c dealSourceCase покриває всі значення каналу
   const fn = /export function dealSourceCase[\s\S]*?\n\}/.exec(met)?.[0] ?? "";
   assert.ok(fn, "🔴 не знайдено `dealSourceCase` — гейт втратив предмет");
 
-  for (const v of ["'ad'", "'leadgen'", "'undef'", "'other'"])
+  for (const v of ["'ad'", "'leadgen'", "'undef'", "'other'", "'elogist'"])
     assert.ok(fn.includes(v), `🔴 у розкладі каналу зникло значення ${v}`);
   assert.match(fn, /ELSE\s+'other'/,
     "🔴 зник catch-all: угода з незнайомим `lead_channel` дістане NULL і випаде з УСІХ кошиків мовчки");

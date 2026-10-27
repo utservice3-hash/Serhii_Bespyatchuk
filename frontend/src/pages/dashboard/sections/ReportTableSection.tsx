@@ -537,6 +537,7 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
     }
     case "srcAd": return <td style={st}>{m.srcAd || none}</td>;
     case "srcLeadgen": return <td style={st}>{m.srcLeadgen || none}</td>;
+    case "srcElogist": return <td style={st}>{m.srcElogist || none}</td>;
     case "srcOther": return <td style={st}>{m.srcOther || none}</td>;
     case "srcNoChannel": return <td style={st}>{m.srcNoChannel || none}</td>;
     case "dispRevenue":
