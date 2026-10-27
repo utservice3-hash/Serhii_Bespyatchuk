@@ -42,8 +42,11 @@ async function scratchDb(t: { skip: (m: string) => void }) {
   if ("unavailable" in scratch) { t.skip(skipReason(scratch)); return null; }
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
-  await c.connect();
-  await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+  // Кластер уже піднятий: впало підключення чи схема — зупинити його, інакше тест висить вічно на живому postgres.
+  try {
+    await c.connect();
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+  } catch (e) { await c.end().catch(() => undefined); scratch.dispose(); throw e; }
   return { c, dispose: async () => { await c.end(); scratch.dispose(); } };
 }
 
