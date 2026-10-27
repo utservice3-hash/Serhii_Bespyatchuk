@@ -84,6 +84,12 @@ export interface DocImages {
 
 /* Розміри вшитих картинок макета (px). Якщо Роман замінить файли в assets/ —
    передати реальні розміри через DocImages, інакше пропорції попливуть. */
+/**
+ * Ширина авто-печатки у Word, см. 4 см — розмір справжньої печатки (прохання Лілі 26.10.2026: «збільшіть печатку, бо кожен
+ * клієнт пише»; Роман: «4 см, роби»). До того було 3,0 см. PDF/прев'ю — те саме в `docCss.ts` (.stimg 113pt) і в прев'ю фронту.
+ */
+export const STAMP_CM = 4.0;
+
 export const DEFAULT_IMG_DIM: Record<string, [number, number]> = {
   sigB: [200, 276], sigK: [240, 205], stU: [300, 308], stA: [300, 300], logoU: [441, 330], logoA: [799, 180],
 };
@@ -468,7 +474,7 @@ function nrDocxBody(s: DocumentState, c: NrCtx): string {
     ? `<w:p><w:pPr><w:spacing w:before="0" w:after="40"/></w:pPr>` +
       (c.hasSig ? c.imgRun('rIdSig', c.sigDim || DEFAULT_IMG_DIM.sigK, 2.3) : '') +
       `<w:r><w:rPr>${RF}</w:rPr><w:t xml:space="preserve">  </w:t></w:r>` +
-      (c.hasStamp ? c.imgRun('rIdSt', c.stampDim || DEFAULT_IMG_DIM.stA, 3.0) : '') + `</w:p>` : '';
+      (c.hasStamp ? c.imgRun('rIdSt', c.stampDim || DEFAULT_IMG_DIM.stA, STAMP_CM) : '') + `</w:p>` : '';
   const twoCells = (l: string, r: string, grid = [half, W_TXT - half]) =>
     `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/><w:tblLayout w:type="fixed"/>${wMar('tblCellMar', 20, 100)}</w:tblPr>` +
     `<w:tblGrid><w:gridCol w:w="${grid[0]}"/><w:gridCol w:w="${grid[1]}"/></w:tblGrid><w:tr><w:trPr><w:cantSplit/></w:trPr>` +
@@ -618,7 +624,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
           ? `<w:p><w:pPr><w:spacing w:before="0" w:after="40"/></w:pPr>` +
             (hasSig ? imgRun('rIdSig', img.sigDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'sigK' : 'sigB'], 2.3) : '') +
             `<w:r><w:rPr>${RF}</w:rPr><w:t xml:space="preserve">  </w:t></w:r>` +
-            (hasStamp ? imgRun('rIdSt', img.stampDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'stA' : 'stU'], 3.0) : '') + `</w:p>`
+            (hasStamp ? imgRun('rIdSt', img.stampDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'stA' : 'stU'], STAMP_CM) : '') + `</w:p>`
           : sp('')) +
         wPa(wR('__________________  ' + (s.ent === 'fop' ? 'ФОП ' : 'Директор '), { sz: 19 }) + wR(e.dirShort, { b: 1, sz: 19 }), { jc: 'left' }) +
         (hasStampFile ? sp('М.П.') : '')) +
