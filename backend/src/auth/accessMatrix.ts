@@ -1942,15 +1942,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "PUT", path: "/api/org/people/:employeeId/unit", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "candidate"] },
   /* 👥 КОМАНДИ KOMMO + ДАШБОРД (27.10.2026): список — усім, хто бачить орг-структуру; запис — право `manage_teams`
-     (керівництво й HR — рішення Романа 27.10). КВП і фінансист адмінського рівня, але права не мають: 403 по ПРАВУ. */
+     (керівництво й HR — рішення Романа 27.10). КВП і фінансист адмінського рівня, але права не мають: 403 по ПРАВУ.
+     Кандидата в `deny` запису НЕМАЄ (як у навчанні, `CANDIDATE_401`): вкладку він має, тож проба доходить до перевірки
+     активності акаунта й отримує 401, а матриця рахує «дозволеним» усе, що не 403 (заміряно на прийманні bbeb221
+     27.10.2026: 3 клітинки «403 → 401»). Відмову кандидату на запис стереже #2855 (кожен запис — під `manage_teams`). */
   { method: "GET", path: "/api/org/teams", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/org/teams", cls: "deny-only",
-    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/org/teams/:id", cls: "deny-only",
-    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager"] },
   { method: "PUT", path: "/api/org/teams/people/:employeeId", cls: "deny-only",
-    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/surveys/badge", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: ["candidate"] },
   { method: "GET", path: "/api/surveys", cls: "GET",
