@@ -392,6 +392,7 @@ export function OverviewSection({
                     <tbody>
                       <tr><td>🎯 Реклама / таргет</td><td>{(overview.newClientsBySource ?? {ad:0,leadgen:0,other:0}).ad.toLocaleString("uk-UA")}</td></tr>
                       <tr><td>📞 Лідогенерація</td><td>{(overview.newClientsBySource ?? {ad:0,leadgen:0,other:0}).leadgen.toLocaleString("uk-UA")}</td></tr>
+                      <tr><td title="Окремий канал з 27.10.2026 (рішення власника): сайт elogist.com.ua, не реклама UTS">🟣 eLogist</td><td>{(overview.newClientsBySource?.elogist ?? 0).toLocaleString("uk-UA")}</td></tr>
                       <tr><td>✍️ Вручну / інше</td><td>{(overview.newClientsBySource ?? {ad:0,leadgen:0,other:0}).other.toLocaleString("uk-UA")}</td></tr>
                     </tbody>
                   </table>

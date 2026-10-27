@@ -79,23 +79,23 @@ export const KLASS_CHIP: Record<"new" | "rep" | "undef", string> = {
  */
 export function narrowToSlice<T extends {
   created: number; new: number; rep: number;
-  srcAd: number; srcLeadgen: number; srcOther: number; srcNoChannel: number;
+  srcAd: number; srcLeadgen: number; srcElogist: number; srcOther: number; srcNoChannel: number;
   srcByKlass?: Record<"new" | "rep" | "undef", {
-    created: number; adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
+    created: number; adCount: number; leadgenCount: number; elogistCount: number; otherCount: number; noChannelCount: number;
   }>;
 }>(m: T, slice: Slice): T {
   if (slice === "all") return m;
   const s = m.srcByKlass?.[slice];
   // Зріз не приїхав (старий бекенд / менеджера немає в розкладі) — НЕ вигадуємо
   // числа: показуємо нулі, а не повний рядок під звуженим підписом.
-  const z = { created: 0, adCount: 0, leadgenCount: 0, otherCount: 0, noChannelCount: 0 };
+  const z = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, otherCount: 0, noChannelCount: 0 };
   const v = s ?? z;
   return {
     ...m,
     created: v.created,
     new: slice === "new" ? v.created : 0,
     rep: slice === "rep" ? v.created : 0,
-    srcAd: v.adCount, srcLeadgen: v.leadgenCount,
+    srcAd: v.adCount, srcLeadgen: v.leadgenCount, srcElogist: v.elogistCount,
     srcOther: v.otherCount, srcNoChannel: v.noChannelCount,
   };
 }

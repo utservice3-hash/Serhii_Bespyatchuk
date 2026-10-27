@@ -38,6 +38,7 @@ import {
 } from "../kommo/client.js";
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 import { provisionUsers } from "../db/userProvisioning.js";
+import { elogistLeadSql, elogistMarkSql } from "../core/elogist.js";
 import { heavyJobHolder } from "./jobLock.js";
 import { writeContactPhones } from "./backfillContactPhones.js";
 import { jobSkip, type JobSkip } from "./jobRuns.js";
@@ -270,6 +271,23 @@ export async function upsertLeadgenTouch(): Promise<number> {
  * Канал угоди = найсвіжіший дотик перед нею; поле «Лидогенератор» на самій
  * угоді завжди перемагає; фолбек — utm/«Источник клиента». Ганяється щосинку
  * по всій таблиці (ідемпотентно, вміє і знижувати канал назад).
+ *
+ * 🟣 eLogist — ЧЕТВЕРТИЙ КАНАЛ (рішення власника 27.10.2026, «варіант А»). Лід
+ * Кваліфікації з ознакою eLogist (`core/elogist.elogistLeadSql`) — це eLogist-дотик, а
+ * НЕ рекламний: його виключено з `adq` і зібрано в окремий `elq`. Правило те саме —
+ * «останній дотик» (власник підтвердив: eLogist і реклама UTS у клієнта → перемагає
+ * свіжіший). Що свідомо НЕ змінилось:
+ *   • ЛІДОГЕН — РІВНО ЯК БУЛО. До 27.10 eLogist-ліди сиділи в `adq`, тож лідоген
+ *     порівнювався з ними як із рекламою. Тепер він порівнюється з GREATEST(ad_t, el_t) —
+ *     це та сама величина, що старий `ad_t`, бо `adq ∪ elq` = старий `adq` (обидва без
+ *     лідоген-маркерів і без 143). Отже жодна угода не стала й не перестала бути лідогеном.
+ *   • «Сміття» 143 не є eLogist-дотиком — так само, як не є рекламним.
+ *   • Гейт власника «мітка АБО новий клієнт» стосується ЛИШЕ реклами, на eLogist не діє
+ *     (рішення 27.10: eLogist — не реклама, тож і правило реклами до нього не прикладається).
+ * Угода повного циклу, що САМА прийшла з eLogist (лід переїхав у FC тим самим `kommo_id` —
+ * у `elq`/`adq` його вже немає), впізнається власною ознакою (`elogistMarkSql`: «Источник
+ * клиента» = elogist.com.ua або назва «eLogist …»): вона і є найсвіжішим дотиком перед
+ * собою, тож стоїть одразу після лідоген-гілок. Тримають `#2491`/`#2491b`.
  */
 export async function reclassifyAdChannel(): Promise<number> {
   // ЄДИНЕ джерело правди рекламних джерел — той самий список, що adDealSql/ads_accepted
@@ -284,7 +302,7 @@ export async function reclassifyAdChannel(): Promise<number> {
     `WITH fc AS (
        SELECT d.kommo_id, d.client_key, d.created_at_kommo, d.lead_channel,
               d.lead_generator, d.utm_source, d.client_source, d.traf_type,
-              d.utm_medium, d.utm_campaign
+              d.utm_medium, d.utm_campaign, d.name, d.pipeline_id, d.status_id
          FROM deals d
         WHERE d.pipeline_id = ANY($1) AND d.client_key IS NOT NULL
      ),
@@ -301,8 +319,11 @@ export async function reclassifyAdChannel(): Promise<number> {
          ) x ON true
         WHERE q.pipeline_id = ANY($2)
      ),
-     adq AS (
-       SELECT q.client_key, q.created_at_kommo AS t
+     -- Дотики Кваліфікації БЕЗ лідоген-маркерів (крім 143) — тепер ДВОХ видів: eLogist (elq)
+     -- і реклама UTS (adq). Умови спільні, різниця — лише ознака eLogist, тож adq ∪ elq
+     -- рівно дорівнює старому adq (на цьому стоїть незмінність лідогену, див. гілку нижче).
+     touchq AS (
+       SELECT q.client_key, q.created_at_kommo AS t, ${elogistLeadSql("q")} AS is_el
          FROM deals q
         WHERE q.pipeline_id = ANY($2)
           AND q.status_id <> 143
@@ -311,6 +332,8 @@ export async function reclassifyAdChannel(): Promise<number> {
           AND NOT EXISTS (SELECT 1 FROM deal_stage_events dse
                            WHERE dse.kommo_id = q.kommo_id AND dse.status_id = ANY($3))
      ),
+     adq AS (SELECT client_key, t FROM touchq WHERE NOT is_el),
+     elq AS (SELECT client_key, t FROM touchq WHERE is_el),
      calc AS (
        SELECT f.kommo_id, f.lead_channel, f.lead_generator, f.utm_source, f.client_source, f.traf_type,
               f.utm_medium, f.utm_campaign,
@@ -339,7 +362,12 @@ export async function reclassifyAdChannel(): Promise<number> {
                   AND lg.t <= f.created_at_kommo + interval '3 days') AS lg_t,
               (SELECT MAX(a.t) FROM adq a
                 WHERE a.client_key = f.client_key
-                  AND a.t <= f.created_at_kommo + interval '3 days') AS ad_t
+                  AND a.t <= f.created_at_kommo + interval '3 days') AS ad_t,
+              (SELECT MAX(e.t) FROM elq e
+                WHERE e.client_key = f.client_key
+                  AND e.t <= f.created_at_kommo + interval '3 days') AS el_t,
+              -- Угода САМА прийшла з eLogist (лід переїхав у FC тим самим kommo_id).
+              ${elogistMarkSql("f")} AS own_el
          FROM fc f
      )
      UPDATE deals d SET lead_channel = c.target
@@ -351,7 +379,12 @@ export async function reclassifyAdChannel(): Promise<number> {
                   -- того самого пріоритету leadgen → ad → other (leadgen лишається
                   -- ПЕРШИМ; deal-specific слід не з'їдає рекламу через client_key).
                   WHEN has_touch THEN 'leadgen'
-                  WHEN lg_t IS NOT NULL AND (ad_t IS NULL OR lg_t >= ad_t) THEN 'leadgen'
+                  -- GREATEST ігнорує NULL: це рівно старий ad_t (до відокремлення eLogist).
+                  WHEN lg_t IS NOT NULL AND (GREATEST(ad_t, el_t) IS NULL OR lg_t >= GREATEST(ad_t, el_t)) THEN 'leadgen'
+                  -- 🟣 eLogist — ДО реклами: угода сама з eLogist, або eLogist-дотик свіжіший
+                  -- за рекламний (нічия — eLogist: реклама не має права забрати чужий лід).
+                  WHEN own_el THEN 'elogist'
+                  WHEN el_t IS NOT NULL AND (ad_t IS NULL OR el_t >= ad_t) THEN 'elogist'
                   -- 🟢 ОБИДВІ рекламні гілки тепер під гейтом власника
                   -- (мітка АБО новий клієнт). Ставимо його ОКРЕМИМ доданком, а не
                   -- всередині кожної умови: інакше через півроку хтось додасть третю

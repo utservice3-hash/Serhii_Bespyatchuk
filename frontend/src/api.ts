@@ -871,7 +871,7 @@ export interface ExecutiveOverview {
   carryover: { amount: number; deals: number } | null;
   repeatClientsList: { clientName: string; orders: number; revenue: number }[];
   newClientsList: { clientName: string; orders: number; revenue: number }[];
-  newClientsBySource: { ad: number; leadgen: number; other: number };
+  newClientsBySource: { ad: number; leadgen: number; elogist?: number; other: number };
   transferred: {
     total: number;
     success: number;
@@ -1204,6 +1204,12 @@ export interface AdsReport {
   /** Гроші, ЩО НАДІЙШЛИ в періоді від реклами будь-якого часу. Не «принесли ці ліди». */
   revenue: number;
   revenueDeals: number;
+  /**
+   * 🟣 eLogist — ОКРЕМИЙ канал, НЕ реклама UTS (рішення власника 27.10.2026). Ліди, створені в
+   * періоді, і гроші, що надійшли по каналу 'elogist'. Витрат eLogist у нас немає — тож без
+   * ціни ліда й ROMI.
+   */
+  elogist: { leads: number; revenue: number; revenueDeals: number };
 }
 
 /** Одна угода рекламної когорти дня — для розкриття. */
@@ -1273,7 +1279,8 @@ export interface KvpDeptWeek { idx: number; from: string; to: string; plan: numb
  * (71%) і неправда для РНК (19%, там 222 нові). Сенс несе НОВИЗНА поруч, не назва.
  * `noChannel` = `lead_channel IS NULL`; на живих даних 0, але кошик існує в ядрі.
  */
-export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; other: number; noChannel: number }
+// 🟣 `elogist` — п'ятий кошик з 27.10.2026 (рішення власника: eLogist окремо від реклами UTS).
+export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; elogist: number; other: number; noChannel: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
@@ -1290,10 +1297,10 @@ export interface KvpDetailCell {
   created: number; newCount: number; repeatCount: number; undefCount: number;
   // 🔴 crAd/crLeadgen/crOther — партиція СТВОРЕНОГО за каналом (Σ == created).
   // НЕ плутати з leadsAd/leadsLeadgen/leadsOther: ті рахують ЛІДИ — інша популяція.
-  crAd: number; crLeadgen: number; crOther: number; crNoChannel: number;
+  crAd: number; crLeadgen: number; crElogist: number; crOther: number; crNoChannel: number;
   leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
   // Розбивка відправлених авто за джерелом (постійний / лідоген / реклама / невизн). Σ = dispatched.
-  dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number;
+  dispRepeat: number; dispLeadgen: number; dispAd: number; dispElogist: number; dispUndef: number;
   received: { deals: number; revenue: number }; expected: { deals: number; sum: number };
   // Розклад ② по дню + активність дзвінків + виставлені рахунки ТОГО дня.
   success: { deals: number; revenue: number }; paid: { deals: number; revenue: number };
@@ -1397,13 +1404,13 @@ export interface KvpReport {
 }
 // ── ЗВІТ (лендинг) — план із задачника + факт із core (макет zvit_v2) ──
 export interface ReportPlanKpi { fact: number | null; target: number; taken?: number; won?: number; revenue?: number;
-  // Тільки для «dispatch» (авто): розбивка факту за джерелом. Σ(repeat+leadgen+ad+undef) = fact.
-  repeat?: number; leadgen?: number; ad?: number; undef?: number;
+  // Тільки для «dispatch» (авто): розбивка факту за джерелом. Σ(repeat+leadgen+ad+elogist+undef) = fact.
+  repeat?: number; leadgen?: number; ad?: number; elogist?: number; undef?: number;
   // Тільки для «avgCheck» (#4): пул reportChain — signed Σ÷count (revenue/deals для Σ/Σ).
   deals?: number }
-/** Розклад джерела всередині одного класу новизни (`created` == Σ чотирьох). */
+/** Розклад джерела всередині одного класу новизни (`created` == Σ п'яти; eLogist — з 27.10.2026). */
 export interface SrcCounts {
-  created: number; adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
+  created: number; adCount: number; leadgenCount: number; elogistCount: number; otherCount: number; noChannelCount: number;
 }
 /** Лічильники «першого дотику». `noRecord` — бот розмови не чув; у відсоток НЕ входить. */
 export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
@@ -1454,8 +1461,8 @@ export interface ReportPlanManager {
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
-  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ чотирьох == created (гейт #174).
-  srcAd: number; srcLeadgen: number; srcOther: number; srcNoChannel: number;
+  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ п'яти == created (гейт #174; eLogist — з 27.10.2026).
+  srcAd: number; srcLeadgen: number; srcElogist: number; srcOther: number; srcNoChannel: number;
   /**
    * 🔀 Той самий розклад ВСЕРЕДИНІ кожного класу новизни (Е3). Приїжджає разом
    * із рядком, бо перемикач НЕ ходить на сервер: `/overview` ×4 вже 4 940-5 168 мс
@@ -1529,9 +1536,9 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
 }
 /** `src` — НОВИЗНА клієнта, `source` — ДЖЕРЕЛО угоди. Різні виміри: угода буває
  *  водночас `src:"rep"` і `source:"ad"` (постійний клієнт прийшов через рекламу). */
-// Джерело угоди — партиція з чотирьох (див. metrics.dealSourceCase). `null` НЕ
-// п'ятий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#175c`.
-export type DealSource = "ad" | "leadgen" | "other" | "undef" | null;
+// Джерело угоди — партиція з п'яти (див. metrics.dealSourceCase; `elogist` — з 27.10.2026). `null`
+// НЕ окремий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#175c`/`#2493`.
+export type DealSource = "ad" | "leadgen" | "elogist" | "other" | "undef" | null;
 /**
  * НОВИЗНА клієнта — ДЗЕРКАЛО `core/klassFilter.DealKlassState`. `"undef"` став
  * окремим станом 25.08.2026: до того сервер зводив його в `null`, тож 6 угод
@@ -1641,7 +1648,7 @@ export interface ResponseTime {
   neglectedOver24h: number;
 }
 /* ⏱ Вікно «Час опрацювання заявки» (ТЗ Юлії 24.09.2026) — бекенд `core/leadTake.ts`. */
-export type LeadTakeSource = "all" | "ad" | "site" | "leadgen";
+export type LeadTakeSource = "all" | "ad" | "site" | "leadgen" | "elogist";
 export type LeadTakeTime = "all" | "work" | "off";
 export type LeadTakeColumn = "all" | "m1" | "m5" | "m30" | "m60" | "h1" | "none" | "slowLost";
 export interface LeadTakeParams { from: string; to: string; source: LeadTakeSource; time: LeadTakeTime; campaign?: string; teamId?: number }

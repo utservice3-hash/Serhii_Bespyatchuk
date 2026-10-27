@@ -207,6 +207,24 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
         </div>
       </div>
 
+      {/*
+        🟣 eLogist — ОКРЕМИЙ рядок, НЕ частина реклами UTS (рішення власника 27.10.2026).
+        Плитки вище його більше не включають: ні в ліди, ні в «Заробили». Витрат eLogist у нас
+        немає (ні GA4, ні аркуша) — тому тут лише ліди й гроші, без ціни ліда та «× до витрат»,
+        і це сказано словами, щоб порожнє місце не читалось як нуль витрат.
+      */}
+      {data.elogist && (
+        <div style={{ ...CARD, padding: "14px 20px", display: "flex", gap: 24, flexWrap: "wrap", alignItems: "baseline" }}>
+          <div style={LAB}>eLogist · окремий канал</div>
+          <div><b style={{ fontSize: 18 }}>{data.elogist.leads}</b> <span style={DIM}>лідів створено за період</span></div>
+          <div><b style={{ fontSize: 18 }}>{money(data.elogist.revenue)} ₴</b>{" "}
+            <span style={DIM}>надійшло · {data.elogist.revenueDeals} угод</span></div>
+          <div style={{ ...DIM, fontSize: 12.5 }}>
+            не реклама UTS і в плитки вище не входить; витрат eLogist немає в даних — ціни ліда й окупності не рахуємо
+          </div>
+        </div>
+      )}
+
       <div style={{ ...CARD, padding: "18px 20px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
           <div style={LAB}>Оберіть день</div>
