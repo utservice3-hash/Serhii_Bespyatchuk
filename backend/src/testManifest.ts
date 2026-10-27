@@ -160,6 +160,7 @@ export const MANIFEST_FILES: string[] = [
   "core/managerKeep.test.js",
   "core/baUtb.test.js",
   "core/baTtnSync.test.js",
+  "core/orgTree.test.js",
   "core/finance.test.js",
   "core/financeKpi.test.js",
   "constructor/constructor.test.js",
@@ -377,6 +378,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
+  "org_units", "org_log", "org_migrations",
   "kommo_declined_forms",
   "prozorro_tenders", "prozorro_leads",
 ];
@@ -2983,6 +2985,14 @@ export const MANIFEST_TESTS: string[] = [
   "#2449 ОСІ: yAxisId лінії — за одиницею (₴ ліва, шт права, ₴ знову ліва); на екрані дві осі й застереження під графіком",
   "#2480 ПЕЧАТКА 4 СМ: Word — кожна авто-печатка 4 см з однієї константи; PDF і прев'ю — 113pt",
   "#1492 НЕАКТИВНИЙ ВИКОНАВЕЦЬ: картка й рядок показують поточного виконавця з позначкою, а не порожньо",
+  // core/orgTree.test.ts — орг структура (задача 7062, ТЗ Даші 23.10.2026; рішення Романа 27.10.2026).
+  "#2700 ЯДРО ОРГ-СТРУКТУРИ: кожен рівно раз, «Без блоку» з переліком, керівник ручний > тімлід",
+  "#2701 НІК: @/без @/t.me → @nick; «-», два ніки, кирилиця, коротке → не вказано",
+  "#2702 ЖИВИЙ SQL: сід 14+2 блоків, керівники разово й однозначно, лише працюючі, без телефону й дат",
+  "#2703 ЖИВИЙ SQL: свій нік — лише у свій рядок; перетягнути = «Команда» в «Наймі» + аудит + журнал",
+  "#2704 ЖИВИЙ SQL: «Команда» блоку несе людей, близнюк 409, коло 400, непорожній не видаляється",
+  "#2705 ДОСТУП: org — усім, edit_org — admin/HR/БА після двох прогонів, запис — під правом, «моє» — без id",
+  "#2706 ФРОНТ: група «Компанія» першою, НОВЕ до дати, статичний імпорт, стартова вкладка не «org», без телефону",
 ];
 
 /**

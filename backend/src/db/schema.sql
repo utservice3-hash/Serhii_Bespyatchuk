@@ -6745,3 +6745,110 @@ CREATE TABLE IF NOT EXISTS payment_request_marks (
   CHECK (approved = (amount IS NOT NULL)), CHECK (approved OR comment IS NOT NULL)
 );
 REVOKE ALL ON payment_request_marks FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏢 ОРГ-СТРУКТУРА (задача 7062, ТЗ Даші 23.10.2026; рішення Романа 27.10.2026). Ядро — `core/orgTree.ts`.
+--  · Людей окремо НЕ зберігаємо: склад — працюючі з реєстру «Найм → Співробітники», а блок людини = її поле
+--    «Команда» (`employees.team_label`), що збігається з «Командою» блоку: `org_units.label`, або — якщо порожньо —
+--    назва привʼязаної команди дашборду (`team_id`). Перетягнути людину на схемі = змінити їй «Команду» в «Наймі»
+--    тим самим `updateEmployee`, з аудитом; старе значення — в `org_log`.
+--  · Блоки продажів привʼязані до команд дашборду; керівник за замовчуванням — тімлід цієї команди. Розставляє
+--    людей HR руками (рішення Романа 27.10: «тільки HR руками»; задача Івану).
+--  · Бачать усі ролі, включно з кандидатами (рішення Романа 27.10); редагують — право `edit_org`: admin, HR, БА (ТЗ).
+--  ⚠️ Revert коду таблиць не прибирає, а «Команди», змінені зі схеми, лишаються в «Наймі».
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS org_units (
+  id               SERIAL PRIMARY KEY,
+  seed_key         TEXT UNIQUE,
+  parent_id        INTEGER REFERENCES org_units(id),
+  name             TEXT NOT NULL CHECK (btrim(name) <> ''),
+  dept             TEXT NOT NULL CHECK (dept IN ('top','hr','fin','it','sales')),
+  team_id          INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  label            TEXT CHECK (label IS NULL OR btrim(label) <> ''),
+  head_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+  side             BOOLEAN NOT NULL DEFAULT false,
+  sort             INTEGER NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (NOT side OR parent_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_units_team ON org_units (team_id) WHERE team_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS org_log (
+  id          BIGSERIAL PRIMARY KEY,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  action      TEXT NOT NULL,
+  employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+  unit_id     INTEGER,
+  summary     TEXT NOT NULL,
+  before      JSONB,
+  after       JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_org_log_at ON org_log (at DESC);
+CREATE TABLE IF NOT EXISTS org_migrations (
+  key     TEXT PRIMARY KEY,
+  done_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Сід — блоки затвердженого прототипу (ТЗ Даші 23.10.2026). `DO NOTHING` за `seed_key`: правки в режимі
+-- «Редагувати» наступний викат не відкочує. Команди дашборду — за `kommo_group_id` (стабільний), дві без групи — за назвою.
+INSERT INTO org_units (seed_key, parent_id, name, dept, label, sort)
+VALUES ('ceo', NULL, 'Керівництво', 'top', 'Керівництво', 0)
+ON CONFLICT (seed_key) DO NOTHING;
+INSERT INTO org_units (seed_key, parent_id, name, dept, label, side, sort)
+SELECT v.k, p.id, v.name, v.dept, v.label, v.side, v.sort
+  FROM (VALUES ('owner2', 'ceo', 'Співвласник', 'top', 'Співвласник', true, 0),
+               ('ops', 'ceo', 'Операційне управління', 'top', 'Операційне управління', false, 10)) AS v(k, pk, name, dept, label, side, sort)
+  JOIN org_units p ON p.seed_key = v.pk
+ON CONFLICT (seed_key) DO NOTHING;
+INSERT INTO org_units (seed_key, parent_id, name, dept, label, side, sort)
+SELECT v.k, p.id, v.name, v.dept, v.label, v.side, v.sort
+  FROM (VALUES ('ba', 'ops', 'Бізнес-асистент', 'top', 'Бізнес-асистент', true, 0),
+               ('hr', 'ops', 'Відділ персоналу', 'hr', 'Відділ персоналу', false, 10),
+               ('fin1', 'ops', 'Фінансист', 'fin', 'Фінансист', false, 20),
+               ('fin2', 'ops', 'Бухгалтерія', 'fin', 'Бухгалтерія', false, 30),
+               ('it', 'ops', 'IT-відділ', 'it', 'IT-відділ', false, 40)) AS v(k, pk, name, dept, label, side, sort)
+  JOIN org_units p ON p.seed_key = v.pk
+ON CONFLICT (seed_key) DO NOTHING;
+INSERT INTO org_units (seed_key, parent_id, name, dept, team_id, label, sort)
+SELECT 'sales', p.id, 'Комерційний відділ', 'sales', (SELECT id FROM teams WHERE name = 'Комерційний відділ' LIMIT 1),
+       CASE WHEN EXISTS (SELECT 1 FROM teams WHERE name = 'Комерційний відділ') THEN NULL ELSE 'Комерційний відділ' END, 50
+  FROM org_units p WHERE p.seed_key = 'ops'
+ON CONFLICT (seed_key) DO NOTHING;
+INSERT INTO org_units (seed_key, parent_id, name, dept, team_id, sort)
+SELECT v.k, p.id, v.name, 'sales', t.id, v.sort
+  FROM (VALUES ('lid', NULL::text, 'Лідогенерація', 'Лідогенерація', 0),
+               ('rnk1', '588532', 'Команда Андрія Безпамʼятного', NULL, 10),
+               ('rnk2', '475168', 'Команда Дарини Михальчевської', NULL, 20),
+               ('rnk3', '728292', 'Команда Вікторії Хомік', NULL, 30),
+               ('rpk1', '335511', 'Команда Дмитра Яцика', NULL, 40),
+               ('rpk2', '508640', 'Команда Василя Дмитрука', NULL, 50),
+               ('rpk3', '691208', 'Команда Лілії Шаврової', NULL, 60)) AS v(k, grp, name, tname, sort)
+  JOIN org_units p ON p.seed_key = 'sales'
+  LEFT JOIN teams t ON (v.grp IS NOT NULL AND t.kommo_group_id = v.grp::bigint) OR (v.grp IS NULL AND t.name = v.tname)
+ON CONFLICT (seed_key) DO NOTHING;
+-- Разово: керівники блоків із прототипу — лише за ОДНОЗНАЧНИМ збігом ПІБ серед працюючих (інакше лишається порожньо й
+-- його ставлять у «Редагувати»). Блоки команд без цього рядка беруть тімліда команди. Позначка — в `org_migrations`,
+-- тож свідомо знятого керівника наступний викат не поверне.
+WITH step AS (INSERT INTO org_migrations (key) VALUES ('seed-heads-2026-10-27') ON CONFLICT DO NOTHING RETURNING key),
+heads(k, a, b) AS (VALUES ('ceo', 'Ступаківський Олександр', NULL), ('owner2', 'Коваль Артем', NULL),
+  ('ops', 'Беспятчук Сергій', NULL), ('ba', 'Протас Дар', NULL), ('hr', 'Романов Іван', NULL), ('fin1', 'Шнайдер Тетяна', NULL),
+  ('fin2', 'Лисенко Інна', NULL), ('it', 'Денисюк Роман', 'Роман Денисюк'), ('sales', 'Левентова Юлія', NULL),
+  ('rnk3', 'Хомік Вікторія', NULL)),
+hit AS (SELECT h.k, min(e.id) AS eid FROM heads h JOIN employees e
+          ON e.status IN ('active','finishing') AND (e.full_name ILIKE h.a || '%' OR (h.b IS NOT NULL AND e.full_name ILIKE h.b || '%'))
+         GROUP BY h.k HAVING count(*) = 1)
+UPDATE org_units u SET head_employee_id = hit.eid
+  FROM hit WHERE u.seed_key = hit.k AND u.head_employee_id IS NULL AND EXISTS (SELECT 1 FROM step);
+
+-- Вкладка «Орг структура» — усім ролям, включно з кандидатом (рішення Романа 27.10.2026). Лише де ключа ще немає:
+-- свідомо вимкнений тумблер наступний викат не вмикає.
+UPDATE roles SET screen_access = screen_access || '{"org":true}'::jsonb
+  WHERE NOT (screen_access ? 'org');
+-- Режим «Редагувати» — рекрутер (HR), бізнес-асистент і адмін (ТЗ). Парою «видати / зняти» ПІСЛЯ синків ролей:
+-- синк копіює права адміна керівництву й фінансисту, і без зняття право розтеклось би мовчки (#2705).
+UPDATE roles SET permissions = permissions || '{"edit_org": true}'::jsonb
+ WHERE key IN ('admin', 'hr', 'business_assistant');
+UPDATE roles SET permissions = permissions - 'edit_org'
+ WHERE key NOT IN ('admin', 'hr', 'business_assistant');
+REVOKE ALL ON org_units, org_log, org_migrations FROM ai_readonly;

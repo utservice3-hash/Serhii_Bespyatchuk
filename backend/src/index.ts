@@ -48,6 +48,7 @@ import { hiringQuestionsRouter } from "./routes/hiringQuestions.js";
 import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
 import { baRouter } from "./routes/businessAssistant.js";
+import { orgRouter } from "./routes/org.js";
 import { financeRouter } from "./routes/finance.js";
 import { financePaymentsRouter } from "./routes/financePayments.js";
 import { constructorRouter } from "./routes/constructor.js";
@@ -202,6 +203,7 @@ app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор ванта�
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
+app.use("/api/org", orgRouter); // 🏢 Орг структура (задача 7062, 27.10.2026)
 app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
 app.use("/api/team-vault", teamVaultRouter); // 👥 тімлід: люди й паролі своєї команди (29.09.2026)
 app.use("/api/vault-bot", vaultBotRouter); // 🤖 вебхук бота «UTS Сейф» (без requireAuth, межа — секрет) // Найм: графік, кандидати, щоденний звіт (17.09.2026)
