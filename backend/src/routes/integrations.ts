@@ -37,7 +37,7 @@ integrationsRouter.get("/tracker/vacations", async (req, res) => {
  * 📈 ОФЛАЙН-КОНВЕРСІЇ GOOGLE ADS (27.10.2026). CSV за шаблоном рекламниці; правила — `core/googleAdsConversions.ts`.
  * Читає Google-таблиця рекламниці формулою `=IMPORTDATA(url)`, а її — Google Ads за розкладом. IMPORTDATA не вміє
  * заголовків, тому ключ — у `?key=` (виняток із правила «ключ у заголовку»; ключ окремий і лише на цей файл).
- * У файлі немає імен і телефонів: gclid, номер угоди, час, маржа.
+ * У файлі: gclid, номер угоди, час, маржа і телефон клієнта (рішення Романа 27.10.2026, розширені конверсії); імен немає.
  */
 integrationsRouter.get("/google-ads/conversions.csv", async (req, res) => {
   if (!config.googleAds.exportKey) return res.status(503).json({ error: "not_configured" });
