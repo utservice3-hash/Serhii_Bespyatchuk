@@ -6259,6 +6259,8 @@ export interface FinKpiPeriod {
   opexUnassigned: { items: number; fact: number } | null;
   /** Валютна дебіторка з 1С на кінець періоду: Σ у гривні, Σ у валюті (різні валюти разом), рядки з нульовим ₴. */
   receivablesFx: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null; source: string | null; rows: number } | null;
+  /** Той самий підсумок на кінець ПОПЕРЕДНЬОГО періоду — для валюти в дужках у стовпці «минулий». */
+  receivablesFxPrev: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null; source: string | null; rows: number } | null;
   /** «З них перекази між нашими рахунками» біля «Надходження / Витрати загальні» (чи виключати — відкрите питання). */
   bankOwn: { in: number; out: number } | null;
   /** 🎯 План і прогноз надходжень / витрат (#5649); `null` — до старту автоматики. */

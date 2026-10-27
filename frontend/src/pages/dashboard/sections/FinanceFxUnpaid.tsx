@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fetchFxUnpaid, hiringError, type FxUnpaid, type FinKpiPeriod } from "../../../api";
 
 /**
@@ -13,15 +13,68 @@ const at = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "E
 const dmy = (d: string | null) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : "—");
 const pill = (bg: string, fg: string): React.CSSProperties => ({ fontSize: 11, padding: "1px 7px", borderRadius: 999, background: bg, color: fg, whiteSpace: "nowrap" });
 
-export function FxNote({ fx }: { fx: Fx }) {
-  const [list, setList] = useState<FxUnpaid | null>(null);
-  const [open, setOpen] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const toggle = () => {
-    setOpen((o) => !o);
-    if (!list) fetchFxUnpaid().then((d) => { setList(d); setErr(null); }).catch((e) => setErr(hiringError(e)));
-  };
+/** Валюта в дужках біля гривні (Тетяна 26.10.2026: «загальна сума саме у валюті… в дужках після грн»). Немає валюти — нічого. */
+export function fxBrackets(fx: Fx | null | undefined): string | null {
+  if (!fx) return null;
+  const parts = [fx.eur ? `${money(fx.eur)} EUR` : null, fx.usd ? `${money(fx.usd)} USD` : null, fx.unknownVal ? `${money(fx.unknownVal)} інша валюта` : null].filter(Boolean);
+  return parts.length ? `(${parts.join(" · ")})` : null;
+}
 
+/**
+ * Рахунки, з яких складається «Валютна дебіторка» — розгортаються прямо під її рядком у таблиці (Роман 26.10.2026:
+ * «щоб можна було розгорнути і побачити, звідки ідуть дані, по яких рахунках»). Список — стан ЗАРАЗ: історії рахунків
+ * немає, тож для минулого періоду це підказка, а не склад його числа, і екран це каже.
+ */
+export function FxInvoices({ current }: { current: boolean }) {
+  const [list, setList] = useState<FxUnpaid | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { fetchFxUnpaid().then((d) => { setList(d); setErr(null); }).catch((e) => setErr(hiringError(e))); }, []);
+  if (err) return <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>;
+  if (!list) return <span className="hr-muted">Завантаження…</span>;
+  const sums = list.invoices.reduce((m, r) => ((m[r.currency] = (m[r.currency] ?? 0) + r.remaining), m), {} as Record<string, number>);
+  return (
+    <div style={{ padding: "4px 0 8px" }}>
+      {!current && <div className="hr-note" style={{ marginTop: 0, marginBottom: 6 }}>Список — стан рахунків ЗАРАЗ{list.syncedAt ? ` (${at(list.syncedAt)})` : ""}. Число цього періоду — підсумок на його кінець; історії окремих рахунків немає.</div>}
+      {list.error && <div className="hr-note" style={{ marginTop: 0, marginBottom: 6 }}>Останній синк 1С не вдався: {list.error}. Нижче — останній вдалий список{list.syncedAt ? ` (${at(list.syncedAt)})` : ""}.</div>}
+      <div style={{ overflowX: "auto" }}>
+        <table className="hr-table" style={{ width: "100%", fontSize: 12.5 }}>
+          <thead><tr><th>Дата</th><th>Рахунок</th><th>Організація</th><th>Покупець</th><th style={{ textAlign: "right" }}>Сума</th><th style={{ textAlign: "right" }}>Оплачено</th>
+            <th style={{ textAlign: "right" }}>Залишок</th><th>Стан</th><th>Оплатити до</th><th>Менеджер</th><th>Угода</th></tr></thead>
+          <tbody>
+            {list.invoices.map((r) => (
+              <tr key={`${r.organization}·${r.number}`}>
+                <td style={{ whiteSpace: "nowrap" }}>{dmy(r.date)}</td>
+                <td style={{ whiteSpace: "nowrap" }}>№ {r.number.replace(/^0+/, "")}</td>
+                <td>{r.organization}</td>
+                <td>{r.contractor}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{money(r.invoiceSum)} {r.currency}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{r.paidSum ? `${money(r.paidSum)} ${r.currency}` : "—"}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><b>{money(r.remaining)} {r.currency}</b></td>
+                <td>
+                  {r.realized ? <span style={pill("rgba(37,99,235,0.10)", "#2563eb")} title={r.debtAccount ? `Борг на рахунку ${r.debtAccount}` : undefined}>реалізація є{r.debtAccount ? ` · ${r.debtAccount}` : ""}</span>
+                    : <span style={pill("rgba(217,119,6,0.14)", "#b45309")} title="У 1С ще немає реалізації за цим рахунком — тому 362 його не бачив">реалізації немає</span>}
+                  {r.partiallyPaid && <span style={{ ...pill("rgba(22,163,74,0.12)", "#16a34a"), marginLeft: 4 }}>частково оплачено</span>}
+                </td>
+                <td style={{ whiteSpace: "nowrap" }}>{dmy(r.dueDate)}</td>
+                <td>{r.manager ?? "—"}</td>
+                <td style={{ whiteSpace: "nowrap" }}>{r.dealId ? <a href={`${list.kommoBase}/leads/detail/${r.dealId}`} target="_blank" rel="noreferrer">{r.dealId}</a> : <span className="hr-muted" title={r.comment ?? undefined}>без угоди</span>}</td>
+              </tr>
+            ))}
+            {!list.invoices.length && <tr><td colSpan={11} className="hr-muted">Валютних неоплачених рахунків 2026 року немає.</td></tr>}
+            {list.invoices.length > 0 && <tr style={{ fontWeight: 700 }}><td colSpan={6}>Разом · {list.invoices.length} рах.</td>
+              <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{Object.entries(sums).map(([c, v]) => `${money(v)} ${c}`).join(" · ")}</td><td colSpan={4} /></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div className="hr-muted" style={{ fontSize: 11.5, marginTop: 4 }}>
+        Джерело — сервіс неоплачених рахунків 1С, лише рахунки з {dmy(list.from)} (рішення 26.10.2026: старіші висячі рахунки сюди не йдуть). Рахунок вважається оплаченим,
+        коли оплату в 1С зараховано саме проти нього; інакше він лишається тут — тоді правити треба в 1С.
+      </div>
+    </div>
+  );
+}
+
+export function FxNote({ fx }: { fx: Fx }) {
   if (fx.source !== "unpaid-2026") return (
     <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
       Валютна дебіторка з 1С (рахунок 362 — джерело до 26.10.2026) на {at(fx.at)}: {money(fx.uah)} у гривні
@@ -33,48 +86,8 @@ export function FxNote({ fx }: { fx: Fx }) {
     <div className="hr-sect" style={{ fontSize: 12.5 }}>
       <span className="hr-muted">Валютна дебіторка — неоплачені рахунки 1С 2026 року на {at(fx.at)}: </span>
       <b>{money(fx.eur)} EUR</b>{fx.usd ? <> · <b>{money(fx.usd)} USD</b></> : null}{fx.unknownVal ? <> · інша валюта <b>{money(fx.unknownVal)}</b></> : null}
-      <span className="hr-muted"> ({fx.rows} рах.) · у гривні за курсом НБУ {money(fx.uah)}</span>
+      <span className="hr-muted"> ({fx.rows} рах.) · у гривні за курсом НБУ {money(fx.uah)}. Які саме рахунки — «▾ рахунки» в рядку «Валютна дебіторка».</span>
       {fx.zeroUah > 0 && <span style={{ color: "#b45309" }}> · для {fx.zeroUah} рах. курсу НБУ не було — у гривневу суму вони не ввійшли</span>}
-      <button className="fin-link" style={{ marginLeft: 8 }} onClick={toggle} aria-expanded={open}>{open ? "Сховати рахунки ▴" : "Які рахунки ▾"}</button>
-      {open && <div style={{ marginTop: 8 }}>
-        {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>}
-        {!list && !err && <span className="hr-muted">Завантаження…</span>}
-        {list && <>
-          {list.error && <div className="hr-note" style={{ marginBottom: 6 }}>Останній синк 1С не вдався: {list.error}. Нижче — останній вдалий список{list.syncedAt ? ` (${at(list.syncedAt)})` : ""}.</div>}
-          <div style={{ overflowX: "auto" }}>
-            <table className="hr-table" style={{ width: "100%", fontSize: 12.5 }}>
-              <thead><tr><th>Дата</th><th>Рахунок</th><th>Організація</th><th>Покупець</th><th style={{ textAlign: "right" }}>Сума</th><th style={{ textAlign: "right" }}>Оплачено</th>
-                <th style={{ textAlign: "right" }}>Залишок</th><th>Стан</th><th>Оплатити до</th><th>Менеджер</th><th>Угода</th></tr></thead>
-              <tbody>
-                {list.invoices.map((r) => (
-                  <tr key={`${r.organization}·${r.number}`}>
-                    <td style={{ whiteSpace: "nowrap" }}>{dmy(r.date)}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>№ {r.number.replace(/^0+/, "")}</td>
-                    <td>{r.organization}</td>
-                    <td>{r.contractor}</td>
-                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{money(r.invoiceSum)} {r.currency}</td>
-                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{r.paidSum ? `${money(r.paidSum)} ${r.currency}` : "—"}</td>
-                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><b>{money(r.remaining)} {r.currency}</b></td>
-                    <td>
-                      {r.realized ? <span style={pill("rgba(37,99,235,0.10)", "#2563eb")} title={r.debtAccount ? `Борг на рахунку ${r.debtAccount}` : undefined}>реалізація є{r.debtAccount ? ` · ${r.debtAccount}` : ""}</span>
-                        : <span style={pill("rgba(217,119,6,0.14)", "#b45309")} title="У 1С ще немає реалізації за цим рахунком — тому 362 його не бачив">реалізації немає</span>}
-                      {r.partiallyPaid && <span style={{ ...pill("rgba(22,163,74,0.12)", "#16a34a"), marginLeft: 4 }}>частково оплачено</span>}
-                    </td>
-                    <td style={{ whiteSpace: "nowrap" }}>{dmy(r.dueDate)}</td>
-                    <td>{r.manager ?? "—"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>{r.dealId ? <a href={`${list.kommoBase}/leads/detail/${r.dealId}`} target="_blank" rel="noreferrer">{r.dealId}</a> : <span className="hr-muted" title={r.comment ?? undefined}>без угоди</span>}</td>
-                  </tr>
-                ))}
-                {!list.invoices.length && <tr><td colSpan={11} className="hr-muted">Валютних неоплачених рахунків 2026 року немає.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-          <div className="hr-muted" style={{ fontSize: 11.5, marginTop: 4 }}>
-            Лише рахунки з {dmy(list.from)} (рішення 26.10.2026: старіші висячі рахунки 1С сюди не йдуть). Рахунок вважається оплаченим, коли в платежі вказано саме його;
-            оплата без привʼязки до рахунку в 1С лишає його тут — тоді правити треба в 1С.
-          </div>
-        </>}
-      </div>}
     </div>
   );
 }
