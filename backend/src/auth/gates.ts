@@ -84,6 +84,10 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Список людей для трекера. Стукає його сервер, не браузер: обліковка — ключ "
        + "X-Dashboard-Sso-Key, вкладки немає й бути не може. Віддає лише особу й підказки; "
        + "доступу в трекері не надає — там акаунти вмикають руками." },
+  { method: "GET", path: "/api/integrations/google-ads/conversions.csv", permanent: true,
+    why: "Офлайн-конверсії для Google Ads (27.10.2026). Стукає Google-таблиця рекламниці (IMPORTDATA), не браузер "
+       + "користувача: обліковка — окремий ключ GADS_EXPORT_KEY у ?key= (IMPORTDATA не шле заголовків). Віддає лише gclid, "
+       + "номер угоди, час і маржу — без імен і телефонів; без ключа в .env — 503. Тримає `#2480`." },
   { method: "GET", path: "/api/integrations/tracker/vacations", permanent: true,
     why: "Відпустки для тайм-трекера (5149). Стукає його сервер, не браузер: обліковка — окремий ключ "
        + "X-Tracker-Vacations-Key лише на читання (не SSO-ключ). Віддає особу й дати погоджених відпусток, більше нічого; "

@@ -232,6 +232,9 @@ const FIELD_UTM_CAMPAIGN = 481997; // utm_campaign (tracking_data)
 const FIELD_ADV_CAMP = 2098331; // ADV_CAMP (text)
 const FIELD_TRAF_SRC = 2098327; // TRAF_SRC (text)
 const FIELD_TRAF_TYPE = 2098329; // TRAF_TYPE (text: cpc/organic/referral/none)
+// 📈 gclid (tracking_data) — Google Click ID для офлайн-конверсій Google Ads (core/googleAdsConversions.ts).
+// Форми uts.ua пишуть його з 23.10.2026; дзвінки Ringostat його не мають.
+const FIELD_GCLID = 482023;
 // «Мінусова угода» (select): «Мінус» = сторно/повернення. Kommo-бюджет завжди додатний;
 // саме ЦЕ поле (не слово в назві) визначає знак: price = is_minus ? -abs(budget) : +abs.
 const FIELD_MINUS = 2098529;
@@ -478,6 +481,11 @@ export interface WebTags {
  * (ADV_CAMP/TRAF_*). Платний сигнал живе в РІЗНИХ полях: utm_medium='cpc' АБО
  * traf_type='cpc'. Тут ЛИШЕ витягуємо; бізнес-правило (paid) — GLOSSARY.
  */
+/** gclid ліда — для вивантаження офлайн-конверсій у Google Ads. */
+export function extractGclid(deal: KommoDeal): string | null {
+  return fieldText(deal, FIELD_GCLID);
+}
+
 export function extractWebTags(deal: KommoDeal): WebTags {
   return {
     utmMedium: fieldText(deal, FIELD_UTM_MEDIUM),

@@ -209,6 +209,10 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_edrpou TEXT;
 -- «менеджер бачить свої заявки, які він подав». Джерело — поля самої заявки:
 -- «ID исходной сделки» (2097401) і «Исходный ответственный» (2098197, ПІБ).
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS source_deal_id BIGINT;
+-- 📈 gclid (Kommo 482023) — Google Click ID для офлайн-конверсій Google Ads (27.10.2026,
+-- core/googleAdsConversions.ts). Пише syncKommo щопрохід; старі угоди — jobs/backfillGclid.ts.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS gclid TEXT;
+CREATE INDEX IF NOT EXISTS idx_deals_gclid ON deals(created_at_kommo) WHERE gclid IS NOT NULL;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS source_responsible TEXT;
 CREATE INDEX IF NOT EXISTS idx_deals_source_deal ON deals(source_deal_id) WHERE source_deal_id IS NOT NULL;
 

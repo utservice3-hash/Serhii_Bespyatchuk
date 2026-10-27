@@ -23,6 +23,7 @@ export const MANIFEST_FILES: string[] = [
   "auth/matrixCoverage.test.js",
   "jobs/dealContactPairs.test.js",
   "core/clientPlans.test.js",
+  "core/googleAdsConversions.test.js",
   "core/forecast.test.js",
   "core/clientCard.test.js",
   "kommo/leadChildLink.test.js",
@@ -383,6 +384,8 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
 export const MANIFEST_TESTS: string[] = [
+  "#2480 GOOGLE ADS: заявка без суми, продаж = маржа в межах 90 днів, формат шаблону",
+  "#2480b GOOGLE ADS SQL: продаж = 142, час із журналу етапів, gclid копії — від батька",
   // core/nominations.test.ts + routes/nominations.test.ts — номінації тижня (21.09.2026)
   "#600 результат і авто номінацій == «Факт» і «Авто» Звіту за той самий тиждень",
   "#601 номінації не мають власного SQL по угодах і грошах — лише ядро",

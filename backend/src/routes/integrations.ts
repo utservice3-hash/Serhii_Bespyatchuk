@@ -3,6 +3,7 @@ import { Router } from "express";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
 import { trackerPeriodError, trackerVacations } from "../core/vacationRules.js";
+import { conversionsCsv, loadConversions } from "../core/googleAdsConversions.js";
 
 /**
  * 🔌 ЗАПИТИ ДЛЯ ІНШИХ НАШИХ СИСТЕМ. Без `requireAuth`: стукає СЕРВЕР іншої системи, не браузер; межа — ключ у
@@ -30,4 +31,19 @@ integrationsRouter.get("/tracker/vacations", async (req, res) => {
   const err = trackerPeriodError(from, to);
   if (err) return res.status(400).json({ error: err });
   res.json({ vacations: await trackerVacations(pool, from as string, to as string) });
+});
+
+/**
+ * 📈 ОФЛАЙН-КОНВЕРСІЇ GOOGLE ADS (27.10.2026). CSV за шаблоном рекламниці; правила — `core/googleAdsConversions.ts`.
+ * Читає Google-таблиця рекламниці формулою `=IMPORTDATA(url)`, а її — Google Ads за розкладом. IMPORTDATA не вміє
+ * заголовків, тому ключ — у `?key=` (виняток із правила «ключ у заголовку»; ключ окремий і лише на цей файл).
+ * У файлі немає імен і телефонів: gclid, номер угоди, час, маржа.
+ */
+integrationsRouter.get("/google-ads/conversions.csv", async (req, res) => {
+  if (!config.googleAds.exportKey) return res.status(503).json({ error: "not_configured" });
+  const key = typeof req.query.key === "string" ? req.query.key : undefined;
+  if (!keyAccepted(key, config.googleAds.exportKey)) return res.status(401).json({ error: "bad_key" });
+  const rows = await loadConversions(pool, new Date());
+  res.setHeader("Cache-Control", "no-store");
+  res.type("text/csv; charset=utf-8").send(conversionsCsv(rows));
 });

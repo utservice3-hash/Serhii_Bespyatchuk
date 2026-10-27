@@ -1457,6 +1457,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
+  { method: "GET", path: "/api/integrations/google-ads/conversions.csv", cls: "deny-only",
+    allow: [], deny: [] },
   { method: "GET", path: "/api/integrations/tracker/vacations", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-sso", cls: "deny-only",
