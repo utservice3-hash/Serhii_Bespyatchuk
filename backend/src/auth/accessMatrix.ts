@@ -1888,23 +1888,27 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   /* 🏢 ОРГ СТРУКТУРА (задача 7062, 27.10.2026): бачать УСІ ролі, включно з кандидатом (рішення Романа 27.10); свій нік і
      фото — теж усі (лише свій рядок «Найму», id з акаунта — #2703). Режим «Редагувати» — право `edit_org`: admin, HR, БА
-     (ТЗ). Керівництво й фінансист вкладку мають, права — ні: 403 по ПРАВУ, тож записані в ADMIN_DENIED_BY_PERM. */
+     (ТЗ). Керівництво й фінансист вкладку мають, права — ні: 403 по ПРАВУ, тож записані в ADMIN_DENIED_BY_PERM.
+     Кандидата в `deny` журналу й запису НЕМАЄ — з тієї ж причини, що в навчанні (`CANDIDATE_401`): вкладку він має,
+     тож проба доходить до перевірки активності акаунта й отримує 401, а матриця рахує «дозволеним» усе, що не 403
+     (заміряно на прийманні 27.10.2026: 5 клітинок «403 → 401»). Відмову кандидату на запис стереже #2705 (кожен
+     роут запису — під `edit_org`, якого в кандидата немає), набір його вкладок — #2708. */
   { method: "GET", path: "/api/org/tree", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "GET", path: "/api/org/log", cls: "GET",
-    allow: ["admin", "hr"], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "candidate"] },
+    allow: ["admin", "hr"], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   { method: "PUT", path: "/api/org/me/telegram", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/org/me/photo", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/org/units", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/org/units/:id", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/org/units/:id", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   { method: "PUT", path: "/api/org/people/:employeeId/unit", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/surveys/badge", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: ["candidate"] },
   { method: "GET", path: "/api/surveys", cls: "GET",
