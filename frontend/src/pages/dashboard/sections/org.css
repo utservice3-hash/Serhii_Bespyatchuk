@@ -1,0 +1,96 @@
+/* 🏢 Орг структура (задача 7062) — за прототипом Даші 23.10.2026; кольори лише зі змінних теми (світла й темна). */
+.org { display: flex; flex-direction: column; gap: 14px; }
+.org h1 { font-size: 22px; margin: 0; }
+.org-sub { color: var(--text-muted); font-size: 13px; margin-top: 2px; }
+.org-tool { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.org-tool .org-search { flex: 1 1 220px; min-width: 0; }
+.org-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-lg); overflow: hidden; }
+.org-seg button { border: 0; background: var(--card-bg); color: var(--text-muted); padding: 6px 14px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.org-seg button.on { background: var(--danger-bg); color: var(--brand); }
+.org-stats { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--text-muted); }
+.org-stats button { border: 0; background: none; padding: 0; font: inherit; color: var(--info); cursor: pointer; text-decoration: underline dotted; }
+.org-edit-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-radius: var(--r-lg); background: var(--warn-bg); color: var(--warn); font-size: 13px; }
+
+/* дерево: лінії підпорядкування зверху вниз */
+.org-treebox { overflow: auto; padding: 8px 4px 16px; }
+.org-canvas { width: max-content; margin: 0 auto; }
+.org-tree, .org-tree ul { list-style: none; margin: 0; padding: 0; display: flex; justify-content: center; }
+.org-tree ul { padding-top: 22px; position: relative; }
+.org-tree li { position: relative; padding: 22px 8px 0; display: flex; flex-direction: column; align-items: center; }
+.org-tree > li { padding-top: 0; }
+.org-tree li::before, .org-tree li::after { content: ""; position: absolute; top: 0; right: 50%; width: 50%; height: 22px; border-top: 1.5px solid var(--border-strong); }
+.org-tree li::after { right: auto; left: 50%; border-left: 1.5px solid var(--border-strong); }
+.org-tree li:only-child::before, .org-tree li:only-child::after { display: none; }
+.org-tree li:only-child { padding-top: 0; }
+.org-tree li:first-child::before, .org-tree li:last-child::after { border: 0; }
+.org-tree li:last-child::before { border-right: 1.5px solid var(--border-strong); border-radius: 0 8px 0 0; }
+.org-tree li:first-child::after { border-radius: 8px 0 0 0; }
+.org-tree ul::before { content: ""; position: absolute; top: 0; left: 50%; height: 22px; border-left: 1.5px solid var(--border-strong); }
+.org-tree > li::before, .org-tree > li::after { display: none; }
+.org-nwrap { position: relative; display: flex; gap: 40px; align-items: center; }
+.org-side { position: relative; }
+.org-side::before { content: ""; position: absolute; right: 100%; top: 50%; width: 40px; border-top: 1.5px dashed var(--border-strong); }
+.org-side .org-node { border-style: dashed; }
+/* багато блоків-команд — рядками по чотири, як у прототипі (комерційний відділ 4 + 3) */
+.org-vgrid { display: flex; flex-direction: column; align-items: center; position: relative; padding-top: 22px; }
+/* одна вертикаль через усю сітку (видно в проміжку між блоками), останній ряд закриває її своїм тлом — як у прототипі */
+.org-vgrid::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1.5px solid var(--border-strong); }
+.org-vrow { display: flex; gap: 16px; align-items: flex-start; padding-top: 16px; position: relative; }
+/* горизонталь — від центру першого блоку до центру останнього (107px = половина ширини блоку) */
+.org-vrow::after { content: ""; position: absolute; top: 0; left: 107px; right: 107px; border-top: 1.5px solid var(--border-strong); }
+.org-vrow > .org-node { position: relative; }
+.org-vrow > .org-node::before { content: ""; position: absolute; top: -17.5px; left: 50%; height: 16px; border-left: 1.5px solid var(--border-strong); }
+.org-vrow + .org-vrow { margin-top: 20px; }
+.org-vrow:last-child { background: var(--bg); }
+
+.org-node { width: 214px; box-sizing: border-box; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--r-2xl); padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
+.org-node.hit { border-color: var(--brand); box-shadow: 0 0 0 3px var(--danger-bg); }
+.org-node.dim { opacity: .35; }
+.org-node.drop { outline: 2px dashed var(--info); outline-offset: 2px; }
+.org-ntitle { display: flex; justify-content: space-between; gap: 6px; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
+.org-ntitle button { border: 0; background: none; color: var(--info); cursor: pointer; font-size: 12px; padding: 0; }
+.org-av { display: inline-grid; place-items: center; flex: none; border-radius: 50%; color: #fff; font-weight: 700; line-height: 1; }
+.org-person { display: flex; gap: 9px; align-items: center; border: 0; background: none; padding: 3px; margin: -3px; border-radius: var(--r-lg); text-align: left; width: calc(100% + 6px); color: var(--text); font: inherit; cursor: pointer; }
+.org-person:hover { background: var(--surface-2); }
+.org-person.hit { background: var(--danger-bg); }
+.org-person[draggable="true"] { cursor: grab; }
+.org-pn { font-weight: 650; font-size: 13px; line-height: 1.2; }
+.org-pr { font-size: 11.5px; color: var(--text-muted); line-height: 1.25; }
+.org-tg { font-size: 11.5px; color: var(--info); }
+.org-members { display: flex; flex-direction: column; gap: 5px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.org-members .org-pn { font-size: 12px; font-weight: 550; }
+.org-nfoot { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.org-tog { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 7px; padding: 2px 8px; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.org-loose { border: 1px dashed var(--warn); border-radius: var(--r-2xl); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.org-loose.drop { outline: 2px dashed var(--info); outline-offset: 2px; }
+.org-loose .org-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.org-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.org-chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); }
+
+/* список */
+.org-list { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.org-list th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); text-align: left; padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.org-list th button { border: 0; background: none; font: inherit; color: inherit; cursor: pointer; padding: 0; letter-spacing: inherit; text-transform: inherit; }
+.org-list td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.org-list tr:hover td { background: var(--surface-2); }
+.org-tbl { overflow-x: auto; }
+
+/* картка людини */
+.org-scrim { position: fixed; inset: 0; background: rgba(10, 10, 14, .35); z-index: 2600; }
+.org-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 100%); box-sizing: border-box; background: var(--card-bg); color: var(--text); z-index: 2601; border-left: 1px solid var(--border); padding: 20px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+.org-dhead { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding-top: 6px; }
+.org-dname { font-size: 19px; font-weight: 800; line-height: 1.2; }
+.org-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--r-xl); background: var(--surface-2); }
+.org-lbl { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+.org-acts { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.org-acts a, .org-acts button { display: flex; justify-content: center; align-items: center; padding: 9px; border-radius: var(--r-xl); font-weight: 700; text-decoration: none; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); font: inherit; cursor: pointer; }
+.org-acts a { color: var(--info); }
+.org-mine { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+.org-form { display: grid; grid-template-columns: 130px 1fr; gap: 8px 10px; align-items: center; font-size: 13px; }
+.org-form .hr-inp { width: 100%; box-sizing: border-box; }
+.org-log { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+
+@media (max-width: 600px) {
+  .org-form { grid-template-columns: 1fr; }
+  .org-tool .org-search { flex-basis: 100%; }
+}
