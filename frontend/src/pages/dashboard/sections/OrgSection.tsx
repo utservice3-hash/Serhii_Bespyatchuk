@@ -1,10 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type DragEvent, type ReactElement } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactElement } from "react";
 import {
   fetchOrgTree, setMyOrgTelegram, uploadMyOrgPhoto, moveOrgPerson, createOrgUnit, updateOrgUnit, deleteOrgUnit, fetchOrgLog, hiringError,
   type OrgTreeResp, type OrgUnit, type OrgPerson, type OrgDept, type OrgUnitInput, type OrgLogRow,
 } from "../../../api";
 import { useToast, type Toast } from "../../../components/Toasts";
-import { EmployeePhoto, PhotoUploadDialog } from "./EmployeePhotos";
+import { EmployeePhoto, PhotoUploadDialog, initialsOf } from "./EmployeePhotos";
 import { fmtTs, useEscape } from "./BaShared";
 import "./hiring.css";
 import "./org.css";
@@ -19,6 +19,15 @@ import "./org.css";
  */
 const narrow = () => typeof window !== "undefined" && window.innerWidth < 700;
 type SortKey = "name" | "position" | "unit" | "telegram";
+
+/** Кольори ініціалів — палітра прототипу Даші; колір сталий для імені (сума кодів символів). */
+const PALETTE = ["#d0261f", "#2f6fdf", "#1f8a4c", "#a352d6", "#c9700a", "#0f8f99", "#5b5b66"];
+const tone = (name: string) => PALETTE[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % PALETTE.length];
+/** Фото, якщо є; інакше — ініціали на кольоровому колі, як у прототипі. */
+function OrgAvatar({ p, size }: { p: Pick<OrgPerson, "name" | "photo">; size: number }) {
+  if (p.photo) return <EmployeePhoto photo={p.photo} name={p.name} size={size} />;
+  return <span className="org-av" style={{ width: size, height: size, fontSize: Math.max(10, Math.round(size * 0.34)), background: tone(p.name) }} aria-label={p.name}>{initialsOf(p.name)}</span>;
+}
 
 export function OrgSection() {
   const toast = useToast();
@@ -46,14 +55,25 @@ export function OrgSection() {
   const people = useMemo(() => new Map((data?.people ?? []).map((p) => [p.id, p])), [data]);
   const kids = useCallback((id: number | null) => (data?.units ?? []).filter((u) => u.parentId === id && !u.side), [data]);
   const sides = useCallback((id: number) => (data?.units ?? []).filter((u) => u.parentId === id && u.side), [data]);
-  // Розгорнуто за замовчуванням: усе, крім блоків-команд (їхні люди — за кнопкою «Команда · N»), як у прототипі.
-  const opened = useMemo(() => open ?? new Set((data?.units ?? []).filter((u) => kids(u.id).length > 0 || u.memberIds.length <= 3).map((u) => u.id)), [open, data, kids]);
+  // Як у прототипі: за замовчуванням розгорнуто ВСЕ — кожна команда з людьми й ніками.
+  const opened = useMemo(() => open ?? new Set((data?.units ?? []).map((u) => u.id)), [open, data]);
   const toggle = (id: number) => setOpen(() => { const s = new Set(opened); if (s.has(id)) s.delete(id); else s.add(id); return s; });
 
   const query = q.trim().toLowerCase();
   const match = (p: OrgPerson) => !query || [p.name, p.position ?? "", p.telegram ?? ""].join(" ").toLowerCase().includes(query);
   const placed = (u: OrgUnit) => [...(u.headId != null && people.get(u.headId)?.unitId === u.id ? [u.headId] : []), ...u.memberIds];
   const deep = (u: OrgUnit): number => placed(u).length + (data?.units ?? []).filter((x) => x.parentId === u.id).reduce((a, x) => a + deep(x), 0);
+  // Дерево вписується в ширину екрана (зменшення до 75%, як у прототипі) — після кожного рендеру й на зміні розміру.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const fit = useCallback(() => {
+    const b = boxRef.current, c = canvasRef.current;
+    if (!b || !c) return;
+    c.style.setProperty("zoom", "1");
+    c.style.setProperty("zoom", String(Math.max(0.75, Math.min(1, (b.clientWidth - 8) / c.scrollWidth))));
+  }, []);
+  useLayoutEffect(fit);
+  useEffect(() => { window.addEventListener("resize", fit); return () => window.removeEventListener("resize", fit); }, [fit]);
   const unitHit = (u: OrgUnit): boolean => [u.headId, ...u.memberIds].some((id) => id != null && match(people.get(id)!))
     || (data?.units ?? []).some((x) => x.parentId === u.id && unitHit(x));
 
@@ -83,11 +103,11 @@ export function OrgSection() {
     return (
       <button key={id} className={`org-person ${query && match(p) ? "hit" : ""}`} onClick={() => setCard(id)}
         draggable={edit} onDragStart={(e) => e.dataTransfer.setData("text/org-person", String(id))}>
-        <EmployeePhoto photo={p.photo} name={p.name} size={small ? 26 : 36} />
+        <OrgAvatar p={p} size={small ? 26 : 36} />
         <span>
           <span className="org-pn">{p.name}</span><br />
-          <span className="org-pr">{p.position || "посада не вказана"}</span>
-          {!small && <><br /><span className="org-tg">{p.telegram ?? <span className="org-pr">Telegram не вказано</span>}</span></>}
+          <span className="org-pr">{p.position || "посада не вказана"}</span><br />
+          <span className="org-tg">{p.telegram ?? <span className="org-pr">Telegram не вказано</span>}</span>
         </span>
       </button>
     );
@@ -99,6 +119,9 @@ export function OrgSection() {
     const dim = (dept && u.dept !== dept && u.dept !== "top") || (query && !unitHit(u));
     const hit = query && [u.headId, ...u.memberIds].some((id) => id != null && match(people.get(id)!));
     const n = u.memberIds.length;
+    const root = u.parentId == null;
+    // Як у прототипі: великі кружки — у керівництві й фінансах, у команд — малі; верхній блок без «Згорнути».
+    const small = u.dept !== "top" && u.dept !== "fin";
     return (
       <div key={u.id} className={`org-node ${hit ? "hit" : ""} ${dim ? "dim" : ""} ${over === u.id ? "drop" : ""}`} {...dropZone(u.id, u.id, !!u.label)}>
         <div className="org-ntitle">
@@ -106,9 +129,9 @@ export function OrgSection() {
           {edit && <button title="Змінити блок" aria-label={`Змінити блок ${u.name}`} onClick={() => setUnitDlg(u)}>✎</button>}
         </div>
         {u.headId != null ? personBtn(u.headId)
-          : <span className="org-pr">{edit ? "Керівника не вказано · " : ""}{ch.length ? `${ch.length} блоків · ` : ""}{deep(u)} люд.</span>}
-        {n > 0 && isOpen && <div className="org-members">{u.memberIds.map((id) => personBtn(id, u.dept !== "top" && n > 3))}</div>}
-        {(n > 0 || ch.length > 0) && (
+          : <span className="org-pr">{edit ? "Керівника не вказано · " : ""}{ch.length ? `${ch.length} команди · ` : ""}{deep(u)} люд.</span>}
+        {n > 0 && (root || isOpen) && <div className="org-members">{u.memberIds.map((id) => personBtn(id, small))}</div>}
+        {!root && (n > 0 || ch.length > 0) && (
           <div className="org-nfoot">
             <span className="org-pr">{deep(u)} люд.{edit && u.label ? ` · «${u.label}»` : ""}</span>
             <button className="org-tog" onClick={() => toggle(u.id)}>{isOpen ? "Згорнути" : n && !ch.length ? `Команда · ${n} ▾` : "Розгорнути"}</button>
@@ -163,7 +186,7 @@ export function OrgSection() {
           <button className={view === "tree" ? "on" : ""} onClick={() => setView("tree")}>Дерево</button>
           <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}>Список</button>
         </div>
-        {view === "tree" && <button className="hr-btn" onClick={() => setOpen(allOpen ? new Set() : new Set(allIds))}>{allOpen ? "Згорнути все" : "Розгорнути все"}</button>}
+        {view === "tree" && <button className="hr-btn" onClick={() => setOpen(allOpen ? new Set(data.units.filter((u) => kids(u.id).length > 0).map((u) => u.id)) : new Set(allIds))}>{allOpen ? "Згорнути все" : "Розгорнути все"}</button>}
         {data.canEdit && <button className={`hr-btn ${edit ? "p" : ""}`} onClick={() => setEdit((x) => !x)}>{edit ? "Готово" : "Редагувати"}</button>}
       </div>
       <div className="org-stats">
@@ -181,11 +204,9 @@ export function OrgSection() {
       )}
 
       {view === "tree" ? (
-        <div className="hr-card" style={{ marginBottom: 0 }}>
-          <div className="org-treebox"><div className="org-canvas">
-            <ul className="org-tree">{kids(null).map(branch)}</ul>
-          </div></div>
-        </div>
+        <div className="org-treebox" ref={boxRef}><div className="org-canvas" ref={canvasRef}>
+          <ul className="org-tree">{kids(null).map(branch)}</ul>
+        </div></div>
       ) : (
         <div className="hr-card org-tbl" style={{ marginBottom: 0 }}>
           <table className="org-list">
@@ -193,7 +214,7 @@ export function OrgSection() {
             <tbody>
               {listRows.map((p) => (
                 <tr key={p.id}>
-                  <td><button className="org-person" style={{ width: "auto", margin: 0 }} onClick={() => setCard(p.id)}><EmployeePhoto photo={p.photo} name={p.name} size={26} /><span className="org-pn">{p.name}</span></button></td>
+                  <td><button className="org-person" style={{ width: "auto", margin: 0 }} onClick={() => setCard(p.id)}><OrgAvatar p={p} size={26} /><span className="org-pn">{p.name}</span></button></td>
                   <td>{p.position || <span className="hr-muted">не вказано</span>}</td>
                   <td>{p.unitId == null ? <span style={{ color: "var(--warn)" }}>Без блоку</span> : unitName(p)}</td>
                   <td className="org-tg" style={{ fontSize: 13 }}>{p.telegram ?? <span className="hr-muted">не вказано</span>}</td>
@@ -254,7 +275,7 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
       <aside className="org-drawer" role="dialog" aria-label={`Картка: ${p.name}`}>
         <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="hr-btn xs" onClick={onClose}>Закрити ✕</button></div>
         <div className="org-dhead">
-          <EmployeePhoto photo={p.photo} name={p.name} size={76} />
+          <OrgAvatar p={p} size={76} />
           <div className="org-dname">{p.name}</div>
           <div className="org-pr" style={{ fontSize: 13.5 }}>{p.position || "посада не вказана"}</div>
           <div className="org-pr">{unitName}{p.isHead ? " · керівник" : ""}</div>
