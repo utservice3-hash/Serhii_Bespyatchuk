@@ -483,7 +483,11 @@ ratesRouter.get("/feedback/stats", requirePerm("view_rate_feedback"), async (req
         WHERE f.created_at >= now() - ($1 || ' days')::interval`, [days]);
     const calcs = await pool.query<{ n: string }>(
       `SELECT COUNT(*) AS n FROM lardi_usage WHERE ts >= now() - ($1 || ' days')::interval`, [days]);
-    res.json({ days, ...feedbackStats(rows.rows.map((r) => ({ ...r, agreed: r.agreed == null ? null : Number(r.agreed) })), Number(calcs.rows[0]?.n ?? 0)) });
+    const feed: FeedbackRow[] = rows.rows.map((r) => ({ rating: r.rating, agreed: r.agreed == null ? null : Number(r.agreed), comment: r.comment,
+      at: r.at, author: r.author, frm: r.frm, tox: r.tox, calc: r.calc }));
+    const st = feedbackStats(feed, Number(calcs.rows[0]?.n ?? 0));
+    res.json({ days, total: st.total, calculations: st.calculations, coverage: st.coverage, byRating: st.byRating, okShare: st.okShare,
+      deviation: st.deviation, byTonnage: st.byTonnage, byZone: st.byZone, comments: st.comments });
   } catch (e) {
     res.status(500).json({ error: `feedback stats error: ${String(e).slice(0, 120)}` });
   }
