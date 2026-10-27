@@ -24,6 +24,8 @@ import {
 import { requestStatusOf } from "../core/paymentRequests.js";
 import { kommoStateOf, discrepancyOf, screenCard, fileRow, splitTotals, archiveDayOf, type ScreenRow, type ScreenSplit } from "../core/paymentScreen.js";
 import { xlsxBook } from "../core/xlsx.js";
+import { applyMark, systemOf, markNote, loadMarks, MANUAL, type PayMark } from "../core/paymentMarks.js";
+import type { Db } from "../core/finance.js";
 import { jobSkip } from "./jobRuns.js";
 
 const CEILING_MS = 10 * 60_000;
@@ -86,7 +88,7 @@ export const toMain = (d: KommoDeal, clientName: string | null): MainDeal => {
   };
 };
 
-export interface RunRow { id: number; mainId: number | null; amount: number | null; ok: boolean; paidBy: Verdict["paidBy"]; reasons: string[]; notes: string[] }
+export interface RunRow { id: number; mainId: number | null; amount: number | null; ok: boolean; paidBy: Verdict["paidBy"] | typeof MANUAL; reasons: string[]; notes: string[] }
 export interface RunResult { at: string; day: string; queue: number; ok: number; check: number; total: number; rows: RunRow[]; sheet: string }
 
 /** «Квитанція…» серед вкладень угоди — лише для угод без доведеної оплати (кілька запитів на прогін). */
@@ -174,12 +176,16 @@ export async function buildOnce(write = true, day?: string): Promise<RunResult> 
   const ctx = await contexts(reqs, mains, new Map([...info].map(([k, v]) => [k, { key: v.client_key }])));
   const rows: RunRow[] = [];
   const pay: (string | number)[][] = [], check: (string | number)[][] = [];
+  // ✋ Погодження людини поверх рішення системи (26.10.2026): погоджений «перевірити» йде у файл «До оплати».
+  const marks = await loadMarks(pool as unknown as Db, reqs.map((r) => r.id));
   for (const r of reqs.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
     const m = r.sourceDealId != null ? mains.get(r.sourceDealId) ?? null : null;
-    const v = judgeRequest(r, m, ctx.get(r.id)!, now);
-    rows.push({ id: r.id, mainId: m?.id ?? r.sourceDealId, amount: r.cash, ok: v.ok, paidBy: v.paidBy, reasons: v.reasons, notes: v.notes });
+    const sys = judgeRequest(r, m, ctx.get(r.id)!, now);
+    const v = applyMark(sys, r.cash, marks.get(r.id) ?? null);
+    // У журнал — рішення з погодженням, але причини й примітки СИСТЕМИ: «погодьте знову» екран допише сам (`applyMark`).
+    rows.push({ id: r.id, mainId: m?.id ?? r.sourceDealId, amount: r.cash, ok: v.ok, paidBy: v.paidBy as RunRow["paidBy"], reasons: sys.reasons, notes: sys.notes });
     if (v.ok && m) pay.push(payRow(r, m));
-    else check.push([m?.id ?? r.sourceDealId ?? "", r.id, r.cash ?? "", v.reasons.join("; "), v.notes.join("; ")]);
+    else check.push([m?.id ?? r.sourceDealId ?? "", r.id, r.cash ?? "", v.reasons.join("; "), [...v.notes, ...markNote(v)].join("; ")]);
   }
   const total = Math.round(pay.reduce((a, x) => a + Number(x[3]), 0) * 100) / 100;
   const at = now.toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -246,14 +252,17 @@ export interface ScreenDay {
 export function dropScreenCache(): void { screenCache.clear(); }
 
 type LogRow = { request_id: string; main_id: string | null; amount: string | null; ok: boolean; paid_by: string | null; reasons: string[]; notes: string[]; last_at: string; day?: string };
-const rowOfLead = (d: KommoDeal | undefined, x: LogRow | undefined, requestId: number): ScreenRow => {
-  const kommo = kommoStateOf(d?.status_id ?? null), ok = x?.ok ?? false;
+const rowOfLead = (d: KommoDeal | undefined, x: LogRow | undefined, requestId: number, mark: PayMark | null = null): ScreenRow => {
+  // Рішення журналу без погодження (`systemOf`) + ПОТОЧНА позначка людини: зняте після прогону погодження діє одразу.
+  const amountNow = d ? num(cf(d, REQ_FIELDS.cash)) : (x?.amount != null ? Number(x.amount) : null);
+  const v = x ? applyMark(systemOf({ ok: x.ok, paidBy: x.paid_by, reasons: x.reasons ?? [], notes: x.notes ?? [] }), amountNow, mark) : null;
+  const kommo = kommoStateOf(d?.status_id ?? null), ok = v?.ok ?? false;
   return {
     mainId: x?.main_id != null ? Number(x.main_id) : (d ? num(cf(d, REQ_FIELDS.sourceDeal)) : null), requestId,
     createdAt: d?.created_at ? new Date(Number(d.created_at) * 1000).toISOString() : null,
     amount: x?.amount != null ? Number(x.amount) : (d ? num(cf(d, REQ_FIELDS.cash)) : null),
-    ok, paidBy: x?.paid_by ?? null,
-    reasons: x ? x.reasons ?? [] : ["ще не перевірено — натисніть «↻ Перевірити зараз»"], notes: x?.notes ?? [],
+    ok, paidBy: v?.paidBy ?? null, manual: v?.manual ?? null, stale: v?.stale ?? false, comment: mark?.comment ?? null, commentBy: mark?.commentBy ?? null,
+    reasons: v ? v.reasons : ["ще не перевірено — натисніть «↻ Перевірити зараз»"], notes: v?.notes ?? [],
     card: d ? screenCard(cf(d, REQ_FIELDS.card)) : "", owner: d ? ownerLine({ recipient: cf(d, REQ_FIELDS.recipient), bank: cf(d, REQ_FIELDS.bank), phone: cf(d, REQ_FIELDS.phone) }) : "",
     category: PAY_CATEGORY, kommo, diff: x ? discrepancyOf(ok, kommo) : false,
     stage: d ? requestStatusOf(Number(d.status_id)).label : "запит не знайдено в Kommo", pending: !x,
@@ -277,7 +286,9 @@ export async function loadScreenDay(dayArg?: string): Promise<ScreenDay> {
   const latest = new Map((activeIds.length ? (await pool.query<LogRow>(
     `SELECT DISTINCT ON (request_id) request_id::text, main_id::text, amount::text, ok, paid_by, reasons, notes, last_at::text
        FROM payment_file_log WHERE request_id = ANY($1::bigint[]) ORDER BY request_id, day DESC, last_at DESC`, [activeIds])).rows : []).map((x) => [Number(x.request_id), x]));
-  const active = open.map((d) => rowOfLead(d, latest.get(d.id), d.id))
+  const gone0 = (await pool.query<{ id: string }>(`SELECT DISTINCT request_id::text AS id FROM payment_file_log WHERE day BETWEEN $1::date - 14 AND $1::date + 1`, [day])).rows.map((x) => Number(x.id));
+  const marks = await loadMarks(pool as unknown as Db, [...new Set([...activeIds, ...gone0])]);
+  const active = open.map((d) => rowOfLead(d, latest.get(d.id), d.id, marks.get(d.id) ?? null))
     .sort((a, b) => Number(b.ok) - Number(a.ok) || String(a.createdAt).localeCompare(String(b.createdAt)));
   // 2) Архів дня: запити з журналу (файли за 14 днів до і день після — поданий після 17:00 належить файлу завтра), яких у
   //    фільтрі вже немає, і день яких за `archiveDayOf` — цей: закриті — за днем закриття в Kommo (наживо: синк відстає
@@ -291,12 +302,22 @@ export async function loadScreenDay(dayArg?: string): Promise<ScreenDay> {
   for (let i = 0; i < gone.length; i += 250)
     for (const d of await once(() => fetchLeadsByIds(gone.slice(i, i + 250).map((x) => Number(x.request_id))))) leads.set(d.id, d);
   const inDay = gone.filter((x) => archiveDayOf(leads.get(Number(x.request_id))?.closed_at, x.day!) === day);
-  const archive = inDay.map((x) => rowOfLead(leads.get(Number(x.request_id)), x, Number(x.request_id)))
+  const archive = inDay.map((x) => rowOfLead(leads.get(Number(x.request_id)), x, Number(x.request_id), marks.get(Number(x.request_id)) ?? null))
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   const at = [...latest.values(), ...inDay].reduce<string | null>((a, x) => (!a || x.last_at > a ? x.last_at : a), null);
   const data: ScreenDay = { day, today, todayCal, at: at ? new Date(at).toISOString() : null, kommoBase: config.kommo.baseUrl, active, archive, totals: splitTotals(active, archive), days };
   screenCache.set(day, { at: Date.now(), data });
   return data;
+}
+
+/**
+ * Для «Погоджено» (26.10.2026): рішення системи з останнього журналу (`null` — прогін запиту ще не бачив) і ЖИВА сума
+ * запиту з Kommo — саме її погоджуємо (змінять суму — погодження не діятиме).
+ */
+export async function markContext(requestId: number): Promise<{ system: { ok: boolean; paidBy: string | null; reasons: string[]; notes: string[] } | null; amountNow: number | null }> {
+  const x = (await pool.query<LogRow>(`SELECT ok, paid_by, reasons, notes FROM payment_file_log WHERE request_id = $1 ORDER BY day DESC, last_at DESC LIMIT 1`, [requestId])).rows[0];
+  const [d] = Number.isInteger(requestId) && requestId > 0 ? await once(() => fetchLeadsByIds([requestId])) : [];
+  return { system: x ? { ok: x.ok, paidBy: x.paid_by, reasons: x.reasons ?? [], notes: x.notes ?? [] } : null, amountNow: d ? num(cf(d, REQ_FIELDS.cash)) : null };
 }
 
 /** Фільтр Тетяни як є: три етапи × відповідальна × «Стандартная», без вікна дати (у фільтрі висять і старі запити). */
@@ -311,8 +332,8 @@ export function screenXlsx(d: ScreenDay): Buffer {
   const okSum = Math.round(ok.reduce((a, r) => a + (r.amount ?? 0), 0) * 100) / 100;
   const head = ["ID угоди", "Запит", "Номер карти", "Власник карти", "Сума", "Рішення системи", "Підстава / причина", "Примітка", "Етап запиту в Kommo", "Розбіжність"];
   const line = (r: ScreenRow) => [r.mainId, r.requestId, r.card, r.owner, r.amount, r.pending ? "ще не перевірено" : r.ok ? "до оплати" : "перевірити",
-    r.ok ? (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту") : r.reasons.join("; "),
-    r.notes.join("; "), r.stage, r.diff ? "так" : ""];
+    r.ok ? (r.paidBy === MANUAL ? `погоджено вручну — ${r.manual?.by ?? "?"}` : r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту") : r.reasons.join("; "),
+    [...r.notes, ...(r.comment ? [`коментар${r.commentBy ? ` (${r.commentBy})` : ""}: ${r.comment}`] : [])].join("; "), r.stage, r.diff ? "так" : ""];
   return xlsxBook([
     { name: "До оплати", rows: [["ID", "Номер карти", "Власник карти", okSum, "Категорії"], ...ok.map(fileRow)] },
     { name: "У фільтрі зараз", rows: [head, ...d.active.map(line)] },

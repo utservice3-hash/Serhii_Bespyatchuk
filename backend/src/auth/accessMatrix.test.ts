@@ -56,6 +56,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   // СЕО, ОД і КВП адмін-рівня його не мають → 403 по ПРАВУ.
   "POST /api/bank/safe/sync": "view_private_finance — СЕО, ОД і КВП його не мають (Таня: «сейф — лише адмін та я», 08.10.2026)",
   "POST /api/finance/payments/run": "view_private_finance — СЕО, ОД і КВП його не мають: у файлі на оплату номери карток і ПІБ отримувачів (16.10.2026)",
+  "POST /api/finance/payments/mark": "view_private_finance — СЕО, ОД і КВП його не мають: «Погоджено» переносить запит у файл на оплату з номерами карток (Роман 26.10.2026: погоджують Тетяна й адмін)",
   "POST /api/finance/approval": "погодження плану — поіменний список fin_plan_approvers (06.10.2026), роль його не дає: kvp і фінансист розділ бачать, а погодити план не можуть",
   "PUT /api/one-on-ones/forms/:type": "edit_1x1_forms — СЕО/ОД, HR і КВП (рішення власника 27.08.2026); admin його не має",
   "POST /api/settings/roles": "manage_users — kvp/financier його не мають (рішення власника)",

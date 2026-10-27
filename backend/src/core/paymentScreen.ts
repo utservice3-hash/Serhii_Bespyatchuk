@@ -20,6 +20,10 @@ export interface ScreenRow {
   stage: string;
   /** Запит у фільтрі, якого прогін ще не бачив (подали після останнього :40) — рішення немає. */
   pending?: boolean;
+  /** ✋ Погоджено вручну (26.10.2026): хто й коли; `stale` — погодили іншу суму, діє лише після повторного погодження. */
+  manual?: { by: string | null; at: string | null } | null; stale?: boolean;
+  /** Коментар до запиту і його автор. */
+  comment?: string | null; commentBy?: string | null;
 }
 
 /**
