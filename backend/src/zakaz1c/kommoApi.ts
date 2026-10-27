@@ -19,6 +19,10 @@ export const KOMMO_FIELDS = {
   leadCar: 2096383, // «Марка і Номер автомобіля»
   leadCityFrom: 481280, // «Откуда город»
   leadCityTo: 481286, // «Куда город»
+  // ⬇ Поля, які зараз пише Genesis (лише API). Ми пишемо їх тільки при ZAKAZ1C_FIELDS_MODE=live.
+  leadOrderNo: 2096315, // «Номер заказа» (text) — номер рахунку 1С, як «000008587»
+  leadPaid1c: 2096323, // «Оплачено 1с» (text) — сума оплат, як «28000»
+  leadPaidFrom1c: 2096325, // «Оплачено из 1с» (checkbox) — повна оплата
 } as const;
 
 let last = 0;
@@ -117,6 +121,23 @@ export async function attachPdfToLead(leadId: number, fileName: string, bytes: B
   });
   if (!lr.ok) throw new Error(`Kommo прикріплення файлу до угоди: ${lr.status}`);
   return uuid;
+}
+
+export interface LeadPatch {
+  id: number;
+  custom_fields_values?: { field_id: number; values: { value: string | boolean }[] }[];
+  status_id?: number;
+  pipeline_id?: number;
+}
+
+/** Пакетне оновлення угод (до 50 за запит, як дозволяє Kommo). Помилка — разом із відповіддю Kommo. */
+export async function patchLeads(batch: LeadPatch[]): Promise<void> {
+  for (let i = 0; i < batch.length; i += 50) {
+    const r = await kommo("/api/v4/leads", {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(batch.slice(i, i + 50)),
+    });
+    if (!r.ok) throw new Error(`Kommo оновлення угод: ${r.status} ${(await r.text()).slice(0, 200)}`);
+  }
 }
 
 /** Звичайна примітка в стрічці угоди. */

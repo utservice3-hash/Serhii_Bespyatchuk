@@ -108,6 +108,7 @@ import { clientLimitsMirror, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON }
 import { minusDealsRouter } from "./routes/minusRegistry.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
 import { zakaz1cRouter } from "./routes/zakaz1c.js";
+import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
 import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
@@ -603,6 +604,11 @@ cron.schedule("50 4 * * *", () => {
 // Щогодини о :45 — не :00/:30 (синк Kommo) і не :40 (файл на оплату, теж ходить у 1С).
 cron.schedule("45 * * * *", () => {
   void runJob("syncOnecDeals", () => syncOnecDeals());
+}, { timezone: "Europe/Kyiv" });
+// 🧾 «ТЕСТ ЗАКАЗ 1С»: оплати 1С → «Оплачено 1с» / «Оплачено из 1с» / «Оплата отримана» (27.10.2026, zakaz1c/payments.ts).
+// О :50 — одразу після свіжих оплат о :45. Поки ZAKAZ1C_FIELDS_MODE=off (Genesis працює) — лише план, у Kommo нічого.
+cron.schedule("50 * * * *", () => {
+  void runJob("zakaz1cPayments", () => zakaz1cPayments());
 }, { timezone: "Europe/Kyiv" });
 // 💱 Неоплачені рахунки 1С з 2026 року (26.10.2026) → «Валютна дебіторка» і список під нею. Щогодини о :15 — не :40
 // (файл на оплату) і не :45 (1С по угодах): усі троє ходять в один сервіс 1С.

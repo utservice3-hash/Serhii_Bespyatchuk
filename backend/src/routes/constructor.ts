@@ -317,8 +317,11 @@ async function docStateOf(req: Request): Promise<{ s: DocumentState; num: string
   return stateFromRow(await visibleRow(req));
 }
 
-/** Друга сторона пакета: той самий збирач стану, id — не з адреси, межу вже перевірив викликач. */
-async function stateById(_req: Request, id: number): Promise<{ s: DocumentState; num: string; dens: Density | null }> {
+/**
+ * Друга сторона пакета: той самий збирач стану, id — не з адреси, межу вже перевірив викликач.
+ * Експорт — для ТТН із вкладки Kommo «ТЕСТ ЗАКАЗ 1С» (`zakaz1c/mount.ts`): там межа — підпис Kommo й угода документа.
+ */
+export async function stateById(_req: Request, id: number): Promise<{ s: DocumentState; num: string; dens: Density | null }> {
   const q = await pool.query(`SELECT ${DOC_COLS} FROM constructor_documents WHERE id = $1`, [id]);
   if (!q.rows[0]) throw new HttpError(404, "Запису немає.");
   return stateFromRow(q.rows[0]);

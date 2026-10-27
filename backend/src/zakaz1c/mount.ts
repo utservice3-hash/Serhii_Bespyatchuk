@@ -15,11 +15,13 @@
 import { Router, type Request, type Response } from "express";
 import { pool } from "../db/pool.js";
 import { requireKommoCaller } from "./kommoAuth.js";
-import { onecServiceBase, zakaz1cMode, zakaz1cTestEdrpou, zakaz1cTesters } from "./env.js";
+import { onecServiceBase, zakaz1cFieldsMode, zakaz1cMode, zakaz1cTestEdrpou, zakaz1cTesters } from "./env.js";
+import { stateById } from "../routes/constructor.js";
+import { buildTtn, waybillBlocker } from "../constructor/services/waybills.js";
 import {
   CURRENCIES, ORGANIZATIONS, VAT_TYPES, buildCreateInvoiceBody, createInvoiceIn1c, invoiceAllowed, invoicePdfFrom1c, parseInvoiceForm,
 } from "./invoice.js";
-import { addLeadNote, attachPdfToLead, kommoUserName, loadLead } from "./kommoApi.js";
+import { KOMMO_FIELDS, addLeadNote, attachPdfToLead, kommoUserName, loadLead, patchLeads } from "./kommoApi.js";
 import { invoiceOfLead, listInvoices, saveInvoice } from "./store.js";
 
 const leadIdOf = (req: Request) => {
@@ -53,6 +55,14 @@ async function agreementsOf(edrpou: string): Promise<{ found: boolean; name: str
   }
 }
 
+/** Остання заявка перевізнику з Конструктора дашборда для цієї угоди (`deal_no` = ID угоди Kommo) — з неї ТТН. */
+async function carrierDocOf(leadId: number): Promise<{ id: number; createdAt: string } | null> {
+  const q = await pool.query<{ id: string; created_at: string }>(
+    `SELECT id::text AS id, to_char(created_at AT TIME ZONE 'Europe/Kyiv', 'DD.MM.YYYY') AS created_at
+       FROM constructor_documents WHERE deal_no = $1 AND party = 'carrier' ORDER BY id DESC LIMIT 1`, [String(leadId)]);
+  return q.rows[0] ? { id: Number(q.rows[0].id), createdAt: q.rows[0].created_at } : null;
+}
+
 export function buildZakaz1cRouter(): Router {
   const r = Router();
   r.use(requireKommoCaller);
@@ -68,14 +78,14 @@ export function buildZakaz1cRouter(): Router {
     const mode = zakaz1cMode();
     const lead = await loadLead(leadId);
     const edrpou = lead.company?.edrpou ?? "";
-    const [onec, invoices] = await Promise.all([agreementsOf(edrpou), listInvoices(pool, leadId)]);
+    const [onec, invoices, carrierDoc] = await Promise.all([agreementsOf(edrpou), listInvoices(pool, leadId), carrierDocOf(leadId)]);
     const allowed = invoiceAllowed(mode, { edrpou, testEdrpou: zakaz1cTestEdrpou(), userId: req.kommoCaller!.userId, testers: zakaz1cTesters() });
     res.json({
       mode, testEdrpou: zakaz1cTestEdrpou(),
       canCreate: allowed.ok, blockedWhy: allowed.ok ? null : allowed.why,
       organizations: ORGANIZATIONS, currencies: CURRENCIES, vatTypes: VAT_TYPES,
       lead: { id: lead.id, name: lead.name, price: lead.price, car: lead.car, cityFrom: lead.cityFrom, cityTo: lead.cityTo, company: lead.company },
-      onec, invoices,
+      onec, invoices, ttn: carrierDoc ? { createdAt: carrierDoc.createdAt } : null,
     });
   });
 
@@ -113,6 +123,11 @@ export function buildZakaz1cRouter(): Router {
         attachError = attachError ?? `примітка: ${(e as Error).message.slice(0, 200)}`;
       });
     }
+    // «Номер заказа» — лише коли Genesis вимкнено (ZAKAZ1C_FIELDS_MODE=live): поки він працює, це його поле.
+    if (zakaz1cFieldsMode() === "live" && !inv.existed) {
+      await patchLeads([{ id: leadId, custom_fields_values: [{ field_id: KOMMO_FIELDS.leadOrderNo, values: [{ value: inv.number }] }] }])
+        .catch((e) => { attachError = attachError ?? `«Номер заказа»: ${(e as Error).message.slice(0, 200)}`; });
+    }
     await saveInvoice(pool, { leadId, inv, mode: mode === "live" ? "live" : "test", kommoUserId: caller.userId, fileUuid, attachError });
     res.json({
       invoice: { uid: inv.uid, number: inv.numberPrint, date: inv.date, organization: inv.organization, agreement: inv.agreement,
@@ -135,6 +150,21 @@ export function buildZakaz1cRouter(): Router {
     const pdf = await invoicePdfFrom1c(onecServiceBase(), uid, stamp);
     if (!pdf.ok) return res.status(502).json({ error: pdf.why });
     res.json({ fileName: `invoice_${uid.slice(0, 8)}${stamp ? "" : "_bez_pechatky"}.pdf`, base64: pdf.bytes.toString("base64") });
+  });
+
+  /**
+   * ТТН (1-ТН, Excel) — той самий генератор, що кнопка «⬇ ТТН» у Конструкторі дашборда, з останньої заявки перевізнику
+   * цієї угоди. Заявки немає або вона клієнтська — 404/400 словами. JSON з base64 — з тієї ж причини, що й PDF.
+   */
+  r.get("/lead/:leadId/ttn", async (req: Request, res: Response) => {
+    const leadId = leadIdOf(req);
+    if (!leadId) return res.status(400).json({ error: "Некоректний номер угоди." });
+    const doc = await carrierDocOf(leadId);
+    if (!doc) return res.status(404).json({ error: "У Конструкторі дашборда немає заявки перевізнику для цієї угоди." });
+    const d = await stateById(req, doc.id);
+    const no = waybillBlocker(d.s);
+    if (no) return res.status(400).json({ error: no });
+    res.json({ fileName: `ТТН-${leadId}.xlsx`, base64: Buffer.from(buildTtn(d.s)).toString("base64") });
   });
 
   return r;

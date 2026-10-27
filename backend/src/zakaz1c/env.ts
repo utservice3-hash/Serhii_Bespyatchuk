@@ -29,6 +29,16 @@ export function zakaz1cMode(env: NodeJS.ProcessEnv = process.env): Zakaz1cMode {
   return m === "test" || m === "live" ? m : "off";
 }
 
+/**
+ * Запис у поля й етапи, які зараз веде Genesis («Номер заказа», «Оплачено 1с», «Оплачено из 1с», етап
+ * «Оплата отримана»). `off` (типово) — лише рахуємо й пишемо в журнал «що записали б»; `live` — пишемо в Kommo.
+ * Вмикається, коли вимикають Genesis: поки він працює, два записувачі в ті самі поля перетирали б одне одного.
+ */
+export type Zakaz1cFieldsMode = "off" | "live";
+export function zakaz1cFieldsMode(env: NodeJS.ProcessEnv = process.env): Zakaz1cFieldsMode {
+  return str(env.ZAKAZ1C_FIELDS_MODE).toLowerCase() === "live" ? "live" : "off";
+}
+
 /** Kommo user id тестувальників (через кому). У режимі test — єдині, кому відкрито створення рахунку. */
 export function zakaz1cTesters(env: NodeJS.ProcessEnv = process.env): Set<number> {
   return new Set(str(env.ZAKAZ1C_TESTERS).split(/[,\s]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0));

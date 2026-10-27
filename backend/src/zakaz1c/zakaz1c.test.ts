@@ -5,7 +5,8 @@ import path from "node:path";
 import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
 import { buildCreateInvoiceBody, fromCreateInvoiceReply, invoiceAllowed, parseInvoiceForm } from "./invoice.js";
-import { zakaz1cMode } from "./env.js";
+import { zakaz1cFieldsMode, zakaz1cMode } from "./env.js";
+import { BEFORE_PAID, PAID_STAGE, patchOf, planPayment, runPayments } from "./payments.js";
 
 /**
  * 🧾 «ТЕСТ ЗАКАЗ 1С» (26.10.2026, `zakaz1c/`). Без БД і мережі: межі модуля — чисті функції, і гейти ганяють рівно їх.
@@ -128,4 +129,70 @@ test("#7105 ВІДЖЕТ: вкладка card_sdk + lcard-0, `{}` лише те�
   assert.match(js, /self\.\$authorizedAjax\(/, "запити йдуть не підписаним каналом Kommo");
   assert.doesNotMatch(js, /\$\.ajax\(|fetch\(/, "є запит повз $authorizedAjax — без підпису сервер його відхилить, а якщо ні — це діра");
   assert.doesNotMatch(js, /secret|Bearer|api[_-]?key/i, "у віджеті є щось схоже на ключ");
+});
+
+test("#7106 ОПЛАТИ → УГОДА: сума по валютах, «оплачено» лише без неоплачених рахунків, етап лише ВПЕРЕД і лише з етапів до «Оплата отримана»", () => {
+  const base = { dealId: 1, pipelineId: 8921932, statusId: 69716312, payments: [{ sum: 28000, currency: "UAH" }], unpaidInvoices: 0 };
+  assert.deepEqual(planPayment(base), { dealId: 1, paidText: "28000", fullyPaid: true, moveTo: 69716460 });
+  assert.equal(planPayment({ ...base, payments: [] }), null, "без оплат щось пишеться");
+  assert.equal(planPayment({ ...base, payments: [{ sum: 1000.5, currency: "UAH" }, { sum: 500, currency: "UAH" }] })!.paidText, "1500.50");
+  assert.equal(planPayment({ ...base, payments: [{ sum: 1800, currency: "EUR" }, { sum: 500, currency: "UAH" }] })!.paidText, "1800 EUR + 500 UAH");
+  const partial = planPayment({ ...base, unpaidInvoices: 1 })!;
+  assert.equal(partial.fullyPaid, false, "з неоплаченим рахунком угода вважається оплаченою");
+  assert.equal(partial.moveTo, null, "часткова оплата рухає етап");
+  for (const st of [142, 143, 69716460]) assert.equal(planPayment({ ...base, statusId: st })!.moveTo, null, `етап ${st} зрушено`);
+  assert.equal(planPayment({ ...base, pipelineId: 8921936, statusId: 69693696 })!.moveTo, null, "рух в іншій воронці");
+  assert.equal(planPayment({ ...base, pipelineId: 155304, statusId: 25044997 })!.moveTo, PAID_STAGE[155304], "стара воронка не рухається");
+  assert.ok(!BEFORE_PAID[8921932].has(PAID_STAGE[8921932]), "«Оплата отримана» стоїть у переліку етапів ДО неї");
+  // Що піде в Kommo: галочку лише ставимо, етап — лише з moveTo.
+  const pFull = patchOf(planPayment(base)!, 8921932);
+  assert.deepEqual(pFull.custom_fields_values!.map((f) => f.field_id), [2096323, 2096325]);
+  assert.equal(pFull.status_id, 69716460);
+  const pPart = patchOf(partial, 8921932);
+  assert.deepEqual(pPart.custom_fields_values!.map((f) => f.field_id), [2096323], "без повної оплати пишеться галочка");
+  assert.equal(pPart.status_id, undefined, "без повної оплати пишеться етап");
+});
+
+test("#7107 ПОКИ ПРАЦЮЄ GENESIS (ZAKAZ1C_FIELDS_MODE=off) — у Kommo ані запиту; план рахується й лягає в журнал", async () => {
+  assert.equal(zakaz1cFieldsMode({} as NodeJS.ProcessEnv), "off", "типово пише в поля Genesis");
+  assert.equal(zakaz1cFieldsMode({ ZAKAZ1C_FIELDS_MODE: "on" } as NodeJS.ProcessEnv), "off", "невідоме значення ввімкнуло запис");
+  const saved = { mode: process.env.ZAKAZ1C_FIELDS_MODE, fetch: globalThis.fetch };
+  let fetches = 0;
+  const queries: string[] = [];
+  globalThis.fetch = (async () => { fetches++; throw new Error("мережа в тесті заборонена"); }) as typeof fetch;
+  const pool = {
+    query: async (sql: string) => {
+      queries.push(sql);
+      if (/FROM c LEFT JOIN deals/.test(sql)) return { rows: [{ deal_id: "62771111", pipeline_id: 8921932, status_id: 69716312,
+        pays: [{ sum: "28000", currency: "UAH" }], unpaid: 0, genesis_paid1c: true }] };
+      return { rows: [] };
+    },
+  };
+  try {
+    delete process.env.ZAKAZ1C_FIELDS_MODE;
+    const r = await runPayments(pool as never);
+    assert.equal(fetches, 0, "у режимі off був запит у мережу (Kommo)");
+    assert.deepEqual({ deals: r.deals, fullyPaid: r.fullyPaid, moves: r.moves, written: r.written, mode: r.mode, agree: r.genesisAgree },
+      { deals: 1, fullyPaid: 1, moves: 1, written: 0, mode: "off", agree: 1 });
+    assert.ok(queries.some((q) => /INSERT INTO zakaz_onec_pay_plan\b(?!_)/.test(q)), "план не записано в журнал");
+    // Дзеркало: у live той самий план ІДЕ в Kommo (інакше «off» нічого б не доводив).
+    process.env.ZAKAZ1C_FIELDS_MODE = "live";
+    process.env.ZAKAZ1C_KOMMO_TOKEN = "t";
+    await runPayments(pool as never).catch(() => undefined);
+    assert.ok(fetches > 0, "у режимі live запиту в Kommo не було");
+  } finally {
+    globalThis.fetch = saved.fetch;
+    if (saved.mode === undefined) delete process.env.ZAKAZ1C_FIELDS_MODE; else process.env.ZAKAZ1C_FIELDS_MODE = saved.mode;
+    delete process.env.ZAKAZ1C_KOMMO_TOKEN;
+  }
+});
+
+test("#7108 ТТН У ВКЛАДЦІ: кнопка є лише за наявної заявки перевізнику і йде підписаним каналом у той самий генератор Конструктора", () => {
+  const js = WIDGET("script.js");
+  assert.match(js, /d\.ttn\s*\n?\s*\?/, "кнопка ТТН не залежить від наявності заявки");
+  assert.match(js, /download\("\/lead\/" \+ leadId\(\) \+ "\/ttn"/, "ТТН качається не з маршруту модуля");
+  const mount = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "mount.ts"), "utf8");
+  assert.match(mount, /buildTtn\(d\.s\)/, "ТТН будується не генератором Конструктора");
+  assert.match(mount, /waybillBlocker\(d\.s\)/, "клієнтська заявка може дати ТТН без перевізника");
+  assert.match(mount, /party = 'carrier'/, "ТТН береться не із заявки перевізнику");
 });

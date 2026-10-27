@@ -6698,3 +6698,12 @@ CREATE TABLE IF NOT EXISTS zakaz_onec_invoices (
 );
 CREATE INDEX IF NOT EXISTS zakaz_onec_invoices_lead_idx ON zakaz_onec_invoices (lead_id, created_at DESC);
 REVOKE ALL ON zakaz_onec_invoices FROM ai_readonly;
+-- 💸 «ТЕСТ ЗАКАЗ 1С» — план оплат 1С → угоди Kommo (`zakaz1c/payments.ts`, 27.10.2026). Що МАЄ бути в «Оплачено 1с» /
+-- «Оплачено из 1с» / етапі за правилом власника, поруч — що записав Genesis (`genesis_paid1c`, де є) для звірки до
+-- перемикання, і що записали МИ (`written_*`) — щоб у live писати лише зміни. Поки ZAKAZ1C_FIELDS_MODE=off, written_* порожні.
+CREATE TABLE IF NOT EXISTS zakaz_onec_pay_plan (
+  deal_id BIGINT PRIMARY KEY, paid_text TEXT NOT NULL, fully_paid BOOLEAN NOT NULL, move_to BIGINT, current_status BIGINT,
+  genesis_paid1c BOOLEAN, computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  written_text TEXT, written_paid BOOLEAN, written_status BIGINT, written_at TIMESTAMPTZ, write_error TEXT
+);
+REVOKE ALL ON zakaz_onec_pay_plan FROM ai_readonly;

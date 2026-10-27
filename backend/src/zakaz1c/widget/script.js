@@ -117,6 +117,9 @@ define(["jquery"], function ($) {
         + "<span class='muted'>Повторне натискання не створює дубль: 1С поверне той самий рахунок угоди.</span></div>"
         + "<div class='" + NS + "-msg'></div>"
         + "<h3 style='margin-top:16px'>Рахунки угоди</h3><div class='" + NS + "-list'>" + listHtml(d.invoices) + "</div>"
+        + "<h3 style='margin-top:16px'>ТТН</h3><div class='row'>" + (d.ttn
+          ? "<button class='btn " + NS + "-ttn'>⬇ ТТН (Excel)</button><span class='muted'>із заявки перевізнику в Конструкторі дашборда від " + esc(d.ttn.createdAt) + "</span>"
+          : "<span class='muted'>Немає заявки перевізнику в Конструкторі дашборда для цієї угоди — ТТН береться з неї.</span>") + "</div>"
         + "</div>";
       el.html(html);
       recalc();
@@ -181,16 +184,19 @@ define(["jquery"], function ($) {
         .then(function () { state.busy = false; btn.prop("disabled", !state.data.canCreate).text("Створити рахунок"); });
     }
 
-    function openPdf(uid, stamp) {
-      api("GET", "/lead/" + leadId() + "/invoice/" + uid + "/pdf?stamp=" + stamp).then(function (r) {
+    /** Файл з JSON `{fileName, base64}` → завантаження в браузері (запит лише підписаним каналом). */
+    function download(path, type) {
+      api("GET", path).then(function (r) {
         var bin = atob(r.base64), bytes = new Uint8Array(bin.length);
         for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        var url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+        var url = URL.createObjectURL(new Blob([bytes], { type: type }));
         var a = document.createElement("a");
         a.href = url; a.download = r.fileName; document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
       }).catch(function (e) { message("err", e.message); });
     }
+    function openPdf(uid, stamp) { download("/lead/" + leadId() + "/invoice/" + uid + "/pdf?stamp=" + stamp, "application/pdf"); }
+    function openTtn() { download("/lead/" + leadId() + "/ttn", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); }
 
     this.callbacks = {
       render: function () { return true; },
@@ -211,6 +217,7 @@ define(["jquery"], function ($) {
             recalc();
           })
           .on("click." + NS, sel + " ." + NS + "-pdf", function (e) { e.preventDefault(); openPdf($(this).data("uid"), $(this).data("stamp")); })
+          .on("click." + NS, sel + " ." + NS + "-ttn", function (e) { e.preventDefault(); openTtn(); })
           .on("input." + NS + " change." + NS, sel + " input, " + sel + " select", recalc);
         return true;
       },
