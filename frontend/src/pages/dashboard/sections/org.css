@@ -74,6 +74,7 @@
 .org-list td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .org-list tr:hover td { background: var(--surface-2); }
 .org-tbl { overflow-x: auto; }
+.org-write { text-decoration: none; white-space: nowrap; }
 
 /* картка людини */
 .org-scrim { position: fixed; inset: 0; background: rgba(10, 10, 14, .35); z-index: 2600; }

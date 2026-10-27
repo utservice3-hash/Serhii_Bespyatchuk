@@ -16,6 +16,8 @@ import "./org.css";
  *  • Людина, чия «Команда» не збіглася з жодним блоком, — у «Без блоку» з переліком значень: невідоме видно.
  *  • Свій нік і фото кожен змінює сам; режим «Редагувати» (перетягнути людину, керівник, блок, журнал) — `canEdit`
  *    із сервера (право `edit_org`). Контакт — лише Telegram (ТЗ).
+ *  • Етап 2 — «Написати» в картці й у списку ВІДКРИВАЄ Telegram (t.me/<нік>); надсилати повідомлення з дашборда
+ *    не можна, діалогів і бота немає (рішення Романа 27.10.2026: «тільки відкривання телеграма»).
  */
 const narrow = () => typeof window !== "undefined" && window.innerWidth < 700;
 type SortKey = "name" | "position" | "unit" | "telegram";
@@ -174,7 +176,7 @@ export function OrgSection() {
     <div className="org">
       <div>
         <h1>Орг структура</h1>
-        <div className="org-sub">Хто де працює і як з ним звʼязатися. Натисни на людину, щоб відкрити картку.</div>
+        <div className="org-sub">Хто де працює і як з ним звʼязатися. Натисни на людину, щоб написати їй у Telegram.</div>
       </div>
       <div className="org-tool">
         <input className="hr-inp org-search" type="search" placeholder="Пошук: імʼя, посада або @нік" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук людини" />
@@ -210,7 +212,7 @@ export function OrgSection() {
       ) : (
         <div className="hr-card org-tbl" style={{ marginBottom: 0 }}>
           <table className="org-list">
-            <thead><tr>{th("name", "Співробітник")}{th("position", "Посада")}{th("unit", "Відділ / команда")}{th("telegram", "Telegram")}</tr></thead>
+            <thead><tr>{th("name", "Співробітник")}{th("position", "Посада")}{th("unit", "Відділ / команда")}{th("telegram", "Telegram")}<th /></tr></thead>
             <tbody>
               {listRows.map((p) => (
                 <tr key={p.id}>
@@ -218,9 +220,11 @@ export function OrgSection() {
                   <td>{p.position || <span className="hr-muted">не вказано</span>}</td>
                   <td>{p.unitId == null ? <span style={{ color: "var(--warn)" }}>Без блоку</span> : unitName(p)}</td>
                   <td className="org-tg" style={{ fontSize: 13 }}>{p.telegram ?? <span className="hr-muted">не вказано</span>}</td>
+                  {/* Етап 2 = лише відкрити Telegram (рішення Романа 27.10.2026): повідомлень у дашборді немає. */}
+                  <td>{p.telegram && <a className="hr-btn xs org-write" href={`https://t.me/${p.telegram.slice(1)}`} target="_blank" rel="noopener noreferrer">Написати</a>}</td>
                 </tr>
               ))}
-              {!listRows.length && <tr><td colSpan={4} className="hr-muted">Нікого не знайдено. Спробуй інше імʼя або прибери фільтр.</td></tr>}
+              {!listRows.length && <tr><td colSpan={5} className="hr-muted">Нікого не знайдено. Спробуй інше імʼя або прибери фільтр.</td></tr>}
             </tbody>
           </table>
         </div>
