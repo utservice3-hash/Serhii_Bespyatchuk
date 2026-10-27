@@ -72,6 +72,7 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/receivables-claims", module: "../routes/receivablesClaims.js", export: "receivablesClaimRouter" },
   { mount: "/api/nominations", module: "../routes/nominations.js", export: "nominationsRouter" },
   { mount: "/api/people", module: "../routes/people.js", export: "peopleRouter" },
+  { mount: "/api/org/teams", module: "../routes/orgTeams.js", export: "orgTeamsRouter" },
   { mount: "/api/org", module: "../routes/org.js", export: "orgRouter" },
   { mount: "/api/secrets", module: "../routes/secrets.js", export: "secretsRouter" },
   { mount: "/api/team-vault", module: "../routes/teamVault.js", export: "teamVaultRouter" },
