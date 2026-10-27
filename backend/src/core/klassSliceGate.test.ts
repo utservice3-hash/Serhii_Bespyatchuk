@@ -143,7 +143,7 @@ test("#212 зріз джерела за класом — партиція, і Σ
     if (k.rep.created !== m.repeatCount) bad.push(`мгр ${m.managerId}: зріз «постійні» ${k.rep.created} ≠ ${m.repeatCount}`);
     if (k.undef.created !== m.undefCount) bad.push(`мгр ${m.managerId}: зріз «невизн» ${k.undef.created} ≠ ${m.undefCount}`);
     for (const [nm, v] of [["new", k.new], ["rep", k.rep], ["undef", k.undef]] as const) {
-      const s = v.adCount + v.leadgenCount + v.otherCount + v.noChannelCount;
+      const s = v.adCount + v.leadgenCount + v.elogistCount + v.otherCount + v.noChannelCount;
       if (s !== v.created) bad.push(`мгр ${m.managerId} «${nm}»: джерела ${s} ≠ ${v.created}`);
     }
     // Плоскі поля — це зріз «усі»: Σ по класах кожного джерела має дорівнювати їм.

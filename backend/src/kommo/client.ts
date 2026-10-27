@@ -206,6 +206,8 @@ import {
 } from "../core/carrierPayment.js";
 export { LEADS_BY_IDS_MAX };
 import { fmIncomeFrom, fmExpenseFrom } from "../core/fmSums.js";
+import { isElogistMark } from "../core/elogist.js";
+import type { LeadChannel } from "../core/dealSourceState.js";
 
 const FIELD_UTM_SOURCE = 481993;
 const FIELD_LEAD_GENERATOR = 2098037; // "Лидогенератор"
@@ -232,6 +234,9 @@ const FIELD_UTM_CAMPAIGN = 481997; // utm_campaign (tracking_data)
 const FIELD_ADV_CAMP = 2098331; // ADV_CAMP (text)
 const FIELD_TRAF_SRC = 2098327; // TRAF_SRC (text)
 const FIELD_TRAF_TYPE = 2098329; // TRAF_TYPE (text: cpc/organic/referral/none)
+// 📈 gclid (tracking_data) — Google Click ID для офлайн-конверсій Google Ads (core/googleAdsConversions.ts).
+// Форми uts.ua пишуть його з 23.10.2026; дзвінки Ringostat його не мають.
+const FIELD_GCLID = 482023;
 // «Мінусова угода» (select): «Мінус» = сторно/повернення. Kommo-бюджет завжди додатний;
 // саме ЦЕ поле (не слово в назві) визначає знак: price = is_minus ? -abs(budget) : +abs.
 const FIELD_MINUS = 2098529;
@@ -440,13 +445,18 @@ export interface LeadSource {
   utmSource: string | null;
   leadGenerator: string | null;
   clientSource: string | null;
-  channel: "ad" | "leadgen" | "other";
+  channel: LeadChannel;
 }
 
 /**
  * Classifies a deal's lead origin into the two tracked channels the sales
  * team cares about — paid ads/targeting vs. the lead-generation department —
  * keeping the raw field values so the rule can be refined later in SQL.
+ *
+ * 🟣 eLogist (рішення власника 27.10.2026) — ОКРЕМИЙ канал, не реклама UTS. Стоїть ПІСЛЯ
+ * лідогену (лідоген лишається першим, як і в `reclassifyAdChannel`) і ПЕРЕД рекламою: заявка
+ * з сайту eLogist може нести utm-мітку, і без цього порядку вона знову стала б «рекламою».
+ * Ознака — ЄДИНЕ означення `core/elogist.isElogistMark` (поле / назва / етап).
  */
 export function extractLeadSource(deal: KommoDeal): LeadSource {
   const utmSource = fieldText(deal, FIELD_UTM_SOURCE);
@@ -456,6 +466,8 @@ export function extractLeadSource(deal: KommoDeal): LeadSource {
   let channel: LeadSource["channel"] = "other";
   if (leadGenerator || LEADGEN_PIPELINES.has(deal.pipeline_id)) {
     channel = "leadgen";
+  } else if (isElogistMark({ pipelineId: deal.pipeline_id, statusId: deal.status_id, name: deal.name, clientSource })) {
+    channel = "elogist";
   } else if (utmSource || (clientSource && AD_CLIENT_SOURCES.has(clientSource))) {
     channel = "ad";
   }
@@ -478,6 +490,11 @@ export interface WebTags {
  * (ADV_CAMP/TRAF_*). Платний сигнал живе в РІЗНИХ полях: utm_medium='cpc' АБО
  * traf_type='cpc'. Тут ЛИШЕ витягуємо; бізнес-правило (paid) — GLOSSARY.
  */
+/** gclid ліда — для вивантаження офлайн-конверсій у Google Ads. */
+export function extractGclid(deal: KommoDeal): string | null {
+  return fieldText(deal, FIELD_GCLID);
+}
+
 export function extractWebTags(deal: KommoDeal): WebTags {
   return {
     utmMedium: fieldText(deal, FIELD_UTM_MEDIUM),

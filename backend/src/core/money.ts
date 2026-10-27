@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 // одне одного лише всередині функцій (не на рівні модуля), тож ESM-live-binding резолвиться
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
 import { adDealSql } from "./metrics.js";
+import { ELOGIST_CHANNEL } from "./elogist.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { managerDealClass, type DealState, type ClientSuccess, type PendDay } from "./leadgenHandoffRules.js";
 // 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
@@ -903,8 +904,11 @@ async function mgrWeekAgg(kind: Kind, managerIds: number[], monthStart: string):
  * `ad` = канонічний `adDealSql` (client_source ∈ adSources АБО lead_channel='ad', без
  * реактивації); `leadgen` = `lead_channel='leadgen'`. Множини можуть перетинатись (як і
  * раніше в роуті) — це ДВІ незалежні агрегації, не розбиття.
+ *
+ * 🟣 `elogist` = `lead_channel='elogist'` (рішення власника 27.10.2026: окремий канал, не реклама
+ * UTS). З `ad` він не перетинається за побудовою: `adDealSql` виключає eLogist сам.
  */
-export async function receivedByChannel(s: MoneyScope, adSources: string[]): Promise<{ ad: MoneyAgg; leadgen: MoneyAgg }> {
+export async function receivedByChannel(s: MoneyScope, adSources: string[]): Promise<{ ad: MoneyAgg; leadgen: MoneyAgg; elogist: MoneyAgg }> {
   const p: unknown[] = [];
   const src = sourceSql("received", p);
   const conds: string[] = [];
@@ -914,11 +918,13 @@ export async function receivedByChannel(s: MoneyScope, adSources: string[]): Pro
   if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   p.push(adSources); const adRef = `$${p.length}`;
   const ad = adDealSql(adRef);
-  const r = await pool.query<{ ad_rev: string; ad_deals: string; lg_rev: string; lg_deals: string }>(
+  const r = await pool.query<{ ad_rev: string; ad_deals: string; lg_rev: string; lg_deals: string; el_rev: string; el_deals: string }>(
     `SELECT COALESCE(SUM(src.price) FILTER (WHERE ${ad}),0) AS ad_rev,
             COUNT(*) FILTER (WHERE ${ad}) AS ad_deals,
             COALESCE(SUM(src.price) FILTER (WHERE d.lead_channel = 'leadgen'),0) AS lg_rev,
-            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_deals
+            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_deals,
+            COALESCE(SUM(src.price) FILTER (WHERE d.lead_channel = '${ELOGIST_CHANNEL}'),0) AS el_rev,
+            COUNT(*) FILTER (WHERE d.lead_channel = '${ELOGIST_CHANNEL}') AS el_deals
        FROM (${src}) src
        JOIN deals d ON d.kommo_id = src.kommo_id
        JOIN managers m ON m.id = src.manager_id
@@ -929,6 +935,7 @@ export async function receivedByChannel(s: MoneyScope, adSources: string[]): Pro
   return {
     ad: { revenue: Number(x?.ad_rev ?? 0), deals: Number(x?.ad_deals ?? 0) },
     leadgen: { revenue: Number(x?.lg_rev ?? 0), deals: Number(x?.lg_deals ?? 0) },
+    elogist: { revenue: Number(x?.el_rev ?? 0), deals: Number(x?.el_deals ?? 0) },
   };
 }
 

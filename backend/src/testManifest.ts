@@ -23,6 +23,7 @@ export const MANIFEST_FILES: string[] = [
   "auth/matrixCoverage.test.js",
   "jobs/dealContactPairs.test.js",
   "core/clientPlans.test.js",
+  "core/googleAdsConversions.test.js",
   "core/forecast.test.js",
   "core/clientCard.test.js",
   "kommo/leadChildLink.test.js",
@@ -58,6 +59,7 @@ export const MANIFEST_FILES: string[] = [
   "core/dealLedger.test.js",
   "core/unpaidInvoices.test.js",
   "core/paymentMarks.test.js",
+  "core/finRecurring.test.js",
   "core/dealFinFields.test.js",
   "core/taskVisibility.test.js",
   "core/taskStatusRights.test.js",
@@ -242,6 +244,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/plansGridScope.test.js",
   "core/leadgenChannelOnly.test.js",
   "core/channelPartition.test.js",
+  "core/elogist.test.js",
   "core/klassSliceGate.test.js",
   "core/kyivPeriod.test.js",
   "core/dayLiteral.test.js",
@@ -373,7 +376,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
@@ -385,6 +388,8 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
 export const MANIFEST_TESTS: string[] = [
+  "#2510 GOOGLE ADS: заявка без суми, продаж = маржа в межах 90 днів, формат шаблону",
+  "#2510b GOOGLE ADS SQL: продаж = 142, час із журналу етапів, gclid копії — від батька",
   // core/nominations.test.ts + routes/nominations.test.ts — номінації тижня (21.09.2026)
   "#600 результат і авто номінацій == «Факт» і «Авто» Звіту за той самий тиждень",
   "#601 номінації не мають власного SQL по угодах і грошах — лише ядро",
@@ -906,6 +911,15 @@ export const MANIFEST_TESTS: string[] = [
   "#175b джерело в розкритті — з ядра, а не власною копією правила",
   "#175c чип малює всі чотири джерела, а «не знаємо» підписане окремо",
   "#175d sourceOf розводить усі чотири стани, і жоден не зводиться в null",
+  "#2490 eLogist-ЛІД: поле, назва й етап КОЖНЕ позначає лід Кваліфікації; заявка uts.ua — ні; апсерт ставить канал elogist",
+  "#2490b ОДНЕ МІСЦЕ: SQL-фрагмент із тих самих констант, що TS-предикат; копій ознаки eLogist поза core/elogist.ts немає",
+  "#2491 РЕКЛАСИФІКАЦІЯ: eLogist-дотик не рекламний, eLogist перед рекламою, лідоген порівнюється з тим самим, що до 27.10",
+  "#2491b РЕКЛАМА UTS: adDealSql і paidAdSql виключають eLogist доданком на весь предикат; реклама при цьому лишається",
+  "#2492 ПАРТИЦІЯ ДЖЕРЕЛА З eLogist: Σ п'яти кошиків == створено — у ядрі, роуті й таблиці",
+  "#2493 sourceOf і чип знають eLogist: стан не зводиться в null, підпис «eLogist» є",
+  "#2494 ВІКНО ЗАЯВОК: джерело eLogist окреме, у «Рекламі» й «Сайті» його немає, «Все» = чотири",
+  "#2495 «РЕКЛАМА»: eLogist окремим рядком; гроші каналу elogist, у рекламні гроші не входять",
+  "#2496 БЕКФІЛ eLogist: лише ліди Кваліфікації з ознакою, без лідогену, повтор — нуль рядків",
   // ── Е3 · зріз за новизною клієнта (core/klassSliceGate.test.ts, 25.08.2026).
   // Перемикач «усі / лише нові / лише постійні» звужує ЧИСЛО і СКЛАД розкриття
   // одним означенням; третій клас показується лише коли непорожній.
@@ -2426,6 +2440,13 @@ export const MANIFEST_TESTS: string[] = [
   "#1288b ЖИВИЙ SQL: погодити лише перевірений «перевірити» з сумою, автор погодження й коментаря окремо, порожнє — видаляється",
   "#1288c МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: чотири роути під view_private_finance, «Погоджено» в матриці, без права — напис",
   "#1288d ПРОВОДКА: позначка до розподілу файлу, журнал — причини системи, екран — поточна позначка з живою сумою, кнопки лише де можна",
+  // core/finRecurring.test.ts — «Календар оплат» (Тетяна #6369, 27.10.2026).
+  "#1291 ДЕНЬ ОПЛАТИ НЕ ЗʼЇЖДЖАЄ: 31.01 → 28.02 → 31.03, квартал і рік від якоря, місяць смуги від 1-го, вікно включно",
+  "#1291b СМУГА: минуле — лише оплачене аж до першої оплати, майбутнє — графік, скасоване й вимкнене — не плануються",
+  "#1291c НАГАДУВАННЯ: лише платнику, за 3 дні (4 — ні), у день оплати і щодня після, вимкнене — нікому",
+  "#1291d ЖИВИЙ SQL: оплата лише поточної дати, скасування лишає рядок, історія не меншає, платник — лише з правом",
+  "#1291e ІЗОЛЯЦІЯ: таблиці календаря — лише в ядрі календаря, видалення з них немає ніде",
+  "#1291f МЕЖА: сім роутів під view_private_finance, матриця, AI закрито, вкладка й нагадування — лише з правом",
   // core/creditLimits.test.ts — ліміти готівкового рядка дебіторки (21.10.2026).
   "#1280 ГОТІВКОВИЙ РЯДОК ДЕБІТОРКИ — ліміти днів і суми з таблиці лімітів за ключем рядка, як у безготівкових",
   // core/paymentApprovals.test.ts — тестову вкладку «План/факт · авто» прибрано (Тетяна 21.10.2026).

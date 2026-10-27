@@ -65,6 +65,11 @@ export const config = {
     // Не ssoKey: той відкриває вхід, цей — тільки «хто й коли у відпустці». Порожньо → запит відповідає 503.
     vacationsKey: process.env.TRACKER_VACATIONS_KEY ?? "",
   },
+  // 📈 Ключ CSV офлайн-конверсій Google Ads (`GET /api/integrations/google-ads/conversions.csv?key=`).
+  // Лише env, генерується на хості `openssl rand -hex 32`. Порожньо → маршрут відповідає 503.
+  googleAds: {
+    exportKey: process.env.GADS_EXPORT_KEY ?? "",
+  },
   // 📊 GA4 (Google Analytics 4) — витрати й кліки Google Ads по днях і кампаніях.
   // Звʼязка Ads→GA4 віддає cost/clicks, тож окремий Google Ads API не потрібен.
   // ОПЦІЙНО, як трекер і Ringostat: порожньо → джоба спить, дашборд стартує без GA4.

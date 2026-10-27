@@ -658,11 +658,11 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
   // (`crAd/crLeadgen/crOther`, Σ == created). Дані вже приходили з `createdSplitByBucket`
   // і мовчки відкидались. Сусідні «Ліди рекл./лідоген» — ІНША популяція (ліди), тому
   // й підписані інакше: дві сімʼї не мають права зливатись в одну назву.
-  const cell = (c: { created: number; newCount: number; repeatCount: number; undefCount: number; crAd: number; crLeadgen: number; crOther: number; leadsAd: number; leadsLeadgen: number; dispatched: number; received: { revenue: number; deals: number }; expected: { sum: number } }, future: boolean) => (<>
+  const cell = (c: { created: number; newCount: number; repeatCount: number; undefCount: number; crAd: number; crLeadgen: number; crElogist: number; crOther: number; leadsAd: number; leadsLeadgen: number; dispatched: number; received: { revenue: number; deals: number }; expected: { sum: number } }, future: boolean) => (<>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.created || "—")}{!future && c.undefCount > 0 && <span style={{ color: MUTED, fontSize: 10, fontWeight: 400 }}> ·{c.undefCount} невизн</span>}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.newCount || "—")}</td>
     <td style={{ textAlign: "right", color: c.repeatCount > 0 ? GREEN : undefined }}>{future ? "—" : (c.repeatCount || "—")}</td>
-    <td style={{ textAlign: "right", color: MUTED, fontSize: 11 }}>{future ? "—" : `${c.crAd || 0} / ${c.crLeadgen || 0} / ${c.crOther || 0}`}</td>
+    <td style={{ textAlign: "right", color: MUTED, fontSize: 11 }}>{future ? "—" : `${c.crAd || 0} / ${c.crLeadgen || 0} / ${c.crElogist || 0} / ${c.crOther || 0}`}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsAd || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsLeadgen || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.dispatched || "—")}</td>
@@ -673,7 +673,7 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
-        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Нові</th><th style={{ textAlign: "right" }}>Постійні <InfoHint text={HINT.createdSplit} /></th><th style={{ textAlign: "right" }} title="Партиція СТВОРЕНОГО за каналом: реклама / лідген / не реклама і не лідген. Σ = Створено.">Канал ств.<InfoHint text={`Розклад стовпця «Створено» за каналом угоди: реклама / лідген / ${NO_CH_LABEL}. Сума = Створено. НЕ плутати з «Ліди рекл./лідоген» — то інша популяція (ліди Кваліфікації), а не створені угоди повного циклу.`} /></th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
+        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Нові</th><th style={{ textAlign: "right" }}>Постійні <InfoHint text={HINT.createdSplit} /></th><th style={{ textAlign: "right" }} title="Партиція СТВОРЕНОГО за каналом: реклама / лідген / eLogist / не реклама і не лідген. Σ = Створено. eLogist — окремий канал з 27.10.2026, не реклама UTS.">Канал ств.<InfoHint text={`Розклад стовпця «Створено» за каналом угоди: реклама / лідген / ${NO_CH_LABEL}. Сума = Створено. НЕ плутати з «Ліди рекл./лідоген» — то інша популяція (ліди Кваліфікації), а не створені угоди повного циклу.`} /></th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
         <tbody>
           {d.weeks.map((w) => {
             const open = openW.has(w.idx);
@@ -764,6 +764,7 @@ function MgrFactLine({ cs }: { cs: CreatedSplit }) {
       <span style={{ color: "var(--border)" }}>|</span>
       {chip("реклама", cs.ad)}
       {chip("лідген", cs.leadgen)}
+      {chip("eLogist", cs.elogist)}
       {chip(NO_CH_LABEL, cs.other)}
       {chip("без каналу", cs.noChannel)}
       <InfoHint text={HINT.createdSplit} />

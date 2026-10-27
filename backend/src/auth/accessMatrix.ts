@@ -1457,6 +1457,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
+  { method: "GET", path: "/api/integrations/google-ads/conversions.csv", cls: "deny-only",
+    allow: [], deny: [] },
   { method: "GET", path: "/api/integrations/tracker/vacations", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-sso", cls: "deny-only",
@@ -1576,6 +1578,22 @@ export const ACCESS_MATRIX: AccessRow[] = [
      deny-only (403 тим, хто без вкладки), а «людина зі списку може / інша з тією ж роллю ні» тримає ЖИВИЙ гейт ядра. */
   // 💸 «Оплати перевізникам» (16.10.2026): номери карток і ПІБ — лише `view_private_finance` (Адмін, фінансист), як Сейф.
   // «Оновити зараз» — deny-only: проба дозволеної ролі запустила б прогін на проді.
+  // 📅 «Календар оплат» (27.10.2026, задача #6369): бачать і ведуть Тетяна й адмін — `view_private_finance`.
+  // Запис — deny-only: проба дозволеної ролі писала б у прод.
+  { method: "GET", path: "/api/finance/calendar", cls: "GET",
+    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/finance/calendar/due", cls: "GET",
+    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/finance/calendar/history.xlsx", cls: "GET",
+    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/calendar", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "PATCH", path: "/api/finance/calendar/:id", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/calendar/:id/pay", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/calendar/paid/:id/undo", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/payments?day=2026-10-14", cls: "GET",
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/payments/export.xlsx?day=2026-10-14", cls: "GET",

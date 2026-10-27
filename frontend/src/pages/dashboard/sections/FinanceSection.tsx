@@ -11,6 +11,8 @@ import {
 import { rowVisible, asInput, planFromPrevious } from "./financeView";
 import { FinanceWeekTab } from "./FinanceWeekTab";
 import { FinancePaymentsTab } from "./FinancePaymentsTab";
+import { FinanceCalendarTab } from "./FinanceCalendarTab";
+import { FIN_TAB_EVENT } from "../../../components/useFinanceReminders";
 import { FinanceMonthResultTab } from "./FinanceMonthResultTab";
 import { FinanceMonthDealsTab, type ManagerPick } from "./FinanceMonthDealsTab";
 import { kyivYm, shiftYm } from "./financeMonthShared";
@@ -28,7 +30,7 @@ import "./finance.css";
  * до того вкладка пояснює, що буде (той самий прийом, що в «Бізнес-асистенті»).
  * Стилі — `hiring.css` (`.hr-*`) + `finance.css` (`.fin-*`).
  */
-type Tab = "pf" | "art" | "week" | "result" | "deals" | "cash" | "payments" | "overview";
+type Tab = "pf" | "art" | "week" | "result" | "deals" | "cash" | "payments" | "calendar" | "overview";
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthLabel = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -231,7 +233,7 @@ function SectionSelect({ value, label, onPick, placeholder }: { value: FinSectio
 
 // ── Розділ ───────────────────────────────────────────────────────────────────
 export function FinanceSection() {
-  const [tab, setTab] = useState<Tab>(() => (["pf", "art", "week", "result", "deals", "cash", "payments", "overview"].includes(lsGet(LS_TAB) ?? "") ? lsGet(LS_TAB) as Tab : "pf"));
+  const [tab, setTab] = useState<Tab>(() => (["pf", "art", "week", "result", "deals", "cash", "payments", "calendar", "overview"].includes(lsGet(LS_TAB) ?? "") ? lsGet(LS_TAB) as Tab : "pf"));
   const [month, setMonth] = useState(kyivMonthNow);
   const [data, setData] = useState<FinMonth | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -254,11 +256,17 @@ export function FinanceSection() {
   const ask = useCallback((d: DialogSpec) => setDialog(d), []);
   const act = useStructureActions(data, reload, ask, toast);
   const pick = (t: Tab) => { setTab(t); lsSet(LS_TAB, t); };
+  // 🔔 «Відкрити» з нагадування календаря оплат (`useFinanceReminders`): розділ уже відкритий — перемкнути вкладку.
+  useEffect(() => {
+    const on = (e: Event) => { const t = (e as CustomEvent<string>).detail; if (t === "calendar") { setTab(t); lsSet(LS_TAB, t); } };
+    window.addEventListener(FIN_TAB_EVENT, on);
+    return () => window.removeEventListener(FIN_TAB_EVENT, on);
+  }, []);
 
   if (err && !data) return <div className="chart-card"><b>Розділ «Фінанси» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!data) return <p className="loading-text">Завантаження…</p>;
 
-  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["result", "Результат місяця", false], ["deals", "Угоди місяця", false], ["cash", "Каса", false], ["payments", "Оплати перевізникам", false], ["overview", "Огляд", true]];
+  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["result", "Результат місяця", false], ["deals", "Угоди місяця", false], ["cash", "Каса", false], ["payments", "Оплати перевізникам", false], ["calendar", "Календар оплат", false], ["overview", "Огляд", true]];
   return (
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Фінанси</h1>
@@ -280,6 +288,7 @@ export function FinanceSection() {
       {tab === "deals" && <FinanceMonthDealsTab ask={ask} toast={toast} ym={mrYm} setYm={setMrYm} manager={mrManager} setManager={setMrManager} />}
       {tab === "cash" && <CashTab />}
       {tab === "payments" && <FinancePaymentsTab />}
+      {tab === "calendar" && <FinanceCalendarTab />}
       {tab === "overview" && <PlannedCard title="Огляд" will={[
         "Головні числа місяця на одному екрані: план/факт витрат, надходження, маржа, залишки.",
         "Графік за рік і статті, що найбільше вийшли за план.",
