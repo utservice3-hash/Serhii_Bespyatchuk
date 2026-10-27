@@ -3775,6 +3775,25 @@ export interface RateAnalysis {
     distance_km: number | null;
     options: { tonnage: string; margin: number; client_min: number | null; client_max: number | null; selected: boolean }[];
   } | null;
+  /** 🧮 Номер розрахунку — до нього привʼязується відгук; `feedback_due` — чи питати (раз на маршрут на день). */
+  usage_id?: number | null;
+  feedback_due?: boolean;
+}
+export type RateFeedbackRating = "ok" | "high" | "low" | "no";
+export async function sendRateFeedback(body: { usageId: number; rating: RateFeedbackRating; agreed: string; comment: string }): Promise<void> {
+  await api.post("/rates/feedback", body);
+}
+export interface RateFeedbackBucket { key: string; n: number; ok: number }
+export interface RateFeedbackStats {
+  days: number; total: number; calculations: number; coverage: number | null;
+  byRating: Record<RateFeedbackRating, number>; okShare: number | null;
+  deviation: { avg: number; n: number } | null;
+  byTonnage: RateFeedbackBucket[]; byZone: RateFeedbackBucket[];
+  comments: { at: string; author: string; route: string; rating: RateFeedbackRating; agreed: number | null; comment: string }[];
+}
+export async function fetchRateFeedbackStats(days = 30): Promise<RateFeedbackStats> {
+  const { data } = await api.get<RateFeedbackStats>("/rates/feedback/stats", { params: { days } });
+  return data;
 }
 export interface RatesUsageStats {
   days: number; total_requests: number; total_users: number;
@@ -6096,7 +6115,7 @@ export interface CtorForm {
 }
 export const CTOR_EMPTY_FORM: CtorForm = {
   ent: "uts", doc: "once", party: "client", intl: false, stamp: true, fopAcc: 0,
-  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
+  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "" },   // порядок оплати менеджер обирає сам (задача 6475)
   dealNo: "", docDate: "", mainNo: "", mainDate: "", mainUntil: "",
 };
 export interface CtorEntityRow {
@@ -6342,3 +6361,31 @@ export const updateFinKpi = async (k: FinKpiThing, id: number, body: Record<stri
 export const deleteFinKpi = async (k: FinKpiThing, id: number, confirm = false) => { await api.delete(`/finance/kpi/${kpiPath(k)}/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
 export const restoreFinKpi = async (k: FinKpiThing, id: number) => { await api.post("/finance/kpi/restore", { kind: k, id }); };
 export const setFinKpiOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/kpi/items/${id}/off`, { off })).data;
+
+// 🏢 Орг структура (задача 7062, 27.10.2026) — дзеркало `routes/org.ts`. Бачать усі ролі; режим «Редагувати» — право `edit_org`
+// (сервер віддає `canEdit`); свій нік і фото — лише свій рядок «Найму» (`meEmployeeId`).
+export type OrgDept = "top" | "hr" | "fin" | "it" | "sales";
+export interface OrgUnit {
+  id: number; parentId: number | null; name: string; dept: OrgDept; teamId: number | null; teamName: string | null;
+  label: string | null; ownLabel: string | null; headId: number | null; headSource: "manual" | "team" | null;
+  side: boolean; sort: number; memberIds: number[];
+}
+export interface OrgPerson {
+  id: number; name: string; position: string | null; teamLabel: string | null; unitId: number | null; isHead: boolean;
+  telegram: string | null; telegramInvalid: boolean; photo: PhotoRef | null; isMe: boolean;
+}
+export interface OrgTreeResp {
+  units: OrgUnit[]; people: OrgPerson[]; unassigned: number[]; unknownLabels: { label: string; count: number }[];
+  stats: { total: number; noTelegram: number; noPhoto: number; unassigned: number };
+  depts: Record<OrgDept, string>; canEdit: boolean; meEmployeeId: number | null; teams: { id: number; name: string }[];
+}
+export interface OrgUnitInput { name?: string; parentId?: number | null; dept?: OrgDept; teamId?: number | null; label?: string | null; headEmployeeId?: number | null; side?: boolean; sort?: number }
+export interface OrgLogRow { id: number; at: string; actor: string | null; action: string; summary: string }
+export const fetchOrgTree = async () => (await api.get<OrgTreeResp>("/org/tree")).data;
+export const setMyOrgTelegram = async (telegram: string) => (await api.put<{ telegram: string | null }>("/org/me/telegram", { telegram })).data.telegram;
+export const uploadMyOrgPhoto = async (dataBase64: string) => (await api.post<{ v: number }>("/org/me/photo", { dataBase64 })).data;
+export const moveOrgPerson = async (employeeId: number, unitId: number | null) => { await api.put(`/org/people/${employeeId}/unit`, { unitId }); };
+export const createOrgUnit = async (body: OrgUnitInput) => (await api.post<{ id: number }>("/org/units", body)).data.id;
+export const updateOrgUnit = async (id: number, body: OrgUnitInput) => { await api.patch(`/org/units/${id}`, body); };
+export const deleteOrgUnit = async (id: number) => { await api.delete(`/org/units/${id}`); };
+export const fetchOrgLog = async () => (await api.get<{ rows: OrgLogRow[] }>("/org/log")).data.rows;

@@ -1285,3 +1285,44 @@ test("#2480 ПЕЧАТКА 4 СМ: Word — кожна авто-печатка 4
   assert.match(fe, /\.ctorx \.docfmt \.stimg\{[^}]*width:113pt/, "🔴 прев'ю конструктора показує печатку не того розміру, що PDF");
   assert.ok(Math.abs(113 / 72 * 2.54 - STAMP_CM) < 0.02, "🔴 113pt — не 4 см");
 });
+
+/**
+ * #2482 — ПОРЯДОК ОПЛАТИ БЕЗ ГОТОВОГО ЗНАЧЕННЯ, ОКРЕМО КЛІЄНТУ Й ПЕРЕВІЗНИКУ (задача 6475, голосові Шаврової Лілії 20.10.2026;
+ * Роман 27.10: «роби все що казала ліля»). Нова форма — порожнє поле; без вибору заявка не формується (і клієнту, і перевізнику);
+ * клієнту першим «до вивантаження», перевізнику — 80/20 і «1000 грн — після оригіналів»; при зміні сторони порядок очищується
+ * (у двох місцях: картка сторони й дзеркальна заявка); списки форми — байт у байт серверні.
+ * 🧨 Червоніє, якщо повернути готове значення, злити списки в один, прибрати очищення чи розвести копії.
+ */
+test("#2482 ПОРЯДОК ОПЛАТИ: без готового значення, обовʼязковий; окремо клієнту й перевізнику; зміна сторони очищує", async () => {
+  const { PAY_ORDERS_CLIENT, PAY_ORDERS_CARRIER, PAY_ORDER_FOP } = await import("./data/legalTexts.js");
+  const fe = await import(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ctorPayOrders.ts")) as {
+    PAY_ORDERS_CLIENT: string[]; PAY_ORDERS_CARRIER: string[]; PAY_ORDER_FOP: string;
+    payOrderPresets(p: "client" | "carrier", fop: boolean): string[]; payOrderAfterPartyChange(fop: boolean): string };
+  assert.deepEqual(fe.PAY_ORDERS_CLIENT, [...PAY_ORDERS_CLIENT], "🔴 список клієнта у формі розійшовся із сервером");
+  assert.deepEqual(fe.PAY_ORDERS_CARRIER, [...PAY_ORDERS_CARRIER], "🔴 список перевізника у формі розійшовся із сервером");
+  assert.equal(fe.PAY_ORDER_FOP, PAY_ORDER_FOP);
+  assert.equal(PAY_ORDERS_CLIENT[0], "до вивантаження", "🔴 клієнту першим має йти «до вивантаження» (Ліля: фактично клієнт платить до вивантаження)");
+  assert.ok(PAY_ORDERS_CARRIER.some((o) => /80%.*20% після оригіналів/.test(o)), "🔴 у перевізника немає 80/20 (з ПДВ)");
+  assert.ok(PAY_ORDERS_CARRIER.some((o) => /1000 грн — після отримання оригіналів/.test(o)), "🔴 у перевізника немає «1000 грн — після оригіналів» (ФОП)");
+  assert.ok(!(PAY_ORDERS_CLIENT as readonly string[]).includes("до вивантаження") || !(PAY_ORDERS_CARRIER as readonly string[]).includes("до вивантаження"), "🔴 «до вивантаження» потрапило перевізнику");
+  assert.notDeepEqual([...PAY_ORDERS_CLIENT], [...PAY_ORDERS_CARRIER], "🔴 списки клієнта й перевізника знову один");
+  assert.deepEqual(fe.payOrderPresets("carrier", false), fe.PAY_ORDERS_CARRIER);
+  assert.deepEqual(fe.payOrderPresets("client", true), [PAY_ORDER_FOP, ...fe.PAY_ORDERS_CLIENT]);
+  assert.equal(fe.payOrderAfterPartyChange(false), "", "🔴 після зміни сторони лишається чужий порядок оплати");
+  assert.equal(fe.payOrderAfterPartyChange(true), PAY_ORDER_FOP);
+
+  const api = readFileSync(path.join(REPO, "frontend", "src", "api.ts"), "utf8");
+  assert.match(api, /pay: \{ sum: "", cur: "грн", form: "б\/г без ПДВ", order: "" \}/, "🔴 нова форма знову має готовий порядок оплати");
+  const sec = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  assert.equal((sec.match(/order: payOrderAfterPartyChange\(f\.ent === "fop"\)/g) ?? []).length, 2, "🔴 зміна сторони (картка / дзеркальна заявка) не очищує порядок оплати");
+  assert.match(sec, /<option value="" disabled>— оберіть порядок оплати —<\/option>/, "🔴 у списку немає порожнього «— оберіть —»");
+  assert.ok(!/const PAY_ORDERS = \[/.test(sec), "🔴 у формі знову власна копія списку порядків");
+
+  const base = ref["once-client-uts"].state;
+  for (const party of ["client", "carrier"] as const) {
+    const s = { ...base, party, doc: party === "carrier" ? "carr" : "once", pay: { ...base.pay, order: "" } } as DocumentState;
+    assert.ok(validateForm(s, { today: "2026-10-27" }).some((i) => i.field === "pay.order" && i.level === "error"), `🔴 ${party}: заявка без порядку оплати формується`);
+    const ok = { ...s, pay: { ...s.pay, order: party === "carrier" ? PAY_ORDERS_CARRIER[1] : PAY_ORDERS_CLIENT[0] } } as DocumentState;
+    assert.ok(!validateForm(ok, { today: "2026-10-27" }).some((i) => i.field === "pay.order"), `🔴 ${party}: обраний порядок оплати не приймається`);
+  }
+});

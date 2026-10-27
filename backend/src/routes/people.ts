@@ -1,15 +1,13 @@
 import { Router, type Request, type Response } from "express";
-import { randomUUID } from "node:crypto";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
-import { listPeoplePhotos, photoFileOf, applyPhotoAction, PeopleError } from "../core/people.js";
-import { checkPhoto, photoStoredName, photoDir } from "../core/peopleRules.js";
+import { listPeoplePhotos, photoFileOf, applyPhotoAction, uploadPhoto, PeopleError } from "../core/people.js";
+import { photoDir } from "../core/peopleRules.js";
 
 /**
  * 📷 ФОТО СПІВРОБІТНИКІВ (22.09.2026). Дві межі:
- *  · САМЕ ФОТО (`GET /photo/:employeeId`) — будь-кому залогіненому: воно на слайдах зустрічі, у
- *    номінаціях і (далі) на дошці пошани, яку бачать усі ролі. Вкладки немає свідомо — запис у
+ *  · САМЕ ФОТО (`GET /photo/:employeeId`) — будь-кому залогіненому, включно з кандидатом (з 27.10.2026): воно на
+ *    слайдах зустрічі, у номінаціях, в орг-структурі й (далі) на дошці пошани, яку бачать усі ролі. Вкладки немає свідомо — запис у
  *    `ROUTE_BOUNDARY_EXEMPTIONS`;
  *  · СПИСОК і ЗАПИС — право сейфу `view_employee_secrets` (admin, ceo, opdir, kvp, hr): ті самі люди,
  *    що ведуть «Найм → Співробітники», де й живе кнопка «Фото».
@@ -36,10 +34,10 @@ const safe = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Re
 const b64 = (v: unknown) => (typeof v === "string" && v ? Buffer.from(v.includes(",") ? v.split(",")[1] : v, "base64") : null);
 
 peopleRouter.get("/photo/:employeeId", safe(async (req, res) => {
-  // 🎓 Кандидат (зовнішній стажист) бачить лише «Навчання» й «Документи» — фото персоналу йому не належать,
-  // і жодного екрана з фото в нього немає. Роут без вкладки, тож межу ставимо тут (#644).
+  // 🎓 ЗМІНА ПОЛІТИКИ 27.10.2026 (рішення Романа: «кандидати бачать орг структуру» — на питання, де фото названо прямо).
+  // До того кандидату тут був 403 (#644): жодного екрана з фото в нього не було. Тепер є — «Орг структура», і фото
+  // віддається будь-кому залогіненому, як і решті ролей. Тримає #2707.
   res.setHeader("Cache-Control", "no-store"); // відмови й 404 не кешуються; успіх перепише заголовок нижче
-  if (req.auth!.roleKey === "candidate") return res.status(403).json({ error: "Фото співробітників — для команди" });
   const file = await photoFileOf(idOf(req.params.employeeId));
   if (!file) return res.status(404).json({ error: "Фото немає" });
   // Імʼя файлу — лише з бази (`photo-<uuid>.ext`), ніколи з запиту; basename — друга лінія проти `..`.
@@ -54,20 +52,7 @@ peopleRouter.get("/photos", requirePerm("view_employee_secrets"), safe(async (_r
 }));
 
 peopleRouter.post("/photo/:employeeId", requirePerm("view_employee_secrets"), safe(async (req, res) => {
-  const id = idOf(req.params.employeeId);
-  const buf = b64(req.body?.dataBase64);
-  const chk = checkPhoto(buf);
-  if (!chk.ok) return res.status(400).json({ error: chk.error });
-  const stored = photoStoredName(randomUUID(), chk.mime);
-  await mkdir(DOCS_DIR, { recursive: true });
-  await writeFile(path.join(DOCS_DIR, stored), buf!);
-  try {
-    res.status(201).json(await applyPhotoAction(id, { kind: "upload", file: stored }, req.auth!.userId));
-  } catch (e) {
-    // Відмова (немає людини, звільнений) — щойно записаний файл нікому не належить: прибираємо лише його.
-    await unlink(path.join(DOCS_DIR, stored)).catch(() => undefined);
-    throw e;
-  }
+  res.status(201).json(await uploadPhoto(idOf(req.params.employeeId), b64(req.body?.dataBase64), req.auth!.userId));
 }));
 
 peopleRouter.delete("/photo/:employeeId", requirePerm("view_employee_secrets"), safe(async (req, res) => {

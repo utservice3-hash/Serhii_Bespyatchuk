@@ -17,5 +17,7 @@ export function homeSection(p: { roleKey?: string; screens?: string[]; navKeys: 
   const own = p.roleKey ? ROLE_HOME[p.roleKey] : undefined;
   if (own && screens.includes(own) && p.navKeys.includes(own)) return own;
   if (screens.includes("report")) return "report";
-  return p.navKeys.find((k) => screens.includes(k)) ?? "report";
+  // 🏢 «Орг структура» стоїть першою в меню й є в КОЖНОЇ ролі (задача 7062) — стартовою вона не стає, інакше бухгалтерія
+  // й бізнес-асистент без «Звіту» відкривали б схему замість своєї роботи. Лише якщо більше нічого немає (#2706).
+  return p.navKeys.find((k) => k !== "org" && screens.includes(k)) ?? (screens.includes("org") ? "org" : "report");
 }

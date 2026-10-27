@@ -5,8 +5,11 @@
  * слайдів воно доходить через `employees.manager_id` — той самий звʼязок «людина ↔ менеджер Kommo»,
  * який реєстр уже веде кнопкою «Зіставити з Kommo». Немає звʼязку — у номінаціях будуть ініціали.
  */
+import { randomUUID } from "node:crypto";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { pool } from "../db/pool.js";
-import { nextPhotoState, photoVersion, type PhotoAction, type PhotoState } from "./peopleRules.js";
+import { nextPhotoState, photoVersion, checkPhoto, photoStoredName, photoDir, type PhotoAction, type PhotoState } from "./peopleRules.js";
 
 export class PeopleError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -85,5 +88,25 @@ export async function applyPhotoAction(employeeId: number, action: PhotoAction, 
     throw e;
   } finally {
     c.release();
+  }
+}
+
+/**
+ * Завантажити фото людині: байти → перевірка типу → файл у корені теки документів (`photoDir`, під нічним бекапом) →
+ * стан під блокуванням. Відмова (немає людини, звільнений) — щойно записаний файл нікому не належить: прибираємо лише
+ * його. Одна реалізація на обидва входи: «Найм» (`routes/people.ts`) і «своє фото» в орг-структурі (`routes/org.ts`).
+ */
+export async function uploadPhoto(employeeId: number, buf: Buffer | null, actorId: number): Promise<PhotoState & { v: number }> {
+  const chk = checkPhoto(buf);
+  if (!chk.ok) throw new PeopleError(400, chk.error);
+  const dir = photoDir();
+  const stored = photoStoredName(randomUUID(), chk.mime);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, stored), buf!);
+  try {
+    return await applyPhotoAction(employeeId, { kind: "upload", file: stored }, actorId);
+  } catch (e) {
+    await unlink(path.join(dir, stored)).catch(() => undefined);
+    throw e;
   }
 }

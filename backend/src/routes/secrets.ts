@@ -137,10 +137,12 @@ secretsRouter.post("/:id/reveal", async (req, res) => {
 secretsRouter.get("/employees", async (_req, res) => {
   try {
     const db = pool as unknown as Db;
-    // Команди для фільтра й зміни: що є в реєстрі + команди дашборда.
+    // Команди для фільтра й зміни: що є в реєстрі + команди дашборда + «Команди» блоків орг-структури (задача 7062:
+    // блок людини = її «Команда», тож HR обирає значення зі списку, а не вгадує написання).
     const teams = (await db.query<{ name: string }>(
       `SELECT DISTINCT name FROM (SELECT team_label AS name FROM employees WHERE team_label IS NOT NULL
-         UNION SELECT name FROM teams WHERE name IS NOT NULL) t ORDER BY name`)).rows.map((r) => r.name);
+         UNION SELECT name FROM teams WHERE name IS NOT NULL
+         UNION SELECT label FROM org_units WHERE label IS NOT NULL) t ORDER BY name`)).rows.map((r) => r.name);
     res.json({ rows: await listEmployees(db), teams });
   } catch (e) { fail(res, e); }
 });

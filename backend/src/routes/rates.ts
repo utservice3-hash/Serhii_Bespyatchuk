@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
-import { requireAuth } from "../auth/middleware.js";
+import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { lardiGet, lardiPost, LANG, hasLardiToken } from "../lardi/client.js";
 import { recordRoute, recordOffers, recordUsage, history, usageStats, learnedStats } from "../lardi/history.js";
 import { offerDate } from "../lardi/offerDate.js";
+import { parseFeedback, feedbackDue, snapshotOf, feedbackStats, RateFeedbackError, type FeedbackRow } from "../core/rateFeedback.js";
 
 // «Калькулятор ставок» — точний порт Python-сервісу lardiweb у наш бекенд
 // (прод — shared cPanel без Python 3.10+). Формат відповіді збережено 1:1 з
@@ -400,10 +401,11 @@ ratesRouter.post("/analyze", async (req, res) => {
   if (realDist) { routeKm = realDist; (result.route as Any).distance_km = realDist; }
 
   // Архів: маршрут + пропозиції; історія за 31 день у кожну сторону.
+  let usageId: number | null = null;
   try {
     await recordRoute(frm, to);
     const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "?";
-    await recordUsage(req.auth!.userId, ip, frm.label ?? "", to.label ?? "");
+    usageId = await recordUsage(req.auth!.userId, ip, frm.label ?? "", to.label ?? "");
     for (const side of ["cargo", "lorry"] as const) {
       const sd = result[side] as Any;
       if (sd && !sd.error) {
@@ -433,7 +435,62 @@ ratesRouter.post("/analyze", async (req, res) => {
     result.learned_recommendation = await learnedRecommendation(frm.town_id, to.town_id, routeKm, massForZone);
   } catch { result.learned_recommendation = null; }
 
+  // 🧮 Відгук «наскільки допоміг»: знімок показаних чисел — у розрахунок; питати — раз на маршрут на день (#2772).
+  result.usage_id = usageId;
+  result.feedback_due = false;
+  if (usageId) {
+    try {
+      const calc = snapshotOf(reqBody as { mass_min: number | null; mass_max: number | null; body_type_ids: number[] }, routeKm,
+        result.zone_recommendation as Parameters<typeof snapshotOf>[2]);
+      await pool.query(`UPDATE lardi_usage SET calc = $2 WHERE id = $1`, [usageId, JSON.stringify(calc)]);
+      const prev = await pool.query<{ frm: string; tox: string; at: Date }>(
+        `SELECT u.frm, u.tox, f.created_at AS at FROM rate_feedback f JOIN lardi_usage u ON u.id = f.usage_id
+          WHERE f.user_id = $1 AND f.created_at >= now() - interval '2 days'`, [req.auth!.userId]);
+      result.feedback_due = feedbackDue(prev.rows, frm.label ?? "", to.label ?? "", new Date());
+    } catch (e) {
+      console.warn("rate feedback snapshot failed:", e);
+    }
+  }
+
   res.json(result);
+});
+
+// 🧮 Відгук на СВІЙ розрахунок — один на розрахунок (`rate_feedback_usage_uniq`).
+ratesRouter.post("/feedback", async (req, res) => {
+  try {
+    const f = parseFeedback(req.body ?? {});
+    const own = await pool.query(`SELECT 1 FROM lardi_usage WHERE id = $1 AND user_id = $2`, [f.usageId, req.auth!.userId]);
+    if (!own.rowCount) return res.status(404).json({ error: "Розрахунок не знайдено" });
+    const r = await pool.query(
+      `INSERT INTO rate_feedback (usage_id, user_id, rating, agreed_rate, comment) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (usage_id) DO NOTHING RETURNING id`,
+      [f.usageId, req.auth!.userId, f.rating, f.agreed, f.comment]);
+    if (!r.rowCount) return res.status(409).json({ error: "Відгук на цей розрахунок уже є" });
+    res.status(201).json({ id: r.rows[0].id });
+  } catch (e) {
+    if (e instanceof RateFeedbackError) return res.status(e.status).json({ error: e.message });
+    res.status(500).json({ error: `feedback error: ${String(e).slice(0, 120)}` });
+  }
+});
+
+// 🧮 Зведення відгуків — адмін, СЕО, ОД, КВП (право `view_rate_feedback`, рішення Романа 27.10.2026).
+ratesRouter.get("/feedback/stats", requirePerm("view_rate_feedback"), async (req, res) => {
+  const days = Math.max(1, Math.min(Number(req.query.days) || 30, 365));
+  try {
+    const rows = await pool.query<{ rating: FeedbackRow["rating"]; agreed: string | null; comment: string | null; at: Date; author: string | null; frm: string; tox: string; calc: FeedbackRow["calc"] }>(
+      `SELECT f.rating, f.agreed_rate AS agreed, f.comment, f.created_at AS at, us.full_name AS author, u.frm, u.tox, u.calc
+         FROM rate_feedback f JOIN lardi_usage u ON u.id = f.usage_id LEFT JOIN users us ON us.id = f.user_id
+        WHERE f.created_at >= now() - ($1 || ' days')::interval`, [days]);
+    const calcs = await pool.query<{ n: string }>(
+      `SELECT COUNT(*) AS n FROM lardi_usage WHERE ts >= now() - ($1 || ' days')::interval`, [days]);
+    const feed: FeedbackRow[] = rows.rows.map((r) => ({ rating: r.rating, agreed: r.agreed == null ? null : Number(r.agreed), comment: r.comment,
+      at: r.at, author: r.author, frm: r.frm, tox: r.tox, calc: r.calc }));
+    const st = feedbackStats(feed, Number(calcs.rows[0]?.n ?? 0));
+    res.json({ days, total: st.total, calculations: st.calculations, coverage: st.coverage, byRating: st.byRating, okShare: st.okShare,
+      deviation: st.deviation, byTonnage: st.byTonnage, byZone: st.byZone, comments: st.comments });
+  } catch (e) {
+    res.status(500).json({ error: `feedback stats error: ${String(e).slice(0, 120)}` });
+  }
 });
 
 // Статистика використання (адмін) — аналог /api/stats оригіналу.
