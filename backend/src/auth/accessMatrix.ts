@@ -1588,8 +1588,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // Запис — deny-only: проба дозволеної ролі писала б у прод.
   { method: "GET", path: "/api/finance/calendar", cls: "GET",
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
-  { method: "GET", path: "/api/finance/calendar/due", cls: "GET",
-    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/calendar/history.xlsx", cls: "GET",
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/calendar", cls: "deny-only",
@@ -1656,6 +1654,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "PUT", path: "/api/finance/kpi/plan", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   // 💱 Список валютних неоплачених рахунків (26.10.2026): хто бачить «Тиждень і місяць», той бачить і його.
+  // 📅 Підказки «Календаря оплат» у «План/факті» (27.10.2026): бачать «Таня + керівництво» (вкладка «Фінанси»);
+  // «додати в план» — deny-only: проба дозволеної ролі писала б план у прод.
+  { method: "GET", path: "/api/finance/plan-hints?m=2026-11", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/plan-hints/add", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/fx-unpaid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   // 🏁 «Результат місяця» (23.10.2026): перегляд — як «Тиждень і місяць»; рішення по угоді — deny-only (проба писала б у прод).
