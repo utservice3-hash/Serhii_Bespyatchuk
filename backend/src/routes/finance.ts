@@ -19,6 +19,7 @@ import { setOverride } from "../core/monthResult.js";
 import { monthResultOrPending, monthResultXlsx, dropMonthResultCache } from "../jobs/monthResultData.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 import { loadUnpaidFx } from "../core/unpaidSync.js";
+import { loadPlanHints, addToPlan } from "../core/finRecurring.js";
 
 /**
  * 💰 ФІНАНСИ, прохід 1 (29.09.2026): «План/факт витрат» і «Статті».
@@ -167,6 +168,21 @@ financeRouter.get("/fx-unpaid", async (req, res) => {
   try {
     onlyFinance(req);
     res.json(await loadUnpaidFx(pool as unknown as Db, config.kommo.baseUrl));
+  } catch (e) { fail(res, e); }
+});
+// 📅 Нагадування «Календаря оплат» у «План/факті» (Тетяна #6369, 27.10.2026): що за графіком припадає на місяць —
+// біля статті; «додати в план» — сума ДО наявного плану через `saveValues`. Бачать «Таня + керівництво» (вкладка
+// «Фінанси»), додає — право вносити (Роман 27.10.2026).
+financeRouter.get("/plan-hints", async (req, res) => {
+  try {
+    onlyFinance(req);
+    res.json({ hints: await loadPlanHints(pool as unknown as Db, req.query.m) });
+  } catch (e) { fail(res, e); }
+});
+financeRouter.post("/plan-hints/add", async (req, res) => {
+  try {
+    canEdit(req);
+    res.json(await tx((db) => addToPlan(db, req.auth!.userId, req.body)));
   } catch (e) { fail(res, e); }
 });
 financeRouter.get("/month-result", async (req, res) => {

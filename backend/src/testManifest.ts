@@ -375,7 +375,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
@@ -2438,13 +2438,15 @@ export const MANIFEST_TESTS: string[] = [
   "#1288b ЖИВИЙ SQL: погодити лише перевірений «перевірити» з сумою, автор погодження й коментаря окремо, порожнє — видаляється",
   "#1288c МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: чотири роути під view_private_finance, «Погоджено» в матриці, без права — напис",
   "#1288d ПРОВОДКА: позначка до розподілу файлу, журнал — причини системи, екран — поточна позначка з живою сумою, кнопки лише де можна",
-  // core/finRecurring.test.ts — «Календар оплат» (Тетяна #6369, 27.10.2026).
+  // core/finRecurring.test.ts — «Календар оплат» (Тетяна #6369, 27.10.2026; прохід 2 — стаття й місяць, підказка в «План/факті»).
   "#1291 ДЕНЬ ОПЛАТИ НЕ ЗʼЇЖДЖАЄ: 31.01 → 28.02 → 31.03, квартал і рік від якоря, місяць смуги від 1-го, вікно включно",
   "#1291b СМУГА: минуле — лише оплачене аж до першої оплати, майбутнє — графік, скасоване й вимкнене — не плануються",
-  "#1291c НАГАДУВАННЯ: лише платнику, за 3 дні (4 — ні), у день оплати і щодня після, вимкнене — нікому",
-  "#1291d ЖИВИЙ SQL: оплата лише поточної дати, скасування лишає рядок, історія не меншає, платник — лише з правом",
+  "#1292 ЖИВИЙ SQL: оплата — стаття й місяць, «Оплачено» лише поточного місяця, скасування лишає рядок, історія не меншає",
+  "#1292b ЖИВИЙ SQL: «додати в план» — сума до наявного плану, двічі — 409, не той місяць — 400, погоджений — 409 без запису, журнал є",
+  "#1292c ПІДКАЗКИ МІСЯЦЯ: графік і оплачене в місяці, скасоване й вимкнене — ні, кілька на статтю — окремо, «додано» з автором",
   "#1291e ІЗОЛЯЦІЯ: таблиці календаря — лише в ядрі календаря, видалення з них немає ніде",
-  "#1291f МЕЖА: сім роутів під view_private_finance, матриця, AI закрито, вкладка й нагадування — лише з правом",
+  "#1292d ПЛАН ЛИШЕ ЧЕРЕЗ saveValues: жодного запису fin_values у календарі, «додано» — після збереження плану",
+  "#1292e МЕЖА: шість роутів календаря під view_private_finance, підказки — межа «Фінансів», форма — стаття й місяць, кнопка лише з правом",
   // core/creditLimits.test.ts — ліміти готівкового рядка дебіторки (21.10.2026).
   "#1280 ГОТІВКОВИЙ РЯДОК ДЕБІТОРКИ — ліміти днів і суми з таблиці лімітів за ключем рядка, як у безготівкових",
   // core/paymentApprovals.test.ts — тестову вкладку «План/факт · авто» прибрано (Тетяна 21.10.2026).
@@ -3105,6 +3107,15 @@ export interface RetiredGate {
 }
 
 export const RETIRED_GATES: RetiredGate[] = [
+  { name: "#1291c НАГАДУВАННЯ: лише платнику, за 3 дні (4 — ні), у день оплати і щодня після, вимкнене — нікому",
+    since: "2026-10-27", decidedBy: "Роман 27.10.2026 — нагадування «Календаря оплат» за проханням Тетяни: «щодо нагадувань, чи може це просто висвітлюватись в план/факт відповідного місяця… цього нагадування буде достатньо»",
+    reason: "змінилось твердження: нагадувань платнику (значок і повідомлення) більше немає — «хто платить» прибрано. А ДЕ ЦЕ ТЕПЕР: нагадування — підказка біля статті в «План/факті» місяця, `#1292c` (які оплати припадають на місяць) і `#1292e` (межа й проводка)." },
+  { name: "#1291d ЖИВИЙ SQL: оплата лише поточної дати, скасування лишає рядок, історія не меншає, платник — лише з правом",
+    since: "2026-10-27", decidedBy: "Роман 27.10.2026 — додавання оплати за проханням Тетяни: «хто платить — не потрібно; дата оплати — достатньо вказати місяць; назва — спадне меню категорій»",
+    reason: "змінилось твердження: оплата — стаття й місяць, без платника. А ДЕ ЦЕ ТЕПЕР: те саме тіло (оплата лише поточного періоду, скасування лишає рядок, історія не меншає) — `#1292`, і «додати в план» — `#1292b`." },
+  { name: "#1291f МЕЖА: сім роутів під view_private_finance, матриця, AI закрито, вкладка й нагадування — лише з правом",
+    since: "2026-10-27", decidedBy: "Роман 27.10.2026 — підказки в «План/факті» бачать «таня + керівництво», нагадування в меню прибрано",
+    reason: "змінилось твердження: роутів календаря стало шість (без `/due`), нагадування в меню немає, підказки — у межі «Фінансів». А ДЕ ЦЕ ТЕПЕР: `#1292e`." },
   { name: "#1271d МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: три роути під view_private_finance, матриця з дзеркалом, вкладка без права — напис",
     since: "2026-10-26", decidedBy: "Роман 26.10.2026 — «Погоджено» і коментар на запиті (прохання Тетяни): «роби, коментар необов'язковий, погоджувати можуть обоє»",
     reason: "змінилось твердження: роутів стало чотири (додано `POST /mark`). А ДЕ ЦЕ ТЕПЕР: `#1288c` — те саме тіло, чотири роути під `view_private_finance`, «Погоджено» в матриці deny-only." },

@@ -6779,3 +6779,29 @@ CREATE TABLE IF NOT EXISTS fin_recurring_paid (
 CREATE UNIQUE INDEX IF NOT EXISTS fin_recurring_paid_live_uniq ON fin_recurring_paid (recurring_id, due_date) WHERE cancelled_at IS NULL;
 REVOKE ALL ON fin_recurring FROM ai_readonly;
 REVOKE ALL ON fin_recurring_paid FROM ai_readonly;
+
+-- 📅 КАЛЕНДАР ОПЛАТ, прохід 2 (Тетяна 27.10.2026; Роман: «таня + керівництво», «так», «так хай буде», «так»): оплата —
+-- це СТАТТЯ «План/факту» (`item_id`) і МІСЯЦЬ (без дня, `next_due` — завжди 1-ше), без «хто платить». Нагадування — підказка
+-- біля статті в «План/факті» потрібного місяця з кнопкою «додати в план»; що вже додано — `fin_recurring_planned`, щоб
+-- кнопка не додала ту саму суму двічі. План пишеться ЛИШЕ через `saveValues` (замок погодженого місяця й журнал — ті самі).
+-- Таблиці на мить зміни порожні (заміряно 27.10.2026: 0 і 0). Обмеження ставляться лише тоді, коли рядків першого
+-- проходу (з днем і без статті) немає: інакше міграція впала б посеред схеми — такі рядки треба спершу розібрати руками.
+ALTER TABLE fin_recurring ADD COLUMN IF NOT EXISTS item_id INTEGER REFERENCES fin_items(id);
+DO $frm$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM fin_recurring WHERE item_id IS NULL OR anchor_day <> 1 OR next_due <> date_trunc('month', next_due)::date) THEN
+    ALTER TABLE fin_recurring ALTER COLUMN item_id SET NOT NULL;
+    ALTER TABLE fin_recurring DROP CONSTRAINT IF EXISTS fin_recurring_month_start;
+    ALTER TABLE fin_recurring ADD CONSTRAINT fin_recurring_month_start CHECK (next_due = date_trunc('month', next_due)::date AND anchor_day = 1);
+  ELSE
+    RAISE WARNING 'fin_recurring: є рядки першого проходу (з днем або без статті) — обмеження прохода 2 не поставлено';
+  END IF;
+END $frm$;
+CREATE TABLE IF NOT EXISTS fin_recurring_planned (
+  recurring_id INTEGER NOT NULL REFERENCES fin_recurring(id),
+  month DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  amount NUMERIC(14,2) NOT NULL,
+  plan_before NUMERIC(14,2),
+  added_by INTEGER REFERENCES users(id), added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (recurring_id, month)
+);
+REVOKE ALL ON fin_recurring_planned FROM ai_readonly;

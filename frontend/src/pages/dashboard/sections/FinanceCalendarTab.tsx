@@ -8,28 +8,26 @@ import { getAuthPayload } from "../../../auth";
 import { useToast } from "../../../components/Toasts";
 
 /**
- * 📅 «Календар оплат» (задача Тетяни #6369, 27.10.2026; макет «Г» — Роман). Нагадування про періодичні витрати, ОКРЕМО від
- * Плану/факту. Зверху — смуга місяців (ліворуч минулий, далі поточний і майбутні; гортається назад до першої оплати),
- * під нею — лише дні, коли є оплати, з «✓ Оплачено» і деталями; поруч — «Історія оплат» (нічого не стирається, скасоване
- * лишається з позначкою). Усе рахує сервер (`core/finRecurring.ts`); тут лише показ. Бачать і ведуть Тетяна й адмін
- * (`view_private_finance`).
+ * 📅 «Календар оплат» (задача Тетяни #6369, 27.10.2026; макет «Г» — Роман). Періодичні витрати: оплата — це СТАТТЯ
+ * «План/факту» і МІСЯЦЬ (прохід 2, Тетяна 27.10.2026). Зверху — смуга місяців (ліворуч минулий, далі поточний і майбутні;
+ * гортається назад до першої оплати), під нею — оплати обраного місяця з «✓ Оплачено» і деталями; поруч — «Історія оплат»
+ * (нічого не стирається, скасоване лишається з позначкою). Нагадування — підказка біля статті в «План/факті» з кнопкою
+ * «додати в план». Усе рахує сервер (`core/finRecurring.ts`). Вкладку бачать і ведуть Тетяна й адмін (`view_private_finance`).
  */
 const MUTED = "var(--text-muted)";
 const MON = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"];
 const MONF = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
-const WD = ["неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"];
 const PERIOD: Record<RecPeriod, string> = { month: "щомісяця", quarter: "щокварталу", year: "раз на рік" };
 const TONE: Record<RecEvent["kind"], [string, string]> = { paid: ["#e6f4ea", "#1e7a3c"], overdue: ["#fdecea", "#b42318"], soon: ["#fff4dc", "#8a5300"], plan: ["#eef1f5", "#3d4552"] };
 const CELL = 104; // ширина місяця в смузі + проміжок
 const money = (n: number) => `${Math.round(n).toLocaleString("uk-UA").replace(/ /g, " ")} ₴`;
 const short = (n: number) => (!n ? "—" : n >= 1000 ? `${(Math.round(n / 100) / 10).toLocaleString("uk-UA")} тис` : String(Math.round(n)));
-const dmy = (s: string) => `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}`;
-const P = (s: string) => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
-const days = (from: string, to: string) => Math.round((P(to) - P(from)) / 864e5);
-const rel = (d: number) => (d < 0 ? `${-d} дн. тому` : d === 0 ? "сьогодні" : d === 1 ? "завтра" : `через ${d} дн.`);
+const monthName = (d: string) => `${MONF[+d.slice(5, 7) - 1].toLowerCase()} ${d.slice(0, 4)}`;
+const STATUS: Record<RecEvent["kind"], string> = { paid: "оплачено", overdue: "не оплачено", soon: "цього місяця", plan: "заплановано" };
 const plural = (n: number, a: string, b: string, c: string) => { const t = n % 10, h = n % 100; return t === 1 && h !== 11 ? a : t >= 2 && t <= 4 && (h < 12 || h > 14) ? b : c; };
 const oplat = (n: number) => `${n} ${plural(n, "оплата", "оплати", "оплат")}`;
-const meta = (i: RecItem) => `${PERIOD[i.period]} · ${i.period === "year" ? `${i.anchorDay} ${MON[+i.next.slice(5, 7) - 1]}` : `${i.anchorDay}-го числа`}`;
+const meta = (i: RecItem) => (i.period === "month" ? PERIOD.month : `${PERIOD[i.period]} · наступна — ${monthName(i.next)}`);
+const title = (i: RecItem | undefined) => (i ? (i.note ? `${i.name} · ${i.note}` : i.name) : "—");
 const at = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const errText = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "помилка";
 const chip = (k: RecEvent["kind"]): React.CSSProperties => ({ display: "inline-block", padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", background: TONE[k][0], color: TONE[k][1] });
@@ -38,7 +36,7 @@ const pill = (on: boolean): React.CSSProperties => ({ minHeight: 34, padding: "0
 const card: React.CSSProperties = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 18px" };
 const label: React.CSSProperties = { fontSize: 12, color: MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".04em" };
 
-type Form = { id: number | null; name: string; amount: string; period: RecPeriod; date: string; payerId: string; note: string };
+type Form = { id: number | null; itemId: string; amount: string; period: RecPeriod; month: string; note: string };
 
 export function FinanceCalendarTab() {
   const canView = (getAuthPayload()?.perms ?? []).includes("view_private_finance");
@@ -89,31 +87,30 @@ export function FinanceCalendarTab() {
     setBusy(true);
     try {
       const r = await payFinRecurring(it.id, { due: it.next, ...(amount != null ? { amount } : {}) });
-      toast(`«${it.name}» — оплачено. Наступне нагадування: ${dmy(r.next)}`, { tone: "ok", action: { label: "Скасувати", run: () => void undo(r.paidId, it.name) } });
+      toast(`«${title(it)}» — оплачено. Наступна оплата: ${monthName(r.next)}`, { tone: "ok", action: { label: "Скасувати", run: () => void undo(r.paidId, title(it)) } });
       load();
     } catch (e) { toast(`Не позначено: ${errText(e)}`, { error: true }); load(); }
     finally { setBusy(false); }
   };
   const disable = async (it: RecItem) => {
-    if (!(await dlg.confirm({ title: `Більше не нагадувати про «${it.name}»?`, text: "Нагадування вимкнеться, історія оплат лишиться. Увімкнути можна будь-коли.", okLabel: "Вимкнути" }))) return;
-    await act(() => updateFinRecurring(it.id, { active: false }), `«${it.name}»: нагадування вимкнено`);
+    if (!(await dlg.confirm({ title: `Більше не нагадувати про «${title(it)}»?`, text: "Нагадування вимкнеться, історія оплат лишиться. Увімкнути можна будь-коли.", okLabel: "Вимкнути" }))) return;
+    await act(() => updateFinRecurring(it.id, { active: false }), `«${title(it)}»: нагадування вимкнено`);
   };
-  const me = getAuthPayload()?.userId;
-  const newForm = (): Form => ({ id: null, name: "", amount: "", period: "month", date: "", payerId: String(data.payers.find((p) => p.id === me)?.id ?? data.payers[0]?.id ?? ""), note: "" });
-  const editForm = (it: RecItem): Form => ({ id: it.id, name: it.name, amount: String(it.amount), period: it.period, date: it.next, payerId: String(it.payerId ?? ""), note: it.note ?? "" });
+  const newForm = (): Form => ({ id: null, itemId: "", amount: "", period: "month", month: curYm, note: "" });
+  const editForm = (it: RecItem): Form => ({ id: it.id, itemId: String(it.itemId), amount: String(it.amount), period: it.period, month: it.next.slice(0, 7), note: it.note ?? "" });
+  const articleName = (id: string) => data.articles.find((a) => String(a.id) === id)?.name ?? "";
   const save = async () => {
     if (!form) return;
-    if (!form.name.trim()) return setFormErr("Вкажіть назву оплати.");
+    if (!form.itemId) return setFormErr("Оберіть статтю.");
     if (!(Number(form.amount.replace(/\s/g, "").replace(",", ".")) > 0)) return setFormErr("Сума має бути більшою за нуль.");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date)) return setFormErr("Вкажіть дату найближчої оплати.");
-    if (!form.payerId) return setFormErr("Оберіть, хто платить.");
-    const base = { name: form.name, amount: form.amount, payerId: Number(form.payerId), note: form.note };
+    if (!/^\d{4}-\d{2}$/.test(form.month)) return setFormErr("Вкажіть місяць оплати.");
+    const base = { itemId: Number(form.itemId), amount: form.amount, note: form.note };
     const was = form.id != null ? items.get(form.id) : undefined;
     const ok = await act(
-      () => (was ? updateFinRecurring(was.id, { ...base, ...(form.period !== was.period || form.date !== was.next ? { period: form.period, date: form.date } : {}) })
-        : createFinRecurring({ ...base, period: form.period, date: form.date })),
-      was ? `«${form.name.trim()}»: збережено` : `Додано «${form.name.trim()}». Перше нагадування: ${dmy(form.date)}`);
-    if (ok) { if (!was) setYm(form.date.slice(0, 7)); setForm(null); setFormErr(null); }
+      () => (was ? updateFinRecurring(was.id, { ...base, ...(form.period !== was.period ? { period: form.period } : {}), ...(form.month !== was.next.slice(0, 7) ? { month: form.month } : {}) })
+        : createFinRecurring({ ...base, period: form.period, month: form.month })),
+      was ? `«${articleName(form.itemId)}»: збережено` : `Додано «${articleName(form.itemId)}» з ${monthName(`${form.month}-01`)}`);
+    if (ok) { if (!was) setYm(form.month); setForm(null); setFormErr(null); }
   };
   const excel = async () => {
     try {
@@ -124,11 +121,8 @@ export function FinanceCalendarTab() {
   const scrollBy = (dx: number) => strip.current?.scrollBy({ left: dx, behavior: "smooth" });
   const home = () => { setYm(curYm); strip.current?.scrollTo({ left: Math.max(0, data.months.findIndex((m) => m.offset === -1)) * CELL, behavior: "smooth" }); };
 
-  const overdueElsewhere = data.items.filter((i) => i.active && i.next < today && i.next.slice(0, 7) !== month.ym);
+  const overdueElsewhere = data.items.filter((i) => i.active && i.next.slice(0, 7) < curYm && i.next.slice(0, 7) !== month.ym);
   const maxSum = Math.max(1, ...data.months.map((m) => m.sum));
-  const byDate = new Map<string, RecEvent[]>();
-  for (const e of month.events) byDate.set(e.date, [...(byDate.get(e.date) ?? []), e]);
-  const rank = { overdue: 0, soon: 1, plan: 2, paid: 3 } as const;
   const off = data.items.filter((i) => !i.active);
 
   return (
@@ -136,8 +130,8 @@ export function FinanceCalendarTab() {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", justifyContent: "space-between" }}>
         <div>
           <p className="hr-muted" style={{ margin: 0, fontSize: 13, maxWidth: 720 }}>
-            Нагадування про періодичні витрати. Окремо від Плану/факту — нічого не рахує в результаті. Нагадує тому, хто платить:
-            за {data.leadDays} дні, у день оплати й щодня, доки не позначено «Оплачено».
+            Періодичні витрати по статтях. Нагадування — у «План/факті» відповідного місяця: біля статті сума й кнопка
+            «додати в план». Сам календар нічого не рахує в результаті.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -155,22 +149,26 @@ export function FinanceCalendarTab() {
 
       {form && (
         <section aria-label={form.id ? "Змінити оплату" : "Нова періодична оплата"} style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
-          <b>{form.id ? `Змінити «${items.get(form.id)?.name ?? ""}»` : "Нова періодична оплата"}</b>
+          <b>{form.id ? `Змінити «${title(items.get(form.id))}»` : "Нова періодична оплата"}</b>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px 14px" }}>
-            <label style={{ fontSize: 13 }}>Назва<br /><input className="hr-inp" style={{ width: "100%" }} value={form.name} placeholder="Напр., оренда складу" onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+            <label style={{ fontSize: 13 }}>Стаття<br />
+              <select className="hr-inp" style={{ width: "100%" }} value={form.itemId} onChange={(e) => setForm({ ...form, itemId: e.target.value })}>
+                <option value="">— оберіть статтю —</option>
+                {[...new Set(data.articles.map((a) => `${a.resp} · ${a.group}`))].map((g) => (
+                  <optgroup key={g} label={g}>
+                    {data.articles.filter((a) => `${a.resp} · ${a.group}` === g && (!a.offFrom || String(a.id) === form.itemId)).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </optgroup>
+                ))}
+              </select></label>
             <label style={{ fontSize: 13 }}>Сума, ₴<br /><input className="hr-inp" style={{ width: "100%" }} inputMode="decimal" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label>
             <label style={{ fontSize: 13 }}>Як часто<br />
               <select className="hr-inp" style={{ width: "100%" }} value={form.period} onChange={(e) => setForm({ ...form, period: e.target.value as RecPeriod })}>
                 <option value="month">щомісяця</option><option value="quarter">щокварталу</option><option value="year">раз на рік</option>
               </select></label>
-            <label style={{ fontSize: 13 }}>Найближча оплата<br /><input className="hr-inp" style={{ width: "100%" }} type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></label>
-            <label style={{ fontSize: 13 }}>Хто платить<br />
-              <select className="hr-inp" style={{ width: "100%" }} value={form.payerId} onChange={(e) => setForm({ ...form, payerId: e.target.value })}>
-                {data.payers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select></label>
-            <label style={{ fontSize: 13 }}>Примітка (необовʼязково)<br /><input className="hr-inp" style={{ width: "100%" }} value={form.note} placeholder="Куди / як платити" onChange={(e) => setForm({ ...form, note: e.target.value })} /></label>
+            <label style={{ fontSize: 13 }}>{form.id ? "Найближчий місяць" : "Перший місяць"}<br /><input className="hr-inp" style={{ width: "100%" }} type="month" value={form.month} onChange={(e) => setForm({ ...form, month: e.target.value })} /></label>
+            <label style={{ fontSize: 13 }}>Примітка (необовʼязково)<br /><input className="hr-inp" style={{ width: "100%" }} value={form.note} placeholder="Напр., ФОП Коваль — щоб розрізнити дві оплати однієї статті" onChange={(e) => setForm({ ...form, note: e.target.value })} /></label>
           </div>
-          <span className="hr-muted" style={{ fontSize: 12.5 }}>Число з дати стане «днем оплати»: 31-го в коротшому місяці нагадає в останній день, а наступного — знову 31-го.</span>
+          <span className="hr-muted" style={{ fontSize: 12.5 }}>Нагадування — у «План/факті» відповідного місяця: біля статті сума й кнопка «додати в план».</span>
           {formErr && <span role="alert" style={{ color: "var(--danger)", fontWeight: 600, fontSize: 13.5 }}>{formErr}</span>}
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" className="hr-btn p" disabled={busy} onClick={() => void save()}>{form.id ? "Зберегти" : "Додати"}</button>
@@ -181,7 +179,7 @@ export function FinanceCalendarTab() {
 
       {overdueElsewhere.length > 0 && view === "cal" && (
         <div role="status" style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "space-between", background: "#fdecea", border: "1px solid #f4c7c2", borderRadius: 10, padding: "6px 8px 6px 14px", color: "#8f1c13" }}>
-          <b style={{ fontSize: 13.5 }}>Прострочено: {overdueElsewhere.map((i) => `«${i.name}» з ${dmy(i.next)} (${money(i.amount)})`).join(", ")}</b>
+          <b style={{ fontSize: 13.5 }}>Не оплачено: {overdueElsewhere.map((i) => `«${title(i)}» за ${monthName(i.next)} (${money(i.amount)})`).join(", ")}</b>
           <button type="button" className="hr-btn xs" onClick={() => { const i = overdueElsewhere[0]; setYm(i.next.slice(0, 7)); setOpen((o) => ({ ...o, [`${i.id}@${i.next}`]: true })); }}>Перейти</button>
         </div>
       )}
@@ -238,26 +236,14 @@ export function FinanceCalendarTab() {
           <div aria-hidden="true" style={{ height: 6, borderRadius: 999, background: "var(--border)", overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${month.sum ? Math.round((month.paid / month.sum) * 100) : 0}%`, background: "#5fae7a" }} />
           </div>
-          {[...byDate.entries()].map(([date, evs]) => {
-            const worst = [...evs].sort((a, b) => rank[a.kind] - rank[b.kind])[0].kind;
-            return (
-              <div key={date} style={{ display: "flex", flexWrap: "wrap", gap: "10px 18px", padding: "14px 0", borderTop: "1px solid var(--border)", marginTop: 8 }}>
-                <div style={{ width: 92, flex: "none", textAlign: "center", padding: "8px 4px", borderRadius: 10, display: "flex", flexDirection: "column", gap: 3, background: TONE[worst][0], color: TONE[worst][1] }}>
-                  <b style={{ fontSize: 26, lineHeight: 1 }}>{date.slice(8, 10)}</b>
-                  <span style={{ fontSize: 12.5 }}>{WD[new Date(P(date)).getUTCDay()]}</span>
-                  <span style={{ fontSize: 11.5, fontWeight: 600 }}>{rel(days(today, date))}</span>
-                </div>
-                <div style={{ flex: "1 1 460px", minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-                  {evs.map((e) => <EventCard key={`${e.recurringId}@${e.date}@${e.paidId ?? ""}`} e={e} it={items.get(e.recurringId)} today={today} history={data.history} busy={busy}
-                    open={!!open[`${e.recurringId}@${e.date}`]} toggle={() => setOpen((o) => ({ ...o, [`${e.recurringId}@${e.date}`]: !o[`${e.recurringId}@${e.date}`] }))}
-                    amt={payAmt[`${e.recurringId}@${e.date}`]} setAmt={(v) => setPayAmt((a) => ({ ...a, [`${e.recurringId}@${e.date}`]: v }))}
-                    pay={pay} undo={undo} disable={disable} edit={(it) => { setForm(editForm(it)); setFormErr(null); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                    openHistory={(id) => { setHistItem(id); setHistMonths(0); setView("hist"); }} />)}
-                </div>
-              </div>
-            );
-          })}
-          {byDate.size === 0 && <p className="hr-muted" style={{ margin: "12px 0 4px" }}>{data.items.length ? "У цьому місяці оплат немає." : "Ще немає жодної періодичної оплати — додайте першу кнопкою «+ Оплата»."}</p>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+            {month.events.map((e) => <EventCard key={`${e.recurringId}@${e.date}@${e.paidId ?? ""}`} e={e} it={items.get(e.recurringId)} history={data.history} busy={busy}
+              open={!!open[`${e.recurringId}@${e.date}`]} toggle={() => setOpen((o) => ({ ...o, [`${e.recurringId}@${e.date}`]: !o[`${e.recurringId}@${e.date}`] }))}
+              amt={payAmt[`${e.recurringId}@${e.date}`]} setAmt={(v) => setPayAmt((a) => ({ ...a, [`${e.recurringId}@${e.date}`]: v }))}
+              pay={pay} undo={undo} disable={disable} edit={(it) => { setForm(editForm(it)); setFormErr(null); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+              openHistory={(id) => { setHistItem(id); setHistMonths(0); setView("hist"); }} />)}
+          </div>
+          {month.events.length === 0 && <p className="hr-muted" style={{ margin: "12px 0 4px" }}>{data.items.length ? "У цьому місяці оплат немає." : "Ще немає жодної періодичної оплати — додайте першу кнопкою «+ Оплата»."}</p>}
         </section>
 
         {off.length > 0 && (
@@ -265,8 +251,8 @@ export function FinanceCalendarTab() {
             <b id="fc-off">Вимкнені нагадування</b>
             {off.map((i) => (
               <div key={i.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--border)", marginTop: 6 }}>
-                <span>{i.name} · {money(i.amount)} <span className="hr-muted" style={{ fontSize: 12.5 }}>· {meta(i)}</span></span>
-                <button type="button" className="hr-btn xs" disabled={busy} onClick={() => void act(() => updateFinRecurring(i.id, { active: true }), `«${i.name}»: нагадування увімкнено`)}>Увімкнути</button>
+                <span>{title(i)} · {money(i.amount)} <span className="hr-muted" style={{ fontSize: 12.5 }}>· {meta(i)}</span></span>
+                <button type="button" className="hr-btn xs" disabled={busy} onClick={() => void act(() => updateFinRecurring(i.id, { active: true }), `«${title(i)}»: нагадування увімкнено`)}>Увімкнути</button>
               </div>
             ))}
           </section>
@@ -278,14 +264,13 @@ export function FinanceCalendarTab() {
   );
 }
 
-function EventCard({ e, it, today, history, open, toggle, amt, setAmt, pay, undo, disable, edit, openHistory, busy }: {
-  e: RecEvent; it: RecItem | undefined; today: string; history: RecPaid[]; open: boolean; toggle: () => void; amt: string | undefined; setAmt: (v: string) => void;
+function EventCard({ e, it, history, open, toggle, amt, setAmt, pay, undo, disable, edit, openHistory, busy }: {
+  e: RecEvent; it: RecItem | undefined; history: RecPaid[]; open: boolean; toggle: () => void; amt: string | undefined; setAmt: (v: string) => void;
   pay: (it: RecItem, amount?: string) => void; undo: (paidId: number, name: string) => void; disable: (it: RecItem) => void; edit: (it: RecItem) => void;
   openHistory: (id: number) => void; busy: boolean;
 }) {
-  const name = it?.name ?? "—";
-  const d = days(today, e.date);
-  const status = e.kind === "paid" ? "оплачено" : d < 0 ? `прострочено ${-d} дн.` : d === 0 ? "сьогодні" : "заплановано";
+  const name = title(it);
+  const status = STATUS[e.kind];
   const canPay = !!it && it.active && e.due;
   const off = e.planned != null && Math.abs(e.amount - e.planned) >= 1;
   const hist = history.filter((p) => p.recurringId === e.recurringId).slice(0, 4);
@@ -305,12 +290,12 @@ function EventCard({ e, it, today, history, open, toggle, amt, setAmt, pay, undo
       {open && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--border-strong)", display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "10px 18px", fontSize: 13.5 }}>
-            <div><div style={label}>Хто платить</div>{it?.payer ?? "не вказано"}</div>
+            <div><div style={label}>Стаття «План/факту»</div>{it?.name ?? "—"}</div>
             <div><div style={label}>Примітка</div>{it?.note || <span className="hr-muted">немає</span>}</div>
-            <div><div style={label}>Наступні дати</div>{it && it.active ? it.upcoming.map((x) => <div key={x}>{dmy(x)}</div>) : <span className="hr-muted">нагадування вимкнене</span>}</div>
+            <div><div style={label}>Наступні місяці</div>{it && it.active ? it.upcoming.map((x) => <div key={x}>{monthName(x)}</div>) : <span className="hr-muted">нагадування вимкнене</span>}</div>
             <div>
               <div style={label}>Історія оплат</div>
-              {hist.map((p) => <div key={p.id} style={p.cancelledAt ? { textDecoration: "line-through", color: MUTED } : undefined}>{dmy(p.due)} — {money(p.amount)}{p.by ? ` · ${p.by}` : ""}</div>)}
+              {hist.map((p) => <div key={p.id} style={p.cancelledAt ? { textDecoration: "line-through", color: MUTED } : undefined}>{monthName(p.due)} — {money(p.amount)}{p.by ? ` · ${p.by}` : ""}</div>)}
               {!hist.length && <span className="hr-muted">ще не оплачувалась</span>}
               <div><button type="button" className="hr-btn xs" style={{ marginTop: 4 }} onClick={() => openHistory(e.recurringId)}>Уся історія →</button></div>
             </div>
@@ -321,7 +306,7 @@ function EventCard({ e, it, today, history, open, toggle, amt, setAmt, pay, undo
                 <input className="hr-inp" inputMode="decimal" style={{ width: 150 }} value={amt ?? String(e.amount)} onChange={(x) => setAmt(x.target.value)} /></label>
               <button type="button" className="hr-btn" disabled={busy} onClick={() => pay(it!, amt ?? String(e.amount))}>Оплачено цією сумою</button>
             </>)}
-            {!canPay && e.kind !== "paid" && it && it.active && <span className="hr-muted" style={{ fontSize: 12.5 }}>Позначити можна після попередньої — {dmy(it.next)}.</span>}
+            {!canPay && e.kind !== "paid" && it && it.active && <span className="hr-muted" style={{ fontSize: 12.5 }}>Позначити можна після попередньої — {monthName(it.next)}.</span>}
             {e.canUndo && e.paidId != null && <button type="button" className="hr-btn" disabled={busy} onClick={() => undo(e.paidId!, name)}>Скасувати оплату</button>}
             <span style={{ flex: 1 }} />
             {it && <button type="button" className="hr-btn xs" onClick={() => edit(it)}>Змінити</button>}
@@ -364,7 +349,7 @@ function History({ data, item, setItem, months, setMonths, undo, excel, busy }: 
       <div style={{ overflowX: "auto" }}>
         <div style={{ minWidth: 760 }}>
           <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12, ...label, padding: "4px 0" }}>
-            <span>Дата</span><span>Оплата</span><span style={{ textAlign: "right" }}>Сплачено</span><span>Проти плану</span><span>Хто позначив</span><span />
+            <span>Місяць</span><span>Оплата</span><span style={{ textAlign: "right" }}>Сплачено</span><span>Проти плану</span><span>Хто позначив</span><span />
           </div>
           {[...groups.entries()].map(([g, list]) => (
             <Fragment key={g}>
@@ -376,7 +361,7 @@ function History({ data, item, setItem, months, setMonths, undo, excel, busy }: 
                 const dv = p.amount - p.planned, x = p.cancelledAt ? { textDecoration: "line-through", color: MUTED } as React.CSSProperties : undefined;
                 return (
                   <div key={p.id} style={{ display: "grid", gridTemplateColumns: cols, gap: 12, alignItems: "center", padding: "5px 0", borderTop: "1px solid var(--border)", fontSize: 13.5 }}>
-                    <span style={{ ...x, fontVariantNumeric: "tabular-nums" }}>{dmy(p.due)}</span>
+                    <span style={{ ...x, fontVariantNumeric: "tabular-nums" }}>{p.due.slice(5, 7)}.{p.due.slice(0, 4)}</span>
                     <b style={x}>{p.name}</b>
                     <b style={{ ...x, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{money(p.amount)}</b>
                     <span style={{ fontSize: 12.5, fontWeight: 600, color: Math.abs(dv) < 1 ? MUTED : dv > 0 ? "#8a5300" : "#1e7a3c" }}>{Math.abs(dv) < 1 ? "за планом" : `${dv > 0 ? "+" : "−"}${money(Math.abs(dv))} ${dv > 0 ? "більше" : "менше"}`}</span>

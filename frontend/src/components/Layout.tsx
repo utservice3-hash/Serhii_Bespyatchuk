@@ -9,8 +9,6 @@ import { heartbeat, trackerSsoUrl, surveysBadge, type SurveysBadge } from "../ap
 import { useRegistriesCount } from "../minusRegistry/client/useRegistriesCount";
 import { useClientLimitsCount } from "../minusRegistry/client/clientLimits/useClientLimitsCount";
 import { usePolling } from "../hooks/usePolling";
-import { useFinanceReminders } from "./useFinanceReminders";
-import { getAuthPayload } from "../auth";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
 export const NAV_GROUPS = [
@@ -215,8 +213,6 @@ export function Layout({
   // після дії) — лише тим, кому вкладку видано. 💰 Дебіторка: «Ліміти клієнтів» — переліміт + прострочка + нова справа в суді.
   const registriesCount = useRegistriesCount(60_000, !screens || screens.includes("registries"));
   const limitsCount = useClientLimitsCount(5 * 60_000, !screens || screens.includes("receivables"));
-  // 📅 Календар оплат: значок і повідомлення раз на день — лише тим, хто веде календар (`view_private_finance`).
-  const finDue = useFinanceReminders((!screens || screens.includes("finance")) && (getAuthPayload()?.perms ?? []).includes("view_private_finance"), () => onSelect("finance" as NavKey));
   const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled)
     .map((g) => ({ ...g, items: g.items.filter((it) => it.key !== "surveys" || showSurveys) }))
     .filter((g) => g.items.length > 0);
@@ -334,14 +330,13 @@ export function Layout({
                             : item.key === "news" ? newsUnread
                             : item.key === "surveys" ? (surveys?.fresh ?? 0)
                             : item.key === "registries" ? registriesCount
-                            : item.key === "receivables" ? limitsCount
-                            : item.key === "finance" ? finDue : 0;
+                            : item.key === "receivables" ? limitsCount : 0;
                 return (
                 <button
                   key={item.key}
                   className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
                   onClick={() => onSelect(item.key as NavKey)}
-                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : item.key === "registries" ? "чекають вашої дії" : item.key === "receivables" ? "у «Лімітах клієнтів»: переліміт, прострочка чи нова справа в суді" : item.key === "finance" ? "оплат чекають у «Календарі оплат»" : "непрочитаних"}` : item.label}
+                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : item.key === "registries" ? "чекають вашої дії" : item.key === "receivables" ? "у «Лімітах клієнтів»: переліміт, прострочка чи нова справа в суді" : "непрочитаних"}` : item.label}
                   style={{ position: "relative" }}
                 >
                   <span className="sidebar-nav-icon"><NavIcon k={item.key} /></span>
