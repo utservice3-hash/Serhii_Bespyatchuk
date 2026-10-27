@@ -9,6 +9,13 @@ import { getAuthPayload } from "../../../auth";
 import { usePolling } from "../../../hooks/usePolling";
 import { InfoHint, Toggle } from "../widgets";
 import { useToast } from "../../../components/Toasts";
+// 💳 № рахунку на вхідних ФОП / картки і коментарі до вихідних ФОП — пакет Сергія (27.10.2026). Вигляд сторінки той самий:
+// додається лише рядок під платежем, фільтр, інфо-рядок і коментарі (ТЗ «Стиль»).
+import {
+  IdentLine, OutComments, IdentFilter, IdentRuleBar, identAccent, useBankIdent, useBankIdentCounts, useOutComments, type IdentFilterValue, type Clock,
+} from "../../../bankIdent/client/bankIdent";
+import type { CommentSummary, IdentState } from "../../../bankIdent/shared/bankIdent";
+import { bankIdentApi, BANK_IDENT_COUNT_EVENT } from "../../../bankIdent/dashboard";
 
 const RED = "#c8102e", MUTED = "var(--text-muted)";
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
@@ -42,7 +49,9 @@ function AccBadge({ company }: { company: string }) {
 
 // Двохрядковий запис: зліва дата·час стовпчиком; рядок1 — контрагент жирним + сума справа
 // (UAH-екв. лише для валютних); рядок2 приглушено — рахунок-бейдж · підстава (ellipsis + title).
-function TxRow({ r, mode }: { r: BankTx; mode: "in" | "out" }) {
+interface RowIdent { state: IdentState; clock: Clock; holidays: string[]; onChange: (s: IdentState) => void }
+interface RowComments { summary: CommentSummary; onChange: (s: CommentSummary) => void }
+function TxRow({ r, mode, ident, oc }: { r: BankTx; mode: "in" | "out"; ident?: RowIdent; oc?: RowComments }) {
   const inMode = mode === "in";
   const color = inMode ? "#16a34a" : "#dc2626";
   const sign = inMode ? "" : "−";
@@ -51,10 +60,12 @@ function TxRow({ r, mode }: { r: BankTx; mode: "in" | "out" }) {
   const p = (x: number) => String(x).padStart(2, "0");
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 12, padding: "10px 4px",
+      // рядок із блоком «№ рахунку» / коментарями — до верху, інакше дата зʼїде до середини (ТЗ «Стиль», п.6)
+      display: "flex", alignItems: ident || oc ? "flex-start" : "center", gap: 12, padding: "10px 4px",
       borderBottom: "1px solid var(--border)",
       background: r.hidden ? "rgba(217,119,6,0.07)" : r.unmatched_account ? "rgba(220,38,38,0.05)" : undefined,
-      borderLeft: r.unmatched_account ? "3px solid #dc2626" : "3px solid transparent",
+      // «горить» (лишилось < 12 роб. год) — тією самою лівою смугою, а не новим фоном (п.5)
+      borderLeft: r.unmatched_account ? "3px solid #dc2626" : `3px solid ${ident ? identAccent(ident.state, ident.clock(), new Set(ident.holidays)) : "transparent"}`,
     }}>
       <div style={{ width: 50, flexShrink: 0, textAlign: "center", lineHeight: 1.15 }}>
         <div style={{ fontSize: 13, fontWeight: 700 }}>{p(d.getDate())}.{p(d.getMonth() + 1)}</div>
@@ -76,6 +87,8 @@ function TxRow({ r, mode }: { r: BankTx; mode: "in" | "out" }) {
           {r.unmatched_account && <span title="нерозпізнаний рахунок" style={{ color: "#dc2626", fontSize: 11, flexShrink: 0 }}>⚠</span>}
           <span title={r.purpose ?? ""} style={{ fontSize: 12.5, color: MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{r.purpose ?? "—"}</span>
         </div>
+        {ident && <IdentLine state={ident.state} api={bankIdentApi} clock={ident.clock} holidays={ident.holidays} onChange={ident.onChange} />}
+        {oc && <OutComments txId={r.id} summary={oc.summary} api={bankIdentApi} onChange={oc.onChange} />}
       </div>
     </div>
   );
@@ -122,6 +135,31 @@ export default function BankSection() {
 
   const filters = useMemo(() => ({ from: range.from, to: range.to, company: companyFilter ?? undefined, currency: ccy || undefined, q: q || undefined }), [range.from, range.to, companyFilter, ccy, q]);
   const feedFn = mode === "in" ? fetchBankIncoming : fetchBankOutgoing;
+
+  // 💳 № рахунку (вхідні) і коментарі (вихідні ФОП). Фільтр ≠ «Усі» — рядки з /api/bank-ident/list (та сама межа
+  // видимості, що в стрічці); стани — для рядків, що на екрані; лічильники — для фільтра.
+  const [identF, setIdentF] = useState<IdentFilterValue>("all");
+  const identKey = mode === "in" && identF !== "all" ? identF : null; // фільтр діє лише на «Вхідних»
+  const identOn = identKey !== null;
+  const [identData, setIdentData] = useState<{ key: string; rows: BankTx[]; total: number } | null>(null);
+  useEffect(() => {
+    if (!identKey) return;
+    let alive = true;
+    bankIdentApi.list(identKey, 200).then((d) => {
+      if (alive) setIdentData({ key: identKey, rows: d.rows as unknown as BankTx[], total: d.total });
+    }).catch(() => { if (alive) setIdentData({ key: identKey, rows: [], total: 0 }); });
+    return () => { alive = false; };
+  }, [identKey]);
+  const identRows = identData && identData.key === identKey ? identData.rows : null; // null — ще вантажиться
+  const identTotal = identData && identData.key === identKey ? identData.total : 0;
+  const shown = identOn ? identRows ?? [] : rows;
+  const ident = useBankIdent(mode === "in" ? shown.map((r) => r.id) : [], bankIdentApi);
+  const { counts: identCounts, reload: reloadIdentCounts } = useBankIdentCounts(bankIdentApi);
+  const onIdentChange = useCallback((s: IdentState) => {
+    ident.setState(s); void reloadIdentCounts();
+    window.dispatchEvent(new Event(BANK_IDENT_COUNT_EVENT)); // бейдж у меню — одразу, не чекаючи хвилини
+  }, [ident.setState, reloadIdentCounts]); // eslint-disable-line react-hooks/exhaustive-deps
+  const oc = useOutComments(mode === "out" ? rows.map((r) => r.id) : [], bankIdentApi);
 
   // Перша сторінка (скидання): підсумки за період + перша порція історії.
   const loadFirst = useCallback(() => {
@@ -269,17 +307,30 @@ export default function BankSection() {
           <span style={{ fontSize: 12.5, color: MUTED }}>{mode === "in" ? "видно всім" : canSeeHidden ? "адмін-вигляд: 🔒 приховані позначені" : "приховані отримувачі відсутні (лише адмін)"} · дані з банку, оновлення ~15 хв</span>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔎 контрагент / підстава / ID" style={{ ...inp, width: 240 }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔎 контрагент / підстава / ID / № рахунку" style={{ ...inp, width: 240 }} />
           <select value={companyFilter ?? ""} onChange={(e) => setCompanyFilter(e.target.value || null)} style={inp}><option value="">Компанія: усі</option>{companies.map((c) => <option key={c.company} value={c.company}>{c.label}</option>)}</select>
           <select value={ccy} onChange={(e) => setCcy(e.target.value)} style={inp}><option value="">Валюта: усі</option>{currencies.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+          {mode === "in" && <IdentFilter counts={identCounts} value={identF} onChange={setIdentF} />}
         </div>
-        {loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій в утриманій історії.</p> : (
+        {mode === "in" && <IdentRuleBar kind="in" />}
+        {mode === "out" && oc.enabled && <IdentRuleBar kind="out" />}
+        {identOn ? (identRows === null ? <p className="loading-text">Завантаження…</p> : identRows.length === 0 ? <p className="loading-text">Немає платежів із таким станом.</p> : (
           <div>
-            {rows.map((r) => <TxRow key={r.id} r={r} mode={mode} />)}
+            {identRows.map((r) => <TxRow key={r.id} r={r} mode="in"
+              ident={ident.states[r.id] ? { state: ident.states[r.id], clock: ident.clock, holidays: ident.holidays, onChange: onIdentChange } : undefined} />)}
+            <div style={{ textAlign: "center", padding: "14px 0 2px", color: MUTED, fontSize: 12.5 }}>
+              {identTotal > identRows.length ? `Показано ${identRows.length} з ${identTotal} — найновіші` : `Усього ${identRows.length}`}
+            </div>
+          </div>
+        )) : loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій в утриманій історії.</p> : (
+          <div>
+            {rows.map((r) => <TxRow key={r.id} r={r} mode={mode}
+              ident={mode === "in" && ident.states[r.id] ? { state: ident.states[r.id], clock: ident.clock, holidays: ident.holidays, onChange: onIdentChange } : undefined}
+              oc={mode === "out" && oc.enabled && oc.summaries[r.id] ? { summary: oc.summaries[r.id], onChange: (s) => oc.setSummary(r.id, s) } : undefined} />)}
           </div>
         )}
         {/* сентинель infinite-scroll + індикатор довантаження / кінець історії */}
-        {!loading && rows.length > 0 && (
+        {!identOn && !loading && rows.length > 0 && (
           <div ref={sentinelRef} style={{ textAlign: "center", padding: "14px 0 2px", color: MUTED, fontSize: 12.5 }}>
             {loadingMore ? "Завантаження ще…" : hasMore ? "Гортай нижче — довантажиться ще" : `Кінець історії · показано ${rows.length} транзакцій`}
           </div>

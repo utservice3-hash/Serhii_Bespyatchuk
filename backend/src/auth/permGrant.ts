@@ -52,6 +52,9 @@ export const PERMISSION_CATALOG = [
   "manage_cargo",
   /** 🧮 Калькулятор ставки: зведення відгуків «наскільки допоміг розрахунок» (рішення Романа 27.10.2026) — admin, СЕО, ОД, КВП. */
   "view_rate_feedback",
+  /** 💳 «Виписка» (пакет Сергія 27.10.2026): вписати № рахунку — менеджер, тімлід; змінити № — фінансист;
+   *  «не оплата клієнта» і коментарі до вихідних ФОП — Бухгалтерія. Адмін — усе. */
+  "tag_bank_invoice", "fix_bank_invoice", "mark_bank_not_client", "bank_out_comments",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",

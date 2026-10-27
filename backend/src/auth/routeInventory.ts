@@ -69,6 +69,7 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/client-limits", module: "../routes/counterparty.js", export: "clientLimitsRouter" },
   { mount: "/api/prozorro", module: "../routes/prozorro.js", export: "prozorroRouter" },
   { mount: "/api/cargo", module: "../routes/cargo.js", export: "cargoRouter" },
+  { mount: "/api/bank-ident", module: "../routes/bankIdent.js", export: "bankIdentRouter" },
   { mount: "/api/receivables-claims", module: "../routes/receivablesClaims.js", export: "receivablesClaimRouter" },
   { mount: "/api/nominations", module: "../routes/nominations.js", export: "nominationsRouter" },
   { mount: "/api/people", module: "../routes/people.js", export: "peopleRouter" },

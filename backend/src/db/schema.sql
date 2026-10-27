@@ -6943,3 +6943,92 @@ UPDATE roles SET permissions = permissions - 'view_rate_feedback'
  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp');
 -- 🔒 Коментарі — вільний текст людей. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON rate_feedback FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💳 «ВИПИСКА» — № РАХУНКУ НА ВХІДНИХ ФОП І КОМЕНТАРІ ДО ВИХІДНИХ (27.10.2026) — пакет Сергія
+-- `UTS_vypyska_nomer_rakhunku` (migrations/001_bank_ident.sql) як є, без BEGIN/COMMIT (схема — один прогін).
+-- Роут — routes/bankIdent.ts, правила — bankIdent/*. Таблиць виписки не змінює.
+-- ident_from = момент ПЕРШОГО прогону: надходження до викату — без номера й строку, тож у день викату історія
+-- не стає «неідентифікованою».
+-- Налаштування правила. ident_from — момент запуску: надходження ДО нього — без номера й без строку,
+-- щоб у день деплою вся історія не стала «неідентифікованою». Перший запуск міграції ставить «зараз».
+CREATE TABLE IF NOT EXISTS bank_ident_settings (
+  key        text PRIMARY KEY,
+  value      text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO bank_ident_settings (key, value)
+VALUES ('ident_from', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+ON CONFLICT (key) DO NOTHING;
+
+-- Поточний стан ідентифікації платежу. Рядка немає — платіж «чекає №» (або ще не в правилі / свій переказ).
+CREATE TABLE IF NOT EXISTS bank_tx_ident (
+  tx_id         bigint PRIMARY KEY,                 -- id транзакції у вашій таблиці виписки
+  account_id    bigint NOT NULL,
+  booked_at     timestamptz NOT NULL,               -- копія часу з банку — для сортування й звітів
+  status        text NOT NULL CHECK (status IN ('identified', 'not_client', 'unidentified')),
+  invoice_no    text CHECK (invoice_no IS NULL OR char_length(invoice_no) BETWEEN 1 AND 120),
+  first_by      text,                               -- хто зафіксував номер першим (автор)
+  first_by_name text,
+  first_at      timestamptz,
+  set_by        text,                               -- хто поставив поточний стан (NULL — система: строк минув)
+  set_by_name   text,
+  set_role      text,
+  set_at        timestamptz NOT NULL DEFAULT now(),
+  reason        text CHECK (reason IS NULL OR char_length(reason) <= 300),
+  note          text CHECK (note IS NULL OR char_length(note) <= 300),
+  unid_kind     text CHECK (unid_kind IS NULL OR unid_kind IN ('expired', 'finance')),
+  deadline_at   timestamptz NOT NULL,               -- строк, за яким рахували (48 роб. год)
+  changed       boolean NOT NULL DEFAULT false,     -- номер змінював фінансист
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT bank_tx_ident_no_chk   CHECK (status <> 'identified' OR invoice_no IS NOT NULL),
+  CONSTRAINT bank_tx_ident_unid_chk CHECK (status <> 'unidentified' OR unid_kind IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_status_idx  ON bank_tx_ident (status, booked_at DESC);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_invoice_idx ON bank_tx_ident (invoice_no) WHERE invoice_no IS NOT NULL;
+
+-- Історія (лише додавання). actor_* = NULL — система (строк минув).
+CREATE TABLE IF NOT EXISTS bank_tx_ident_events (
+  id         bigserial PRIMARY KEY,
+  tx_id      bigint NOT NULL,
+  at         timestamptz NOT NULL DEFAULT now(),
+  actor_id   text,
+  actor_name text,
+  actor_role text,
+  act        text NOT NULL CHECK (act IN ('set', 'change', 'unidentify', 'not_client', 'expired')),
+  from_no    text,
+  to_no      text,
+  reason     text,
+  note       text
+);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_events_tx_idx ON bank_tx_ident_events (tx_id, at, id);
+
+-- Коментарі до вихідних ФОП. Бачать і пишуть лише ті, в кого право bank_out_comments (за замовчуванням — бухгалтер) і адмін.
+CREATE TABLE IF NOT EXISTS bank_tx_comments (
+  id          bigserial PRIMARY KEY,
+  tx_id       bigint NOT NULL,
+  author_id   text NOT NULL,
+  author_name text NOT NULL,
+  author_role text,
+  body        text NOT NULL CHECK (char_length(body) BETWEEN 1 AND 1000),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bank_tx_comments_tx_idx ON bank_tx_comments (tx_id, created_at, id);
+
+-- Права (рішення Сергія 27.10, ТЗ §3). Явними рядками видача й зняття і САМЕ ТУТ, у кінці: синки ролей вище копіюють
+-- усі права адміна на СЕО, ОД, КВП і фінансиста — без зняття «вписати №» розтеклося б на всіх них.
+--   tag_bank_invoice     — вписати № один раз: менеджер, тімлід (+ адмін);
+--   fix_bank_invoice     — змінити № / визнати неідентифікованим: фінансист (+ адмін);
+--   mark_bank_not_client — «не оплата клієнта»: Бухгалтерія (ключ — 12 підкреслень) (+ адмін);
+--   bank_out_comments    — коментарі до вихідних ФОП: Бухгалтерія (+ адмін). Без права коментарів не видно взагалі.
+UPDATE roles SET permissions = permissions || '{"tag_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'manager', 'team_lead');
+UPDATE roles SET permissions = permissions - 'tag_bank_invoice' WHERE key NOT IN ('admin', 'manager', 'team_lead');
+UPDATE roles SET permissions = permissions || '{"fix_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'financier');
+UPDATE roles SET permissions = permissions - 'fix_bank_invoice' WHERE key NOT IN ('admin', 'financier');
+UPDATE roles SET permissions = permissions || '{"mark_bank_not_client": true}'::jsonb WHERE key IN ('admin', '____________');
+UPDATE roles SET permissions = permissions - 'mark_bank_not_client' WHERE key NOT IN ('admin', '____________');
+UPDATE roles SET permissions = permissions || '{"bank_out_comments": true}'::jsonb WHERE key IN ('admin', '____________');
+UPDATE roles SET permissions = permissions - 'bank_out_comments' WHERE key NOT IN ('admin', '____________');
+
+-- 🔒 Хто що вписав і коментарі до платежів ФОП — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON bank_ident_settings, bank_tx_ident, bank_tx_ident_events, bank_tx_comments FROM ai_readonly;
