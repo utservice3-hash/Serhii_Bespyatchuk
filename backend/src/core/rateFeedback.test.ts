@@ -122,3 +122,11 @@ test("#2775 ЕКРАН: відгук виїжджає через 15 с і лиш
     "🔴 відгук виїжджає без «питати» від сервера — раз на маршрут на день не тримається");
   assert.match(SCREEN, /sendRateFeedback\(\{ usageId: data\.usage_id/, "🔴 відгук не надсилається на сервер");
 });
+
+test("#2777 ЕКРАН: форма з полями міст — вище за сусідні картки, підказки не ховаються під «Нещодавні» й результатом", () => {
+  const at = SCREEN.indexOf("<TownField label=\"Звідки\"");
+  assert.ok(at > 0, "🔴 поля «Звідки» на екрані немає");
+  const open = SCREEN.lastIndexOf("<div ", at);
+  const tag = SCREEN.slice(open, SCREEN.indexOf(">", open) + 1);
+  assert.match(tag, /position: "relative", zIndex: 5/, "🔴 форма не піднята над сусідами — підказки міст знову під «Нещодавні»");
+});

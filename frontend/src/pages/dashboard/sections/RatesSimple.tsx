@@ -194,7 +194,9 @@ export function RatesSimple() {
       {view === "stats" && isAdmin && <><RateFeedbackStats /><StatsView /></>}
       {view === "calc" && <>
       {noToken && <div className="rs-in" style={{ ...box, padding: 16, borderLeft: `4px solid ${ACC}`, fontSize: 14 }}>⚠️ Токен Lardi не заданий на сервері — розрахунок не працюватиме.</div>}
-      <div className="rs-in" style={{ ...box, padding: 16, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
+      {/* Анімація `.rs-in` робить кожну картку окремим шаром, і пізніші («Нещодавні», результат) малювались поверх
+          підказок міст. Форма — вище за сусідів (Роман 27.10.2026, #2777). */}
+      <div className="rs-in" style={{ ...box, padding: 16, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", position: "relative", zIndex: 5 }}>
         <TownField label="Звідки" placeholder="місто" text={frmText} setText={(v) => { setFrmText(v); setFrm(null); }} picked={frm} onPick={(t) => { setFrm(t); setFrmText(t.name); }} />
         <button type="button" className="rs-btn" onClick={swap} aria-label="Поміняти місцями" style={{ ...ctl, width: 44, padding: 0, color: ACC, cursor: "pointer" }}>⇄</button>
         <TownField label="Куди" placeholder="місто" text={toText} setText={(v) => { setToText(v); setTo(null); }} picked={to} onPick={(t) => { setTo(t); setToText(t.name); }} />
