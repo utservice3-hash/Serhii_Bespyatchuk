@@ -1306,6 +1306,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "DELETE", path: "/api/rates/city-info/:id", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 🧮 Відгук на розрахунок ставки (27.10.2026): лишає кожен, хто рахує; зведення — право `view_rate_feedback`
+  //    (admin, СЕО, ОД, КВП — рішення Романа). Фінансист рахувати може, зведення не бачить.
+  { method: "POST", path: "/api/rates/feedback", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "GET", path: "/api/rates/feedback/stats", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["hr", "team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/rates/health", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/rates/stats", cls: "GET",

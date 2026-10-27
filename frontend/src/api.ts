@@ -3775,6 +3775,25 @@ export interface RateAnalysis {
     distance_km: number | null;
     options: { tonnage: string; margin: number; client_min: number | null; client_max: number | null; selected: boolean }[];
   } | null;
+  /** 🧮 Номер розрахунку — до нього привʼязується відгук; `feedback_due` — чи питати (раз на маршрут на день). */
+  usage_id?: number | null;
+  feedback_due?: boolean;
+}
+export type RateFeedbackRating = "ok" | "high" | "low" | "no";
+export async function sendRateFeedback(body: { usageId: number; rating: RateFeedbackRating; agreed: string; comment: string }): Promise<void> {
+  await api.post("/rates/feedback", body);
+}
+export interface RateFeedbackBucket { key: string; n: number; ok: number }
+export interface RateFeedbackStats {
+  days: number; total: number; calculations: number; coverage: number | null;
+  byRating: Record<RateFeedbackRating, number>; okShare: number | null;
+  deviation: { avg: number; n: number } | null;
+  byTonnage: RateFeedbackBucket[]; byZone: RateFeedbackBucket[];
+  comments: { at: string; author: string; route: string; rating: RateFeedbackRating; agreed: number | null; comment: string }[];
+}
+export async function fetchRateFeedbackStats(days = 30): Promise<RateFeedbackStats> {
+  const { data } = await api.get<RateFeedbackStats>("/rates/feedback/stats", { params: { days } });
+  return data;
 }
 export interface RatesUsageStats {
   days: number; total_requests: number; total_users: number;

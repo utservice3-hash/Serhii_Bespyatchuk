@@ -171,6 +171,7 @@ export const MANIFEST_FILES: string[] = [
   "constructor/validate.test.js",
   "surveys/surveys.test.js",
   "cargo/cargo.test.js",
+  "core/rateFeedback.test.js",
   "core/hiringTraining.test.js",
   "core/candidateTraining.test.js",
   "core/secrets.test.js",
@@ -384,10 +385,18 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "org_units", "org_log", "org_migrations",
   "kommo_declined_forms",
   "prozorro_tenders", "prozorro_leads",
+  "rate_feedback",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
 export const MANIFEST_TESTS: string[] = [
+  // core/rateFeedback.test.ts — відгук на розрахунок ставки (27.10.2026)
+  "#2770 ВІДГУК: невідома оцінка, нульова ставка й чужий формат — відмова; кожна з чотирьох оцінок і «44 000 ₴» — приймаються",
+  "#2771 ЗВЕДЕННЯ: частка «Точно», відхилення від середини діапазону зі знаком, розбивка за авто й зоною, покриття",
+  "#2772 «РАЗ НА МАРШРУТ НА ДЕНЬ» РАХУЄТЬСЯ ПО-КИЇВСЬКИ: 23:59 і 00:01 — різні дні, інший маршрут — питати",
+  "#2773 ПРАВО `view_rate_feedback`: у каталозі, видане рівно адмін/СЕО/ОД/КВП, зведення закрите ним і в матриці",
+  "#2774 ВІДГУК ЛИШЕ НА СВІЙ РОЗРАХУНОК, ЧИСЛА — ЗІ ЗНІМКА СЕРВЕРА; таблиця закрита для AI",
+  "#2775 ЕКРАН: відгук виїжджає через 15 с і лише коли сервер каже «питати»",
   "#2510 GOOGLE ADS: заявка без суми, продаж = маржа в межах 90 днів, формат шаблону",
   "#2510b GOOGLE ADS SQL: продаж = 142, час із журналу етапів, gclid копії — від батька",
   // core/nominations.test.ts + routes/nominations.test.ts — номінації тижня (21.09.2026)
