@@ -5405,6 +5405,8 @@ export interface HiringTrainingDetail {
   questions: { id: number; question: string; asked_at: string; answer: string | null; answered_at: string | null;
     material_id: number | null; material_title: string | null; answered_by: string | null }[];
   events: { id: number; kind: string; from_status: HiringStatus | null; to_status: HiringStatus | null; comment: string | null; at: string; actor: string | null }[];
+  /** Картка співробітника цього акаунта (`employees.id`); `null` — картки ще немає. */
+  employeeId: number | null;
   canDecide: boolean; canRestore: boolean;
 }
 export const fetchHiringTraining = async () =>
