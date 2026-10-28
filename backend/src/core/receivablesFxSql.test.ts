@@ -69,23 +69,25 @@ test("#1294b ЖИВИЙ SQL: валютний клієнт — відповід�
     await c.query(`INSERT INTO receivable_invoices (client_key, client_key_raw, client_name, manager_id, invoice_no, invoice_date, amount, currency, amount_fx, amount_fx_uah) VALUES
       ('etrade', 'etrade', 'E-TRADE', 4, 'E1', CURRENT_DATE - 14, 0, 'EUR', 1570, 79838.95),
       ('etrade', 'etrade', 'E-TRADE', 4, 'E2', CURRENT_DATE - 5, 0, 'EUR', 1000, 50852.20),
+      -- Свіжіший дрібний рахунок ІНШОГО менеджера: без ваги валюти (усі суми 0) тай-брейк «свіжіша дата» віддав би клієнта йому.
+      ('etrade', 'etrade', 'E-TRADE', 7, 'E4', CURRENT_DATE - 1, 0, 'EUR', 100, 5085.22),
       ('гривнякл', 'гривнякл', 'Гривня Кл', 7, 'E3', CURRENT_DATE - 3, 0, 'USD', 200, 9120.16)`);
     // Агрегат так, як його будує синк: Σ amount по клієнту (валютні — нулі).
     await c.query(`INSERT INTO receivables (client_key, client_name, amount) SELECT client_key, min(client_name), sum(amount) FROM receivable_invoices GROUP BY client_key`);
     assert.equal(Number((await c.query(`SELECT sum(amount) AS s FROM receivables`)).rows[0].s), 50000, "🔴 валюта потрапила в гривневу суму");
     await recomputeOwners(c as never);
     const owners = (await c.query(`SELECT client_key, manager_id, owner_source FROM receivables ORDER BY client_key`)).rows;
-    assert.deepEqual(owners.map((o) => [o.client_key, o.manager_id]), [["etrade", 4], ["гривнякл", 7]], "🔴 чисто валютний клієнт без відповідального");
+    assert.deepEqual(owners.map((o) => [o.client_key, o.manager_id]), [["etrade", 4], ["гривнякл", 7]], "🔴 чисто валютний клієнт без відповідального чи відповідальний не за сумою у валюті");
     const fx = (await c.query(`SELECT r.client_key, ${FX_UAH_SQL("r")}::float8 AS uah, ${FX_BY_CURRENCY_SQL("r")} AS by FROM receivables r ORDER BY r.client_key`)).rows;
-    assert.deepEqual(fx.map((x) => [x.client_key, x.uah, Number(x.by.EUR ?? 0), Number(x.by.USD ?? 0)]), [["etrade", 130691.15, 2570, 0], ["гривнякл", 9120.16, 0, 200]], "🔴 валютний борг клієнта");
+    assert.deepEqual(fx.map((x) => [x.client_key, x.uah, Number(x.by.EUR ?? 0), Number(x.by.USD ?? 0)]), [["etrade", 135776.37, 2670, 0], ["гривнякл", 9120.16, 0, 200]], "🔴 валютний борг клієнта");
     const debtors = new Map((await c.query(DEBTORS_SQL)).rows.map((x) => [x.key, Number(x.debt)]));
-    assert.deepEqual([debtors.get("etrade"), debtors.get("гривнякл")], [130691.15, 59120.16], "🔴 ліміти не бачать валютного боргу");
+    assert.deepEqual([debtors.get("etrade"), debtors.get("гривнякл")], [135776.37, 59120.16], "🔴 ліміти не бачать валютного боргу");
     const target = (await c.query(WRITEOFF_TARGETS_SQL(true), ["etrade", "E1"])).rows[0];
     assert.deepEqual([Number(target.amount), target.currency, Number(target.amount_fx)], [0, "EUR", 1570], "🔴 списання не знає валюти");
     await c.query(`INSERT INTO users (id, email, password_hash, role, is_active) VALUES (50, 'a@t', 'x', 'admin', true)`);
     await c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note, written_off_by, currency, amount_fx) VALUES ('etrade', 'E1', 0, 'клієнт банкрут', 50, 'EUR', 1570)`);
     const after = (await c.query(`SELECT ${FX_UAH_SQL("r")}::float8 AS uah, ${FX_BY_CURRENCY_SQL("r")} AS by FROM receivables r WHERE r.client_key = 'etrade'`)).rows[0];
-    assert.deepEqual([after.uah, Number(after.by.EUR)], [50852.2, 1000], "🔴 списаний валютний рахунок лишився в боргу");
+    assert.deepEqual([after.uah, Number(after.by.EUR)], [55937.42, 1100], "🔴 списаний валютний рахунок лишився в боргу");
   } finally { await s.dispose(); }
 });
 
