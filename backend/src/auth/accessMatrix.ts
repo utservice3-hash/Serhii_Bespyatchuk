@@ -915,6 +915,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "PUT", path: "/api/dashboard/receivables/invoice-note", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 💱 Валютна дебіторка (задача 7136, 28.10.2026): та сама вкладка й той самий скоуп, що й гривнева.
+  { method: "GET", path: "/api/dashboard/receivables/fx", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/receivables/invoices", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/receivables/payment-requests", cls: "GET",

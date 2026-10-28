@@ -7162,3 +7162,9 @@ UPDATE roles SET permissions = permissions - 'bank_out_comments' WHERE key NOT I
 
 -- 🔒 Хто що вписав і коментарі до платежів ФОП — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON bank_ident_settings, bank_tx_ident, bank_tx_ident_events, bank_tx_comments FROM ai_readonly;
+
+-- 💱 ВАЛЮТНА ДЕБІТОРКА В РОЗДІЛІ «ДЕБІТОРКА» (задача 7136; Сергій на TOP Weekly 26.10.2026: «виведи цю дебіторку окремо в
+-- лист дебіторки … валюта»; Роман 28.10: «роби як пропонуєш»). Курс НБУ, з яким синк порахував гривню, памʼятається поруч зі
+-- станом — щоб ≈ грн по рахунку на екрані збігалась із підсумком у «Фінансах», а не рахувалась за іншим курсом.
+ALTER TABLE onec_unpaid_state ADD COLUMN IF NOT EXISTS rate_eur NUMERIC(12,6);
+ALTER TABLE onec_unpaid_state ADD COLUMN IF NOT EXISTS rate_usd NUMERIC(12,6);

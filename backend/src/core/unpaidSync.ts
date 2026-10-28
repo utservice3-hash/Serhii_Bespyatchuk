@@ -26,8 +26,10 @@ export async function replaceUnpaid(db: Db, rows: readonly UnpaidInvoice[], nbu:
   const t = unpaidFxTotals(rows, nbu);
   await db.query(`INSERT INTO receivables_fx_totals (rows, total_uah, total_val, zero_uah, usd, eur, unknown_val, source) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [t.rows, t.totalUah, t.totalVal, t.zeroUah, t.usd, t.eur, t.unknownVal, FX_SOURCE]);
-  await db.query(`INSERT INTO onec_unpaid_state (id, synced_at, rows, error, error_at) VALUES (1, now(), $1, NULL, NULL)
-    ON CONFLICT (id) DO UPDATE SET synced_at = now(), rows = EXCLUDED.rows, error = NULL, error_at = NULL`, [rows.length]);
+  // Курс — той самий, з яким пораховано підсумок: «Дебіторка» рахує ≈ грн по рахунку саме за ним (задача 7136).
+  await db.query(`INSERT INTO onec_unpaid_state (id, synced_at, rows, error, error_at, rate_eur, rate_usd) VALUES (1, now(), $1, NULL, NULL, $2, $3)
+    ON CONFLICT (id) DO UPDATE SET synced_at = now(), rows = EXCLUDED.rows, error = NULL, error_at = NULL, rate_eur = EXCLUDED.rate_eur, rate_usd = EXCLUDED.rate_usd`,
+  [rows.length, nbu.EUR ?? null, nbu.USD ?? null]);
   return { rows: rows.length, fx: t.rows };
 }
 
