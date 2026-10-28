@@ -1895,6 +1895,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/client-limits/import", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  // «＋ Додати клієнта» (задача 7137): пошук по базі й ліміт клієнту без боргу — лише Сергій (погоджувач за id, не за роллю).
+  { method: "GET", path: "/api/client-limits/search?q=юмо", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/client-limits/add", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "GET", path: "/api/cargo/three.js", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/cargo/reference", cls: "GET",
