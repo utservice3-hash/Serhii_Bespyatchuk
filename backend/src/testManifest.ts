@@ -172,6 +172,7 @@ export const MANIFEST_FILES: string[] = [
   "surveys/surveys.test.js",
   "cargo/cargo.test.js",
   "bankIdent/bankIdent.test.js",
+  "bankIdent/bankIdentFilter.test.js",
   "core/rateFeedback.test.js",
   "core/hiringTraining.test.js",
   "core/candidateTraining.test.js",
@@ -2882,6 +2883,7 @@ export const MANIFEST_TESTS: string[] = [
   "#2913 ВИДИМІСТЬ «ВИПИСКИ» для № і коментарів = стрічка: «лише фінанси», вихідні картки, приховані — по обидва боки",
   "#2914 таблиці «Виписки» (№ рахунку, історія, коментарі) відібрані в ai_readonly після GRANT і CREATE і є в FORBIDDEN_TABLES",
   "#2915 ФРОНТ «ВИПИСКИ»: правила = бекенд байт у байт, один чанк, CSS на змінних дашборда, вставки й бейдж на місці",
+  "#2916 ФІЛЬТР № РАХУНКУ ЗА ВИБРАНИМ РАХУНКОМ: /list і /counts з company — лише ця компанія, без неї — усі, бейдж загальний",
   // cargo/cargo.test.ts — Конфігуратор вантажу в авто, пакет Сергія (12.10.2026).
   "#1610 РУШІЙ = МАКЕТ: 40 еталонних сценаріїв і 60 випадкових — розкладка, «не влізло», «ще влізе», вага",
   "#1611 РУШІЙ: кейси Сергія, види вантажів, ручне пересування, арки, інваріанти на 80 сценаріях",

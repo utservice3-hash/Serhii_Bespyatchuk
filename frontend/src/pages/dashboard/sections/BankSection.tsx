@@ -15,7 +15,7 @@ import {
   IdentLine, OutComments, IdentFilter, IdentRuleBar, identAccent, useBankIdent, useBankIdentCounts, useOutComments, type IdentFilterValue, type Clock,
 } from "../../../bankIdent/client/bankIdent";
 import type { CommentSummary, IdentState } from "../../../bankIdent/shared/bankIdent";
-import { bankIdentApi, BANK_IDENT_COUNT_EVENT } from "../../../bankIdent/dashboard";
+import { bankIdentApi, bankIdentApiFor, BANK_IDENT_COUNT_EVENT } from "../../../bankIdent/dashboard";
 
 const RED = "#c8102e", MUTED = "var(--text-muted)";
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
@@ -142,19 +142,22 @@ export default function BankSection() {
   const identKey = mode === "in" && identF !== "all" ? identF : null; // фільтр діє лише на «Вхідних»
   const identOn = identKey !== null;
   const [identData, setIdentData] = useState<{ key: string; rows: BankTx[]; total: number } | null>(null);
+  // фільтр і лічильники — за вибраним чипом рахунку (компанією), як і решта стрічки
+  const identApi = useMemo(() => bankIdentApiFor(companyFilter), [companyFilter]);
+  const identDataKey = identKey ? `${identKey}|${companyFilter ?? ""}` : null;
   useEffect(() => {
-    if (!identKey) return;
+    if (!identKey || !identDataKey) return;
     let alive = true;
-    bankIdentApi.list(identKey, 200).then((d) => {
-      if (alive) setIdentData({ key: identKey, rows: d.rows as unknown as BankTx[], total: d.total });
-    }).catch(() => { if (alive) setIdentData({ key: identKey, rows: [], total: 0 }); });
+    identApi.list(identKey, 200).then((d) => {
+      if (alive) setIdentData({ key: identDataKey, rows: d.rows as unknown as BankTx[], total: d.total });
+    }).catch(() => { if (alive) setIdentData({ key: identDataKey, rows: [], total: 0 }); });
     return () => { alive = false; };
-  }, [identKey]);
-  const identRows = identData && identData.key === identKey ? identData.rows : null; // null — ще вантажиться
-  const identTotal = identData && identData.key === identKey ? identData.total : 0;
+  }, [identKey, identDataKey, identApi]);
+  const identRows = identData && identData.key === identDataKey ? identData.rows : null; // null — ще вантажиться
+  const identTotal = identData && identData.key === identDataKey ? identData.total : 0;
   const shown = identOn ? identRows ?? [] : rows;
   const ident = useBankIdent(mode === "in" ? shown.map((r) => r.id) : [], bankIdentApi);
-  const { counts: identCounts, reload: reloadIdentCounts } = useBankIdentCounts(bankIdentApi);
+  const { counts: identCounts, reload: reloadIdentCounts } = useBankIdentCounts(identApi);
   const onIdentChange = useCallback((s: IdentState) => {
     ident.setState(s); void reloadIdentCounts();
     window.dispatchEvent(new Event(BANK_IDENT_COUNT_EVENT)); // бейдж у меню — одразу, не чекаючи хвилини
