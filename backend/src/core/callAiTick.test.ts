@@ -61,7 +61,7 @@ const ANALYSIS = JSON.stringify({ callback_request: { asked: false, quote: "", d
 function fakeNet() {
   const hits = { ringostat: 0, elevenlabs: 0, gemini: 0, other: 0 };
   const http: HttpDeps = {
-    fetch: (async (u: string | URL | Request) => {
+    fetch: (async (u: string | URL | Request, init?: RequestInit) => {
       const url = String(u);
       if (url.startsWith("https://rec/")) { hits.ringostat++; return new Response(wav(20)); }
       if (url === ELEVENLABS_STT_URL) {
@@ -73,7 +73,9 @@ function fakeNet() {
       }
       if (url.includes("generativelanguage.googleapis.com")) {
         hits.gemini++;
-        return Response.json({ candidates: [{ content: { parts: [{ text: ANALYSIS }] }, finishReason: "STOP" }],
+        // 🚛 Рубрика виду перевезення (задача 7183) — своя схема відповіді; решта — розбір «Першого дотику».
+        const transport = String(init?.body ?? "").includes("ВИД ПЕРЕВЕЗЕННЯ");
+        return Response.json({ candidates: [{ content: { parts: [{ text: transport ? JSON.stringify({ kind: "regular", quote: "" }) : ANALYSIS }] }, finishReason: "STOP" }],
           usageMetadata: { promptTokenCount: 700, candidatesTokenCount: 90, thoughtsTokenCount: 40 } });
       }
       hits.other++;
@@ -129,14 +131,15 @@ test("#780 ТІК · ЖИВА СХЕМА: перші розмови реклам
   assert.deepEqual(got.map((x) => x.uniqueid), first, "🔴 вибірка тіку — не перші розмови реклами за 30 днів");
   assert.ok(got.every((x) => x.status === "done"), `🔴 не розпізнано: ${JSON.stringify(got)}`);
   assert.equal(r1.selected, 2);
-  assert.deepEqual({ el: net.hits.elevenlabs, g: net.hits.gemini, other: net.hits.other }, { el: 2, g: 2, other: 0 });
+  // 28.10.2026 (7183): на кожну розмову — ще й короткий розбір виду перевезення (з 20.09), тож Gemini 2 + 2.
+  assert.deepEqual({ el: net.hits.elevenlabs, g: net.hits.gemini, other: net.hits.other }, { el: 2, g: 4, other: 0 });
   const an = (await c.raw.query<{ n: number }>(`SELECT count(*)::int n FROM call_analyses a JOIN call_transcripts t ON t.id=a.transcript_id
     WHERE t.uniqueid LIKE '7000-%' AND a.status='done'`)).rows[0].n;
-  assert.equal(an, 2, "🔴 розшифровки не проаналізовано");
+  assert.equal(an, 4, "🔴 розшифровки не проаналізовано (розбір + вид перевезення на кожну)");
 
   const r2 = await runCallAiTick(env(c.db, net.http));
   assert.equal(r2.enqueued, 0, "🔴 другий тік поставив у чергу те, що вже там");
-  assert.deepEqual({ el: net.hits.elevenlabs, g: net.hits.gemini }, { el: 2, g: 2 }, "🔴 другий тік заплатив удруге");
+  assert.deepEqual({ el: net.hits.elevenlabs, g: net.hits.gemini }, { el: 2, g: 4 }, "🔴 другий тік заплатив удруге");
 });
 
 /**
