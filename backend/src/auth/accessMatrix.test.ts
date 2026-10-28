@@ -127,6 +127,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "PUT /api/training/material/:id/file": "manage_training — те саме (повний редактор, 28.09.2026)",
   "POST /api/training/reorder": "manage_training — те саме (повний редактор, 28.09.2026)",
   "GET /api/training/quiz/:id/editor": "manage_training — тест із правильними відповідями бачить лише редактор (13.10.2026)",
+  "PATCH /api/training/quiz/:id/questions/:qid": "manage_training — ліміт часу питання змінює лише редактор навчання (28.10.2026)",
   // 🔐 Сейф доступів (18.09.2026): право `view_employee_secrets` на рівні роутера.
   "POST /api/secrets/link": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/unlink": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",

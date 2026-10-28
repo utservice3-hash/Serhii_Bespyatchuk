@@ -7,11 +7,13 @@
  *  • усе приходить ЧЕРНЕТКОЮ (`status = 'draft'`) — кандидати не бачать, доки людина не опублікує;
  *  • повторний запуск не дублює: тест — за `external_id = quiz:<key>`, питання — за `external_key`;
  *  • питання повторного запуску ОНОВЛЮЮТЬСЯ з сіду (правка документа → `--write`); налаштування тесту, що вже
- *    є (поріг, спроби), — ні: їх міг змінити редактор;
+ *    є (поріг, спроби), і ліміт часу питання — ні: їх міг змінити редактор. Новому питанню ліміт ставиться за
+ *    типом (`defaultLimitSec`: розрахунок — 60 с, решта — 30 с);
  *  • `--dry` не пише нічого.
  * ⚠️ Питання, яке ПРИБРАЛИ з сіду, з бази НЕ видаляється — це окрема дія людини (спроби на нього посилаються).
  */
 import { orderedMaterials } from "./trainingProgress.js";
+import { defaultLimitSec } from "./trainingQuiz.js";
 import type { QuizDb } from "./trainingQuizStore.js";
 import type { QuizSeed, SeedQuestion } from "./quizSeedSalesCourse.js";
 
@@ -96,10 +98,10 @@ export async function importQuizzes(db: QuizDb, seed: QuizSeed, opts: { write: b
 
 async function upsertQuestion(db: QuizDb, materialId: number, position: number, x: SeedQuestion) {
   await db.query(
-    `INSERT INTO training_quiz_questions (material_id, position, kind, text, options, correct, explanation, source_title, external_key)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO training_quiz_questions (material_id, position, kind, text, options, correct, explanation, source_title, external_key, time_limit_sec)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT (external_key) DO UPDATE SET
        material_id = EXCLUDED.material_id, position = EXCLUDED.position, kind = EXCLUDED.kind, text = EXCLUDED.text,
        options = EXCLUDED.options, correct = EXCLUDED.correct, explanation = EXCLUDED.explanation, source_title = EXCLUDED.source_title`,
-    [materialId, position, x.kind, x.text, x.options ? JSON.stringify(x.options) : null, JSON.stringify(x.correct), x.explanation, x.source, x.key]);
+    [materialId, position, x.kind, x.text, x.options ? JSON.stringify(x.options) : null, JSON.stringify(x.correct), x.explanation, x.source, x.key, defaultLimitSec(x.kind)]);
 }

@@ -7176,3 +7176,21 @@ REVOKE ALL ON bank_ident_settings, bank_tx_ident, bank_tx_ident_events, bank_tx_
 -- станом — щоб ≈ грн по рахунку на екрані збігалась із підсумком у «Фінансах», а не рахувалась за іншим курсом.
 ALTER TABLE onec_unpaid_state ADD COLUMN IF NOT EXISTS rate_eur NUMERIC(12,6);
 ALTER TABLE onec_unpaid_state ADD COLUMN IF NOT EXISTS rate_usd NUMERIC(12,6);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⏱ ЛІМІТ ЧАСУ НА ПИТАННЯ ТЕСТУ (28.10.2026, Роман: «30 секунд — це мінімум на питання»; розрахунок — 60 с).
+-- Час рахує сервер: спроба памʼятає поточне питання й мить, коли його видано (`cur_index`, `cur_shown_at`), а
+-- `timings` — скільки секунд ішла кожна відповідь і чи запізнилась. Правила — `core/trainingQuiz.ts`.
+-- 60 с питанням-числам ставиться ЛИШЕ разом зі створенням колонки: повторний прогін схеми не затирає ліміт,
+-- який редактор змінив руками.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema() AND table_name = 'training_quiz_questions' AND column_name = 'time_limit_sec') THEN
+    ALTER TABLE training_quiz_questions ADD COLUMN time_limit_sec INTEGER NOT NULL DEFAULT 30
+      CONSTRAINT training_quiz_questions_time_limit CHECK (time_limit_sec BETWEEN 30 AND 600);
+    UPDATE training_quiz_questions SET time_limit_sec = 60 WHERE kind = 'number';
+  END IF;
+END $$;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS cur_index    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS cur_shown_at TIMESTAMPTZ;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS timings      JSONB;

@@ -23,7 +23,40 @@ export interface QuizQuestion {
   correct: number[] | { value: number; tol: number };
   explanation: string | null;
   sourceTitle: string | null;
+  /** Секунд на відповідь (28.10.2026). Не менше `QUIZ_MIN_LIMIT_SEC`. */
+  timeLimitSec: number;
 }
+
+/**
+ * ⏱ ЛІМІТ ЧАСУ НА ПИТАННЯ (28.10.2026, Роман: «30 секунд — це мінімум на питання»; розрахунок — 60 с).
+ * Час рахує СЕРВЕР від моменту, коли видав питання, — таймер на екрані лише показує залишок. Інакше оновлення
+ * сторінки чи годинник браузера обнуляли б ліміт. `QUIZ_GRACE_SEC` — запас на дорогу відповіді мережею, не на думання.
+ */
+export const QUIZ_MIN_LIMIT_SEC = 30;
+export const QUIZ_MAX_LIMIT_SEC = 600;
+export const QUIZ_GRACE_SEC = 3;
+
+/** Ліміт за замовчуванням: питання з розрахунком (число) — 60 с, решта — 30 с. */
+export const defaultLimitSec = (kind: QuizKind): number => (kind === "number" ? 60 : QUIZ_MIN_LIMIT_SEC);
+
+/** Чи годиться ліміт з редактора: ціле число секунд від 30 до 600. */
+export function limitVerdict(raw: unknown): { ok: true; sec: number } | { ok: false; reason: string } {
+  const sec = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+  if (typeof sec !== "number" || !Number.isInteger(sec)) return { ok: false, reason: "Ліміт — ціле число секунд" };
+  if (sec < QUIZ_MIN_LIMIT_SEC) return { ok: false, reason: `Ліміт не менше ${QUIZ_MIN_LIMIT_SEC} секунд` };
+  if (sec > QUIZ_MAX_LIMIT_SEC) return { ok: false, reason: `Ліміт не більше ${QUIZ_MAX_LIMIT_SEC} секунд` };
+  return { ok: true, sec };
+}
+
+/** Скільки секунд ішла відповідь і чи запізнилась вона (понад ліміт + запас на мережу). */
+export function answerTiming(shownAt: Date, now: Date, limitSec: number): { sec: number; late: boolean } {
+  const sec = Math.max(0, Math.round((now.getTime() - shownAt.getTime()) / 100) / 10);
+  return { sec, late: sec > limitSec + QUIZ_GRACE_SEC };
+}
+
+/** Залишок секунд на питання для екрана (ціле, не менше нуля). */
+export const remainingSec = (shownAt: Date, now: Date, limitSec: number): number =>
+  Math.max(0, Math.ceil(limitSec - (now.getTime() - shownAt.getTime()) / 1000));
 
 /** Відповідь кандидата: індекс (`one`), масив індексів (`multi`), рядок або число (`number`). */
 export type QuizAnswer = number | number[] | string | null | undefined;
@@ -118,18 +151,22 @@ export function publicQuestion(q: QuizQuestion, order: number[] | null): PublicQ
   return { id: q.id, kind: q.kind, text: q.text, options: opts };
 }
 
-/** Результат по питанню для екрана після спроби: пояснення й урок — ЛИШЕ для помилок; правильного варіанта немає. */
-export interface QuestionResult { id: number; text: string; ok: boolean; explanation: string | null; source: string | null }
+/**
+ * Результат по питанню для екрана після спроби: пояснення й урок — ЛИШЕ для помилок; правильного варіанта немає.
+ * `late` — відповідь прийшла після ліміту часу: зараховано як неправильну, хоч би якою вона була.
+ */
+export interface QuestionResult { id: number; text: string; ok: boolean; late: boolean; explanation: string | null; source: string | null }
 
 export function gradePlan(plan: readonly AttemptPlan[], byId: ReadonlyMap<number, QuizQuestion>,
-  answers: Readonly<Record<string, QuizAnswer>>): { marks: boolean[]; results: QuestionResult[] } {
+  answers: Readonly<Record<string, QuizAnswer>>, late: ReadonlySet<number> = new Set()): { marks: boolean[]; results: QuestionResult[] } {
   const marks: boolean[] = [];
   const results: QuestionResult[] = [];
   for (const p of plan) {
     const q = byId.get(p.questionId);
-    const ok = q ? gradeAnswer(q, answers[String(p.questionId)]) : false;
+    const isLate = late.has(p.questionId);
+    const ok = q && !isLate ? gradeAnswer(q, answers[String(p.questionId)]) : false;
     marks.push(ok);
-    results.push({ id: p.questionId, text: q?.text ?? "", ok,
+    results.push({ id: p.questionId, text: q?.text ?? "", ok, late: isLate,
       explanation: ok ? null : q?.explanation ?? null, source: ok ? null : q?.sourceTitle ?? null });
   }
   return { marks, results };

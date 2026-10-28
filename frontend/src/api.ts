@@ -5486,22 +5486,31 @@ export const fetchCandidateMe = async () => (await api.get<CandidateMe>("/traini
 export interface MyQuiz {
   materialId: number; title: string; passPct: number; questionCount: number; poolSize: number; maxAttempts: number;
   used: number; grants: number; left: number; passed: boolean; bestPct: number | null; hasOpenAttempt: boolean;
+  /** ⏱ Ліміт часу на питання в цьому тесті, секунди (28.10.2026). */
+  limitMinSec: number; limitMaxSec: number;
   attempts: { right: number; total: number; pct: number; passed: boolean; submittedAt: string }[];
 }
 export type QuizKind = "one" | "multi" | "number";
 export interface QuizPublicQuestion { id: number; kind: QuizKind; text: string; options: { i: number; text: string }[] | null }
 export type QuizAnswerValue = number | number[] | string;
 export interface QuizResult { right: number; total: number; pct: number; passed: boolean; left: number;
-  results: { id: number; text: string; ok: boolean; explanation: string | null; source: string | null }[] }
+  results: { id: number; text: string; ok: boolean; late: boolean; explanation: string | null; source: string | null }[] }
+/** ⏱ Хід тесту (28.10.2026): поточне питання з лімітом і залишком часу від сервера — або результат спроби. */
+export interface QuizStep { done: false; attemptId: number; passPct: number; total: number; index: number;
+  question: QuizPublicQuestion; limitSec: number; remainingSec: number }
+export type QuizTurn = QuizStep | { done: true; result: QuizResult };
 export interface QuizEditorView {
   settings: { materialId: number; title: string; status: string; passPct: number; showCount: number | null; maxAttempts: number };
-  questions: { id: number; kind: QuizKind; text: string; options: string[] | null; correct: number[] | { value: number; tol: number }; explanation: string | null; sourceTitle: string | null }[];
+  questions: { id: number; kind: QuizKind; text: string; options: string[] | null; correct: number[] | { value: number; tol: number }; explanation: string | null; sourceTitle: string | null; timeLimitSec: number }[];
 }
 export const fetchMyQuiz = async (id: number) => (await api.get<MyQuiz>(`/training/quiz/${id}/me`)).data;
-export const startQuiz = async (id: number) =>
-  (await api.post<{ attemptId: number; passPct: number; questions: QuizPublicQuestion[] }>(`/training/quiz/${id}/start`)).data;
-export const submitQuiz = async (id: number, attemptId: number, answers: Record<number, QuizAnswerValue>) =>
-  (await api.post<QuizResult>(`/training/quiz/${id}/submit`, { attemptId, answers })).data;
+export const startQuiz = async (id: number) => (await api.post<QuizTurn>(`/training/quiz/${id}/start`)).data;
+/** Відповідь на поточне питання; `null` — час вийшов без відповіді. У відповідь — наступне питання або результат. */
+export const answerQuiz = async (id: number, attemptId: number, questionId: number, answer: QuizAnswerValue | null) =>
+  (await api.post<QuizTurn>(`/training/quiz/${id}/answer`, { attemptId, questionId, answer })).data;
+/** Ліміт часу питання в редакторі (не менше 30 с). */
+export const setQuizQuestionLimit = async (id: number, questionId: number, timeLimitSec: number) =>
+  (await api.patch<{ ok: true; timeLimitSec: number }>(`/training/quiz/${id}/questions/${questionId}`, { timeLimitSec })).data;
 export const fetchQuizEditor = async (id: number) => (await api.get<QuizEditorView>(`/training/quiz/${id}/editor`)).data;
 export const fetchMyTrainingQuestions = async () => (await api.get<{ rows: MyTrainingQuestion[] }>("/training/questions")).data.rows;
 export const askTrainingQuestion = async (question: string, materialId: number | null) =>

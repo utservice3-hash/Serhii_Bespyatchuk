@@ -252,3 +252,13 @@ img.tr-lsn-media { background: transparent; }
 .qz-eopts li, .qz-eopts span { color: var(--text-muted); }
 .qz-eopts .ok { color: var(--ok); font-weight: 600; }
 .qz-introtext { margin: 0; color: var(--text); font-size: 14px; line-height: 1.55; }
+
+/* ⏱ Ліміт часу на питання (28.10.2026): таймер над питанням, смуга залишку, позначка «час вийшов», поле в редакторі. */
+.qz-timer { font-weight: 700; font-variant-numeric: tabular-nums; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--card-bg); }
+.qz-timer.low { color: var(--danger); border-color: var(--danger); }
+.qz-tbar i { transition: width .25s linear; }
+.qz-late { margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--danger); }
+.qz-elim { display: inline-flex; align-items: center; gap: 4px; }
+.qz-elim input { width: 64px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text); font: inherit; }
+.qz-elim .ok { color: var(--ok); }
+.qz-elim .bad { color: var(--danger); }

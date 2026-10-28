@@ -13,7 +13,8 @@ import { roleHasPerm } from "../auth/rbac.js";
 import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
 import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
 import { LESSON_ONLY, PART_ROLES, partVerdict, type PartRole } from "../core/trainingLesson.js";
-import { myQuiz, startQuiz, submitQuiz, loadQuiz, QuizError, type QuizDb } from "../core/trainingQuizStore.js";
+import { myQuiz, startQuiz, answerQuiz, submitQuiz, loadQuiz, QuizError, type QuizDb } from "../core/trainingQuizStore.js";
+import { limitVerdict } from "../core/trainingQuiz.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
@@ -631,7 +632,7 @@ trainingRouter.post("/progress/:materialId/open", async (req, res) => {
 });
 
 /**
- * «Пройшов, далі». Для тестів тут 400 — їх закриває `POST /quiz/:id/submit` (крок 3).
+ * «Пройшов, далі». Для тестів тут 400 — їх закриває перевірка відповідей (`POST /quiz/:id/answer`).
  * 🔴 `DO UPDATE`, а не `DO NOTHING`: людина спершу ВІДКРИВАЄ матеріал (рядок уже є зі
  * станом `opened`), тож «нічого не роби при конфлікті» лишило б курс назавжди на 0%.
  */
@@ -726,17 +727,50 @@ trainingRouter.post("/quiz/:id/start", async (req, res) => {
   } catch (e) { quizFail(res, e); }
 });
 
-/** Завершити спробу. Перевірка — лише на сервері; складено — крок «пройдено», ні — лише бал і спроба. */
+/**
+ * Відповідь на поточне питання (⏱ 28.10.2026). Час рахує сервер від видачі питання; у відповідь іде наступне
+ * питання або — якщо це було останнє — результат спроби.
+ */
+trainingRouter.post("/quiz/:id/answer", async (req, res) => {
+  try {
+    const id = quizId(req);
+    const attemptId = Number(req.body?.attemptId), questionId = Number(req.body?.questionId);
+    if (!Number.isInteger(attemptId) || attemptId <= 0) throw new QuizError(400, "Некоректна спроба");
+    if (!Number.isInteger(questionId) || questionId <= 0) throw new QuizError(400, "Некоректне питання");
+    const answer = req.body?.answer;
+    if (answer !== null && answer !== undefined && !["number", "string"].includes(typeof answer)
+        && !(Array.isArray(answer) && answer.every((x) => Number.isInteger(x)))) throw new QuizError(400, "Некоректна відповідь");
+    const blocked = roleHasPerm(req.auth!.roleKey, "manage_training") ? null : await lockedReason(req.auth!.userId, id);
+    if (blocked) return res.status(423).json({ error: "Тест ще закритий", blockedBy: blocked });
+    res.json(await quizTx((db) => answerQuiz(db, req.auth!.userId, id, attemptId, questionId, answer ?? null)));
+  } catch (e) { quizFail(res, e); }
+});
+
+/**
+ * Завершити спробу достроково — відповідями, які сервер уже прийняв. Відповіді з тіла запиту НЕ приймаються
+ * (⏱ 28.10.2026): інакше ліміт часу обходився б одним запитом «усі відповіді разом».
+ */
 trainingRouter.post("/quiz/:id/submit", async (req, res) => {
   try {
     const id = quizId(req);
     const attemptId = Number(req.body?.attemptId);
     if (!Number.isInteger(attemptId) || attemptId <= 0) throw new QuizError(400, "Некоректна спроба");
-    const answers = req.body?.answers;
-    if (answers == null || typeof answers !== "object" || Array.isArray(answers)) throw new QuizError(400, "answers: обʼєкт {idПитання: відповідь}");
     const blocked = roleHasPerm(req.auth!.roleKey, "manage_training") ? null : await lockedReason(req.auth!.userId, id);
     if (blocked) return res.status(423).json({ error: "Тест ще закритий", blockedBy: blocked });
-    res.json(await quizTx((db) => submitQuiz(db, req.auth!.userId, id, attemptId, answers)));
+    res.json(await quizTx((db) => submitQuiz(db, req.auth!.userId, id, attemptId)));
+  } catch (e) { quizFail(res, e); }
+});
+
+/** Ліміт часу питання — у редакторі (право `manage_training`): ціле число секунд, не менше 30. */
+trainingRouter.patch("/quiz/:id/questions/:qid", canEditTraining, async (req, res) => {
+  try {
+    const id = quizId(req), qid = Number(req.params.qid);
+    if (!Number.isInteger(qid) || qid <= 0) throw new QuizError(400, "Некоректне питання");
+    const v = limitVerdict(req.body?.timeLimitSec);
+    if (!v.ok) throw new QuizError(400, v.reason);
+    const r = await pool.query(`UPDATE training_quiz_questions SET time_limit_sec = $3 WHERE id = $1 AND material_id = $2 RETURNING id`, [qid, id, v.sec]);
+    if (!r.rowCount) throw new QuizError(404, "Питання не знайдено");
+    res.json({ ok: true, timeLimitSec: v.sec });
   } catch (e) { quizFail(res, e); }
 });
 
