@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 import { MIRROR_NOTE } from "./legacyLimits.js";
-import { clientQuery, limitOfClient } from "./shared/clientLimits.js";
+import { clientQuery, limGroup, limitOfClient, shortName, type AnyRow } from "./shared/clientLimits.js";
 
 /**
  * 🔎 «＋ ДОДАТИ КЛІЄНТА» у «Лімітах клієнтів» (задача 7137; Сергій, UTS TOP Weekly 26.10: «сюди попадають тільки ті, хто в
@@ -179,4 +179,54 @@ test("#2792 ФРОНТ ДОДАТИ КЛІЄНТА: кнопка лише Сер
   assert.match(go, /o\.api\.add\(h\.key, v\)/);
   assert.ok(!/renderAdd\(\)/.test(go), "addGo перемальовує панель — на помилці форма втратить ліміт, дні й причину");
   assert.match(FRONT("minusRegistry/client/counterparty/api.ts"), /search: q => call\(api\.get\(`\$\{CL\}\/search`, \{ params: \{ q \} \}\)\),\s*add: \(clientKey, b\) => call\(api\.post\(`\$\{CL\}\/add`, \{ \.\.\.b, clientKey \}\)\),/);
+});
+
+/**
+ * #2793 — ГРУПУВАННЯ І НАЗВА (Сергій 28.10: «групувати… сума, к-сть днів»; ліміт «пропадав» унизу під «Т»). Межа діапазону
+ * входить у НИЖЧУ групу з обох боків (50 000 — «до 50 тис.», 50 001 — «50–100»; 7 днів — «до 7», 8 — «8–14»); не
+ * погоджена сума / дні — своя група, не «до 50 тис.»; боржник без ліміту — «Ліміт не узгоджено» в кінці. Скорочується
+ * лише юридична форма НА ПОЧАТКУ (включно з латинською «I» з CRM), слово «товариство» всередині назви — ні.
+ * 🧨 Червоніє, якщо зсунути межу, загубити «не погоджено» в нулі або обрізати частину назви.
+ */
+test("#2793 ГРУПИ ЛІМІТІВ: межа — у нижчій групі з обох боків, «не погоджено» окремо; скорочується лише юрформа на початку", () => {
+  const L = (limit: number | null, days: number | null) => ({ src: "set", limit, days, managerName: "Марина" }) as unknown as AnyRow;
+  const sum = (v: number | null) => limGroup(L(v, 14), "sum").label, day = (v: number | null) => limGroup(L(100, v), "days").label;
+  assert.deepEqual([sum(2000), sum(50_000), sum(50_001), sum(100_000), sum(100_001), sum(300_000), sum(500_000), sum(500_001), sum(3_000_000)],
+    ["до 50 тис. грн", "до 50 тис. грн", "50–100 тис. грн", "50–100 тис. грн", "100–300 тис. грн", "100–300 тис. грн", "300–500 тис. грн", "понад 500 тис. грн", "понад 500 тис. грн"]);
+  assert.deepEqual([day(2), day(7), day(8), day(14), day(15), day(30), day(31), day(60)],
+    ["до 7 днів", "до 7 днів", "8–14 днів", "8–14 днів", "15–30 днів", "15–30 днів", "понад 30 днів", "понад 30 днів"]);
+  assert.equal(sum(null), "Суму не погоджено", "непогоджена сума впала в діапазон");
+  assert.equal(day(null), "Дні не погоджено");
+  assert.ok(limGroup(L(null, 14), "sum").order > limGroup(L(3_000_000, 14), "sum").order, "«не погоджено» не в кінці");
+  const none = { src: "none", managerName: "", debt: 5 } as unknown as AnyRow;
+  assert.deepEqual([limGroup(none, "sum").label, limGroup(none, "days").label, limGroup(none, "manager").label], ["Ліміт не узгоджено", "Ліміт не узгоджено", "без відповідального"]);
+  assert.ok(limGroup(none, "sum").order > limGroup(L(null, null), "sum").order);
+  assert.equal(limGroup(L(1, 1), "manager").label, "Марина");
+
+  assert.equal(shortName('ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ "УНІВЕРСАЛСЕРВІС ПЛЮС"'), "УНІВЕРСАЛСЕРВІС ПЛЮС ТОВ");
+  assert.equal(shortName("ТОВАРИСТВО З ОБМЕЖЕНОЮ ВIДПОВIДАЛЬНIСТЮ «МОСТОЗАГІН-55»"), "МОСТОЗАГІН-55 ТОВ", "латинська I з CRM не впізнана");
+  assert.equal(shortName("Приватне підприємство Ромашка"), "Ромашка ПП");
+  assert.equal(shortName("ГУМАТРЕСТ ПП"), "ГУМАТРЕСТ ПП", "коротку назву зачепило");
+  assert.equal(shortName("ТОВАРИСТВО ДРУЗІВ АГРО"), "ТОВАРИСТВО ДРУЗІВ АГРО", "обрізано не юридичну форму");
+  assert.equal(shortName("АГРО ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ"), "АГРО ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ", "форма не на початку — обрізано середину");
+  assert.equal(shortName("ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ "), "ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ ", "від назви нічого не лишилось — а мала лишитись повна");
+});
+
+/**
+ * #2794 — ФРОНТ: ЩОЙНО ЗАДАНИЙ ЛІМІТ НЕ «ПРОПАДАЄ» (Сергій 28.10). Після «Задати ліміт» — і з «＋ Додати клієнта», і для
+ * боржника — фільтр скидається на «Усі», пошук очищується, рядок першим із «щойно задано» і над групами. Групування —
+ * у списку на панелі, вибір у браузері з try/catch (приватне вікно не ламає вкладку). 🧨 Червоніє, якщо хоч один шлях
+ * «задати» не кличе showFresh, якщо скидання фільтра прибрати або якщо щойно заданий підкоряється фільтру.
+ */
+test("#2794 ФРОНТ ЛІМІТІВ: щойно заданий — першим і поза фільтром, обидва шляхи «задати»; групування з памʼяттю в try/catch", () => {
+  const f = FRONT("minusRegistry/client/clientLimits/limits.ts");
+  const fresh = f.slice(f.indexOf("function showFresh("), f.indexOf("// ---------- дії ----------"));
+  assert.ok(fresh.length > 40, "showFresh не знайдено — гейт нічого не перевіряє");
+  assert.match(fresh, /freshId = id; filter = 'all'; query = '';/, "після задання ліміту фільтр або пошук не скидаються");
+  assert.match(f, /replace\(r\); showFresh\(r\.id\); openPanel\(r\.id\);/, "«＋ Додати клієнта» не показує щойно заданий");
+  assert.match(f, /r => \{ rows = rows\.filter\(y => y\.id !== was\.id\); openId = r\.id; showFresh\(r\.id\); \}\);/, "«Задати ліміт» боржнику не показує щойно заданий");
+  assert.match(f, /const list = all\.filter\(x => x\.id === freshId \|\| \(limIn\(x, filter\)/, "щойно заданий підкоряється фільтру — знову «пропаде»");
+  assert.match(f, /\.sort\(\(a, b\) => Number\(b\.id === freshId\) - Number\(a\.id === freshId\) \|\|/, "щойно заданий не першим");
+  assert.match(f, /try \{ const g = localStorage\.getItem\(GROUP_KEY\);[^\n]*\} catch/, "читання групування без try/catch");
+  assert.match(f, /try \{ localStorage\.setItem\(GROUP_KEY, groupBy\); \} catch/, "запис групування без try/catch");
 });
