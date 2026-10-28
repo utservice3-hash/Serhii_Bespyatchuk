@@ -141,9 +141,9 @@ export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel,
           <Ring pct={result.pct} ok={result.passed} sub={`${result.right} з ${result.total}`} />
           <div className="qz-score-t">
             <h2>{result.passed ? "Тест складено" : result.endedBy === "violations" ? "Тест не зараховано" : "Тест не складено"}</h2>
-            {result.endedBy === "violations" && <div className="qz-banner bad"><b>Ви 3 рази виходили з тесту</b>
-              <span>Спробу завершено як не складену, незалежно від відповідей. Тімлід і рекрутер бачать причину.</span></div>}
-            {result.passed
+            {result.endedBy === "violations" ? <div className="qz-banner bad"><b>Ви 3 рази виходили з тесту</b>
+              <span>Спробу завершено як не складену, незалежно від відповідей. Тімлід і рекрутер бачать причину. {result.left > 0 ? `Лишилось спроб: ${result.left}.` : "Спроби закінчились — тімлід або рекрутер може дати ще одну."}</span></div>
+            : result.passed
               ? <div className="qz-banner ok"><b>Наступну тему відкрито</b><span>Рекрутер і ваш тімлід бачать результат: {result.right} з {result.total}.</span></div>
               : <div className="qz-banner bad"><b>Потрібно {need} з {result.total}, у вас {result.right}</b>
                   <span>{result.left > 0 ? `Лишилось спроб: ${result.left}. Перегляньте уроки з помилками нижче й спробуйте знову.` : "Спроби закінчились — тімлід або рекрутер може дати ще одну."}</span></div>}
