@@ -164,7 +164,10 @@ export async function answerQuiz(db: QuizDb, uid: number, materialId: number, at
   if (!cur || cur.questionId !== questionId || !a.cur_shown_at)
     throw new QuizError(409, "Це питання вже закрите — оновіть сторінку");
   const q = quiz.questions.find((x) => x.id === questionId);
-  const t = answerTiming(new Date(a.cur_shown_at), now, q?.timeLimitSec ?? QUIZ_MIN_LIMIT_SEC);
+  const timing = answerTiming(new Date(a.cur_shown_at), now, q?.timeLimitSec ?? QUIZ_MIN_LIMIT_SEC);
+  // Порожня відповідь — це екран, у якого таймер дійшов до нуля: позначаємо «час вийшов», щоб людина бачила причину.
+  // Довіряти тут безпечно: позначка лише робить відповідь неправильною, а порожня й так неправильна.
+  const t = answer == null ? { ...timing, late: true } : timing;
   const answers = { ...(a.answers ?? {}), [String(questionId)]: answer ?? null };
   const timings: Timings = { ...(a.timings ?? {}), [String(questionId)]: t };
   await db.query(`UPDATE training_quiz_attempts SET answers = $2, timings = $3, cur_index = $4, cur_shown_at = NULL WHERE id = $1`,

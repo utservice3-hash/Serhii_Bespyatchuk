@@ -132,8 +132,15 @@ test("#3103 ЖИВИЙ SQL: оновлення сторінки не скида�
   const skipped = last.result.results.find((x) => x.id === a.question.id)!;
   assert.deepEqual([skipped.ok, skipped.late], [false, true], "🔴 прострочене питання не зараховане неправильним");
   assert.equal(last.result.right, 2);
+  // Таймер на екрані дійшов до нуля → порожня відповідь у межах запасу — теж «час вийшов», а не просто помилка.
+  const e = step(await f.store.startQuiz(f.db, f.user, f.quiz, Math.random, at(800)));
+  const e2 = await f.store.answerQuiz(f.db, f.user, f.quiz, e.attemptId, e.question.id, null, at(800 + e.limitSec));
+  assert.equal(e2.done, false);
+  await f.store.submitQuiz(f.db, f.user, f.quiz, e.attemptId);
+  const tm = (await f.q(`SELECT timings FROM training_quiz_attempts WHERE id = $1`, [e.attemptId]))[0].timings as Record<string, { late: boolean }>;
+  assert.equal(tm[String(e.question.id)]?.late, true, "🔴 порожня відповідь на нулі таймера не позначена «час вийшов»");
   // Дострокове завершення не приймає відповідей ззовні: нова спроба, нуль відповідей → нуль балів.
-  const d = step(await f.store.startQuiz(f.db, f.user, f.quiz, Math.random, at(900)));
+  const d = step(await f.store.startQuiz(f.db, f.user, f.quiz, Math.random, at(1900)));
   const r = await f.store.submitQuiz(f.db, f.user, f.quiz, d.attemptId);
   assert.equal(r.right, 0, "🔴 завершення спроби зарахувало відповіді, яких сервер не приймав");
 });
