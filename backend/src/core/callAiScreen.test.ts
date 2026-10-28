@@ -301,7 +301,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
+    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -1270,7 +1270,8 @@ test("#905 ЗАПЕРЕЧЕННЯ: окрема рубрика, лише нес�
   const T = await import("./callAiTick.js");
   assert.ok(T.OBJ_BUDGET_MS > 0 && T.OBJ_BUDGET_MS < T.LLM_BUDGET_MS, "🔴 бюджет заперечень поза бюджетом розбору");
   // 4631 (09.10.2026): розбір розмов про борг теж бере ЧАСТКУ того самого бюджету — твердження те саме.
-  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
+  // 28.10.2026 (7183): поруч відкушено й частку на вид перевезення — так само з бюджету розбору, не понад тік.
+  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?(?: - TRANSPORT_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
 });
 
 /**
@@ -2030,4 +2031,96 @@ test("#2212 ПРОВОДКА 7183: роут зворотного звʼязку 
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /\{d\.canFeedback && <div style=\{\{ marginTop: 4 \}\}><FeedbackButton uniqueid=\{r\.uniqueid\} small \/><\/div>\}/, "🔴 кнопка біля угоди не за правом сервера");
   assert.match(sec, /CLOSURE_UI\[r\.reviewClosure\]\.label/, "🔴 у таблиці немає підпису, чим закрито");
+});
+
+/**
+ * #2213 — ВИД ПЕРЕВЕЗЕННЯ (задача 7183, п.1): міжнародка, трал і негабарит, цистерни, самоскиди, зерновози не оцінюються;
+ * довантаження — оцінюється. Міжнародне за Kommo — без AI; від моделі — лише «не звичайне» з цитатою, що знайшлась у
+ * розмові; сумнів — лишаємо в оцінці. Рубрика — частка бюджету розбору в тіку, з початку вибірки «Першого дотику».
+ * 🧨 Червоніє, якщо виключати без цитати чи з незнайденою, приймати «не звичайне» без цитати, загубити міжнародне з Kommo,
+ * розійтись із літералом «Міжнародні» номінацій або дати рубриці час понад тік.
+ */
+test("#2213 ВИД ПЕРЕВЕЗЕННЯ: Kommo «Міжнародні» без AI; AI — лише з цитатою з розмови; сумнів — в оцінці; частка бюджету тіку", async () => {
+  const X = await import("./firstTouchTransport.js");
+  const T = await import("./callAiTick.js");
+  assert.deepEqual(X.validateTransport({ kind: "oversize", quote: "" }).ok, false, "🔴 «трал» без цитати прийнято");
+  assert.deepEqual(X.validateTransport({ kind: "boat", quote: "x" }).ok, false, "🔴 вид поза переліком прийнято");
+  const reg = X.validateTransport({ kind: "regular", quote: "якісь слова" });
+  assert.ok(reg.ok && reg.value.quote === "", "🔴 для звичайного лишилась цитата");
+  const turns = [{ channel: 0, start: 0, end: 2, text: "Нам потрібен трал під екскаватор", lang: "ukr" }, { channel: 1, start: 2, end: 4, text: "Добре, порахую", lang: "ukr" }];
+  const ok = X.interpretTransport({ text: JSON.stringify({ kind: "oversize", quote: "потрібен трал" }), finishReason: "STOP" } as never, turns);
+  assert.ok(ok.ok && ok.result.quote_found === true, "🔴 цитата, що є в розмові, не знайшлась");
+  const lie = X.interpretTransport({ text: JSON.stringify({ kind: "tanker", quote: "потрібна цистерна" }), finishReason: "STOP" } as never, turns);
+  assert.ok(lie.ok && lie.result.quote_found === false, "🔴 вигадана цитата пройшла як знайдена");
+  const ex = (ai: unknown, kommoInternational = false) => X.transportExclusion({ ai: ai as never, kommoInternational });
+  assert.equal(ex(ok.ok ? ok.result : null), "oversize");
+  assert.equal(ex(lie.ok ? lie.result : null), null, "🔴 виключено за вигаданою цитатою");
+  assert.equal(ex({ kind: "dump", quote: "самоскид", quote_found: null }), null, "🔴 виключено без перевіреної цитати — сумнів має лишати в оцінці");
+  assert.equal(ex({ kind: "regular", quote: "", quote_found: null }), null);
+  assert.equal(ex(null, true), "international", "🔴 міжнародне з Kommo загубилось без AI");
+  assert.equal(ex({ kind: "regular", quote: "", quote_found: null }, true), "international", "🔴 Kommo «Міжнародні» перекрите відповіддю моделі");
+  assert.equal(ex(null), null, "дзеркало: нічого не відомо — оцінюємо");
+  assert.match(X.TRANSPORT_SYSTEM_PROMPT, /ДОВАНТАЖЕННЯ \(догруз, збірний вантаж\) — теж regular/, "🔴 довантаження перестало бути звичайним (п.1: «довантаження лишаємо»)");
+  assert.match(SRC("core/nominations.ts"), new RegExp(`INTL_REQUEST_TYPE = "${X.INTL_REQUEST_TYPE}"`), "🔴 літерал «Міжнародні» розійшовся з номінаціями");
+  assert.equal(X.TRANSPORT_FROM, T.FIRST_TOUCH_RULE.startDate, "🔴 рубрика ставиться не з початку вибірки «Першого дотику»");
+  assert.ok(T.TRANSPORT_BUDGET_MS > 0 && T.TRANSPORT_BUDGET_MS < T.LLM_BUDGET_MS - T.OBJ_BUDGET_MS - T.DEBT_BUDGET_MS, "🔴 бюджет виду перевезення поза бюджетом розбору");
+  const tick = SRC("core/callAiTick.ts");
+  assert.match(tick, /runObjection\(RUBRIC_TRANSPORT_V1, TRANSPORT_KIT, await objectionCandidates\(env\.db, TRANSPORT_FROM\), TRANSPORT_BUDGET_MS, TRANSPORT_MAX_OUTPUT_TOKENS\)/, "🔴 рубрика виду перевезення не в тіку");
+});
+
+/**
+ * #2214 — ЖИВА СХЕМА: розмова з розбором «трал» (цитата знайдена) і розмова угоди «Міжнародні» — у «Виключених» з причиною;
+ * звичайна — у звіті; картка каже те саме, що список.
+ * 🧨 Червоніє, якщо список не бере розбір виду перевезення, ігнорує «Тип запиту» угоди чи картка розходиться зі списком.
+ */
+test("#2214 ЖИВА СХЕМА: вид перевезення виключає розмову зі звіту з причиною; Kommo «Міжнародні»; список = картка", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard } = await import("./callAiScreen.js");
+  const X = await import("./firstTouchTransport.js");
+  const deal = (id: number, phone: string, rt: string | null) => c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id,request_type)
+    VALUES ($1,$2,8921932,1,'2026-10-20 10:00:00+03',$3,'ad',9011,$4)`, [id, `D${String(id)}`, phone, rt]);
+  await deal(72141, "0507214100", null); await deal(72142, "0507214200", "Міжнародні"); await deal(72143, "0507214300", null);
+  const call = (u: string, phone: string) => c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ($1,'2026-10-20 10:10:00+03','out','ANSWERED',60,65,9011,$2,'https://rec/x')`, [u, phone]);
+  await call("tr1", "380507214100"); await call("tr2", "380507214200"); await call("tr3", "380507214300");
+  const tr = async (u: string, text: string) => (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done',$2::jsonb) RETURNING id`, [u, JSON.stringify([{ channel: 0, start: 0, end: 2, text, lang: "ukr" }])])).rows[0].id;
+  const an = (tid: string, rubric: string, result: unknown) => c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash',$2,'done',$3::jsonb)`, [tid, rubric, JSON.stringify(result)]);
+  const t1 = await tr("tr1", "потрібен трал під екскаватор"); await an(t1, "first-touch-v4", RESULT);
+  await an(t1, X.RUBRIC_TRANSPORT_V1, { kind: "oversize", quote: "потрібен трал", quote_found: true });
+  const t2 = await tr("tr2", "тент двадцять тонн"); await an(t2, "first-touch-v4", RESULT);
+  const t3 = await tr("tr3", "тент двадцять тонн"); await an(t3, "first-touch-v4", RESULT);
+  await an(t3, X.RUBRIC_TRANSPORT_V1, { kind: "regular", quote: "", quote_found: null });
+  const rows = (await aiCallsList(c.db, FAKE_AD, "2026-10-20", "2026-10-20", new Date("2026-10-20T15:00:00Z"), {})).rows;
+  const by = new Map(rows.map((r) => [r.uniqueid, r]));
+  assert.ok(by.has("tr1") && by.has("tr2") && by.has("tr3"), "🔴 розмов 20.10 немає в списку — гейту нема що перевіряти");
+  assert.deepEqual([by.get("tr1")!.transportKind, by.get("tr1")!.inReport], ["oversize", false], "🔴 трал лишився в оцінці");
+  assert.deepEqual([by.get("tr2")!.transportKind, by.get("tr2")!.inReport], ["international", false], "🔴 Kommo «Міжнародні» не виключило розмову");
+  assert.deepEqual([by.get("tr3")!.transportKind, by.get("tr3")!.inReport], [null, true], "🔴 звичайне перевезення випало з оцінки");
+  const card = await aiCallCard(c.db, "tr1", false, {});
+  assert.deepEqual([card?.row.transportKind, card?.row.inReport], ["oversize", false], "🔴 картка розійшлась зі списком");
+});
+
+/**
+ * #2215 — ФРОНТ ВИДУ ПЕРЕВЕЗЕННЯ: у «Виключених» — фільтр «вид перевезення» рівно на такі розмови (а фільтри типів їх не
+ * захоплюють), підпис «не оцінюємо · трал / негабарит» у таблиці й картці.
+ * 🧨 Червоніє, якщо фільтр бере зайві розмови, тип «запит» захопить виключені за видом, або зникне підпис.
+ */
+test("#2215 ФРОНТ: «Виключені» — фільтр «вид перевезення» рівно на свої розмови, підпис «не оцінюємо» в таблиці й картці", async () => {
+  const V = await loadView() as unknown as { tabRows: (rows: readonly unknown[], tab: string, type?: string) => { id: string }[]; TRANSPORT_LABEL: Record<string, string> };
+  const rows = [
+    { id: "a", inReport: false, conversationType: "cargo_request", transportKind: "oversize" },
+    { id: "b", inReport: false, conversationType: "carrier", transportKind: null },
+    { id: "c", inReport: true, conversationType: "cargo_request", transportKind: null },
+  ];
+  assert.deepEqual(V.tabRows(rows, "excluded", "transport").map((r) => r.id), ["a"], "🔴 фільтр «вид перевезення» бере не свої розмови");
+  assert.deepEqual(V.tabRows(rows, "excluded", "cargo_request").map((r) => r.id), [], "🔴 тип «запит» захопив виключену за видом перевезення");
+  assert.deepEqual(V.tabRows(rows, "excluded", "carrier").map((r) => r.id), ["b"]);
+  assert.deepEqual(V.tabRows(rows, "excluded").map((r) => r.id), ["a", "b"], "дзеркало: «усі» — обидві виключені");
+  assert.equal(V.TRANSPORT_LABEL.oversize, "трал / негабарит");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /<option value="transport">вид перевезення \(не оцінюємо\)<\/option>/, "🔴 у «Виключених» немає фільтра виду перевезення");
+  assert.match(sec, /не оцінюємо · \{TRANSPORT_LABEL\[r\.transportKind\]\}/, "🔴 у таблиці немає причини виключення");
+  assert.match(readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8"), /\{c\.row\.transportKind && <Chip tone="muted">не оцінюємо · \{TRANSPORT_LABEL\[c\.row\.transportKind\]\}<\/Chip>\}/, "🔴 у картці немає причини виключення");
 });

@@ -213,9 +213,17 @@ export function fmtMinutes(m: number): string {
 
 export type ListTab = "report" | "excluded";
 /** Рядок у вкладці: «Звіт» — `inReport`, «Виключені» — решта. Фільтр за типом — лише у «Виключених». */
-export function tabRows<T extends { inReport: boolean; conversationType: ConversationTypeT | null }>(rows: readonly T[], tab: ListTab,
-  type: ConversationTypeT | "all" = "all"): T[] {
-  return rows.filter((r) => (tab === "report" ? r.inReport : !r.inReport) && (tab === "report" || type === "all" || r.conversationType === type));
+/** 🚛 Вид перевезення, який не оцінюємо (задача 7183) — підпис для «Виключених» і картки. */
+export type TransportKindT = "international" | "oversize" | "tanker" | "dump" | "grain";
+export const TRANSPORT_LABEL: Readonly<Record<TransportKindT, string>> = {
+  international: "міжнародне", oversize: "трал / негабарит", tanker: "цистерна", dump: "самоскид", grain: "зерновоз",
+};
+/** Фільтр «Виключених»: тип розмови, або «transport» — розмови, які не оцінюємо через вид перевезення. */
+export type ExcludedFilterT = ConversationTypeT | "transport" | "all";
+export function tabRows<T extends { inReport: boolean; conversationType: ConversationTypeT | null; transportKind?: TransportKindT | null }>(rows: readonly T[], tab: ListTab,
+  type: ExcludedFilterT = "all"): T[] {
+  return rows.filter((r) => (tab === "report" ? r.inReport : !r.inReport)
+    && (tab === "report" || type === "all" || (type === "transport" ? r.transportKind != null : r.transportKind == null && r.conversationType === type)));
 }
 
 /**

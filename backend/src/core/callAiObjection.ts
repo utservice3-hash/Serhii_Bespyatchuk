@@ -154,7 +154,7 @@ export function validateObjectionV2(x: unknown): { ok: true; value: ObjectionRes
 }
 
 /** Цитату шукаємо в тексті ОДНОГО каналу (як у `verifyQuotes`): склейка з двох каналів не пройде. */
-function quoteInOneChannel(quote: string, turns: readonly Turn[]): boolean | null {
+export function quoteInOneChannel(quote: string, turns: readonly Turn[]): boolean | null {
   const n = normForQuote(quote);
   if (!n) return null;
   const byChannel = new Map<number, string[]>();

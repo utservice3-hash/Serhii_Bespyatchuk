@@ -11261,7 +11261,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       // П3: прапорець — лише за період після оголошення норми; до того поле є, а екран його не показує.
       silentBeforeClose: r.silentBeforeClose,
       conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
-      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride,
+      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride, transportKind: r.transportKind,
       priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
       reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
       // Екран D (08.10.2026): чек-лист і черга розбору — стани від ядра, фронт їх лише складає.

@@ -406,6 +406,8 @@ export interface AiCallRowT {
   /** Тип розмови (рубрика v2, ТЗ 30.09.2026) і куди вона йде: звіт чи «Виключені». */
   conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
+  /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183); `null` — оцінюємо. */
+  transportKind: AiTransportKindT | null;
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
   priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
   reactionMin?: number | null; reactionOffHours?: boolean;
@@ -430,6 +432,7 @@ export interface AiClientDecisionT { value: "agreed" | "thinking" | "declined" |
 /** Успіх угоди з Kommo — стан ЗАРАЗ. */
 export interface AiDealOutcomeT { state: "success" | "lost" | "open"; lossReason: string | null }
 export type AiReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
+export type AiTransportKindT = "international" | "oversize" | "tanker" | "dump" | "grain";
 /** Чим закрито розмову з черги: погоджено коментар менеджера · закрито тімлідом без коментаря · угода дійшла до рахунку. */
 export type AiReviewClosureT = "approved" | "direct" | "invoice";
 export interface AiNoteT { text: string; byName: string | null; at: string }
