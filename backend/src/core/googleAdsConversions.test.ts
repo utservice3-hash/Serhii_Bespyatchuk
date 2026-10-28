@@ -43,12 +43,14 @@ test("#2510 GOOGLE ADS: заявка = 1 900, продаж = маржа «Авт
   assert.equal(e164(null), "");
 
   const csv = conversionsCsv(rows).split("\n");
-  assert.equal(csv[0], "Parameters:TimeZone=Europe/Kiev", "🔴 немає рядка TimeZone — Google візьме час не того поясу");
-  assert.equal(csv[1], "Google Click ID,Conversion Name,Conversion Time,Conversion Value,Conversion Currency,Transaction ID,Phone Number");
-  assert.equal(csv[2], "G1,CRM Send_form,2026-10-24 12:00:00,1900,UAH,1,+380671112233", "🔴 рядок заявки не за форматом");
-  assert.equal(csv[3], ",CRM Send_form,2026-10-25 11:00:00,1900,UAH,4,+380501234567", "🔴 дзвінок без gclid — не за форматом");
-  assert.equal(csv[4], "G1,CRM Deal Won,2026-10-26 14:30:00,5600,UAH,1,+380671112233", "🔴 рядок продажу не за форматом");
-  assert.equal(kyivTime(D("2026-07-15T21:30:00Z")), "2026-07-16 00:30:00", "🔴 літній час Києва (UTC+3) пораховано не так");
+  assert.equal(csv[0], "Google Click ID,Conversion Name,Conversion Time,Conversion Value,Conversion Currency,Transaction ID,Phone Number,Ad User Data,Ad Personalization",
+    "🔴 файл не починається із заголовка — Google прочитає перший рядок як назви стовпців (рекламниця 28.10)");
+  assert.ok(!csv.some((l) => l.startsWith("Parameters:")), "🔴 повернувся рядок Parameters");
+  assert.equal(csv[1], "G1,CRM Send_form,2026-10-24 12:00:00+03:00,1900,UAH,1,+380671112233,Granted,Granted", "🔴 рядок заявки не за форматом");
+  assert.equal(csv[2], ",CRM Send_form,2026-10-25 11:00:00+02:00,1900,UAH,4,+380501234567,Granted,Granted",
+    "🔴 дзвінок без gclid не за форматом або зсув не перейшов на зимовий час (+02:00 з 25.10)");
+  assert.equal(csv[3], "G1,CRM Deal Won,2026-10-26 14:30:00+02:00,5600,UAH,1,+380671112233,Granted,Granted", "🔴 рядок продажу не за форматом");
+  assert.equal(kyivTime(D("2026-07-15T21:30:00Z")), "2026-07-16 00:30:00+03:00", "🔴 літній час Києва (UTC+3) пораховано не так");
 });
 
 /**
