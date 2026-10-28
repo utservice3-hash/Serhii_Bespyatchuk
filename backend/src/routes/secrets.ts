@@ -261,7 +261,7 @@ secretsRouter.post("/employees/:id/documents/:fileId/restore", async (req, res) 
  * звільнення й відповіді звільнених — персональні дані.
  */
 secretsRouter.get("/churn", async (req, res) => {
-  try { res.json(await churnReport(pool as unknown as Db, req.query.from, req.query.to)); } catch (e) { fail(res, e); }
+  try { res.json(await churnReport(pool as unknown as Db, req.query.from, req.query.to, req.query.category)); } catch (e) { fail(res, e); }
 });
 
 secretsRouter.post("/employees/kommo-link", async (_req, res) => {

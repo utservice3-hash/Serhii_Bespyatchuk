@@ -5559,6 +5559,8 @@ export interface EmployeeRow {
   manager_id: number | null; kommo_name: string | null;
   /** 👥 Справжня команда (27.10.2026): з Kommo — `team_locked`; інакше вибрана в картці (`team_ref`: `k:<id>` / `d:<id>`). */
   team_name: string | null; team_locked: boolean; team_ref: string | null;
+  /** 🗂 Категорія (28.10.2026, #2960): ручна (`category_manual`) або за посадою; null — «Без категорії». */
+  category: EmpCategory | null; category_manual: boolean;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
   /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
@@ -5579,11 +5581,30 @@ export interface ImportPreview {
 export interface ImportCounts { rows: number; created: number; updated: number; duplicate: number; linked: number; secretsCreated: number; secretsExisting: number; secretsNoAccount: number; secretsInvalid: number }
 // ── Етапи 4–5: плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026) ──
 export interface ChurnMonthRow { month: string; headcount: number; hired: number; dismissed: number; turnover: number | null; early: number; noHireDate: number }
+/** 🗂 Категорії співробітників — дзеркало `backend/src/core/employeeCategory.ts` `EMP_CATEGORIES` (звіряє #2960b). */
+export const EMP_CATEGORIES = [
+  ["manager", "Менеджери"],
+  ["teamlead", "Тім-ліди"],
+  ["leadgen", "Лідогенерація"],
+  ["accounting", "Бухгалтерія"],
+  ["finance", "Фінансист"],
+  ["management", "Керівництво"],
+  ["office", "Офіс і HR"],
+  ["it", "IT"],
+] as const;
+export type EmpCategory = (typeof EMP_CATEGORIES)[number][0];
+export const empCategoryLabel = (k: string | null) => EMP_CATEGORIES.find(([c]) => c === k)?.[1] ?? "Без категорії";
+export interface ChurnPersonRow { id: number; full_name: string; category: EmpCategory | null; position: string | null; hired_at: string | null; dismissed_at: string; tenure_days: number | null }
 export interface ChurnReport {
-  months: ChurnMonthRow[]; total: { dismissed: number; hired: number; early: number; avgTurnover: number; active: number; unknownDate?: number };
+  from: string; to: string; wholeMonths: boolean;
+  months: ChurnMonthRow[];
+  total: { dismissed: number; hired: number; early: number; avgTurnover: number | null; avgTenureDays: number | null; noHireDate: number; active: number; unknownDate?: number };
+  people: ChurnPersonRow[]; byCategory: Record<string, number>;
   reasons: { label: string; n: number }[]; positions: { label: string; n: number }[];
 }
-export const fetchChurn = async (from: string, to: string) => (await api.get<ChurnReport>("/secrets/churn", { params: { from, to } })).data;
+/** Період — місяці «РРРР-ММ» або дні «РРРР-ММ-ДД»; `category` — ключ, «none» (без категорії) або порожньо (усі). */
+export const fetchChurn = async (from: string, to: string, category?: string | null) =>
+  (await api.get<ChurnReport>("/secrets/churn", { params: { from, to, ...(category ? { category } : {}) } })).data;
 export const linkEmployeesKommo = async () => (await api.post<{ linked: number; byId: number; byName: number; ambiguous: number; none: number }>("/secrets/employees/kommo-link")).data;
 export interface ExitInterview {
   id: number; employee_id: number | null; full_name: string; interview_date: string; position: string | null; tenure: string | null;
@@ -5597,14 +5618,14 @@ export const updateExit = async (id: number, b: Partial<ExitInterview>) => { awa
 export const deleteExit = async (id: number) => { await api.delete(`/secrets/exit/${id}`); };
 export const restoreExit = async (id: number) => { await api.post(`/secrets/exit/${id}/restore`); };
 export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; teams: string[] }>("/secrets/employees")).data;
-export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
+export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">> & { category?: EmpCategory | null };
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 // 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
 // ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
 export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false, dateUnknown = false) =>
   (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk, dateUnknown })).data;
 /** 📉 «Змінити дату звільнення» / «дата невідома» (#2100). */
-export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string }) =>
+export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string; hiredAt?: string | null }) =>
   (await api.post<{ dismissedAt: string | null; unknown: boolean }>(`/secrets/employees/${id}/dismiss-date`, b)).data;
 export const dismissNeedsConfirm = (e: unknown): boolean =>
   !!(e as { response?: { status?: number; data?: { needsConfirm?: boolean } } })?.response?.data?.needsConfirm;

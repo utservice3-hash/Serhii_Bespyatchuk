@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchChurn, fetchExits, createExit, updateExit, deleteExit, restoreExit, fetchEmployees, hiringError,
-  type ChurnReport, type ExitInterview, type EmployeeRow,
+  fetchChurn, fetchExits, createExit, updateExit, deleteExit, restoreExit, fetchEmployees, hiringError, setDismissDate, EMP_CATEGORIES, empCategoryLabel,
+  type ChurnReport, type ChurnPersonRow, type ExitInterview, type EmployeeRow,
 } from "../../../api";
 import type { Toast } from "./HiringShared";
 
@@ -12,33 +12,86 @@ import type { Toast } from "./HiringShared";
  */
 
 const ym = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+const ymd = (d: Date) => `${ym(d)}-${String(d.getDate()).padStart(2, "0")}`;
+const dmy = (iso: string | null) => (iso ? iso.split("-").reverse().join(".") : "—");
 const monthLabel = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("uk-UA", { month: "short", year: "2-digit" });
 const pct = (v: number | null) => (v == null ? "—" : `${String(v).replace(".", ",")}%`);
-const PRESETS: [string, number][] = [["6 місяців", 6], ["12 місяців", 12], ["24 місяці", 24]];
+const stazh = (days: number | null) => {
+  if (days == null) return null;
+  if (days < 60) return `${days} дн.`;
+  const m = Math.round(days / 30.4);
+  return m < 24 ? `${m} міс.` : `${(days / 365).toFixed(1).replace(".", ",")} р.`;
+};
 
-export function HiringChurnTab() {
-  const [n, setN] = useState(12);
+/**
+ * 📅 ПЕРІОД (28.10.2026, ТЗ Івана): тиждень — календарний пн–нд (пропозиція, питання 3 макета), місяць — календарний,
+ * 6/12/24 — останні N місяців, що закінчуються місяцем-якорем. Стрілки зсувають якір на один період.
+ */
+type Per = "week" | "month" | "6" | "12" | "24";
+const PERIODS: [Per, string][] = [["week", "Тиждень"], ["month", "Місяць"], ["6", "6 місяців"], ["12", "12 місяців"], ["24", "24 місяці"]];
+function rangeOf(per: Per, anchor: Date): { from: string; to: string; end: Date; label: string } {
+  if (per === "week") {
+    const mon = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - ((anchor.getDay() + 6) % 7));
+    const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
+    return { from: ymd(mon), to: ymd(sun), end: sun, label: `${dmy(ymd(mon)).slice(0, 5)} – ${dmy(ymd(sun))}` };
+  }
+  const n = per === "month" ? 1 : Number(per);
+  const first = new Date(anchor.getFullYear(), anchor.getMonth() - n + 1, 1), last = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
+  const lbl = (d: Date) => d.toLocaleDateString("uk-UA", { month: "long", year: "numeric" }).replace(" р.", "");
+  return { from: ym(first), to: ym(anchor), end: last, label: n === 1 ? lbl(anchor) : `${monthLabel(ym(first))} – ${monthLabel(ym(anchor))}` };
+}
+const shiftAnchor = (per: Per, a: Date, k: number) =>
+  per === "week" ? new Date(a.getFullYear(), a.getMonth(), a.getDate() + 7 * k) : new Date(a.getFullYear(), a.getMonth() + k * (per === "month" ? 1 : Number(per)), 1);
+
+export function HiringChurnTab({ toast }: { toast: Toast }) {
+  const [per, setPer] = useState<Per>("month");
+  const [anchor, setAnchor] = useState(() => new Date());
+  const [cat, setCat] = useState("");
   const [d, setD] = useState<ChurnReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    const now = new Date(), from = new Date(now.getFullYear(), now.getMonth() - n + 1, 1);
-    setErr(null); fetchChurn(ym(from), ym(now)).then(setD).catch((e) => setErr(hiringError(e)));
-  }, [n]);
-  if (err) return <div className="chart-card"><b>Плинність недоступна.</b> <span className="hr-muted">{err}</span></div>;
-  if (!d) return <p className="loading-text">Рахую…</p>;
+  const [edit, setEdit] = useState<ChurnPersonRow | null>(null);
+  const r = rangeOf(per, anchor);
+  const load = useCallback(() => {
+    setErr(null); fetchChurn(r.from, r.to, cat || null).then(setD).catch((e) => setErr(hiringError(e)));
+  }, [r.from, r.to, cat]);
+  useEffect(load, [load]);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const atEnd = r.end >= today;
+  const head = (
+    <div className="page-filters" style={{ marginBottom: 14, alignItems: "center" }}>
+      <div className="hr-seg2">{PERIODS.map(([k, l]) => <button key={k} className={per === k ? "on" : ""} onClick={() => { setPer(k); setAnchor(new Date()); }}>{l}</button>)}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <button className="hr-btn xs" aria-label="Попередній період" onClick={() => setAnchor(shiftAnchor(per, anchor, -1))}>‹</button>
+        <b style={{ minWidth: 150, textAlign: "center" }}>{r.label}</b>
+        <button className="hr-btn xs" aria-label="Наступний період" disabled={atEnd} onClick={() => setAnchor(shiftAnchor(per, anchor, 1))}>›</button>
+      </div>
+    </div>
+  );
+  if (err) return <>{head}<div className="chart-card"><b>Плинність недоступна.</b> <span className="hr-muted">{err}</span></div></>;
+  if (!d) return <>{head}<p className="loading-text">Рахую…</p></>;
   const max = Math.max(1, ...d.months.map((m) => m.turnover ?? 0));
   const noDate = d.months.at(-1)?.noHireDate ?? 0;
+  const allN = Object.values(d.byCategory).reduce((a, n) => a + n, 0);
   return (
     <>
-      <div className="page-filters" style={{ marginBottom: 14 }}>
-        <div className="hr-seg2">{PRESETS.map(([l, k]) => <button key={k} className={n === k ? "on" : ""} onClick={() => setN(k)}>{l}</button>)}</div>
-        <span className="hr-muted" style={{ fontSize: 12.5 }}>Плинність місяця = звільнено ÷ усі, хто працював у цьому місяці (як у таблиці «Плинність NEW»).</span>
+      {head}
+      <div className="chart-card" style={{ padding: 0, marginBottom: 14 }}>
+        <div className="emp-cats" role="group" aria-label="Категорія" style={{ borderBottom: 0 }}>
+          <button className={`emp-cat ${cat === "" ? "on" : ""}`} onClick={() => setCat("")}>Усі <span>{allN}</span></button>
+          {[...EMP_CATEGORIES, ["none", "Без категорії"] as const].map(([k, l]) => {
+            const n = d.byCategory[k] ?? 0;
+            if (k === "none" && !n && cat !== "none") return null;
+            return <button key={k} className={`emp-cat ${cat === k ? "on" : ""} ${n ? "" : "zero"}`} onClick={() => setCat(cat === k ? "" : k)}>{l} <span>{n}</span></button>;
+          })}
+        </div>
       </div>
       <div className="kpi-grid">
-        <div className="kpi-card"><div className="kpi-label">Середня плинність</div><div className="kpi-value">{pct(d.total.avgTurnover)}</div><div className="hr-muted">на місяць за період</div></div>
         <div className="kpi-card"><div className="kpi-label">Звільнено</div><div className="kpi-value" style={{ color: "var(--danger)" }}>{d.total.dismissed}</div><div className="hr-muted">з них у перші 90 днів: {d.total.early}</div></div>
-        <div className="kpi-card"><div className="kpi-label">Прийнято</div><div className="kpi-value" style={{ color: "var(--ok)" }}>{d.total.hired}</div><div className="hr-muted">за період</div></div>
-        <div className="kpi-card"><div className="kpi-label">Працює зараз</div><div className="kpi-value">{d.total.active}</div><div className="hr-muted">{noDate ? `без дати прийому: ${noDate}` : "дати прийому в усіх"}</div></div>
+        <div className="kpi-card"><div className="kpi-label">Середній стаж звільнених</div><div className="kpi-value">{stazh(d.total.avgTenureDays) ?? "—"}</div>
+          <div className="hr-muted">{d.total.noHireDate ? `без дати початку: ${d.total.noHireDate} — не в середньому` : "від дати початку до звільнення"}</div></div>
+        <div className="kpi-card"><div className="kpi-label">{d.wholeMonths && d.months.length > 1 ? "Середня плинність" : "Плинність"}</div><div className="kpi-value">{pct(d.total.avgTurnover)}</div>
+          <div className="hr-muted">{d.wholeMonths ? (d.months.length > 1 ? "на місяць за період" : "звільнено ÷ працювало в місяці") : "для тижня не рахується — формула помісячна"}</div></div>
+        <div className="kpi-card"><div className="kpi-label">Працює зараз</div><div className="kpi-value">{d.total.active}</div><div className="hr-muted">{noDate ? `без дати прийому: ${noDate}` : cat ? `у категорії «${empCategoryLabel(cat === "none" ? null : cat)}»` : "за реєстром"}</div></div>
       </div>
       {(d.total.unknownDate ?? 0) > 0 && (
         <div className="hr-muted" style={{ margin: "-6px 0 12px", fontSize: 12.5 }}>
@@ -46,29 +99,96 @@ export function HiringChurnTab() {
         </div>
       )}
       <div className="chart-card" style={{ marginBottom: 16 }}>
-        <div className="chart-title">Плинність по місяцях</div>
-        <div className="hr-tw">
-          <table className="data-table compact" style={{ width: "100%" }}>
-            <thead><tr><th>Місяць</th><th className="num">Працювало</th><th className="num">Прийнято</th><th className="num">Звільнено</th><th className="num">у перші 90 днів</th><th>Плинність</th></tr></thead>
-            <tbody>{d.months.map((m) => (
-              <tr key={m.month}>
-                <td>{monthLabel(m.month)}</td><td className="num">{m.headcount}</td><td className="num" style={{ color: m.hired ? "var(--ok)" : undefined }}>{m.hired || "—"}</td>
-                <td className="num" style={{ color: m.dismissed ? "var(--danger)" : undefined }}>{m.dismissed || "—"}</td><td className="num">{m.early || "—"}</td>
-                <td style={{ minWidth: 180 }}><div className="ch-bar"><i style={{ width: `${((m.turnover ?? 0) / max) * 100}%`, background: (m.turnover ?? 0) >= 10 ? "var(--danger)" : (m.turnover ?? 0) >= 5 ? "var(--warn)" : "var(--ok)" }} /><span>{pct(m.turnover)}</span></div></td>
-              </tr>))}</tbody>
-          </table>
-        </div>
+        <div className="chart-title">Хто звільнився · {r.label}</div>
+        {d.people.length === 0 ? <div className="hr-muted">За цей період звільнень немає{cat ? ` у категорії «${empCategoryLabel(cat === "none" ? null : cat)}»` : ""}.</div> : (
+          <div className="hr-tw">
+            <table className="data-table compact" style={{ width: "100%" }}>
+              <thead><tr><th>Співробітник</th><th>Категорія</th><th>Посада</th><th>Почав</th><th>Звільнився</th><th className="num">Стаж</th><th /></tr></thead>
+              <tbody>{d.people.map((p) => (
+                <tr key={p.id}>
+                  <td><b>{p.full_name}</b></td>
+                  <td>{p.category ? empCategoryLabel(p.category) : <span className="hr-muted">без категорії</span>}</td>
+                  <td className="hr-muted">{p.position ?? "—"}</td>
+                  <td>{p.hired_at ? dmy(p.hired_at) : <span className="hr-muted">невідомо</span>}</td>
+                  <td>{dmy(p.dismissed_at)}</td>
+                  <td className="num">{stazh(p.tenure_days) ?? <span className="hr-muted">—</span>}</td>
+                  <td style={{ textAlign: "right" }}><button className="hr-btn xs" onClick={() => setEdit(p)}>Змінити</button></td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+        )}
       </div>
+      {d.months.length > 1 && (
+        <div className="chart-card" style={{ marginBottom: 16 }}>
+          <div className="chart-title">Плинність по місяцях</div>
+          <div className="hr-tw">
+            <table className="data-table compact" style={{ width: "100%" }}>
+              <thead><tr><th>Місяць</th><th className="num">Працювало</th><th className="num">Прийнято</th><th className="num">Звільнено</th><th className="num">у перші 90 днів</th><th>Плинність</th></tr></thead>
+              <tbody>{d.months.map((m) => (
+                <tr key={m.month}>
+                  <td>{monthLabel(m.month)}</td><td className="num">{m.headcount}</td><td className="num" style={{ color: m.hired ? "var(--ok)" : undefined }}>{m.hired || "—"}</td>
+                  <td className="num" style={{ color: m.dismissed ? "var(--danger)" : undefined }}>{m.dismissed || "—"}</td><td className="num">{m.early || "—"}</td>
+                  <td style={{ minWidth: 180 }}><div className="ch-bar"><i style={{ width: `${((m.turnover ?? 0) / max) * 100}%`, background: (m.turnover ?? 0) >= 10 ? "var(--danger)" : (m.turnover ?? 0) >= 5 ? "var(--warn)" : "var(--ok)" }} /><span>{pct(m.turnover)}</span></div></td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
       <div className="chart-grid">
         <div className="chart-card"><div className="chart-title">Причини звільнень</div>
-          {d.reasons.length ? <table className="data-table compact" style={{ width: "100%" }}><tbody>{d.reasons.map((r) => <tr key={r.label}><td>{r.label}</td><td className="num">{r.n}</td></tr>)}</tbody></table> : <div className="hr-muted">За період звільнень немає.</div>}
+          {d.reasons.length ? <table className="data-table compact" style={{ width: "100%" }}><tbody>{d.reasons.map((x) => <tr key={x.label}><td>{x.label}</td><td className="num">{x.n}</td></tr>)}</tbody></table> : <div className="hr-muted">За період звільнень немає.</div>}
         </div>
         <div className="chart-card"><div className="chart-title">Звідки йдуть — за посадою</div>
-          {d.positions.length ? <table className="data-table compact" style={{ width: "100%" }}><tbody>{d.positions.map((r) => <tr key={r.label}><td>{r.label}</td><td className="num">{r.n}</td></tr>)}</tbody></table> : <div className="hr-muted">—</div>}
+          {d.positions.length ? <table className="data-table compact" style={{ width: "100%" }}><tbody>{d.positions.map((x) => <tr key={x.label}><td>{x.label}</td><td className="num">{x.n}</td></tr>)}</tbody></table> : <div className="hr-muted">—</div>}
         </div>
       </div>
+      {edit && <TenureDialog p={edit} onClose={() => setEdit(null)} onDone={(m) => { setEdit(null); toast(m); load(); }} />}
     </>
   );
+}
+
+/**
+ * ✏️ «Змінити» в списку плинності (28.10.2026, ТЗ Івана, варіант А): стаж правиться ДАТАМИ, а не окремим числом —
+ * одне джерело правди для картки, плинності й стажу. Коментар обовʼязковий, зміна йде в журнал (`setDismissDate`).
+ */
+function TenureDialog({ p, onClose, onDone }: { p: ChurnPersonRow; onClose: () => void; onDone: (m: string) => void }) {
+  const [hired, setHired] = useState(p.hired_at ?? "");
+  const [left, setLeft] = useState(p.dismissed_at);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const days = hired && left ? Math.round((Date.parse(`${left}T00:00:00Z`) - Date.parse(`${hired}T00:00:00Z`)) / 86_400_000) : null;
+  const bad = days != null && days < 0;
+  const save = async () => {
+    if (!left) { setErr("Вкажіть дату звільнення"); return; }
+    if (bad) { setErr("Дата початку пізніше за дату звільнення"); return; }
+    if (!comment.trim()) { setErr("Коментар обовʼязковий"); return; }
+    setBusy(true); setErr(null);
+    try {
+      await setDismissDate(p.id, { date: left, comment: comment.trim(), ...(hired !== (p.hired_at ?? "") ? { hiredAt: hired || null } : {}) });
+      onDone(`${p.full_name}: ${dmy(hired || null)} – ${dmy(left)}${days != null && !bad ? `, стаж ${stazh(days)}` : ""}`);
+    } catch (e) { setErr(hiringError(e)); setBusy(false); }
+  };
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label="Дати роботи" onClick={(e) => e.stopPropagation()} style={{ width: "min(480px, 96vw)" }}>
+        <h3 style={{ margin: "0 0 4px" }}>{p.full_name} — дати роботи</h3>
+        <p className="hr-muted" style={{ margin: "0 0 12px", fontSize: 13 }}>Стаж рахується з цих дат сам. Ті самі дати — у картці співробітника й у плинності.</p>
+        <div className="emp-form" style={{ marginTop: 0 }}>
+          <label><span>Почав(ла)</span><input className="hr-inp" type="date" value={hired} onChange={(e) => setHired(e.target.value)} /></label>
+          <label><span>Звільнився(лась)</span><input className="hr-inp" type="date" value={left} onChange={(e) => setLeft(e.target.value)} /></label>
+          <div className="wide hr-muted" style={{ fontSize: 13, color: bad ? "var(--danger)" : undefined }}>
+            {bad ? "Дата початку пізніше за дату звільнення" : days != null ? <>Стаж: <b style={{ color: "var(--text)" }}>{stazh(days)}</b> · рахується сам</> : "Без дати початку стаж невідомий"}
+          </div>
+          <label className="wide"><span>Коментар *</span><input className="hr-inp" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="напр.: вийшла на стажування раніше, ніж оформили" /></label>
+        </div>
+        {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="hr-btn" onClick={onClose}>Скасувати</button>
+          <button className="hr-btn p" disabled={busy || !comment.trim() || bad} onClick={() => void save()}>{busy ? "Зберігаю…" : "Зберегти"}</button>
+        </div>
+      </div>
+    </div>, document.body);
 }
 
 /** Питання — ті самі, що в Google-формі «Exit interview». */

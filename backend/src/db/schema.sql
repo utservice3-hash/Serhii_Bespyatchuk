@@ -6920,6 +6920,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_teams_kommo ON dashboard_teams (k
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
 ALTER TABLE org_units ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
+
+-- 🗂 КАТЕГОРІЯ СПІВРОБІТНИКА ВРУЧНУ (28.10.2026, ТЗ Івана). NULL = рахує правило за посадою (`core/employeeCategory.ts`);
+-- значення = HR поставив вручну, і воно перемагає правило. Бекфілу немає: колонка порожня всім. ⚠️ revert коду колонку
+-- не прибирає, але без коду її ніхто не читає. Перелік у CHECK — дзеркало `EMP_CATEGORIES` (#2960b).
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_category_check;
+ALTER TABLE employees ADD CONSTRAINT employees_category_check
+  CHECK (category IS NULL OR category IN ('manager','teamlead','leadgen','accounting','finance','management','office','it'));
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'employees_one_team') THEN
     ALTER TABLE employees ADD CONSTRAINT employees_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);
