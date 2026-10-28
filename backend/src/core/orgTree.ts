@@ -11,7 +11,9 @@
  *    команди або старий текст «Команди», напр. «9») — а не зникає. Кожен працюючий — рівно в одному місці (#2850).
  *  • ПЕРЕТЯГНУТИ = поставити людині команду блоку (`setEmployeeTeam`, аудит) + рядок у `org_log`. Людину з Kommo не
  *    перетягнути — 409 (її команда з Kommo). Нік у Telegram і фото кожен змінює собі сам (свій рядок — за `user_id`).
- *  • Телефонів, документів, дат — не віддаємо взагалі (ТЗ): вибірка називає поля поіменно (#2702).
+ *  • ТЕЛЕФОН — у картці, усім, включно з кандидатами (рішення Романа 28.10.2026, замість «не показувати» з ТЗ); пошти,
+ *    документів, дат — не віддаємо взагалі: вибірка називає поля поіменно (#2712). Номер зводиться до одного вигляду тут,
+ *    один раз (`phoneView`); нерозпізнаний показується як записаний, а не ховається.
  */
 import { updateEmployee } from "./employees.js";
 import type { Db } from "./secrets.js";
@@ -50,6 +52,21 @@ export function tgNick(raw: string | null | undefined): string | null {
   return /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(s) ? `@${s}` : null;
 }
 
+/**
+ * Телефон для картки: `0501112233`, `380501112233`, `+380 50 111-22-33`, `501112233` → «+380 50 111 22 33» з посиланням
+ * `tel:+380501112233`. Порожньо або без жодної цифри й літери («-») — `null`. Решту (не 9/10/12 цифр українського номера, кілька номерів) показуємо як
+ * записано, без посилання: невідоме видно, а не зникає (#2713).
+ */
+export function phoneView(raw: string | null | undefined): { text: string; tel: string | null } | null {
+  const t = raw?.trim();
+  if (!t || !/[\p{L}\d]/u.test(t)) return null; // «-», «—», «.» — сентинел, а не номер (правило 5)
+  const d = /^\+?[\d\s()-]+$/.test(t) ? t.replace(/\D/g, "") : "";
+  const n = d.length === 12 && d.startsWith("380") ? d.slice(3) : d.length === 10 && d.startsWith("0") ? d.slice(1)
+    : d.length === 9 && !d.startsWith("0") ? d : null;
+  if (!n) return { text: t, tel: null };
+  return { text: `+380 ${n.slice(0, 2)} ${n.slice(2, 5)} ${n.slice(5, 7)} ${n.slice(7)}`, tel: `+380${n}` };
+}
+
 export interface UnitRow {
   id: number; parentId: number | null; name: string; dept: OrgDept; teamId: number | null; teamName: string | null;
   /** Команда дашборду блоку (замість команди Kommo) і, якщо вона зʼєднана, — її команда Kommo. */
@@ -57,7 +74,7 @@ export interface UnitRow {
   label: string | null; headEmployeeId: number | null; teamLeadEmployeeId: number | null; side: boolean; sort: number;
 }
 export interface PersonRow extends PersonTeamInput {
-  id: number; name: string; position: string | null; teamLabel: string | null; telegram: string | null;
+  id: number; name: string; position: string | null; teamLabel: string | null; telegram: string | null; phone: string | null;
   /** Назва справжньої команди людини (Kommo або дашборду) — для картки й «Без блоку». */
   teamName: string | null;
   photoV: number | null; userId: number | null;
@@ -75,7 +92,8 @@ export interface OrgPerson {
   id: number; name: string; position: string | null; teamLabel: string | null; unitId: number | null; isHead: boolean;
   /** Справжня команда людини і чи вона з Kommo (тоді змінюють її лише в Kommo). */
   teamName: string | null; teamLocked: boolean;
-  telegram: string | null; telegramInvalid: boolean; photo: { id: number; v: number } | null; isMe: boolean;
+  telegram: string | null; telegramInvalid: boolean; phone: { text: string; tel: string | null } | null;
+  photo: { id: number; v: number } | null; isMe: boolean;
 }
 export interface OrgTree {
   units: OrgUnit[]; people: OrgPerson[]; unassigned: number[];
@@ -125,7 +143,7 @@ export function buildOrg(unitRows: readonly UnitRow[], personRows: readonly Pers
     return {
       id: p.id, name: p.name, position: p.position, teamLabel: p.teamLabel, unitId: where.unitId, isHead: where.isHead,
       teamName: p.teamName, teamLocked: teamOf.get(p.id)!.locked,
-      telegram: nick, telegramInvalid: !nick && !!p.telegram?.trim(), photo: p.photoV != null ? { id: p.id, v: p.photoV } : null,
+      telegram: nick, telegramInvalid: !nick && !!p.telegram?.trim(), phone: phoneView(p.phone), photo: p.photoV != null ? { id: p.id, v: p.photoV } : null,
       isMe: meUserId != null && p.userId === meUserId,
     };
   }).sort((a, b) => byUk(a.name, b.name));
@@ -161,15 +179,15 @@ async function unitRows(db: Db): Promise<UnitRow[]> {
 }
 
 async function personRows(db: Db): Promise<PersonRow[]> {
-  // 🔒 Поля поіменно: телефону, пошти, дат, документів тут немає й бути не може (ТЗ; #2702).
-  const r = await db.query<{ id: number; full_name: string; position: string | null; team_label: string | null; telegram: string | null;
+  // 🔒 Поля поіменно: пошти, дат, документів тут немає й бути не може (ТЗ); телефон — рішення Романа 28.10 (#2712).
+  const r = await db.query<{ id: number; full_name: string; position: string | null; team_label: string | null; telegram: string | null; phone: string | null;
     user_id: number | null; has_photo: boolean; photo_updated_at: Date | null; team_name: string | null;
     kommo_team_id: number | null; card_team_id: number | null; dash_team_id: number | null; dash_linked_kommo_id: number | null }>(
-    `SELECT e.id, e.full_name, e.position, e.team_label, e.telegram, e.user_id,
+    `SELECT e.id, e.full_name, e.position, e.team_label, e.telegram, e.phone, e.user_id,
             (e.photo_file IS NOT NULL) AS has_photo, e.photo_updated_at, ${PERSON_TEAM_COLS},
             COALESCE((SELECT name FROM teams WHERE id = COALESCE(tm1.team_id, tm2.team_id, e.team_id, tdt.kommo_team_id)), tdt.name) AS team_name
        FROM employees e ${PERSON_TEAM_JOINS} WHERE ${WORKING_SQL}`);
-  return r.rows.map((x) => ({ id: x.id, name: x.full_name, position: x.position, teamLabel: x.team_label, telegram: x.telegram,
+  return r.rows.map((x) => ({ id: x.id, name: x.full_name, position: x.position, teamLabel: x.team_label, telegram: x.telegram, phone: x.phone,
     userId: x.user_id, photoV: x.has_photo ? photoVersion(x.photo_updated_at) : null, teamName: x.team_name, ...personTeamInput(x) }));
 }
 

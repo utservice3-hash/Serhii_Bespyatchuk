@@ -6378,7 +6378,10 @@ export interface OrgPerson {
   id: number; name: string; position: string | null; teamLabel: string | null; unitId: number | null; isHead: boolean;
   /** Справжня команда людини; `teamLocked` — з Kommo, змінюють лише в Kommo. */
   teamName: string | null; teamLocked: boolean;
-  telegram: string | null; telegramInvalid: boolean; photo: PhotoRef | null; isMe: boolean;
+  telegram: string | null; telegramInvalid: boolean;
+  /** Телефон з «Найму» в одному вигляді; `tel` — лише коли номер розпізнано (рішення Романа 28.10.2026). */
+  phone: { text: string; tel: string | null } | null;
+  photo: PhotoRef | null; isMe: boolean;
 }
 export interface OrgTreeResp {
   units: OrgUnit[]; people: OrgPerson[]; unassigned: number[]; unknownLabels: { label: string; count: number }[];

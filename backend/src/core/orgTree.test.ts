@@ -17,7 +17,7 @@ const unit = (o: Partial<UnitRow> & { id: number; name: string }): UnitRow => ({
   label: null, headEmployeeId: null, teamLeadEmployeeId: null, side: false, sort: 0, ...o,
 });
 const person = (o: Partial<PersonRow> & { id: number; name: string }): PersonRow => ({
-  position: null, teamLabel: null, telegram: null, photoV: null, userId: null, teamName: null,
+  position: null, teamLabel: null, telegram: null, phone: null, photoV: null, userId: null, teamName: null,
   kommoTeamId: null, cardTeamId: null, dashTeamId: null, dashLinkedKommoId: null, ...o,
 });
 
@@ -114,14 +114,15 @@ const code = (n: number) => (e: { status?: number }) => e.status === n;
 const byUkSort = (a: string[]) => [...a].sort((x, y) => x.localeCompare(y, "uk"));
 
 /**
- * #2851 — ЖИВИЙ SQL МІГРАЦІЇ КОМАНД: офісні блоки сіду (8) стають командами дашборду й привʼязуються; блоки продажів
+ * #2712 (було #2851) — ЖИВИЙ SQL МІГРАЦІЇ КОМАНД: офісні блоки сіду (8) стають командами дашборду й привʼязуються; блоки продажів
  * лишаються на командах Kommo; `teams` не змінюється ні на рядок; людям БЕЗ групи в Kommo команда ставиться з тексту
  * лише за ТОЧНИМ збігом (регістр і пробіли — не різниця), «0»/«1» — ні з чим; з Kommo (і через акаунт) — не чіпаються;
- * повторний викат нічого не дублює, а кому HR команду зняв — не повертає. Дерево віддає людину поіменно: без телефону.
+ * повторний викат нічого не дублює, а кому HR команду зняв — не повертає. Дерево віддає людину поіменно: телефон — так
+ * (одним виглядом, рішення Романа 28.10.2026), пошти й дат — ні.
  * 🧨 Червоніє, якщо команди дашборду покласти в `teams`, ставити команду людям із Kommo, зіставляти «приблизно» або
  * повертати зняту команду наступним викатом.
  */
-test("#2851 ЖИВИЙ SQL: офісні блоки → команди дашборду, команда з тексту лише без Kommo й точно, двічі — те саме, без телефону", async (t) => {
+test("#2712 ЖИВИЙ SQL: офісні блоки → команди дашборду, команда з тексту лише без Kommo й точно, двічі — те саме, телефон без пошти й дат", async (t) => {
   const x = await scratch(t); if (!x) return;
   const { c } = x;
   try {
@@ -168,10 +169,12 @@ test("#2851 ЖИВИЙ SQL: офісні блоки → команди дашб�
     const tree = await loadOrg(c as never, null);
     assert.deepEqual(tree.people.map((p) => p.id).sort((a, b) => a - b), [1, 5, 7, 8, 9], "🔴 у схемі звільнений або немає того, хто «завершує»");
     const keys = [...new Set(tree.people.flatMap((p) => Object.keys(p)))].sort();
-    assert.deepEqual(keys, ["id", "isHead", "isMe", "name", "photo", "position", "teamLabel", "teamLocked", "teamName", "telegram", "telegramInvalid", "unitId"],
+    assert.deepEqual(keys, ["id", "isHead", "isMe", "name", "phone", "photo", "position", "teamLabel", "teamLocked", "teamName", "telegram", "telegramInvalid", "unitId"],
       `🔴 у відповіді схеми зайві поля людини: ${keys.join(", ")}`);
     const raw = JSON.stringify(tree);
-    for (const leak of ["+38050", "a@x.ua", "1980-01-01"]) assert.ok(!raw.includes(leak), `🔴 у відповіді схеми є «${leak}»`);
+    for (const leak of ["a@x.ua", "1980-01-01"]) assert.ok(!raw.includes(leak), `🔴 у відповіді схеми є «${leak}»`);
+    assert.deepEqual(tree.people.find((p) => p.id === 1)!.phone, { text: "+380 50 111 22 33", tel: "+380501112233" }, "🔴 телефон з «Найму» не дійшов до картки одним виглядом");
+    assert.equal(tree.people.find((p) => p.id === 5)!.phone, null, "дзеркало: порожній телефон — «не вказано», а не порожній рядок");
     const idOf = async (k: string) => (await c.query(`SELECT id FROM org_units WHERE seed_key = $1`, [k])).rows[0].id as number;
     const rnk1 = await idOf("rnk1");
     assert.equal(tree.units.find((u) => u.id === rnk1)?.headId, 5, "🔴 тімлід команди не став керівником її блоку");
@@ -414,14 +417,14 @@ test("#2855 ДОСТУП ДО КОМАНД: список — вкладка org,
 
 
 /**
- * #2710 — ФРОНТ: «Компанія → Орг структура» групою меню ОДРАЗУ ПІД «Роботою» (Роман 27.10.2026: «на низ … під роботою»;
+ * #2714 (було #2710) — ФРОНТ: «Компанія → Орг структура» групою меню ОДРАЗУ ПІД «Роботою» (Роман 27.10.2026: «на низ … під роботою»;
  * до того — першою, гейт `#2706` у відставці) з позначкою «НОВЕ» до дати; статичний імпорт (#225);
- * стартова вкладка ролі НЕ стає «org» (бухгалтерія й БА без «Звіту» лишаються на своїй першій вкладці); у секції немає
- * телефону й дат — лише те, що віддає API.
+ * стартова вкладка ролі НЕ стає «org» (бухгалтерія й БА без «Звіту» лишаються на своїй першій вкладці); дат у секції немає,
+ * а ТЕЛЕФОН — лише в картці людини, посиланням `tel:` (рішення Романа 28.10.2026), не в списку й не на блоках.
  * 🧨 Червоніє, якщо повернути групу першою (чи будь-куди, крім місця під «Роботою»), дозволити homeSection обрати «org»,
- * лінивий імпорт секції або показати телефон.
+ * лінивий імпорт секції, показати дату народження, прибрати телефон з картки або винести його в список.
  */
-test("#2710 ФРОНТ: група «Компанія» одразу під «Роботою», НОВЕ до дати, статичний імпорт, стартова вкладка не «org», без телефону", async () => {
+test("#2714 ФРОНТ: група «Компанія» одразу під «Роботою», НОВЕ до дати, статичний імпорт, стартова вкладка не «org», телефон лише в картці", async () => {
   const lay = FSRC("components/Layout.tsx");
   const navSrc = lay.slice(lay.indexOf("export const NAV_GROUPS = ["), lay.indexOf("\n];", lay.indexOf("export const NAV_GROUPS = [")));
   const groups = [...navSrc.matchAll(/^    label: "([^"]+)",$/gm)].map((m) => m[1]);
@@ -442,27 +445,143 @@ test("#2710 ФРОНТ: група «Компанія» одразу під «Р
   assert.equal(homeSection({ roleKey: "manager", screens: ["org", "report"], navKeys: nav }), "report", "дзеркало: «Звіт» лишається");
   assert.equal(homeSection({ roleKey: "x", screens: ["org"], navKeys: nav }), "org", "дзеркало: якщо більше нічого — схема");
   const sec = FSRC("pages/dashboard/sections/OrgSection.tsx");
-  assert.ok(!/phone|birth|телефон/i.test(sec), "🔴 у секції орг-структури телефон або дата народження");
+  assert.ok(!/birth|народж/i.test(sec), "🔴 у секції орг-структури дата народження");
+  const card = sec.slice(sec.indexOf("function PersonCard("), sec.indexOf("function UnitDialog("));
+  assert.match(card, /p\.phone\.tel \? <a className="org-tel" href=\{`tel:\$\{p\.phone\.tel\}`\}>\{p\.phone\.text\}<\/a>/, "🔴 у картці немає телефону посиланням tel:");
+  assert.match(card, /!p\.phone \? <span className="hr-muted">не вказано<\/span>/, "🔴 порожній телефон не підписаний «не вказано»");
+  const outside = sec.slice(0, sec.indexOf("function PersonCard("));
+  assert.ok(!/phone/.test(outside), "🔴 телефон вийшов за межі картки (список чи блоки дерева)");
   assert.match(sec, /href=\{`https:\/\/t\.me\/\$\{/, "🔴 немає кнопки «Telegram» на t.me/<нік>");
 });
 
 /**
- * #2711 — ПЛАВНІСТЬ (Роман 27.10.2026): картка виїжджає й ховається (закриття чекає анімацію, а не обриває її), люди
- * блоку зʼявляються з анімацією, і все це вимикається, якщо людина просила систему не рухати (`prefers-reduced-motion`).
- * 🧨 Червоніє, якщо закриття знову миттєве, або прибрати повагу до «менше руху» — у CSS чи в закритті картки.
+ * #2716 (було #2711) — ПЛАВНІСТЬ 2 (Роман 28.10.2026: «не дуже плавні згортання і розгортання дерева»): картка виїжджає й
+ * ховається; люди блоку і гілки дерева РОЗГОРТАЮТЬСЯ висотою від нуля (`org-open`) і так само ЗГОРТАЮТЬСЯ (`org-close`) —
+ * згорнуте лишається в DOM рівно на час анімації (`FOLD_MS` == тривалість `org-close` у CSS), а не зникає ривком;
+ * «менше руху» вимикає все — і в CSS, і в згортанні (тоді блок закривається одразу, без таймера).
+ * 🧨 Червоніє, якщо згортання знову миттєве (немає стану `closing` чи таймера), тривалості в коді й CSS розійдуться,
+ * люди блоку зʼявлятимуться без обгортки згортання або зникне повага до «менше руху».
  */
-test("#2711 ПЛАВНІСТЬ: картка виїжджає й ховається, люди блоку зʼявляються; «менше руху» вимикає все", () => {
+test("#2716 ПЛАВНІСТЬ 2: картка й згортання дерева в обидва боки, таймер = CSS, «менше руху» вимикає все", () => {
   const sec = FSRC("pages/dashboard/sections/OrgSection.tsx");
   const card = sec.slice(sec.indexOf("function PersonCard("), sec.indexOf("function UnitDialog("));
   assert.match(card, /const close = \(\) => \{ if \(calm\(\)\) return onClose\(\); setLeaving\(true\); window\.setTimeout\(onClose, CARD_OUT_MS\); \};/, "🔴 картка закривається без анімації або ігнорує «менше руху»");
   assert.match(card, /useEscape\(close\)/, "🔴 Esc закриває картку ривком, повз анімацію");
   assert.ok(!/onClick=\{onClose\}/.test(card.slice(0, card.indexOf("photoDlg &&"))), "🔴 фон чи «Закрити» обривають анімацію (onClose напряму)");
   assert.match(sec, /matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)/, "🔴 закриття не питає систему про «менше руху»");
+  assert.match(sec, /const toggle = \(id: number\) => fold\(\[id\], opened\.has\(id\) && !closing\.has\(id\)\);/, "🔴 «Згорнути» обходить плавне згортання");
+  const fold = sec.slice(sec.indexOf("const fold = "), sec.indexOf("const toggle = "));
+  assert.match(fold, /if \(calm\(\)\) return drop\(ids\);/, "🔴 при «менше руху» згортання все одно чекає анімацію");
+  assert.match(fold, /setClosing\(\(c\) => new Set\(\[\.\.\.c, \.\.\.ids\]\)\);[\s\S]*window\.setTimeout\([\s\S]*drop\(\[id\]\)[\s\S]*FOLD_MS\)/, "🔴 згорнуте зникає одразу, а не після анімації");
+  assert.match(fold, /window\.clearTimeout\(foldTimers\.current\.get\(id\)\)/, "🔴 повторне розгортання під час згортання не скасовує таймер — блок закриється сам");
+  assert.match(sec, /<div className=\{`org-fold \$\{out \? "out" : ""\}`\}><div className="org-fold-in"><div className="org-members">/, "🔴 люди блоку зʼявляються без обгортки згортання");
+  assert.match(sec, /<div className=\{`org-fold sub \$\{out \? "out" : ""\}`\}><div className="org-fold-in">\{sub\}<\/div><\/div>/, "🔴 гілки дерева розгортаються без обгортки згортання");
   const css = FSRC("pages/dashboard/sections/org.css");
+  assert.match(css, /@keyframes org-open \{ from \{ grid-template-rows: 0fr;/, "🔴 розгортання не від нульової висоти");
+  assert.match(css, /@keyframes org-close \{ from \{ grid-template-rows: 1fr; opacity: 1; \} to \{ grid-template-rows: 0fr;/, "🔴 згортання не до нульової висоти");
+  const ms = Number(/const FOLD_MS = (\d+);/.exec(sec)?.[1]);
+  const cssMs = Math.round(Number(/\.org-fold\.out \{ animation: org-close ([\d.]+)s/.exec(css)?.[1]) * 1000);
+  assert.ok(ms > 0 && ms === cssMs, `🔴 таймер згортання ${ms} мс ≠ анімація ${cssMs} мс — вміст зникне посеред анімації або повисить порожнім`);
   assert.match(css, /\.org-drawer \{ animation: org-slide/, "🔴 картка не виїжджає");
   assert.match(css, /\.org-drawer\.out \{ transform: translateX\(100%\); \}/, "🔴 картка не ховається");
-  assert.match(css, /\.org-members \{ animation: org-drop/, "🔴 люди блоку зʼявляються ривком");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.org \*, \.org-scrim, \.org-drawer \{ animation: none !important; transition: none !important; \}/, "🔴 «менше руху» не вимикає анімацій");
+});
+
+/**
+ * #2713 — ТЕЛЕФОН ОДНИМ ВИГЛЯДОМ (рішення Романа 28.10.2026: «номери телефонів мають бути також в карточках»). У «Наймі»
+ * шість форматів (заміряно на проді 28.10: 0XXXXXXXXX ×41, +380… ×7, 380… ×5, з пробілами й дефісами ×5, 9 цифр ×3) —
+ * у картці один «+380 XX XXX XX XX» і `tel:`. Нерозпізнане (два номери, закордонний, текст) — як записано, без посилання;
+ * порожнє й сентинел («-») — `null`.
+ * 🧨 Червоніє, якщо загубити +380, приклеїти зайвий нуль, зробити посилання з нерозпізнаного або сховати його.
+ */
+test("#2713 ТЕЛЕФОН: шість форматів «Найму» → +380 XX XXX XX XX і tel:, нерозпізнане — як записано, порожнє — null", async () => {
+  const { phoneView } = await import("./orgTree.js");
+  const ok = { text: "+380 50 111 22 33", tel: "+380501112233" };
+  for (const raw of ["0501112233", "+380501112233", "380501112233", "050 111-22-33", "(050) 111 22 33", "501112233", "501 112 233", " 0501112233 "])
+    assert.deepEqual(phoneView(raw), ok, `🔴 «${raw}» не зведено до одного вигляду`);
+  for (const raw of ["0501112233, 0671112233", "+48 601 234 567", "05011122", "0050111223344", "дзвонити Ользі"])
+    assert.deepEqual(phoneView(raw), { text: raw, tel: null }, `🔴 нерозпізнане «${raw}» перекручене або стало посиланням`);
+  for (const raw of [null, undefined, "", "   ", "-", "—"]) assert.equal(phoneView(raw), null, `🔴 порожнє чи сентинел «${raw}» не стало «не вказано»`);
+});
+
+/**
+ * #2715 — РОЗКЛАДКА: ВІДДІЛ ОКРЕМОЮ ГІЛКОЮ (рішення Романа 28.10.2026: «лідогени окремо, над ними напис „маркетинговий
+ * відділ“, але теж від КВП тягнуться»). Прості команди під блоком — сіткою по чотири, якщо їх більше чотирьох; дитина з
+ * власними блоками — окремою гілкою від того самого блоку, поруч із сіткою. Чотири й менше простих — усі гілками, як було
+ * (саме так стоїть «Операційне управління»: 4 відділи + Комерційний).
+ * 🧨 Червоніє, якщо відділ із власними блоками знову потрапить у сітку команд, сітка перестане ділитись по чотири або межа
+ * «більше чотирьох» зсунеться.
+ */
+test("#2715 РОЗКЛАДКА: відділ із власними блоками — окремою гілкою, команди — сіткою по чотири, межа 4/5", async () => {
+  const ts = await import("typescript");
+  const js = ts.transpileModule(FSRC("pages/dashboard/sections/orgLayout.ts"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const { splitKids } = await import(`data:text/javascript,${encodeURIComponent(js)}`);
+  const deep = new Set(["mk", "sales"]);
+  const has = (c: string) => deep.has(c);
+  assert.deepEqual(splitKids(["mk", "t1", "t2", "t3", "t4", "t5", "t6"], has), { branches: ["mk"], rows: [["t1", "t2", "t3", "t4"], ["t5", "t6"]] },
+    "🔴 «Маркетинговий відділ» не окремою гілкою або команди не сіткою по чотири");
+  assert.deepEqual(splitKids(["hr", "fin1", "fin2", "it", "sales"], has), { branches: ["hr", "fin1", "fin2", "it", "sales"], rows: [] },
+    "🔴 «Операційне управління» (4 відділи + Комерційний) розкладено інакше, ніж було");
+  assert.deepEqual(splitKids(["t1", "t2", "t3", "t4", "t5"], has), { branches: [], rows: [["t1", "t2", "t3", "t4"], ["t5"]] }, "🔴 пʼять команд не сіткою");
+  assert.deepEqual(splitKids(["t1", "t2", "t3", "t4"], has).rows, [], "дзеркало: чотири команди — рядом, без сітки");
+  const sec = FSRC("pages/dashboard/sections/OrgSection.tsx");
+  const br = sec.slice(sec.indexOf("const branch = "), sec.indexOf("const unitName = "));
+  assert.match(br, /splitKids\(ch, \(c\) => kids\(c\.id\)\.length > 0\)/, "🔴 дерево не бере розкладку з splitKids");
+  assert.match(br, /branches\.length \? <ul>\{branches\.map\(branch\)\}<li key="grid" className="org-gridli">\{grid\}<\/li><\/ul>/, "🔴 окрема гілка й сітка не поруч від одного блоку");
+  assert.match(FSRC("pages/dashboard/sections/org.css"), /\.org-gridli > \.org-vgrid \{ padding-top: 0; \}/, "🔴 сітка під гілкою з подвійним стовбуром");
+});
+
+/**
+ * #2717 — ЛІНІЇ ВИДНО (Роман 28.10.2026: «лінії трошки сірі і вузькі, нічого не видно»): усі зʼєднання дерева — однією
+ * парою змінних `--org-lw` (2px) і `--org-line` (колір підписів теми, а не рамки), у світлій і темній темі однаково.
+ * 🧨 Червоніє, якщо повернути 1.5px чи колір рамки хоч в одному зʼєднанні або звузити лінію.
+ */
+test("#2717 ЛІНІЇ: зʼєднання дерева 2px кольором підписів, жодного 1.5px чи кольору рамки", () => {
+  const css = FSRC("pages/dashboard/sections/org.css");
+  assert.match(css, /\.org \{[^}]*--org-line: var\(--text-muted\); --org-lw: 2px; \}/, "🔴 лінії знову тонкі або кольору рамки");
+  const lines = css.split("\n").filter((l) => /^\.org-(tree|vgrid|vrow|side)[^{]*\{[^}]*border-(top|left|right):/.test(l));
+  assert.ok(lines.length >= 8, `🔴 правил зʼєднань знайдено ${lines.length} — гейту нема що перевіряти`);
+  for (const l of lines) assert.match(l, /border-(top|left|right): var\(--org-lw\) (solid|dashed) var\(--org-line\)/, `🔴 зʼєднання не на змінних: ${l}`);
+  assert.ok(!/(?<![\d.])1\.5px/.test(css), "🔴 у стилях орг-структури лишилось 1.5px");
+});
+
+/**
+ * #2718 — ЖИВИЙ SQL «МАРКЕТИНГОВИЙ ВІДДІЛ» (рішення Романа 28.10.2026): разово під «Комерційним відділом» зʼявляється
+ * блок-контейнер без команди, і Лідогенерація переходить у нього — лише якщо досі стоїть під КВП; у журнал — один рядок.
+ * Повторний викат нічого не дублює; видалений руками блок не повертається; Лідогенерацію, яку вже перенесли деінде, не
+ * чіпає.
+ * 🧨 Червоніє, якщо прибрати позначку разовості, переносити Лідогенерацію безумовно або дати блоку команду.
+ */
+test("#2718 ЖИВИЙ SQL: «Маркетинговий відділ» разово під КВП, Лідогенерація в нього, видалене не повертається", async (t) => {
+  const x = await scratch(t); if (!x) return;
+  const { c } = x;
+  try {
+    await c.query(x.schema);
+    const u = async (k: string) => (await c.query(`SELECT id, parent_id, name, team_id, dashboard_team_id, label FROM org_units WHERE seed_key = $1`, [k])).rows[0];
+    const logN = async () => (await c.query(`SELECT count(*)::int AS n FROM org_log WHERE action = 'migration' AND summary LIKE '%Маркетинговий відділ%'`)).rows[0].n as number;
+    const sales = await u("sales"), mk = await u("marketing");
+    assert.ok(mk, "🔴 блоку «Маркетинговий відділ» немає");
+    assert.deepEqual([mk.parent_id, mk.name, mk.team_id, mk.dashboard_team_id, mk.label], [sales.id, "Маркетинговий відділ", null, null, null],
+      "🔴 «Маркетинговий відділ» не контейнером під «Комерційним відділом»");
+    assert.equal((await u("lid")).parent_id, mk.id, "🔴 Лідогенерація не перейшла в «Маркетинговий відділ»");
+    assert.equal(await logN(), 1, "🔴 у журналі не рівно один запис про новий блок");
+    await c.query(x.schema);
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM org_units WHERE name = 'Маркетинговий відділ'`)).rows[0].n, 1, "🔴 повторний викат задублював блок");
+    assert.equal(await logN(), 1, "🔴 повторний викат задублював запис у журналі");
+    // Руками: Лідогенерацію повернули під КВП, блок видалили — наступний викат цього не відкочує.
+    await c.query(`UPDATE org_units SET parent_id = $1 WHERE seed_key = 'lid'`, [sales.id]);
+    await c.query(`DELETE FROM org_units WHERE seed_key = 'marketing'`);
+    await c.query(x.schema);
+    assert.equal(await u("marketing"), undefined, "🔴 видалений руками блок повернувся наступним викатом");
+    assert.equal((await u("lid")).parent_id, sales.id, "🔴 викат знову переніс Лідогенерацію");
+    // Дзеркало: база, де разовий крок ще не йшов, але Лідогенерацію вже перенесли деінде, — блок є, Лідогенерація лишається.
+    const ops = await u("ops");
+    await c.query(`UPDATE org_units SET parent_id = $1 WHERE seed_key = 'lid'`, [ops.id]);
+    await c.query(`DELETE FROM org_migrations WHERE key = 'marketing-2026-10-28'`);
+    await c.query(x.schema);
+    assert.ok(await u("marketing"), "дзеркало: без позначки крок виконується");
+    assert.equal((await u("lid")).parent_id, ops.id, "🔴 Лідогенерацію, перенесену руками, крок забрав у маркетинг");
+  } finally { await x.done(); }
 });
 
 /**

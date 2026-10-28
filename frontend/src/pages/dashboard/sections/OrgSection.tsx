@@ -10,6 +10,7 @@ import { OrgTeamsCard, TeamOptions, useTeams } from "./OrgTeams";
 import { createOrgTeam } from "../../../api";
 import "./hiring.css";
 import "./org.css";
+import { splitKids } from "./orgLayout";
 
 /**
  * 🏢 ОРГ СТРУКТУРА (задача 7062; ТЗ Даші 23.10.2026, вигляд затвердив ОД; рішення Романа 27.10.2026).
@@ -25,6 +26,8 @@ import "./org.css";
 const narrow = () => typeof window !== "undefined" && window.innerWidth < 700;
 /** Плавність (Роман 27.10.2026): картка ховається за стільки ж, скільки виїжджає; без анімацій — якщо людина їх вимкнула в системі. */
 const CARD_OUT_MS = 200;
+/** Згортання блоку: стільки триває анімація, перш ніж вміст зникне з DOM (дорівнює `org-close` у CSS). */
+const FOLD_MS = 260;
 const calm = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 type SortKey = "name" | "position" | "unit" | "telegram";
 
@@ -47,6 +50,9 @@ export function OrgSection() {
   const [dept, setDept] = useState<OrgDept | "">("");
   const [noTg, setNoTg] = useState(false);
   const [open, setOpen] = useState<Set<number> | null>(null);
+  const [closing, setClosing] = useState<Set<number>>(new Set());
+  const foldTimers = useRef(new Map<number, number>());
+  useEffect(() => () => { for (const t of foldTimers.current.values()) window.clearTimeout(t); }, []);
   const [card, setCard] = useState<number | null>(null);
   const [edit, setEdit] = useState(false);
   const [unitDlg, setUnitDlg] = useState<OrgUnit | "new" | null>(null);
@@ -66,7 +72,23 @@ export function OrgSection() {
   const sides = useCallback((id: number) => (data?.units ?? []).filter((u) => u.parentId === id && u.side), [data]);
   // Як у прототипі: за замовчуванням розгорнуто ВСЕ — кожна команда з людьми й ніками.
   const opened = useMemo(() => open ?? new Set((data?.units ?? []).map((u) => u.id)), [open, data]);
-  const toggle = (id: number) => setOpen(() => { const s = new Set(opened); if (s.has(id)) s.delete(id); else s.add(id); return s; });
+  // Плавно (Роман 28.10.2026): розгорнуте зʼявляється з анімацією; згорнуте спершу ховається (`closing`), і лише
+  // через FOLD_MS зникає з DOM. Повторний клік під час згортання скасовує його таймер.
+  const fold = (ids: number[], shut: boolean) => {
+    const base = (cur: Set<number> | null) => new Set(cur ?? (data?.units ?? []).map((u) => u.id));
+    const unclose = (list: number[]) => setClosing((c) => { const x = new Set(c); list.forEach((id) => x.delete(id)); return x; });
+    if (!shut) {
+      ids.forEach((id) => { window.clearTimeout(foldTimers.current.get(id)); foldTimers.current.delete(id); });
+      unclose(ids);
+      setOpen((cur) => { const x = base(cur); ids.forEach((id) => x.add(id)); return x; });
+      return;
+    }
+    const drop = (list: number[]) => setOpen((cur) => { const x = base(cur); list.forEach((id) => x.delete(id)); return x; });
+    if (calm()) return drop(ids);
+    setClosing((c) => new Set([...c, ...ids]));
+    for (const id of ids) foldTimers.current.set(id, window.setTimeout(() => { foldTimers.current.delete(id); drop([id]); unclose([id]); }, FOLD_MS));
+  };
+  const toggle = (id: number) => fold([id], opened.has(id) && !closing.has(id));
 
   const query = q.trim().toLowerCase();
   const match = (p: OrgPerson) => !query || [p.name, p.position ?? "", p.telegram ?? ""].join(" ").toLowerCase().includes(query);
@@ -123,7 +145,9 @@ export function OrgSection() {
   };
 
   const node = (u: OrgUnit) => {
-    const isOpen = opened.has(u.id) || !!query;
+    const shown = opened.has(u.id) || !!query;
+    const out = !query && closing.has(u.id);
+    const isOpen = shown && !out;
     const ch = kids(u.id);
     const dim = (dept && u.dept !== dept && u.dept !== "top") || (query && !unitHit(u));
     const hit = query && [u.headId, ...u.memberIds].some((id) => id != null && match(people.get(id)!));
@@ -139,7 +163,10 @@ export function OrgSection() {
         </div>
         {u.headId != null ? personBtn(u.headId)
           : <span className="org-pr">{edit ? "Керівника не вказано · " : ""}{ch.length ? `${ch.length} команди · ` : ""}{deep(u)} люд.</span>}
-        {n > 0 && (root || isOpen) && <div className="org-members">{u.memberIds.map((id) => personBtn(id, small))}</div>}
+        {n > 0 && root && <div className="org-members">{u.memberIds.map((id) => personBtn(id, small))}</div>}
+        {n > 0 && !root && shown && (
+          <div className={`org-fold ${out ? "out" : ""}`}><div className="org-fold-in"><div className="org-members">{u.memberIds.map((id) => personBtn(id, small))}</div></div></div>
+        )}
         {!root && (n > 0 || ch.length > 0) && (
           <div className="org-nfoot">
             <span className="org-pr">{deep(u)} люд.{edit && u.label ? ` · «${u.label}»` : ""}</span>
@@ -152,16 +179,19 @@ export function OrgSection() {
 
   const branch = (u: OrgUnit): ReactElement => {
     const ch = kids(u.id);
-    const isOpen = opened.has(u.id) || !!query;
-    const leafs = ch.length > 4 && ch.every((c) => kids(c.id).length === 0);
-    const rows: OrgUnit[][] = [];
-    if (leafs) for (let i = 0; i < ch.length; i += 4) rows.push(ch.slice(i, i + 4));
+    const shown = opened.has(u.id) || !!query;
+    const out = !query && closing.has(u.id);
+    // Команди без власних блоків — сіткою по чотири, як у прототипі. Відділ із власними блоками (напр. «Маркетинговий
+    // відділ» з Лідогенерацією, Роман 28.10.2026) — окремою гілкою від того самого керівника, поруч із сіткою (#2715).
+    const { branches, rows } = splitKids(ch, (c) => kids(c.id).length > 0);
+    const grid = <div className="org-vgrid">{rows.map((r, i) => <div key={i} className="org-vrow">{r.map(node)}</div>)}</div>;
+    const sub = !rows.length ? <ul>{ch.map(branch)}</ul>
+      : branches.length ? <ul>{branches.map(branch)}<li key="grid" className="org-gridli">{grid}</li></ul>
+      : grid;
     return (
       <li key={u.id}>
         <div className="org-nwrap">{node(u)}{sides(u.id).map((s) => <div key={s.id} className="org-side">{node(s)}</div>)}</div>
-        {ch.length > 0 && isOpen && (leafs
-          ? <div className="org-vgrid">{rows.map((r, i) => <div key={i} className="org-vrow">{r.map(node)}</div>)}</div>
-          : <ul>{ch.map(branch)}</ul>)}
+        {ch.length > 0 && shown && <div className={`org-fold sub ${out ? "out" : ""}`}><div className="org-fold-in">{sub}</div></div>}
       </li>
     );
   };
@@ -176,14 +206,14 @@ export function OrgSection() {
     <th><button onClick={() => setSort((s) => ({ k, up: s.k === k ? !s.up : true }))}>{label}{sort.k === k ? (sort.up ? " ▲" : " ▼") : ""}</button></th>
   );
   const allIds = data.units.map((u) => u.id);
-  const allOpen = allIds.every((id) => opened.has(id));
+  const allOpen = allIds.every((id) => opened.has(id) && !closing.has(id));
   const s = data.stats;
 
   return (
     <div className="org">
       <div>
         <h1>Орг структура</h1>
-        <div className="org-sub">Хто де працює і як з ним звʼязатися. Натисни на людину, щоб написати їй у Telegram.</div>
+        <div className="org-sub">Хто де працює і як з ним звʼязатися. Натисни на людину, щоб написати їй у Telegram або подзвонити.</div>
       </div>
       <div className="org-tool">
         <input className="hr-inp org-search" type="search" placeholder="Пошук: імʼя, посада або @нік" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук людини" />
@@ -195,7 +225,9 @@ export function OrgSection() {
           <button className={view === "tree" ? "on" : ""} onClick={() => setView("tree")}>Дерево</button>
           <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}>Список</button>
         </div>
-        {view === "tree" && <button className="hr-btn" onClick={() => setOpen(allOpen ? new Set(data.units.filter((u) => kids(u.id).length > 0).map((u) => u.id)) : new Set(allIds))}>{allOpen ? "Згорнути все" : "Розгорнути все"}</button>}
+        {view === "tree" && <button className="hr-btn" onClick={() => (allOpen
+          ? fold(allIds.filter((id) => kids(id).length === 0), true)
+          : fold(allIds.filter((id) => !opened.has(id) || closing.has(id)), false))}>{allOpen ? "Згорнути все" : "Розгорнути все"}</button>}
         {data.canEdit && <button className={`hr-btn ${edit ? "p" : ""}`} onClick={() => setEdit((x) => !x)}>{edit ? "Готово" : "Редагувати"}</button>}
       </div>
       <div className="org-stats">
@@ -270,9 +302,9 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
   const [busy, setBusy] = useState(false);
   const [photoDlg, setPhotoDlg] = useState(false);
   useEffect(() => { setNick(p.telegram ?? ""); }, [p.id, p.telegram]);
-  const copy = () => {
-    if (!p.telegram) return;
-    (navigator.clipboard?.writeText(p.telegram) ?? Promise.reject()).then(() => toast(`Скопійовано: ${p.telegram}`)).catch(() => toast("Виділи нік і скопіюй вручну"));
+  const copy = (v: string | null | undefined, what: string) => {
+    if (!v) return;
+    (navigator.clipboard?.writeText(v) ?? Promise.reject()).then(() => toast(`Скопійовано: ${v}`)).catch(() => toast(`Виділи ${what} і скопіюй вручну`));
   };
   const saveNick = async () => {
     setBusy(true);
@@ -300,13 +332,22 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
             {p.telegram ? <span className="org-tg" style={{ fontSize: 14, fontWeight: 650 }}>{p.telegram}</span>
               : <span className="hr-muted">{p.telegramInvalid ? "у «Наймі» записано не нік — не показуємо" : "не вказано"}</span>}
           </span>
-          {p.telegram && <button className="hr-btn xs" onClick={copy}>Копіювати</button>}
+          {p.telegram && <button className="hr-btn xs" onClick={() => copy(p.telegram, "нік")}>Копіювати</button>}
         </div>
         {p.telegram && (
           <div className="org-acts">
             <a href={`https://t.me/${p.telegram.slice(1)}`} target="_blank" rel="noopener noreferrer">Написати в Telegram</a>
           </div>
         )}
+        {/* Телефон — у картці, усім (рішення Романа 28.10.2026); нерозпізнаний номер — як записано, без посилання. */}
+        <div className="org-row">
+          <span><span className="org-lbl">Телефон</span><br />
+            {!p.phone ? <span className="hr-muted">не вказано</span>
+              : p.phone.tel ? <a className="org-tel" href={`tel:${p.phone.tel}`}>{p.phone.text}</a>
+              : <span className="org-tel">{p.phone.text}</span>}
+          </span>
+          {p.phone && <button className="hr-btn xs" onClick={() => copy(p.phone?.tel ?? p.phone?.text, "номер")}>Копіювати</button>}
+        </div>
         {p.isMe && (
           <div className="org-mine">
             <span className="org-lbl">Моє</span>

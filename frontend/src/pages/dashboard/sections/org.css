@@ -1,5 +1,6 @@
 /* 🏢 Орг структура (задача 7062) — за прототипом Даші 23.10.2026; кольори лише зі змінних теми (світла й темна). */
-.org { display: flex; flex-direction: column; gap: 14px; }
+/* лінії дерева — товщі й темніші (Роман 28.10.2026: «сірі і вузькі, нічого не видно») */
+.org { display: flex; flex-direction: column; gap: 14px; --org-line: var(--text-muted); --org-lw: 2px; }
 .org h1 { font-size: 22px; margin: 0; }
 .org-sub { color: var(--text-muted); font-size: 13px; margin-top: 2px; }
 .org-tool { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -18,30 +19,32 @@
 .org-tree ul { padding-top: 22px; position: relative; }
 .org-tree li { position: relative; padding: 22px 8px 0; display: flex; flex-direction: column; align-items: center; }
 .org-tree > li { padding-top: 0; }
-.org-tree li::before, .org-tree li::after { content: ""; position: absolute; top: 0; right: 50%; width: 50%; height: 22px; border-top: 1.5px solid var(--border-strong); }
-.org-tree li::after { right: auto; left: 50%; border-left: 1.5px solid var(--border-strong); }
+.org-tree li::before, .org-tree li::after { content: ""; position: absolute; top: 0; right: 50%; width: 50%; height: 22px; border-top: var(--org-lw) solid var(--org-line); }
+.org-tree li::after { right: auto; left: 50%; border-left: var(--org-lw) solid var(--org-line); }
 .org-tree li:only-child::before, .org-tree li:only-child::after { display: none; }
 .org-tree li:only-child { padding-top: 0; }
 .org-tree li:first-child::before, .org-tree li:last-child::after { border: 0; }
-.org-tree li:last-child::before { border-right: 1.5px solid var(--border-strong); border-radius: 0 8px 0 0; }
+.org-tree li:last-child::before { border-right: var(--org-lw) solid var(--org-line); border-radius: 0 8px 0 0; }
 .org-tree li:first-child::after { border-radius: 8px 0 0 0; }
-.org-tree ul::before { content: ""; position: absolute; top: 0; left: 50%; height: 22px; border-left: 1.5px solid var(--border-strong); }
+.org-tree ul::before { content: ""; position: absolute; top: 0; left: 50%; height: 22px; border-left: var(--org-lw) solid var(--org-line); }
 .org-tree > li::before, .org-tree > li::after { display: none; }
 .org-nwrap { position: relative; display: flex; gap: 40px; align-items: center; }
 .org-side { position: relative; }
-.org-side::before { content: ""; position: absolute; right: 100%; top: 50%; width: 40px; border-top: 1.5px dashed var(--border-strong); }
+.org-side::before { content: ""; position: absolute; right: 100%; top: 50%; width: 40px; border-top: var(--org-lw) dashed var(--org-line); }
 .org-side .org-node { border-style: dashed; }
 /* багато блоків-команд — рядками по чотири, як у прототипі (комерційний відділ 4 + 3) */
 .org-vgrid { display: flex; flex-direction: column; align-items: center; position: relative; padding-top: 22px; }
 /* одна вертикаль через усю сітку (видно в проміжку між блоками), останній ряд закриває її своїм тлом — як у прототипі */
-.org-vgrid::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1.5px solid var(--border-strong); }
+.org-vgrid::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: var(--org-lw) solid var(--org-line); }
 .org-vrow { display: flex; gap: 16px; align-items: flex-start; padding-top: 16px; position: relative; }
 /* горизонталь — від центру першого блоку до центру останнього (107px = половина ширини блоку) */
-.org-vrow::after { content: ""; position: absolute; top: 0; left: 107px; right: 107px; border-top: 1.5px solid var(--border-strong); }
+.org-vrow::after { content: ""; position: absolute; top: 0; left: 107px; right: 107px; border-top: var(--org-lw) solid var(--org-line); }
 .org-vrow > .org-node { position: relative; }
-.org-vrow > .org-node::before { content: ""; position: absolute; top: -17.5px; left: 50%; height: 16px; border-left: 1.5px solid var(--border-strong); }
+.org-vrow > .org-node::before { content: ""; position: absolute; top: -17px; left: 50%; height: 16px; border-left: var(--org-lw) solid var(--org-line); }
 .org-vrow + .org-vrow { margin-top: 20px; }
 .org-vrow:last-child { background: var(--bg); }
+/* сітка команд поруч з окремою гілкою (Маркетинговий відділ): стовбур уже дала гілка li */
+.org-gridli > .org-vgrid { padding-top: 0; }
 
 .org-node { width: 214px; box-sizing: border-box; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--r-2xl); padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
 .org-node.hit { border-color: var(--brand); box-shadow: 0 0 0 3px var(--danger-bg); }
@@ -75,6 +78,7 @@
 .org-list tr:hover td { background: var(--surface-2); }
 .org-tbl { overflow-x: auto; }
 .org-write { text-decoration: none; white-space: nowrap; }
+.org-tel { font-size: 14px; font-weight: 650; color: var(--info); text-decoration: none; }
 
 /* картка людини */
 .org-scrim { position: fixed; inset: 0; background: rgba(10, 10, 14, .35); z-index: 2600; }
@@ -101,9 +105,15 @@
 /* плавність (Роман 27.10.2026): картка виїжджає й ховається, люди блоку зʼявляються, вигляд перемикається без ривка */
 @keyframes org-fade { from { opacity: 0; } }
 @keyframes org-slide { from { transform: translateX(100%); } }
-@keyframes org-drop { from { opacity: 0; transform: translateY(-6px); } }
 .org-treebox, .org-tbl { animation: org-fade .22s ease-out; }
-.org-members { animation: org-drop .24s ease-out; }
+/* згортання й розгортання (Роман 28.10.2026): висота їде від 0 до вмісту й назад; згорнуте зникає з DOM після org-close */
+@keyframes org-open { from { grid-template-rows: 0fr; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }
+@keyframes org-close { from { grid-template-rows: 1fr; opacity: 1; } to { grid-template-rows: 0fr; opacity: 0; } }
+.org-fold { display: grid; grid-template-rows: 1fr; animation: org-open .32s cubic-bezier(.2, .8, .2, 1); }
+.org-fold.out { animation: org-close .26s ease-in forwards; }
+.org-fold-in { min-height: 0; overflow: hidden; }
+/* у гілки дерева тіні блоків по краях: запас, щоб обрізання їх не зʼїдало */
+.org-fold.sub > .org-fold-in { padding: 0 14px 14px; margin: 0 -14px -14px; }
 .org-node { transition: box-shadow .2s, border-color .2s, opacity .25s, transform .2s; }
 .org-node:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg, var(--shadow)); }
 .org-person, .org-seg button, .org-tog, .org-write { transition: background-color .15s, color .15s; }

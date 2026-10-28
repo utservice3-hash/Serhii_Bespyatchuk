@@ -6946,6 +6946,23 @@ UPDATE roles SET permissions = permissions || '{"manage_teams": true}'::jsonb
 UPDATE roles SET permissions = permissions - 'manage_teams'
  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr');
 REVOKE ALL ON dashboard_teams FROM ai_readonly;
+-- 📣 «Маркетинговий відділ» над Лідогенерацією (рішення Романа 28.10.2026: «лідогени окремо, над ними напис „маркетинговий
+-- відділ“, але теж від КВП тягнуться»). Разово, з позначкою в `org_migrations`: блок-контейнер без команди під
+-- «Комерційним відділом», і Лідогенерація переходить у нього — лише якщо досі стоїть під КВП. Видалений чи перенесений
+-- руками блок наступний викат не повертає. У журнал — дія `migration` (не `unit.*`: це зробив викат, а не людина в «Редагувати»).
+-- Revert коду блоку не прибирає — його видаляють у «Редагувати».
+WITH step AS (INSERT INTO org_migrations (key) VALUES ('marketing-2026-10-28') ON CONFLICT DO NOTHING RETURNING key),
+sales AS (SELECT id FROM org_units WHERE seed_key = 'sales'),
+mk AS (INSERT INTO org_units (seed_key, parent_id, name, dept, sort)
+       SELECT 'marketing', sales.id, 'Маркетинговий відділ', 'sales', -10 FROM sales WHERE EXISTS (SELECT 1 FROM step)
+       ON CONFLICT (seed_key) DO NOTHING RETURNING id),
+moved AS (UPDATE org_units l SET parent_id = mk.id, updated_at = now() FROM mk, sales
+           WHERE l.seed_key = 'lid' AND l.parent_id = sales.id RETURNING l.id)
+INSERT INTO org_log (action, unit_id, summary, after)
+SELECT 'migration', mk.id, 'Створено блок «Маркетинговий відділ» під «Комерційним відділом»'
+       || CASE WHEN EXISTS (SELECT 1 FROM moved) THEN ', у нього перенесено «Лідогенерацію»' ELSE '' END || ' (рішення Романа 28.10.2026)',
+       jsonb_build_object('name', 'Маркетинговий відділ', 'parentId', (SELECT id FROM sales), 'moved', (SELECT id FROM moved))
+  FROM mk;
 -- 📅 КАЛЕНДАР ОПЛАТ (Тетяна, задача #6369, 27.10.2026; `core/finRecurring.ts`): нагадування про періодичні витрати —
 -- окремо від Плану/факту, нічого не рахує в результаті. `anchor_day` — «день оплати» з першої дати: 31-го в коротшому
 -- місяці нагадує в останній день, а наступного — знову 31-го (без «зʼїзду», як у `monthKeys`, борг 19). Нічого не
