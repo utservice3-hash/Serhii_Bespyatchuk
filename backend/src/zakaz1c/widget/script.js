@@ -69,9 +69,9 @@ define(["jquery"], function ($) {
       + "--ok:#173a26;--okt:#6fd496;--part:#3a3016;--partt:#f0c46a;--bad:#3d1c1f;--badt:#ff9a9a;--strip:#26323e;--stage:#2c3844}"
       + P + " *{box-sizing:border-box}"
       + P + " .lbl{display:block;font-size:11.5px;color:var(--mut);margin-bottom:4px}"
-      + P + " .in{width:100%;font:inherit;font-size:13.5px;background:var(--fld);border:1px solid var(--line);border-radius:3px;padding:7px 9px;color:var(--txt)}"
+      + P + " .in{height:36px;width:100%;font:inherit;font-size:13.5px;background:var(--fld);border:1px solid var(--line);border-radius:3px;padding:7px 9px;color:var(--txt)}"
       + P + " .in:disabled," + P + " .ro{opacity:.7;background:var(--strip)}"
-      + P + " .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 12px}"
+      + P + " .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 12px;align-items:start}" + P + " textarea.in{height:auto}"
       + P + " .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}"
       + P + " .btn{font:inherit;font-size:13px;border:1px solid var(--line);background:transparent;color:var(--txt);border-radius:3px;padding:7px 14px;cursor:pointer;white-space:nowrap}"
       + P + " .btn:hover{border-color:var(--acc)}"
@@ -102,7 +102,7 @@ define(["jquery"], function ($) {
       + P + " .msg{border-radius:3px;padding:8px 12px;font-size:13px;margin-top:10px}"
       + P + " .msg.err{background:var(--bad);color:var(--badt)}" + P + " .msg.ok{background:var(--ok);color:var(--okt)}" + P + " .msg.warn{background:var(--part);color:var(--partt)}"
       + P + " .tot{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:var(--mut)}" + P + " .tot b{color:var(--txt)}"
-      + P + " .hint{font-size:11px;color:var(--mut)}"
+      + P + " .hint{display:block;margin-top:4px;font-size:11px;color:var(--mut)}"
       + P + " .prev{border:1px dashed var(--line);border-radius:4px;padding:8px 10px;font-size:12.5px;display:grid;gap:4px;overflow-wrap:anywhere}"
       + P + " .x{background:none;border:0;color:var(--mut);font-size:18px;cursor:pointer;padding:0 4px}"
       + P + " table{width:100%;border-collapse:collapse;margin-top:8px}"
@@ -111,7 +111,7 @@ define(["jquery"], function ($) {
       + P + " .shade{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;padding:60px 16px;z-index:10000}"
       + P + " .modal{width:min(560px,100%);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:16px 18px;display:grid;gap:12px}"
       + P + " .tg{white-space:pre-wrap;background:var(--strip);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:0;font:inherit;font-size:12.5px}"
-      + "@media (max-width:760px){" + P + " .steps," + P + " .grid{grid-template-columns:minmax(0,1fr)}}";
+      + "@media (max-width:760px){" + P + " .steps," + P + " .grid{grid-template-columns:minmax(0,1fr)}" + P + " .grid>*{grid-column:auto!important}}";
 
     /* ——— дані ——— */
 
@@ -240,8 +240,8 @@ define(["jquery"], function ($) {
         + "<label><span class='lbl'>Оплатити до</span><input class='in' type='date' min='" + esc(d.today) + "' data-k='dueDate' value='" + esc(f.dueDate) + "'></label></div>"
         + items + "<div class='row'><button class='btn sm' data-z1c='add'>+ позиція</button></div>"
         + "<div class='grid'>"
-        + "<label><span class='lbl'>Дата акту <span class='hint'>лише якщо впевнені, інакше порожньо</span></span><input class='in' type='date' data-k='actDate' value='" + esc(f.actDate) + "'></label>"
-        + "<label style='grid-column:span 2'><span class='lbl'>Коментар для бухгалтерії</span><input class='in' data-k='crmComment' value='" + esc(f.crmComment) + "' placeholder='необовʼязково, у 1С піде в «Коментар СРМ»'></label></div>"
+        + "<label><span class='lbl'>Дата акту</span><input class='in' type='date' data-k='actDate' value='" + esc(f.actDate) + "'><span class='hint'>лише якщо впевнені, інакше порожньо</span></label>"
+        + "<label style='grid-column:span 3'><span class='lbl'>Коментар для бухгалтерії</span><input class='in' data-k='crmComment' value='" + esc(f.crmComment) + "' placeholder='необовʼязково, у 1С піде в «Коментар СРМ»'></label></div>"
         + "<div class='hint'>" + esc(d.waits.fields) + "</div>"
         + "<label class='row' style='gap:8px'><input type='checkbox' data-k='stamp'" + (f.stamp ? " checked" : "") + "> PDF з печаткою</label>"
         + "<div class='prev'><span class='lbl' style='margin:0'>Так піде в 1С, як зараз із Genesis:</span><span>Комментарий: <b>" + esc(d.managerName ? d.managerName + ", " : "")
