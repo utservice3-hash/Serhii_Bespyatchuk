@@ -9,6 +9,7 @@ import { parseCsv, buildRows, guessTarget, validateMapping, shortKey, ImportErro
 import { prepareSecret, insertSecrets, SecretError, type Db } from "./secrets.js";
 import { SecretKeyMissing } from "./secretBox.js";
 import { DOC_COUNTS_SQL } from "./employeeDocs.js";
+import { PERSON_TEAM_JOINS } from "./teams.js";
 
 const MAX_ROWS = 3000, MAX_COLS = 120;
 const NAME = `COALESCE(NULLIF(u.full_name, ''), m.name, u.email)`;
@@ -322,9 +323,14 @@ export async function listEmployees(db: Db) {
             e.dismiss_reason, e.note, e.extra, e.user_id, ${NAME} AS account_name, u.is_active AS account_active,
             e.manager_id, km.name AS kommo_name, o.stage AS offboarding, o.last_day::text AS last_day, ${DOC_COUNTS_SQL},
             (SELECT count(*)::int FROM employee_secrets s WHERE (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
-            e.updated_at
+            e.updated_at,
+            -- 👥 Справжня команда (27.10.2026, \`core/teams.ts\`): з Kommo — заблокована; інакше — вибрана в картці (\`team_ref\`).
+            COALESCE((SELECT name FROM teams WHERE id = COALESCE(tm1.team_id, tm2.team_id, e.team_id, tdt.kommo_team_id)), tdt.name) AS team_name,
+            (COALESCE(tm1.team_id, tm2.team_id) IS NOT NULL) AS team_locked,
+            CASE WHEN e.team_id IS NOT NULL THEN 'k:' || e.team_id WHEN e.dashboard_team_id IS NOT NULL THEN 'd:' || e.dashboard_team_id END AS team_ref
        FROM employees e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m ON m.id = u.manager_id
        LEFT JOIN managers km ON km.id = e.manager_id LEFT JOIN employee_offboarding o ON o.employee_id = e.id
+       ${PERSON_TEAM_JOINS}
       ORDER BY (e.status = 'dismissed'), e.full_name`)).rows;
 }
 

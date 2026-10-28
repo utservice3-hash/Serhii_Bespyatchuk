@@ -5,14 +5,13 @@ import { useToast, type Toast } from "../../../components/Toasts";
 import {
   fetchFinMonth, fetchFinItem, createFin, updateFin, deleteFin, restoreFin, setFinItemOff, saveFinValues, saveFinNote,
   setFinApproval, finErrorData, hiringError, setFinItemSections, FIN_SECTIONS, fetchFinLog, type FinLogRow,
-  fetchBankAccounts, type BankAccount, syncFinApprovals,
+  fetchBankAccounts, type BankAccount, syncFinApprovals, fetchPlanHints, addHintToPlan, type PlanHint,
   type FinMonth, type FinSection, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
 import { rowVisible, asInput, planFromPrevious } from "./financeView";
 import { FinanceWeekTab } from "./FinanceWeekTab";
 import { FinancePaymentsTab } from "./FinancePaymentsTab";
 import { FinanceCalendarTab } from "./FinanceCalendarTab";
-import { FIN_TAB_EVENT } from "../../../components/useFinanceReminders";
 import { FinanceMonthResultTab } from "./FinanceMonthResultTab";
 import { FinanceMonthDealsTab, type ManagerPick } from "./FinanceMonthDealsTab";
 import { kyivYm, shiftYm } from "./financeMonthShared";
@@ -46,6 +45,23 @@ const fmtTs = (ts: string) => new Date(ts).toLocaleString("uk-UA", { timeZone: "
 const LS_TAB = "fin.tab";
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* приватне вікно */ } };
+
+const HINT_PERIOD: Record<PlanHint["period"], string> = { month: "щомісяця", quarter: "щокварталу", year: "раз на рік" };
+/** 📅 Підказки «Календаря оплат» біля статті: сума, як часто, чи вже в плані; «додати в план» — до наявного плану. */
+function PlanHints({ hints, canAdd, onAdd }: { hints: PlanHint[] | undefined; canAdd: boolean; onAdd: (h: PlanHint) => void }) {
+  if (!hints?.length) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 3 }}>
+      {hints.map((h) => (
+        <span key={h.recurringId} className="hr-muted" style={{ fontSize: 12, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          <span>📅 {h.note ? `${h.note} · ` : ""}{money(h.amount)} ₴ · {h.paid ? "оплачено" : HINT_PERIOD[h.period]}</span>
+          {h.added ? <span title={`Додано ${new Date(h.added.at).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`}>✓ у плані{h.added.by ? ` (${h.added.by})` : ""}</span>
+            : canAdd ? <button type="button" className="fin-link" onClick={(e) => { e.stopPropagation(); onAdd(h); }}>додати в план</button> : null}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // ── Діалог: поля + кнопки. Кнопка повертає false — діалог лишається відкритим. ────────
 type Field = { id: string; label: string; value?: string; type?: "text" | "select"; options?: [string, string][]; placeholder?: string };
@@ -256,12 +272,6 @@ export function FinanceSection() {
   const ask = useCallback((d: DialogSpec) => setDialog(d), []);
   const act = useStructureActions(data, reload, ask, toast);
   const pick = (t: Tab) => { setTab(t); lsSet(LS_TAB, t); };
-  // 🔔 «Відкрити» з нагадування календаря оплат (`useFinanceReminders`): розділ уже відкритий — перемкнути вкладку.
-  useEffect(() => {
-    const on = (e: Event) => { const t = (e as CustomEvent<string>).detail; if (t === "calendar") { setTab(t); lsSet(LS_TAB, t); } };
-    window.addEventListener(FIN_TAB_EVENT, on);
-    return () => window.removeEventListener(FIN_TAB_EVENT, on);
-  }, []);
 
   if (err && !data) return <div className="chart-card"><b>Розділ «Фінанси» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!data) return <p className="loading-text">Завантаження…</p>;
@@ -355,6 +365,16 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const [busy, setBusy] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // 📅 Підказки «Календаря оплат» (Тетяна #6369, 27.10.2026): що за графіком припадає на місяць — біля статті.
+  const [hints, setHints] = useState<Map<number, PlanHint[]>>(new Map());
+  const [hintsNonce, setHintsNonce] = useState(0);
+  useEffect(() => {
+    let live = true;
+    fetchPlanHints(month.slice(0, 7))
+      .then((list) => { if (live) setHints(list.reduce((m, h) => m.set(h.itemId, [...(m.get(h.itemId) ?? []), h]), new Map<number, PlanHint[]>())); })
+      .catch(() => { if (live) setHints(new Map()); });
+    return () => { live = false; };
+  }, [month, hintsNonce, data]);
   /** 🧾 З жовтня 2026 факт — із таблиці «UTS Утверждение оплат» (задача Тетяни #5607): руками не вноситься. */
   const factAuto = data.factSource === "approvals";
   const syncNow = async () => {
@@ -367,6 +387,18 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   /** 🔒 План погоджено — клітинки плану лише для читання для ВСІХ (сервер і БД однаково відмовлять). */
   const planLocked = !!data.approval;
   const current = month === data.currentMonth;
+  /** «Додати в план» — право вносити й непогоджений план (сервер і БД однаково відмовлять). */
+  const canAdd = data.canEdit && !planLocked;
+  const addHint = async (h: PlanHint, it: FinItem) => {
+    if (edit && changedKeys.length) { toast("Спершу збережіть або скасуйте зміни в плані", { error: true }); return; }
+    if (!(await dlg.confirm({ title: `Додати в план «${it.name}»?`, okLabel: "Додати в план",
+      text: `План ${monthLabel(month).toLowerCase()}: ${money(it.plan)} → ${money((it.plan ?? 0) + h.amount)} ₴ (+${money(h.amount)} ₴${h.note ? ` — ${h.note}` : ""}, з «Календаря оплат»).` }))) return;
+    try {
+      const r = await addHintToPlan(h.recurringId, month.slice(0, 7));
+      reload(); setHintsNonce((n) => n + 1);
+      toast(`План «${it.name}»: ${money(r.before)} → ${money(r.after)} ₴`);
+    } catch (e) { toast(hiringError(e), { error: true }); setHintsNonce((n) => n + 1); }
+  };
   const shownData = data.month === month ? data : null;
   const changedKeys = Object.keys(draft);
   const leave = (fn: () => void) => async () => {
@@ -517,7 +549,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
                         return (
                           <tr key={it.id} className={`it ${it.state === "over" || it.state === "noplan" ? "over" : ""} ${sel === it.id ? "sel" : ""}`} tabIndex={0}
                             onClick={() => setSel(it.id)} onKeyDown={(e) => { if (e.key === "Enter" && !(e.target as HTMLElement).closest("input")) setSel(it.id); }}>
-                            <td className="ind2">{it.name}</td>
+                            <td className="ind2">{it.name}<PlanHints hints={hints.get(it.id)} canAdd={canAdd} onAdd={(h) => void addHint(h, it)} /></td>
                             <td className="num">{edit ? cell("plan") : it.plan == null ? <span className="hr-muted">не задано</span> : money(it.plan)}</td>
                             <td className="num">{edit ? cell("fact") : money(it.fact)}</td>
                             <td className="num">{it.state === "noplan" ? <span className="fin-bad">−{money(it.fact)}</span>

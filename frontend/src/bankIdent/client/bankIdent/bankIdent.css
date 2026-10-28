@@ -1,0 +1,77 @@
+/* «Виписка»: рядок «№ рахунку», фільтр, коментарі до вихідних ФОП.
+   Вимога Сергія 27.10: вигляд — як ПОТОЧНИЙ екран «Виписка». Тому тут лише змінні дашборда (--text, --text-muted, --border,
+   --card-bg, --surface-2, --ok, --warn, --danger, --info, --sans) і розміри, які вже є на сторінці:
+     кнопки — як «Реквізити» (700, r 8–10), поля — як «🔎 контрагент / підстава / ID» (13px, r 8),
+     позначки — як чипи рахунків у рядку (11–11.5px / 700, r 7), підписи — як призначення платежу (12.5px, --text-muted),
+     фільтр — як чипи рахунків угорі (12.5px / 700, r 20, активний — #2f6fdb).
+   Темна тема дашборда (:root[data-theme=dark]) підхоплюється сама — свого перемикача тут немає. Префікс класів — bi-. */
+.bi{font-family:var(--sans,system-ui,"Segoe UI",Roboto,sans-serif);color:var(--text,#1f2330);font-variant-numeric:tabular-nums}
+.bi-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:8px;font-size:13px;line-height:1.35}
+.bi-num,.bi-inp,.bi-sel{box-sizing:border-box;height:32px;padding:0 10px;border:1px solid var(--border,#e5e7eb);border-radius:8px;background:var(--card-bg,#fff);color:var(--text,#1f2330);font:400 13px/1.3 var(--sans,system-ui,sans-serif)}
+.bi-num{width:210px;max-width:100%;font-weight:600;font-variant-numeric:tabular-nums}
+.bi-inp{width:100%}
+.bi-ta{height:auto;min-height:58px;padding:8px 10px;resize:vertical}
+.bi-sel{min-width:190px}
+.bi-num::placeholder,.bi-inp::placeholder{color:var(--text-muted,#6b7280);font-weight:400}
+.bi-bad-b{border-color:var(--danger,#b91c1c)!important}
+.bi-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border,#e5e7eb);background:var(--card-bg,#fff);color:var(--text,#1f2330);font:700 13px/1 var(--sans,system-ui,sans-serif);cursor:pointer;white-space:nowrap}
+.bi-btn:hover:not(:disabled){border-color:var(--border-strong,#d1d5db)}
+.bi-btn:disabled{opacity:.5;cursor:default}
+.bi-pri{background:var(--text,#1f2330);border-color:var(--text,#1f2330);color:var(--card-bg,#fff)}
+.bi-pri:hover:not(:disabled){border-color:var(--text,#1f2330);opacity:.92}
+.bi-warn{color:var(--danger,#b91c1c);border-color:color-mix(in srgb,var(--danger,#b91c1c) 40%,var(--border,#e5e7eb))}
+.bi-warn.bi-fill{background:var(--danger,#b91c1c);border-color:var(--danger,#b91c1c);color:var(--card-bg,#fff)}
+.bi-ghost{background:transparent;border-color:transparent;color:var(--text-muted,#6b7280)}
+.bi-ghost:hover:not(:disabled){border-color:var(--border,#e5e7eb)}
+.bi-lnk{border:0;background:none;padding:0;font:600 13px/1.3 var(--sans,system-ui,sans-serif);color:#2f6fdb;cursor:pointer}
+.bi-lnk:hover{text-decoration:underline}
+.bi-pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:7px;font-size:11.5px;font-weight:700;line-height:1.5;white-space:nowrap}
+.bi-ok{color:var(--ok,#166534);background:var(--ok-bg,#dcfce7)}
+.bi-bad{color:var(--danger,#b91c1c);background:var(--danger-bg,#fee2e2)}
+.bi-mut{color:var(--text-muted,#6b7280);background:var(--surface-2,#f8fafc);box-shadow:inset 0 0 0 1px var(--border,#e5e7eb)}
+.bi-no{font-weight:700;color:var(--text,#1f2330)}
+.bi-pill .bi-no{color:inherit}
+.bi-by{font-size:12.5px;color:var(--text-muted,#6b7280);min-width:0;overflow-wrap:anywhere}
+.bi-by b{color:var(--text,#1f2330);font-weight:600}
+.bi-due{font-size:12.5px;color:var(--text-muted,#6b7280);white-space:nowrap}
+.bi-due b{color:var(--text,#1f2330);font-weight:700}
+.bi-soon,.bi-soon b{color:var(--warn,#b45309)}
+.bi-acts{display:inline-flex;flex-wrap:wrap;gap:6px}
+.bi-err,.bi-info{flex-basis:100%;font-size:12.5px}
+.bi-err{color:var(--danger,#b91c1c)}
+.bi-info{color:var(--info,#1d4ed8)}
+.bi-conf{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:6px 8px 6px 12px;border-radius:10px;background:var(--surface-2,#f8fafc);border:1px solid var(--border,#e5e7eb)}
+.bi-box{margin-top:8px;padding:12px 14px;border-radius:10px;background:var(--surface-2,#f8fafc);border:1px solid var(--border,#e5e7eb);font-size:13px}
+.bi-box p{margin:0 0 8px}
+.bi-fh{margin:0 0 6px;font-size:13.5px;font-weight:700}
+.bi-fh .bi-by{font-weight:400}
+.bi-frow{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 10px;margin-top:8px}
+.bi-frow label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--text-muted,#6b7280)}
+.bi-frow .bi-num{width:180px}
+.bi-grow{flex:1 1 240px}
+.bi-hist{margin:0;padding:0;list-style:none;display:grid;gap:5px}
+.bi-hist li{display:grid;grid-template-columns:118px minmax(0,1fr);gap:10px;font-size:12.5px}
+.bi-hist li>span:first-child{color:var(--text-muted,#6b7280);white-space:nowrap}
+.bi-sys{color:var(--danger,#b91c1c)}
+.bi-cms{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.bi-cms li{padding:8px 10px;border-radius:8px;background:var(--card-bg,#fff);border:1px solid var(--border,#e5e7eb)}
+.bi-who{margin-bottom:2px;font-size:12px;color:var(--text-muted,#6b7280)}
+.bi-who b{color:var(--text,#1f2330);font-weight:600}
+.bi-tx{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bi-priv{font-size:12px;color:var(--text-muted,#6b7280);white-space:nowrap}
+/* фільтр — як чипи рахунків угорі сторінки */
+.bi-filt{display:flex;flex-wrap:wrap;gap:8px}
+.bi-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:20px;border:1px solid var(--border,#e5e7eb);background:var(--card-bg,#fff);color:var(--text,#1f2330);font:700 12.5px/1 var(--sans,system-ui,sans-serif);cursor:pointer;white-space:nowrap}
+.bi-chip.bi-on{background:rgba(47,111,219,.1);border-color:#2f6fdb;color:#2f6fdb}
+.bi-n{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:11px;font-weight:800;background:var(--surface-2,#f8fafc);color:var(--text-muted,#6b7280)}
+.bi-n-warn{background:var(--warn-bg,#fef3c7);color:var(--warn,#b45309)}
+.bi-n-bad{background:var(--danger-bg,#fee2e2);color:var(--danger,#b91c1c)}
+.bi-rule{display:flex;gap:10px;align-items:flex-start;margin:0 0 6px;padding:9px 12px;border-radius:10px;background:var(--surface-2,#f8fafc);border:1px solid var(--border,#e5e7eb);font-size:12.5px;line-height:1.5;color:var(--text-muted,#6b7280)}
+.bi-rule b{color:var(--text,#1f2330)}
+.bi-i{flex:none;display:grid;place-items:center;width:18px;height:18px;margin-top:1px;border-radius:50%;border:1px solid var(--border-strong,#d1d5db);font-size:11px;font-weight:800;color:var(--text-muted,#6b7280)}
+.bi :focus-visible,.bi-filt :focus-visible{outline:2px solid #2f6fdb;outline-offset:1px}
+@media (max-width:640px){
+  .bi-num,.bi-frow .bi-num{flex:1 1 150px;width:auto}
+  .bi-sel{width:100%}
+  .bi-hist li{grid-template-columns:minmax(0,1fr);gap:0}
+}

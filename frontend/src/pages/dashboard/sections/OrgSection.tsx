@@ -6,14 +6,17 @@ import {
 import { useToast, type Toast } from "../../../components/Toasts";
 import { EmployeePhoto, PhotoUploadDialog, initialsOf } from "./EmployeePhotos";
 import { fmtTs, useEscape } from "./BaShared";
+import { OrgTeamsCard, TeamOptions, useTeams } from "./OrgTeams";
+import { createOrgTeam } from "../../../api";
 import "./hiring.css";
 import "./org.css";
 
 /**
  * 🏢 ОРГ СТРУКТУРА (задача 7062; ТЗ Даші 23.10.2026, вигляд затвердив ОД; рішення Романа 27.10.2026).
  *  • Дерево зверху вниз із лініями підпорядкування, список із сортуванням, пошук (імʼя / посада / @нік), фільтр
- *    «Відділ», картка людини справа. Дані — лише з «Найм → Співробітники»; блок людини = її «Команда».
- *  • Людина, чия «Команда» не збіглася з жодним блоком, — у «Без блоку» з переліком значень: невідоме видно.
+ *    «Відділ», картка людини справа. Дані — лише з «Найм → Співробітники»; блок людини = її КОМАНДА (27.10.2026):
+ *    з Kommo — для менеджерів і тімлідів, інакше — вибрана (команда Kommo або відділ дашборду, `OrgTeams.tsx`).
+ *  • Людина без команди або з командою без блоку — у «Без блоку» з причиною: невідоме видно.
  *  • Свій нік і фото кожен змінює сам; режим «Редагувати» (перетягнути людину, керівник, блок, журнал) — `canEdit`
  *    із сервера (право `edit_org`). Контакт — лише Telegram (ТЗ).
  *  • Етап 2 — «Написати» в картці й у списку ВІДКРИВАЄ Telegram (t.me/<нік>); надсилати повідомлення з дашборда
@@ -48,6 +51,7 @@ export function OrgSection() {
   const [edit, setEdit] = useState(false);
   const [unitDlg, setUnitDlg] = useState<OrgUnit | "new" | null>(null);
   const [logOpen, setLogOpen] = useState(false);
+  const [teamsOpen, setTeamsOpen] = useState(false);
   const [over, setOver] = useState<number | "loose" | null>(null);
   const [sort, setSort] = useState<{ k: SortKey; up: boolean }>({ k: "name", up: true });
   const reload = useCallback(() => setNonce((n) => n + 1), []);
@@ -93,7 +97,7 @@ export function OrgSection() {
     if (!p || p.unitId === unitId) return;
     try {
       await moveOrgPerson(id, unitId);
-      toast(`${p.name} → ${unitId == null ? "Без блоку" : units.get(unitId)?.name}. «Команда» в «Наймі» змінена`);
+      toast(`${p.name} → ${unitId == null ? "Без блоку" : units.get(unitId)?.name}. Команду змінено`);
       reload();
     } catch (x) { toast(hiringError(x), { error: true }); }
   };
@@ -202,8 +206,9 @@ export function OrgSection() {
       </div>
       {edit && (
         <div className="org-edit-bar">
-          <span>Перетягни людину на блок — їй зміниться «Команда» в «Найм → Співробітники». ✎ — змінити блок.</span>
+          <span>Перетягни людину на блок — їй зміниться команда (менеджерів і тімлідів — лише в Kommo). ✎ — змінити блок.</span>
           <button className="hr-btn xs" onClick={() => setUnitDlg("new")}>+ Блок</button>
+          <button className="hr-btn xs" onClick={() => setTeamsOpen(true)}>Відділи</button>
           <button className="hr-btn xs" onClick={() => setLogOpen(true)}>Журнал змін</button>
         </div>
       )}
@@ -237,10 +242,10 @@ export function OrgSection() {
         <div className={`org-loose ${over === "loose" ? "drop" : ""}`} {...dropZone("loose", null, true)}>
           <b>Без блоку · {data.unassigned.length} люд.</b>
           <span className="hr-muted">
-            «Команда» цих людей у «Найм → Співробітники» не збігається з жодним блоком схеми. Блок людини — це її «Команда»:
-            {data.canEdit ? " перетягни людину на блок або виправ «Команду» в «Наймі»." : " виправляє HR."}
+            У цих людей не вибрано команду або під їхню команду немає блоку. Блок людини — це її команда:
+            {data.canEdit ? " перетягни людину на блок або обери команду в картці співробітника." : " розставляє HR."}
           </span>
-          <div className="org-chips">{data.unknownLabels.map((x) => <span key={x.label} className="org-chip">{x.label.startsWith("«") ? x.label : `«${x.label}»`} — {x.count} люд.</span>)}</div>
+          <div className="org-chips">{data.unknownLabels.map((x) => <span key={x.label} className="org-chip">{x.label} — {x.count} люд.</span>)}</div>
           <div className="org-people">{data.unassigned.filter((id) => match(people.get(id)!)).map((id) => personBtn(id, true))}</div>
         </div>
       )}
@@ -250,6 +255,7 @@ export function OrgSection() {
       )}
       {unitDlg && <UnitDialog data={data} unit={unitDlg === "new" ? null : unitDlg} toast={toast} onClose={() => setUnitDlg(null)} onSaved={() => { setUnitDlg(null); reload(); }} />}
       {logOpen && <LogDialog onClose={() => setLogOpen(false)} toast={toast} />}
+      {teamsOpen && <TeamsDialog toast={toast} onClose={() => setTeamsOpen(false)} onChanged={reload} />}
     </div>
   );
 }
@@ -275,7 +281,7 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
   };
   const move = async (v: string) => {
     setBusy(true);
-    try { await moveOrgPerson(p.id, v ? Number(v) : null); toast(`${p.name}: блок змінено, «Команда» в «Наймі» теж`); onChanged(); }
+    try { await moveOrgPerson(p.id, v ? Number(v) : null); toast(`${p.name}: блок і команду змінено`); onChanged(); }
     catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(false); }
   };
   return (
@@ -321,11 +327,17 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
         {data.canEdit && !p.isHead && (
           <div className="org-mine">
             <span className="org-lbl">Блок на схемі</span>
-            <select className="hr-inp" disabled={busy} value={p.unitId ?? ""} onChange={(e) => void move(e.target.value)} aria-label="Блок на схемі">
-              <option value="">Без блоку («Команду» прибрати)</option>
-              {data.units.filter((u) => u.label).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </select>
-            <span className="hr-muted">«Команда» в «Наймі» зараз: {p.teamLabel ?? "не заповнена"}</span>
+            {p.teamLocked ? (
+              <span className="hr-muted">Команда «{p.teamName}» — з Kommo. Переводять у Kommo, синк перенесе людину сам.</span>
+            ) : (
+              <>
+                <select className="hr-inp" disabled={busy} value={p.unitId ?? ""} onChange={(e) => void move(e.target.value)} aria-label="Блок на схемі">
+                  <option value="">Без блоку (команду зняти)</option>
+                  {data.units.filter((u) => u.teamKey).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+                <span className="hr-muted">Команда зараз: {p.teamName ?? (p.teamLabel ? `не вибрано (у таблиці було «${p.teamLabel}»)` : "не вибрано")}</span>
+              </>
+            )}
           </div>
         )}
       </aside>
@@ -339,17 +351,24 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
 function UnitDialog({ data, unit, toast, onClose, onSaved }: { data: OrgTreeResp; unit: OrgUnit | null; toast: Toast; onClose: () => void; onSaved: () => void }) {
   useEscape(onClose);
   const [f, setF] = useState<Required<OrgUnitInput>>({
-    name: unit?.name ?? "", parentId: unit?.parentId ?? null, dept: unit?.dept ?? "sales", teamId: unit?.teamId ?? null,
-    label: unit?.ownLabel ?? null, headEmployeeId: unit?.headSource === "manual" ? unit.headId : null, side: unit?.side ?? false, sort: unit?.sort ?? 0,
+    name: unit?.name ?? "", parentId: unit?.parentId ?? null, dept: unit?.dept ?? "sales",
+    team: unit?.teamId != null ? `k:${unit.teamId}` : unit?.dashTeamId != null ? `d:${unit.dashTeamId}` : null,
+    headEmployeeId: unit?.headSource === "manual" ? unit.headId : null, side: unit?.side ?? false, sort: unit?.sort ?? 0,
   });
   const [busy, setBusy] = useState(false);
+  const [teams, reloadTeams] = useTeams();
+  const [newDept, setNewDept] = useState("");
   // Батьком не може бути сам блок і ніхто з його підпорядкованих — інакше коло (сервер теж не пустить).
   const below = useMemo(() => {
     const out = new Set<number>(); if (!unit) return out;
     const walk = (id: number) => { out.add(id); data.units.filter((u) => u.parentId === id).forEach((u) => walk(u.id)); };
     walk(unit.id); return out;
   }, [data, unit]);
-  const team = data.teams.find((t) => t.id === f.teamId);
+  const addDept = async () => {
+    setBusy(true);
+    try { const id = await createOrgTeam({ name: newDept.trim() }); setNewDept(""); reloadTeams(); setF({ ...f, team: `d:${id}` }); toast(`Відділ «${newDept.trim()}» створено`); }
+    catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(false); }
+  };
   const save = async () => {
     setBusy(true);
     try {
@@ -380,17 +399,21 @@ function UnitDialog({ data, unit, toast, onClose, onSaved }: { data: OrgTreeResp
           <select id="ou-dept" className="hr-inp" value={f.dept} onChange={(e) => setF({ ...f, dept: e.target.value as OrgDept })}>
             {(Object.keys(data.depts) as OrgDept[]).map((k) => <option key={k} value={k}>{data.depts[k]}</option>)}
           </select>
-          <label htmlFor="ou-team">Команда дашборду</label>
-          <select id="ou-team" className="hr-inp" value={f.teamId ?? ""} onChange={(e) => setF({ ...f, teamId: num(e.target.value) })}>
-            <option value="">— без привʼязки</option>
-            {data.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          <label htmlFor="ou-team">Команда</label>
+          <select id="ou-team" className="hr-inp" value={f.team ?? ""} onChange={(e) => setF({ ...f, team: e.target.value || null })}>
+            <option value="">— без команди (контейнер)</option>
+            <TeamOptions data={teams} current={f.team} />
           </select>
-          <label htmlFor="ou-label">«Команда» блоку</label>
-          <input id="ou-label" className="hr-inp" value={f.label ?? ""} placeholder={team ? `${team.name} (з команди дашборду)` : "як у «Найм → Співробітники»"}
-            onChange={(e) => setF({ ...f, label: e.target.value || null })} />
+          {teams?.canManage && <>
+            <label htmlFor="ou-newdept">Новий відділ</label>
+            <span style={{ display: "flex", gap: 6 }}>
+              <input id="ou-newdept" className="hr-inp" style={{ flex: 1 }} placeholder="напр. «IT відділ»" value={newDept} onChange={(e) => setNewDept(e.target.value)} />
+              <button className="hr-btn" disabled={busy || !newDept.trim()} onClick={() => void addDept()}>+ Відділ</button>
+            </span>
+          </>}
           <label htmlFor="ou-head">Керівник</label>
           <select id="ou-head" className="hr-inp" value={f.headEmployeeId ?? ""} onChange={(e) => setF({ ...f, headEmployeeId: num(e.target.value) })}>
-            <option value="">{f.teamId ? "— тімлід команди дашборду" : "— не вказано"}</option>
+            <option value="">{f.team?.startsWith("k:") ? "— тімлід команди Kommo" : "— не вказано"}</option>
             {data.people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <label htmlFor="ou-side">Збоку (пунктиром)</label>
@@ -398,7 +421,7 @@ function UnitDialog({ data, unit, toast, onClose, onSaved }: { data: OrgTreeResp
           <label htmlFor="ou-sort">Порядок</label>
           <input id="ou-sort" className="hr-inp" type="number" value={f.sort} onChange={(e) => setF({ ...f, sort: Number(e.target.value) || 0 })} />
         </div>
-        <p className="hr-muted">Люди потрапляють у блок за «Командою» в «Найм → Співробітники». Змінили «Команду» блоку — люди з попередньою переїдуть разом.</p>
+        <p className="hr-muted">Люди потрапляють у блок за командою: менеджери й тімліди — за командою в Kommo, решта — за вибраною в картці. Блок із людьми команду не змінює — спершу перемістіть людей.</p>
         <div style={{ display: "flex", gap: 8, justifyContent: "space-between", flexWrap: "wrap" }}>
           <span>{unit && <button className="hr-btn" disabled={busy} onClick={() => void remove()}>Видалити блок</button>}</span>
           <span style={{ display: "flex", gap: 8 }}>
@@ -406,6 +429,18 @@ function UnitDialog({ data, unit, toast, onClose, onSaved }: { data: OrgTreeResp
             <button className="hr-btn p" disabled={busy || !f.name.trim()} onClick={() => void save()}>Зберегти</button>
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function TeamsDialog({ toast, onClose, onChanged }: { toast: Toast; onClose: () => void; onChanged: () => void }) {
+  useEscape(onClose);
+  return (
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" style={{ maxWidth: 720 }} role="dialog" aria-label="Відділи дашборду" onClick={(e) => e.stopPropagation()}>
+        <OrgTeamsCard toast={toast} onChanged={onChanged} />
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}><button className="hr-btn" onClick={onClose}>Закрити</button></div>
       </div>
     </div>
   );

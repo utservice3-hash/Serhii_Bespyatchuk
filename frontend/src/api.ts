@@ -3775,6 +3775,25 @@ export interface RateAnalysis {
     distance_km: number | null;
     options: { tonnage: string; margin: number; client_min: number | null; client_max: number | null; selected: boolean }[];
   } | null;
+  /** 🧮 Номер розрахунку — до нього привʼязується відгук; `feedback_due` — чи питати (раз на маршрут на день). */
+  usage_id?: number | null;
+  feedback_due?: boolean;
+}
+export type RateFeedbackRating = "ok" | "high" | "low" | "no";
+export async function sendRateFeedback(body: { usageId: number; rating: RateFeedbackRating; agreed: string; comment: string }): Promise<void> {
+  await api.post("/rates/feedback", body);
+}
+export interface RateFeedbackBucket { key: string; n: number; ok: number }
+export interface RateFeedbackStats {
+  days: number; total: number; calculations: number; coverage: number | null;
+  byRating: Record<RateFeedbackRating, number>; okShare: number | null;
+  deviation: { avg: number; n: number } | null;
+  byTonnage: RateFeedbackBucket[]; byZone: RateFeedbackBucket[];
+  comments: { at: string; author: string; route: string; rating: RateFeedbackRating; agreed: number | null; comment: string }[];
+}
+export async function fetchRateFeedbackStats(days = 30): Promise<RateFeedbackStats> {
+  const { data } = await api.get<RateFeedbackStats>("/rates/feedback/stats", { params: { days } });
+  return data;
 }
 export interface RatesUsageStats {
   days: number; total_requests: number; total_users: number;
@@ -5536,6 +5555,8 @@ export interface EmployeeRow {
   dismissed_at: string | null; dismiss_reason: string | null; note: string | null; extra: Record<string, string>;
   user_id: number | null; account_name: string | null; account_active: boolean | null; secrets: number; updated_at: string;
   manager_id: number | null; kommo_name: string | null;
+  /** 👥 Справжня команда (27.10.2026): з Kommo — `team_locked`; інакше вибрана в картці (`team_ref`: `k:<id>` / `d:<id>`). */
+  team_name: string | null; team_locked: boolean; team_ref: string | null;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
   /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
@@ -5982,8 +6003,8 @@ export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: 
 /** 📅 «Календар оплат» (задача #6369, 27.10.2026): періодичні витрати — нагадування, окремо від Плану/факту. */
 export type RecPeriod = "month" | "quarter" | "year";
 export interface RecItem {
-  id: number; name: string; amount: number; period: RecPeriod; anchorDay: number; next: string;
-  payerId: number | null; payer: string | null; note: string | null; active: boolean; upcoming: string[];
+  id: number; itemId: number; name: string; amount: number; period: RecPeriod; anchorDay: number; next: string;
+  note: string | null; active: boolean; upcoming: string[];
 }
 export interface RecEvent {
   recurringId: number; date: string; amount: number; kind: "paid" | "overdue" | "soon" | "plan"; due: boolean;
@@ -5994,17 +6015,24 @@ export interface RecPaid {
   id: number; recurringId: number; name: string; due: string; amount: number; planned: number;
   by: string | null; at: string; cancelledBy: string | null; cancelledAt: string | null; canUndo: boolean;
 }
-export interface RecCalendar { today: string; leadDays: number; items: RecItem[]; months: RecMonth[]; history: RecPaid[]; payers: { id: number; name: string }[] }
-export interface RecReminder { id: number; name: string; amount: number; next: string; days: number }
+export interface RecArticle { id: number; name: string; group: string; resp: string; offFrom: string | null }
+export interface RecCalendar { today: string; items: RecItem[]; months: RecMonth[]; history: RecPaid[]; articles: RecArticle[] }
 export const fetchFinCalendar = async () => (await api.get<RecCalendar>("/finance/calendar")).data;
-export const fetchFinCalendarDue = async () => (await api.get<{ today: string; leadDays: number; items: RecReminder[] }>("/finance/calendar/due")).data;
-export const createFinRecurring = async (body: { name: string; amount: string; period: RecPeriod; date: string; payerId: number; note: string }) =>
+export const createFinRecurring = async (body: { itemId: number; amount: string; period: RecPeriod; month: string; note: string }) =>
   (await api.post<{ id: number }>("/finance/calendar", body)).data;
-export const updateFinRecurring = async (id: number, body: Partial<{ name: string; amount: string; period: RecPeriod; date: string; payerId: number; note: string; active: boolean }>) =>
+export const updateFinRecurring = async (id: number, body: Partial<{ itemId: number; amount: string; period: RecPeriod; month: string; note: string; active: boolean }>) =>
   (await api.patch<{ ok: boolean }>(`/finance/calendar/${id}`, body)).data;
 export const payFinRecurring = async (id: number, body: { due: string; amount?: string }) =>
   (await api.post<{ next: string; paidId: number }>(`/finance/calendar/${id}/pay`, body)).data;
 export const undoFinRecurringPaid = async (paidId: number) => (await api.post<{ next: string }>(`/finance/calendar/paid/${paidId}/undo`)).data;
+/** 📅 Підказки «Календаря оплат» у «План/факті» місяця і «додати в план» (сума ДО наявного плану). */
+export interface PlanHint {
+  recurringId: number; itemId: number; name: string; note: string | null; amount: number; period: RecPeriod; paid: boolean;
+  added: { amount: number; by: string | null; at: string } | null;
+}
+export const fetchPlanHints = async (m: string) => (await api.get<{ hints: PlanHint[] }>("/finance/plan-hints", { params: { m } })).data.hints;
+export const addHintToPlan = async (recurringId: number, month: string) =>
+  (await api.post<{ before: number | null; after: number }>("/finance/plan-hints/add", { recurringId, month })).data;
 export async function downloadFinCalendarHistory(): Promise<{ blob: Blob; filename: string }> {
   const res = await api.get("/finance/calendar/history.xlsx", { responseType: "blob" });
   const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
@@ -6089,7 +6117,7 @@ export interface CtorForm {
 }
 export const CTOR_EMPTY_FORM: CtorForm = {
   ent: "uts", doc: "once", party: "client", intl: false, stamp: true, fopAcc: 0,
-  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
+  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "" },   // порядок оплати менеджер обирає сам (задача 6475)
   dealNo: "", docDate: "", mainNo: "", mainDate: "", mainUntil: "",
 };
 export interface CtorEntityRow {
@@ -6341,11 +6369,15 @@ export const setFinKpiOff = async (id: number, off: boolean) => (await api.post<
 export type OrgDept = "top" | "hr" | "fin" | "it" | "sales";
 export interface OrgUnit {
   id: number; parentId: number | null; name: string; dept: OrgDept; teamId: number | null; teamName: string | null;
+  /** 👥 Команда блоку: Kommo (`teamId`) або дашборду (`dashTeamId`); `teamKey` — `k:<id>` / `d:<id>`, `null` — контейнер. */
+  dashTeamId: number | null; dashTeamName: string | null; teamKey: string | null;
   label: string | null; ownLabel: string | null; headId: number | null; headSource: "manual" | "team" | null;
   side: boolean; sort: number; memberIds: number[];
 }
 export interface OrgPerson {
   id: number; name: string; position: string | null; teamLabel: string | null; unitId: number | null; isHead: boolean;
+  /** Справжня команда людини; `teamLocked` — з Kommo, змінюють лише в Kommo. */
+  teamName: string | null; teamLocked: boolean;
   telegram: string | null; telegramInvalid: boolean; photo: PhotoRef | null; isMe: boolean;
 }
 export interface OrgTreeResp {
@@ -6353,7 +6385,7 @@ export interface OrgTreeResp {
   stats: { total: number; noTelegram: number; noPhoto: number; unassigned: number };
   depts: Record<OrgDept, string>; canEdit: boolean; meEmployeeId: number | null; teams: { id: number; name: string }[];
 }
-export interface OrgUnitInput { name?: string; parentId?: number | null; dept?: OrgDept; teamId?: number | null; label?: string | null; headEmployeeId?: number | null; side?: boolean; sort?: number }
+export interface OrgUnitInput { name?: string; parentId?: number | null; dept?: OrgDept; team?: string | null; headEmployeeId?: number | null; side?: boolean; sort?: number }
 export interface OrgLogRow { id: number; at: string; actor: string | null; action: string; summary: string }
 export const fetchOrgTree = async () => (await api.get<OrgTreeResp>("/org/tree")).data;
 export const setMyOrgTelegram = async (telegram: string) => (await api.put<{ telegram: string | null }>("/org/me/telegram", { telegram })).data.telegram;
@@ -6363,3 +6395,19 @@ export const createOrgUnit = async (body: OrgUnitInput) => (await api.post<{ id:
 export const updateOrgUnit = async (id: number, body: OrgUnitInput) => { await api.patch(`/org/units/${id}`, body); };
 export const deleteOrgUnit = async (id: number) => { await api.delete(`/org/units/${id}`); };
 export const fetchOrgLog = async () => (await api.get<{ rows: OrgLogRow[] }>("/org/log")).data.rows;
+
+// 👥 Команди Kommo + ВІДДІЛИ ДАШБОРДУ (27.10.2026) — дзеркало `routes/orgTeams.ts`. Список — усім, хто бачить орг-структуру;
+// запис — право `manage_teams` (керівництво й HR), сервер віддає `canManage`. ⚠️ Не плутати з «командою лише в дашборді»
+// з «Налаштування → Команди» (`createDashboardTeam`): та живе в `teams`, її бачать Звіт і КВП — це команда продажів.
+// Відділи дашборду (`dashboard_teams`) у звітах продажів не зʼявляються ніколи.
+export interface TeamOption {
+  key: string; kind: "kommo" | "dashboard"; id: number; name: string;
+  linkedKommoId: number | null; linkedKommoName: string | null; archived: boolean; members: number;
+}
+export interface TeamsResp { kommo: TeamOption[]; dashboard: TeamOption[]; canManage: boolean }
+export const fetchOrgTeams = async () => (await api.get<TeamsResp>("/org/teams")).data;
+export const createOrgTeam = async (body: { name: string; kommoTeamId?: number | null }) => (await api.post<{ id: number }>("/org/teams", body)).data.id;
+export const updateOrgTeam = async (id: number, body: { name?: string; kommoTeamId?: number | null; archived?: boolean }) => { await api.patch(`/org/teams/${id}`, body); };
+/** Команда людини без Kommo: `k:<id>` / `d:<id>` або `null` — зняти. */
+export const setEmployeeTeam = async (employeeId: number, team: string | null) =>
+  (await api.put<{ ok: true; name: string | null }>(`/org/teams/people/${employeeId}`, { team })).data.name;

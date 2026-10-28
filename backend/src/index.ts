@@ -49,12 +49,14 @@ import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
 import { baRouter } from "./routes/businessAssistant.js";
 import { orgRouter } from "./routes/org.js";
+import { orgTeamsRouter } from "./routes/orgTeams.js";
 import { financeRouter } from "./routes/finance.js";
 import { financePaymentsRouter } from "./routes/financePayments.js";
 import { financeCalendarRouter } from "./routes/financeCalendar.js";
 import { constructorRouter } from "./routes/constructor.js";
 import { surveysRouter } from "./routes/surveys.js";
 import { cargoRouter } from "./routes/cargo.js";
+import { bankIdentRouter, bankIdentFinalizeOnce } from "./routes/bankIdent.js";
 import { tickSurveys } from "./surveys/surveyScheduler.js";
 import { receivablesClaimRouter } from "./routes/receivablesClaims.js";
 import { nominationsRouter } from "./routes/nominations.js";
@@ -205,6 +207,7 @@ app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор ванта�
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
+app.use("/api/org/teams", orgTeamsRouter); // 👥 Команди Kommo + дашборд (27.10.2026) — ДО orgRouter, бо той теж під /api/org
 app.use("/api/org", orgRouter); // 🏢 Орг структура (задача 7062, 27.10.2026)
 app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
 app.use("/api/team-vault", teamVaultRouter); // 👥 тімлід: люди й паролі своєї команди (29.09.2026)
@@ -212,6 +215,7 @@ app.use("/api/vault-bot", vaultBotRouter); // 🤖 вебхук бота «UTS �
 app.use("/api/statistics", statisticsRouter);
 app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
 app.use("/api/bank", bankRouter); // Виписка — банк-API (окремо від CRM)
+app.use("/api/bank-ident", bankIdentRouter); // 💳 «Виписка»: № рахунку на вхідних ФОП і коментарі до вихідних — пакет Сергія (27.10.2026)
 app.use("/api/integrations", integrationsRouter); // 🔌 запити інших наших систем (трекер: відпустки) — межа ключем, без requireAuth
 app.use("/api/tracker", trackerRouter); // Трекер часу — власна авторизація (БЕЗ requireAuth), окрема підсистема
 
@@ -595,6 +599,12 @@ cron.schedule("25,55 * * * *", () => {
 // поруч із Сейфом. Нагляд — MONITORED_JOBS (everyMin == крону).
 cron.schedule("20,50 * * * *", () => {
   void runJob("syncApprovals", () => syncApprovals());
+}, { timezone: "Europe/Kyiv" });
+// 💳 «Виписка» — фіналізатор № рахунку (27.10.2026): раз на 10 хв фіксує «неідентифікований» тим, у кого минули 48 роб. год,
+// навіть якщо екран ніхто не відкривав (пакет Сергія: startIdentFinalizer). Хвилини :04/:14/… — повз :00/:30 синку.
+// Нагляд — MONITORED_JOBS (everyMin == крону).
+cron.schedule("4,14,24,34,44,54 * * * *", () => {
+  void runJob("bankIdentFinalize", () => bankIdentFinalizeOnce());
 }, { timezone: "Europe/Kyiv" });
 // 🏁 Зміни відповідального успішних угод «Повного циклу» поточного й минулого місяця (23.10.2026) — для «Результату
 // місяця» («хто закривав»): щоночі о 04:50 (~200 запитів Kommo по угодах; не поруч із синком о :00/:30).

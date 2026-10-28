@@ -143,8 +143,11 @@ export async function listRoutes(maxAgeDays = 14): Promise<{ from_id: number; to
   }));
 }
 
-export async function recordUsage(userId: number | null, ip: string, frm: string, tox: string): Promise<void> {
-  await pool.query(`INSERT INTO lardi_usage (user_id, ip, frm, tox) VALUES ($1,$2,$3,$4)`, [userId, ip, frm, tox]);
+/** Номер розрахунку — до нього привʼязується відгук «наскільки допоміг» (`core/rateFeedback.ts`). */
+export async function recordUsage(userId: number | null, ip: string, frm: string, tox: string): Promise<number> {
+  const r = await pool.query<{ id: number }>(
+    `INSERT INTO lardi_usage (user_id, ip, frm, tox) VALUES ($1,$2,$3,$4) RETURNING id`, [userId, ip, frm, tox]);
+  return r.rows[0].id;
 }
 
 export async function usageStats(days = 14) {

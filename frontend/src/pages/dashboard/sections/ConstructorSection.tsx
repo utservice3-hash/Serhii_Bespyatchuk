@@ -25,6 +25,7 @@ import {
   type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorIssue, type CtorRegistryCard, type CtorEdrResult, type CtorFieldSource,
   type CtorDirector,
 } from "../../../api";
+import { PAY_ORDER_FOP, payOrderPresets, payOrderAfterPartyChange } from "./ctorPayOrders";
 import { StampView } from "./StampView";
 import "./mockFonts.css";
 import "./constructor.css";
@@ -91,13 +92,7 @@ const TRIP: Array<[string, string, 0 | 1]> = [
 ];
 const INTL_KEYS = ["custAddr", "border", "decustAddr"];
 const FULL = new Set(["route", "cargo", "special", "loadAddr", "unloadAddr", "custAddr", "decustAddr", "reqs", "truck", "driver", "otherResp", "extra"]);
-/* Порядки й форми оплати — з `data/legalTexts.ts` пакета (PAY_ORDERS, PAY_ORDER_FOP, PAY_FORMS). */
-const PAY_ORDERS = [
-  "по отриманні документів", "до дати доставки вантажу",
-  "80% після скан-копій документів, 20% після оригіналів (по 2 банк. дні)",
-  "99% після скан-копій, решта після оригіналів", "відтермінування 14 календарних днів",
-];
-const PAY_ORDER_FOP = "оплата за реквізитами, наданими Експедитором";
+/* Форми оплати — з `data/legalTexts.ts` пакета (PAY_FORMS); порядки оплати — `ctorPayOrders.ts` (окремо клієнт / перевізник, 6475). */
 const PAY_FORMS = ["б/г з ПДВ", "б/г без ПДВ", "готівка"];
 /** Від ТОВ ЮТС готівкою не можна (задача 5887) — сервер блокує формування, форма не пропонує. */
 const CASH = "готівка";
@@ -210,9 +205,11 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const entRow = (k: CtorEntityKey) => entities.find((e) => e.key === k);
   const E = entRow(form.ent);
   const fop = form.ent === "fop";
-  // «Інше…» (задача 5453, 12.10.2026; і для ФОП — Сергій «так, це можна»): текст не з готового списку = власний
-  const orderPresets = fop ? [PAY_ORDER_FOP, ...PAY_ORDERS] : PAY_ORDERS;
-  const orderOther = !orderPresets.includes(form.pay.order);
+  // «Інше…» (задача 5453, 12.10.2026; і для ФОП — Сергій «так, це можна»): текст не з готового списку = власний.
+  // 6475: готового значення немає — порожнє поле це «— оберіть —», а не «Інше…»; «Інше…» з порожнім текстом тримає `orderOtherOn`.
+  const orderPresets = payOrderPresets(form.party, fop);
+  const [orderOtherOn, setOrderOtherOn] = useState(false);
+  const orderOther = orderOtherOn || (!!form.pay.order && !orderPresets.includes(form.pay.order));
   const fopConflict = fop && form.party === "client" && !!form.cp.name && !/^ФОП/i.test(form.cp.name);
   const isMain = form.doc === "main";
   const isNrMain = form.doc === "nrmain", isNrApp = form.doc === "nrapp", isNr = isNrMain || isNrApp;
@@ -225,7 +222,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     setForm((f) => {
       if (f.ent === "fop") return f.pay.form === "СОФТ платіж" ? f : { ...f, pay: { ...f.pay, form: "СОФТ платіж", order: PAY_ORDER_FOP } };
       if (f.pay.form === "СОФТ платіж" || f.pay.order === PAY_ORDER_FOP)
-        return { ...f, pay: { ...f.pay, form: f.pay.form === "СОФТ платіж" ? "б/г без ПДВ" : f.pay.form, order: f.pay.order === PAY_ORDER_FOP ? PAY_ORDERS[0] : f.pay.order } };
+        return { ...f, pay: { ...f.pay, form: f.pay.form === "СОФТ платіж" ? "б/г без ПДВ" : f.pay.form, order: f.pay.order === PAY_ORDER_FOP ? "" : f.pay.order } };
       return f;
     });
   }, [form.ent]);
@@ -424,9 +421,10 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     setForm((f) => {
       const toClient = f.party === "carrier";
       setMirrorCost(toClient ? f.pay.sum : "");
-      return { ...f, party: toClient ? "client" : "carrier", doc: toClient ? "once" : "carr", cp: {}, pay: { ...f.pay, sum: "" }, trip: { ...f.trip, otherResp: "" } };
+      return { ...f, party: toClient ? "client" : "carrier", doc: toClient ? "once" : "carr", cp: {}, pay: { ...f.pay, sum: "", order: payOrderAfterPartyChange(f.ent === "fop") }, trip: { ...f.trip, otherResp: "" } };
     });
     ok("Рейс і № угоди перенесено в заявку для другої сторони — додайте контрагента і його суму.");
+    setOrderOtherOn(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -475,7 +473,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
         cp: row.contractor, trip: row.trip, pay: row.pay, dealNo: row.doc_kind === "main" || row.doc_kind === "nrmain" ? "" : row.deal_no,
         docDate: row.doc_date ? String(row.doc_date).slice(0, 10) : "",
         mainNo: row.doc_kind === "main" || row.doc_kind === "nrmain" ? row.deal_no : (row.main_no || ""), mainDate: row.main_date || "", mainUntil: row.main_until || "" });
-      setMade(null);
+      setMade(null); setOrderOtherOn(false);
       ok("Заявку піднято у форму — внесіть правки і сформуйте нову версію з тим самим №.");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) { await bad(e); }
@@ -488,7 +486,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
         dealNo: r.dealNo || prev.dealNo, intl: !!r.intl,
         cp: { ...prev.cp, ...Object.fromEntries(Object.entries(r.cp).filter(([, v]) => v)) }, trip: { ...prev.trip, ...r.trip },
         pay: r.pay ? { ...prev.pay, ...r.pay } : prev.pay }));
-      setMade(null);
+      setMade(null); setOrderOtherOn(false);
       setOldState(`✓ заявку № ${r.dealNo || "—"} (${r.party === "carrier" ? "перевізник" : "клієнт"}) піднято у форму`);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) { setOldState("✗ " + (await errOf(e))); }
@@ -599,7 +597,9 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
             ["carrier", "Договір із перевізником", "ми замовляємо перевезення й платимо за нього",
               <><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7V8z" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" /></>]] as const).map(([k, n, d, ic]) => (
             <button key={k} className="pcard" aria-pressed={form.party === k}
-              onClick={() => setForm((f) => ({ ...f, party: k, doc: k === "carrier" ? "carr" : (f.doc === "carr" ? "once" : f.doc) }))}>
+              onClick={() => { if (form.party !== k) setOrderOtherOn(false);
+                setForm((f) => ({ ...f, party: k, doc: k === "carrier" ? "carr" : (f.doc === "carr" ? "once" : f.doc),
+                  ...(f.party !== k ? { pay: { ...f.pay, order: payOrderAfterPartyChange(f.ent === "fop") } } : {}) })); }}>
               <span className="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">{ic}</svg></span>
               <span><span className="nm">{n}</span><br /><span className="ds">{d}</span></span>
             </button>
@@ -825,7 +825,8 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                     {/* 5887: від ЮТС готівки в списку немає; прийшла зі старої заявки — видно, і «Сформувати» заблоковано */}
                     {form.ent === "uts" && form.pay.form === CASH && <option value={CASH} disabled>готівка — заборонено для ЮТС</option>}</select>
                     <FieldMsg is={iss("pay.form")} /></div>
-                  <div className="fld"><label htmlFor="payorder">Порядок і строки оплати</label><select id="payorder" value={orderOther ? OTHER : form.pay.order} onChange={(e) => setPay("order", e.target.value === OTHER ? "" : e.target.value)}>
+                  <div className="fld"><label htmlFor="payorder">Порядок і строки оплати</label><select id="payorder" value={orderOther ? OTHER : form.pay.order} onChange={(e) => { const v = e.target.value; setOrderOtherOn(v === OTHER); setPay("order", v === OTHER ? "" : v); }}>
+                    <option value="" disabled>— оберіть порядок оплати —</option>
                     {orderPresets.map((o) => <option key={o}>{o}</option>)}<option value={OTHER}>Інше…</option></select>
                     {orderOther && <input type="text" value={form.pay.order} onChange={(e) => setPay("order", e.target.value)} placeholder="напр. 50% передоплата, 50% після розвантаження" style={{ marginTop: 6 }} />}
                     <FieldMsg is={iss("pay.order")} /></div></>}

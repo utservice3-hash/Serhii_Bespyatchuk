@@ -2,16 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { addPeriod, occurrences, shiftYm, buildMonths, remindersFor, undoable, type RecItem, type PaidRow } from "./finRecurring.js";
+import { addPeriod, occurrences, shiftYm, buildMonths, planHintsOf, undoable, type RecItem, type PaidRow } from "./finRecurring.js";
 
 /**
- * 📅 «Календар оплат» (задача Тетяни #6369, 27.10.2026; макет «Г» — Роман). Гейти `#1291`–`#1291f` (вільні в `main` і в
- * усіх гілках на 27.10.2026).
+ * 📅 «Календар оплат» (задача Тетяни #6369, 27.10.2026; макет «Г» — Роман). Гейти `#1291`–`#1291f` (прохід 1) і
+ * `#1292`–`#1292e` (прохід 2: стаття й місяць, підказка в «План/факті»; `#1291c`/`#1291d`/`#1291f` знято — RETIRED_GATES).
  */
 const SRC = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
 const FE = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", rel), "utf8");
-const item = (o: Partial<RecItem>): RecItem => ({ id: 1, name: "Оренда", amount: 45000, period: "month", anchorDay: 5, next: "2026-11-05", payerId: 8, payer: "Тетяна", note: null, active: true, ...o });
-const paid = (o: Partial<PaidRow>): PaidRow => ({ id: 1, recurringId: 1, name: "Оренда", due: "2026-10-05", amount: 45000, planned: 45000, by: "Тетяна", at: "2026-10-05T09:00:00Z", cancelledBy: null, cancelledAt: null, ...o });
+const item = (o: Partial<RecItem>): RecItem => ({ id: 1, itemId: 101, name: "Оренда", amount: 45000, period: "month", anchorDay: 1, next: "2026-11-01", note: null, active: true, ...o });
+const paid = (o: Partial<PaidRow>): PaidRow => ({ id: 1, recurringId: 1, name: "Оренда", due: "2026-10-01", amount: 45000, planned: 45000, by: "Тетяна", at: "2026-10-05T09:00:00Z", cancelledBy: null, cancelledAt: null, ...o });
 
 /**
  * #1291 — «ДЕНЬ ОПЛАТИ» НЕ ЗʼЇЖДЖАЄ. Наступна дата рахується від ЯКОРЯ, а не від попередньої: 31.01 → 28.02 → 31.03;
@@ -34,41 +34,27 @@ test("#1291 ДЕНЬ ОПЛАТИ НЕ ЗʼЇЖДЖАЄ: 31.01 → 28.02 → 31.
 /**
  * #1291b — СМУГА МІСЯЦІВ. Ліворуч — минуле аж до першої живої оплати (не менше 6 міс.), праворуч — 18 міс. Минуле — лише
  * реально оплачене (графік у минуле не малюється), майбутнє — з графіка увімкнених оплат; скасована позначка в смугу не
- * йде; вимкнена оплата — не планується, але її оплати лишаються; прострочене — «overdue»; «Оплачено» — лише на поточній
- * даті; «Скасувати» — лише на останній позначці.
+ * йде; вимкнена оплата — не планується, але її оплати лишаються; минулий неоплачений місяць — «overdue», поточний —
+ * «soon»; «Оплачено» — лише на поточному місяці; «Скасувати» — лише на останній позначці.
  * 🧨 Червоніє, якщо смуга обріже історію, намалює графік у минуле, покаже скасоване чи дасть скасувати не останню.
  */
 test("#1291b СМУГА: минуле — лише оплачене аж до першої оплати, майбутнє — графік, скасоване й вимкнене — не плануються", () => {
-  const items = [item({ id: 1, next: "2026-11-05" }), item({ id: 2, name: "Хостинг", amount: 1200, anchorDay: 20, next: "2026-10-20" }), item({ id: 3, name: "Старе", active: false, next: "2026-08-01", anchorDay: 1 })];
-  const p = [paid({ id: 1, due: "2025-12-05" }), paid({ id: 2, due: "2026-10-05" }), paid({ id: 3, recurringId: 2, name: "Хостинг", due: "2026-09-20", amount: 1200, planned: 1200, cancelledAt: "2026-09-21T10:00:00Z", cancelledBy: "Роман" }),
+  const items = [item({ id: 1, next: "2026-11-01" }), item({ id: 2, name: "Хостинг", amount: 1200, next: "2026-09-01" }), item({ id: 3, name: "Старе", active: false, next: "2026-08-01" })];
+  const p = [paid({ id: 1, due: "2025-12-01" }), paid({ id: 2, due: "2026-10-01" }), paid({ id: 3, recurringId: 2, name: "Хостинг", due: "2026-08-01", amount: 1200, planned: 1200, cancelledAt: "2026-09-21T10:00:00Z", cancelledBy: "Роман" }),
     paid({ id: 4, recurringId: 3, name: "Старе", due: "2026-07-01", amount: 700, planned: 700 })];
   const m = buildMonths(items, p, "2026-10-27");
   assert.deepEqual([m[0].ym, m[0].offset, m.at(-1)!.ym], ["2025-12", -10, "2028-04"], "🔴 смуга не від першої оплати чи не на 18 міс.");
   assert.equal(buildMonths(items, [], "2026-10-27")[0].ym, "2026-04", "🔴 без історії — не 6 міс. назад");
-  const oct = m.find((x) => x.ym === "2026-10")!;
-  assert.deepEqual(oct.events.map((e) => [e.recurringId, e.date, e.kind, e.due]), [[1, "2026-10-05", "paid", false], [2, "2026-10-20", "overdue", true]], "🔴 жовтень");
-  assert.deepEqual([oct.sum, oct.paid, oct.overdue], [46200, 45000, 1200], "🔴 суми жовтня");
-  assert.deepEqual(m.find((x) => x.ym === "2026-09")!.events, [], "🔴 скасоване чи графік у минуле потрапили у вересень");
+  const sep = m.find((x) => x.ym === "2026-09")!, oct = m.find((x) => x.ym === "2026-10")!;
+  assert.deepEqual(sep.events.map((e) => [e.recurringId, e.kind, e.due]), [[2, "overdue", true]], "🔴 неоплачений минулий місяць не «прострочено»");
+  assert.deepEqual(oct.events.map((e) => [e.recurringId, e.kind, e.due]), [[1, "paid", false], [2, "soon", false]], "🔴 жовтень");
+  assert.deepEqual([oct.sum, oct.paid, sep.overdue], [46200, 45000, 1200], "🔴 суми місяців");
+  assert.deepEqual(m.find((x) => x.ym === "2026-08")!.events, [], "🔴 скасоване чи графік у минуле потрапили в серпень");
   assert.deepEqual(m.find((x) => x.ym === "2026-07")!.events.map((e) => e.recurringId), [3], "🔴 оплата вимкненої зникла з історії");
   assert.ok(m.every((x) => x.events.every((e) => e.recurringId !== 3 || e.kind === "paid")), "🔴 вимкнена оплата планується");
-  const nov = m.find((x) => x.ym === "2026-11")!.events;
-  assert.deepEqual(nov.map((e) => [e.recurringId, e.kind, e.due]), [[1, "plan", true], [2, "plan", false]], "🔴 листопад: «Оплачено» не лише на поточній даті");
+  assert.deepEqual(m.find((x) => x.ym === "2026-11")!.events.map((e) => [e.recurringId, e.kind, e.due]), [[1, "plan", true], [2, "plan", false]], "🔴 «Оплачено» не лише на поточному місяці");
   const byId = new Map(items.map((i) => [i.id, i]));
   assert.deepEqual([undoable(p[1], byId), undoable(p[0], byId), undoable(p[2], byId)], [true, false, false], "🔴 скасувати можна не лише останню живу");
-});
-
-/**
- * #1291c — КОМУ Й КОЛИ НАГАДУВАТИ. Лише тому, хто платить; за 3 дні (3 — так, 4 — ні), у день оплати і щодня після;
- * вимкнена оплата й оплата без платника — нікому.
- * 🧨 Червоніє, якщо межу зсунуть, нагадають чужому чи про вимкнене.
- */
-test("#1291c НАГАДУВАННЯ: лише платнику, за 3 дні (4 — ні), у день оплати і щодня після, вимкнене — нікому", () => {
-  const today = "2026-10-27";
-  const items = [item({ id: 1, next: "2026-10-30" }), item({ id: 2, next: "2026-10-31" }), item({ id: 3, next: "2026-10-27" }), item({ id: 4, next: "2026-10-20" }),
-    item({ id: 5, next: "2026-10-27", payerId: 50 }), item({ id: 6, next: "2026-10-27", active: false }), item({ id: 7, next: "2026-10-27", payerId: null })];
-  assert.deepEqual(remindersFor(items, 8, today).map((r) => [r.id, r.days]), [[4, -7], [3, 0], [1, 3]], "🔴 межа 3 днів, сьогодні чи прострочене");
-  assert.deepEqual(remindersFor(items, 50, today).map((r) => r.id), [5], "🔴 нагадало не тому, хто платить");
-  assert.deepEqual(remindersFor(items, 8, today, 4).map((r) => r.id), [4, 3, 1, 2], "🔴 lead не діє");
 });
 
 async function scratchDb(t: { skip: (m: string) => void }) {
@@ -84,15 +70,24 @@ async function scratchDb(t: { skip: (m: string) => void }) {
   } catch (e) { await c.end().catch(() => undefined); scratch.dispose(); throw e; }
   return { c, dispose: async () => { await c.end(); scratch.dispose(); } };
 }
+/** Відповідальний → група → дві статті (друга видалена); користувачі Тетяна (8) і Роман (50). */
+async function seed(c: import("pg").Client): Promise<{ rent: number; gone: number }> {
+  await c.query(`INSERT INTO users (id, email, password_hash, role, is_active, full_name) VALUES (8, 'fin@test', 'x', 'admin', true, 'Тетяна'), (50, 'adm@test', 'x', 'admin', true, 'Роман')`);
+  const r = (await c.query(`INSERT INTO fin_resps (name) VALUES ('Тетяна') RETURNING id`)).rows[0].id;
+  const g = (await c.query(`INSERT INTO fin_groups (resp_id, name) VALUES ($1, 'Офіс') RETURNING id`, [r])).rows[0].id;
+  const rent = (await c.query(`INSERT INTO fin_items (group_id, name) VALUES ($1, 'Оренда офісу') RETURNING id`, [g])).rows[0].id;
+  const gone = (await c.query(`INSERT INTO fin_items (group_id, name, deleted_at) VALUES ($1, 'Стара стаття', now()) RETURNING id`, [g])).rows[0].id;
+  return { rent, gone };
+}
 
 /**
- * #1291d — ЖИВИЙ SQL: ЗАПИС І ІСТОРІЯ. Створити — лише з платником, що має право (інакше 400, нічого не пишеться);
- * «Оплачено» — лише поточна дата (інша / повторно — 409 без запису), фактична сума окремо від планової, дата зсувається на
- * період; «Скасувати» — лише останню, рядок лишається «скасовано», дата повертається; після скасування можна оплатити
- * знову; вимкнути — оплатити не можна, історія ціла. Рядків історії ніколи не меншає.
- * 🧨 Червоніє, якщо подвійне натискання дасть дві оплати, скасування зітре рядок чи чужий платник пройде.
+ * #1292 — ЖИВИЙ SQL: ОПЛАТА — СТАТТЯ Й МІСЯЦЬ. Без статті / видалена стаття / нульова сума / без місяця — 400 і нічого не
+ * пишеться; місяць — завжди 1-ше; назва — назва статті (з приміткою в історії); «Оплачено» — лише поточний місяць (інший
+ * чи повторно — 409 без запису), фактична сума окремо від планової; «Скасувати» — лише останню, рядок лишається
+ * «скасовано»; після скасування можна оплатити знову; вимкнену — не оплатити. Рядків історії ніколи не меншає.
+ * 🧨 Червоніє, якщо подвійне натискання дасть дві оплати, скасування зітре рядок, а видалена стаття стане оплатою.
  */
-test("#1291d ЖИВИЙ SQL: оплата лише поточної дати, скасування лишає рядок, історія не меншає, платник — лише з правом", async (t) => {
+test("#1292 ЖИВИЙ SQL: оплата — стаття й місяць, «Оплачено» лише поточного місяця, скасування лишає рядок, історія не меншає", async (t) => {
   const s = await scratchDb(t);
   if (!s) return;
   const { c } = s;
@@ -100,46 +95,89 @@ test("#1291d ЖИВИЙ SQL: оплата лише поточної дати, с
   const db = c as unknown as import("./finance.js").Db;
   const rows = async () => (await c.query(`SELECT count(*)::int AS n FROM fin_recurring_paid`)).rows[0].n as number;
   try {
-    await c.query(`INSERT INTO users (id, email, password_hash, role, is_active, full_name) VALUES (8, 'fin@test', 'x', 'admin', true, 'Тетяна'), (50, 'adm@test', 'x', 'admin', true, 'Роман'), (60, 'm@test', 'x', 'manager', true, 'Менеджер')`);
-    await c.query(`UPDATE users SET role_override = 'financier' WHERE id = 8`);
-    await c.query(`UPDATE roles SET permissions = permissions || '{"view_private_finance": true}'::jsonb WHERE key IN ('admin', 'financier')`);
-    const body = { name: "Оренда офісу", amount: "45 000", period: "month", date: "2026-01-31", payerId: 8, note: "до 1-го" };
-    await assert.rejects(createRecurring(db, 50, { ...body, payerId: 60 }), (e: any) => e?.status === 400, "🔴 платник без права пройшов");
-    await assert.rejects(createRecurring(db, 50, { ...body, amount: "0" }), (e: any) => e?.status === 400, "🔴 нульова сума пройшла");
-    await assert.rejects(createRecurring(db, 50, { ...body, date: "2026-02-30" }), (e: any) => e?.status === 400, "🔴 неіснуюча дата пройшла");
+    const { rent, gone } = await seed(c);
+    const body = { itemId: rent, amount: "45 000", period: "month", month: "2026-01", note: "ФОП Коваль" };
+    for (const [why, b] of [["видалена стаття", { ...body, itemId: gone }], ["без статті", { ...body, itemId: null }], ["нульова сума", { ...body, amount: "0" }], ["без місяця", { ...body, month: "2026-13" }]] as const)
+      await assert.rejects(createRecurring(db, 50, b), (e: any) => e?.status === 400, `🔴 пройшло: ${why}`);
     assert.equal((await c.query(`SELECT count(*)::int AS n FROM fin_recurring`)).rows[0].n, 0, "🔴 відмова щось записала");
     const id = await createRecurring(db, 50, body);
-    await assert.rejects(payRecurring(db, 8, id, { due: "2026-02-28" }), (e: any) => e?.status === 409, "🔴 оплачено не поточну дату");
-    const p1 = await payRecurring(db, 8, id, { due: "2026-01-31", amount: "45 500" });
-    assert.equal(p1.next, "2026-02-28", "🔴 дата не зсунулась на місяць");
-    await assert.rejects(payRecurring(db, 8, id, { due: "2026-01-31" }), (e: any) => e?.status === 409, "🔴 подвійне натискання дало другу оплату");
-    const p2 = await payRecurring(db, 50, id, { due: "2026-02-28" });
-    assert.equal(p2.next, "2026-03-31", "🔴 день оплати зʼїхав після лютого");
-    assert.equal(await rows(), 2, "🔴 оплат не дві");
+    assert.deepEqual((await c.query(`SELECT name, next_due::text AS d, anchor_day AS a FROM fin_recurring WHERE id = $1`, [id])).rows[0], { name: "Оренда офісу", d: "2026-01-01", a: 1 }, "🔴 не стаття чи не 1-ше");
+    await assert.rejects(payRecurring(db, 8, id, { due: "2026-02-01" }), (e: any) => e?.status === 409, "🔴 оплачено не поточний місяць");
+    const p1 = await payRecurring(db, 8, id, { due: "2026-01-01", amount: "45 500" });
+    assert.equal(p1.next, "2026-02-01", "🔴 місяць не зсунувся");
+    await assert.rejects(payRecurring(db, 8, id, { due: "2026-01-01" }), (e: any) => e?.status === 409, "🔴 подвійне натискання дало другу оплату");
+    const p2 = await payRecurring(db, 50, id, { due: "2026-02-01" });
     await assert.rejects(undoPaid(db, 50, p1.paidId), (e: any) => e?.status === 409, "🔴 скасовано не останню");
-    assert.equal((await undoPaid(db, 50, p2.paidId)).next, "2026-02-28", "🔴 дата не повернулась");
-    await assert.rejects(undoPaid(db, 50, p2.paidId), (e: any) => e?.status === 409, "🔴 скасовано двічі");
+    assert.equal((await undoPaid(db, 50, p2.paidId)).next, "2026-02-01", "🔴 місяць не повернувся");
     assert.equal(await rows(), 2, "🔴 скасування стерло рядок");
-    await payRecurring(db, 8, id, { due: "2026-02-28", amount: "44 000" });
+    await payRecurring(db, 8, id, { due: "2026-02-01", amount: "44 000" });
     assert.equal(await rows(), 3, "🔴 після скасування не можна оплатити знову");
     await updateRecurring(db, 50, id, { active: false });
-    await assert.rejects(payRecurring(db, 8, id, { due: "2026-03-31" }), (e: any) => e?.status === 400, "🔴 оплачено вимкнене");
+    await assert.rejects(payRecurring(db, 8, id, { due: "2026-03-01" }), (e: any) => e?.status === 400, "🔴 оплачено вимкнене");
     const cal = await loadCalendar(db, "2026-04-10");
-    assert.deepEqual(cal.history.map((h) => [h.due, h.amount, h.planned, h.by, !!h.cancelledAt]),
-      [["2026-02-28", 44000, 45000, "Тетяна", false], ["2026-02-28", 45000, 45000, "Роман", true], ["2026-01-31", 45500, 45000, "Тетяна", false]], "🔴 історія");
-    assert.deepEqual(cal.payers.map((p) => p.name), ["Роман", "Тетяна"], "🔴 платники — не рівно ті, хто має право");
-    assert.equal(cal.items[0].active, false, "🔴 вимкнення не записалось");
+    assert.deepEqual(cal.history.map((h) => [h.due, h.amount, h.planned, h.by, !!h.cancelledAt, h.name]),
+      [["2026-02-01", 44000, 45000, "Тетяна", false, "Оренда офісу · ФОП Коваль"], ["2026-02-01", 45000, 45000, "Роман", true, "Оренда офісу · ФОП Коваль"], ["2026-01-01", 45500, 45000, "Тетяна", false, "Оренда офісу · ФОП Коваль"]], "🔴 історія");
+    assert.deepEqual(cal.articles.map((a) => a.name), ["Оренда офісу"], "🔴 у списку статей видалена чи немає живої");
   } finally { await s.dispose(); }
+});
+
+/**
+ * #1292b — ЖИВИЙ SQL: «ДОДАТИ В ПЛАН». Сума ДОДАЄТЬСЯ до наявного плану статті (порожній — стає сумою); дві оплати на одну
+ * статтю — кожна своєю кнопкою; вдруге та сама — 409, план не змінюється; місяць, на який оплата не припадає, — 400;
+ * погоджений місяць — 409 і нічого не записано (ні план, ні «додано»); запис іде в журнал змін «Фінансів».
+ * 🧨 Червоніє, якщо кнопка перепише план замість додати, додасть двічі чи обійде замок погодженого місяця.
+ */
+test("#1292b ЖИВИЙ SQL: «додати в план» — сума до наявного плану, двічі — 409, не той місяць — 400, погоджений — 409 без запису, журнал є", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const { createRecurring, addToPlan, loadPlanHints } = await import("./finRecurring.js");
+  const db = c as unknown as import("./finance.js").Db;
+  const plan = async (itemId: number, m: string) => (await c.query(`SELECT plan::float8 AS p FROM fin_values WHERE item_id = $1 AND month = $2::date`, [itemId, m])).rows[0]?.p ?? null;
+  try {
+    const { rent } = await seed(c);
+    const a = await createRecurring(db, 50, { itemId: rent, amount: "45000", period: "month", month: "2026-11" });
+    const b = await createRecurring(db, 50, { itemId: rent, amount: "5000", period: "quarter", month: "2026-11", note: "склад" });
+    await c.query(`INSERT INTO fin_values (item_id, month, plan) VALUES ($1, '2026-11-01', 10000)`, [rent]);
+    assert.deepEqual(await addToPlan(db, 8, { recurringId: a, month: "2026-11" }), { before: 10000, after: 55000 }, "🔴 не додало до наявного плану");
+    await assert.rejects(addToPlan(db, 8, { recurringId: a, month: "2026-11" }), (e: any) => e?.status === 409, "🔴 додано вдруге");
+    assert.equal(await plan(rent, "2026-11-01"), 55000, "🔴 повторна спроба змінила план");
+    assert.deepEqual(await addToPlan(db, 50, { recurringId: b, month: "2026-11" }), { before: 55000, after: 60000 }, "🔴 друга оплата статті");
+    await assert.rejects(addToPlan(db, 8, { recurringId: b, month: "2026-12" }), (e: any) => e?.status === 400, "🔴 квартальна додалась у місяць без оплати");
+    assert.deepEqual((await addToPlan(db, 8, { recurringId: a, month: "2026-12" })), { before: null, after: 45000 }, "🔴 порожній план не став сумою");
+    await c.query(`INSERT INTO fin_plan_approvals (month, approved_by) VALUES ('2027-01-01', 50)`);
+    await assert.rejects(addToPlan(db, 8, { recurringId: a, month: "2027-01" }), (e: any) => e?.status === 409, "🔴 обійдено замок погодженого місяця");
+    assert.deepEqual([await plan(rent, "2027-01-01"), (await c.query(`SELECT count(*)::int AS n FROM fin_recurring_planned WHERE month = '2027-01-01'`)).rows[0].n], [null, 0], "🔴 погоджений місяць щось записав");
+    const h = await loadPlanHints(db, "2026-11");
+    assert.deepEqual(h.map((x) => [x.recurringId, x.note, x.added?.amount, x.added?.by]), [[a, null, 45000, "Тетяна"], [b, "склад", 5000, "Роман"]], "🔴 підказки не кажуть, що й хто додав");
+    assert.ok((await c.query(`SELECT count(*)::int AS n FROM fin_log WHERE target_id = $1 AND field = 'plan'`, [rent])).rows[0].n >= 3, "🔴 «додати в план» не в журналі змін");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1292c — ПІДКАЗКИ МІСЯЦЯ. Що за графіком припадає на місяць (квартальна — лише в свої місяці), що в ньому вже оплачено
+ * (фактична сума; і тоді, коли оплату потім вимкнули), скасоване — ні, вимкнене без оплати — ні; кілька оплат на статтю —
+ * окремо; «додано» — з тим, хто додав.
+ * 🧨 Червоніє, якщо підказка зʼявиться не в той місяць, сховає оплачене чи покаже скасоване.
+ */
+test("#1292c ПІДКАЗКИ МІСЯЦЯ: графік і оплачене в місяці, скасоване й вимкнене — ні, кілька на статтю — окремо, «додано» з автором", () => {
+  const items = [item({ id: 1, next: "2026-11-01" }), item({ id: 2, amount: 5000, period: "quarter", next: "2026-11-01", note: "склад" }), item({ id: 3, itemId: 102, active: false, next: "2026-11-01" })];
+  const p = [paid({ id: 1, recurringId: 1, due: "2026-10-01", amount: 45500 }), paid({ id: 2, recurringId: 3, due: "2026-10-01", amount: 700 }), paid({ id: 3, recurringId: 2, due: "2026-08-01", cancelledAt: "2026-08-02T00:00:00Z" })];
+  const added = new Map([["1@2026-11", { amount: 45000, by: "Тетяна", at: "2026-10-27T10:00:00Z" }]]);
+  assert.deepEqual(planHintsOf(items, p, added, "2026-11").map((h) => [h.recurringId, h.amount, h.paid, h.added?.by ?? null]), [[1, 45000, false, "Тетяна"], [2, 5000, false, null]], "🔴 листопад");
+  assert.deepEqual(planHintsOf(items, p, new Map(), "2026-12").map((h) => h.recurringId), [1], "🔴 квартальна в чужому місяці");
+  assert.deepEqual(planHintsOf(items, p, new Map(), "2027-02").map((h) => h.recurringId), [1, 2], "🔴 квартальна не у свій місяць");
+  assert.deepEqual(planHintsOf(items, p, new Map(), "2026-10").map((h) => [h.recurringId, h.amount, h.paid]), [[1, 45500, true], [3, 700, true]], "🔴 оплачене (і вимкнене потім) не показано");
+  assert.deepEqual(planHintsOf(items, p, new Map(), "2026-08"), [], "🔴 скасоване показано");
 });
 
 const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => { const p = path.join(dir, f); return statSync(p).isDirectory() ? walk(p) : [p]; });
 
 /**
- * #1291e — ОКРЕМО ВІД ПЛАНУ/ФАКТУ І БЕЗ ВИДАЛЕННЯ. SQL по таблицях календаря (`FROM` / `JOIN` / `INTO` / `UPDATE`) є лише в `core/finRecurring.ts` (жоден
- * модуль Плану/факту, Результату, KPI, Каси їх не бачить); видалення з них (`DELETE` / `TRUNCATE`) немає ніде в коді.
- * Сама перевірка обходить УСІ файли `backend/src` (не лише ті, де є слово), і для доказу, що їй є що знаходити, звіряє:
- * файлів більше сотні, а ядро календаря таблиці справді згадує.
- * 🧨 Червоніє, якщо хтось підключить календар до Плану/факту чи додасть видалення історії.
+ * #1291e — ОКРЕМО Й БЕЗ ВИДАЛЕННЯ. SQL по таблицях календаря (`FROM` / `JOIN` / `INTO` / `UPDATE`) є лише в
+ * `core/finRecurring.ts` («План/факт» отримує підказки ЧЕРЕЗ нього, а не власним запитом); видалення з них (`DELETE` /
+ * `TRUNCATE`) немає ніде в коді. Перевірка обходить УСІ файли `backend/src` (не лише ті, де є слово); файлів має бути понад сотню.
+ * 🧨 Червоніє, якщо хтось почне читати календар власним SQL чи додасть видалення історії.
  */
 test("#1291e ІЗОЛЯЦІЯ: таблиці календаря — лише в ядрі календаря, видалення з них немає ніде", () => {
   const root = path.join(import.meta.dirname, "..", "..", "src");
@@ -152,37 +190,56 @@ test("#1291e ІЗОЛЯЦІЯ: таблиці календаря — лише в
 });
 
 /**
- * #1291f — МЕЖА Й ПРОВОДКА. Сім роутів, кожен — `view_private_finance` ПЕРШИМ middleware; роутер змонтовано ДО загального
- * `/api/finance`; у матриці перегляд — Адмін і фінансист, СЕО / ОД / КВП — заборона (дзеркало), запис — deny-only; таблиці
- * закриті від AI; вкладка «Календар оплат» без права — напис і без запиту; нагадування в меню — лише з правом, раз на день.
- * 🧨 Червоніє, якщо зняти право з роута, відкрити календар СЕО/ОД/КВП чи вмикати опитування всім.
+ * #1292d — ПЛАН ЛИШЕ ЧЕРЕЗ `saveValues`. Календар не пише `fin_values` власним SQL (лише читає поточний план), а
+ * «додати в план» кличе `saveValues` ДО запису «додано» — тож замок погодженого місяця, вимкнена стаття й журнал змін ті
+ * самі, що в ручного «Зберегти», і відмова не лишає «додано» без плану.
+ * 🧨 Червоніє, якщо хтось запише план напряму чи поміняє порядок.
  */
-test("#1291f МЕЖА: сім роутів під view_private_finance, матриця, AI закрито, вкладка й нагадування — лише з правом", async () => {
+test("#1292d ПЛАН ЛИШЕ ЧЕРЕЗ saveValues: жодного запису fin_values у календарі, «додано» — після збереження плану", () => {
+  const src = SRC("core/finRecurring.ts");
+  assert.doesNotMatch(src, /(INSERT\s+INTO|UPDATE)\s+fin_values/i, "🔴 календар пише план напряму");
+  const fn = src.slice(src.indexOf("export async function addToPlan"), src.indexOf("const dmy ="));
+  assert.ok(fn.length > 100, "🔴 не знайдено addToPlan");
+  const save = fn.indexOf(`await saveValues(db, actor, ym, [{ itemId: h.itemId, field: "plan", value: after }]);`);
+  assert.ok(save > 0 && save < fn.indexOf("INSERT INTO fin_recurring_planned"), "🔴 «додано» пишеться не після збереження плану через saveValues");
+});
+
+/**
+ * #1292e — МЕЖА Й ПРОВОДКА. Шість роутів календаря, кожен — `view_private_finance` ПЕРШИМ middleware, змонтовані ДО
+ * `/api/finance`; підказки й «додати в план» — у межі «Фінансів» (`onlyFinance` / `canEdit` першим: бачать «Таня +
+ * керівництво»); у матриці — дзеркала; таблиці закриті від AI; нагадувань у меню більше немає; форма — стаття зі списку й
+ * місяць, без «хто платить»; у «План/факті» підказка біля статті, кнопка — лише з правом і на непогодженому плані.
+ * 🧨 Червоніє, якщо відкрити календар СЕО/ОД/КВП, сховати підказки від керівництва чи повернути «хто платить».
+ */
+test("#1292e МЕЖА: шість роутів календаря під view_private_finance, підказки — межа «Фінансів», форма — стаття й місяць, кнопка лише з правом", async () => {
   const r = SRC("routes/financeCalendar.ts");
   const handlers = [...r.matchAll(/financeCalendarRouter\.(get|post|put|patch|delete)\("([^"]+)",\s*([^,]+),/g)];
-  assert.equal(handlers.length, 7, "🔴 обробників не рівно сім — гейт не бачить нового роута");
+  assert.equal(handlers.length, 6, "🔴 обробників не рівно шість — гейт не бачить нового роута");
   for (const [, m, p, first] of handlers) assert.equal(first.trim(), `requirePerm("view_private_finance")`, `🔴 ${m.toUpperCase()} ${p}: першим стоїть «${first.trim()}»`);
   const idx = SRC("index.ts");
   assert.ok(idx.indexOf(`app.use("/api/finance/calendar", financeCalendarRouter);`) > 0 && idx.indexOf(`app.use("/api/finance/calendar", financeCalendarRouter);`) < idx.indexOf(`app.use("/api/finance", financeRouter);`), "🔴 роутер не змонтовано до /api/finance");
+  const fin = SRC("routes/finance.ts");
+  assert.match(fin, /financeRouter\.get\("\/plan-hints", async \(req, res\) => \{\n\s*try \{\n\s*onlyFinance\(req\);/, "🔴 підказки не в межі «Фінансів»");
+  assert.match(fin, /financeRouter\.post\("\/plan-hints\/add", async \(req, res\) => \{\n\s*try \{\n\s*canEdit\(req\);/, "🔴 «додати в план» не за правом вносити");
   const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js");
   const row = (method: string, p: string) => ACCESS_MATRIX.find((x) => x.method === method && x.path === p);
-  for (const p of ["/api/finance/calendar", "/api/finance/calendar/due", "/api/finance/calendar/history.xlsx"]) {
+  for (const p of ["/api/finance/calendar", "/api/finance/calendar/history.xlsx"]) {
     assert.deepEqual([...(row("GET", p)?.allow ?? [])].sort(), ["admin", "financier"], `🔴 ${p}: дозвіл не рівно Адмін і фінансист`);
     for (const role of ["ceo", "opdir", "kvp", "manager"]) assert.ok(row("GET", p)!.deny.includes(role), `🔴 ${p}: ${role} не в забороні`);
   }
-  for (const [m, p] of [["POST", "/api/finance/calendar"], ["PATCH", "/api/finance/calendar/:id"], ["POST", "/api/finance/calendar/:id/pay"], ["POST", "/api/finance/calendar/paid/:id/undo"]])
-    assert.deepEqual([row(m, p)?.cls, row(m, p)?.deny], ["deny-only", ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"]], `🔴 ${m} ${p} не в матриці`);
-  for (const t of ["fin_recurring", "fin_recurring_paid"]) {
+  assert.equal(row("GET", "/api/finance/calendar/due"), undefined, "🔴 у матриці лишився знятий роут нагадувань");
+  assert.deepEqual([...(row("GET", "/api/finance/plan-hints?m=2026-11")?.allow ?? [])].sort(), ["admin", "ceo", "financier", "kvp", "opdir"], "🔴 підказки не «Таня + керівництво»");
+  assert.deepEqual(row("POST", "/api/finance/plan-hints/add")?.deny, ["hr", "team_lead", "manager"], "🔴 «додати в план» не в матриці");
+  for (const t of ["fin_recurring", "fin_recurring_paid", "fin_recurring_planned"]) {
     assert.match(SRC("db/schema.sql"), new RegExp(`REVOKE ALL ON ${t} FROM ai_readonly;`), `🔴 ${t} відкрита для AI`);
     assert.match(SRC("ai/metricTools.ts"), new RegExp(`"${t}"`), `🔴 ${t} не в заборонених AI`);
   }
-  const sec = FE("pages/dashboard/sections/FinanceSection.tsx"), tab = FE("pages/dashboard/sections/FinanceCalendarTab.tsx");
-  assert.match(sec, /\{tab === "calendar" && <FinanceCalendarTab \/>\}/, "🔴 вкладка не рендерить календар");
-  assert.match(sec, /\["calendar", "Календар оплат", false\]/, "🔴 вкладки немає в «Фінансах»");
-  assert.match(tab, /const canView = \(getAuthPayload\(\)\?\.perms \?\? \[\]\)\.includes\("view_private_finance"\);/, "🔴 вкладка не за view_private_finance");
+  const tab = FE("pages/dashboard/sections/FinanceCalendarTab.tsx"), sec = FE("pages/dashboard/sections/FinanceSection.tsx");
   assert.match(tab, /if \(!canView\) return;\n\s*fetchFinCalendar\(\)/, "🔴 без права вкладка все одно просить дані");
-  assert.ok(tab.indexOf("if (!canView) return <div") < tab.indexOf("<section"), "🔴 вміст рендериться до перевірки права");
-  assert.match(FE("components/Layout.tsx"), /useFinanceReminders\(\(!screens \|\| screens\.includes\("finance"\)\) && \(getAuthPayload\(\)\?\.perms \?\? \[\]\)\.includes\("view_private_finance"\)/, "🔴 нагадування опитує без права");
-  const hook = FE("components/useFinanceReminders.ts");
-  assert.match(hook, /const fresh = d\.items\.filter\(\(r\) => !was\.includes\(`\$\{r\.id\}@\$\{r\.next\}`\)\);\n\s*if \(!fresh\.length\) return;/, "🔴 повідомлення не раз на день");
+  assert.match(tab, /<select className="hr-inp"[^>]*value=\{form\.itemId\}/, "🔴 «Назва» — не список статей");
+  assert.match(tab, /type="month" value=\{form\.month\}/, "🔴 замість місяця — дата");
+  assert.doesNotMatch(tab, /Хто платить|payerId/, "🔴 повернувся «хто платить»");
+  assert.doesNotMatch(FE("components/Layout.tsx"), /useFinanceReminders/, "🔴 нагадування в меню повернулось");
+  assert.match(sec, /<PlanHints hints=\{hints\.get\(it\.id\)\}/, "🔴 підказки немає в рядку статті");
+  assert.match(sec, /const canAdd = data\.canEdit && !planLocked;/, "🔴 кнопка без права чи на погодженому плані");
 });

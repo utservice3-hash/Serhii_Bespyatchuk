@@ -6622,6 +6622,14 @@ CREATE TABLE IF NOT EXISTS client_limit_events (
 );
 CREATE INDEX IF NOT EXISTS client_limit_events_idx ON client_limit_events (limit_id, at, id);
 
+-- 🧹 «0 ДНІВ» У ДЕБІТОРЦІ — ЦЕ «У ВІДСТРОЧЦІ ВІДМОВЛЕНО», А НЕ ЛІМІТ НА 0 ДНІВ (Роман 27.10.2026: «роби і техноген теж»).
+-- Перший перенос 25.10 приніс такі рядки в «Ліміти клієнтів» як ліміт 0 днів (ТЕХНОГЕН, ІНДЕКС): колонка писала «0 дн. від
+-- рахунку», а плитка «Активної дебіторки» — «ліміт не узгоджено». Тепер `legacyRow` не переносить 0 днів як дні; тут — разове
+-- прибирання вже перенесеного. Лише рядки ПЕРЕНОСУ (src='debt' з приміткою переносу); idempotent: другий прогін нічого не знаходить.
+-- Ліміт у дебіторці (`client_credit_limits` = 0) не чіпається — він і далі каже «відмовлено». Гейт `#2483`.
+DELETE FROM client_limits WHERE src = 'debt' AND days = 0 AND limit_sum IS NULL AND note LIKE 'діяв у дебіторці з%';
+UPDATE client_limits SET days = NULL, updated_at = now() WHERE src = 'debt' AND days = 0 AND limit_sum IS NOT NULL AND note LIKE 'діяв у дебіторці з%';
+
 -- Справи, які щомісячна перевірка вже бачила (нова = ще не бачили). case_no '*' — «базу для коду вже знято».
 CREATE TABLE IF NOT EXISTS cl_court_seen (
   code        text NOT NULL,
@@ -6856,6 +6864,88 @@ UPDATE roles SET permissions = permissions || '{"edit_org": true}'::jsonb
 UPDATE roles SET permissions = permissions - 'edit_org'
  WHERE key NOT IN ('admin', 'hr', 'business_assistant');
 REVOKE ALL ON org_units, org_log, org_migrations FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 👥 КОМАНДИ: KOMMO + ДАШБОРД (рішення Романа 27.10.2026; `core/teams.ts`).
+--  · Команди Kommo — `teams` (синк, назви лише в Kommo). Їх читають 116 запитів продажів (Звіт, КВП, плани…), тому
+--    команди дашборду живуть ОКРЕМО (`dashboard_teams`) і в `teams` не потрапляють ніколи — синк Kommo їх не чіпає.
+--  · Команда людини: звʼязаний із Kommo (менеджер/тімлід із групою) — команда Kommo, змінити в дашборді не можна;
+--    решта — `employees.team_id` (команда Kommo без акаунта Kommo) АБО `employees.dashboard_team_id`, не обидва.
+--  · «Зʼєднати»: `dashboard_teams.kommo_team_id` — люди такої команди дашборду показуються в команді Kommo.
+--  · Не видаляється нічого: команда архівується (`archived_at`), і лише порожня.
+--  ⚠️ Revert коду таблиці й стовпців не прибирає; `team_label` лишається (вітрина назви, історія).
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS dashboard_teams (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT NOT NULL CHECK (btrim(name) <> ''),
+  kommo_team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  archived_at   TIMESTAMPTZ,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_teams_name ON dashboard_teams (lower(btrim(name))) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_teams_kommo ON dashboard_teams (kommo_team_id) WHERE archived_at IS NULL AND kommo_team_id IS NOT NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
+ALTER TABLE org_units ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'employees_one_team') THEN
+    ALTER TABLE employees ADD CONSTRAINT employees_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'org_units_one_team') THEN
+    ALTER TABLE org_units ADD CONSTRAINT org_units_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_units_dashboard_team ON org_units (dashboard_team_id) WHERE dashboard_team_id IS NOT NULL;
+-- Офісні блоки з власною «Командою» (Керівництво, Бухгалтерія, IT…) стають командами дашборду. Ідемпотентно: блок, що вже
+-- має команду (будь-яку), не чіпається; однойменна жива команда дашборду — береться наявна, а не створюється друга.
+INSERT INTO dashboard_teams (name)
+SELECT DISTINCT ON (lower(btrim(u.label))) btrim(u.label) FROM org_units u
+ WHERE u.team_id IS NULL AND u.dashboard_team_id IS NULL AND u.label IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM dashboard_teams d WHERE d.archived_at IS NULL AND lower(btrim(d.name)) = lower(btrim(u.label)));
+UPDATE org_units u SET dashboard_team_id = d.id
+  FROM dashboard_teams d
+ WHERE u.team_id IS NULL AND u.dashboard_team_id IS NULL AND u.label IS NOT NULL
+   AND d.archived_at IS NULL AND lower(btrim(d.name)) = lower(btrim(u.label))
+   AND NOT EXISTS (SELECT 1 FROM org_units o WHERE o.dashboard_team_id = d.id);
+-- Людям БЕЗ команди Kommo — команда з тексту «Команди», лише за ТОЧНИМ збігом назви (регістр, пробіли, апостроф не
+-- різниця). Кожен викат, але лише кому ще нічого не вибрано: кому HR команду зняв, той має й порожній текст (`setEmployeeTeam`
+-- пише назву в `team_label`), тож назад не повернеться. Цифри «0/9/13» не збігаються ні з чим — лишаються «не вибрано».
+WITH kommo AS (
+  SELECT e.id FROM employees e
+    LEFT JOIN managers m1 ON m1.id = e.manager_id
+    LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m2 ON m2.id = u.manager_id
+   WHERE COALESCE(m1.team_id, m2.team_id) IS NOT NULL),
+cand AS (
+  SELECT e.id, lower(regexp_replace(translate(btrim(e.team_label), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) AS k
+    FROM employees e
+   WHERE e.team_id IS NULL AND e.dashboard_team_id IS NULL AND e.team_label IS NOT NULL
+     AND e.id NOT IN (SELECT id FROM kommo))
+UPDATE employees e SET team_id = t.id
+  FROM cand c JOIN teams t ON lower(regexp_replace(translate(btrim(t.name), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) = c.k
+ WHERE e.id = c.id;
+WITH kommo AS (
+  SELECT e.id FROM employees e
+    LEFT JOIN managers m1 ON m1.id = e.manager_id
+    LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m2 ON m2.id = u.manager_id
+   WHERE COALESCE(m1.team_id, m2.team_id) IS NOT NULL),
+cand AS (
+  SELECT e.id, lower(regexp_replace(translate(btrim(e.team_label), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) AS k
+    FROM employees e
+   WHERE e.team_id IS NULL AND e.dashboard_team_id IS NULL AND e.team_label IS NOT NULL
+     AND e.id NOT IN (SELECT id FROM kommo))
+UPDATE employees e SET dashboard_team_id = d.id
+  FROM cand c JOIN dashboard_teams d ON d.archived_at IS NULL
+   AND lower(regexp_replace(translate(btrim(d.name), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) = c.k
+ WHERE e.id = c.id;
+-- Створювати, перейменовувати, зʼєднувати й архівувати команди дашборду, міняти команду людини без Kommo — керівництво
+-- і HR (рішення Романа 27.10). Парою «видати / зняти» ПІСЛЯ синків ролей, як `edit_org`.
+UPDATE roles SET permissions = permissions || '{"manage_teams": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'hr');
+UPDATE roles SET permissions = permissions - 'manage_teams'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr');
+REVOKE ALL ON dashboard_teams FROM ai_readonly;
 -- 📅 КАЛЕНДАР ОПЛАТ (Тетяна, задача #6369, 27.10.2026; `core/finRecurring.ts`): нагадування про періодичні витрати —
 -- окремо від Плану/факту, нічого не рахує в результаті. `anchor_day` — «день оплати» з першої дати: 31-го в коротшому
 -- місяці нагадує в останній день, а наступного — знову 31-го (без «зʼїзду», як у `monthKeys`, борг 19). Нічого не
@@ -6885,3 +6975,142 @@ CREATE TABLE IF NOT EXISTS fin_recurring_paid (
 CREATE UNIQUE INDEX IF NOT EXISTS fin_recurring_paid_live_uniq ON fin_recurring_paid (recurring_id, due_date) WHERE cancelled_at IS NULL;
 REVOKE ALL ON fin_recurring FROM ai_readonly;
 REVOKE ALL ON fin_recurring_paid FROM ai_readonly;
+
+-- 📅 КАЛЕНДАР ОПЛАТ, прохід 2 (Тетяна 27.10.2026; Роман: «таня + керівництво», «так», «так хай буде», «так»): оплата —
+-- це СТАТТЯ «План/факту» (`item_id`) і МІСЯЦЬ (без дня, `next_due` — завжди 1-ше), без «хто платить». Нагадування — підказка
+-- біля статті в «План/факті» потрібного місяця з кнопкою «додати в план»; що вже додано — `fin_recurring_planned`, щоб
+-- кнопка не додала ту саму суму двічі. План пишеться ЛИШЕ через `saveValues` (замок погодженого місяця й журнал — ті самі).
+-- Таблиці на мить зміни порожні (заміряно 27.10.2026: 0 і 0). Обмеження ставляться лише тоді, коли рядків першого
+-- проходу (з днем і без статті) немає: інакше міграція впала б посеред схеми — такі рядки треба спершу розібрати руками.
+ALTER TABLE fin_recurring ADD COLUMN IF NOT EXISTS item_id INTEGER REFERENCES fin_items(id);
+DO $frm$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM fin_recurring WHERE item_id IS NULL OR anchor_day <> 1 OR next_due <> date_trunc('month', next_due)::date) THEN
+    ALTER TABLE fin_recurring ALTER COLUMN item_id SET NOT NULL;
+    ALTER TABLE fin_recurring DROP CONSTRAINT IF EXISTS fin_recurring_month_start;
+    ALTER TABLE fin_recurring ADD CONSTRAINT fin_recurring_month_start CHECK (next_due = date_trunc('month', next_due)::date AND anchor_day = 1);
+  ELSE
+    RAISE WARNING 'fin_recurring: є рядки першого проходу (з днем або без статті) — обмеження прохода 2 не поставлено';
+  END IF;
+END $frm$;
+CREATE TABLE IF NOT EXISTS fin_recurring_planned (
+  recurring_id INTEGER NOT NULL REFERENCES fin_recurring(id),
+  month DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  amount NUMERIC(14,2) NOT NULL,
+  plan_before NUMERIC(14,2),
+  added_by INTEGER REFERENCES users(id), added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (recurring_id, month)
+);
+REVOKE ALL ON fin_recurring_planned FROM ai_readonly;
+-- 🧮 КАЛЬКУЛЯТОР СТАВКИ: ВІДГУК «НАСКІЛЬКИ ДОПОМІГ» (Роман 27.10.2026; `core/rateFeedback.ts`). `calc` — що калькулятор
+-- ПОКАЗАВ (зонна карта: ставка клієнту, перевізнику, маржа, зона) у мить розрахунку: відгук порівнюється саме з ним, а
+-- не з перерахунком за сьогоднішніми тарифами. Старі розрахунки — без `calc`. Відгук — один на розрахунок, лише на свій.
+-- Відкат даних (код їх не прибирає): DROP TABLE rate_feedback; ALTER TABLE lardi_usage DROP COLUMN calc;
+--   UPDATE roles SET permissions = permissions - 'view_rate_feedback';
+ALTER TABLE lardi_usage ADD COLUMN IF NOT EXISTS calc JSONB;
+CREATE TABLE IF NOT EXISTS rate_feedback (
+  id SERIAL PRIMARY KEY,
+  usage_id INTEGER NOT NULL REFERENCES lardi_usage(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  rating TEXT NOT NULL CHECK (rating IN ('ok', 'high', 'low', 'no')),
+  agreed_rate NUMERIC(12,2) CHECK (agreed_rate IS NULL OR agreed_rate > 0),
+  comment TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS rate_feedback_usage_uniq ON rate_feedback (usage_id);
+CREATE INDEX IF NOT EXISTS idx_rate_feedback_user_created ON rate_feedback (user_id, created_at DESC);
+-- Зведення відгуків бачать адмін, СЕО, ОД, КВП (рішення Романа 27.10.2026). Склад фіксований кодом, парою «видати / зняти».
+UPDATE roles SET permissions = permissions || '{"view_rate_feedback": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp');
+UPDATE roles SET permissions = permissions - 'view_rate_feedback'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp');
+-- 🔒 Коментарі — вільний текст людей. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON rate_feedback FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💳 «ВИПИСКА» — № РАХУНКУ НА ВХІДНИХ ФОП І КОМЕНТАРІ ДО ВИХІДНИХ (27.10.2026) — пакет Сергія
+-- `UTS_vypyska_nomer_rakhunku` (migrations/001_bank_ident.sql) як є, без BEGIN/COMMIT (схема — один прогін).
+-- Роут — routes/bankIdent.ts, правила — bankIdent/*. Таблиць виписки не змінює.
+-- ident_from = момент ПЕРШОГО прогону: надходження до викату — без номера й строку, тож у день викату історія
+-- не стає «неідентифікованою».
+-- Налаштування правила. ident_from — момент запуску: надходження ДО нього — без номера й без строку,
+-- щоб у день деплою вся історія не стала «неідентифікованою». Перший запуск міграції ставить «зараз».
+CREATE TABLE IF NOT EXISTS bank_ident_settings (
+  key        text PRIMARY KEY,
+  value      text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO bank_ident_settings (key, value)
+VALUES ('ident_from', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+ON CONFLICT (key) DO NOTHING;
+
+-- Поточний стан ідентифікації платежу. Рядка немає — платіж «чекає №» (або ще не в правилі / свій переказ).
+CREATE TABLE IF NOT EXISTS bank_tx_ident (
+  tx_id         bigint PRIMARY KEY,                 -- id транзакції у вашій таблиці виписки
+  account_id    bigint NOT NULL,
+  booked_at     timestamptz NOT NULL,               -- копія часу з банку — для сортування й звітів
+  status        text NOT NULL CHECK (status IN ('identified', 'not_client', 'unidentified')),
+  invoice_no    text CHECK (invoice_no IS NULL OR char_length(invoice_no) BETWEEN 1 AND 120),
+  first_by      text,                               -- хто зафіксував номер першим (автор)
+  first_by_name text,
+  first_at      timestamptz,
+  set_by        text,                               -- хто поставив поточний стан (NULL — система: строк минув)
+  set_by_name   text,
+  set_role      text,
+  set_at        timestamptz NOT NULL DEFAULT now(),
+  reason        text CHECK (reason IS NULL OR char_length(reason) <= 300),
+  note          text CHECK (note IS NULL OR char_length(note) <= 300),
+  unid_kind     text CHECK (unid_kind IS NULL OR unid_kind IN ('expired', 'finance')),
+  deadline_at   timestamptz NOT NULL,               -- строк, за яким рахували (48 роб. год)
+  changed       boolean NOT NULL DEFAULT false,     -- номер змінював фінансист
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT bank_tx_ident_no_chk   CHECK (status <> 'identified' OR invoice_no IS NOT NULL),
+  CONSTRAINT bank_tx_ident_unid_chk CHECK (status <> 'unidentified' OR unid_kind IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_status_idx  ON bank_tx_ident (status, booked_at DESC);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_invoice_idx ON bank_tx_ident (invoice_no) WHERE invoice_no IS NOT NULL;
+
+-- Історія (лише додавання). actor_* = NULL — система (строк минув).
+CREATE TABLE IF NOT EXISTS bank_tx_ident_events (
+  id         bigserial PRIMARY KEY,
+  tx_id      bigint NOT NULL,
+  at         timestamptz NOT NULL DEFAULT now(),
+  actor_id   text,
+  actor_name text,
+  actor_role text,
+  act        text NOT NULL CHECK (act IN ('set', 'change', 'unidentify', 'not_client', 'expired')),
+  from_no    text,
+  to_no      text,
+  reason     text,
+  note       text
+);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_events_tx_idx ON bank_tx_ident_events (tx_id, at, id);
+
+-- Коментарі до вихідних ФОП. Бачать і пишуть лише ті, в кого право bank_out_comments (за замовчуванням — бухгалтер) і адмін.
+CREATE TABLE IF NOT EXISTS bank_tx_comments (
+  id          bigserial PRIMARY KEY,
+  tx_id       bigint NOT NULL,
+  author_id   text NOT NULL,
+  author_name text NOT NULL,
+  author_role text,
+  body        text NOT NULL CHECK (char_length(body) BETWEEN 1 AND 1000),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bank_tx_comments_tx_idx ON bank_tx_comments (tx_id, created_at, id);
+
+-- Права (рішення Сергія 27.10, ТЗ §3). Явними рядками видача й зняття і САМЕ ТУТ, у кінці: синки ролей вище копіюють
+-- усі права адміна на СЕО, ОД, КВП і фінансиста — без зняття «вписати №» розтеклося б на всіх них.
+--   tag_bank_invoice     — вписати № один раз: менеджер, тімлід (+ адмін);
+--   fix_bank_invoice     — змінити № / визнати неідентифікованим: фінансист (+ адмін);
+--   mark_bank_not_client — «не оплата клієнта»: Бухгалтерія (ключ — 12 підкреслень) (+ адмін);
+--   bank_out_comments    — коментарі до вихідних ФОП: Бухгалтерія (+ адмін). Без права коментарів не видно взагалі.
+UPDATE roles SET permissions = permissions || '{"tag_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'manager', 'team_lead');
+UPDATE roles SET permissions = permissions - 'tag_bank_invoice' WHERE key NOT IN ('admin', 'manager', 'team_lead');
+UPDATE roles SET permissions = permissions || '{"fix_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'financier');
+UPDATE roles SET permissions = permissions - 'fix_bank_invoice' WHERE key NOT IN ('admin', 'financier');
+UPDATE roles SET permissions = permissions || '{"mark_bank_not_client": true}'::jsonb WHERE key IN ('admin', '____________');
+UPDATE roles SET permissions = permissions - 'mark_bank_not_client' WHERE key NOT IN ('admin', '____________');
+UPDATE roles SET permissions = permissions || '{"bank_out_comments": true}'::jsonb WHERE key IN ('admin', '____________');
+UPDATE roles SET permissions = permissions - 'bank_out_comments' WHERE key NOT IN ('admin', '____________');
+
+-- 🔒 Хто що вписав і коментарі до платежів ФОП — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON bank_ident_settings, bank_tx_ident, bank_tx_ident_events, bank_tx_comments FROM ai_readonly;
