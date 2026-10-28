@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactElement } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactElement } from "react";
 import {
   fetchOrgTree, setMyOrgTelegram, uploadMyOrgPhoto, moveOrgPerson, createOrgUnit, updateOrgUnit, deleteOrgUnit, fetchOrgLog, hiringError,
   type OrgTreeResp, type OrgUnit, type OrgPerson, type OrgDept, type OrgUnitInput, type OrgLogRow,
@@ -179,6 +179,7 @@ export function OrgSection() {
 
   const branch = (u: OrgUnit): ReactElement => {
     const ch = kids(u.id);
+    const sd = sides(u.id);
     const shown = opened.has(u.id) || !!query;
     const out = !query && closing.has(u.id);
     // Команди без власних блоків — сіткою по чотири, як у прототипі. Відділ із власними блоками (напр. «Маркетинговий
@@ -190,7 +191,8 @@ export function OrgSection() {
       : grid;
     return (
       <li key={u.id}>
-        <div className="org-nwrap">{node(u)}{sides(u.id).map((s) => <div key={s.id} className="org-side">{node(s)}</div>)}</div>
+        {/* `--org-sides` — скільки бічних блоків праворуч: стільки ж місця зліва, і лінія йде з-під основного (#2719). */}
+        <div className="org-nwrap" style={sd.length ? ({ "--org-sides": sd.length } as CSSProperties) : undefined}>{node(u)}{sd.map((s) => <div key={s.id} className="org-side">{node(s)}</div>)}</div>
         {ch.length > 0 && shown && <div className={`org-fold sub ${out ? "out" : ""}`}><div className="org-fold-in">{sub}</div></div>}
       </li>
     );
