@@ -1929,6 +1929,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/bank-ident/:txId/unidentify", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
+  // [28.10, погодив Сергій] «↺ Скинути №» — право reset_bank_invoice: фінансист і адмін
+  { method: "POST", path: "/api/bank-ident/:txId/reset", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/bank-ident/:txId/not-client", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/bank-ident/comments/summary", cls: "deny-only",
