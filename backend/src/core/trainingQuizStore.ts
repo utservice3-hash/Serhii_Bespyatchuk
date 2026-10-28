@@ -6,8 +6,9 @@
  * «опрацював». Друга перевірка тут розійшлася б із першою.
  */
 import {
-  QUIZ_MIN_LIMIT_SEC, answerTiming, attemptsLeft, gradePlan, pickQuestions, publicQuestion, remainingSec, scoreAttempt, startVerdict,
-  type AttemptPlan, type PublicQuestion, type QuestionResult, type QuizAnswer, type QuizQuestion, type Rng,
+  QUIZ_MIN_LIMIT_SEC, QUIZ_VIOLATION_LIMIT, answerTiming, attemptsLeft, countsAsNewViolation, gradePlan, isViolationKind, pickQuestions,
+  publicQuestion, remainingSec, scoreAttempt, startVerdict, violationVerdict,
+  type AttemptPlan, type QuizViolationKind, type PublicQuestion, type QuestionResult, type QuizAnswer, type QuizQuestion, type Rng,
 } from "./trainingQuiz.js";
 
 export interface QuizDb {
@@ -37,12 +38,17 @@ export async function loadQuiz(db: QuizDb, materialId: number): Promise<{ settin
 }
 
 type Timings = Record<string, { sec: number; late: boolean }>;
+export type ViolationLog = { kind: QuizViolationKind; at: string }[];
+/** Чим завершилась спроба, якщо не відповідями: `violations` — три виходи з тесту, спроба не складена. */
+export type EndedBy = "violations" | null;
 interface AttemptRow {
   id: number; plan: AttemptPlan[]; answers: Record<string, QuizAnswer> | null; timings: Timings | null;
   cur_index: number; cur_shown_at: Date | string | null;
+  violations: number; violation_log: ViolationLog | null; ended_reason: EndedBy;
   right_count: number | null; total: number | null; pct: number | null; passed: boolean | null; started_at: string; submitted_at: string | null;
 }
-const ATTEMPT_COLS = `id, plan, answers, timings, cur_index, cur_shown_at, right_count, total, pct, passed, started_at, submitted_at`;
+const ATTEMPT_COLS = `id, plan, answers, timings, cur_index, cur_shown_at, violations, violation_log, ended_reason,
+  right_count, total, pct, passed, started_at, submitted_at`;
 
 async function attemptsOf(db: QuizDb, uid: number, materialId: number) {
   const rows = (await db.query<AttemptRow>(
@@ -58,7 +64,7 @@ export interface MyQuiz {
   used: number; grants: number; left: number; passed: boolean; bestPct: number | null; hasOpenAttempt: boolean;
   /** Ліміт часу на питання в цьому тесті: найменший і найбільший (секунди). */
   limitMinSec: number; limitMaxSec: number;
-  attempts: { right: number; total: number; pct: number; passed: boolean; submittedAt: string }[];
+  attempts: { right: number; total: number; pct: number; passed: boolean; submittedAt: string; endedBy: EndedBy }[];
 }
 
 /** Стан тесту для людини: поріг, скільки питань, спроби, найкращий бал. Без питань. */
@@ -74,7 +80,7 @@ export async function myQuiz(db: QuizDb, uid: number, materialId: number): Promi
     passed: st.passed, bestPct: st.bestPct, hasOpenAttempt: st.open != null,
     limitMinSec: quiz.questions.length ? Math.min(...quiz.questions.map((q) => q.timeLimitSec)) : QUIZ_MIN_LIMIT_SEC,
     limitMaxSec: quiz.questions.length ? Math.max(...quiz.questions.map((q) => q.timeLimitSec)) : QUIZ_MIN_LIMIT_SEC,
-    attempts: st.done.map((r) => ({ right: r.right_count ?? 0, total: r.total ?? 0, pct: r.pct ?? 0, passed: !!r.passed, submittedAt: r.submitted_at! })),
+    attempts: st.done.map((r) => ({ right: r.right_count ?? 0, total: r.total ?? 0, pct: r.pct ?? 0, passed: !!r.passed, submittedAt: r.submitted_at!, endedBy: r.ended_reason })),
   };
 }
 
@@ -166,7 +172,30 @@ export async function answerQuiz(db: QuizDb, uid: number, materialId: number, at
   return turnOf(db, uid, materialId, quiz, { ...a, answers, timings, cur_index: a.cur_index + 1, cur_shown_at: null }, now);
 }
 
-export interface SubmitResult { right: number; total: number; pct: number; passed: boolean; left: number; results: QuestionResult[] }
+export interface SubmitResult { right: number; total: number; pct: number; passed: boolean; left: number; results: QuestionResult[]; endedBy: EndedBy }
+
+/**
+ * 🖥 Порушення: вийшов із повного екрана / вкладки / програми. Перші два — попередження, третє завершує спробу як
+ * НЕ складену (і спроба витрачається). Подія ближче ніж за 2 с до попередньої — відлуння того самого виходу.
+ */
+export type ViolationTurn = { done: false; violations: number; limit: number; counted: boolean } | { done: true; result: SubmitResult };
+export async function reportViolation(db: QuizDb, uid: number, materialId: number, attemptId: number, kind: unknown,
+  now: Date = new Date()): Promise<ViolationTurn> {
+  if (!isViolationKind(kind)) throw new QuizError(400, "Невідомий вид порушення");
+  const quiz = await loadQuiz(db, materialId);
+  if (!quiz) throw new QuizError(404, "Тест не знайдено");
+  const a = await openAttemptForUpdate(db, uid, materialId, attemptId);
+  if (!a) throw new QuizError(409, "Спробу вже завершено або її не існує");
+  const log: ViolationLog = [...(a.violation_log ?? [])];
+  const last = log.length ? new Date(log[log.length - 1].at) : null;
+  if (!countsAsNewViolation(last, now)) return { done: false, violations: a.violations, limit: QUIZ_VIOLATION_LIMIT, counted: false };
+  log.push({ kind, at: now.toISOString() });
+  const n = a.violations + 1;
+  await db.query(`UPDATE training_quiz_attempts SET violations = $2, violation_log = $3 WHERE id = $1`, [a.id, n, JSON.stringify(log)]);
+  if (violationVerdict(n).fail)
+    return { done: true, result: await finishAttempt(db, uid, materialId, quiz, a.id, a.plan, a.answers ?? {}, a.timings ?? {}, "violations") };
+  return { done: false, violations: n, limit: QUIZ_VIOLATION_LIMIT, counted: true };
+}
 
 /**
  * Завершити спробу ДОСТРОКОВО — відповідями, які вже прийняв сервер; решта питань — неправильні. Відповіді з
@@ -182,16 +211,18 @@ export async function submitQuiz(db: QuizDb, uid: number, materialId: number, at
 
 /** Підсумок спроби: перевірка на сервері, запис балу, і — ЛИШЕ якщо складено — крок «пройдено». */
 async function finishAttempt(db: QuizDb, uid: number, materialId: number, quiz: NonNullable<Awaited<ReturnType<typeof loadQuiz>>>,
-  attemptId: number, plan: AttemptPlan[], answers: Record<string, QuizAnswer>, timings: Timings): Promise<SubmitResult> {
+  attemptId: number, plan: AttemptPlan[], answers: Record<string, QuizAnswer>, timings: Timings, endedBy: EndedBy = null): Promise<SubmitResult> {
   const byId = new Map(quiz.questions.map((q) => [q.id, q]));
   const late = new Set(Object.entries(timings).filter(([, t]) => t.late).map(([k]) => Number(k)));
   const { marks, results } = gradePlan(plan, byId, answers, late);
-  const sc = scoreAttempt(marks, quiz.settings.passPct);
+  const scored = scoreAttempt(marks, quiz.settings.passPct);
+  // Три виходи з тесту — не складено, хоч би якими були відповіді; бал лишається видимим як є.
+  const sc = endedBy ? { ...scored, passed: false } : scored;
   const upd = await db.query(
     `UPDATE training_quiz_attempts SET answers = $2, timings = $3, right_count = $4, total = $5, pct = $6, passed = $7,
-            cur_index = $8, cur_shown_at = NULL, submitted_at = now()
+            cur_index = $8, cur_shown_at = NULL, ended_reason = $9, submitted_at = now()
       WHERE id = $1 AND submitted_at IS NULL RETURNING id`,
-    [attemptId, JSON.stringify(answers), JSON.stringify(timings), sc.right, sc.total, sc.pct, sc.passed, plan.length]);
+    [attemptId, JSON.stringify(answers), JSON.stringify(timings), sc.right, sc.total, sc.pct, sc.passed, plan.length, endedBy]);
   if (!upd.rows.length) throw new QuizError(409, "Спробу вже завершено");
   const st = await attemptsOf(db, uid, materialId);
   await db.query(
@@ -206,11 +237,15 @@ async function finishAttempt(db: QuizDb, uid: number, materialId: number, quiz: 
     [uid, materialId, sc.passed, sc.pct, st.done.length]);
   await db.query(
     `INSERT INTO training_events (user_id, material_id, kind, payload_json) VALUES ($1, $2, 'quiz_attempt', $3)`,
-    [uid, materialId, JSON.stringify({ attemptId, right: sc.right, total: sc.total, pct: sc.pct, passed: sc.passed })]);
-  return { ...sc, left: attemptsLeft({ used: st.done.length, max: quiz.settings.maxAttempts, grants: st.grants }), results };
+    [uid, materialId, JSON.stringify({ attemptId, right: sc.right, total: sc.total, pct: sc.pct, passed: sc.passed, endedBy })]);
+  return { ...sc, left: attemptsLeft({ used: st.done.length, max: quiz.settings.maxAttempts, grants: st.grants }), results, endedBy };
 }
 
-export interface QuizSummary { materialId: number; title: string; used: number; grants: number; maxAttempts: number; left: number; passed: boolean; bestPct: number | null; lastPct: number | null }
+export interface QuizSummary {
+  materialId: number; title: string; used: number; grants: number; maxAttempts: number; left: number; passed: boolean; bestPct: number | null; lastPct: number | null;
+  /** 🖥 Скільки спроб не зараховано через вихід із тесту, і коли саме виходили в останній спробі з виходами. */
+  endedByViolations: number; lastViolations: ViolationLog | null;
+}
 
 /** Підсумок тестів для дошки «Найму»: по кожному тесту курсу — спроби й найкращий бал кожного користувача. */
 export async function quizSummaries(db: QuizDb, userIds: readonly number[], quizIds: readonly number[]): Promise<Map<number, QuizSummary[]>> {
@@ -219,8 +254,8 @@ export async function quizSummaries(db: QuizDb, userIds: readonly number[], quiz
   const meta = (await db.query<{ id: number; title: string; max_attempts: number | null }>(
     `SELECT m.id, m.title, q.max_attempts FROM training_materials m LEFT JOIN training_quizzes q ON q.material_id = m.id WHERE m.id = ANY($1::int[])`,
     [quizIds])).rows;
-  const att = (await db.query<{ user_id: number; material_id: number; pct: number | null; passed: boolean | null; submitted_at: string }>(
-    `SELECT user_id, material_id, pct, passed, submitted_at FROM training_quiz_attempts
+  const att = (await db.query<{ user_id: number; material_id: number; pct: number | null; passed: boolean | null; submitted_at: string; ended_reason: EndedBy; violation_log: ViolationLog | null }>(
+    `SELECT user_id, material_id, pct, passed, submitted_at, ended_reason, violation_log FROM training_quiz_attempts
       WHERE user_id = ANY($1::int[]) AND material_id = ANY($2::int[]) AND submitted_at IS NOT NULL ORDER BY submitted_at, id`,
     [userIds, quizIds])).rows;
   const gr = (await db.query<{ user_id: number; material_id: number; n: number }>(
@@ -234,7 +269,9 @@ export async function quizSummaries(db: QuizDb, userIds: readonly number[], quiz
       const max = m?.max_attempts ?? 3;
       return { materialId: qid, title: m?.title ?? "", used: mine.length, grants, maxAttempts: max,
         left: attemptsLeft({ used: mine.length, max, grants }), passed: mine.some((x) => x.passed),
-        bestPct: mine.length ? Math.max(...mine.map((x) => x.pct ?? 0)) : null, lastPct: mine.length ? mine[mine.length - 1].pct : null };
+        bestPct: mine.length ? Math.max(...mine.map((x) => x.pct ?? 0)) : null, lastPct: mine.length ? mine[mine.length - 1].pct : null,
+        endedByViolations: mine.filter((x) => x.ended_reason === "violations").length,
+        lastViolations: [...mine].reverse().find((x) => x.violation_log?.length)?.violation_log ?? null };
     }));
   }
   return out;

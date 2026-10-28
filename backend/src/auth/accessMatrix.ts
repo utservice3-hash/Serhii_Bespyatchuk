@@ -1542,6 +1542,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // ⏱ Відповідь по одному питанню (28.10.2026) — та сама межа, що start/submit: вкладка й замок теми.
   { method: "POST", path: "/api/training/quiz/:id/answer", cls: "deny-only",
     allow: [], deny: [] },
+  // 🖥 Вихід із тесту (28.10.2026) — та сама межа: своя відкрита спроба; без неї 409.
+  { method: "POST", path: "/api/training/quiz/:id/violation", cls: "deny-only",
+    allow: [], deny: [] },
   // ⏱ Ліміт часу питання — запис редактора навчання (`manage_training`), як решта правки уроків.
   { method: "PATCH", path: "/api/training/quiz/:id/questions/:qid", cls: "deny-only",
     allow: [], deny: ["financier", "team_lead", "manager"] },

@@ -171,3 +171,33 @@ export function gradePlan(plan: readonly AttemptPlan[], byId: ReadonlyMap<number
   }
   return { marks, results };
 }
+
+/**
+ * 🖥 ПОВНИЙ ЕКРАН І ВИХІД ІЗ ТЕСТУ (28.10.2026, Роман: «на весь екран, і не можна переключатися між вкладками…
+ * спочатку 2 попередження, і на 3 раз уже пише тест як не вдалий»).
+ * Порушення — вийти з повного екрана, перейти на іншу вкладку чи згорнути, перемкнутись в іншу програму довше 2 с.
+ * Лічильник веде СЕРВЕР (екран можна перезавантажити). Одне «виходження» часто дає кілька подій браузера одразу
+ * (вкладка + повний екран + фокус), тому подія ближче ніж за `QUIZ_VIOLATION_DEDUPE_SEC` до попередньої — та сама.
+ * ⚠️ Браузер не забороняє перемкнутись — лише помічає це; телефон поруч не ловиться ніяк.
+ */
+export const QUIZ_VIOLATION_KINDS = ["fullscreen_exit", "tab_hidden", "window_blur"] as const;
+export type QuizViolationKind = (typeof QUIZ_VIOLATION_KINDS)[number];
+export const QUIZ_VIOLATION_LABEL: Record<QuizViolationKind, string> = {
+  fullscreen_exit: "вийшов із повного екрана",
+  tab_hidden: "перейшов на іншу вкладку чи згорнув браузер",
+  window_blur: "перемкнувся в іншу програму",
+};
+/** Скільки порушень завершує спробу як не складену: два попередження, третє — кінець. */
+export const QUIZ_VIOLATION_LIMIT = 3;
+export const QUIZ_VIOLATION_DEDUPE_SEC = 2;
+
+export const isViolationKind = (x: unknown): x is QuizViolationKind => (QUIZ_VIOLATION_KINDS as readonly unknown[]).includes(x);
+
+/** Чи нова подія — окреме порушення, а не відлуння попереднього «виходження». */
+export const countsAsNewViolation = (lastAt: Date | null, now: Date): boolean =>
+  !lastAt || now.getTime() - lastAt.getTime() >= QUIZ_VIOLATION_DEDUPE_SEC * 1000;
+
+/** Після `count` порушень: чи спроба завершується, і скільки попереджень ще лишилось. */
+export function violationVerdict(count: number): { fail: boolean; warningsLeft: number } {
+  return { fail: count >= QUIZ_VIOLATION_LIMIT, warningsLeft: Math.max(0, QUIZ_VIOLATION_LIMIT - 1 - count) };
+}

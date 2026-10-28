@@ -262,3 +262,11 @@ img.tr-lsn-media { background: transparent; }
 .qz-elim input { width: 64px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text); font: inherit; }
 .qz-elim .ok { color: var(--ok); }
 .qz-elim .bad { color: var(--danger); }
+
+/* 🖥 Тест на весь екран (28.10.2026): під час спроби тест закриває собою розділ; попередження про вихід — поверх. */
+.qz-fs { position: fixed; inset: 0; z-index: 1000; overflow-y: auto; background: var(--bg, var(--card-bg));
+  padding: max(24px, env(safe-area-inset-top, 0px)) max(16px, calc((100vw - 760px) / 2)) 32px; }
+.qz-warn { position: fixed; inset: 0; z-index: 1001; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .55); }
+.qz-warn-box { max-width: 440px; width: 100%; padding: 22px 24px; border-radius: 14px; background: var(--card-bg); color: var(--text); border: 2px solid var(--danger); display: grid; gap: 10px; }
+.qz-warn-box h3 { margin: 0; color: var(--danger); }
+.qz-warn-box p { margin: 0; }

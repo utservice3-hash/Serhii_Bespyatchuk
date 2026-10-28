@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { answerTiming, defaultLimitSec, limitVerdict, remainingSec, QUIZ_GRACE_SEC } from "./trainingQuiz.js";
+import { answerTiming, countsAsNewViolation, defaultLimitSec, isViolationKind, limitVerdict, remainingSec, violationVerdict, QUIZ_GRACE_SEC } from "./trainingQuiz.js";
 import { SALES_COURSE_QUIZZES } from "./quizSeedSalesCourse.js";
 
 /**
@@ -183,4 +183,86 @@ test("#3106 ЕКРАН ТЕСТУ: відповідь по одному пита
   assert.match(learner, /remainingSec/, "🔴 таймер не бере залишок із сервера");
   const api = SRC("frontend/src/api.ts");
   assert.doesNotMatch(api, /submitQuiz[^\n]*answers/, "🔴 API досі шле відповіді в «завершити»");
+});
+
+// ── 🖥 Повний екран і вихід із тесту (28.10.2026): два попередження, третій вихід — спроба не складена ──────────
+
+test("#3107 ВИХІД ІЗ ТЕСТУ: два попередження, третій — не складено; відлуння одного виходу за < 2 с не рахується", () => {
+  assert.deepEqual(violationVerdict(1), { fail: false, warningsLeft: 1 });
+  assert.deepEqual(violationVerdict(2), { fail: false, warningsLeft: 0 }, "🔴 друге порушення вже завершує тест");
+  assert.equal(violationVerdict(3).fail, true, "🔴 третє порушення не завершує тест");
+  const t0 = new Date("2026-10-28T10:00:00Z");
+  assert.equal(countsAsNewViolation(null, t0), true);
+  assert.equal(countsAsNewViolation(t0, new Date(t0.getTime() + 1900)), false, "🔴 відлуння того самого виходу пораховане другим порушенням");
+  assert.equal(countsAsNewViolation(t0, new Date(t0.getTime() + 2000)), true, "🔴 окремий вихід через 2 с не порахований");
+  assert.equal(isViolationKind("tab_hidden"), true);
+  assert.equal(isViolationKind("anything"), false);
+});
+
+/** Відповісти правильно на `k` питань поспіль (кожне — через 3 с після попереднього). */
+async function answerRight(f: Awaited<ReturnType<typeof fixture>>, first: Turn, k: number, from: Date) {
+  let cur: Turn = first, now = from;
+  for (let i = 0; i < k && !cur.done; i++) {
+    now = new Date(now.getTime() + 3000);
+    cur = await f.store.answerQuiz(f.db, f.user, f.quiz, cur.attemptId, cur.question.id, f.right(cur.question.id), now);
+  }
+  return { cur, now };
+}
+
+test("#3108 ЖИВИЙ SQL: третій вихід — не складено навіть із правильними відповідями й спробу витрачено; два виходи — складено (дзеркало)", async (t) => {
+  const s = await cluster(t); if (!s) return;
+  // Дзеркало: два виходи, усі відповіді правильні → складено.
+  const ok = await fixture(s.c, "warn2");
+  const st = step(await ok.store.startQuiz(ok.db, ok.user, ok.quiz, Math.random, T0));
+  for (const sec of [5, 15]) {
+    const v = await ok.store.reportViolation(ok.db, ok.user, ok.quiz, st.attemptId, "tab_hidden", at(sec));
+    assert.equal(v.done, false, "🔴 тест завершився після попередження");
+  }
+  const fin = await answerRight(ok, st, 3, at(20));
+  assert.ok(fin.cur.done && fin.cur.result.passed, "🔴 два попередження зіпсували складений тест");
+  assert.equal(fin.cur.done && fin.cur.result.endedBy, null);
+  // Три виходи: дві правильні відповіді, потім третій вихід → спробу завершено, не складено, спробу витрачено.
+  const bad = await fixture(s.c, "warn3");
+  const b0 = step(await bad.store.startQuiz(bad.db, bad.user, bad.quiz, Math.random, T0));
+  const part = await answerRight(bad, b0, 2, T0);
+  let last: Awaited<ReturnType<typeof bad.store.reportViolation>> | null = null;
+  for (const [i, kind] of (["fullscreen_exit", "tab_hidden", "window_blur"] as const).entries())
+    last = await bad.store.reportViolation(bad.db, bad.user, bad.quiz, b0.attemptId, kind, new Date(part.now.getTime() + (i + 1) * 5000));
+  assert.ok(last && last.done, "🔴 третій вихід не завершив спробу");
+  const r = (last as { done: true; result: { passed: boolean; endedBy: string | null; right: number } }).result;
+  assert.deepEqual([r.passed, r.endedBy, r.right], [false, "violations", 2], "🔴 третій вихід — не той результат");
+  const me = await bad.store.myQuiz(bad.db, bad.user, bad.quiz);
+  assert.deepEqual([me.used, me.left, me.attempts[0].endedBy], [1, 2, "violations"], "🔴 спробу через вихід не витрачено");
+  const prog = (await bad.q(`SELECT status FROM training_progress WHERE user_id = $1 AND material_id = $2`, [bad.user, bad.quiz]))[0]?.status;
+  assert.notEqual(prog, "done", "🔴 тест, завершений виходами, зараховано кроком");
+});
+
+test("#3109 ЖИВИЙ SQL: одне «виходження» — одне порушення; після завершення порушення не приймаються; «Найм» бачить причину й час", async (t) => {
+  const s = await cluster(t); if (!s) return;
+  const f = await fixture(s.c, "echo");
+  const st = step(await f.store.startQuiz(f.db, f.user, f.quiz, Math.random, T0));
+  const v1 = await f.store.reportViolation(f.db, f.user, f.quiz, st.attemptId, "tab_hidden", at(10));
+  const v2 = await f.store.reportViolation(f.db, f.user, f.quiz, st.attemptId, "fullscreen_exit", at(10.5));
+  assert.deepEqual([v1.done, v2.done], [false, false]);
+  assert.equal(!v2.done && v2.counted, false, "🔴 відлуння (вкладка + повний екран за пів секунди) пораховано двічі");
+  assert.equal(!v2.done && v2.violations, 1);
+  await assert.rejects(f.store.reportViolation(f.db, f.user, f.quiz, st.attemptId, "hack", at(20)), /Невідомий вид/);
+  await f.store.reportViolation(f.db, f.user, f.quiz, st.attemptId, "window_blur", at(30));
+  const end = await f.store.reportViolation(f.db, f.user, f.quiz, st.attemptId, "tab_hidden", at(40));
+  assert.equal(end.done, true);
+  await assert.rejects(f.store.reportViolation(f.db, f.user, f.quiz, st.attemptId, "tab_hidden", at(50)), /завершено/, "🔴 порушення на завершеній спробі прийнято");
+  const sum = (await f.store.quizSummaries(f.db, [f.user], [f.quiz])).get(f.user)![0];
+  assert.equal(sum.endedByViolations, 1, "🔴 «Найм» не бачить спроби, не зарахованої через вихід");
+  assert.equal(sum.lastViolations?.length, 3, "🔴 «Найм» не бачить часу кожного виходу");
+});
+
+test("#3110 ЕКРАН ТЕСТУ: повний екран на «Почати», ловить вкладку, повний екран і програму; «Найм» показує причину", () => {
+  const view = SRC("frontend/src/pages/dashboard/sections/QuizView.tsx");
+  const learner = view.slice(0, view.indexOf("export function QuizEditorPanel"));
+  for (const ev of ["visibilitychange", "fullscreenchange", "blur"]) assert.match(learner, new RegExp(`"${ev}"`), `🔴 екран не ловить «${ev}»`);
+  assert.match(learner, /reportQuizViolation\(/, "🔴 вихід не повідомляється серверу");
+  const begin = learner.slice(learner.indexOf("const begin = async"), learner.indexOf("const send = async"));
+  assert.match(begin, /enterFullscreen\(/, "🔴 «Почати тест» не розгортає на весь екран");
+  assert.match(learner, /Повернутись до тесту/, "🔴 немає попередження з поверненням");
+  assert.match(SRC("frontend/src/pages/dashboard/sections/HiringTraining.tsx"), /endedByViolations/, "🔴 «Найм» не показує незарахування через вихід");
 });

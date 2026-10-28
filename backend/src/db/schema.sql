@@ -7194,3 +7194,9 @@ END $$;
 ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS cur_index    INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS cur_shown_at TIMESTAMPTZ;
 ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS timings      JSONB;
+-- 🖥 Вихід із тесту (28.10.2026): скільки разів людина виходила з повного екрана / вкладки / програми, коли саме,
+-- і чи спробу завершено через це (`ended_reason = 'violations'` — не складено, хоч би якими були відповіді).
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS violations    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS violation_log JSONB;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS ended_reason  TEXT
+  CONSTRAINT training_quiz_attempts_ended_reason CHECK (ended_reason IS NULL OR ended_reason IN ('violations'));

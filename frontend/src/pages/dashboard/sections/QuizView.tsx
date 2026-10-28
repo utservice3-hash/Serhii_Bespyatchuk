@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  fetchMyQuiz, startQuiz, answerQuiz, fetchQuizEditor, publishTrainingMaterial, setQuizQuestionLimit, hiringError,
-  type MyQuiz, type QuizStep, type QuizTurn, type QuizAnswerValue, type QuizResult, type QuizEditorView,
+  fetchMyQuiz, startQuiz, answerQuiz, reportQuizViolation, fetchQuizEditor, publishTrainingMaterial, setQuizQuestionLimit, hiringError,
+  type MyQuiz, type QuizStep, type QuizTurn, type QuizAnswerValue, type QuizResult, type QuizEditorView, type QuizViolationKind,
 } from "../../../api";
 import "./training.css";
 
@@ -15,7 +15,28 @@ import "./training.css";
  * ⏱ ЛІМІТ ЧАСУ (28.10.2026): сервер видає питання ПО ОДНОМУ й рахує час сам; екран лише показує залишок, який
  * прийшов із сервера, і, коли він дійшов до нуля, шле порожню відповідь. Назад повернутись не можна: інакше ліміт
  * обходився б тим, що на питання дивляться довше, ніж дозволено.
+ *
+ * 🖥 ПОВНИЙ ЕКРАН (28.10.2026): «Почати тест» розгортає браузер на весь екран, а тест закриває собою розділ. Вихід
+ * із повного екрана, інша вкладка чи згорнутий браузер, інша програма довше 2 с — порушення; лічильник на сервері.
+ * Два — попередження, третє завершує спробу як не складену. Одне «виходження» дає кілька подій браузера — рахуємо
+ * один раз, доки людина не натисне «Повернутись до тесту». На iPhone повного екрана для сторінок немає — там
+ * лишається вкладка/програма.
  */
+const VIOLATION_TEXT: Record<QuizViolationKind, string> = {
+  fullscreen_exit: "вийшли з повного екрана",
+  tab_hidden: "перейшли на іншу вкладку чи згорнули браузер",
+  window_blur: "перемкнулись в іншу програму",
+};
+const enterFullscreen = (fsOn: { current: boolean }) => {
+  const el = document.documentElement;
+  if (document.fullscreenElement) { fsOn.current = true; return; }
+  if (typeof el.requestFullscreen !== "function") return; // iPhone/iPad: лишається вкладка/програма
+  el.requestFullscreen().then(() => { fsOn.current = true; }).catch(() => undefined);
+};
+const exitFullscreen = (fsOn: { current: boolean }) => {
+  fsOn.current = false;
+  if (document.fullscreenElement && typeof document.exitFullscreen === "function") document.exitFullscreen().catch(() => undefined);
+};
 export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel, onNext }: {
   materialId: number;
   /** Вступ до тесту — текст уроку-тесту, який редактор пише в полі «Вступ». */
@@ -36,17 +57,23 @@ export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel,
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<QuizResult | null>(null);
   const sending = useRef(false);
+  const fsOn = useRef(false);   // ми розгорнули повний екран — його втрата є порушенням
+  const away = useRef(false);   // людина «вийшла»; наступні події того самого виходу не рахуються
+  const [warn, setWarn] = useState<{ n: number; limit: number; kind: QuizViolationKind } | null>(null);
 
   const load = () => fetchMyQuiz(materialId).then((x) => { setMe(x); setErr(null); }).catch((e) => setErr(hiringError(e)));
   useEffect(() => { setRun(null); setResult(null); setA(undefined); void load(); }, [materialId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const apply = async (t: QuizTurn) => {
     if (t.done) {
+      exitFullscreen(fsOn); away.current = false; setWarn(null);
       setResult(t.result); setRun(null); await load();
       if (t.result.passed) onPassed();
     } else { setRun({ step: t, at: Date.now() }); setNow(Date.now()); setA(undefined); }
   };
   const begin = async () => {
+    enterFullscreen(fsOn); // лише в обробнику кліку: браузер дає повний екран тільки на дію людини
+    away.current = false; setWarn(null);
     setBusy(true); setErr(null);
     try { setResult(null); await apply(await startQuiz(materialId)); }
     catch (e) { setErr(hiringError(e)); }
@@ -67,6 +94,36 @@ export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel,
     const h = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(h);
   }, [run]);
+  // 🖥 Вихід із тесту → сервер рахує; третій завершує спробу (у відповідь — результат).
+  const attemptId = run?.step.attemptId ?? null;
+  useEffect(() => {
+    if (attemptId == null) return;
+    let blurTimer: number | undefined;
+    const leave = (kind: QuizViolationKind) => {
+      if (away.current) return;
+      away.current = true;
+      reportQuizViolation(materialId, attemptId, kind)
+        .then((r) => { if (r.done) void apply({ done: true, result: r.result }); else setWarn({ n: r.violations, limit: r.limit, kind }); })
+        .catch((e) => { setWarn({ n: 0, limit: 3, kind }); setErr(hiringError(e)); });
+    };
+    const onVis = () => { if (document.hidden) leave("tab_hidden"); };
+    const onFs = () => { if (!document.fullscreenElement && fsOn.current) { fsOn.current = false; leave("fullscreen_exit"); } };
+    const onBlur = () => { window.clearTimeout(blurTimer); blurTimer = window.setTimeout(() => { if (!document.hasFocus()) leave("window_blur"); }, 2000); };
+    const onFocus = () => window.clearTimeout(blurTimer);
+    document.addEventListener("visibilitychange", onVis);
+    document.addEventListener("fullscreenchange", onFs);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearTimeout(blurTimer);
+      document.removeEventListener("visibilitychange", onVis);
+      document.removeEventListener("fullscreenchange", onFs);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [attemptId, materialId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const backToQuiz = () => { enterFullscreen(fsOn); away.current = false; setWarn(null); };
+
   const left = run ? Math.max(0, run.step.remainingSec - (now - run.at) / 1000) : 0;
   const expired = !!run && left <= 0;
   useEffect(() => { if (expired) void send(null); }, [expired]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -83,7 +140,9 @@ export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel,
         <div className="qz-score">
           <Ring pct={result.pct} ok={result.passed} sub={`${result.right} з ${result.total}`} />
           <div className="qz-score-t">
-            <h2>{result.passed ? "Тест складено" : "Тест не складено"}</h2>
+            <h2>{result.passed ? "Тест складено" : result.endedBy === "violations" ? "Тест не зараховано" : "Тест не складено"}</h2>
+            {result.endedBy === "violations" && <div className="qz-banner bad"><b>Ви 3 рази виходили з тесту</b>
+              <span>Спробу завершено як не складену, незалежно від відповідей. Тімлід і рекрутер бачать причину.</span></div>}
             {result.passed
               ? <div className="qz-banner ok"><b>Наступну тему відкрито</b><span>Рекрутер і ваш тімлід бачать результат: {result.right} з {result.total}.</span></div>
               : <div className="qz-banner bad"><b>Потрібно {need} з {result.total}, у вас {result.right}</b>
@@ -122,7 +181,19 @@ export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel,
     const secs = Math.ceil(left);
     const last = step.index + 1 >= step.total;
     return (
-      <div className="qz">
+      <div className="qz qz-fs">
+        {warn && (
+          <div className="qz-warn" role="alertdialog" aria-modal="true" aria-labelledby="qz-warn-h">
+            <div className="qz-warn-box">
+              <h3 id="qz-warn-h">{warn.n ? `Попередження ${warn.n} з ${warn.limit - 1}` : "Ви вийшли з тесту"}</h3>
+              <p>Ви {VIOLATION_TEXT[warn.kind]}. {warn.n >= warn.limit - 1
+                ? "Наступний вихід завершить тест як не складений."
+                : `Ще ${warn.limit - warn.n} виходи — і тест не буде зараховано.`}</p>
+              <p className="hr-muted">Таймер питання не зупинявся.</p>
+              <button className="hr-btn p" autoFocus onClick={backToQuiz}>Повернутись до тесту</button>
+            </div>
+          </div>
+        )}
         <div className="qz-top">
           <span className="hr-pill gr">{me.title} · спроба {me.used + 1}</span>
           <span className={`qz-timer${secs <= 10 ? " low" : ""}`} role="timer" aria-label={`Лишилось ${secs} секунд`}>⏱ {secs} с</span>
@@ -177,6 +248,7 @@ export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel,
       <ul className="qz-rules">
         <li>На кожне питання — {me.limitMinSec === me.limitMaxSec ? `${me.limitMinSec} секунд` : `від ${me.limitMinSec} до ${me.limitMaxSec} секунд`}; таймер видно над питанням. Час вийшов — питання зараховується як неправильне.</li>
         <li>Питання йдуть по одному, повернутись до попереднього не можна. Оновлення сторінки таймер не зупиняє.</li>
+        <li>Тест відкривається на весь екран. Вийти з нього, перейти на іншу вкладку чи програму — порушення: два попередження, на третій раз спроба не зараховується.</li>
         <li>Після тесту побачите, де помилились, і урок, де про це сказано.</li>
         <li>Склали — відкривається наступна тема. Ні — перегляньте уроки й спробуйте знову.</li>
       </ul>

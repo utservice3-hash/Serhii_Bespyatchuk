@@ -5396,7 +5396,9 @@ export interface HiringTrainingRow {
   /** 📝 Тести курсу в порядку курсу (13.10.2026). */
   quizzes?: QuizSummary[];
 }
-export interface QuizSummary { materialId: number; title: string; used: number; grants: number; maxAttempts: number; left: number; passed: boolean; bestPct: number | null; lastPct: number | null }
+export type QuizViolationKind = "fullscreen_exit" | "tab_hidden" | "window_blur";
+export interface QuizSummary { endedByViolations?: number; lastViolations?: { kind: QuizViolationKind; at: string }[] | null;
+  materialId: number; title: string; used: number; grants: number; maxAttempts: number; left: number; passed: boolean; bestPct: number | null; lastPct: number | null }
 export interface HiringTrainingRules { inviteHours: number; noLoginHours: number; trainingDays: number; stuckHours: number }
 export interface HiringTrainingDetail {
   row: HiringTrainingRow;
@@ -5488,13 +5490,15 @@ export interface MyQuiz {
   used: number; grants: number; left: number; passed: boolean; bestPct: number | null; hasOpenAttempt: boolean;
   /** ⏱ Ліміт часу на питання в цьому тесті, секунди (28.10.2026). */
   limitMinSec: number; limitMaxSec: number;
-  attempts: { right: number; total: number; pct: number; passed: boolean; submittedAt: string }[];
+  attempts: { right: number; total: number; pct: number; passed: boolean; submittedAt: string; endedBy?: "violations" | null }[];
 }
 export type QuizKind = "one" | "multi" | "number";
 export interface QuizPublicQuestion { id: number; kind: QuizKind; text: string; options: { i: number; text: string }[] | null }
 export type QuizAnswerValue = number | number[] | string;
 export interface QuizResult { right: number; total: number; pct: number; passed: boolean; left: number;
-  results: { id: number; text: string; ok: boolean; late: boolean; explanation: string | null; source: string | null }[] }
+  results: { id: number; text: string; ok: boolean; late: boolean; explanation: string | null; source: string | null }[];
+  /** 🖥 `violations` — спробу завершено трьома виходами з тесту: не складено, хоч би якими були відповіді. */
+  endedBy?: "violations" | null }
 /** ⏱ Хід тесту (28.10.2026): поточне питання з лімітом і залишком часу від сервера — або результат спроби. */
 export interface QuizStep { done: false; attemptId: number; passPct: number; total: number; index: number;
   question: QuizPublicQuestion; limitSec: number; remainingSec: number }
@@ -5508,6 +5512,10 @@ export const startQuiz = async (id: number) => (await api.post<QuizTurn>(`/train
 /** Відповідь на поточне питання; `null` — час вийшов без відповіді. У відповідь — наступне питання або результат. */
 export const answerQuiz = async (id: number, attemptId: number, questionId: number, answer: QuizAnswerValue | null) =>
   (await api.post<QuizTurn>(`/training/quiz/${id}/answer`, { attemptId, questionId, answer })).data;
+/** 🖥 Вихід із тесту (повний екран / вкладка / програма). Третій — спроба завершена як не складена. */
+export const reportQuizViolation = async (id: number, attemptId: number, kind: QuizViolationKind) =>
+  (await api.post<{ done: false; violations: number; limit: number; counted: boolean } | { done: true; result: QuizResult }>(
+    `/training/quiz/${id}/violation`, { attemptId, kind })).data;
 /** Ліміт часу питання в редакторі (не менше 30 с). */
 export const setQuizQuestionLimit = async (id: number, questionId: number, timeLimitSec: number) =>
   (await api.patch<{ ok: true; timeLimitSec: number }>(`/training/quiz/${id}/questions/${questionId}`, { timeLimitSec })).data;

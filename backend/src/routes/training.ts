@@ -13,7 +13,7 @@ import { roleHasPerm } from "../auth/rbac.js";
 import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
 import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
 import { LESSON_ONLY, PART_ROLES, partVerdict, type PartRole } from "../core/trainingLesson.js";
-import { myQuiz, startQuiz, answerQuiz, submitQuiz, loadQuiz, QuizError, type QuizDb } from "../core/trainingQuizStore.js";
+import { myQuiz, startQuiz, answerQuiz, submitQuiz, reportViolation, loadQuiz, QuizError, type QuizDb } from "../core/trainingQuizStore.js";
 import { limitVerdict } from "../core/trainingQuiz.js";
 
 /**
@@ -743,6 +743,19 @@ trainingRouter.post("/quiz/:id/answer", async (req, res) => {
     const blocked = roleHasPerm(req.auth!.roleKey, "manage_training") ? null : await lockedReason(req.auth!.userId, id);
     if (blocked) return res.status(423).json({ error: "Тест ще закритий", blockedBy: blocked });
     res.json(await quizTx((db) => answerQuiz(db, req.auth!.userId, id, attemptId, questionId, answer ?? null)));
+  } catch (e) { quizFail(res, e); }
+});
+
+/**
+ * 🖥 Вихід із тесту (28.10.2026): повний екран, вкладка чи інша програма. Перші два — попередження, третє завершує
+ * спробу як не складену. Лічильник — на сервері, тож перезавантаження сторінки його не скидає.
+ */
+trainingRouter.post("/quiz/:id/violation", async (req, res) => {
+  try {
+    const id = quizId(req);
+    const attemptId = Number(req.body?.attemptId);
+    if (!Number.isInteger(attemptId) || attemptId <= 0) throw new QuizError(400, "Некоректна спроба");
+    res.json(await quizTx((db) => reportViolation(db, req.auth!.userId, id, attemptId, req.body?.kind)));
   } catch (e) { quizFail(res, e); }
 });
 
