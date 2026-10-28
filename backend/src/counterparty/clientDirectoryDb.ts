@@ -12,6 +12,7 @@
 import type { Pool } from "pg";
 import { GENERIC_CLIENT_KEYS } from "../core/metrics.js";
 import { normalizeClientName } from "../utils/clientName.js";
+import { FX_UAH_SQL } from "../core/receivablesFxSql.js";
 import type { ClientDirectory, ClientHit } from "./server/clientDirectory.js";
 
 const VALID_CODE = `'^[0-9]{8}([0-9]{2})?$'`;
@@ -41,7 +42,7 @@ WITH keys AS (
    LIMIT 20)
 SELECT a.key, COALESCE(r.client_name, co.name, a.deal_name, a.key) AS name, COALESCE(a.n, 0) AS deals, a.last_at,
        u.id::text AS manager_user_id, COALESCE(m.name, '') AS manager_name,
-       COALESCE(r.amount > 0, false) AS debtor,
+       COALESCE(r.amount + ${FX_UAH_SQL("r")} > 0, false) AS debtor,   -- 💱 валютний борг теж робить боржником
        COALESCE((SELECT array_agg(DISTINCT x.c ORDER BY x.c) FROM (
           SELECT kc.edrpou AS c FROM deals d JOIN deal_companies dc ON dc.deal_kommo_id = d.kommo_id
             JOIN kommo_companies kc ON kc.company_id = dc.company_id WHERE d.client_key = a.key AND kc.edrpou ~ ${VALID_CODE}

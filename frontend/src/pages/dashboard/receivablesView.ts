@@ -1116,7 +1116,7 @@ export const sortMark = (cur: SortState, key: SortKey): string =>
 export const ariaSort = (cur: SortState, key: SortKey): "descending" | "ascending" | "none" =>
   cur.key !== key ? "none" : cur.dir === "desc" ? "descending" : "ascending";
 
-export interface SortableRow { amount: number; overdueDays: number | null }
+export interface SortableRow { amount: number; overdueDays: number | null; fx?: { uah: number } }
 
 /**
  * 🔴 ТРИ ПАСТКИ, КОЖНА З ЯКИХ ЗЛАМАЛА Б ЦЕ ТИХО.
@@ -1139,7 +1139,8 @@ export interface SortableRow { amount: number; overdueDays: number | null }
  *    упорядкований (борг спадно).
  */
 export function sortClients<T extends SortableRow>(rows: readonly T[], sort: SortState): T[] {
-  const valueOf = (r: T): number | null => (sort.key === "amount" ? r.amount : r.overdueDays);
+  // 💱 Борг для сортування — гривня + ≈ ₴ валютного: інакше чисто валютний клієнт завжди падав би вниз як «0».
+  const valueOf = (r: T): number | null => (sort.key === "amount" ? r.amount + (r.fx?.uah ?? 0) : r.overdueDays);
   const sign = sort.dir === "desc" ? -1 : 1;
   return rows
     .map((row, i) => ({ row, i }))

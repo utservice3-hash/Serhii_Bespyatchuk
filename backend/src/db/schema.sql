@@ -7185,3 +7185,16 @@ UPDATE roles SET permissions = permissions - 'reset_bank_invoice' WHERE key NOT 
 -- станом — щоб ≈ грн по рахунку на екрані збігалась із підсумком у «Фінансах», а не рахувалась за іншим курсом.
 ALTER TABLE onec_unpaid_state ADD COLUMN IF NOT EXISTS rate_eur NUMERIC(12,6);
 ALTER TABLE onec_unpaid_state ADD COLUMN IF NOT EXISTS rate_usd NUMERIC(12,6);
+
+-- 💱 ВАЛЮТНА ДЕБІТОРКА ВСЕРЕДИНІ ОСНОВНОЇ (Сергій 28.10.2026: «вона ніяким чином не поєднується з функціоналом основної»;
+-- Роман 28.10 — «роби як пропонуєш»; `core/receivablesFxSql.ts`). Неоплачені валютні рахунки 1С (`onec_unpaid_invoices`) щосинку
+-- лягають у `receivable_invoices` поруч із гривневими — тож відповідальний, домовленість, ліміти, списання, «Проблемний
+-- клієнт», дедлайни й задачі працюють на них тим самим кодом. 🔴 `amount` у валютного рахунку = 0: гривнева дебіторка
+-- (плитки, КВП, Огляд, журнал «Фінансів») не змінюється за побудовою; валюта — у `amount_fx`, ≈ ₴ за курсом НБУ синку — у
+-- `amount_fx_uah` (його беруть ліміти й вибір відповідального). `currency` NULL — гривня.
+ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS currency TEXT;
+ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS amount_fx NUMERIC(14,2);
+ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS amount_fx_uah NUMERIC(14,2);
+-- Списання валютного рахунку — у валюті (рішення В): гривнева `amount` у нього 0, валюта — тут.
+ALTER TABLE receivable_writeoffs ADD COLUMN IF NOT EXISTS currency TEXT;
+ALTER TABLE receivable_writeoffs ADD COLUMN IF NOT EXISTS amount_fx NUMERIC(14,2);

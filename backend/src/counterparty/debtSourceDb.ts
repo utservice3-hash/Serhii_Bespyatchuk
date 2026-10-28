@@ -10,10 +10,11 @@
  */
 import type { Pool } from "pg";
 import { INVOICE_ALIVE_SQL } from "../core/receivablesAge.js";
+import { FX_UAH_SQL } from "../core/receivablesFxSql.js";
 import type { DebtSource, Debtor } from "./server/debtSource.js";
 
 export const DEBTORS_SQL = `
-  SELECT r.client_key AS key, r.client_name AS name, r.amount::numeric AS debt,
+  SELECT r.client_key AS key, r.client_name AS name, (r.amount + ${FX_UAH_SQL("r")})::numeric AS debt,
          COALESCE(r.overdue_days, 0)::int AS age_days, r.limit_days,
          u.id::text AS manager_user_id, m.name AS manager_name,
          COALESCE(inv.codes, '{}') AS codes,
@@ -23,10 +24,10 @@ export const DEBTORS_SQL = `
     LEFT JOIN LATERAL (SELECT id FROM users WHERE manager_id = r.manager_id ORDER BY is_active DESC, id LIMIT 1) u ON true
     LEFT JOIN LATERAL (
       SELECT array_agg(DISTINCT ri.edrpou) FILTER (WHERE ri.edrpou ~ '^[0-9]{8}([0-9]{2})?$') AS codes,
-             sum(ri.amount) FILTER (WHERE ${INVOICE_ALIVE_SQL} AND (CURRENT_DATE - ri.invoice_date) > COALESCE(r.limit_days, 0)) AS od_sum,
+             sum(ri.amount + COALESCE(ri.amount_fx_uah, 0)) FILTER (WHERE ${INVOICE_ALIVE_SQL} AND (CURRENT_DATE - ri.invoice_date) > COALESCE(r.limit_days, 0)) AS od_sum,
              max((CURRENT_DATE - ri.invoice_date) - COALESCE(r.limit_days, 0)) FILTER (WHERE ${INVOICE_ALIVE_SQL}) AS od_days
         FROM receivable_invoices ri WHERE ri.client_key = r.client_key) inv ON true
-   WHERE r.amount > 0`;
+   WHERE r.amount + ${FX_UAH_SQL("r")} > 0`;
 
 export function receivablesDebtSource(pool: Pool): DebtSource {
   return {

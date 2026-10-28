@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { FX_UAH_SQL, FX_BY_CURRENCY_SQL } from "./receivablesFxSql.js";
 import { cohortPct } from "./cohortRule.js";
 import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckClock,
   stageMoveCte, STAGE_MOVE, ASOF_SQL, ASOF_JOB_SQL,
@@ -3024,6 +3025,9 @@ export interface ClientDebt {
   ownerSource: string;
   /** Мажоритар до перевірки активності — щоб підпис міг назвати, кого замінили. */
   majorityName: string | null;
+  /** 💱 Валютний борг (живі рахунки): ≈ ₴ за НБУ синку і у валютах. До `amount` НЕ входить (рішення А, 28.10.2026). */
+  fxUah: number;
+  fxByCurrency: Record<string, number>;
 }
 
 /** Борг по клієнту (знімок). Неатрибутовані клієнти теж показуються (managerName =
@@ -3031,9 +3035,9 @@ export interface ClientDebt {
  *  в роуті (це не метрика, а редаговане поле). */
 export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[]> {
   const { where, params } = debtWhere(s);
-  const r = await pool.query<{ manager_id: number | null; manager_name: string | null; client_key: string | null; client_name: string | null; amount: string; limit_days: number | null; limit_amount: string | null; overdue_days: number | null; owner_source: string | null; majority_name: string | null }>(
+  const r = await pool.query<{ manager_id: number | null; manager_name: string | null; client_key: string | null; client_name: string | null; amount: string; limit_days: number | null; limit_amount: string | null; overdue_days: number | null; owner_source: string | null; majority_name: string | null; fx_uah: string; fx_by: Record<string, string | number> }>(
     `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount, r.limit_days, r.limit_amount, r.overdue_days,
-            r.owner_source, mj.name AS majority_name
+            r.owner_source, mj.name AS majority_name, ${FX_UAH_SQL("r")} AS fx_uah, ${FX_BY_CURRENCY_SQL("r")} AS fx_by
      FROM receivables r
      LEFT JOIN managers m ON m.id = r.manager_id
      LEFT JOIN managers mj ON mj.id = r.majority_manager_id
@@ -3051,6 +3055,8 @@ export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[
     amount: Number(x.amount), limitDays: x.limit_days,
     limitAmount: x.limit_amount == null ? null : Number(x.limit_amount), overdueDays: x.overdue_days,
     ownerSource: x.owner_source ?? "none", majorityName: x.majority_name,
+    fxUah: Number(x.fx_uah ?? 0),
+    fxByCurrency: Object.fromEntries(Object.entries(x.fx_by ?? {}).map(([k, v]) => [k, Number(v)])),
   }));
 }
 

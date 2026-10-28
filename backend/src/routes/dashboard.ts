@@ -118,6 +118,7 @@ import * as callLink from "../core/receivableCallLink.js";
 import { callsNormFor } from "../core/callsNormPlan.js";
 import { RUBRIC_DEBT_V1, type DebtResult } from "../core/receivableCallAi.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
+import { FX_UAH_SQL } from "../core/receivablesFxSql.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
 import * as unmergePreview from "../core/unmergePreview.js";
@@ -125,7 +126,6 @@ import * as paymentMatch from "../core/paymentMatch.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { receivablesScope } from "../auth/receivablesScope.js";
-import { loadReceivablesFx } from "../core/receivablesFx.js";
 import { paymentRequestsSql, toPaymentRequestRows, summarize as summarizePaymentRequests, PAYMENT_REQUEST_STATUSES } from "../core/paymentRequests.js";
 import {
   fkErrorMessage, limitRequestTitle, amountLimitState, amountLimitLabel,
@@ -2378,6 +2378,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
 
   type Client = {
     clientKey: string | null; clientName: string | null; amount: number;
+    fx: { uah: number; byCurrency: Record<string, number> };
     limitDays: number | null; limitAmount: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
     noteUpdatedAt: string | null; noteHistoryCount: number;
@@ -2464,6 +2465,8 @@ dashboardRouter.get("/receivables", async (req, res) => {
     const visibleAmount = r.amount - (cf?.writtenOffAmount ?? 0);
     entry.clients.push({
       clientKey: r.clientKey, clientName: r.clientName, amount: visibleAmount,
+      // 💱 Валютний борг клієнта (живі рахунки) — окремо від гривневого `amount`, який сюди його не додає (рішення А).
+      fx: { uah: r.fxUah, byCurrency: r.fxByCurrency },
       limitDays: r.limitDays, limitAmount: r.limitAmount, overdueDays: r.overdueDays,
       comment: n?.comment ?? null, dueDate: n?.dueDate ?? null,
       noteUpdatedAt: n?.updatedAt ?? null, noteHistoryCount: canonHist,
@@ -2595,7 +2598,7 @@ dashboardRouter.post("/receivables/writeoff", async (req, res) => {
   // На екрані це не було б видно взагалі: join накриває всі рядки з тим самим
   // ключем, і плитка просіла б на повну суму — а в журналі лежала б частина.
   // Тобто розбіжність тиха, і саме тому вона тут і закрита.
-  const target = await pool.query<{ client_key_raw: string; invoice_no: string; amount: string }>(
+  const target = await pool.query<{ client_key_raw: string; invoice_no: string; amount: string; currency: string | null; amount_fx: string | null }>(
     WRITEOFF_TARGETS_SQL(invoiceNo != null),
     invoiceNo ? [clientKey, invoiceNo] : [clientKey]
   );
@@ -2605,13 +2608,13 @@ dashboardRouter.post("/receivables/writeoff", async (req, res) => {
 
   for (const row of target.rows) {
     await pool.query(
-      `INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note, written_off_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note, written_off_by, currency, amount_fx)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (client_key_raw, invoice_no) DO UPDATE SET
-         amount = EXCLUDED.amount, note = EXCLUDED.note,
+         amount = EXCLUDED.amount, note = EXCLUDED.note, currency = EXCLUDED.currency, amount_fx = EXCLUDED.amount_fx,
          written_off_by = EXCLUDED.written_off_by, written_off_at = now(),
          revoked_by = NULL, revoked_at = NULL, revoke_note = NULL`,
-      [row.client_key_raw, row.invoice_no, Number(row.amount), note, auth.userId]
+      [row.client_key_raw, row.invoice_no, Number(row.amount), note, auth.userId, row.currency, row.amount_fx == null ? null : Number(row.amount_fx)]
     );
   }
   res.json({ ok: true, written: target.rowCount });
@@ -2856,7 +2859,7 @@ dashboardRouter.get("/receivables/limit-request", async (req, res) => {
   const row = await pool.query<{
     client_name: string; amount: string; limit_amount: string | null; team_id: number | null;
   }>(
-    `SELECT r.client_name, r.amount, r.limit_amount, m.team_id
+    `SELECT r.client_name, r.amount + ${FX_UAH_SQL("r")} AS amount, r.limit_amount, m.team_id
        FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
       WHERE r.client_key = $1 LIMIT 1`, [clientKey]);
   if (!row.rowCount) return res.status(404).json({ error: "Клієнта немає в дебіторці" });
@@ -2929,7 +2932,7 @@ dashboardRouter.post("/receivables/limit-task", async (req, res) => {
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
 
   const row = await pool.query<{ client_name: string; amount: string; limit_amount: string | null; team_id: number | null }>(
-    `SELECT r.client_name, r.amount, r.limit_amount, m.team_id
+    `SELECT r.client_name, r.amount + ${FX_UAH_SQL("r")} AS amount, r.limit_amount, m.team_id
        FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
       WHERE r.client_key = $1 LIMIT 1`, [clientKey]);
   if (!row.rowCount) return res.status(404).json({ error: "Клієнта немає в дебіторці" });
@@ -3027,22 +3030,6 @@ dashboardRouter.delete("/receivables/limit/:clientKey", requirePerm("manage_cred
  * detail): every unpaid invoice with its number, date, amount and service link.
  * Role-scoped like /receivables — a manager only sees their own clients.
  */
-/**
- * 💱 Валютна дебіторка — окрема вкладка «Дебіторки» (задача 7136, Сергій 26.10.2026; Роман 28.10 — «роби як пропонуєш»).
- * Скоуп — той самий `receivablesScope`, що в усіх дверях вкладки; поля — явним переліком (#17e2). Логіка — `core/receivablesFx.ts`.
- */
-dashboardRouter.get("/receivables/fx", async (req, res) => {
-  const sc = receivablesScope(req.auth!, req.query);
-  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
-  try {
-    const r = await loadReceivablesFx(pool as unknown as import("../core/finance.js").Db, { managerId: sc.managerId, teamId: sc.teamId }, kyivToday());
-    res.json({ syncedAt: r.syncedAt, error: r.error, from: r.from, rates: r.rates, totals: r.totals, clients: r.clients, kommoBase: config.kommo.baseUrl });
-  } catch (e) {
-    console.error("[receivables/fx]", e);
-    res.status(500).json({ error: "Не вдалося завантажити валютну дебіторку" });
-  }
-});
-
 dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const auth = req.auth!;
   /**
@@ -3102,7 +3089,7 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const conds = [flat ? "ri.client_key = ANY($1)" : "ri.client_key = $1"];
   const params: unknown[] = [flat ? visibleKeys : clientKey];
 
-  const r = await pool.query<{ client_key: string; invoice_time: string | null; invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; edrpou: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; client_merged: boolean; invoice_manager: string | null }>(
+  const r = await pool.query<{ client_key: string; invoice_time: string | null; invoice_no: string | null; invoice_date: string | null; amount: string; currency: string | null; amount_fx: number | null; amount_fx_uah: number | null; service_url: string | null; note: string | null; edrpou: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; client_merged: boolean; invoice_manager: string | null }>(
     `SELECT ri.client_key, ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
             -- 🕐 ЧАС ВИСТАВЛЕННЯ. NULL = часу не записано (сентинел 00:00:00 у
             -- 1С — 121 із 293 рядків), і це «не знаємо», а не «опівночі».
@@ -3110,6 +3097,8 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
             -- ⚠️ Без бектиків: усередині шаблонного літерала вони обірвали б рядок.
             to_char(ri.invoice_at AT TIME ZONE 'Europe/Kyiv', 'HH24:MI:SS') AS invoice_time,
             ri.amount, ri.service_url, ri.note, ri.edrpou,
+            -- 💱 Валютний рахунок: гривнева сума 0, валюта й ≈ ₴ — окремо (core/receivablesFxSql.ts).
+            ri.currency, ri.amount_fx::float8 AS amount_fx, ri.amount_fx_uah::float8 AS amount_fx_uah,
             -- 👤 Менеджер САМОГО РАХУНКУ (колонка «Відповідальний» у розкритті).
             -- Це НЕ той, хто веде клієнта: після override або склейки це різні
             -- люди, і саме тому колонка стоїть під «Відповідальним» — щоб різницю
@@ -3229,6 +3218,7 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         // і екран мусить сказати її словами, а не показати «00:00».
         invoiceTime: x.invoice_time,
         amount: Number(x.amount),
+        currency: x.currency, amountFx: x.amount_fx, amountFxUah: x.amount_fx_uah,
         serviceUrl: x.service_url,
         note: x.note,
         edrpou: x.edrpou,

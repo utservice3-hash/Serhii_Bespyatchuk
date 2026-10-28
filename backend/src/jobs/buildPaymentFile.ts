@@ -11,6 +11,7 @@
  * усе одно рахує й пише стан (видно, що джоба жива), а запис таблиці — пропущено з причиною.
  * ⏱ Прапорець «уже працює» має стелю (правило зони jobs-sync).
  */
+import { FX_UAH_SQL } from "../core/receivablesFxSql.js";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { kommoRequest, fetchLeadsByIds, type KommoDeal } from "../kommo/client.js";
@@ -125,7 +126,7 @@ async function contexts(reqs: PayRequest[], mains: Map<number, MainDeal>, client
   const limits = new Map((await pool.query<{ client_key: string; limit_days: number; limit_amount: string | null }>(
     `SELECT client_key, limit_days, limit_amount::text FROM client_credit_limits WHERE client_key = ANY($1)`, [keys])).rows.map((x) => [x.client_key, x]));
   const debts = new Map((await pool.query<{ client_key: string; amount: string; age: number | null }>(
-    `SELECT client_key, sum(amount)::text AS amount, max(overdue_days) AS age FROM receivables WHERE client_key = ANY($1) GROUP BY client_key`, [keys])).rows.map((x) => [x.client_key, x]));
+    `SELECT r.client_key, sum(r.amount + ${FX_UAH_SQL("r")})::text AS amount, max(r.overdue_days) AS age FROM receivables r WHERE r.client_key = ANY($1) GROUP BY r.client_key`, [keys])).rows.map((x) => [x.client_key, x]));
   // Вхідні платежі клієнтів: без Сейфу й карток («лише фінанси», `staff`), без видалених і комісій.
   const payments: BankIn[] = (await pool.query<{ booked_on: string; amount: string; purpose: string | null; payer: string | null }>(
     `SELECT to_char(t.booked_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS booked_on, t.amount::text, t.purpose, t.counterparty_name AS payer

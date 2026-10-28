@@ -374,7 +374,8 @@ export const OPEN_UNIVERSE_SQL = `
            ON wo.client_key_raw = ri.client_key_raw
           AND wo.invoice_no = COALESCE(ri.invoice_no, '')
           AND wo.revoked_at IS NULL
-   WHERE COALESCE(ri.invoice_no, '') <> '' AND wo.client_key_raw IS NULL`;
+   WHERE COALESCE(ri.invoice_no, '') <> '' AND wo.client_key_raw IS NULL
+     AND ri.currency IS NULL`;
 
 /** Рядок всесвіту, як його віддає SQL. */
 export interface RawOpenRow { invoice_no: string; amount: string | number; edrpou: string | null }

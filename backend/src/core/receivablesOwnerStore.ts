@@ -101,7 +101,8 @@ export async function recomputeOwners(c: Queryable, clientKeys?: string[]): Prom
   const inv = await c.query<{
     client_key: string; manager_id: number | null; amount: string; invoice_date: string | null;
   }>(
-    `SELECT client_key, manager_id, amount,
+    // 💱 Валютний рахунок важить своїми ≈ ₴ (гривнева сума в нього 0) — інакше в чисто валютного клієнта не було б мажоритара.
+    `SELECT client_key, manager_id, amount + COALESCE(amount_fx_uah, 0) AS amount,
             to_char(invoice_date, 'YYYY-MM-DD') AS invoice_date
        FROM receivable_invoices
       WHERE ($1::text[] IS NULL OR client_key = ANY($1))`,

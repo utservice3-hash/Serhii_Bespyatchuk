@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchInvoiceRegistry, type ReceivableInvoice } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
+import { InvoiceAmount } from "./ReceivablesFx";
 import { invoiceStamp, nPlural, seenCell } from "../receivablesView";
 import { Hint, Tip } from "../../../components/Hint";
 
@@ -149,7 +150,7 @@ export function ReceivablesRegistry() {
                   </td>
                   <td className="recv-num" style={{ textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}
                       title={formatAmountFull(x.amount)}>
-                    {formatAmount(x.amount)}
+                    <InvoiceAmount amount={x.amount} currency={x.currency} amountFx={x.amountFx} amountFxUah={x.amountFxUah} />
                   </td>
                 </tr>
               );
