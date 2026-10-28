@@ -5,13 +5,17 @@
  */
 import { Router, type Response } from "express";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
-import { loadScreenDay, screenXlsx, buildPaymentFile } from "../jobs/buildPaymentFile.js";
+import { loadScreenDay, screenXlsx, buildPaymentFile, markContext, dropScreenCache } from "../jobs/buildPaymentFile.js";
+import { pool } from "../db/pool.js";
+import { setMark } from "../core/paymentMarks.js";
+import type { Db } from "../core/finance.js";
 
 export const financePaymentsRouter = Router();
 financePaymentsRouter.use(requireAuth);
 function fail(res: Response, e: unknown) {
-  console.error("finance/payments:", e);
-  res.status(500).json({ error: (e as Error)?.message ?? "Помилка" });
+  const status = (e as { status?: number })?.status;
+  if (!status) console.error("finance/payments:", e);
+  res.status(status ?? 500).json({ error: (e as Error)?.message ?? "Помилка" });
 }
 
 financePaymentsRouter.get("/", requirePerm("view_private_finance"), async (req, res) => {
@@ -30,3 +34,13 @@ financePaymentsRouter.post("/run", requirePerm("view_private_finance"), async (_
   try { res.json({ ok: true, result: await buildPaymentFile() }); } catch (e) { fail(res, e); }
 });
 
+// ✋ «Погоджено» / «Скасувати» і коментар (Тетяна 26.10.2026; погоджують Тетяна й адмін — та сама межа, що в екрана).
+// Рішення й сума — з журналу й живого Kommo в мить натискання; у Kommo нічого не пише.
+financePaymentsRouter.post("/mark", requirePerm("view_private_finance"), async (req, res) => {
+  try {
+    const ctx = await markContext(Number(req.body?.requestId));
+    const r = await setMark(pool as unknown as Db, req.auth!.userId, req.body, ctx);
+    dropScreenCache();
+    res.json({ ok: true, ...r });
+  } catch (e) { fail(res, e); }
+});

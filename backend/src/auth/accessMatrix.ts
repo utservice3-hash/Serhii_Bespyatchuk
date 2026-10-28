@@ -131,7 +131,7 @@ const CANDIDATE_401 = "Роман 21.09.2026 («так»): кандидат на
   + "17–18.09) стоїть ПЕРЕД tab-гейтом, а проба матриці ходить від кандидата без активного акаунта. Відмова "
   + "лишилась, змінився лише код; матриця ж рахує «дозволеним» усе, що не 403. Тому роль знято з deny цих "
   + "рядків (у allow deny-only рядків її вписати не можна — проба виконала б запис). Що кандидату закрито все, "
-  + "крім його двох вкладок, стереже #443 через ROUTE_TAB";
+  + "крім його вкладок (навчання, документи, з 27.10.2026 — орг структура), стереже #2708 через ROUTE_TAB";
 const SAFE_PRIVATE = "Таня 08.10.2026: «сейф — лише адмін та я». Перегляд Сейфу — лише право `view_private_finance` "
   + "(Адмін, фінансист); вносити в дашборді не можна — Сейф дзеркало Google-таблиці (Роман 12.10.2026)";
 const HR_GOALS = "Роман 12.10.2026 («роби»): Іван (HR) бачив вкладку «Місячні цілі» (screen_access.goals = true), а "
@@ -487,9 +487,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager", "team_lead"] },
   /* 📷 Фото співробітників (22.09.2026). Саме фото — будь-кому залогіненому (0 → 400/404, але не 403);
      список і запис — право сейфу `view_employee_secrets`: admin, ceo, opdir, kvp, hr. Запис — deny-only. */
-  /* Кандидату — 403 в самому обробнику, але проба матриці ходить від НЕАКТИВНОГО кандидата, і її раніше відсікає
-     перевірка активності в `requireAuth` (401) — той самий випадок, що `CANDIDATE_401` вище. Тому кандидата тут
-     не пробуємо; відмову активному кандидату доводить `#644` на справжньому HTTP. */
+  /* Кандидат (з 27.10.2026 — бачить, орг-структура): проба матриці ходить від НЕАКТИВНОГО кандидата, і її раніше
+     відсікає перевірка активності в `requireAuth` (401) — той самий випадок, що `CANDIDATE_401` вище. Тому кандидата
+     тут не пробуємо; що активному кандидату фото віддається, доводить `#2707` на справжньому HTTP. */
   { method: "GET", path: "/api/people/photo/:employeeId", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/people/photos", cls: "GET",
@@ -1306,6 +1306,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "DELETE", path: "/api/rates/city-info/:id", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 🧮 Відгук на розрахунок ставки (27.10.2026): лишає кожен, хто рахує; зведення — право `view_rate_feedback`
+  //    (admin, СЕО, ОД, КВП — рішення Романа). Фінансист рахувати може, зведення не бачить.
+  { method: "POST", path: "/api/rates/feedback", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "GET", path: "/api/rates/feedback/stats", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["hr", "team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/rates/health", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/rates/stats", cls: "GET",
@@ -1457,6 +1463,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
+  { method: "GET", path: "/api/integrations/google-ads/conversions.csv", cls: "deny-only",
+    allow: [], deny: [] },
   { method: "GET", path: "/api/integrations/tracker/vacations", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-sso", cls: "deny-only",
@@ -1576,11 +1584,28 @@ export const ACCESS_MATRIX: AccessRow[] = [
      deny-only (403 тим, хто без вкладки), а «людина зі списку може / інша з тією ж роллю ні» тримає ЖИВИЙ гейт ядра. */
   // 💸 «Оплати перевізникам» (16.10.2026): номери карток і ПІБ — лише `view_private_finance` (Адмін, фінансист), як Сейф.
   // «Оновити зараз» — deny-only: проба дозволеної ролі запустила б прогін на проді.
+  // 📅 «Календар оплат» (27.10.2026, задача #6369): бачать і ведуть Тетяна й адмін — `view_private_finance`.
+  // Запис — deny-only: проба дозволеної ролі писала б у прод.
+  { method: "GET", path: "/api/finance/calendar", cls: "GET",
+    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/finance/calendar/history.xlsx", cls: "GET",
+    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/calendar", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "PATCH", path: "/api/finance/calendar/:id", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/calendar/:id/pay", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/calendar/paid/:id/undo", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/payments?day=2026-10-14", cls: "GET",
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/payments/export.xlsx?day=2026-10-14", cls: "GET",
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/payments/run", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
+  // ✋ «Погоджено» / коментар (26.10.2026): deny-only — проба дозволеної ролі писала б у прод.
+  { method: "POST", path: "/api/finance/payments/mark", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/month?m=2026-09", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
@@ -1629,6 +1654,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "PUT", path: "/api/finance/kpi/plan", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   // 💱 Список валютних неоплачених рахунків (26.10.2026): хто бачить «Тиждень і місяць», той бачить і його.
+  // 📅 Підказки «Календаря оплат» у «План/факті» (27.10.2026): бачать «Таня + керівництво» (вкладка «Фінанси»);
+  // «додати в план» — deny-only: проба дозволеної ролі писала б план у прод.
+  { method: "GET", path: "/api/finance/plan-hints?m=2026-11", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/finance/plan-hints/add", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/fx-unpaid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   // 🏁 «Результат місяця» (23.10.2026): перегляд — як «Тиждень і місяць»; рішення по угоді — deny-only (проба писала б у прод).
@@ -1877,6 +1908,68 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/cargo/history", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  /* 💳 «ВИПИСКА» — № рахунку й коментарі (пакет Сергія 27.10.2026). Вкладка `bank` — усі, крім HR (як /api/bank/incoming).
+     Номери й історію бачать усі з вкладкою; дії — за правами (сід — schema.sql, кінець файла):
+       вписати № — tag_bank_invoice (менеджер, тімлід) або fix_bank_invoice (фінансист); змінити / визнати неідентифікованим —
+       лише фінансист; «не оплата клієнта» й коментарі до вихідних ФОП — Бухгалтерія (не в ACCESS_ROLES) і адмін. */
+  { method: "POST", path: "/api/bank-ident/state", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "GET", path: "/api/bank-ident/counts", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/bank-ident/list?status=wait", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/bank-ident/:txId/history", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "POST", path: "/api/bank-ident/:txId/invoice", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "hr"] },
+  { method: "PATCH", path: "/api/bank-ident/:txId/invoice", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/:txId/unidentify", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/:txId/not-client", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/comments/summary", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "GET", path: "/api/bank-ident/:txId/comments", cls: "GET",
+    allow: ["admin"], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/:txId/comments", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  /* 🏢 ОРГ СТРУКТУРА (задача 7062, 27.10.2026): бачать УСІ ролі, включно з кандидатом (рішення Романа 27.10); свій нік і
+     фото — теж усі (лише свій рядок «Найму», id з акаунта — #2703). Режим «Редагувати» — право `edit_org`: admin, HR, БА
+     (ТЗ). Керівництво й фінансист вкладку мають, права — ні: 403 по ПРАВУ, тож записані в ADMIN_DENIED_BY_PERM.
+     Кандидата в `deny` журналу й запису НЕМАЄ — з тієї ж причини, що в навчанні (`CANDIDATE_401`): вкладку він має,
+     тож проба доходить до перевірки активності акаунта й отримує 401, а матриця рахує «дозволеним» усе, що не 403
+     (заміряно на прийманні 27.10.2026: 5 клітинок «403 → 401»). Відмову кандидату на запис стереже #2705 (кожен
+     роут запису — під `edit_org`, якого в кандидата немає), набір його вкладок — #2708. */
+  { method: "GET", path: "/api/org/tree", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
+  { method: "GET", path: "/api/org/log", cls: "GET",
+    allow: ["admin", "hr"], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/org/me/telegram", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/org/me/photo", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/org/units", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
+  { method: "PATCH", path: "/api/org/units/:id", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
+  { method: "DELETE", path: "/api/org/units/:id", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/org/people/:employeeId/unit", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
+  /* 👥 КОМАНДИ KOMMO + ДАШБОРД (27.10.2026): список — усім, хто бачить орг-структуру; запис — право `manage_teams`
+     (керівництво й HR — рішення Романа 27.10). КВП і фінансист адмінського рівня, але права не мають: 403 по ПРАВУ.
+     Кандидата в `deny` запису НЕМАЄ (як у навчанні, `CANDIDATE_401`): вкладку він має, тож проба доходить до перевірки
+     активності акаунта й отримує 401, а матриця рахує «дозволеним» усе, що не 403 (заміряно на прийманні bbeb221
+     27.10.2026: 3 клітинки «403 → 401»). Відмову кандидату на запис стереже #2855 (кожен запис — під `manage_teams`). */
+  { method: "GET", path: "/api/org/teams", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
+  { method: "POST", path: "/api/org/teams", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager"] },
+  { method: "PATCH", path: "/api/org/teams/:id", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/org/teams/people/:employeeId", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/surveys/badge", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: ["candidate"] },
   { method: "GET", path: "/api/surveys", cls: "GET",

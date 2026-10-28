@@ -31,13 +31,13 @@ test("#2390 ФОРМА: «бракує» — опис завжди, резуль
   const f: In = { title: "Замінити віджет", strategic: false, goalResult: "", assigneeId: "", assigneeUserId: "" };
   assert.deepEqual(R.formMissing(f, { sharedIntent: false }), [], "🔴 звичайна задача без виконавця заблокована — це особиста, вона дозволена");
   assert.deepEqual(R.formMissing({ ...f, title: "  " }, { sharedIntent: false }), ["опис задачі"]);
-  assert.deepEqual(R.formMissing({ ...f, strategic: true }, { sharedIntent: false }), ["результат цілі"], "🔴 ціль без результату пройде");
+  assert.deepEqual(R.formMissing({ ...f, strategic: true }, { sharedIntent: false }), ["результат стратегічної задачі"], "🔴 ціль без результату пройде");
   assert.deepEqual(R.formMissing({ ...f, strategic: true, goalResult: "≥ 3 млн" }, { sharedIntent: false }), []);
   assert.deepEqual(R.formMissing({ ...f, goalResult: "" }, { sharedIntent: false }), [], "🔴 результат вимагають у звичайної задачі");
   assert.deepEqual(R.formMissing(f, { sharedIntent: true }), ["кому ставите"], "🔴 зі «Спільних» можна створити без виконавця");
   assert.deepEqual(R.formMissing({ ...f, assigneeUserId: 7 }, { sharedIntent: true }), [], "🔴 акаунт-виконавець не рахується як «кому»");
   assert.deepEqual(R.formMissing({ title: "", strategic: true, goalResult: "", assigneeId: "", assigneeUserId: "" }, { sharedIntent: true }),
-    ["опис задачі", "результат цілі", "кому ставите"], "🔴 порядок «бракує» не той, у якому людина заповнює форму");
+    ["опис задачі", "результат стратегічної задачі", "кому ставите"], "🔴 порядок «бракує» не той, у якому людина заповнює форму");
 });
 
 /**
@@ -98,7 +98,7 @@ test("#2393 ФОРМА: діалог шле ті самі поля тим сам
     ["assigneeId: p.id", "виконавець-менеджер"], ["assigneeUserId: p.id", "виконавець-акаунт"], ["assigneeId2: p.id", "другий виконавець"],
     ["reviewerId: p.id", "«Приймає»"], ["deadline: q.date", "швидка дата"], ["deadline: e.target.value", "дата з календаря"],
     ["priority: p", "пріоритет"], ["department: e.target.value", "департамент"], ["comments: e.target.value", "коментар"],
-    ["goalResult: e.target.value", "результат цілі"], ["strategic: k === \"goal\"", "тип «Ціль»"], ["title: e.target.value", "опис"],
+    ["goalResult: e.target.value", "результат стратегічної задачі"], ["strategic: k === \"goal\"", "тип «Ціль»"], ["title: e.target.value", "опис"],
   ] as const) {
     assert.ok(dlg.includes(field), `🔴 у діалозі немає контрола «${what}» (${field})`);
   }
@@ -108,4 +108,19 @@ test("#2393 ФОРМА: діалог шле ті самі поля тим сам
   const dash = code("pages", "Dashboard.tsx");
   assert.match(dash, /strategic: taskForm\.strategic, goalResult: taskForm\.goalResult, goalId: taskForm\.goalId === "" \? null : Number\(taskForm\.goalId\),/,
     "🔴 стратегічна й підзадача не доїжджають до сервера");
+});
+
+/**
+ * #2394 — ВИКОНАВЕЦЬ «Я» ПІДПИСАНО ІМЕНЕМ, А НЕ НОМЕРОМ КАРТКИ (26.10.2026: пігулка показувала «№387273» — моя
+ * картка менеджера неактивна й не входить у список). Діалог отримує мою картку й імʼя від `TasksSection`.
+ * 🧨 Червоніє, якщо діалог знову підпише мене номером, або якщо `TasksSection` перестане передавати картку чи імʼя.
+ */
+test("#2394 ФОРМА: виконавець «я» — «Я (імʼя)», навіть коли моєї картки немає серед активних менеджерів", () => {
+  const dlg = code("pages", "dashboard", "sections", "TaskCreateDialog.tsx");
+  assert.match(dlg, /: id === selfManagerId \? `Я\$\{selfName \? ` \(\$\{selfName\}\)` : ""\}`/, "🔴 «я» знову підписано номером картки");
+  const at = dlg.indexOf("id === selfManagerId"), byOptions = dlg.indexOf("managerOptions.find((m) => m.id === id)?.name");
+  assert.ok(at > 0 && at < byOptions, "🔴 «я» перевіряється ПІСЛЯ пошуку серед активних — неактивна картка знову дасть номер");
+  const sec = code("pages", "dashboard", "sections", "TasksSection.tsx");
+  assert.match(sec, /selfManagerId=\{currentManagerId \?\? null\} selfName=\{accounts\.find\(\(a\) => a\.id === currentUserId\)\?\.name \|\| accountName\}/,
+    "🔴 задачник не передає діалогу мою картку чи імʼя");
 });

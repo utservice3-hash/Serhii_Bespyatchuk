@@ -298,6 +298,19 @@ function inviteLine(r: HiringTrainingRow): string {
   return `запрошення чинне до ${kyiv(i.expires_at)}, ще не відкрите`;
 }
 
+/** Після «Вийшов на роботу» це вже робочий акаунт: пароль тут не видається, його скидають у картці співробітника
+ *  (там новий пароль ще й лягає в сейф). Замість вимкненої кнопки — куди йти (22.10.2026, Гуназа; #2241). */
+function ManagerPasswordHint({ employeeId }: { employeeId: number | null }) {
+  return (
+    <div className="hr-muted" style={{ flexBasis: "100%" }}>
+      Вийшов(ла) на роботу — це вже робочий акаунт. Пароль скидають у картці співробітника кнопкою «Скинути пароль»: новий покажеться один раз і збережеться в сейфі картки.{" "}
+      {employeeId != null
+        ? <a className="hr-link" href={`/hiring?tab=emp&employee=${employeeId}`}>Відкрити картку співробітника ›</a>
+        : <>Картки співробітника ще немає — заведіть її в «Найм → Співробітники».</>}
+    </div>
+  );
+}
+
 /** Блок у картці кандидата: акаунт, запрошення, прогрес коротко й вхід у повний прогрес.
  *  `version` — лічильник історії картки: блок ОНОВЛЮЄ дані, коли він змінюється, але не перебудовується.
  *  Перебудова (через `key`) губила щойно виданий пароль і посилання: видача сама пише в історію (22.10.2026, #2240). */
@@ -319,7 +332,9 @@ export function TrainingAccessBlock({ meta, id, version, toast, onChanged }: { m
       </div>
       {r.health !== "no_account" && <><Bar pct={r.percent} /><div className="hr-muted" style={{ margin: "2px 0 6px" }}>{r.done} із {r.total} кроків · логін {r.login} · {inviteLine(r)}</div></>}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
-        <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} disabled={inviteBlock} />
+        {r.status === "manager"
+          ? <ManagerPasswordHint employeeId={d.employeeId} />
+          : <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} disabled={inviteBlock} />}
         <button className="hr-btn" onClick={() => setOpen(true)}>Відкрити прогрес ›</button>
         {r.health === "no_account" && !inviteBlock && <LinkAccountBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />}
       </div>
@@ -402,8 +417,10 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
                 </div>
               )}
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
-                <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }}
-                  disabled={r.access_closed_at ? "Доступ закрито — спершу «Відновити доступ»" : r.status !== "candidate" && r.status !== "training" ? "Запрошення — для «кандидат + команда» і «на навчанні»" : null} />
+                {r.status === "manager"
+                  ? <ManagerPasswordHint employeeId={d.employeeId} />
+                  : <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }}
+                      disabled={r.access_closed_at ? "Доступ закрито — спершу «Відновити доступ»" : r.status !== "candidate" && r.status !== "training" ? "Запрошення — для «кандидат + команда» і «на навчанні»" : null} />}
                 {open && <button className="hr-btn" onClick={() => void run(() => extendHiringAccess(id), "Доступ продовжено на 1 день")}>Продовжити доступ на 1 день</button>}
                 {d.canRestore && r.access_closed_at && (r.access_closed_reason === "no_login" || r.access_closed_reason === "expired") && (
                   <button className="hr-btn" onClick={() => void run(() => restoreHiringAccess(id), "Доступ відновлено щонайменше на добу")}>Відновити доступ</button>

@@ -620,7 +620,9 @@ export async function trainingDetail(db: Db, id: number, access: HiringAccess, l
        FROM hiring_events e LEFT JOIN users u ON u.id = e.actor_id LEFT JOIN managers mg ON mg.id = u.manager_id
       WHERE e.candidate_id = $1 AND (e.kind IN ('access','question') OR (e.kind = 'status' AND e.to_status IN ('candidate','training','manager','refused','black')))
       ORDER BY e.at DESC, e.id DESC`, [id])).rows;
-  return { row, steps, questions, events };
+  // Картка співробітника цього акаунта: після «Вийшов на роботу» пароль скидають там (#2241), а не тут.
+  const employeeId = userId ? (await db.query<{ id: number }>(`SELECT id FROM employees WHERE user_id = $1`, [userId])).rows[0]?.id ?? null : null;
+  return { row, steps, questions, events, employeeId };
 }
 
 /**

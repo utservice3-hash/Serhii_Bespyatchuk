@@ -10,7 +10,7 @@ import {
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
-  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, receivablesFxAt, bankTotals, periodStart, shiftPeriod,
+  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, receivablesFxAt, bankTotals, periodStart, shiftPeriod, periodEnd,
 } from "../core/financeKpi.js";
 import { loadPlan, setManualPlan } from "../core/financePlan.js";
 import { opexFromApprovals } from "../core/paymentApprovals.js";
@@ -19,6 +19,7 @@ import { setOverride } from "../core/monthResult.js";
 import { monthResultOrPending, monthResultXlsx, dropMonthResultCache } from "../jobs/monthResultData.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 import { loadUnpaidFx } from "../core/unpaidSync.js";
+import { loadPlanHints, addToPlan } from "../core/finRecurring.js";
 
 /**
  * 💰 ФІНАНСИ, прохід 1 (29.09.2026): «План/факт витрат» і «Статті».
@@ -169,6 +170,21 @@ financeRouter.get("/fx-unpaid", async (req, res) => {
     res.json(await loadUnpaidFx(pool as unknown as Db, config.kommo.baseUrl));
   } catch (e) { fail(res, e); }
 });
+// 📅 Нагадування «Календаря оплат» у «План/факті» (Тетяна #6369, 27.10.2026): що за графіком припадає на місяць —
+// біля статті; «додати в план» — сума ДО наявного плану через `saveValues`. Бачать «Таня + керівництво» (вкладка
+// «Фінанси»), додає — право вносити (Роман 27.10.2026).
+financeRouter.get("/plan-hints", async (req, res) => {
+  try {
+    onlyFinance(req);
+    res.json({ hints: await loadPlanHints(pool as unknown as Db, req.query.m) });
+  } catch (e) { fail(res, e); }
+});
+financeRouter.post("/plan-hints/add", async (req, res) => {
+  try {
+    canEdit(req);
+    res.json(await tx((db) => addToPlan(db, req.auth!.userId, req.body)));
+  } catch (e) { fail(res, e); }
+});
 financeRouter.get("/month-result", async (req, res) => {
   try {
     onlyFinance(req);
@@ -239,6 +255,9 @@ financeRouter.get("/kpi", async (req, res) => {
     // Друге число до предиката (правило 4): статті без розділу з фактом місяця і деталі валютної дебіторки.
     const opex = autoActive(p.kind, p.start) ? (await opexFromApprovals(pool as unknown as Db, p.start, p.end)).unassigned : null;
     const fx = autoActive(p.kind, p.start) ? await receivablesFxAt(pool as unknown as Db, p.end, new Date()) : null;
+    // Валюта в дужках і для стовпця «минулий» (Тетяна 26.10.2026): той самий журнал на кінець попереднього періоду.
+    const prevStart = shiftPeriod(p.kind, p.start, -1);
+    const fxPrev = autoActive(p.kind, prevStart) ? await receivablesFxAt(pool as unknown as Db, periodEnd(p.kind, prevStart), new Date()) : null;
     // «з них перекази між своїми рахунками» — друге число біля «Надходження / Витрати загальні» (питання відкрите).
     const bank = autoActive(p.kind, p.start) ? await bankTotals(pool as unknown as Db, p.start, p.end) : null;
     // 🎯 План і прогноз надходжень / витрат (#5649): факт — уже пораховане значення рядка цього періоду.
@@ -246,7 +265,7 @@ financeRouter.get("/kpi", async (req, res) => {
     const plan = autoActive(p.kind, p.start) ? await loadPlan(pool as unknown as Db, p.kind, p.start, new Date(), (id) => factById.get(id) ?? null) : null;
     res.json({
       plan,
-      opexUnassigned: opex, receivablesFx: fx, bankOwn: bank ? { in: bank.ownIn, out: bank.ownOut } : null,
+      opexUnassigned: opex, receivablesFx: fx, receivablesFxPrev: fxPrev, bankOwn: bank ? { in: bank.ownIn, out: bank.ownOut } : null,
       kind: p.kind, start: p.start, end: p.end, prev: p.prev, label: p.label, prevLabel: p.prevLabel, current: p.current,
       sections: p.sections, closed: p.closed, importedInterim: p.importedInterim, canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"),
     });

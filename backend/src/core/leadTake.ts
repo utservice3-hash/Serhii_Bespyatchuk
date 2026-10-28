@@ -4,9 +4,10 @@ import { FC_PIPELINES, successForSources } from "./money.js";
 import { RNK_TEAM_IDS, NON_COMMERCIAL_TEAM_IDS } from "./metrics.js";
 import { teamAtSql } from "./teamAt.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
+import { elogistMarkSql } from "./elogist.js";
 import {
-  takeOf, statsOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost,
-  type DealTake, type TakeRowInput, type TakeStats, type TakeColumn,
+  takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost, statsByBucket,
+  type DealTake, type TakeRowInput, type TakeStats, type TakeColumn, type TakeTarget, type TakeGran,
 } from "./leadTakeRules.js";
 
 /**
@@ -21,7 +22,10 @@ import {
  *                 розбивка за `utm_campaign`, порожня — «кампанія не вказана» (заповнена лише в ~24% заявок);
  *   • `site`    — «Сайт»: джерела yalogist.com.ua (другий сайт);
  *   • `leadgen` — «Лідгени»: `lead_channel = 'leadgen'`;
- *   • `all`     — «Все»: три разом.
+ *   • `elogist` — «eLogist» (рішення власника 27.10.2026): заявки сестринського сайту — ЄДИНЕ
+ *                 означення `core/elogist.elogistMarkSql`. Із «Реклами» й «Сайту» вони виключені:
+ *                 eLogist — не реклама UTS, і одна заявка не може стояти у двох джерелах;
+ *   • `all`     — «Все»: чотири разом.
  * Воронки — «Кваліфікація» і «Повний цикл»: там живуть заявки. Період — за датою СТВОРЕННЯ за Києвом.
  *
  * КОМАНДИ (ТЗ: «групування по командах (Андрій, Дарина, РПК)»): кожна команда РНК окремо, усі продажні РПК —
@@ -31,7 +35,7 @@ import {
 export const AD_SOURCES = ["Дзвінок з uts.ua", "uts.ua", "Callback з uts.ua"] as const;
 export const SITE_SOURCES = ["Дзвінок з yalogist.com.ua", "yalogist.com.ua", "Callback з yalogist.com.ua"] as const;
 export const NO_CAMPAIGN = "(кампанія не вказана)";
-export type TakeSource = "all" | "ad" | "site" | "leadgen";
+export type TakeSource = "all" | "ad" | "site" | "leadgen" | "elogist";
 export type TakeTime = "all" | "work" | "off";
 
 export interface TakeQuery {
@@ -69,10 +73,12 @@ export function leadSelection(q: Pick<TakeQuery, "from" | "to" | "source" | "cam
   const conds = ["d.pipeline_id = ANY($1)", `(d.created_at_kommo ${K})::date BETWEEN $2::date AND $3::date`];
   const add = (v: unknown) => { p.push(v); return `$${p.length}`; };
   // Параметр джерела додається ЛИШЕ коли умова його вживає: зайвий параметр Postgres відкидає цілим запитом.
-  const ad = () => `d.client_source = ANY(${add([...AD_SOURCES])})`;
-  const site = () => `d.client_source = ANY(${add([...SITE_SOURCES])})`;
+  const el = elogistMarkSql("d");
+  const ad = () => `(d.client_source = ANY(${add([...AD_SOURCES])}) AND NOT ${el})`;
+  const site = () => `(d.client_source = ANY(${add([...SITE_SOURCES])}) AND NOT ${el})`;
   const lg = "(d.lead_channel = 'leadgen')";
-  conds.push(q.source === "ad" ? ad() : q.source === "site" ? site() : q.source === "leadgen" ? lg : `(${ad()} OR ${site()} OR ${lg})`);
+  conds.push(q.source === "ad" ? ad() : q.source === "site" ? site() : q.source === "leadgen" ? lg
+    : q.source === "elogist" ? el : `(${ad()} OR ${site()} OR ${lg} OR ${el})`);
   if (q.source === "ad" && q.campaign) {
     conds.push(q.campaign === NO_CAMPAIGN ? "d.utm_campaign IS NULL" : `d.utm_campaign = ${add(q.campaign)}`);
   }
@@ -133,7 +139,11 @@ async function loadRows(q: TakeQuery): Promise<Row[]> {
   return rows;
 }
 
-export interface TakeTableRow extends TakeStats { kind: "manager" | "group" | "dept"; key: string; label: string; group?: string }
+export interface TakeTableRow extends TakeStats {
+  kind: "manager" | "group" | "dept"; key: string; label: string; group?: string;
+  /** Ціль проти факту ЦЬОГО рядка (`targetOf` над його ж `statsOf`) — рядок «ВІДДІЛ» дає шапку картки. */
+  target: TakeTarget;
+}
 export interface TakeTable {
   rows: TakeTableRow[];
   avgCheck: number | null;
@@ -148,12 +158,14 @@ const groupOrder = (g: string) => (g === "Інші" ? 2 : g === "РПК" ? 1 : 0
 export async function leadTakeTable(q: TakeQuery): Promise<TakeTable> {
   const [rows, succ] = await Promise.all([loadRows(q), successForSources({ from: q.from, to: q.to }, AD_SOURCES)]);
   const avgCheck = succ.deals > 0 ? Math.round(succ.revenue / succ.deals) : null;
+  /** Числа рядка і його ціль — з ОДНОГО `statsOf`: ціль не може судити інші числа, ніж показані в рядку. */
+  const statsWithTarget = (rs: Row[]) => { const s = statsOf(rs, avgCheck); return { ...s, target: targetOf(s) }; };
   const byGroup = new Map<string, Row[]>();
   for (const r of rows) byGroup.set(r.d.group, [...(byGroup.get(r.d.group) ?? []), r]);
   const out: TakeTableRow[] = [];
   for (const g of [...byGroup.keys()].sort((a, b) => groupOrder(a) - groupOrder(b) || a.localeCompare(b, "uk"))) {
     const gr = byGroup.get(g)!;
-    out.push({ kind: "group", key: `g:${g}`, label: g, ...statsOf(gr, avgCheck) });
+    out.push({ kind: "group", key: `g:${g}`, label: g, ...statsWithTarget(gr) });
     const byMgr = new Map<string, Row[]>();
     for (const r of gr) {
       const k = r.d.managerId == null ? "∅" : String(r.d.managerId);
@@ -161,11 +173,11 @@ export async function leadTakeTable(q: TakeQuery): Promise<TakeTable> {
     }
     const mgrRows = [...byMgr].map(([k, rs]) => ({
       kind: "manager" as const, key: `m:${k}:${g}`, group: g,
-      label: rs[0].d.manager ?? "Без відповідального", ...statsOf(rs, avgCheck),
+      label: rs[0].d.manager ?? "Без відповідального", ...statsWithTarget(rs),
     }));
     out.push(...mgrRows.sort((a, b) => a.label.localeCompare(b.label, "uk")));
   }
-  out.push({ kind: "dept", key: "dept", label: "ВІДДІЛ", ...statsOf(rows, avgCheck) });
+  out.push({ kind: "dept", key: "dept", label: "ВІДДІЛ", ...statsWithTarget(rows) });
   const camp = new Map<string, number>();
   if (q.source === "ad" && !q.campaign) for (const r of rows) camp.set(r.d.campaign, (camp.get(r.d.campaign) ?? 0) + 1);
   return {
@@ -185,3 +197,20 @@ export async function leadTakeDeals(q: TakeQuery, rowKey: string, col: TakeColum
   };
   return rows.filter((r) => inRow(r) && inColumn(col, r)).map((r) => r.d);
 }
+
+/**
+ * 📈 СЕРІЯ ДЛЯ «СТАТИСТИК» — ТА САМА ВИБІРКА, ЩО ВІКНО ЗВІТУ (`loadRows` → `leadSelection` → `takeOf`), розкладена по
+ * кошиках за київською датою створення (`statsByBucket`). Кожен кошик — `statsOf` над угодами кошика, тож число тижня
+ * дорівнює рядку «ВІДДІЛ» вікна за той самий Пн–Нд і той самий фільтр. Копії SQL тут немає.
+ */
+export async function leadTakeSeries(q: TakeQuery, g: TakeGran): Promise<{ bucket: string; stats: TakeStats }[]> {
+  const rows = await loadRows(q);
+  return statsByBucket(rows.map((r) => ({ ...r, createdAt: Date.parse(r.d.createdAt) })), g);
+}
+
+/**
+ * Фільтр серій «Статистик»: усі джерела, ЛИШЕ РОБОЧИЙ ЧАС (Роман 26.10.2026: «робочий час»). Число на графіку збігається
+ * з вікном Звіту при «Час: Робочий» (вікно за замовчуванням відкривається з «Все» — це підписано в ⓘ графіка).
+ * Одне місце; гейт `#2444` звіряє серію з вікном саме за цим фільтром.
+ */
+export const SERIES_TAKE_FILTER: Pick<TakeQuery, "source" | "time"> = { source: "all", time: "work" };

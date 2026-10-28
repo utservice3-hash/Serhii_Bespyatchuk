@@ -44,8 +44,11 @@ async function scratchDb(t: { skip: (m: string) => void }) {
   if ("unavailable" in scratch) { t.skip(skipReason(scratch)); return null; }
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
-  await c.connect();
-  await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+  // Кластер уже піднятий: впало підключення чи схема — зупинити його, інакше тест висить вічно на живому postgres.
+  try {
+    await c.connect();
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+  } catch (e) { await c.end().catch(() => undefined); scratch.dispose(); throw e; }
   return { c, dispose: async () => { await c.end(); scratch.dispose(); } };
 }
 const row = (o: Partial<UnpaidInvoice>): UnpaidInvoice => ({ uid: "u", number: "1", date: "2026-10-12", organization: "О", contractor: "К", edrpou: null, currency: "EUR",
@@ -149,4 +152,26 @@ test("#1286d ЖИВИЙ SQL: разовий крок 2в — авто-опера
     assert.deepEqual(await rows(), edited, "🔴 повторний прогін схеми повторив крок — свідомі правки відкочено або «ЗП» відроджено");
     assert.equal((await c.query(`SELECT count(*)::int AS n FROM fin_kpis WHERE name = 'ЗП + Податки на ЗП'`)).rows[0].n, 1, "🔴 «ЗП» продубльовано");
   } finally { await s.dispose(); }
+});
+
+/**
+ * #1287 — ВАЛЮТА В ДУЖКАХ І «ЗВІДКИ ЧИСЛО» ПРЯМО В РЯДКУ (Тетяна 26.10.2026: «загальна сума саме у валюті… в дужках після
+ * грн» у тиждень/місяць; Роман: «щоб можна було розгорнути і побачити, звідки ідуть дані, по яких рахунках»). Сервер
+ * віддає підсумок журналу і на кінець ПОПЕРЕДНЬОГО періоду; у рядку «Валютна дебіторка» під гривнею обох стовпців —
+ * валюта в дужках із того самого підсумку; «▾ рахунки» в рядку (клік не відкриває картку показника) розгортає під ним
+ * список рахунків; для не поточного періоду список прямо каже, що це стан ЗАРАЗ, а не склад числа періоду.
+ * 🧨 Червоніє, якщо минулий стовпець візьме сьогоднішню валюту, дужки зникнуть чи список видасть себе за історію.
+ */
+test("#1287 ВАЛЮТА В ДУЖКАХ І РАХУНКИ В РЯДКУ: обидва стовпці зі свого підсумку, «▾ рахунки» під рядком, минулий період — «стан зараз»", () => {
+  const r = SRC("routes/finance.ts");
+  assert.match(r, /const prevStart = shiftPeriod\(p\.kind, p\.start, -1\);\s*const fxPrev = autoActive\(p\.kind, prevStart\) \? await receivablesFxAt\(pool as unknown as Db, periodEnd\(p\.kind, prevStart\), new Date\(\)\) : null;/, "🔴 минулий стовпець — не підсумок на кінець попереднього періоду");
+  assert.match(r, /receivablesFx: fx, receivablesFxPrev: fxPrev,/, "🔴 сервер не віддає валюту минулого періоду");
+  const wk = FE("pages/dashboard/sections/FinanceWeekTab.tsx");
+  assert.match(wk, /\{isFx && fxBrackets\(data\.receivablesFxPrev\) &&/, "🔴 у минулому стовпці немає дужок");
+  assert.match(wk, /\{isFx && fxBrackets\(data\.receivablesFx\) &&/, "🔴 у поточному стовпці немає дужок");
+  assert.match(wk, /onClick=\{\(e\) => \{ e\.stopPropagation\(\); setFxOpen\(\(o\) => !o\); \}\}/, "🔴 «▾ рахунки» відкриває картку показника або не розгортає");
+  assert.match(wk, /\{isFx && fxOpen && <tr><td colSpan=\{fxCols\}[^>]*><FxInvoices current=\{!!data\.current\} \/><\/td><\/tr>\}/, "🔴 список не розгортається під рядком");
+  const fx = FE("pages/dashboard/sections/FinanceFxUnpaid.tsx");
+  assert.match(fx, /fx\.eur \? `\$\{money\(fx\.eur\)\} EUR` : null, fx\.usd \? `\$\{money\(fx\.usd\)\} USD` : null/, "🔴 дужки не з EUR / USD підсумку");
+  assert.match(fx, /\{!current && <div className="hr-note"[^>]*>Список — стан рахунків ЗАРАЗ/, "🔴 для минулого періоду список видає себе за історію");
 });

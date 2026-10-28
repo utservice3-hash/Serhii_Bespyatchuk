@@ -38,7 +38,30 @@ const LT_CSS = `
 .lt-tbl tr.lt-team td.lt-badbg,.lt-tbl tr.lt-dept td.lt-badbg{background:${RED_BG}}
 .lt-tbl .lt-link{all:unset;cursor:pointer;border-radius:3px}
 .lt-tbl .lt-link:hover,.lt-tbl .lt-link:focus-visible{text-decoration:underline;color:#2f6fdb}
+.lt-tbl .lt-gap{display:block;font-size:10.5px;font-weight:700;color:${RED_FG}}
 `;
+
+/**
+ * 🎯 ЦІЛЬ ПРОТИ ФАКТУ — ВЕЛИКИМ РЯДКОМ У ШАПЦІ (Роман 26.10.2026: «ціль показана дрібним сірим підписом — її не видно»).
+ * Факт — рядок «ВІДДІЛ» (увесь вибір: період × джерело × час); ціль, розрив і підпис рахує сервер
+ * (`leadTakeRules.targetOf` над тим самим `statsOf`), тут жодного числа цілі й жодної формули — лише показ.
+ */
+const GOOD_FG = "#16a34a";
+const tgtColor = (met: boolean | null) => (met == null ? MUTED : met ? GOOD_FG : RED_FG);
+function TargetLine({ dept }: { dept: LeadTakeRow }) {
+  const t = dept.target;
+  return (
+    <div className="lt-target" style={{ margin: "4px 0 12px", lineHeight: 1.45 }}>
+      <div style={{ fontSize: 17, fontWeight: 800, color: tgtColor(t.m5.met) }}>
+        Ціль: до 5 хв — {t.m5.norm}% · Факт: {fmtPct(t.m5.fact)} · {t.m5.label}
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 700, display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <span style={{ color: tgtColor(t.m1.met) }}>до 1 хв — {t.m1.norm}% · факт {fmtPct(t.m1.fact)} · {t.m1.label}</span>
+        <span style={{ color: tgtColor(t.notTaken.met) }}>не взято — {t.notTaken.norm} · факт {t.notTaken.fact ?? "—"} · {t.notTaken.label}</span>
+      </div>
+    </div>
+  );
+}
 
 function weekOf(ymd: string, offset: number): { from: string; to: string } {
   const d = new Date(`${ymd}T00:00:00Z`);
@@ -54,7 +77,8 @@ const fmtUah = (v: number | null) => (v == null ? "—" : `${v.toLocaleString("u
 const fmtDt = (iso: string | null) => (iso == null ? "—"
   : new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }));
 
-const SOURCES: [LeadTakeSource, string][] = [["all", "Все"], ["ad", "Реклама"], ["leadgen", "Лідгени"], ["site", "Сайт"]];
+// 🟣 «eLogist» — окреме джерело з 27.10.2026 (рішення власника): заявки сестринського сайту, НЕ реклама UTS.
+const SOURCES: [LeadTakeSource, string][] = [["all", "Все"], ["ad", "Реклама"], ["leadgen", "Лідгени"], ["site", "Сайт"], ["elogist", "eLogist"]];
 const TIMES: [LeadTakeTime, string][] = [["work", "Робочий"], ["off", "Неробочий"], ["all", "Все"]];
 
 export function LeadTakeCard({ from: initFrom, to: initTo, teamId }: { from: string; to: string; teamId?: number }) {
@@ -93,16 +117,21 @@ export function LeadTakeCard({ from: initFrom, to: initTo, teamId }: { from: str
   const thisW = weekOf(today, 0), lastW = weekOf(today, -1);
   const isW = (w: { from: string; to: string }) => w.from === period.from && w.to === period.to;
 
-  const cell = (row: LeadTakeRow, col: LeadTakeColumn, text: string, red: boolean, what: string, count: number) => {
+  const cell = (row: LeadTakeRow, col: LeadTakeColumn, text: string, red: boolean, what: string, count: number, badge?: string) => {
     const zero = !red && (text === "0" || text === "0%");
     return (
       <td style={{ textAlign: "right" }} className={[red ? "lt-bad lt-badbg" : "", zero ? "lt-zero" : ""].join(" ").trim() || undefined}
         title={red ? "Гірше за норматив" : undefined}>
         {count > 0 ? <button className="lt-link" onClick={() => open(row, col, what)} title="Показати угоди">{text}</button> : text}
+        {badge && <span className="lt-gap" title="Відставання від цілі">{badge}</span>}
       </td>
     );
   };
   const cnt = (r: LeadTakeRow, pct: number | null) => (pct == null ? 0 : Math.round((pct / 100) * r.n));
+  const dept = data?.rows.find((r) => r.kind === "dept");
+  /** Бейдж відхилення від цілі — лише в рядках команди й відділу (у менеджера червоний текст і так є). Розрив — із сервера. */
+  const gapBadge = (r: LeadTakeRow, p: { met: boolean | null; gap: number | null }) =>
+    r.kind !== "manager" && p.met === false && p.gap != null ? `−${p.gap} п.п.` : undefined;
 
   return (
     <div className="chart-card" style={{ marginBottom: 16, borderLeft: "4px solid #6366f1" }}>
@@ -137,6 +166,7 @@ export function LeadTakeCard({ from: initFrom, to: initTo, teamId }: { from: str
 
       {err && <p style={{ color: RED_FG, fontSize: 12.5 }}>{err}</p>}
       {busy && !data && <p className="loading-text">Завантаження…</p>}
+      {dept && <TargetLine dept={dept} />}
       {data && (
         <div style={{ overflowX: "auto", opacity: busy ? 0.6 : 1 }}>
           <style>{LT_CSS}</style>
@@ -157,8 +187,8 @@ export function LeadTakeCard({ from: initFrom, to: initTo, teamId }: { from: str
                   <tr key={r.key} className={r.kind === "manager" ? "lt-mgr" : r.kind === "dept" ? "lt-dept" : "lt-team"}>
                     <td>{r.label}</td>
                     {cell(r, "all", String(r.n), false, "усі заявки", r.n)}
-                    {cell(r, "m1", fmtPct(r.m1Pct), r.red.m1, "взято до 1 хв", cnt(r, r.m1Pct))}
-                    {cell(r, "m5", fmtPct(r.m5Pct), r.red.m5, "взято до 5 хв", cnt(r, r.m5Pct))}
+                    {cell(r, "m1", fmtPct(r.m1Pct), r.red.m1, "взято до 1 хв", cnt(r, r.m1Pct), gapBadge(r, r.target.m1))}
+                    {cell(r, "m5", fmtPct(r.m5Pct), r.red.m5, "взято до 5 хв", cnt(r, r.m5Pct), gapBadge(r, r.target.m5))}
                     {cell(r, "m30", fmtPct(r.m30Pct), false, "взято за 5–30 хв", cnt(r, r.m30Pct))}
                     {cell(r, "m60", fmtPct(r.m60Pct), false, "взято за 30–60 хв", cnt(r, r.m60Pct))}
                     {cell(r, "h1", fmtPct(r.h1Pct), false, "взято понад годину", cnt(r, r.h1Pct))}

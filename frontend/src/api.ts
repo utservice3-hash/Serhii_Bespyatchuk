@@ -871,7 +871,7 @@ export interface ExecutiveOverview {
   carryover: { amount: number; deals: number } | null;
   repeatClientsList: { clientName: string; orders: number; revenue: number }[];
   newClientsList: { clientName: string; orders: number; revenue: number }[];
-  newClientsBySource: { ad: number; leadgen: number; other: number };
+  newClientsBySource: { ad: number; leadgen: number; elogist?: number; other: number };
   transferred: {
     total: number;
     success: number;
@@ -1204,6 +1204,12 @@ export interface AdsReport {
   /** Гроші, ЩО НАДІЙШЛИ в періоді від реклами будь-якого часу. Не «принесли ці ліди». */
   revenue: number;
   revenueDeals: number;
+  /**
+   * 🟣 eLogist — ОКРЕМИЙ канал, НЕ реклама UTS (рішення власника 27.10.2026). Ліди, створені в
+   * періоді, і гроші, що надійшли по каналу 'elogist'. Витрат eLogist у нас немає — тож без
+   * ціни ліда й ROMI.
+   */
+  elogist: { leads: number; revenue: number; revenueDeals: number };
 }
 
 /** Одна угода рекламної когорти дня — для розкриття. */
@@ -1273,7 +1279,8 @@ export interface KvpDeptWeek { idx: number; from: string; to: string; plan: numb
  * (71%) і неправда для РНК (19%, там 222 нові). Сенс несе НОВИЗНА поруч, не назва.
  * `noChannel` = `lead_channel IS NULL`; на живих даних 0, але кошик існує в ядрі.
  */
-export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; other: number; noChannel: number }
+// 🟣 `elogist` — п'ятий кошик з 27.10.2026 (рішення власника: eLogist окремо від реклами UTS).
+export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; elogist: number; other: number; noChannel: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
@@ -1290,10 +1297,10 @@ export interface KvpDetailCell {
   created: number; newCount: number; repeatCount: number; undefCount: number;
   // 🔴 crAd/crLeadgen/crOther — партиція СТВОРЕНОГО за каналом (Σ == created).
   // НЕ плутати з leadsAd/leadsLeadgen/leadsOther: ті рахують ЛІДИ — інша популяція.
-  crAd: number; crLeadgen: number; crOther: number; crNoChannel: number;
+  crAd: number; crLeadgen: number; crElogist: number; crOther: number; crNoChannel: number;
   leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
   // Розбивка відправлених авто за джерелом (постійний / лідоген / реклама / невизн). Σ = dispatched.
-  dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number;
+  dispRepeat: number; dispLeadgen: number; dispAd: number; dispElogist: number; dispUndef: number;
   received: { deals: number; revenue: number }; expected: { deals: number; sum: number };
   // Розклад ② по дню + активність дзвінків + виставлені рахунки ТОГО дня.
   success: { deals: number; revenue: number }; paid: { deals: number; revenue: number };
@@ -1397,13 +1404,13 @@ export interface KvpReport {
 }
 // ── ЗВІТ (лендинг) — план із задачника + факт із core (макет zvit_v2) ──
 export interface ReportPlanKpi { fact: number | null; target: number; taken?: number; won?: number; revenue?: number;
-  // Тільки для «dispatch» (авто): розбивка факту за джерелом. Σ(repeat+leadgen+ad+undef) = fact.
-  repeat?: number; leadgen?: number; ad?: number; undef?: number;
+  // Тільки для «dispatch» (авто): розбивка факту за джерелом. Σ(repeat+leadgen+ad+elogist+undef) = fact.
+  repeat?: number; leadgen?: number; ad?: number; elogist?: number; undef?: number;
   // Тільки для «avgCheck» (#4): пул reportChain — signed Σ÷count (revenue/deals для Σ/Σ).
   deals?: number }
-/** Розклад джерела всередині одного класу новизни (`created` == Σ чотирьох). */
+/** Розклад джерела всередині одного класу новизни (`created` == Σ п'яти; eLogist — з 27.10.2026). */
 export interface SrcCounts {
-  created: number; adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
+  created: number; adCount: number; leadgenCount: number; elogistCount: number; otherCount: number; noChannelCount: number;
 }
 /** Лічильники «першого дотику». `noRecord` — бот розмови не чув; у відсоток НЕ входить. */
 export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
@@ -1454,8 +1461,8 @@ export interface ReportPlanManager {
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
-  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ чотирьох == created (гейт #174).
-  srcAd: number; srcLeadgen: number; srcOther: number; srcNoChannel: number;
+  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ п'яти == created (гейт #174; eLogist — з 27.10.2026).
+  srcAd: number; srcLeadgen: number; srcElogist: number; srcOther: number; srcNoChannel: number;
   /**
    * 🔀 Той самий розклад ВСЕРЕДИНІ кожного класу новизни (Е3). Приїжджає разом
    * із рядком, бо перемикач НЕ ходить на сервер: `/overview` ×4 вже 4 940-5 168 мс
@@ -1529,9 +1536,9 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
 }
 /** `src` — НОВИЗНА клієнта, `source` — ДЖЕРЕЛО угоди. Різні виміри: угода буває
  *  водночас `src:"rep"` і `source:"ad"` (постійний клієнт прийшов через рекламу). */
-// Джерело угоди — партиція з чотирьох (див. metrics.dealSourceCase). `null` НЕ
-// п'ятий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#175c`.
-export type DealSource = "ad" | "leadgen" | "other" | "undef" | null;
+// Джерело угоди — партиція з п'яти (див. metrics.dealSourceCase; `elogist` — з 27.10.2026). `null`
+// НЕ окремий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#175c`/`#2493`.
+export type DealSource = "ad" | "leadgen" | "elogist" | "other" | "undef" | null;
 /**
  * НОВИЗНА клієнта — ДЗЕРКАЛО `core/klassFilter.DealKlassState`. `"undef"` став
  * окремим станом 25.08.2026: до того сервер зводив його в `null`, тож 6 угод
@@ -1641,7 +1648,7 @@ export interface ResponseTime {
   neglectedOver24h: number;
 }
 /* ⏱ Вікно «Час опрацювання заявки» (ТЗ Юлії 24.09.2026) — бекенд `core/leadTake.ts`. */
-export type LeadTakeSource = "all" | "ad" | "site" | "leadgen";
+export type LeadTakeSource = "all" | "ad" | "site" | "leadgen" | "elogist";
 export type LeadTakeTime = "all" | "work" | "off";
 export type LeadTakeColumn = "all" | "m1" | "m5" | "m30" | "m60" | "h1" | "none" | "slowLost";
 export interface LeadTakeParams { from: string; to: string; source: LeadTakeSource; time: LeadTakeTime; campaign?: string; teamId?: number }
@@ -1650,7 +1657,10 @@ export interface LeadTakeRow {
   n: number; m1Pct: number | null; m5Pct: number | null; m30Pct: number | null; m60Pct: number | null; h1Pct: number | null;
   notTaken: number; medianMin: number | null; slowLost: number; loss: number | null;
   red: { m1: boolean; m5: boolean; notTaken: boolean };
+  /** Ціль проти факту цього рядка — рахує сервер (`leadTakeRules.targetOf`), фронт лише показує. */
+  target: { m1: LeadTakeTargetPart; m5: LeadTakeTargetPart; notTaken: LeadTakeTargetPart };
 }
+export interface LeadTakeTargetPart { norm: number; fact: number | null; met: boolean | null; gap: number | null; label: string }
 export interface LeadTakeTable {
   rows: LeadTakeRow[]; avgCheck: number | null; avgCheckDeals: number;
   campaigns: { campaign: string; n: number }[];
@@ -3765,6 +3775,25 @@ export interface RateAnalysis {
     distance_km: number | null;
     options: { tonnage: string; margin: number; client_min: number | null; client_max: number | null; selected: boolean }[];
   } | null;
+  /** 🧮 Номер розрахунку — до нього привʼязується відгук; `feedback_due` — чи питати (раз на маршрут на день). */
+  usage_id?: number | null;
+  feedback_due?: boolean;
+}
+export type RateFeedbackRating = "ok" | "high" | "low" | "no";
+export async function sendRateFeedback(body: { usageId: number; rating: RateFeedbackRating; agreed: string; comment: string }): Promise<void> {
+  await api.post("/rates/feedback", body);
+}
+export interface RateFeedbackBucket { key: string; n: number; ok: number }
+export interface RateFeedbackStats {
+  days: number; total: number; calculations: number; coverage: number | null;
+  byRating: Record<RateFeedbackRating, number>; okShare: number | null;
+  deviation: { avg: number; n: number } | null;
+  byTonnage: RateFeedbackBucket[]; byZone: RateFeedbackBucket[];
+  comments: { at: string; author: string; route: string; rating: RateFeedbackRating; agreed: number | null; comment: string }[];
+}
+export async function fetchRateFeedbackStats(days = 30): Promise<RateFeedbackStats> {
+  const { data } = await api.get<RateFeedbackStats>("/rates/feedback/stats", { params: { days } });
+  return data;
 }
 export interface RatesUsageStats {
   days: number; total_requests: number; total_users: number;
@@ -5376,6 +5405,8 @@ export interface HiringTrainingDetail {
   questions: { id: number; question: string; asked_at: string; answer: string | null; answered_at: string | null;
     material_id: number | null; material_title: string | null; answered_by: string | null }[];
   events: { id: number; kind: string; from_status: HiringStatus | null; to_status: HiringStatus | null; comment: string | null; at: string; actor: string | null }[];
+  /** Картка співробітника цього акаунта (`employees.id`); `null` — картки ще немає. */
+  employeeId: number | null;
   canDecide: boolean; canRestore: boolean;
 }
 export const fetchHiringTraining = async () =>
@@ -5526,6 +5557,8 @@ export interface EmployeeRow {
   dismissed_at: string | null; dismiss_reason: string | null; note: string | null; extra: Record<string, string>;
   user_id: number | null; account_name: string | null; account_active: boolean | null; secrets: number; updated_at: string;
   manager_id: number | null; kommo_name: string | null;
+  /** 👥 Справжня команда (27.10.2026): з Kommo — `team_locked`; інакше вибрана в картці (`team_ref`: `k:<id>` / `d:<id>`). */
+  team_name: string | null; team_locked: boolean; team_ref: string | null;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
   /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
@@ -5937,6 +5970,9 @@ export interface PayScreenRow {
   stage: string;
   /** У фільтрі, але прогін його ще не бачив — рішення немає. */
   pending?: boolean;
+  /** ✋ Погоджено вручну (хто, коли); `stale` — погодили іншу суму, треба погодити знову. */
+  manual?: { by: string | null; at: string | null } | null; stale?: boolean;
+  comment?: string | null; commentBy?: string | null;
 }
 export interface PayScreenDay {
   day: string; today: string; todayCal: string; at: string | null; kommoBase: string;
@@ -5954,6 +5990,9 @@ export interface FxUnpaid { syncedAt: string | null; error: string | null; from:
 export const fetchFxUnpaid = async () => (await api.get<FxUnpaid>("/finance/fx-unpaid")).data;
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
 export const runCarrierPayments = async () => (await api.post<{ ok: boolean; result: unknown }>("/finance/payments/run")).data;
+/** ✋ «Погоджено» / «Скасувати» і коментар до запиту (26.10.2026). Не передане поле лишається як було. */
+export const markCarrierPayment = async (body: { requestId: number; approved?: boolean; comment?: string | null }) =>
+  (await api.post<{ ok: boolean; approved: boolean; comment: string | null }>("/finance/payments/mark", body)).data;
 
 /** 🧪 «План/факт · авто (тест)» (20.10.2026): факт із таблиці «UTS Утверждение оплат» поруч із ручним. Лише читання. */
 export interface FinApprLine { payDate: string | null; what: string; amount: number | null; direction: string; paid: boolean }
@@ -5962,6 +6001,44 @@ export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: 
   const res = await api.get("/finance/payments/export.xlsx", { params: { day }, responseType: "blob" });
   const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
   return { blob: res.data as Blob, filename: m?.[1] ?? `oplata_perevizny_${day}.xlsx` };
+}
+/** 📅 «Календар оплат» (задача #6369, 27.10.2026): періодичні витрати — нагадування, окремо від Плану/факту. */
+export type RecPeriod = "month" | "quarter" | "year";
+export interface RecItem {
+  id: number; itemId: number; name: string; amount: number; period: RecPeriod; anchorDay: number; next: string;
+  note: string | null; active: boolean; upcoming: string[];
+}
+export interface RecEvent {
+  recurringId: number; date: string; amount: number; kind: "paid" | "overdue" | "soon" | "plan"; due: boolean;
+  paidId: number | null; planned: number | null; by: string | null; at: string | null; canUndo: boolean;
+}
+export interface RecMonth { ym: string; offset: number; sum: number; paid: number; overdue: number; events: RecEvent[] }
+export interface RecPaid {
+  id: number; recurringId: number; name: string; due: string; amount: number; planned: number;
+  by: string | null; at: string; cancelledBy: string | null; cancelledAt: string | null; canUndo: boolean;
+}
+export interface RecArticle { id: number; name: string; group: string; resp: string; offFrom: string | null }
+export interface RecCalendar { today: string; items: RecItem[]; months: RecMonth[]; history: RecPaid[]; articles: RecArticle[] }
+export const fetchFinCalendar = async () => (await api.get<RecCalendar>("/finance/calendar")).data;
+export const createFinRecurring = async (body: { itemId: number; amount: string; period: RecPeriod; month: string; note: string }) =>
+  (await api.post<{ id: number }>("/finance/calendar", body)).data;
+export const updateFinRecurring = async (id: number, body: Partial<{ itemId: number; amount: string; period: RecPeriod; month: string; note: string; active: boolean }>) =>
+  (await api.patch<{ ok: boolean }>(`/finance/calendar/${id}`, body)).data;
+export const payFinRecurring = async (id: number, body: { due: string; amount?: string }) =>
+  (await api.post<{ next: string; paidId: number }>(`/finance/calendar/${id}/pay`, body)).data;
+export const undoFinRecurringPaid = async (paidId: number) => (await api.post<{ next: string }>(`/finance/calendar/paid/${paidId}/undo`)).data;
+/** 📅 Підказки «Календаря оплат» у «План/факті» місяця і «додати в план» (сума ДО наявного плану). */
+export interface PlanHint {
+  recurringId: number; itemId: number; name: string; note: string | null; amount: number; period: RecPeriod; paid: boolean;
+  added: { amount: number; by: string | null; at: string } | null;
+}
+export const fetchPlanHints = async (m: string) => (await api.get<{ hints: PlanHint[] }>("/finance/plan-hints", { params: { m } })).data.hints;
+export const addHintToPlan = async (recurringId: number, month: string) =>
+  (await api.post<{ before: number | null; after: number }>("/finance/plan-hints/add", { recurringId, month })).data;
+export async function downloadFinCalendarHistory(): Promise<{ blob: Blob; filename: string }> {
+  const res = await api.get("/finance/calendar/history.xlsx", { responseType: "blob" });
+  const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
+  return { blob: res.data as Blob, filename: m?.[1] ?? "istoriya_oplat.xlsx" };
 }
 /** 🏁 «Результат місяця» (#5583, 23.10.2026): успішні угоди «Повного циклу» за менеджером, який закривав, і рішення Тетяни. */
 export interface MRCheckOverride { kommoId: number; action: "exclude" | "move" | "profit"; targetMonth: string | null; profit: number | null; note: string; setBy: string | null; setAt: string }
@@ -6042,7 +6119,7 @@ export interface CtorForm {
 }
 export const CTOR_EMPTY_FORM: CtorForm = {
   ent: "uts", doc: "once", party: "client", intl: false, stamp: true, fopAcc: 0,
-  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
+  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "" },   // порядок оплати менеджер обирає сам (задача 6475)
   dealNo: "", docDate: "", mainNo: "", mainDate: "", mainUntil: "",
 };
 export interface CtorEntityRow {
@@ -6256,6 +6333,8 @@ export interface FinKpiPeriod {
   opexUnassigned: { items: number; fact: number } | null;
   /** Валютна дебіторка з 1С на кінець періоду: Σ у гривні, Σ у валюті (різні валюти разом), рядки з нульовим ₴. */
   receivablesFx: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null; source: string | null; rows: number } | null;
+  /** Той самий підсумок на кінець ПОПЕРЕДНЬОГО періоду — для валюти в дужках у стовпці «минулий». */
+  receivablesFxPrev: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null; source: string | null; rows: number } | null;
   /** «З них перекази між нашими рахунками» біля «Надходження / Витрати загальні» (чи виключати — відкрите питання). */
   bankOwn: { in: number; out: number } | null;
   /** 🎯 План і прогноз надходжень / витрат (#5649); `null` — до старту автоматики. */
@@ -6286,3 +6365,54 @@ export const updateFinKpi = async (k: FinKpiThing, id: number, body: Record<stri
 export const deleteFinKpi = async (k: FinKpiThing, id: number, confirm = false) => { await api.delete(`/finance/kpi/${kpiPath(k)}/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
 export const restoreFinKpi = async (k: FinKpiThing, id: number) => { await api.post("/finance/kpi/restore", { kind: k, id }); };
 export const setFinKpiOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/kpi/items/${id}/off`, { off })).data;
+
+// 🏢 Орг структура (задача 7062, 27.10.2026) — дзеркало `routes/org.ts`. Бачать усі ролі; режим «Редагувати» — право `edit_org`
+// (сервер віддає `canEdit`); свій нік і фото — лише свій рядок «Найму» (`meEmployeeId`).
+export type OrgDept = "top" | "hr" | "fin" | "it" | "sales";
+export interface OrgUnit {
+  id: number; parentId: number | null; name: string; dept: OrgDept; teamId: number | null; teamName: string | null;
+  /** 👥 Команда блоку: Kommo (`teamId`) або дашборду (`dashTeamId`); `teamKey` — `k:<id>` / `d:<id>`, `null` — контейнер. */
+  dashTeamId: number | null; dashTeamName: string | null; teamKey: string | null;
+  label: string | null; ownLabel: string | null; headId: number | null; headSource: "manual" | "team" | null;
+  side: boolean; sort: number; memberIds: number[];
+}
+export interface OrgPerson {
+  id: number; name: string; position: string | null; teamLabel: string | null; unitId: number | null; isHead: boolean;
+  /** Справжня команда людини; `teamLocked` — з Kommo, змінюють лише в Kommo. */
+  teamName: string | null; teamLocked: boolean;
+  telegram: string | null; telegramInvalid: boolean;
+  /** Телефон з «Найму» в одному вигляді; `tel` — лише коли номер розпізнано (рішення Романа 28.10.2026). */
+  phone: { text: string; tel: string | null } | null;
+  photo: PhotoRef | null; isMe: boolean;
+}
+export interface OrgTreeResp {
+  units: OrgUnit[]; people: OrgPerson[]; unassigned: number[]; unknownLabels: { label: string; count: number }[];
+  stats: { total: number; noTelegram: number; noPhoto: number; unassigned: number };
+  depts: Record<OrgDept, string>; canEdit: boolean; meEmployeeId: number | null; teams: { id: number; name: string }[];
+}
+export interface OrgUnitInput { name?: string; parentId?: number | null; dept?: OrgDept; team?: string | null; headEmployeeId?: number | null; side?: boolean; sort?: number }
+export interface OrgLogRow { id: number; at: string; actor: string | null; action: string; summary: string }
+export const fetchOrgTree = async () => (await api.get<OrgTreeResp>("/org/tree")).data;
+export const setMyOrgTelegram = async (telegram: string) => (await api.put<{ telegram: string | null }>("/org/me/telegram", { telegram })).data.telegram;
+export const uploadMyOrgPhoto = async (dataBase64: string) => (await api.post<{ v: number }>("/org/me/photo", { dataBase64 })).data;
+export const moveOrgPerson = async (employeeId: number, unitId: number | null) => { await api.put(`/org/people/${employeeId}/unit`, { unitId }); };
+export const createOrgUnit = async (body: OrgUnitInput) => (await api.post<{ id: number }>("/org/units", body)).data.id;
+export const updateOrgUnit = async (id: number, body: OrgUnitInput) => { await api.patch(`/org/units/${id}`, body); };
+export const deleteOrgUnit = async (id: number) => { await api.delete(`/org/units/${id}`); };
+export const fetchOrgLog = async () => (await api.get<{ rows: OrgLogRow[] }>("/org/log")).data.rows;
+
+// 👥 Команди Kommo + ВІДДІЛИ ДАШБОРДУ (27.10.2026) — дзеркало `routes/orgTeams.ts`. Список — усім, хто бачить орг-структуру;
+// запис — право `manage_teams` (керівництво й HR), сервер віддає `canManage`. ⚠️ Не плутати з «командою лише в дашборді»
+// з «Налаштування → Команди» (`createDashboardTeam`): та живе в `teams`, її бачать Звіт і КВП — це команда продажів.
+// Відділи дашборду (`dashboard_teams`) у звітах продажів не зʼявляються ніколи.
+export interface TeamOption {
+  key: string; kind: "kommo" | "dashboard"; id: number; name: string;
+  linkedKommoId: number | null; linkedKommoName: string | null; archived: boolean; members: number;
+}
+export interface TeamsResp { kommo: TeamOption[]; dashboard: TeamOption[]; canManage: boolean }
+export const fetchOrgTeams = async () => (await api.get<TeamsResp>("/org/teams")).data;
+export const createOrgTeam = async (body: { name: string; kommoTeamId?: number | null }) => (await api.post<{ id: number }>("/org/teams", body)).data.id;
+export const updateOrgTeam = async (id: number, body: { name?: string; kommoTeamId?: number | null; archived?: boolean }) => { await api.patch(`/org/teams/${id}`, body); };
+/** Команда людини без Kommo: `k:<id>` / `d:<id>` або `null` — зняти. */
+export const setEmployeeTeam = async (employeeId: number, team: string | null) =>
+  (await api.put<{ ok: true; name: string | null }>(`/org/teams/people/${employeeId}`, { team })).data.name;

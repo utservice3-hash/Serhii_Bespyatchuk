@@ -149,7 +149,7 @@ test("#175b джерело в розкритті — з ядра, а не вла
  */
 test("#175c чип малює всі чотири джерела, а «не знаємо» підписане окремо", () => {
   const api = FE("api.ts");
-  assert.match(api, /export type DealSource\s*=\s*"ad"\s*\|\s*"leadgen"\s*\|\s*"other"\s*\|\s*"undef"\s*\|\s*null/,
+  assert.match(api, /export type DealSource\s*=\s*"ad"\s*\|\s*"leadgen"\s*\|\s*"elogist"\s*\|\s*"other"\s*\|\s*"undef"\s*\|\s*null/,
     "🔴 тип `DealSource` не має стану «канал не вказано» — він зіллється з «немає даних»");
 
   const rp = FE("pages/dashboard/sections/ReportPlanSection.tsx");

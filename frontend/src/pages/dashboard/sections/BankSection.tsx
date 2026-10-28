@@ -9,6 +9,13 @@ import { getAuthPayload } from "../../../auth";
 import { usePolling } from "../../../hooks/usePolling";
 import { InfoHint, Toggle } from "../widgets";
 import { useToast } from "../../../components/Toasts";
+// 💳 № рахунку на вхідних ФОП / картки і коментарі до вихідних ФОП — пакет Сергія (27.10.2026). Вигляд сторінки той самий:
+// додається лише рядок під платежем, фільтр, інфо-рядок і коментарі (ТЗ «Стиль»).
+import {
+  IdentLine, OutComments, IdentFilter, IdentRuleBar, identAccent, useBankIdent, useBankIdentCounts, useOutComments, type IdentFilterValue, type Clock,
+} from "../../../bankIdent/client/bankIdent";
+import type { CommentSummary, IdentState } from "../../../bankIdent/shared/bankIdent";
+import { bankIdentApi, bankIdentApiFor, BANK_IDENT_COUNT_EVENT } from "../../../bankIdent/dashboard";
 
 const RED = "#c8102e", MUTED = "var(--text-muted)";
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
@@ -20,6 +27,7 @@ const ACC_COLOR: Record<string, { bg: string; fg: string; short: string }> = {
   fop_privat: { bg: "rgba(22,163,74,0.14)", fg: "#16a34a", short: "ФОП·П" },
   fop_mono: { bg: "rgba(217,119,6,0.14)", fg: "#d97706", short: "ФОП·М" },
   staff: { bg: "rgba(13,148,136,0.14)", fg: "#0d9488", short: "Картка" },
+  elogist: { bg: "rgba(219,39,119,0.14)", fg: "#db2777", short: "ЄЛ" },
 };
 // детерміноване групування пробілом (без locale/.replace(/,/g) — там була помилка з комою)
 const fmtUah = (n: number) => {
@@ -41,7 +49,9 @@ function AccBadge({ company }: { company: string }) {
 
 // Двохрядковий запис: зліва дата·час стовпчиком; рядок1 — контрагент жирним + сума справа
 // (UAH-екв. лише для валютних); рядок2 приглушено — рахунок-бейдж · підстава (ellipsis + title).
-function TxRow({ r, mode }: { r: BankTx; mode: "in" | "out" }) {
+interface RowIdent { state: IdentState; clock: Clock; holidays: string[]; onChange: (s: IdentState) => void }
+interface RowComments { summary: CommentSummary; onChange: (s: CommentSummary) => void }
+function TxRow({ r, mode, ident, oc }: { r: BankTx; mode: "in" | "out"; ident?: RowIdent; oc?: RowComments }) {
   const inMode = mode === "in";
   const color = inMode ? "#16a34a" : "#dc2626";
   const sign = inMode ? "" : "−";
@@ -50,10 +60,12 @@ function TxRow({ r, mode }: { r: BankTx; mode: "in" | "out" }) {
   const p = (x: number) => String(x).padStart(2, "0");
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 12, padding: "10px 4px",
+      // рядок із блоком «№ рахунку» / коментарями — до верху, інакше дата зʼїде до середини (ТЗ «Стиль», п.6)
+      display: "flex", alignItems: ident || oc ? "flex-start" : "center", gap: 12, padding: "10px 4px",
       borderBottom: "1px solid var(--border)",
       background: r.hidden ? "rgba(217,119,6,0.07)" : r.unmatched_account ? "rgba(220,38,38,0.05)" : undefined,
-      borderLeft: r.unmatched_account ? "3px solid #dc2626" : "3px solid transparent",
+      // «горить» (лишилось < 12 роб. год) — тією самою лівою смугою, а не новим фоном (п.5)
+      borderLeft: r.unmatched_account ? "3px solid #dc2626" : `3px solid ${ident ? identAccent(ident.state, ident.clock(), new Set(ident.holidays)) : "transparent"}`,
     }}>
       <div style={{ width: 50, flexShrink: 0, textAlign: "center", lineHeight: 1.15 }}>
         <div style={{ fontSize: 13, fontWeight: 700 }}>{p(d.getDate())}.{p(d.getMonth() + 1)}</div>
@@ -75,6 +87,8 @@ function TxRow({ r, mode }: { r: BankTx; mode: "in" | "out" }) {
           {r.unmatched_account && <span title="нерозпізнаний рахунок" style={{ color: "#dc2626", fontSize: 11, flexShrink: 0 }}>⚠</span>}
           <span title={r.purpose ?? ""} style={{ fontSize: 12.5, color: MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{r.purpose ?? "—"}</span>
         </div>
+        {ident && <IdentLine state={ident.state} api={bankIdentApi} clock={ident.clock} holidays={ident.holidays} onChange={ident.onChange} />}
+        {oc && <OutComments txId={r.id} summary={oc.summary} api={bankIdentApi} onChange={oc.onChange} />}
       </div>
     </div>
   );
@@ -121,6 +135,34 @@ export default function BankSection() {
 
   const filters = useMemo(() => ({ from: range.from, to: range.to, company: companyFilter ?? undefined, currency: ccy || undefined, q: q || undefined }), [range.from, range.to, companyFilter, ccy, q]);
   const feedFn = mode === "in" ? fetchBankIncoming : fetchBankOutgoing;
+
+  // 💳 № рахунку (вхідні) і коментарі (вихідні ФОП). Фільтр ≠ «Усі» — рядки з /api/bank-ident/list (та сама межа
+  // видимості, що в стрічці); стани — для рядків, що на екрані; лічильники — для фільтра.
+  const [identF, setIdentF] = useState<IdentFilterValue>("all");
+  const identKey = mode === "in" && identF !== "all" ? identF : null; // фільтр діє лише на «Вхідних»
+  const identOn = identKey !== null;
+  const [identData, setIdentData] = useState<{ key: string; rows: BankTx[]; total: number } | null>(null);
+  // фільтр і лічильники — за вибраним чипом рахунку (компанією), як і решта стрічки
+  const identApi = useMemo(() => bankIdentApiFor(companyFilter), [companyFilter]);
+  const identDataKey = identKey ? `${identKey}|${companyFilter ?? ""}` : null;
+  useEffect(() => {
+    if (!identKey || !identDataKey) return;
+    let alive = true;
+    identApi.list(identKey, 200).then((d) => {
+      if (alive) setIdentData({ key: identDataKey, rows: d.rows as unknown as BankTx[], total: d.total });
+    }).catch(() => { if (alive) setIdentData({ key: identDataKey, rows: [], total: 0 }); });
+    return () => { alive = false; };
+  }, [identKey, identDataKey, identApi]);
+  const identRows = identData && identData.key === identDataKey ? identData.rows : null; // null — ще вантажиться
+  const identTotal = identData && identData.key === identDataKey ? identData.total : 0;
+  const shown = identOn ? identRows ?? [] : rows;
+  const ident = useBankIdent(mode === "in" ? shown.map((r) => r.id) : [], bankIdentApi);
+  const { counts: identCounts, reload: reloadIdentCounts } = useBankIdentCounts(identApi);
+  const onIdentChange = useCallback((s: IdentState) => {
+    ident.setState(s); void reloadIdentCounts();
+    window.dispatchEvent(new Event(BANK_IDENT_COUNT_EVENT)); // бейдж у меню — одразу, не чекаючи хвилини
+  }, [ident.setState, reloadIdentCounts]); // eslint-disable-line react-hooks/exhaustive-deps
+  const oc = useOutComments(mode === "out" ? rows.map((r) => r.id) : [], bankIdentApi);
 
   // Перша сторінка (скидання): підсумки за період + перша порція історії.
   const loadFirst = useCallback(() => {
@@ -254,6 +296,7 @@ export default function BankSection() {
           <Stat label="транзакцій за період" value={String(summary.count)} hint="Кількість транзакцій за вибраний період. Список показує всю утриману історію." />
           <Stat label="ТОВ ЮТС" value={fmtUah(byCo.uts ?? 0)} hint="Σ по рахунку ТОВ ЮТС за період, UAH. Джерело — банк." />
           <Stat label="ТОВ Автомув" value={fmtUah(byCo.automuv ?? 0)} hint="Σ по рахунку ТОВ Автомув за період, UAH. Джерело — банк." />
+          <Stat label="ТОВ ЄЛОГІСТ" value={fmtUah(byCo.elogist ?? 0)} hint="Σ по рахунках ТОВ ЄЛОГІСТ за період, UAH (валютні — за курсом). Джерело — банк, з 26.10.2026." />
           <Stat label="ФОП Беспятчук" value={fmtUah(fopSum)} hint="Σ по рахунках ФОП (Приват+Моно) за період, UAH. Джерело — банк." />
           <Stat label="найбільший платіж" value={fmtUah(summary.maxPayment)} hint="Найбільша транзакція за період, UAH." />
           <span style={{ marginLeft: "auto", alignSelf: "flex-start", fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише адмін</span>
@@ -270,14 +313,27 @@ export default function BankSection() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔎 контрагент / підстава / ID" style={{ ...inp, width: 240 }} />
           <select value={companyFilter ?? ""} onChange={(e) => setCompanyFilter(e.target.value || null)} style={inp}><option value="">Компанія: усі</option>{companies.map((c) => <option key={c.company} value={c.company}>{c.label}</option>)}</select>
           <select value={ccy} onChange={(e) => setCcy(e.target.value)} style={inp}><option value="">Валюта: усі</option>{currencies.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+          {mode === "in" && <IdentFilter counts={identCounts} value={identF} onChange={setIdentF} />}
         </div>
-        {loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій в утриманій історії.</p> : (
+        {mode === "in" && <IdentRuleBar kind="in" />}
+        {mode === "out" && oc.enabled && <IdentRuleBar kind="out" />}
+        {identOn ? (identRows === null ? <p className="loading-text">Завантаження…</p> : identRows.length === 0 ? <p className="loading-text">Немає платежів із таким станом.</p> : (
           <div>
-            {rows.map((r) => <TxRow key={r.id} r={r} mode={mode} />)}
+            {identRows.map((r) => <TxRow key={r.id} r={r} mode="in"
+              ident={ident.states[r.id] ? { state: ident.states[r.id], clock: ident.clock, holidays: ident.holidays, onChange: onIdentChange } : undefined} />)}
+            <div style={{ textAlign: "center", padding: "14px 0 2px", color: MUTED, fontSize: 12.5 }}>
+              {identTotal > identRows.length ? `Показано ${identRows.length} з ${identTotal} — найновіші` : `Усього ${identRows.length}`}
+            </div>
+          </div>
+        )) : loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій в утриманій історії.</p> : (
+          <div>
+            {rows.map((r) => <TxRow key={r.id} r={r} mode={mode}
+              ident={mode === "in" && ident.states[r.id] ? { state: ident.states[r.id], clock: ident.clock, holidays: ident.holidays, onChange: onIdentChange } : undefined}
+              oc={mode === "out" && oc.enabled && oc.summaries[r.id] ? { summary: oc.summaries[r.id], onChange: (s) => oc.setSummary(r.id, s) } : undefined} />)}
           </div>
         )}
         {/* сентинель infinite-scroll + індикатор довантаження / кінець історії */}
-        {!loading && rows.length > 0 && (
+        {!identOn && !loading && rows.length > 0 && (
           <div ref={sentinelRef} style={{ textAlign: "center", padding: "14px 0 2px", color: MUTED, fontSize: 12.5 }}>
             {loadingMore ? "Завантаження ще…" : hasMore ? "Гортай нижче — довантажиться ще" : `Кінець історії · показано ${rows.length} транзакцій`}
           </div>
@@ -370,7 +426,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
 // ─────────── «+ Картка»: будь-яка картка monobank без програміста (Роман 07.10.2026) ───────────
 // Токен — лише рядком у серверному .env (`MONO_TOKEN_…`); сервер бачить його без рестарту. Картка створюється
 // вимкненою: вмикається перемикачем, коли в її картці вже «API ✓». Правила полів — на сервері (`core/bankAccounts.ts`).
-const CARD_OWNERS: [string, string][] = [["staff", "Картка працівника"], ["uts", "ТОВ ЮТС"], ["automuv", "ТОВ Автомув"], ["fop_mono", "ФОП Беспятчук"]];
+const CARD_OWNERS: [string, string][] = [["staff", "Картка працівника"], ["uts", "ТОВ ЮТС"], ["automuv", "ТОВ Автомув"], ["elogist", "ТОВ ЄЛОГІСТ"], ["fop_mono", "ФОП Беспятчук"]];
 function AddCardForm({ onAdded }: { onAdded: (text: string) => void | Promise<void> }) {
   const empty = { label: "", company: "staff", currency: "UAH", last4: "", iban: "", env: "MONO_TOKEN_", outPrivate: true };
   const [open, setOpen] = useState(false);

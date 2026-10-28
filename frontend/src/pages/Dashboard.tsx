@@ -69,6 +69,7 @@ import { AiCallsSection } from "./dashboard/sections/AiCallsSection";
 import { CarrierCallsSection } from "./dashboard/sections/CarrierCallsSection";
 import { HiringSection } from "./dashboard/sections/HiringSection";
 import { BusinessAssistantSection } from "./dashboard/sections/BusinessAssistantSection";
+import { OrgSection } from "./dashboard/sections/OrgSection";
 import { FinanceSection } from "./dashboard/sections/FinanceSection";
 import { ConstructorSection } from "./dashboard/sections/ConstructorSection";
 import { SurveysSection } from "./dashboard/sections/SurveysSection";
@@ -1176,6 +1177,8 @@ export function Dashboard() {
       {/* 📄 Конструктор документів (30.09.2026, пакет Сергія). Статичний імпорт — гейт #225. Доступ вирішує сервер. */}
       {section === "constructor" && <ConstructorSection />}
       {section === "surveys" && <SurveysSection />}
+      {/* 🏢 Орг структура (задача 7062). Статичний імпорт — гейт #225; бачать усі ролі, доступ вирішує сервер (вкладка org). */}
+      {section === "org" && <OrgSection />}
       {section === "registries" && <RegistriesPage tabs={regTabsFor(auth?.roleKey ?? auth?.role)} onNavigate={(_t, url) => navigate(url)} />}
       {/* 🏛 «Тендери Prozorro» (#5299): статичний імпорт — гейт #225; доступ вирішує сервер (вкладка prozorro). */}
       {section === "prozorro" && <ProzorroSection roleKey={auth?.roleKey ?? null} />}

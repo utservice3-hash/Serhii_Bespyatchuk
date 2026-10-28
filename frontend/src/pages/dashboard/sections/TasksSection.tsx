@@ -2061,6 +2061,8 @@ export function TasksSection({
           onKind={(k) => setTaskForm((f) => ({ ...f, taskType: k === "kpi" ? "weekly_kpi" : "reactivation", strategic: false, goalResult: "", pendingFile: null }))}
           onSubmit={handleSubmitTaskModal}
           onClose={() => setTaskModalOpen(false)}
+          selfManagerId={currentManagerId ?? null}
+          selfName={accounts.find((a) => a.id === currentUserId)?.name || accountName}
         />
       )}
       {taskModalOpen && taskForm.taskType !== "simple" && (

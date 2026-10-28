@@ -209,6 +209,10 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_edrpou TEXT;
 -- «менеджер бачить свої заявки, які він подав». Джерело — поля самої заявки:
 -- «ID исходной сделки» (2097401) і «Исходный ответственный» (2098197, ПІБ).
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS source_deal_id BIGINT;
+-- 📈 gclid (Kommo 482023) — Google Click ID для офлайн-конверсій Google Ads (27.10.2026,
+-- core/googleAdsConversions.ts). Пише syncKommo щопрохід; старі угоди — jobs/backfillGclid.ts.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS gclid TEXT;
+CREATE INDEX IF NOT EXISTS idx_deals_gclid ON deals(created_at_kommo) WHERE gclid IS NOT NULL;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS source_responsible TEXT;
 CREATE INDEX IF NOT EXISTS idx_deals_source_deal ON deals(source_deal_id) WHERE source_deal_id IS NOT NULL;
 
@@ -1940,7 +1944,7 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
   id              SERIAL PRIMARY KEY,
   account_id      INTEGER NOT NULL REFERENCES bank_accounts(id),
   direction       TEXT NOT NULL CHECK (direction IN ('in','out')),
-  external_tx_id  TEXT NOT NULL UNIQUE,   -- ідемпотентність upsert
+  external_tx_id  TEXT NOT NULL UNIQUE,   -- ідемпотентність upsert; з 26.10.2026 унікальність — (account_id, external_tx_id), див. «КЛЮЧ РУХУ»
   booked_at       TIMESTAMPTZ,
   processed_at    TIMESTAMPTZ,
   counterparty_name TEXT,
@@ -5757,7 +5761,7 @@ ALTER TABLE feedback ADD CONSTRAINT feedback_impact_check
 --    вимкненою; токен — рядком `MONO_TOKEN_…` у .env, сервер бачить його без рестарту, `bankSources/token.ts`).
 -- ══════════════════════════════════════════════════════════════════════════
 ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_company_check;
-ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff'));
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff','elogist'));
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_pan_last4 TEXT;
 ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_mono_pan_last4_check;
 ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHECK (mono_pan_last4 IS NULL OR mono_pan_last4 ~ '^[0-9]{4}$');
@@ -6618,6 +6622,14 @@ CREATE TABLE IF NOT EXISTS client_limit_events (
 );
 CREATE INDEX IF NOT EXISTS client_limit_events_idx ON client_limit_events (limit_id, at, id);
 
+-- 🧹 «0 ДНІВ» У ДЕБІТОРЦІ — ЦЕ «У ВІДСТРОЧЦІ ВІДМОВЛЕНО», А НЕ ЛІМІТ НА 0 ДНІВ (Роман 27.10.2026: «роби і техноген теж»).
+-- Перший перенос 25.10 приніс такі рядки в «Ліміти клієнтів» як ліміт 0 днів (ТЕХНОГЕН, ІНДЕКС): колонка писала «0 дн. від
+-- рахунку», а плитка «Активної дебіторки» — «ліміт не узгоджено». Тепер `legacyRow` не переносить 0 днів як дні; тут — разове
+-- прибирання вже перенесеного. Лише рядки ПЕРЕНОСУ (src='debt' з приміткою переносу); idempotent: другий прогін нічого не знаходить.
+-- Ліміт у дебіторці (`client_credit_limits` = 0) не чіпається — він і далі каже «відмовлено». Гейт `#2483`.
+DELETE FROM client_limits WHERE src = 'debt' AND days = 0 AND limit_sum IS NULL AND note LIKE 'діяв у дебіторці з%';
+UPDATE client_limits SET days = NULL, updated_at = now() WHERE src = 'debt' AND days = 0 AND limit_sum IS NOT NULL AND note LIKE 'діяв у дебіторці з%';
+
 -- Справи, які щомісячна перевірка вже бачила (нова = ще не бачили). case_no '*' — «базу для коду вже знято».
 CREATE TABLE IF NOT EXISTS cl_court_seen (
   code        text NOT NULL,
@@ -6649,6 +6661,34 @@ UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
  WHERE key IN ('hr', 'business_assistant')
    AND NOT COALESCE((SELECT (data->>'cpCheckTabGranted')::boolean FROM app_settings WHERE id = 1), false);
 UPDATE app_settings SET data = data || '{"cpCheckTabGranted":true}'::jsonb WHERE id = 1 AND NOT (data ? 'cpCheckTabGranted');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏦 ТОВ «ЄЛОГІСТ» У «ВИПИСЦІ» (задача 6458; Сергій 22.10.2026: «повністю все аналогічно ЮТС, включно з API банків»;
+--  Роман 26.10.2026: «з сьогодні виписку з банку»). Компанію `elogist` дозволено в CHECK вище.
+--  · `sync_from` — нижня межа історії рахунку за Києвом: раніших рухів синк не тягне й не пише НІКОЛИ (не лише на першому
+--    проході — порожній валютний рахунок інакше щоразу тягнув би 60 днів, `core/bankSyncWindow.ts`). NULL — як було.
+--  · Три рахунки Привату під одним ключем `PRIVAT_TOKEN_ELOGIST` (як Автомув); доступ до всіх трьох IBAN перевірено пробним
+--    запитом 26.10.2026, реквізити — від Романа 26.10.2026. Створюються ВИМКНЕНИМИ: між міграцією й рестартом ще живе СТАРИЙ
+--    процес, і його синк не знає `sync_from` — увімкнений рахунок він встиг би засипати 60 днями. Вмикається в панелі після рестарту.
+--  · IBAN у рахунках робить перекази ЮТС ↔ ЄЛОГІСТ «своїми» в «Надходження / Витрати» (#1221) без окремих правил.
+--  · Разовий крок (позначка в `fin_kpi_imports`, як Сейф і картки): рахунки створюються рівно один раз на базу — повтор
+--    не дублює, правку адміна не перетирає, а видалені адміном НЕ воскрешає на наступному викаті (#2423).
+--  · ВІДКАТ: рядок CHECK вище з `'elogist'` НЕ відкочувати — старий CHECK упав би на цих рахунках і зупинив міграцію. Решту
+--    коду відкочувати можна; рахунки спершу вимкнути в панелі (старий синк тягнув би 60 днів). Видалити — лише поки рухів немає.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS sync_from DATE;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('elogist-accounts-2026-10-26', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, is_active, sync_from, iban,
+                           legal_name, edrpou_ipn, vat_ipn, bank_name, mfo, legal_address, director)
+SELECT v.company, 'privat', v.label, v.currency, 'PRIVAT_TOKEN_ELOGIST', false, DATE '2026-10-26', v.iban,
+       'ТОВ «ЄЛОГІСТ»', '45149289', '451492826513', 'АТ КБ «ПриватБанк»', '305299',
+       'Україна, 02141, м. Київ, вул. Лариси Руденко, буд. 6-А', 'Протас Дар''я В''ячеславівна'
+  FROM (VALUES
+    ('elogist', 'ТОВ ЄЛОГІСТ',       'UAH', 'UA873052990000026008035031953'),
+    ('elogist', 'ТОВ ЄЛОГІСТ · USD', 'USD', 'UA883052990000026003035023375'),
+    ('elogist', 'ТОВ ЄЛОГІСТ · EUR', 'EUR', 'UA353052990000026000015029239')
+  ) AS v(company, label, currency, iban)
+ WHERE EXISTS (SELECT 1 FROM step) AND NOT EXISTS (SELECT 1 FROM bank_accounts WHERE company = 'elogist');
 
 -- 💱 НЕОПЛАЧЕНІ РАХУНКИ 1С з 2026 року (сервіс `unpaid-invoices`, 1С 25.10.2026; задача #5297; рішення Романа 26.10.2026
 -- «лише 2026 рік і щоб можна було глянути, що там не так»). Пише лише `syncUnpaidInvoices` (щогодини о :15, заміна цілком).
@@ -6715,3 +6755,410 @@ CREATE TABLE IF NOT EXISTS zakaz_onec_pay_plan (
   written_text TEXT, written_paid BOOLEAN, written_status BIGINT, written_at TIMESTAMPTZ, write_error TEXT
 );
 REVOKE ALL ON zakaz_onec_pay_plan FROM ai_readonly;
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🔑 КЛЮЧ РУХУ — У МЕЖАХ РАХУНКУ (задача 6458, 26.10.2026; знайдено оглядом перед ЄЛОГІСТ).
+--  Переказ між двома НАШИМИ рахунками Привату має однаковий REF#NUM_DOC в обох виписках. Поки `external_tx_id` був унікальним
+--  на всю таблицю, друга сторона робила `ON CONFLICT … DO UPDATE` по рядку ПЕРШОЇ: одна нога зникала, у другої перевертався
+--  знак і контрагентом ставав сам рахунок. Заміряно на проді: переказ Автомув → ФОП Приват 01.10.2026 на 50 000 — у ФОП
+--  «надходження» −50 000, списання Автомуву немає (1 випадок з 1). Із ЄЛОГІСТ так було б із кожним переказом ЮТС ↔ ЄЛОГІСТ.
+--  · Унікальність тепер (account_id, external_tx_id); усі записувачі — `ON CONFLICT (account_id, external_tx_id)` (#2424, #2425).
+--  · Ремонт РАЗОВИЙ і чесний: не правимо рядки руками, а позначаємо зачеплені рахунки (свій рядок зі знаком навпаки до
+--    напрямку + рахунок-контрагент за IBAN) на повторне завантаження з дня до збою — `syncBank` перечитає їх, upsert поставить
+--    обидві ноги на місце, і позначка зніметься сама (#2426). Revert коду цього не повертає (і не має: повернувся б баг).
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_transactions DROP CONSTRAINT IF EXISTS bank_transactions_external_tx_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS bank_transactions_account_tx_uniq ON bank_transactions (account_id, external_tx_id);
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS resync_from DATE;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('privat-own-transfer-resync-2026-10-26', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
+broken AS (
+  SELECT t.account_id, t.raw_json->>'AUT_CNTR_ACC' AS cntr, (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date AS d
+    FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+   WHERE a.bank = 'privat' AND t.amount <> 0 AND (t.direction = 'in') <> (t.amount > 0) AND t.deleted_at IS NULL)
+UPDATE bank_accounts a SET resync_from = (SELECT min(d) - 1 FROM broken)
+ WHERE EXISTS (SELECT 1 FROM step) AND a.bank = 'privat'
+   AND (a.id IN (SELECT account_id FROM broken) OR a.iban IN (SELECT cntr FROM broken WHERE cntr IS NOT NULL));
+
+-- ✋ «ПОГОДЖЕНО» І КОМЕНТАР НА ЗАПИТІ «ОПЛАТИ ПЕРЕВІЗНИКАМ» (Тетяна 26.10.2026; `core/paymentMarks.ts`): рішення людини
+-- поверх рішення системи. Погодження привʼязане до суми (`amount`): змінили суму в Kommo — не діє. Автор погодження й
+-- автор коментаря — окремо (дописаний коментар не переписує, хто погодив). У Kommo нічого не пишемо.
+CREATE TABLE IF NOT EXISTS payment_request_marks (
+  request_id BIGINT PRIMARY KEY, approved BOOLEAN NOT NULL DEFAULT false, amount NUMERIC(14,2),
+  approved_by INTEGER REFERENCES users(id), approved_at TIMESTAMPTZ,
+  comment TEXT CHECK (comment IS NULL OR btrim(comment) <> ''), comment_by INTEGER REFERENCES users(id), comment_at TIMESTAMPTZ,
+  CHECK (approved = (amount IS NOT NULL)), CHECK (approved OR comment IS NOT NULL)
+);
+REVOKE ALL ON payment_request_marks FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏢 ОРГ-СТРУКТУРА (задача 7062, ТЗ Даші 23.10.2026; рішення Романа 27.10.2026). Ядро — `core/orgTree.ts`.
+--  · Людей окремо НЕ зберігаємо: склад — працюючі з реєстру «Найм → Співробітники», а блок людини = її поле
+--    «Команда» (`employees.team_label`), що збігається з «Командою» блоку: `org_units.label`, або — якщо порожньо —
+--    назва привʼязаної команди дашборду (`team_id`). Перетягнути людину на схемі = змінити їй «Команду» в «Наймі»
+--    тим самим `updateEmployee`, з аудитом; старе значення — в `org_log`.
+--  · Блоки продажів привʼязані до команд дашборду; керівник за замовчуванням — тімлід цієї команди. Розставляє
+--    людей HR руками (рішення Романа 27.10: «тільки HR руками»; задача Івану).
+--  · Бачать усі ролі, включно з кандидатами (рішення Романа 27.10); редагують — право `edit_org`: admin, HR, БА (ТЗ).
+--  ⚠️ Revert коду таблиць не прибирає, а «Команди», змінені зі схеми, лишаються в «Наймі».
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS org_units (
+  id               SERIAL PRIMARY KEY,
+  seed_key         TEXT UNIQUE,
+  parent_id        INTEGER REFERENCES org_units(id),
+  name             TEXT NOT NULL CHECK (btrim(name) <> ''),
+  dept             TEXT NOT NULL CHECK (dept IN ('top','hr','fin','it','sales')),
+  team_id          INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  label            TEXT CHECK (label IS NULL OR btrim(label) <> ''),
+  head_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+  side             BOOLEAN NOT NULL DEFAULT false,
+  sort             INTEGER NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (NOT side OR parent_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_units_team ON org_units (team_id) WHERE team_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS org_log (
+  id          BIGSERIAL PRIMARY KEY,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  action      TEXT NOT NULL,
+  employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+  unit_id     INTEGER,
+  summary     TEXT NOT NULL,
+  before      JSONB,
+  after       JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_org_log_at ON org_log (at DESC);
+CREATE TABLE IF NOT EXISTS org_migrations (
+  key     TEXT PRIMARY KEY,
+  done_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Сід — блоки затвердженого прототипу (ТЗ Даші 23.10.2026). `DO NOTHING` за `seed_key`: правки в режимі
+-- «Редагувати» наступний викат не відкочує. Команди дашборду — за `kommo_group_id` (стабільний), дві без групи — за назвою.
+INSERT INTO org_units (seed_key, parent_id, name, dept, label, sort)
+VALUES ('ceo', NULL, 'Керівництво', 'top', 'Керівництво', 0)
+ON CONFLICT (seed_key) DO NOTHING;
+INSERT INTO org_units (seed_key, parent_id, name, dept, label, side, sort)
+SELECT v.k, p.id, v.name, v.dept, v.label, v.side, v.sort
+  FROM (VALUES ('owner2', 'ceo', 'Співвласник', 'top', 'Співвласник', true, 0),
+               ('ops', 'ceo', 'Операційне управління', 'top', 'Операційне управління', false, 10)) AS v(k, pk, name, dept, label, side, sort)
+  JOIN org_units p ON p.seed_key = v.pk
+ON CONFLICT (seed_key) DO NOTHING;
+INSERT INTO org_units (seed_key, parent_id, name, dept, label, side, sort)
+SELECT v.k, p.id, v.name, v.dept, v.label, v.side, v.sort
+  FROM (VALUES ('ba', 'ops', 'Бізнес-асистент', 'top', 'Бізнес-асистент', true, 0),
+               ('hr', 'ops', 'Відділ персоналу', 'hr', 'Відділ персоналу', false, 10),
+               ('fin1', 'ops', 'Фінансист', 'fin', 'Фінансист', false, 20),
+               ('fin2', 'ops', 'Бухгалтерія', 'fin', 'Бухгалтерія', false, 30),
+               ('it', 'ops', 'IT-відділ', 'it', 'IT-відділ', false, 40)) AS v(k, pk, name, dept, label, side, sort)
+  JOIN org_units p ON p.seed_key = v.pk
+ON CONFLICT (seed_key) DO NOTHING;
+INSERT INTO org_units (seed_key, parent_id, name, dept, team_id, label, sort)
+SELECT 'sales', p.id, 'Комерційний відділ', 'sales', (SELECT id FROM teams WHERE name = 'Комерційний відділ' LIMIT 1),
+       CASE WHEN EXISTS (SELECT 1 FROM teams WHERE name = 'Комерційний відділ') THEN NULL ELSE 'Комерційний відділ' END, 50
+  FROM org_units p WHERE p.seed_key = 'ops'
+ON CONFLICT (seed_key) DO NOTHING;
+INSERT INTO org_units (seed_key, parent_id, name, dept, team_id, sort)
+SELECT v.k, p.id, v.name, 'sales', t.id, v.sort
+  FROM (VALUES ('lid', NULL::text, 'Лідогенерація', 'Лідогенерація', 0),
+               ('rnk1', '588532', 'Команда Андрія Безпамʼятного', NULL, 10),
+               ('rnk2', '475168', 'Команда Дарини Михальчевської', NULL, 20),
+               ('rnk3', '728292', 'Команда Вікторії Хомік', NULL, 30),
+               ('rpk1', '335511', 'Команда Дмитра Яцика', NULL, 40),
+               ('rpk2', '508640', 'Команда Василя Дмитрука', NULL, 50),
+               ('rpk3', '691208', 'Команда Лілії Шаврової', NULL, 60)) AS v(k, grp, name, tname, sort)
+  JOIN org_units p ON p.seed_key = 'sales'
+  LEFT JOIN teams t ON (v.grp IS NOT NULL AND t.kommo_group_id = v.grp::bigint) OR (v.grp IS NULL AND t.name = v.tname)
+ON CONFLICT (seed_key) DO NOTHING;
+-- Разово: керівники блоків із прототипу — лише за ОДНОЗНАЧНИМ збігом ПІБ серед працюючих (інакше лишається порожньо й
+-- його ставлять у «Редагувати»). Блоки команд без цього рядка беруть тімліда команди. Позначка — в `org_migrations`,
+-- тож свідомо знятого керівника наступний викат не поверне.
+WITH step AS (INSERT INTO org_migrations (key) VALUES ('seed-heads-2026-10-27') ON CONFLICT DO NOTHING RETURNING key),
+heads(k, a, b) AS (VALUES ('ceo', 'Ступаківський Олександр', NULL), ('owner2', 'Коваль Артем', NULL),
+  ('ops', 'Беспятчук Сергій', NULL), ('ba', 'Протас Дар', NULL), ('hr', 'Романов Іван', NULL), ('fin1', 'Шнайдер Тетяна', NULL),
+  ('fin2', 'Лисенко Інна', NULL), ('it', 'Денисюк Роман', 'Роман Денисюк'), ('sales', 'Левентова Юлія', NULL),
+  ('rnk3', 'Хомік Вікторія', NULL)),
+hit AS (SELECT h.k, min(e.id) AS eid FROM heads h JOIN employees e
+          ON e.status IN ('active','finishing') AND (e.full_name ILIKE h.a || '%' OR (h.b IS NOT NULL AND e.full_name ILIKE h.b || '%'))
+         GROUP BY h.k HAVING count(*) = 1)
+UPDATE org_units u SET head_employee_id = hit.eid
+  FROM hit WHERE u.seed_key = hit.k AND u.head_employee_id IS NULL AND EXISTS (SELECT 1 FROM step);
+
+-- Вкладка «Орг структура» — усім ролям, включно з кандидатом (рішення Романа 27.10.2026). Лише де ключа ще немає:
+-- свідомо вимкнений тумблер наступний викат не вмикає.
+UPDATE roles SET screen_access = screen_access || '{"org":true}'::jsonb
+  WHERE NOT (screen_access ? 'org');
+-- Режим «Редагувати» — рекрутер (HR), бізнес-асистент і адмін (ТЗ). Парою «видати / зняти» ПІСЛЯ синків ролей:
+-- синк копіює права адміна керівництву й фінансисту, і без зняття право розтеклось би мовчки (#2705).
+UPDATE roles SET permissions = permissions || '{"edit_org": true}'::jsonb
+ WHERE key IN ('admin', 'hr', 'business_assistant');
+UPDATE roles SET permissions = permissions - 'edit_org'
+ WHERE key NOT IN ('admin', 'hr', 'business_assistant');
+REVOKE ALL ON org_units, org_log, org_migrations FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 👥 КОМАНДИ: KOMMO + ДАШБОРД (рішення Романа 27.10.2026; `core/teams.ts`).
+--  · Команди Kommo — `teams` (синк, назви лише в Kommo). Їх читають 116 запитів продажів (Звіт, КВП, плани…), тому
+--    команди дашборду живуть ОКРЕМО (`dashboard_teams`) і в `teams` не потрапляють ніколи — синк Kommo їх не чіпає.
+--  · Команда людини: звʼязаний із Kommo (менеджер/тімлід із групою) — команда Kommo, змінити в дашборді не можна;
+--    решта — `employees.team_id` (команда Kommo без акаунта Kommo) АБО `employees.dashboard_team_id`, не обидва.
+--  · «Зʼєднати»: `dashboard_teams.kommo_team_id` — люди такої команди дашборду показуються в команді Kommo.
+--  · Не видаляється нічого: команда архівується (`archived_at`), і лише порожня.
+--  ⚠️ Revert коду таблиці й стовпців не прибирає; `team_label` лишається (вітрина назви, історія).
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS dashboard_teams (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT NOT NULL CHECK (btrim(name) <> ''),
+  kommo_team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  archived_at   TIMESTAMPTZ,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_teams_name ON dashboard_teams (lower(btrim(name))) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_teams_kommo ON dashboard_teams (kommo_team_id) WHERE archived_at IS NULL AND kommo_team_id IS NOT NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
+ALTER TABLE org_units ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'employees_one_team') THEN
+    ALTER TABLE employees ADD CONSTRAINT employees_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'org_units_one_team') THEN
+    ALTER TABLE org_units ADD CONSTRAINT org_units_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_units_dashboard_team ON org_units (dashboard_team_id) WHERE dashboard_team_id IS NOT NULL;
+-- Офісні блоки з власною «Командою» (Керівництво, Бухгалтерія, IT…) стають командами дашборду. Ідемпотентно: блок, що вже
+-- має команду (будь-яку), не чіпається; однойменна жива команда дашборду — береться наявна, а не створюється друга.
+INSERT INTO dashboard_teams (name)
+SELECT DISTINCT ON (lower(btrim(u.label))) btrim(u.label) FROM org_units u
+ WHERE u.team_id IS NULL AND u.dashboard_team_id IS NULL AND u.label IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM dashboard_teams d WHERE d.archived_at IS NULL AND lower(btrim(d.name)) = lower(btrim(u.label)));
+UPDATE org_units u SET dashboard_team_id = d.id
+  FROM dashboard_teams d
+ WHERE u.team_id IS NULL AND u.dashboard_team_id IS NULL AND u.label IS NOT NULL
+   AND d.archived_at IS NULL AND lower(btrim(d.name)) = lower(btrim(u.label))
+   AND NOT EXISTS (SELECT 1 FROM org_units o WHERE o.dashboard_team_id = d.id);
+-- Людям БЕЗ команди Kommo — команда з тексту «Команди», лише за ТОЧНИМ збігом назви (регістр, пробіли, апостроф не
+-- різниця). Кожен викат, але лише кому ще нічого не вибрано: кому HR команду зняв, той має й порожній текст (`setEmployeeTeam`
+-- пише назву в `team_label`), тож назад не повернеться. Цифри «0/9/13» не збігаються ні з чим — лишаються «не вибрано».
+WITH kommo AS (
+  SELECT e.id FROM employees e
+    LEFT JOIN managers m1 ON m1.id = e.manager_id
+    LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m2 ON m2.id = u.manager_id
+   WHERE COALESCE(m1.team_id, m2.team_id) IS NOT NULL),
+cand AS (
+  SELECT e.id, lower(regexp_replace(translate(btrim(e.team_label), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) AS k
+    FROM employees e
+   WHERE e.team_id IS NULL AND e.dashboard_team_id IS NULL AND e.team_label IS NOT NULL
+     AND e.id NOT IN (SELECT id FROM kommo))
+UPDATE employees e SET team_id = t.id
+  FROM cand c JOIN teams t ON lower(regexp_replace(translate(btrim(t.name), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) = c.k
+ WHERE e.id = c.id;
+WITH kommo AS (
+  SELECT e.id FROM employees e
+    LEFT JOIN managers m1 ON m1.id = e.manager_id
+    LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m2 ON m2.id = u.manager_id
+   WHERE COALESCE(m1.team_id, m2.team_id) IS NOT NULL),
+cand AS (
+  SELECT e.id, lower(regexp_replace(translate(btrim(e.team_label), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) AS k
+    FROM employees e
+   WHERE e.team_id IS NULL AND e.dashboard_team_id IS NULL AND e.team_label IS NOT NULL
+     AND e.id NOT IN (SELECT id FROM kommo))
+UPDATE employees e SET dashboard_team_id = d.id
+  FROM cand c JOIN dashboard_teams d ON d.archived_at IS NULL
+   AND lower(regexp_replace(translate(btrim(d.name), '’''`', 'ʼʼʼ'), '\s+', ' ', 'g')) = c.k
+ WHERE e.id = c.id;
+-- Створювати, перейменовувати, зʼєднувати й архівувати команди дашборду, міняти команду людини без Kommo — керівництво
+-- і HR (рішення Романа 27.10). Парою «видати / зняти» ПІСЛЯ синків ролей, як `edit_org`.
+UPDATE roles SET permissions = permissions || '{"manage_teams": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'hr');
+UPDATE roles SET permissions = permissions - 'manage_teams'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr');
+REVOKE ALL ON dashboard_teams FROM ai_readonly;
+-- 📣 «Маркетинговий відділ» над Лідогенерацією (рішення Романа 28.10.2026: «лідогени окремо, над ними напис „маркетинговий
+-- відділ“, але теж від КВП тягнуться»). Разово, з позначкою в `org_migrations`: блок-контейнер без команди під
+-- «Комерційним відділом», і Лідогенерація переходить у нього — лише якщо досі стоїть під КВП. Видалений чи перенесений
+-- руками блок наступний викат не повертає. У журнал — дія `migration` (не `unit.*`: це зробив викат, а не людина в «Редагувати»).
+-- Revert коду блоку не прибирає — його видаляють у «Редагувати».
+WITH step AS (INSERT INTO org_migrations (key) VALUES ('marketing-2026-10-28') ON CONFLICT DO NOTHING RETURNING key),
+sales AS (SELECT id FROM org_units WHERE seed_key = 'sales'),
+mk AS (INSERT INTO org_units (seed_key, parent_id, name, dept, sort)
+       SELECT 'marketing', sales.id, 'Маркетинговий відділ', 'sales', -10 FROM sales WHERE EXISTS (SELECT 1 FROM step)
+       ON CONFLICT (seed_key) DO NOTHING RETURNING id),
+moved AS (UPDATE org_units l SET parent_id = mk.id, updated_at = now() FROM mk, sales
+           WHERE l.seed_key = 'lid' AND l.parent_id = sales.id RETURNING l.id)
+INSERT INTO org_log (action, unit_id, summary, after)
+SELECT 'migration', mk.id, 'Створено блок «Маркетинговий відділ» під «Комерційним відділом»'
+       || CASE WHEN EXISTS (SELECT 1 FROM moved) THEN ', у нього перенесено «Лідогенерацію»' ELSE '' END || ' (рішення Романа 28.10.2026)',
+       jsonb_build_object('name', 'Маркетинговий відділ', 'parentId', (SELECT id FROM sales), 'moved', (SELECT id FROM moved))
+  FROM mk;
+-- 📅 КАЛЕНДАР ОПЛАТ (Тетяна, задача #6369, 27.10.2026; `core/finRecurring.ts`): нагадування про періодичні витрати —
+-- окремо від Плану/факту, нічого не рахує в результаті. `anchor_day` — «день оплати» з першої дати: 31-го в коротшому
+-- місяці нагадує в останній день, а наступного — знову 31-го (без «зʼїзду», як у `monthKeys`, борг 19). Нічого не
+-- видаляється: оплату вимикають (`active`), позначку «оплачено» скасовують (`cancelled_at`), рядок лишається в історії.
+CREATE TABLE IF NOT EXISTS fin_recurring (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL CHECK (btrim(name) <> ''),
+  amount NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+  period TEXT NOT NULL CHECK (period IN ('month', 'quarter', 'year')),
+  anchor_day SMALLINT NOT NULL CHECK (anchor_day BETWEEN 1 AND 31),
+  next_due DATE NOT NULL,
+  payer_id INTEGER REFERENCES users(id),
+  note TEXT,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_by INTEGER REFERENCES users(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by INTEGER REFERENCES users(id), updated_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS fin_recurring_paid (
+  id SERIAL PRIMARY KEY,
+  recurring_id INTEGER NOT NULL REFERENCES fin_recurring(id),
+  due_date DATE NOT NULL,
+  amount NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+  planned NUMERIC(14,2) NOT NULL,
+  paid_by INTEGER REFERENCES users(id), paid_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cancelled_by INTEGER REFERENCES users(id), cancelled_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS fin_recurring_paid_live_uniq ON fin_recurring_paid (recurring_id, due_date) WHERE cancelled_at IS NULL;
+REVOKE ALL ON fin_recurring FROM ai_readonly;
+REVOKE ALL ON fin_recurring_paid FROM ai_readonly;
+
+-- 📅 КАЛЕНДАР ОПЛАТ, прохід 2 (Тетяна 27.10.2026; Роман: «таня + керівництво», «так», «так хай буде», «так»): оплата —
+-- це СТАТТЯ «План/факту» (`item_id`) і МІСЯЦЬ (без дня, `next_due` — завжди 1-ше), без «хто платить». Нагадування — підказка
+-- біля статті в «План/факті» потрібного місяця з кнопкою «додати в план»; що вже додано — `fin_recurring_planned`, щоб
+-- кнопка не додала ту саму суму двічі. План пишеться ЛИШЕ через `saveValues` (замок погодженого місяця й журнал — ті самі).
+-- Таблиці на мить зміни порожні (заміряно 27.10.2026: 0 і 0). Обмеження ставляться лише тоді, коли рядків першого
+-- проходу (з днем і без статті) немає: інакше міграція впала б посеред схеми — такі рядки треба спершу розібрати руками.
+ALTER TABLE fin_recurring ADD COLUMN IF NOT EXISTS item_id INTEGER REFERENCES fin_items(id);
+DO $frm$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM fin_recurring WHERE item_id IS NULL OR anchor_day <> 1 OR next_due <> date_trunc('month', next_due)::date) THEN
+    ALTER TABLE fin_recurring ALTER COLUMN item_id SET NOT NULL;
+    ALTER TABLE fin_recurring DROP CONSTRAINT IF EXISTS fin_recurring_month_start;
+    ALTER TABLE fin_recurring ADD CONSTRAINT fin_recurring_month_start CHECK (next_due = date_trunc('month', next_due)::date AND anchor_day = 1);
+  ELSE
+    RAISE WARNING 'fin_recurring: є рядки першого проходу (з днем або без статті) — обмеження прохода 2 не поставлено';
+  END IF;
+END $frm$;
+CREATE TABLE IF NOT EXISTS fin_recurring_planned (
+  recurring_id INTEGER NOT NULL REFERENCES fin_recurring(id),
+  month DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  amount NUMERIC(14,2) NOT NULL,
+  plan_before NUMERIC(14,2),
+  added_by INTEGER REFERENCES users(id), added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (recurring_id, month)
+);
+REVOKE ALL ON fin_recurring_planned FROM ai_readonly;
+-- 🧮 КАЛЬКУЛЯТОР СТАВКИ: ВІДГУК «НАСКІЛЬКИ ДОПОМІГ» (Роман 27.10.2026; `core/rateFeedback.ts`). `calc` — що калькулятор
+-- ПОКАЗАВ (зонна карта: ставка клієнту, перевізнику, маржа, зона) у мить розрахунку: відгук порівнюється саме з ним, а
+-- не з перерахунком за сьогоднішніми тарифами. Старі розрахунки — без `calc`. Відгук — один на розрахунок, лише на свій.
+-- Відкат даних (код їх не прибирає): DROP TABLE rate_feedback; ALTER TABLE lardi_usage DROP COLUMN calc;
+--   UPDATE roles SET permissions = permissions - 'view_rate_feedback';
+ALTER TABLE lardi_usage ADD COLUMN IF NOT EXISTS calc JSONB;
+CREATE TABLE IF NOT EXISTS rate_feedback (
+  id SERIAL PRIMARY KEY,
+  usage_id INTEGER NOT NULL REFERENCES lardi_usage(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  rating TEXT NOT NULL CHECK (rating IN ('ok', 'high', 'low', 'no')),
+  agreed_rate NUMERIC(12,2) CHECK (agreed_rate IS NULL OR agreed_rate > 0),
+  comment TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS rate_feedback_usage_uniq ON rate_feedback (usage_id);
+CREATE INDEX IF NOT EXISTS idx_rate_feedback_user_created ON rate_feedback (user_id, created_at DESC);
+-- Зведення відгуків бачать адмін, СЕО, ОД, КВП (рішення Романа 27.10.2026). Склад фіксований кодом, парою «видати / зняти».
+UPDATE roles SET permissions = permissions || '{"view_rate_feedback": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp');
+UPDATE roles SET permissions = permissions - 'view_rate_feedback'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp');
+-- 🔒 Коментарі — вільний текст людей. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON rate_feedback FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💳 «ВИПИСКА» — № РАХУНКУ НА ВХІДНИХ ФОП І КОМЕНТАРІ ДО ВИХІДНИХ (27.10.2026) — пакет Сергія
+-- `UTS_vypyska_nomer_rakhunku` (migrations/001_bank_ident.sql) як є, без BEGIN/COMMIT (схема — один прогін).
+-- Роут — routes/bankIdent.ts, правила — bankIdent/*. Таблиць виписки не змінює.
+-- ident_from = момент ПЕРШОГО прогону: надходження до викату — без номера й строку, тож у день викату історія
+-- не стає «неідентифікованою».
+-- Налаштування правила. ident_from — момент запуску: надходження ДО нього — без номера й без строку,
+-- щоб у день деплою вся історія не стала «неідентифікованою». Перший запуск міграції ставить «зараз».
+CREATE TABLE IF NOT EXISTS bank_ident_settings (
+  key        text PRIMARY KEY,
+  value      text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO bank_ident_settings (key, value)
+VALUES ('ident_from', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+ON CONFLICT (key) DO NOTHING;
+
+-- Поточний стан ідентифікації платежу. Рядка немає — платіж «чекає №» (або ще не в правилі / свій переказ).
+CREATE TABLE IF NOT EXISTS bank_tx_ident (
+  tx_id         bigint PRIMARY KEY,                 -- id транзакції у вашій таблиці виписки
+  account_id    bigint NOT NULL,
+  booked_at     timestamptz NOT NULL,               -- копія часу з банку — для сортування й звітів
+  status        text NOT NULL CHECK (status IN ('identified', 'not_client', 'unidentified')),
+  invoice_no    text CHECK (invoice_no IS NULL OR char_length(invoice_no) BETWEEN 1 AND 120),
+  first_by      text,                               -- хто зафіксував номер першим (автор)
+  first_by_name text,
+  first_at      timestamptz,
+  set_by        text,                               -- хто поставив поточний стан (NULL — система: строк минув)
+  set_by_name   text,
+  set_role      text,
+  set_at        timestamptz NOT NULL DEFAULT now(),
+  reason        text CHECK (reason IS NULL OR char_length(reason) <= 300),
+  note          text CHECK (note IS NULL OR char_length(note) <= 300),
+  unid_kind     text CHECK (unid_kind IS NULL OR unid_kind IN ('expired', 'finance')),
+  deadline_at   timestamptz NOT NULL,               -- строк, за яким рахували (48 роб. год)
+  changed       boolean NOT NULL DEFAULT false,     -- номер змінював фінансист
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT bank_tx_ident_no_chk   CHECK (status <> 'identified' OR invoice_no IS NOT NULL),
+  CONSTRAINT bank_tx_ident_unid_chk CHECK (status <> 'unidentified' OR unid_kind IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_status_idx  ON bank_tx_ident (status, booked_at DESC);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_invoice_idx ON bank_tx_ident (invoice_no) WHERE invoice_no IS NOT NULL;
+
+-- Історія (лише додавання). actor_* = NULL — система (строк минув).
+CREATE TABLE IF NOT EXISTS bank_tx_ident_events (
+  id         bigserial PRIMARY KEY,
+  tx_id      bigint NOT NULL,
+  at         timestamptz NOT NULL DEFAULT now(),
+  actor_id   text,
+  actor_name text,
+  actor_role text,
+  act        text NOT NULL CHECK (act IN ('set', 'change', 'unidentify', 'not_client', 'expired')),
+  from_no    text,
+  to_no      text,
+  reason     text,
+  note       text
+);
+CREATE INDEX IF NOT EXISTS bank_tx_ident_events_tx_idx ON bank_tx_ident_events (tx_id, at, id);
+
+-- Коментарі до вихідних ФОП. Бачать і пишуть лише ті, в кого право bank_out_comments (за замовчуванням — бухгалтер) і адмін.
+CREATE TABLE IF NOT EXISTS bank_tx_comments (
+  id          bigserial PRIMARY KEY,
+  tx_id       bigint NOT NULL,
+  author_id   text NOT NULL,
+  author_name text NOT NULL,
+  author_role text,
+  body        text NOT NULL CHECK (char_length(body) BETWEEN 1 AND 1000),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bank_tx_comments_tx_idx ON bank_tx_comments (tx_id, created_at, id);
+
+-- Права (рішення Сергія 27.10, ТЗ §3). Явними рядками видача й зняття і САМЕ ТУТ, у кінці: синки ролей вище копіюють
+-- усі права адміна на СЕО, ОД, КВП і фінансиста — без зняття «вписати №» розтеклося б на всіх них.
+--   tag_bank_invoice     — вписати № один раз: менеджер, тімлід (+ адмін);
+--   fix_bank_invoice     — змінити № / визнати неідентифікованим: фінансист (+ адмін);
+--   mark_bank_not_client — «не оплата клієнта»: Бухгалтерія (ключ — 12 підкреслень) (+ адмін);
+--   bank_out_comments    — коментарі до вихідних ФОП: Бухгалтерія (+ адмін). Без права коментарів не видно взагалі.
+UPDATE roles SET permissions = permissions || '{"tag_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'manager', 'team_lead');
+UPDATE roles SET permissions = permissions - 'tag_bank_invoice' WHERE key NOT IN ('admin', 'manager', 'team_lead');
+UPDATE roles SET permissions = permissions || '{"fix_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'financier');
+UPDATE roles SET permissions = permissions - 'fix_bank_invoice' WHERE key NOT IN ('admin', 'financier');
+UPDATE roles SET permissions = permissions || '{"mark_bank_not_client": true}'::jsonb WHERE key IN ('admin', '____________');
+UPDATE roles SET permissions = permissions - 'mark_bank_not_client' WHERE key NOT IN ('admin', '____________');
+UPDATE roles SET permissions = permissions || '{"bank_out_comments": true}'::jsonb WHERE key IN ('admin', '____________');
+UPDATE roles SET permissions = permissions - 'bank_out_comments' WHERE key NOT IN ('admin', '____________');
+
+-- 🔒 Хто що вписав і коментарі до платежів ФОП — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON bank_ident_settings, bank_tx_ident, bank_tx_ident_events, bank_tx_comments FROM ai_readonly;

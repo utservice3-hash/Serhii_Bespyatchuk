@@ -554,8 +554,8 @@ hiringRouter.get("/training/:id", async (req, res) => {
   try {
     const access = anyAccess(req);
     const id = idOf(req);
-    const { row, steps, questions, events } = await trainingDetail(pool as unknown as Db, id, access, req.auth!.teamId);
-    res.json({ row, steps, questions, events, canDecide: decides(req), canRestore: access === "edit" });
+    const { row, steps, questions, events, employeeId } = await trainingDetail(pool as unknown as Db, id, access, req.auth!.teamId);
+    res.json({ row, steps, questions, events, employeeId, canDecide: decides(req), canRestore: access === "edit" });
   } catch (e) { fail(res, e); }
 });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
@@ -7,7 +7,7 @@ import {
   type FinKpiPeriod, type FinKpi, type FinKpiCard, type FinPeriodKind, type FinKpiRefSource, type FinKpiThing,
 } from "../../../api";
 import { asInput } from "./financeView";
-import { FxNote } from "./FinanceFxUnpaid";
+import { FxNote, FxInvoices, fxBrackets } from "./FinanceFxUnpaid";
 
 /**
  * 💰 «ТИЖДЕНЬ І МІСЯЦЬ» (прохід 2а, 01.10.2026) — аркуш «ФМ» у дашборді. Показники вносяться руками; «Комісійні» й
@@ -102,6 +102,8 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
   const [bad, setBad] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [card, setCard] = useState<number | null>(null);
+  // 💱 Рядок «Валютна дебіторка» розгортається списком рахунків, з яких складається сума (26.10.2026).
+  const [fxOpen, setFxOpen] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -242,18 +244,23 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
                   // Поле — де сервер дозволяє вносити: ручні рядки й операційні (поверх таблиці оплат).
                   const input = edit && (k.editable ?? k.kind === "manual") && k.active;
                   const cur = draft[k.id] ?? asInput(k.value);
+                  const isFx = k.refSource === "receivables_fx";
+                  const fxCols = 6 + (data.canEdit && !edit ? 1 : 0);
                   return (
-                    <tr key={k.id} className={`it ${k.active ? "" : "off"}`} onClick={() => !edit && setCard(k.id)}>
+                    <Fragment key={k.id}>
+                    <tr className={`it ${k.active ? "" : "off"}`} onClick={() => !edit && setCard(k.id)}>
                       <td className="ind1">{k.name}{(k.kind === "sum" || k.kind === "diff") && <span className="hr-muted" style={{ fontSize: 11, marginLeft: 6 }}>{k.kind === "sum" ? "сума" : "різниця"}</span>}
                         {k.kind === "auto" && <span className={`hr-pill ${k.autoState === "live" ? "pl" : ""}`} style={{ fontSize: 11, marginLeft: 6 }}
                           title={`${k.refSource ? REF_HINT[k.refSource] + ". " : ""}${k.autoState ? AUTO_STATE[k.autoState][1] : "Для цього періоду числа немає"}`}>
-                          {k.autoState === "live" && k.refSource?.startsWith("opex_") ? "з таблиці оплат" : k.autoState === "live" && k.refSource?.startsWith("bank_") ? "з «Виписки»" : k.autoState ? AUTO_STATE[k.autoState][0] : "авто"}</span>}</td>
-                      <td className="num hr-muted">{money(k.prevValue, k.unit)}</td>
+                          {k.autoState === "live" && k.refSource?.startsWith("opex_") ? "з таблиці оплат" : k.autoState === "live" && k.refSource?.startsWith("bank_") ? "з «Виписки»" : k.autoState ? AUTO_STATE[k.autoState][0] : "авто"}</span>}
+                        {isFx && <button className="fin-link" style={{ marginLeft: 8, fontSize: 12 }} aria-expanded={fxOpen}
+                          onClick={(e) => { e.stopPropagation(); setFxOpen((o) => !o); }}>{fxOpen ? "▴ рахунки" : "▾ рахунки"}</button>}</td>
+                      <td className="num hr-muted">{money(k.prevValue, k.unit)}{isFx && fxBrackets(data.receivablesFxPrev) && <div style={{ fontSize: 11.5 }}>{fxBrackets(data.receivablesFxPrev)}</div>}</td>
                       <td className="num">{input
                         ? <input className={`fin-cell ${draft[k.id] !== undefined ? "ch" : ""} ${bad.has(k.id) ? "bad" : ""}`} inputMode="decimal" aria-label={`${k.name}: ${data.label}`}
                             value={cur} onClick={(e) => e.stopPropagation()}
                             onChange={(e) => { const v = e.target.value; setDraft((dr) => { const n = { ...dr }; if (v === asInput(k.value)) delete n[k.id]; else n[k.id] = v; return n; }); }} />
-                        : <b>{money(k.value, k.unit)}</b>}</td>
+                        : <><b>{money(k.value, k.unit)}</b>{isFx && fxBrackets(data.receivablesFx) && <div className="hr-muted" style={{ fontSize: 11.5 }}>{fxBrackets(data.receivablesFx)}</div>}</>}</td>
                       <td className="num">{d == null ? "—" : <span className={d < 0 ? "fin-bad" : "fin-good"}>{d > 0 ? "+" : d < 0 ? "−" : ""}{money(Math.abs(d), k.unit)}</span>}</td>
                       <td><RefCell k={k} /></td>
                       <td>{k.note ? <span className="hr-pill pl" title={k.note}>{k.note.length > 24 ? `${k.note.slice(0, 24)}…` : k.note}</span> : null}</td>
@@ -264,6 +271,8 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
                         <button className="hr-btn xs" style={{ color: "var(--danger)" }} onClick={() => void act.delKpi(k)} aria-label={`Видалити ${k.name}`}>🗑</button>
                       </span></td>}
                     </tr>
+                    {isFx && fxOpen && <tr><td colSpan={fxCols} style={{ background: "var(--surface-2, var(--bg))" }}><FxInvoices current={!!data.current} /></td></tr>}
+                    </Fragment>
                   );
                 })}
               </SectionRows>

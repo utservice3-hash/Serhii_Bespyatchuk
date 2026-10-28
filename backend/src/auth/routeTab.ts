@@ -184,6 +184,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // 📋 Опитування (30.09.2026). Вкладка — у всіх, крім кандидата; керування й відповіді — право `manage_surveys`,
     // решта — лише адресовані їм опитування (межа всередині роуту).
     { test: pre("/api/surveys"), tabs: ["surveys"] },
+    // 🏢 Орг структура (задача 7062). Вкладка — у ВСІХ ролей, включно з кандидатом (рішення Романа 27.10.2026);
+    // друга лінія — та сама вкладка на роутері, запис у схему — право `edit_org`.
+    { test: pre("/api/org"), tabs: ["org"] },
     // Кнопка «Проблемний клієнт» живе в ДЕБІТОРЦІ: вкладка `receivables`, а дію гейтить право
     // `create_claim` — фінансист розділу не бачить, але кнопку натискає.
     { test: pre("/api/receivables-claims"), tabs: ["receivables"] },
@@ -194,6 +197,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // `view_team_secrets` на роутері, третя — `teamMemberVerdict` у кожному обробнику.
     { test: pre("/api/team-vault"), tabs: ["hiring"] },
     { test: pre("/api/bank"), tabs: ["bank"] },
+    // 💳 № рахунку й коментарі «Виписки» (27.10.2026) — сусід через дефіс, `pre("/api/bank")` його НЕ ловить; та сама вкладка.
+    { test: pre("/api/bank-ident"), tabs: ["bank"] },
   ];
 })();
 

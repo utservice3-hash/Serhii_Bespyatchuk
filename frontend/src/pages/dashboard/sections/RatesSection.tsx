@@ -531,7 +531,7 @@ function Fld({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-function TownField({ label, placeholder, text, setText, picked, onPick }: {
+export function TownField({ label, placeholder, text, setText, picked, onPick }: {
   label: string; placeholder: string; text: string; setText: (v: string) => void;
   picked: Town | null; onPick: (t: Town) => void;
 }) {
@@ -682,7 +682,7 @@ function OfferRows({ items }: { items: RateOffer[] }) {
   );
 }
 
-function OfferTable({ title, side, cls }: { title: string; side?: RateSide; cls: Cls }) {
+export function OfferTable({ title, side, cls }: { title: string; side?: RateSide; cls: Cls }) {
   if (!side || side.error) return null;
   const all = (side.offers ?? []).filter((o) => cls === "all" || o.load_type === cls || o.load_type === "unknown");
   if (!all.length) return null;
@@ -703,7 +703,7 @@ function OfferTable({ title, side, cls }: { title: string; side?: RateSide; cls:
   );
 }
 
-function StatsView() {
+export function StatsView() {
   const [d, setD] = useState<RatesUsageStats | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { fetchRatesStats(30).then(setD).catch((e) => setErr(String(e?.response?.data?.error ?? e))); }, []);
@@ -758,7 +758,7 @@ const CAT_META: Record<CityInfoCategory, { label: string; icon: string }> = {
 };
 
 /** «Ціни по місту» — редагована менеджерами база цін/вантажників/контактів. */
-function CityInfoView() {
+export function CityInfoView() {
   const [q, setQ] = useState("");
   const [entries, setEntries] = useState<CityInfoEntry[] | null>(null);
   const [reload, setReload] = useState(0);
@@ -868,7 +868,7 @@ function CityInfoView() {
 }
 
 /** 🚚 Перевізники з CRM — пошук по місту (згадка в маршруті успішної угоди). */
-function CarriersView() {
+export function CarriersView() {
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<CrmCarrier[] | null>(null);
   const [processed, setProcessed] = useState(0);

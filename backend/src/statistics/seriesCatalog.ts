@@ -7,7 +7,9 @@ export const STATS_SEAM = "2026-07-01"; // sheet (<) → crm (≥)
 // CRM-able метрики: історія sheet діє СТРОГО до шва; з шва — тільки live з ядра.
 // Решта (finance/hr/tenders/lgintl/бюджети) — sheet+manual (CRM не рахує).
 export const CRM_ABLE: Record<string, Set<string>> = {
-  sales: new Set(["revenue_success", "avg_check", "calls", "cars_success", "cars_delivered", "payment_received", "managers_count", "cash_deals_sum"]),
+  // `lead_take_*` — «Час опрацювання заявки» (вікно Звіту): історії в ручній таблиці немає, ряд починається від шва.
+  sales: new Set(["revenue_success", "avg_check", "calls", "cars_success", "cars_delivered", "payment_received", "managers_count", "cash_deals_sum",
+    "lead_take_median", "lead_take_m5_pct"]),
   marketing: new Set(["ad_leads", "ad_offtarget_leads", "ad_new_revenue", "ad_new_paid_cars", "ad_avg_check", "lg_transfers", "lg_new_revenue", "lg_new_clients", "lg_avg_check", "revenue_all_clients"]),
   logistics: new Set(["repeat_clients_sum", "repeat_clients_cars", "repeat_clients_active", "repeat_avg_check", "cars_delivered_all"]),
   intl: new Set(["intl_delivered_sum", "intl_delivered_cars", "intl_avg_check", "intl_new_sum", "intl_new_cars", "intl_new_avg_check", "intl_repeat_sum", "intl_repeat_cars", "intl_repeat_avg_check"]),

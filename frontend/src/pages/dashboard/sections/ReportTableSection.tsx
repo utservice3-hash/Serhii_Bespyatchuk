@@ -2,11 +2,15 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanManager, type Team } from "../../../api";
 import {
-  REPORT_COLS, OPTIONAL_COLS, DEFAULT_OPT_ON, sortRows, footValue, firstTouchLabel,
-  type ColDef, type ColKey,
+  REPORT_COLS, OPTIONAL_COLS, sortRows, footValue, firstTouchLabel,
+  COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
+  applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
+  isLockedCol, colVisible,
+  type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
 import { VacationMark } from "../VacationMark";
+import { getAuthPayload } from "../../../auth";
 
 /**
  * 📊 ТАБЛИЧНИЙ ВИГЛЯД ЗВІТУ — рядок на менеджера за обраний період.
@@ -25,7 +29,15 @@ import { VacationMark } from "../VacationMark";
 const nf = new Intl.NumberFormat("uk-UA");
 const money = (v: number) => nf.format(Math.round(v));
 const K = (v: number) => Math.round(v / 1000) + "к";
-const COLS_LS = "rptTableCols";
+
+/** Сховище вибору колонок. Сам доступ до `localStorage` може кинути (приватне вікно) — тоді `null`. */
+const colStore = (): ColsStore | null => {
+  try { return window.localStorage; } catch { return null; }
+};
+/** Хто дивиться — для ОСОБИСТОГО ключа вибору колонок. Немає токена/сховища — `null` (старий спільний ключ). */
+const viewerUserId = (): number | null => {
+  try { return getAuthPayload()?.userId ?? null; } catch { return null; }
+};
 
 /** Клас статусу → токен. Один вираз на весь файл. */
 const TOKEN: Record<string, string> = { g: "--ok", a: "--warn", r: "--danger" };
@@ -68,18 +80,26 @@ export function ReportTableSection({
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
   const [mgrFilter, setMgrFilter] = useState<number | "">("");
   const [open, setOpen] = useState<number | null>(null);
-  // Видимість колонок переживає перезавантаження — як пресети періоду в КВП.
-  const [optOn, setOptOn] = useState<Record<string, boolean>>(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem(COLS_LS) || "null");
-      return raw && typeof raw === "object" ? { ...DEFAULT_OPT_ON, ...raw } : { ...DEFAULT_OPT_ON };
-    } catch { return { ...DEFAULT_OPT_ON }; }
-  });
+  // Видимість колонок переживає перезавантаження — і вона ОСОБИСТА: ключ
+  // `rptTableCols:<userId>` з фолбеком на старий спільний (див. reportTableCols.ts).
+  const [userId] = useState<number | null>(viewerUserId);
+  const [optOn, setOptOn] = useState<Record<string, boolean>>(() => readColPrefs(colStore(), userId));
   const toggleCol = (k: string) => setOptOn((p) => {
     const next = { ...p, [k]: !p[k] };
-    localStorage.setItem(COLS_LS, JSON.stringify(next));
+    writeColPrefs(colStore(), userId, next);
     return next;
   });
+  const applyCols = (next: Record<string, boolean>) => {
+    setOptOn(next);
+    writeColPrefs(colStore(), userId, next);
+  };
+  // ↔️ Порядок колонок — теж особистий, окремим ключем `rptTableColOrder:<userId>`
+  // (див. reportTableCols.ts). Зберігається повним: і показані, і сховані колонки.
+  const [order, setOrder] = useState<ColKey[]>(() => readColOrder(colStore(), userId));
+  const applyOrder = (next: ColKey[]) => {
+    setOrder(next);
+    writeColOrder(colStore(), userId, next);
+  };
 
   // Обраний менеджер зник із набору (змінили період/команду) — фільтр знімаємо,
   // інакше екран лишився б порожнім без пояснення.
@@ -99,9 +119,48 @@ export function ReportTableSection({
   const undefMoney = useMemo(
     () => data.managers.reduce((a, m) => a + Math.abs(m.factUndef ?? 0), 0), [data.managers]);
   const showUndef = undefMoney > 0;
+  /**
+   * 🔴 ОДИН УПОРЯДКОВАНИЙ СПИСОК НА ВСЮ ТАБЛИЦЮ. Шапка, рядки, підсумки команд,
+   * загальний `tfoot` і список «Порядок» у меню беруть САМЕ `cols`. Порядок
+   * застосовується тут і більше ніде: друге місце, що впорядковує колонки
+   * по-своєму, — і шапка поїде від клітинок (#2462).
+   */
   const cols = useMemo(
-    () => REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : c.core || optOn[c.key])),
-    [optOn, showUndef]);
+    () => applyColOrder(REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : colVisible(c.key, optOn))), order),
+    [optOn, showUndef, order]);
+  const colKeys = cols.map((c) => c.key);
+  const moveTo = (from: ColKey, to: ColKey) => applyOrder(moveCol(order, from, to));
+  const moveStep = (k: ColKey, dir: -1 | 1) => applyOrder(moveColStep(order, k, dir, colKeys));
+
+  /**
+   * ✋ ПЕРЕТЯГУВАННЯ — НАТИВНЕ HTML5, ОДНЕ НА ШАПКУ Й МЕНЮ. Закріплені («#»,
+   * «Менеджер») не тягнуться і не приймають скидання: `dragover` без
+   * `preventDefault` браузер читає як «сюди не можна». Що тягнемо — у ref, а не
+   * лише в `dataTransfer`: під час `dragover` браузер даних не віддає.
+   */
+  const dragCol = useRef<ColKey | null>(null);
+  const [dropOn, setDropOn] = useState<ColKey | null>(null);
+  const dnd = (k: ColKey) => (isPinnedCol(k) ? { draggable: false } : {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      dragCol.current = k;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", k);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragCol.current) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (dropOn !== k) setDropOn(k);
+    },
+    onDragLeave: () => setDropOn((d) => (d === k ? null : d)),
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (dragCol.current) moveTo(dragCol.current, k);
+      dragCol.current = null; setDropOn(null);
+    },
+    onDragEnd: () => { dragCol.current = null; setDropOn(null); },
+  });
   const rows = useMemo(() => {
     const picked = mgrFilter === "" ? data.managers : data.managers.filter((m) => m.managerId === mgrFilter);
     /**
@@ -208,18 +267,19 @@ export function ReportTableSection({
         </div>
       )}
 
-      {/* ── Чипи колонок */}
-      <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>Колонки:</span>
-        {OPTIONAL_COLS.filter((c) => c.key !== "factUndef").map((c) => (
-          <button key={c.key} onClick={() => toggleCol(c.key)} aria-pressed={!!optOn[c.key]}
-            style={{
-              border: `1px solid ${optOn[c.key] ? "var(--brand)" : "var(--border)"}`,
-              background: optOn[c.key] ? "var(--brand)" : "var(--card-bg)",
-              color: optOn[c.key] ? "#fff" : "var(--text-muted)",
-              borderRadius: "var(--r-pill)", padding: "4px 12px", fontSize: 12, cursor: "pointer",
-            }}>{c.title}</button>
-        ))}
+      {/* ── Вибір колонок: кнопка з меню галочок замість ряду з 22 чипів (26.10.2026).
+             Меню живе ПОЗА скрол-контейнером таблиці, як «Обсяг», тож нічого не обрізається. */}
+      <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <ColumnPicker
+          toggleable={OPTIONAL_COLS.filter((c) => c.key !== "factUndef")}
+          locked={REPORT_COLS.filter((c) => isLockedCol(c.key))}
+          optOn={optOn} onToggle={toggleCol}
+          onReset={() => applyCols(resetColPrefs())}
+          onResetOrder={() => applyOrder(resetColOrder())}
+          onAll={() => applyCols(allColPrefs())}
+          ordered={cols} onStep={moveStep} dnd={dnd} dropOn={dropOn}
+          shown={cols.length} total={REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : true)).length}
+        />
       </div>
 
       {/**
@@ -237,20 +297,36 @@ export function ReportTableSection({
       )}
 
       <div className="chart-card" style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
+        {/**
+          * 📌 ЛИПКА ШАПКА — ОДИН СКРОЛ-КОНТЕЙНЕР НА ОБИДВІ ОСІ (26.10.2026).
+          *
+          * 🔴 ЧОМУ ШАПКА ДОТИ НЕ ТРИМАЛАСЬ, хоч `th` мав `sticky; top: 0`. Обгортка
+          * мала лише `overflowX: auto`, а це за специфікацією робить скрол-контейнером
+          * і вертикальну вісь. `sticky` чіпляється до НАЙБЛИЖЧОГО скрол-контейнера —
+          * тобто до цієї обгортки, яка вертикально не скролилась ніколи (висота не
+          * обмежена). Сторінка їхала, обгортка — ні, і шапка їхала разом із нею.
+          *
+          * Тому висота обмежена вікном, а скрол — по обох осях: шапка (`top: 0`),
+          * колонка «Менеджер» (`left: 0`) і загальний підсумок (`bottom: 0`) липнуть
+          * в ОДНОМУ контейнері, а кут «Менеджер» має найвищий z-index.
+          */}
+        <div style={{ overflow: "auto", maxHeight: "calc(100vh - 120px)" }}>
           <table className="data-table rpt-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontVariantNumeric: "tabular-nums" }}>
             <thead>
               <tr>
                 {cols.map((c, i) => (
-                  <th key={c.key} onClick={() => onSort(c.key)}
+                  <th key={c.key} onClick={() => onSort(c.key)} {...dnd(c.key)}
                     className={c.key === "name" ? "sticky-mgr" : undefined}
+                    title={isPinnedCol(c.key) ? undefined : "Клік — сортування; перетягніть, щоб змінити порядок"}
                     style={{
-                      position: "sticky", top: 0, zIndex: c.key === "name" ? 4 : 2,
+                      position: "sticky", top: 0, zIndex: c.key === "name" ? 5 : 3,
+                      // Фон НЕПРОЗОРИЙ (токен теми): без нього рядки просвічують крізь шапку.
                       background: "var(--surface-2)", cursor: c.key === "rank" ? "default" : "pointer",
                       textAlign: c.left ? "left" : "right", whiteSpace: "nowrap",
                       fontSize: 11, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase",
                       color: c.key === sortKey ? "var(--brand)" : "var(--text-muted)",
                       padding: "10px 12px", borderBottom: "1px solid var(--border-strong)",
+                      ...(dropOn === c.key ? { boxShadow: "inset 3px 0 0 var(--brand)" } : null),
                       ...(c.key === "name" ? { left: 0, boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)" } : null),
                     }}>
                     {c.title}
@@ -323,8 +399,11 @@ export function ReportTableSection({
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 11, lineHeight: 1.55 }}>
         <b style={{ color: "var(--text)" }}>Клік по менеджеру</b> розкриває його тижні: план кожного
         тижня — той, що був <b style={{ color: "var(--text)" }}>зафіксований у понеділок</b>, а не
-        перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу. Перша колонка залипає при
-        горизонтальному скролі. <b style={{ color: "var(--text)" }}>Сер. чек, Викон. % і Конв.</b> у
+        перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу.
+        Заголовок можна <b style={{ color: "var(--text)" }}>перетягнути</b>, щоб змінити порядок колонок
+        («#» і «Менеджер» закріплені); на телефоні — кнопками ↑/↓ у меню «Колонки» → «Порядок». Таблиця прокручується
+        всередині себе: шапка залипає вгорі, загальний підсумок — унизу, колонка «Менеджер» — ліворуч
+        при горизонтальному скролі. <b style={{ color: "var(--text)" }}>Сер. чек, Викон. % і Конв.</b> у
         підсумку рахуються від сум чисельника й знаменника, а не складанням стовпчика — це частки,
         і додавати їх не можна.
       </div>
@@ -458,6 +537,7 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
     }
     case "srcAd": return <td style={st}>{m.srcAd || none}</td>;
     case "srcLeadgen": return <td style={st}>{m.srcLeadgen || none}</td>;
+    case "srcElogist": return <td style={st}>{m.srcElogist || none}</td>;
     case "srcOther": return <td style={st}>{m.srcOther || none}</td>;
     case "srcNoChannel": return <td style={st}>{m.srcNoChannel || none}</td>;
     case "dispRevenue":
@@ -484,7 +564,11 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
     fontWeight: 700, fontSize: group ? 12.5 : 13,
     background: group ? "var(--surface-2)" : "var(--surface-2)",
     borderTop: `${group ? 1 : 2}px solid var(--border-strong)`, whiteSpace: "nowrap",
-    ...(col.key === "name" ? { position: "sticky", left: 0, zIndex: 1 } : null),
+    // 📌 ЗАГАЛЬНИЙ підсумок липне до низу контейнера — читається при будь-якій
+    // прокрутці. Підсумки КОМАНД (`group`) — ні: їх кілька, і стосом унизу вони
+    // закрили б саму таблицю.
+    ...(group ? null : { position: "sticky", bottom: 0, zIndex: 3 }),
+    ...(col.key === "name" ? { position: "sticky", left: 0, zIndex: group ? 1 : 4 } : null),
   };
   if (col.key === "rank") return <td style={st} />;
   if (col.key === "name") return <td style={st}>{scopeLabel} · {count}</td>;
@@ -529,8 +613,8 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
  * #85b. Тому це справжній елемент: `role="button"`, `tabIndex=0`, Enter/Пробіл.
  *
  * 🔴 ЧОМУ ПОРТАЛ У BODY, А НЕ `position:absolute` У ЗАГОЛОВКУ. Таблиця лежить у
- * контейнері з `overflow-x:auto`, а це за специфікацією робить НЕ-visible і другу
- * вісь: вікно, що виходить за межі контейнера, обрізається — і найдужче саме там,
+ * скрол-контейнері (`overflow: auto` по обох осях, з 26.10.2026 — заради липкої
+ * шапки), тож вікно, що виходить за межі контейнера, обрізається — і найдужче саме там,
  * де воно найпотрібніше (крайні праві колонки, куди треба скролити). Портал із
  * `position:fixed` виносить вікно з-під обрізання зовсім; координати беруться від
  * кнопки і перераховуються на скролі, щоб підказка не «відклеїлась».
@@ -748,6 +832,153 @@ function ScopePicker({ teams, isAdmin, teamIds, onTeamIds, mgrFilter, onMgrFilte
               <span style={{ width: 14 }}>{mgrFilter === m.managerId ? "•" : ""}</span>{m.name}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 🗂 «КОЛОНКИ · N з M» — МЕНЮ ГАЛОЧОК ЗАМІСТЬ РЯДУ ЧИПІВ (26.10.2026).
+ *
+ * 22 чипи займали над таблицею два-три рядки й не казали, скільки колонок
+ * показано. Тепер одна кнопка з лічильником, а галочки — згруповані за змістом
+ * (`COL_GROUPS` у реєстрі).
+ *
+ * 🔴 НЕВИМИКНУ КОЛОНКУ ВИДНО В МЕНЮ — неактивною галочкою з підписом «завжди».
+ * З 26.10.2026 (задача 7087) така лише «Менеджер»: решта, включно з колишніми
+ * обовʼязковими («Отримано», «План міс.», «#»…), — звичайні галочки, увімкнені в
+ * типовому наборі.
+ *
+ * Перелік галочок приходить ТИМ САМИМ виразом, що й раніше чипи
+ * (`OPTIONAL_COLS.filter((c) => c.key !== "factUndef")`): умовна колонка
+ * «Отримано · невизначено» вимикатись користувачем не може (`#214b`).
+ * Закривається кліком поза меню й Escape — як «Обсяг».
+ *
+ * ↔️ ВКЛАДКА «ПОРЯДОК» (задача 7087). Галочки згруповані ЗА ЗМІСТОМ, тож тягнути
+ * їх для порядку не можна: позиція в групі нічого не каже про місце в таблиці.
+ * Тому порядок — окремим плоским списком ТИХ САМИХ `cols`, що малює таблиця:
+ * перетягування (той самий `dnd`, що й у шапці) + кнопки ↑/↓ для клавіатури й
+ * телефону, де HTML5-перетягування на тачі ненадійне. «Скинути до типових»
+ * скидає І вибір, І порядок — два колбеки, одна кнопка.
+ */
+function ColumnPicker({ toggleable, locked, optOn, onToggle, onReset: resetCols, onResetOrder, onAll, shown, total, ordered, onStep, dnd, dropOn }: {
+  toggleable: ColDef[];
+  /** Невимикні колонки (лише «Менеджер») — неактивними галочками з «завжди». */
+  locked: ColDef[];
+  optOn: Record<string, boolean>; onToggle: (k: string) => void;
+  onReset: () => void; onResetOrder: () => void; onAll: () => void;
+  shown: number; total: number;
+  /** Показані колонки в ПОТОЧНОМУ порядку — рівно `cols` таблиці. */
+  ordered: ColDef[];
+  onStep: (k: ColKey, dir: -1 | 1) => void;
+  dnd: (k: ColKey) => React.HTMLAttributes<HTMLElement> & { draggable: boolean };
+  dropOn: ColKey | null;
+}) {
+  const onReset = () => { resetCols(); onResetOrder(); };
+  const [tab, setTab] = useState<"pick" | "order">("pick");
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away); document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
+
+  const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", fontSize: 13, cursor: "pointer" };
+  const linkBtn: React.CSSProperties = {
+    border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
+    borderRadius: "var(--r-pill)", padding: "3px 10px", fontSize: 12, cursor: "pointer",
+  };
+  // ↑/↓ — не менше 28 px: на телефоні це основний спосіб змінити порядок.
+  const stepBtn: React.CSSProperties = {
+    border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
+    borderRadius: "var(--r-md)", minWidth: 28, height: 28, fontSize: 13, cursor: "pointer", padding: 0,
+  };
+
+  return (
+    <div ref={box} style={{ position: "relative" }}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true"
+        style={{ ...selStyle, minWidth: 0 }}>
+        Колонки · {shown} з {total} <span style={{ opacity: 0.5, marginLeft: 4 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div role="menu" style={{
+          position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 60,
+          width: "min(340px, calc(100vw - 32px))", maxHeight: "min(480px, 70vh)", overflowY: "auto",
+          background: "var(--card-bg)", border: "1px solid var(--border-strong)",
+          borderRadius: "var(--r-md)", boxShadow: "var(--shadow)", padding: "6px 0",
+        }}>
+          <div style={{ display: "flex", gap: 6, padding: "4px 12px 8px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
+            <button type="button" style={linkBtn} onClick={onReset}>Скинути до типових</button>
+            <button type="button" style={linkBtn} onClick={onAll}>Усі</button>
+          </div>
+          <div role="tablist" style={{ display: "flex", gap: 4, padding: "8px 12px 2px" }}>
+            {([["pick", "Вибір"], ["order", "Порядок"]] as const).map(([k, lbl]) => (
+              <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+                style={{ ...linkBtn, fontWeight: tab === k ? 700 : 400,
+                  borderColor: tab === k ? "var(--brand)" : "var(--border)", color: tab === k ? "var(--brand)" : "var(--text)" }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+          {tab === "order" && (
+            <div>
+              <div style={{ padding: "6px 12px 4px", fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                Перетягніть назву або тисніть ↑/↓. Вище в списку — лівіше в таблиці. Сховані колонки
+                при увімкненні стануть туди, де стояли.
+              </div>
+              {ordered.map((c, i) => {
+                const pinned = isPinnedCol(c.key);
+                const prevPinned = i === 0 || isPinnedCol(ordered[i - 1].key);
+                const last = i === ordered.length - 1;
+                const label = c.key === "rank" ? "# (номер рядка)" : c.title;
+                return (
+                  <div key={c.key} {...dnd(c.key)}
+                    style={{ ...row, cursor: pinned ? "default" : "grab", color: pinned ? "var(--text-muted)" : undefined,
+                      boxShadow: dropOn === c.key ? "inset 0 2px 0 var(--brand)" : undefined }}>
+                    <span aria-hidden="true" style={{ width: 12, color: "var(--text-muted)", opacity: pinned ? 0.3 : 0.8 }}>{pinned ? "🔒" : "⋮⋮"}</span>
+                    <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+                    {pinned ? <span style={{ fontSize: 11 }}>закріплена</span> : (
+                      <>
+                        <button type="button" style={{ ...stepBtn, opacity: prevPinned ? 0.35 : 1 }} disabled={prevPinned} onClick={() => onStep(c.key, -1)}
+                          aria-label={`«${label}» — вище (лівіше в таблиці)`}>↑</button>
+                        <button type="button" style={{ ...stepBtn, opacity: last ? 0.35 : 1 }} disabled={last} onClick={() => onStep(c.key, 1)}
+                          aria-label={`«${label}» — нижче (правіше в таблиці)`}>↓</button>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {tab === "pick" && COL_GROUPS.map((g) => {
+            const req = locked.filter((c) => COL_GROUP_OF[c.key] === g.key);
+            const opt = toggleable.filter((c) => COL_GROUP_OF[c.key] === g.key);
+            if (req.length + opt.length === 0) return null;
+            return (
+              <div key={g.key}>
+                <div style={{ padding: "8px 12px 3px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--text-muted)" }}>
+                  {g.title}
+                </div>
+                {req.map((c) => (
+                  <label key={c.key} style={{ ...row, cursor: "default", color: "var(--text-muted)" }} title="Обовʼязкова колонка — показується завжди">
+                    <input type="checkbox" checked disabled />
+                    {c.title}
+                    <span style={{ marginLeft: "auto", fontSize: 11 }}>завжди</span>
+                  </label>
+                ))}
+                {opt.map((c) => (
+                  <label key={c.key} style={row}>
+                    <input type="checkbox" checked={!!optOn[c.key]} onChange={() => onToggle(c.key)} />
+                    {c.key === "rank" ? "# (номер рядка)" : c.title}
+                  </label>
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

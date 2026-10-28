@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { AD_SOURCES, SITE_SOURCES, leadSelection } from "./leadTake.js";
+import { elogistMarkSql } from "./elogist.js";
 import { firstDial, responseRowsSql, buildResponseTable, type ResponseRawRow, type ResponseTable } from "./leadResponseRules.js";
 export type { ResponseLine, ResponseTable } from "./leadResponseRules.js";
 
@@ -12,7 +13,12 @@ export type { ResponseLine, ResponseTable } from "./leadResponseRules.js";
  */
 
 export async function loadResponseRows(q: { from: string; to: string; managerId?: number | null; teamId?: number | null }): Promise<ResponseRawRow[]> {
-  const { sql, params } = responseRowsSql(leadSelection({ ...q, source: "all" }), [...AD_SOURCES, ...SITE_SOURCES]);
+  // 🟣 eLogist (окремий канал з 27.10.2026) сюди НЕ входить: «Все» вікна «Час опрацювання» тепер
+  // включає eLogist, а цей екран — про заявки UTS (реклама + сайт + лідгени). Без цього рядка
+  // eLogist-заявки (їхнє «Источник клиента» не в джерелах UTS) упали б у блок «лідгени» як не-основні.
+  const sel = leadSelection({ ...q, source: "all" });
+  sel.conds.push(`NOT ${elogistMarkSql("d")}`);
+  const { sql, params } = responseRowsSql(sel, [...AD_SOURCES, ...SITE_SOURCES]);
   const r = await pool.query<{
     created: Date; manager_id: number | null; manager: string | null; team_id: number | null; team: string | null;
     is_main: boolean; note_at: Date | null; note_sec: number | null; rc_at: Date | null; rc_sec: number | null;

@@ -20,7 +20,7 @@ import { klassOf } from "../core/klassFilter.js";
 import { overviewCache } from "../core/lazyCache.js";
 
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
-const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, otherCount: 0, noChannelCount: 0 } as const;
+const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl } from "../core/kommoLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
 import { canCloseDeal } from "../core/firstTouchClose.js";
@@ -1025,9 +1025,11 @@ dashboardRouter.get("/overview", async (req, res) => {
      GROUP BY 1`,
     from ? [...params, from] : params
   );
-  const newClientsBySource = { ad: 0, leadgen: 0, other: 0 } as { ad: number; leadgen: number; other: number };
+  // 🟣 `elogist` — окремий рядок з 27.10.2026 (рішення власника): інакше нові клієнти eLogist,
+  // що до того стояли в «Реклама», мовчки переїхали б у «Вручну / інше».
+  const newClientsBySource = { ad: 0, leadgen: 0, elogist: 0, other: 0 } as { ad: number; leadgen: number; elogist: number; other: number };
   for (const r of newBySourceRes.rows) {
-    if (r.ch === "ad" || r.ch === "leadgen") newClientsBySource[r.ch] = Number(r.clients);
+    if (r.ch === "ad" || r.ch === "leadgen" || r.ch === "elogist") newClientsBySource[r.ch] = Number(r.clients);
     else newClientsBySource.other += Number(r.clients);
   }
 
@@ -4162,7 +4164,7 @@ function leadTakeQuery(req: import("express").Request): leadTake.TakeQuery | { e
   const from = String(req.query.from ?? ""), to = String(req.query.to ?? "");
   if (!ymd.test(from) || !ymd.test(to) || from > to) return { error: "from/to: YYYY-MM-DD, from ≤ to" };
   const source = String(req.query.source ?? "all") as leadTake.TakeSource;
-  if (!["all", "ad", "site", "leadgen"].includes(source)) return { error: "source: all | ad | site | leadgen" };
+  if (!["all", "ad", "site", "leadgen", "elogist"].includes(source)) return { error: "source: all | ad | site | leadgen | elogist" };
   const time = String(req.query.time ?? "all") as leadTake.TakeTime;
   if (!["all", "work", "off"].includes(time)) return { error: "time: all | work | off" };
   const campaign = source === "ad" && typeof req.query.campaign === "string" && req.query.campaign ? req.query.campaign : null;
@@ -6034,9 +6036,13 @@ dashboardRouter.get("/ads", async (req, res) => {
   // ⚠️ Дохід — це гроші, ЩО НАДІЙШЛИ в періоді, від реклами будь-якого часу. Це НЕ
   // «скільки принесли ліди цього періоду»: угода з ліда 4 липня оплатиться у серпні.
   // Когортного доходу в ядрі немає, і вигадувати його тут не можна.
-  const [plan, revenue] = await Promise.all([
+  // 🟣 eLogist — ОКРЕМИЙ рядок, не частина реклами UTS (рішення власника 27.10.2026). Ліди —
+  // ядро (`metrics.elogistLeadsCreated`), гроші — той самий `receivedByChannel`, канал 'elogist'.
+  // Витрат eLogist у нас НЕМАЄ (ні GA4, ні аркуша), тож ні ціни ліда, ні ROMI не віддаємо.
+  const [plan, revenue, elogistLeads] = await Promise.all([
     adPlanForPeriod(from, to),
     money.receivedByChannel({ from, to }, adSources),
+    metrics.elogistLeadsCreated({ from, to }),
   ]);
 
   res.json({
@@ -6044,6 +6050,7 @@ dashboardRouter.get("/ads", async (req, res) => {
     planMonth: plan,                       // null = на ці місяці плану не ставили
     revenue: revenue.ad.revenue,
     revenueDeals: revenue.ad.deals,
+    elogist: { leads: elogistLeads, revenue: revenue.elogist.revenue, revenueDeals: revenue.elogist.deals },
   });
 });
 
@@ -9347,15 +9354,15 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   // 🔴 НЕ плутати з `leadsAd/leadsLeadgen/leadsOther`: ті рахують ЛІДИ (інша
   // популяція, інший запит). Дві сімʼї поруч мусять лишатись підписаними окремо —
   // саме тому вони й названі по-різному, а не «ad/leadgen» двічі.
-  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; crAd: number; crLeadgen: number; crOther: number; crNoChannel: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number; dispSum: number; dispPaid: { deals: number; sum: number }; dispAwait: { deals: number; sum: number }; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
-  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, crAd: 0, crLeadgen: 0, crOther: 0, crNoChannel: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispUndef: 0, dispSum: 0, dispPaid: { deals: 0, sum: 0 }, dispAwait: { deals: 0, sum: 0 }, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
+  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; crAd: number; crLeadgen: number; crElogist: number; crOther: number; crNoChannel: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispElogist: number; dispUndef: number; dispSum: number; dispPaid: { deals: number; sum: number }; dispAwait: { deals: number; sum: number }; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
+  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, crAd: 0, crLeadgen: 0, crElogist: 0, crOther: 0, crNoChannel: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispElogist: 0, dispUndef: 0, dispSum: 0, dispPaid: { deals: 0, sum: 0 }, dispAwait: { deals: 0, sum: 0 }, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
   const dayMap = new Map<string, Cell>();
   const dget = (d: string) => { let e = dayMap.get(d); if (!e) { e = zero(); dayMap.set(d, e); } return e; };
   for (const r of createdRows) dget(r.bucket).created += r.deals;
   for (const r of splitRows) { const e = dget(r.bucket); e.newCount += r.newCount; e.repeatCount += r.repeatCount; e.undefCount += r.undefCount;
-    e.crAd += r.adCount; e.crLeadgen += r.leadgenCount; e.crOther += r.otherCount; e.crNoChannel += r.noChannelCount; }
+    e.crAd += r.adCount; e.crLeadgen += r.leadgenCount; e.crElogist += r.elogistCount; e.crOther += r.otherCount; e.crNoChannel += r.noChannelCount; }
   for (const r of leadsRows) { const e = dget(r.bucket); const c = (r as { channel?: string }).channel; if (c === "ad") e.leadsAd += r.deals; else if (c === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals; }
-  for (const r of dispRows) { const e = dget(r.ym); e.dispatched += r.deals; e.dispRepeat += r.repeat; e.dispLeadgen += r.leadgen; e.dispAd += r.ad; e.dispUndef += r.undef; }
+  for (const r of dispRows) { const e = dget(r.ym); e.dispatched += r.deals; e.dispRepeat += r.repeat; e.dispLeadgen += r.leadgen; e.dispAd += r.ad; e.dispElogist += r.elogist; e.dispUndef += r.undef; }
   for (const r of recvRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.received.deals += r.deals; e.received.revenue += r.revenue; }
   for (const r of expRows) if (r.day >= from && r.day <= to) { const e = dget(r.day); e.expected.deals += r.deals; e.expected.sum += r.sum; }
   for (const r of sucRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.success.deals += r.deals; e.success.revenue += r.revenue; }
@@ -9369,7 +9376,7 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
     e.dispPaid.deals += r.paidDeals; e.dispPaid.sum += r.paidSum;
     e.dispAwait.deals += r.awaitDeals; e.dispAwait.sum += r.awaitSum; }
 
-  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, crAd: a.crAd + b.crAd, crLeadgen: a.crLeadgen + b.crLeadgen, crOther: a.crOther + b.crOther, crNoChannel: a.crNoChannel + b.crNoChannel, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, dispSum: a.dispSum + b.dispSum, dispPaid: { deals: a.dispPaid.deals + b.dispPaid.deals, sum: a.dispPaid.sum + b.dispPaid.sum }, dispAwait: { deals: a.dispAwait.deals + b.dispAwait.deals, sum: a.dispAwait.sum + b.dispAwait.sum }, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
+  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, crAd: a.crAd + b.crAd, crLeadgen: a.crLeadgen + b.crLeadgen, crElogist: a.crElogist + b.crElogist, crOther: a.crOther + b.crOther, crNoChannel: a.crNoChannel + b.crNoChannel, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispElogist: a.dispElogist + b.dispElogist, dispUndef: a.dispUndef + b.dispUndef, dispSum: a.dispSum + b.dispSum, dispPaid: { deals: a.dispPaid.deals + b.dispPaid.deals, sum: a.dispPaid.sum + b.dispPaid.sum }, dispAwait: { deals: a.dispAwait.deals + b.dispAwait.deals, sum: a.dispAwait.sum + b.dispAwait.sum }, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   /**
    * 🔴 БЛОКИ — ПО ЗАПИТАНОМУ ДІАПАЗОНУ, А НЕ ПО МІСЯЦЮ `from` (20.08.2026).
@@ -9800,11 +9807,13 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       // ДЖЕРЕЛО — накладка поверх партиції (⊂ created), у суму не додається.
       // 🧺 РОЗКЛАД СТВОРЕНИХ ЗА ДЖЕРЕЛОМ — ПОВНИЙ, тобто ПАРТИЦІЯ (24.08.2026).
-      // `srcAd + srcLeadgen + srcOther + srcNoChannel == created`. Раніше віддавались
+      // `srcAd + srcLeadgen + srcElogist + srcOther + srcNoChannel == created` (eLogist —
+      // окремий кошик з 27.10.2026, рішення власника). Раніше віддавались
       // лише перші дві гілки з чотирьох, і 43.2% угод не мали імені на екрані взагалі.
       // ⚠️ `srcNoChannel` (канал не заповнено) — НЕ те саме, що невизначена НОВИЗНА:
       // остання їде окремим полем і належить ІНШІЙ партиції. Тримає `#174`.
       srcAd: splitM.get(m.id)?.adCount ?? 0, srcLeadgen: splitM.get(m.id)?.leadgenCount ?? 0,
+      srcElogist: splitM.get(m.id)?.elogistCount ?? 0,
       srcOther: splitM.get(m.id)?.otherCount ?? 0, srcNoChannel: splitM.get(m.id)?.noChannelCount ?? 0,
       // 🔀 Е3: той самий розклад ВСЕРЕДИНІ кожного класу новизни. Їде разом із
       // рядком, бо перемикач «усі / лише нові / лише постійні» НЕ ходить на
@@ -9872,7 +9881,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
         leadgen: { fact: lgAcceptedM.get(m.id) ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
         dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0),
           // Розбивка авто за джерелом (постійний / лідоген / реклама / невизн). Σ = fact.
-          repeat: dispM.get(m.id)?.repeat ?? 0, leadgen: dispM.get(m.id)?.leadgen ?? 0, ad: dispM.get(m.id)?.ad ?? 0, undef: dispM.get(m.id)?.undef ?? 0 },
+          repeat: dispM.get(m.id)?.repeat ?? 0, leadgen: dispM.get(m.id)?.leadgen ?? 0, ad: dispM.get(m.id)?.ad ?? 0, elogist: dispM.get(m.id)?.elogist ?? 0, undef: dispM.get(m.id)?.undef ?? 0 },
         avgCheck: { fact: avgM.get(m.id)?.avgCheck ?? null, target: Math.round(pl.avg_check ?? 0),
           revenue: Math.round(avgM.get(m.id)?.revenue ?? 0), deals: avgM.get(m.id)?.deals ?? 0 },
         conversion: { fact: c && c.taken >= 10 ? c.cohortPct : null, target: Math.round(pl.conversion ?? 0), taken: c?.taken ?? 0, won: c?.won ?? 0 },
@@ -10173,7 +10182,8 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
       // ⚠️ БІЛИЙ СПИСОК ІЗ ЧОТИРЬОХ, не з трьох: `undef` («канал не вказано») мусить
       // доїхати окремим станом, інакше він зіллється з `null` («джерело незастосовне»)
       // і незнання читатиметься як відсутність питання. Тримає `#175`.
-      source: x.source === "ad" || x.source === "leadgen" || x.source === "other" || x.source === "undef" ? x.source : null,
+      // 🟣 + `elogist` (окремий канал з 27.10.2026) — без нього чип eLogist-угоди мовчки став би `null`.
+      source: x.source === "ad" || x.source === "leadgen" || x.source === "elogist" || x.source === "other" || x.source === "undef" ? x.source : null,
       price: Math.round(Number(x.price)), status: label(Number(x.status_id)),
     })),
   });
@@ -10441,7 +10451,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       // рахує всі чотири — і 44% створеного (999-1010 угод серпня, у РПК 74.4%) не
       // потрапляло на екран узагалі. `other`/`noChannel` беруться з ТОГО САМОГО
       // `splitByMgr`: жодного нового запиту, лише перестала губитись частина.
-      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, ad: s?.adCount ?? 0, leadgen: s?.leadgenCount ?? 0, other: s?.otherCount ?? 0, noChannel: s?.noChannelCount ?? 0 }; })(),
+      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, ad: s?.adCount ?? 0, leadgen: s?.leadgenCount ?? 0, elogist: s?.elogistCount ?? 0, other: s?.otherCount ?? 0, noChannel: s?.noChannelCount ?? 0 }; })(),
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
       weeks: weeksForMgr(mid, mp.plan),    // Крок Д фінал #2: тижневий розріз Т1–Т5
     });
@@ -10793,9 +10803,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     createdSplit: {
       totals: createdSplitMgr.reduce((a, x) => ({
         created: a.created + x.created, new: a.new + x.newCount, repeat: a.repeat + x.repeatCount, undef: a.undef + x.undefCount,
-        ad: a.ad + x.adCount, leadgen: a.leadgen + x.leadgenCount, other: a.other + x.otherCount, noChannel: a.noChannel + x.noChannelCount,
-      }), { created: 0, new: 0, repeat: 0, undef: 0, ad: 0, leadgen: 0, other: 0, noChannel: 0 }),
-      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, ad: x.adCount, leadgen: x.leadgenCount, other: x.otherCount, noChannel: x.noChannelCount })),
+        ad: a.ad + x.adCount, leadgen: a.leadgen + x.leadgenCount, elogist: a.elogist + x.elogistCount, other: a.other + x.otherCount, noChannel: a.noChannel + x.noChannelCount,
+      }), { created: 0, new: 0, repeat: 0, undef: 0, ad: 0, leadgen: 0, elogist: 0, other: 0, noChannel: 0 }),
+      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, ad: x.adCount, leadgen: x.leadgenCount, elogist: x.elogistCount, other: x.otherCount, noChannel: x.noChannelCount })),
     },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),

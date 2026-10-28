@@ -9,6 +9,8 @@ import { heartbeat, trackerSsoUrl, surveysBadge, type SurveysBadge } from "../ap
 import { useRegistriesCount } from "../minusRegistry/client/useRegistriesCount";
 import { useClientLimitsCount } from "../minusRegistry/client/clientLimits/useClientLimitsCount";
 import { usePolling } from "../hooks/usePolling";
+import { useBankIdentBadge } from "../bankIdent/dashboard";
+import { getAuthPayload } from "../auth";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
 export const NAV_GROUPS = [
@@ -95,6 +97,14 @@ export const NAV_GROUPS = [
     ],
   },
   {
+    // 🏢 «Компанія» (задача 7062): одразу під «Роботою» (рішення Романа 27.10.2026: «на низ … під роботою»; до того
+    // стояла першою, як у прототипі Даші). Вкладка `org` — у всіх ролей (сид schema.sql), видимість — зі `screen_access`.
+    label: "Компанія",
+    items: [
+      { key: "org", label: "Орг структура", icon: "🏢" },
+    ],
+  },
+  {
     // 🗂 Бізнес-асистент (задача 4314, 28.09.2026): один пункт — розділ із вкладками за ТЗ. Окремий блок
     // перед «Системою», як у затвердженому макеті. Видимість — `screen_access.ba` (сид: бізнес-асистент і
     // керівництво); перегрупування решти меню — окрема задача 4466.
@@ -115,6 +125,17 @@ export const NAV_GROUPS = [
 ] as const;
 
 type NavItem = { key: string; label: string; icon: string; roles?: readonly string[] };
+
+/**
+ * Позначка «НОВЕ» біля пункту — 14 днів від викату (ТЗ орг-структури). Дата, а не лічильник: після неї позначка зникає
+ * сама, без ще одного викату. Київська дата сьогодні порівнюється рядком «РРРР-ММ-ДД».
+ */
+const ORG_NEW_UNTIL = "2026-11-11";
+const NEW_UNTIL: Readonly<Record<string, string>> = { org: ORG_NEW_UNTIL };
+const isNewItem = (key: string) => {
+  const until = NEW_UNTIL[key];
+  return !!until && new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }) < until;
+};
 export type NavKey = (typeof NAV_GROUPS)[number]["items"][number]["key"];
 
 // Вкладки, ПРИБРАНІ з навігації (меню/таби/командна панель) за рішенням власника —
@@ -213,6 +234,9 @@ export function Layout({
   // після дії) — лише тим, кому вкладку видано. 💰 Дебіторка: «Ліміти клієнтів» — переліміт + прострочка + нова справа в суді.
   const registriesCount = useRegistriesCount(60_000, !screens || screens.includes("registries"));
   const limitsCount = useClientLimitsCount(5 * 60_000, !screens || screens.includes("receivables"));
+  // 💳 «Виписка»: скільки надходжень ФОП / картки чекають № рахунку — лише тим, хто його вписує (право tag_bank_invoice;
+  // права в токені — з моменту входу). Пакет Сергія 27.10.2026, «як Новини 4»; 0 — без значка.
+  const bankIdentCount = useBankIdentBadge((!screens || screens.includes("bank")) && !!getAuthPayload()?.perms?.includes("tag_bank_invoice"));
   const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled)
     .map((g) => ({ ...g, items: g.items.filter((it) => it.key !== "surveys" || showSurveys) }))
     .filter((g) => g.items.length > 0);
@@ -330,17 +354,23 @@ export function Layout({
                             : item.key === "news" ? newsUnread
                             : item.key === "surveys" ? (surveys?.fresh ?? 0)
                             : item.key === "registries" ? registriesCount
-                            : item.key === "receivables" ? limitsCount : 0;
+                            : item.key === "receivables" ? limitsCount
+                            : item.key === "bank" ? bankIdentCount : 0;
                 return (
                 <button
                   key={item.key}
                   className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
                   onClick={() => onSelect(item.key as NavKey)}
-                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : item.key === "registries" ? "чекають вашої дії" : item.key === "receivables" ? "у «Лімітах клієнтів»: переліміт, прострочка чи нова справа в суді" : "непрочитаних"}` : item.label}
+                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : item.key === "registries" ? "чекають вашої дії" : item.key === "receivables" ? "у «Лімітах клієнтів»: переліміт, прострочка чи нова справа в суді" : item.key === "bank" ? "надходжень чекають № рахунку" : "непрочитаних"}` : item.label}
                   style={{ position: "relative" }}
                 >
                   <span className="sidebar-nav-icon"><NavIcon k={item.key} /></span>
                   {!collapsed && item.label}
+                  {!badge && !collapsed && isNewItem(item.key) && (
+                    <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, background: "#c8102e", color: "#fff", borderRadius: 6, padding: "1px 6px" }}>
+                      НОВЕ
+                    </span>
+                  )}
                   {badge > 0 && (
                     <span
                       style={{

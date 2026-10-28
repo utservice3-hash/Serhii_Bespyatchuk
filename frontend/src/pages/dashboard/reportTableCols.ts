@@ -21,7 +21,7 @@ export type ColKey =
   | "dispatch" | "avgCheck" | "fact" | "factNew" | "factRepeat" | "factUndef" | "plan" | "pct"
   | "projected" | "needPerDay" | "expectThisMonth" | "expectNew" | "expectRepeat" | "awaitNoDate"
   | "jamDeals" | "jam" | "dobir" | "talks" | "normDays" | "dispRevenue" | "responseTime"
-  | "srcAd" | "srcLeadgen" | "srcOther" | "srcNoChannel" | "firstTouch";
+  | "srcAd" | "srcLeadgen" | "srcElogist" | "srcOther" | "srcNoChannel" | "firstTouch";
 
 /**
  * Як колонка згортається в підсумковий рядок.
@@ -42,7 +42,12 @@ export interface ColDef {
   key: ColKey;
   /** Підпис у шапці. */
   title: string;
-  /** Колонка з набору «завжди видимих» (чипом не вимикається). */
+  /**
+   * Колонка ТИПОВОГО НАБОРУ: увімкнена, доки людина сама її не вимкнула.
+   * ⚠️ До 26.10.2026 це означало «завжди видима, не вимикається». Рішення власника
+   * (задача 7087): вимкнути можна БУДЬ-ЯКУ колонку, крім «Менеджер» (`LOCKED_COLS`).
+   * Поле лишилось — воно задає типовий набір (`DEFAULT_OPT_ON`), а не замок.
+   */
   core: boolean;
   /** Ліве вирівнювання (текстові колонки). */
   left?: boolean;
@@ -199,7 +204,7 @@ export const REPORT_COLS: ColDef[] = [
   // це ті самі дві гілки `dealSourceCase`. Змінилось ЧИТАННЯ сімʼї: раніше
   // показувались дві гілки з чотирьох, тож 43.2% створених угод не мали імені на
   // екрані взагалі й читались як «решта, про яку не питали». Тепер показані всі,
-  // отже Σ чотирьох == «Створено», і кожна угода лежить рівно в одному кошику.
+  // отже Σ п'яти == «Створено», і кожна угода лежить рівно в одному кошику.
   //
   // ⚠️ І САМЕ ТОМУ ЦЕ НЕ «ЩЕ ОДНА КОЛОНКА». Поки сімʼя була неповною, складати її
   // зі «Створено» було помилкою; тепер це ПЕРЕВІРКА. Різниця в один кошик змінює
@@ -211,13 +216,17 @@ export const REPORT_COLS: ColDef[] = [
   // тому воно показується ЛИШЕ коли зʼявиться (`hideWhenZero`): підпис у кожному
   // рядку про те, чого немає, — це шпалери, а не сигнал.
   { key: "srcAd", title: "зі створених: реклама", core: false, val: (m) => m.srcAd, foot: "add",
-    help: "Скільки зі СТВОРЕНИХ угод періоду мають рекламний канал (deals.lead_channel='ad'). Джерело: metrics.createdSplitByManager. Разом із «лідоген», «без джерела» і «канал не вказано» утворює ПАРТИЦІЮ: Σ чотирьох == «Створено». ⚠️ Не плутати з «Прийнято реклами» — то ОКРЕМА метрика (KPI-факт), не частина цього розкладу. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
+    help: "Скільки зі СТВОРЕНИХ угод періоду мають рекламний канал (deals.lead_channel='ad'). Джерело: metrics.createdSplitByManager. Разом із «лідоген», «eLogist», «без джерела» і «канал не вказано» утворює ПАРТИЦІЮ: Σ п'яти == «Створено». ⚠️ Не плутати з «Прийнято реклами» — то ОКРЕМА метрика (KPI-факт), не частина цього розкладу. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
   { key: "srcLeadgen", title: "зі створених: лідоген", core: false, val: (m) => m.srcLeadgen, foot: "add",
-    help: "Скільки зі СТВОРЕНИХ угод періоду прийшли від лідогенератора (deals.lead_channel='leadgen'). Джерело: metrics.createdSplitByManager. Частина ПАРТИЦІЇ джерела: Σ чотирьох == «Створено». ⚠️ Не плутати з «Прийнято лідоген» — то ОКРЕМА метрика (KPI-факт). 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
+    help: "Скільки зі СТВОРЕНИХ угод періоду прийшли від лідогенератора (deals.lead_channel='leadgen'). Джерело: metrics.createdSplitByManager. Частина ПАРТИЦІЇ джерела: Σ п'яти == «Створено». ⚠️ Не плутати з «Прийнято лідоген» — то ОКРЕМА метрика (KPI-факт). 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
+  // 🟣 eLogist — П'ЯТИЙ кошик партиції (рішення власника 27.10.2026): сестринський сайт, НЕ реклама
+  // UTS. До 27.10 ці угоди стояли в «реклама»; тепер окремою колонкою, і Σ п'яти == «Створено».
+  { key: "srcElogist", title: "зі створених: eLogist", core: false, val: (m) => m.srcElogist, foot: "add",
+    help: "Скільки зі СТВОРЕНИХ угод періоду мають канал eLogist (deals.lead_channel='elogist') — заявки сайту elogist.com.ua (сестринський бренд). Рішення власника 27.10.2026: eLogist — ОКРЕМИЙ канал, НЕ реклама UTS; до цієї дати такі угоди рахувались у «реклама». Ознака ліда — «Источник клиента» = elogist.com.ua, назва «eLogist …» або етап «Заявки eLogist (сайт)»; канал угоди повного циклу — за останнім дотиком. Джерело: metrics.createdSplitByManager. Частина ПАРТИЦІЇ джерела: Σ п'яти == «Створено». ⚠️ Пари «Прийнято …» і плану в неї НЕМАЄ: KPI-цілі ставляться лише по рекламі й лідогену — це не пропуск. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею." },
   { key: "srcOther", title: "зі створених: без джерела", core: false, val: (m) => m.srcOther, foot: "add",
-    help: "Скільки зі СТВОРЕНИХ угод періоду не мають ані рекламного, ані лідоген-дотику — менеджер завів угоду сам. Джерело: metrics.createdSplitByManager. Частина ПАРТИЦІЇ джерела: Σ чотирьох == «Створено». 📐 Заміряно 25.07-24.08: 1137 угод (43.2%), з них 827 — постійні клієнти, тобто це переважно робота з наявною базою, а не «загублене походження». ⚠️ Пари «Прийнято …» у цієї колонки НЕМАЄ — і це не пропуск: KPI-цілі ставляться лише по рекламі й лідогену. ⚠️ ПЛАНУ по цій колонці НЕМАЄ і не передбачено: цілі ставляться лише по рекламі й лідогену, тож порожньо в «плані» тут — це відсутність цілі, а не недопрацювання. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
+    help: "Скільки зі СТВОРЕНИХ угод періоду не мають ані рекламного, ані лідоген-дотику — менеджер завів угоду сам. Джерело: metrics.createdSplitByManager. Частина ПАРТИЦІЇ джерела: Σ п'яти == «Створено». 📐 Заміряно 25.07-24.08: 1137 угод (43.2%), з них 827 — постійні клієнти, тобто це переважно робота з наявною базою, а не «загублене походження». ⚠️ Пари «Прийнято …» у цієї колонки НЕМАЄ — і це не пропуск: KPI-цілі ставляться лише по рекламі й лідогену. ⚠️ ПЛАНУ по цій колонці НЕМАЄ і не передбачено: цілі ставляться лише по рекламі й лідогену, тож порожньо в «плані» тут — це відсутність цілі, а не недопрацювання. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
   { key: "srcNoChannel", title: "зі створених: канал не вказано", core: false, val: (m) => m.srcNoChannel, foot: "add",
-    help: "Четвертий кошик ПАРТИЦІЇ джерела: угоди, у яких канал не заповнений узагалі (deals.lead_channel IS NULL) — тобто ми НЕ ЗНАЄМО джерела, на відміну від «без джерела», де відомо, що дотику не було. 📐 Заміряно 24.08.2026: НУЛЬ по всій базі. Колонка існує, щоб перша ж така угода стала видимою, а не осіла тихо в сусідньому кошику; поки нуль — про це кричить гейт #174e, а не підпис у кожному рядку. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
+    help: "Кошик ПАРТИЦІЇ джерела «канал не вказано»: угоди, у яких канал не заповнений узагалі (deals.lead_channel IS NULL) — тобто ми НЕ ЗНАЄМО джерела, на відміну від «без джерела», де відомо, що дотику не було. 📐 Заміряно 24.08.2026: НУЛЬ по всій базі. Колонка існує, щоб перша ж така угода стала видимою, а не осіла тихо в сусідньому кошику; поки нуль — про це кричить гейт #174e, а не підпис у кожному рядку. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
   // 🎯 ТЗ-3 «перший дотик»: відсоток — ЧАСТКА, тож у підсумку Σ названих ÷ Σ оцінених, а не Σ відсотків.
   { key: "firstTouch", title: "Ціну названо (1-й дотик)", core: false,
     val: (m) => (m.firstTouch?.state === "measured" ? firstTouchPct(m.firstTouch.voiced, m.firstTouch.analyzed) : null),
@@ -233,16 +242,238 @@ export const REPORT_COLS: ColDef[] = [
     help: "Частка вхідних лідів воронки Кваліфікації, опрацьованих понад годину (реакція на лід, не повний цикл). «—» якщо лідів немає. Джерело: metrics.responseTimeByManager (first_activity − created > 60 хв)." },
 ];
 
-/** Опційні колонки, увімкнені за замовчуванням (решта — вимкнені). */
+/**
+ * 🔒 НЕВИМИКНА ЛИШЕ «Менеджер» (рішення власника 26.10.2026, задача 7087: «вибирати
+ * будь-які колонки»). Без імені рядок таблиці — набір чисел нічий, і підсумок
+ * («Весь відділ · N») теж живе в цій колонці. «#» вимикається: номер рядка ні на що
+ * інше не впливає.
+ */
+export const LOCKED_COLS: ColKey[] = ["name"];
+export const isLockedCol = (k: ColKey): boolean => LOCKED_COLS.includes(k);
+
+/**
+ * ТИПОВИЙ НАБІР: усі колонки `core` + опційні, увімкнені за замовчуванням.
+ *
+ * 🔴 КОЛОНКИ `core` ТУТ ЯВНО `true` — і саме це береже старі збережені вибори.
+ * Доти у сховищі лежали лише опційні ключі (core були невимикні, їх не писали).
+ * `readColPrefs` накладає збережене поверх цього обʼєкта, тож у старому виборі
+ * core-колонки читаються увімкненими, і після викату ні в кого нічого не зникає.
+ * Ключі core виводяться з реєстру, а не перелічуються руками: нова core-колонка
+ * не випаде з типового набору.
+ */
 export const DEFAULT_OPT_ON: Record<string, boolean> = {
+  ...Object.fromEntries(REPORT_COLS.filter((c) => c.core && !isLockedCol(c.key)).map((c) => [c.key, true])),
   projected: true, needPerDay: true, expectThisMonth: true, awaitNoDate: true,
   jamDeals: true, responseTime: true,
   jam: false, dobir: false, talks: false, dispRevenue: false,
-  srcAd: false, srcLeadgen: false, srcOther: false, srcNoChannel: false,
+  srcAd: false, srcLeadgen: false, srcElogist: false, srcOther: false, srcNoChannel: false,
   firstTouch: true,
 };
 
-export const OPTIONAL_COLS = REPORT_COLS.filter((c) => !c.core);
+/** Колонки, які людина може вимкнути в меню, — усі, крім закритих замком (`LOCKED_COLS`). */
+export const OPTIONAL_COLS = REPORT_COLS.filter((c) => !isLockedCol(c.key));
+
+/** Чи показана колонка за вибором людини. Умовну «Отримано · невизначено» вирішує таблиця, не вибір. */
+export const colVisible = (k: ColKey, prefs: Record<string, boolean>): boolean =>
+  isLockedCol(k) || prefs[k] === true;
+
+/**
+ * 🗂 ГРУПИ КОЛОНОК У МЕНЮ «Колонки» (26.10.2026).
+ *
+ * Окрема мапа, а не поле в кожному записі реєстру: `Record<ColKey, …>` змушує
+ * tsc вимагати групу для КОЖНОЇ колонки — нова колонка без групи не збереться,
+ * а не тихо випаде з меню. І записи реєстру, які читають текстові гейти, не
+ * зсуваються.
+ */
+export type ColGroup = "base" | "leads" | "src" | "money" | "expect" | "auto" | "calls";
+export const COL_GROUPS: { key: ColGroup; title: string }[] = [
+  { key: "base", title: "Менеджер" },
+  { key: "money", title: "Гроші" },
+  { key: "expect", title: "Очікування й затор" },
+  { key: "leads", title: "Ліди й конверсія" },
+  { key: "src", title: "Створені за джерелом" },
+  { key: "auto", title: "Авто" },
+  { key: "calls", title: "Дзвінки й реакція" },
+];
+export const COL_GROUP_OF: Record<ColKey, ColGroup> = {
+  rank: "base", name: "base", status: "base",
+  fact: "money", plan: "money", pct: "money", avgCheck: "money",
+  factNew: "money", factRepeat: "money", factUndef: "money", projected: "money", needPerDay: "money", dobir: "money",
+  expectThisMonth: "expect", expectNew: "expect", expectRepeat: "expect", awaitNoDate: "expect",
+  jamDeals: "expect", jam: "expect",
+  created: "leads", ads: "leads", leadgen: "leads", conv: "leads", convAd: "leads", convLg: "leads",
+  srcAd: "src", srcLeadgen: "src", srcElogist: "src", srcOther: "src", srcNoChannel: "src",
+  dispatch: "auto", dispRevenue: "auto",
+  talks: "calls", normDays: "calls", firstTouch: "calls", responseTime: "calls",
+};
+
+/**
+ * 💾 ВИБІР КОЛОНОК — ОСОБИСТИЙ ДЛЯ КОРИСТУВАЧА (26.10.2026).
+ *
+ * Доти ключ був один на браузер (`rptTableCols`): двоє людей за одним компʼютером
+ * перемикали колонки ОДНЕ ОДНОМУ. Тепер ключ — `rptTableCols:<userId>`. Старий
+ * ключ лишається ФОЛБЕКОМ на читання: інакше всі, хто вже налаштував таблицю,
+ * після викату побачили б типовий набір і вирішили б, що вибір «злетів». Старий
+ * ключ не стирається — ним можуть ще користуватись інші люди того ж браузера.
+ *
+ * Сховище передається параметром, а не береться глобально: модуль лишається
+ * чистим, і поведінку (а не текст) перевіряють гейти #2432–#2434. Кожне читання й
+ * запис — у try/catch: приватне вікно чи заблоковане сховище кидають на доступі,
+ * і таблиця мусить відмалюватись із типовим набором, а не впасти.
+ */
+export const COLS_LS_LEGACY = "rptTableCols";
+export interface ColsStore { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem?(key: string): void }
+export const colsStorageKey = (userId: number | null | undefined): string =>
+  userId != null ? `${COLS_LS_LEGACY}:${String(userId)}` : COLS_LS_LEGACY;
+
+export function readColPrefs(store: ColsStore | null, userId: number | null | undefined): Record<string, boolean> {
+  try {
+    if (!store) return { ...DEFAULT_OPT_ON };
+    const own = store.getItem(colsStorageKey(userId));
+    const raw: unknown = JSON.parse((own ?? store.getItem(COLS_LS_LEGACY)) || "null");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_OPT_ON };
+    const picked: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(raw)) if (typeof v === "boolean") picked[k] = v;
+    return { ...DEFAULT_OPT_ON, ...picked };
+  } catch {
+    return { ...DEFAULT_OPT_ON };
+  }
+}
+
+/** Пише ЛИШЕ особистий ключ. `false` — сховище недоступне (вибір живе до перезавантаження). */
+export function writeColPrefs(store: ColsStore | null, userId: number | null | undefined, prefs: Record<string, boolean>): boolean {
+  try {
+    if (!store) return false;
+    store.setItem(colsStorageKey(userId), JSON.stringify(prefs));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** «Скинути до типових» — рівно `DEFAULT_OPT_ON`, копією (щоб стан не ділив обʼєкт із реєстром). */
+export const resetColPrefs = (): Record<string, boolean> => ({ ...DEFAULT_OPT_ON });
+
+/** «Усі» — кожна опційна колонка увімкнена. */
+export const allColPrefs = (): Record<string, boolean> =>
+  Object.fromEntries(OPTIONAL_COLS.map((c) => [c.key, true]));
+
+/**
+ * ↔️ ПОРЯДОК КОЛОНОК — ОСОБИСТИЙ, ПОРУЧ ІЗ ВИБОРОМ (задача 7087, 26.10.2026).
+ *
+ * 🔴 ОКРЕМИЙ КЛЮЧ `rptTableColOrder:<userId>`, А НЕ ПОЛЕ У ЗАПИСІ ВИБОРУ. Запис
+ * вибору — `Record<string, boolean>`, і `readColPrefs` свідомо викидає все
+ * не-булеве (#2434). Масив у тому самому обʼєкті або зламав би цей фільтр, або
+ * був би ним мовчки викинутий. Два ключі — дві незалежні речі: зіпсований порядок
+ * не губить вибору, і навпаки.
+ *
+ * 🔴 ЗАКРІПЛЕНІ «#» І «Менеджер» (`PINNED_COLS`) ЗАВЖДИ ПЕРШІ, у порядку реєстру,
+ * що б не лежало у сховищі. «Менеджер» — липкий кут (`sticky-mgr`, `left: 0`):
+ * зсунутий углиб таблиці, він липнув би поверх чужих колонок.
+ *
+ * 🔴 НОВА КОЛОНКА СТАЄ НА СВОЄ ТИПОВЕ МІСЦЕ — одразу за найближчим сусідом зліва з
+ * реєстру, а не в хвіст. Інакше кожна нова колонка в людей із налаштованим порядком
+ * зʼявлялась би десь праворуч за скролом і читалась би як «її не додали». Ключі,
+ * яких у реєстрі більше немає, відкидаються.
+ *
+ * Порядок завжди ПОВНИЙ — усі колонки реєстру, і показані, і сховані: увімкнена
+ * пізніше колонка стає туди, де людина її колись поставила.
+ */
+export const PINNED_COLS: ColKey[] = ["rank", "name"];
+export const isPinnedCol = (k: ColKey): boolean => PINNED_COLS.includes(k);
+/** Типовий порядок — рівно порядок реєстру. */
+export const defaultColOrder = (): ColKey[] => REPORT_COLS.map((c) => c.key);
+
+/** Будь-що зі сховища → повний порядок реєстру без дублів, закріплені спереду. */
+export function normalizeColOrder(saved: unknown): ColKey[] {
+  const def = defaultColOrder();
+  const known = new Set<ColKey>(def);
+  const out: ColKey[] = [...PINNED_COLS];
+  const seen = new Set<ColKey>(PINNED_COLS);
+  if (Array.isArray(saved)) {
+    for (const k of saved) {
+      if (typeof k !== "string" || !known.has(k as ColKey) || seen.has(k as ColKey)) continue;
+      out.push(k as ColKey); seen.add(k as ColKey);
+    }
+  }
+  // Відсутні в збереженому — на типове місце: за найближчим уже поставленим сусідом зліва.
+  def.forEach((k, i) => {
+    if (seen.has(k)) return;
+    let at = PINNED_COLS.length;
+    for (let j = i - 1; j >= 0; j--) {
+      const p = out.indexOf(def[j]);
+      if (p >= 0) { at = Math.max(p + 1, PINNED_COLS.length); break; }
+    }
+    out.splice(at, 0, k); seen.add(k);
+  });
+  return out;
+}
+
+/** Упорядковує список колонок за збереженим порядком. Єдине місце, де порядок застосовується. */
+export function applyColOrder<T extends { key: ColKey }>(cols: T[], order: readonly ColKey[]): T[] {
+  const pos = new Map<ColKey, number>(normalizeColOrder(order).map((k, i) => [k, i]));
+  return [...cols].sort((a, b) => (pos.get(a.key) ?? 0) - (pos.get(b.key) ?? 0));
+}
+
+/**
+ * Перемістити колонку `from` НА МІСЦЕ `to` (перетягування): `from` стає на індекс,
+ * який займала `to`, решта зсувається. Закріплену не рухаємо й на її місце не ставимо —
+ * повертається нормалізований порядок без змін.
+ */
+export function moveCol(order: readonly ColKey[], from: ColKey, to: ColKey): ColKey[] {
+  const cur = normalizeColOrder(order);
+  if (from === to || isPinnedCol(from) || isPinnedCol(to)) return cur;
+  const i = cur.indexOf(from), j = cur.indexOf(to);
+  if (i < 0 || j < 0) return cur;
+  cur.splice(i, 1);
+  cur.splice(j, 0, from);
+  return cur;
+}
+
+/**
+ * Крок ↑/↓ (клавіатура, телефон): на місце СУСІДНЬОЇ ПОКАЗАНОЇ колонки. Сховані
+ * колонки між ними не рахуються — інакше кнопка «нічого не робила б» кілька натискань
+ * поспіль. `visible` — показані колонки в поточному порядку.
+ */
+export function moveColStep(order: readonly ColKey[], key: ColKey, dir: -1 | 1, visible: readonly ColKey[]): ColKey[] {
+  const i = visible.indexOf(key);
+  const to = i < 0 ? undefined : visible[i + dir];
+  return to == null ? normalizeColOrder(order) : moveCol(order, key, to);
+}
+
+export const COL_ORDER_LS = "rptTableColOrder";
+export const colOrderStorageKey = (userId: number | null | undefined): string =>
+  userId != null ? `${COL_ORDER_LS}:${String(userId)}` : COL_ORDER_LS;
+
+export function readColOrder(store: ColsStore | null, userId: number | null | undefined): ColKey[] {
+  try {
+    if (!store) return defaultColOrder();
+    return normalizeColOrder(JSON.parse(store.getItem(colOrderStorageKey(userId)) || "null"));
+  } catch {
+    return defaultColOrder();
+  }
+}
+
+/**
+ * Пише ЛИШЕ особистий ключ порядку; ключ вибору колонок не чіпає. Порядок, що
+ * збігається з типовим, ключ ПРИБИРАЄ: людина, яка скинула порядок, далі йде за
+ * реєстром, а не за застиглою копією сьогоднішнього типового.
+ */
+export function writeColOrder(store: ColsStore | null, userId: number | null | undefined, order: readonly ColKey[]): boolean {
+  try {
+    if (!store) return false;
+    const key = colOrderStorageKey(userId);
+    const norm = normalizeColOrder(order);
+    if (norm.join() === defaultColOrder().join() && store.removeItem) store.removeItem(key);
+    else store.setItem(key, JSON.stringify(norm));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** «Скинути до типових» для порядку — порядок реєстру, новою копією. */
+export const resetColOrder = (): ColKey[] => defaultColOrder();
 
 /**
  * СОРТУВАННЯ. `null` — це «даних немає», і воно ЗАВЖДИ внизу, у будь-якому

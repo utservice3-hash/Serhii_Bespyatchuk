@@ -13,7 +13,8 @@
  */
 
 /**
- * ЧОТИРИ СТАНИ ДЖЕРЕЛА + `null`, і жоден не зводиться в інший.
+ * ЧОТИРИ СТАНИ ДЖЕРЕЛА + `null`, і жоден не зводиться в інший. З 27.10.2026 — П'ЯТЬ:
+ * додано `elogist` (окремий канал, не реклама UTS).
  *
  * 🔴 ЩО ТУТ БУЛО ДО 24.08.2026. Стояло `'undef' → null`, «як і невизначена
  * новизна». Разом із тим, що чип малювався лише для `ad`/`leadgen`, це давало
@@ -31,11 +32,19 @@
  * «не показали», ніж «показали не тим станом»: нове значення в ядрі має спершу
  * зламати `#174c` (catch-all), а не тихо прикинутись відомим.
  */
-export type DealSourceState = "ad" | "leadgen" | "other" | "undef" | null;
+export type DealSourceState = "ad" | "leadgen" | "elogist" | "other" | "undef" | null;
+
+/**
+ * 🟣 КАНАЛИ `deals.lead_channel` — ЧОТИРИ з 27.10.2026 (рішення власника: eLogist окремо від
+ * реклами UTS, означення — `core/elogist.ts`). Тип у одному місці, щоб компілятор сам знайшов
+ * кожен розклад, який досі знає лише три.
+ */
+export type LeadChannel = "ad" | "leadgen" | "elogist" | "other";
 
 export const sourceOf = (v: string | null): DealSourceState =>
   v === "ad" ? "ad"
     : v === "leadgen" ? "leadgen"
-      : v === "other" ? "other"
-        : v === "undef" ? "undef"
-          : null;
+      : v === "elogist" ? "elogist"
+        : v === "other" ? "other"
+          : v === "undef" ? "undef"
+            : null;

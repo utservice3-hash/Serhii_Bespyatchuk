@@ -13,6 +13,13 @@ import { todayKyiv } from "../periodRules";
 import { FirstTouchSettingsCard } from "./FirstTouchSettingsCard";
 import { MissedNormCard } from "./MissedCallsTzBlocks";
 import { Toggle } from "../widgets";
+import { OrgTeamsCard } from "./OrgTeams";
+
+/** 👥 Відділи дашборду (27.10.2026) — та сама картка, що в режимі «Редагувати» орг-структури (`OrgTeams.tsx`). */
+function OrgTeamsBlock() {
+  const toast = useToast();
+  return <div style={{ marginTop: 14 }}><OrgTeamsCard toast={toast} /></div>;
+}
 
 /** Хто ставить ціль пропущених — ті самі ролі, що на сервері (`LEADERSHIP_ROLES`, `missedNoCallbackRules.ts`). */
 const MISSED_NORM_ROLES: ReadonlySet<string> = new Set(["admin", "opdir", "ceo", "kvp"]);
@@ -59,6 +66,8 @@ const RAW_PERMS: { key: string; label: string; hint?: string }[] = [
   { key: "view_cashflow", label: "Бачити кешфлоу (Виписка)", hint: "помісячний рух коштів; admin + Фінансист" },
   { key: "export_bank_statement", label: "Вивантажувати виписку у форматі банку (CSV)", hint: "файл з реквізитами контрагентів; бухгалтерія, фінансист, керівництво" },
   { key: "create_claim", label: "Кнопка «Проблемний клієнт» у дебіторці", hint: "створює претензію в «Бізнес-асистенті»; керівництво і фінансист" },
+  { key: "edit_org", label: "Редагувати орг структуру", hint: "блоки, керівники, переміщення людей (змінює команду людини); адмін, HR, бізнес-асистент" },
+  { key: "manage_teams", label: "Керувати командами дашборду", hint: "створювати, перейменовувати, зʼєднувати з Kommo й архівувати команди; команда людини без Kommo; керівництво й HR" },
   { key: "view_all_1x1", label: "Наскрізний доступ до 1×1", hint: "усі типи/люди/історія/аналітика Ван-ту-ван; HR/СЕО/ОД" },
   { key: "edit_1x1_forms", label: "Редагувати питання 1×1", hint: "керувати наборами питань Ван-ту-ван у Налаштуваннях" },
 ];
@@ -121,6 +130,7 @@ export default function SettingsSection({ role, roleKey, teams, syncStatus, sync
       {sub === "Загальні" && MISSED_NORM_ROLES.has(roleKey ?? "") && <MissedNormCard />}
       {sub === "Користувачі" && <UsersTab teams={teams} isAdminUx={isAdminUx} />}
       {sub === "Команди" && <TeamsTab isAdminUx={isAdminUx} />}
+      {sub === "Команди" && <OrgTeamsBlock />}
       {sub === "Ролі та доступи" && <RolesTab />}
       {sub === "Архів" && <ArchiveTab />}
       {sub === "Журнал змін" && <AuditTab />}

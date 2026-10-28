@@ -15,6 +15,8 @@ import { teamAtSql, teamOnDateSql, teamJoinSql } from "./teamAt.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
 import { FC_PIPELINE_IDS } from "./moneyBuckets.js";
+import { elogistMarkSql, notElogistSql } from "./elogist.js";
+import type { LeadChannel } from "./dealSourceState.js";
 
 /**
  * ЄДИНЕ місце в проєкті з SQL по НЕ-грошових бізнес-метриках (гроші — `core/money.ts`).
@@ -176,10 +178,18 @@ export const adTouchGate = (mode: PriorPaidMode = "correlated"): string => `(
 
 export const AD_TOUCH_GATE = adTouchGate("correlated");
 
+/**
+ * 🟣 eLogist НЕ Є РЕКЛАМОЮ UTS (рішення власника 27.10.2026). Виключення стоїть ОКРЕМИМ
+ * доданком на ВЕСЬ предикат — з тієї самої причини, що й гейт дотику вище: шляхів у
+ * «рекламу» два (`lead_channel='ad'` і `client_source ∈ adSources`), і eLogist-лід із
+ * `client_source='uts.ua'` чи cpc-міткою пройшов би другим. Означення — `core/elogist.ts`.
+ * Тримає `#2491b`.
+ */
 export const adDealSqlMode = (srcRef: string, mode: PriorPaidMode): string =>
   `((d.client_source = ANY(${srcRef}) OR d.lead_channel = 'ad')
     AND COALESCE(d.client_source, '') NOT ILIKE '%реактив%'
-    AND ${adTouchGate(mode)})`;
+    AND ${adTouchGate(mode)}
+    AND ${notElogistSql("d")})`;
 
 export const adDealSql = (srcRef: string): string => adDealSqlMode(srcRef, "correlated");
 
@@ -369,7 +379,7 @@ export interface FunnelWeekRow {
   stage: string;
   bucket: string; // YYYY-MM-DD (день / понеділок тижня / 1-е місяця)
   deals: number;
-  channel?: "ad" | "leadgen" | "other"; // лише коли byChannel=true (BE-1)
+  channel?: LeadChannel; // лише коли byChannel=true (BE-1)
 }
 
 // Спільний вираз бакета за подією стадії (день / тиждень-Пн / місяць-1).
@@ -412,7 +422,7 @@ export async function funnelWeekly(s: MetricScope, granularity: "day" | "week" |
   );
   return r.rows.map((x) => ({
     stage: x.stage, bucket: x.bucket, deals: Number(x.deals),
-    ...(byChannel ? { channel: (x.channel as "ad" | "leadgen" | "other") ?? "other" } : {}),
+    ...(byChannel ? { channel: (x.channel as LeadChannel) ?? "other" } : {}),
   }));
 }
 
@@ -422,7 +432,7 @@ export interface FunnelWeekMgrRow {
   stage: string;
   bucket: string; // YYYY-MM-DD (день / понеділок тижня / 1-е місяця, київський)
   deals: number;
-  channel?: "ad" | "leadgen" | "other"; // лише коли byChannel=true (BE-1)
+  channel?: LeadChannel; // лише коли byChannel=true (BE-1)
 }
 
 /**
@@ -457,11 +467,11 @@ export async function funnelWeeklyByManager(s: MetricScope, granularity: "day" |
   );
   return r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, stage: x.stage, bucket: x.bucket, deals: Number(x.deals),
-    ...(byChannel ? { channel: (x.channel as "ad" | "leadgen" | "other") ?? "other" } : {}),
+    ...(byChannel ? { channel: (x.channel as LeadChannel) ?? "other" } : {}),
   }));
 }
 
-export interface LeadsTakenRow { bucket: string; deals: number; channel?: "ad" | "leadgen" | "other" }
+export interface LeadsTakenRow { bucket: string; deals: number; channel?: LeadChannel }
 
 /**
  * «Взято лідів» SINGLE-ANCHOR — кожна угода РАЗ, за ПЕРШИМ входом у «Взято в роботу»
@@ -504,7 +514,7 @@ export async function leadsTakenByBucket(s: MetricScope, granularity: "day" | "w
   );
   return r.rows.map((x) => ({
     bucket: x.bucket, deals: Number(x.deals),
-    ...(byChannel ? { channel: (x.channel as "ad" | "leadgen" | "other") ?? "other" } : {}),
+    ...(byChannel ? { channel: (x.channel as LeadChannel) ?? "other" } : {}),
   }));
 }
 
@@ -514,7 +524,10 @@ export interface CreatedBucketRow { bucket: string; deals: number }
  * Рядок розколу СТВОРЕНИХ — **ДВІ НЕЗАЛЕЖНІ ПАРТИЦІЇ ОДНОГО НАБОРУ**.
  *
  *   новизна : `newCount + repeatCount + undefCount   == created`
- *   джерело : `adCount + leadgenCount + otherCount + noChannelCount == created`
+ *   джерело : `adCount + leadgenCount + elogistCount + otherCount + noChannelCount == created`
+ *
+ * 🟣 З 27.10.2026 кошиків джерела П'ЯТЬ: `elogistCount` — окремий канал eLogist (рішення
+ * власника, `core/elogist.ts`). До того ці угоди сиділи в `adCount`.
  *
  * 🔴 ДЖЕРЕЛО СТАЛО ПАРТИЦІЄЮ 24.08.2026 (рішення власника), і це зміна ЧИТАННЯ,
  * а не чисел. Раніше віддавались лише `adCount`/`leadgenCount` — дві з чотирьох
@@ -542,6 +555,7 @@ export interface CreatedSplitRow {
   undefCount: number;
   adCount: number;
   leadgenCount: number;
+  elogistCount: number;
   otherCount: number;
   noChannelCount: number;
   /**
@@ -561,17 +575,18 @@ export interface CreatedSplitRow {
   sourceByKlass: Record<"new" | "rep" | "undef", SourceCounts>;
 }
 
-/** Розклад джерела всередині одного класу новизни. `created` — Σ чотирьох. */
+/** Розклад джерела всередині одного класу новизни. `created` — Σ п'яти. */
 export interface SourceCounts {
   created: number;
   adCount: number;
   leadgenCount: number;
+  elogistCount: number;
   otherCount: number;
   noChannelCount: number;
 }
 export interface CreatedSplitBucketRow {
   bucket: string; created: number; newCount: number; repeatCount: number; undefCount: number;
-  adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
+  adCount: number; leadgenCount: number; elogistCount: number; otherCount: number; noChannelCount: number;
 }
 
 // Дженерик/порожні client_key, що НЕ беруть участі в матчингу історії клієнта
@@ -690,10 +705,13 @@ export function createdKlassCase(ops: {
  * не зсипається в «інше»: невідоме має читатись як невідоме.
  */
 export function dealSourceCase(channel: string): string {
+  // 🟣 'elogist' — власна гілка (рішення власника 27.10.2026): без неї eLogist мовчки осів би
+  // в catch-all «без джерела», і партиція сходилась би, ховаючи цілий канал.
   return `
   CASE
     WHEN ${channel} = 'ad' THEN 'ad'
     WHEN ${channel} = 'leadgen' THEN 'leadgen'
+    WHEN ${channel} = 'elogist' THEN 'elogist'
     WHEN ${channel} IS NULL THEN 'undef'
     ELSE 'other'
   END`;
@@ -734,10 +752,13 @@ export const dealSourceSql = (alias = "d"): string => dealSourceCase(`${alias}.l
 // Пріоритет каналу-першим = правило реатрибуції «останній дотик» («реактивація б'є мітки»):
 //   ad → реклама · leadgen → лідоген · other+історія(has_prior) АБО декларація «Постійні» →
 //   постійний · решта (other без історії, невідома декларація) → невизн. Σ 4 категорій = total.
+// 🟣 eLogist — власна категорія (27.10.2026): до того ці авто йшли в «рекл», а без гілки тут
+// впали б у «постійний»/«невизн» за декларацією — тобто отримали б чужий підпис.
 const SOURCE_KLASS_CASE = `
   CASE
     WHEN lead_channel = 'ad' THEN 'ad'
     WHEN lead_channel = 'leadgen' THEN 'leadgen'
+    WHEN lead_channel = 'elogist' THEN 'elogist'
     WHEN lead_channel = 'other' AND vkey IS NOT NULL AND has_prior THEN 'repeat'
     WHEN sales_channel = 'Постійні клієнти' THEN 'repeat'
     ELSE 'undef'
@@ -853,8 +874,8 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   // 🔀 Зріз джерела всередині класу — ЧОТИРИ `FILTER` на кожен із трьох класів.
   // Пари (klass, source) перелічені ЯВНО, без циклу по рядку SQL: перелік має
   // збігатися з `dealSourceCase`, і `#212` це звіряє на живих даних.
-  const bySrc = (k: string): string => ["ad", "leadgen", "other", "undef"]
-    .map((s, i) => `COUNT(*) FILTER (WHERE klass = '${k}' AND source = '${s}') AS ${k}_${["ad", "lg", "oth", "nch"][i]}`)
+  const bySrc = (k: string): string => ["ad", "leadgen", "elogist", "other", "undef"]
+    .map((s, i) => `COUNT(*) FILTER (WHERE klass = '${k}' AND source = '${s}') AS ${k}_${["ad", "lg", "el", "oth", "nch"][i]}`)
     .join(",\n            ");
   const r = await pool.query<Record<string, string> & { manager_id: number; name: string; team_id: number | null }>(
     `WITH ${cte}
@@ -865,6 +886,7 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
             COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count,
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
             COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
+            COUNT(*) FILTER (WHERE source = 'elogist') AS elogist_count,
             COUNT(*) FILTER (WHERE source = 'other') AS other_count,
             COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count,
             ${bySrc("new")},
@@ -877,13 +899,13 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   );
   const slice = (x: Record<string, string>, k: string): SourceCounts => {
     const n = (suf: string): number => Number(x[`${k}_${suf}`]);
-    const ad = n("ad"), lg = n("lg"), oth = n("oth"), nch = n("nch");
-    return { created: ad + lg + oth + nch, adCount: ad, leadgenCount: lg, otherCount: oth, noChannelCount: nch };
+    const ad = n("ad"), lg = n("lg"), el = n("el"), oth = n("oth"), nch = n("nch");
+    return { created: ad + lg + el + oth + nch, adCount: ad, leadgenCount: lg, elogistCount: el, otherCount: oth, noChannelCount: nch };
   };
   return r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, teamId: x.team_id,
     created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
-    adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count),
+    adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count), elogistCount: Number(x.elogist_count),
     otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
     sourceByKlass: { new: slice(x, "new"), rep: slice(x, "repeat"), undef: slice(x, "undef") },
   }));
@@ -902,7 +924,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
     : `to_char(date_trunc('${granularity === "month" ? "month" : "week"}', ${col})::date, 'YYYY-MM-DD')`;
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params, bucketExpr);
-  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; other_count: string; no_channel_count: string }>(
+  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; elogist_count: string; other_count: string; no_channel_count: string }>(
     `WITH ${cte}
      SELECT bucket,
             COUNT(*) AS created,
@@ -911,6 +933,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
             COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count,
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
             COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
+            COUNT(*) FILTER (WHERE source = 'elogist') AS elogist_count,
             COUNT(*) FILTER (WHERE source = 'other') AS other_count,
             COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count
        FROM final
@@ -919,7 +942,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
   );
   return r.rows.map((x) => ({
     bucket: x.bucket, created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
-    adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count),
+    adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count), elogistCount: Number(x.elogist_count),
     otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
   }));
 }
@@ -1377,16 +1400,17 @@ export async function newRepeatTotals(s: MetricScope): Promise<NewRepeatAgg> {
 //  • «Дохід»     = дата отримання коштів (`core/money.receivedByChannel`, канал 'leadgen').
 
 export interface DispatchRow { ym: string; deals: number; revenue: number }
-// Розбивка відправлених авто за ДЖЕРЕЛОМ (постійний / лідоген / реклама / невизн).
-// Σ(repeat+leadgen+ad+undef) = total авто того ж скоупу/бакета (партиція за SOURCE_KLASS_CASE).
-export interface DispatchSplit { repeat: number; leadgen: number; ad: number; undef: number }
+// Розбивка відправлених авто за ДЖЕРЕЛОМ (постійний / лідоген / реклама / eLogist / невизн).
+// Σ(repeat+leadgen+ad+elogist+undef) = total авто того ж скоупу/бакета (партиція за SOURCE_KLASS_CASE).
+export interface DispatchSplit { repeat: number; leadgen: number; ad: number; elogist: number; undef: number }
 const DISPATCH_SPLIT_SELECT = `
        COUNT(*) FILTER (WHERE klass = 'repeat')  AS repeat_c,
        COUNT(*) FILTER (WHERE klass = 'leadgen') AS leadgen_c,
        COUNT(*) FILTER (WHERE klass = 'ad')      AS ad_c,
+       COUNT(*) FILTER (WHERE klass = 'elogist') AS elogist_c,
        COUNT(*) FILTER (WHERE klass = 'undef')   AS undef_c`;
-const dispatchSplitOf = (x: { repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }): DispatchSplit =>
-  ({ repeat: Number(x.repeat_c), leadgen: Number(x.leadgen_c), ad: Number(x.ad_c), undef: Number(x.undef_c) });
+const dispatchSplitOf = (x: { repeat_c: string; leadgen_c: string; ad_c: string; elogist_c: string; undef_c: string }): DispatchSplit =>
+  ({ repeat: Number(x.repeat_c), leadgen: Number(x.leadgen_c), ad: Number(x.ad_c), elogist: Number(x.elogist_c), undef: Number(x.undef_c) });
 /**
  * «Поїхали» помісячно за `load_at` (Дата загрузки = відправлення): угоди Повного
  * циклу з проставленою `load_at`, опційно фільтр каналу (`channel`). Сума — signed
@@ -1429,7 +1453,7 @@ export async function dispatchedByLoadBucket(s: MetricScope, granularity: "day" 
   const bucketExpr = `to_char(date_trunc('${granularity}', (d.load_at ${KYIV})), 'YYYY-MM-DD')`;
   const params: unknown[] = [];
   const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, bucketExpr, carryPrice: true, channel: channel ?? null });
-  const r = await pool.query<{ ym: string; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
+  const r = await pool.query<{ ym: string; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; elogist_c: string; undef_c: string }>(
     `WITH ${cte}
      SELECT f.bucket AS ym, COUNT(*)::int AS deals, COALESCE(SUM(f.price),0) AS revenue,${DISPATCH_SPLIT_SELECT}
        FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
@@ -1542,7 +1566,7 @@ export async function dispatchedByManager(s: MetricScope, opts: { requestType?: 
   // `requestType` — лише звуження (номінація «міжнародні», `core/nominations.ts`); Звіт кличе без нього.
   const params: unknown[] = [];
   const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, carryPrice: true, requestType: opts.requestType ?? null });
-  const r = await pool.query<{ manager_id: number; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
+  const r = await pool.query<{ manager_id: number; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; elogist_c: string; undef_c: string }>(
     `WITH ${cte}
      SELECT f.manager_id, COUNT(*) deals, COALESCE(SUM(f.price),0) revenue,${DISPATCH_SPLIT_SELECT}
        FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
@@ -1556,7 +1580,7 @@ export async function dispatchedByManagerBucket(s: MetricScope, granularity: "da
   const bucketExpr = `to_char(date_trunc('${granularity}', (d.load_at ${KYIV}))::date, 'YYYY-MM-DD')`;
   const params: unknown[] = [];
   const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, bucketExpr, carryPrice: true });
-  const r = await pool.query<{ manager_id: number; bucket: string; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
+  const r = await pool.query<{ manager_id: number; bucket: string; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; elogist_c: string; undef_c: string }>(
     `WITH ${cte}
      SELECT f.manager_id, f.bucket, COUNT(*) deals, COALESCE(SUM(f.price),0) revenue,${DISPATCH_SPLIT_SELECT}
        FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
@@ -2053,9 +2077,31 @@ const ADZONE_TAKEN = [69693652, 69693656, 69693660, 68671948, 68065144, 67888780
  * (`traf_type<>'organic'`) — інакше adDealSql змітав би ~1.7к органічних угод
  * у знаменник (доведено 6.3). `srcRef` — плейсхолдер параметра з adSources.
  */
+// 🟣 Перша гілка (веб-платний) — теж без eLogist: заявка з сайту eLogist може нести cpc-мітку
+// ЙОГО кампанії, і без цього доданка вона знову потрапила б у знаменник конверсії реклами UTS.
 const paidAdSql = (srcRef: string, mode: PriorPaidMode = "correlated"): string =>
-  `((d.traf_type = 'cpc' OR d.utm_medium = 'cpc' OR d.utm_campaign IS NOT NULL)
-    OR (${adDealSqlMode(srcRef, mode)} AND COALESCE(lower(d.traf_type), '') <> 'organic'))`;
+  `(((d.traf_type = 'cpc' OR d.utm_medium = 'cpc' OR d.utm_campaign IS NOT NULL)
+    OR (${adDealSqlMode(srcRef, mode)} AND COALESCE(lower(d.traf_type), '') <> 'organic'))
+    AND ${notElogistSql("d")})`;
+
+/**
+ * 🟣 ЛІДИ eLogist, СТВОРЕНІ В ПЕРІОДІ (рішення власника 27.10.2026) — рядок на екрані «Реклама».
+ *
+ * Множина — угоди з ознакою eLogist (`core/elogist.elogistMarkSql`) у Кваліфікації АБО в Повному
+ * циклі: лід переїжджає з Кваліфікації в FC ТІЄЮ САМОЮ угодою, і рахувати лише поточну
+ * Кваліфікацію означало б губити саме ті ліди, що дійшли до роботи. Анкер — створення, за Києвом,
+ * обидва кінці включно. Бюджету eLogist НЕМАЄ (джерела витрат немає), тож ні ціни ліда, ні ROMI
+ * тут не рахується — лише кількість.
+ */
+export async function elogistLeadsCreated(s: { from?: string | null; to?: string | null }): Promise<number> {
+  const params: unknown[] = [[...QUALIFICATION_PIPELINES, ...FC_PIPELINE_IDS]];
+  const conds = ["d.pipeline_id = ANY($1::bigint[])", elogistMarkSql("d")];
+  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+  const r = await pool.query<{ n: string }>(
+    `SELECT COUNT(*)::int AS n FROM deals d WHERE ${conds.join(" AND ")}`, params);
+  return Number(r.rows[0]?.n ?? 0);
+}
 
 export interface ConversionAdsRow {
   ym: string;
