@@ -204,6 +204,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/client-limits/:id/keep": "«лишити ліміт» — лише Сергій (ТЗ §7)",
   "POST /api/client-limits/set": "задати ліміт боржнику — лише Сергій (ТЗ §6.4)",
   "POST /api/client-limits/import": "перенос лімітів — лише Сергій (ТЗ §6.3)",
+  "GET /api/client-limits/search?q=юмо": "пошук клієнта по базі для «＋ Додати клієнта» — лише Сергій (задача 7137)",
+  "POST /api/client-limits/add": "ліміт клієнту з бази без боргу — лише Сергій (задача 7137)",
 };
 
 const GHOST = "__zzz_neisnuyucha_cil_9999__";
