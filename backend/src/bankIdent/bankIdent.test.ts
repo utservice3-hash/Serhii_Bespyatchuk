@@ -289,3 +289,4 @@ test("#2915 ФРОНТ «ВИПИСКИ»: правила = бекенд бай�
   assert.match(lay, /: item\.key === "bank" \? bankIdentCount : 0;/, "🔴 бейдж «чекають №» біля «Виписка» не підключено");
   assert.match(FRONT("bankIdent/dashboard.ts"), /if \(token\) headers\.set\("Authorization", `Bearer \$\{token\}`\);/, "🔴 клієнт пакета без нашого токена");
 });
+

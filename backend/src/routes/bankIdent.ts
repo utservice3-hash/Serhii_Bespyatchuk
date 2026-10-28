@@ -118,14 +118,29 @@ r.post("/state", async (req: AuthedRequest, res) => {
   res.json({ now: new Date(at).toISOString(), holidays: [...(await engine.rules()).holidays], states });
 });
 
+/**
+ * [дашборд 28.10] Фільтр і лічильники № рахунку йдуть за вибраною в «Виписці» компанією (чипи рахунків = `company`):
+ * без цього «З номером» на чипі «ФОП (Моно)» показував платіж ФОП (Приват). Без `company` — усі рахунки правила.
+ * Бейдж у меню від компанії НЕ залежить — меню питає без неї.
+ */
+async function scopeAccountIds(req: AuthedRequest): Promise<number[]> {
+  const company = typeof req.query.company === "string" ? req.query.company : "";
+  if (!company) return engine.accountIds;
+  if (!/^[a-z_]{1,32}$/.test(company)) throw new HttpError(400, "Некоректна компанія.");
+  const r = await pool.query<{ id: number }>(`SELECT id FROM bank_accounts WHERE company = $1 AND id = ANY($2::int[])`, [company, engine.accountIds]);
+  return r.rows.map((x) => Number(x.id));
+}
+
 r.get("/counts", async (req: AuthedRequest, res) => {
   personOf(req);
   const rights = await engine.rightsOf(req.user!);
+  const scope = await scopeAccountIds(req);
   const { waiting } = await engine.sweepOpen();
   const rules = await engine.rules();
-  const wait = waiting.filter((t) => !isOwnTransfer(t, rules)).length;
-  const totals = await statusTotals(pool, engine.accountIds);
-  res.json({ wait, identified: totals.identified, not_client: totals.not_client, unidentified: totals.unidentified, badge: rights.tag ? wait : 0 });
+  const waitAll = waiting.filter((t) => !isOwnTransfer(t, rules));
+  const wait = waitAll.filter((t) => scope.includes(t.accountId)).length;
+  const totals = await statusTotals(pool, scope);
+  res.json({ wait, identified: totals.identified, not_client: totals.not_client, unidentified: totals.unidentified, badge: rights.tag ? waitAll.length : 0 });
 });
 
 r.get("/list", async (req: AuthedRequest, res) => {
@@ -135,15 +150,16 @@ r.get("/list", async (req: AuthedRequest, res) => {
   const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
   const offset = Math.max(0, Number(req.query.offset) || 0);
   const rights = await engine.rightsOf(req.user!);
+  const scope = await scopeAccountIds(req);
   const at = engine.now();
   const rules = await engine.rules();
   const { waiting } = await engine.sweepOpen(at);
   let ids: number[], total: number;
   if (status === "wait") {
-    const w = waiting.filter((t) => !isOwnTransfer(t, rules));
+    const w = waiting.filter((t) => !isOwnTransfer(t, rules) && scope.includes(t.accountId));
     total = w.length; ids = w.slice(offset, offset + limit).map((t) => t.id);
   } else {
-    ({ ids, total } = await idsByStatus(pool, status as StoredStatus, engine.accountIds, limit, offset));
+    ({ ids, total } = await idsByStatus(pool, status as StoredStatus, scope, limit, offset));
   }
   const txs = await visible(req.user!, await bankIdentOptions.txs.byIds(ids));
   const byId = new Map(txs.map((t) => [Number(t.id), t]));
