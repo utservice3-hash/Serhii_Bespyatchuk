@@ -20,15 +20,15 @@ import { workBetween } from '../../shared/identDeadline';
 import { esc, fDT, fDue, fDueAt, fLeft, fWDT } from './format';
 import { BankIdentError, type BankIdentApi, type Clock } from './types';
 
-type Open = null | 'confirm' | 'fix' | 'unid' | 'nc' | 'hist';
+type Open = null | 'confirm' | 'fix' | 'unid' | 'nc' | 'hist' | 'reset'; // reset — [дашборд 28.10]
 export interface IdentLineUi {
   open: Open;
-  no: string; fixNo: string; fixWhy: string; unidWhy: string; ncReason: NcReason; ncNote: string;
+  no: string; fixNo: string; fixWhy: string; unidWhy: string; ncReason: NcReason; ncNote: string; resetWhy: string;
   err: string; info: string; busy: boolean;
   hist: IdentEvent[] | null; histErr: string;
 }
 export const newIdentUi = (): IdentLineUi => ({
-  open: null, no: '', fixNo: '', fixWhy: '', unidWhy: '', ncReason: NC_REASONS[0], ncNote: '',
+  open: null, no: '', fixNo: '', fixWhy: '', unidWhy: '', ncReason: NC_REASONS[0], ncNote: '', resetWhy: '',
   err: '', info: '', busy: false, hist: null, histErr: '',
 });
 
@@ -52,6 +52,8 @@ export function histLineHtml(e: IdentEvent): string {
     case 'unidentify': return `${who(e.by)} — визнано неідентифікованим (був № ${no(e.fromNo)}) · «${esc(e.reason)}»`;
     case 'not_client': return `${who(e.by)} — позначено «не оплата клієнта»: ${esc(e.reason)}${e.note ? ' — ' + esc(e.note) : ''}`;
     case 'expired': return '<span class="bi-sys">Строк минув — номер не вписано. Неідентифікований остаточно.</span>';
+    // [дашборд 28.10] скидання вписаного номера (погодив Сергій)
+    case 'reset': return `${who(e.by)} — скинуто № ${no(e.fromNo)}, платіж знову чекає номер · «${esc(e.reason)}»`;
     default: return '';
   }
 }
@@ -76,7 +78,9 @@ export function identLineHtml(s: IdentState, ui: IdentLineUi, now: number, hol?:
     case 'identified':
       h = `<span class="bi-pill bi-ok" title="Номер зафіксовано. Змінити може лише фінансист.">✓ № <span class="bi-no">${esc(s.invoiceNo)}</span></span>`
         + `<span class="bi-by">${by}${s.changed ? ' · змінено' : ''}</span>${histLink(s, ui)}`;
-      if (s.can.fix && ui.open !== 'fix' && ui.open !== 'unid') h += `<span class="bi-acts">${B('fix', '✎ Змінити', '', ui)}${B('unid', 'Визнати неідентифікованим', 'bi-warn', ui)}</span>`;
+      if ((s.can.fix || s.can.reset) && ui.open !== 'fix' && ui.open !== 'unid' && ui.open !== 'reset') {
+        h += `<span class="bi-acts">${s.can.fix ? B('fix', '✎ Змінити', '', ui) : ''}${s.can.reset ? B('reset', '↺ Скинути №', '', ui) : ''}${s.can.fix ? B('unid', 'Визнати неідентифікованим', 'bi-warn', ui) : ''}</span>`;
+      }
       break;
     case 'unidentified':
       h = `<span class="bi-pill bi-bad">Неідентифікований</span><span class="bi-by">${s.unidKind === 'finance'
@@ -97,13 +101,14 @@ export function identLineHtml(s: IdentState, ui: IdentLineUi, now: number, hol?:
       break;
     }
   }
-  if (ui.open !== 'fix' && ui.open !== 'unid' && ui.open !== 'nc') h += errHtml(ui.err);
+  if (ui.open !== 'fix' && ui.open !== 'unid' && ui.open !== 'nc' && ui.open !== 'reset') h += errHtml(ui.err);
   h += infoHtml(ui.info);
 
   let box = '';
   if (ui.open === 'hist') box = histBox(ui);
   else if (ui.open === 'fix' && s.status === 'identified') box = fixBox(s, ui);
   else if (ui.open === 'unid' && s.status === 'identified') box = unidBox(s, ui);
+  else if (ui.open === 'reset' && s.status === 'identified') box = resetBox(s, ui);
   else if (ui.open === 'nc' && s.status === 'wait') box = ncBox(ui);
   return `<div class="bi-line">${h}</div>${box}`;
 }
@@ -128,6 +133,14 @@ function unidBox(s: IdentState, ui: IdentLineUi): string {
     + errHtml(ui.err)
     + `<div class="bi-frow">${B('unid-save', ui.busy ? 'Зберігаю…' : 'Визнати неідентифікованим', 'bi-warn bi-fill', ui)}${B('cancel', 'Скасувати', 'bi-ghost', ui)}</div></div>`;
 }
+/** [дашборд 28.10] «↺ Скинути №»: номер знімається, платіж знову «Чекає №» — менеджер впише правильний, поки строк не минув. */
+function resetBox(s: IdentState, ui: IdentLineUi): string {
+  return `<div class="bi-box"><div class="bi-fh">Скинути № рахунку <span class="bi-by">— платіж знову чекатиме номер, в історії лишиться, що номер скидали</span></div>`
+    + `<p>Номер <span class="bi-no">${esc(s.invoiceNo)}</span> зніметься, і менеджер зможе вписати правильний до кінця строку.</p>`
+    + `<div class="bi-frow"><label class="bi-grow">Причина<input class="bi-inp" data-bf="resetWhy" value="${esc(ui.resetWhy)}" placeholder="напр. менеджер помилилась у номері" maxlength="300"></label></div>`
+    + errHtml(ui.err)
+    + `<div class="bi-frow">${B('reset-save', ui.busy ? 'Зберігаю…' : 'Скинути №', 'bi-pri', ui)}${B('cancel', 'Скасувати', 'bi-ghost', ui)}</div></div>`;
+}
 function ncBox(ui: IdentLineUi): string {
   return `<div class="bi-box"><div class="bi-fh">Не оплата клієнта <span class="bi-by">— строк знімається, № не потрібен</span></div>`
     + `<div class="bi-frow"><label>Що це<select class="bi-sel" data-bf="ncReason">${NC_REASONS.map(x => `<option${x === ui.ncReason ? ' selected' : ''}>${x}</option>`).join('')}</select></label>`
@@ -141,7 +154,7 @@ export const expiredState = (s: IdentState): IdentState => ({ ...s, status: 'uni
 
 export interface IdentLineOptions {
   state: IdentState;
-  api: Pick<BankIdentApi, 'set' | 'fix' | 'unidentify' | 'notClient' | 'history'>;
+  api: Pick<BankIdentApi, 'set' | 'fix' | 'unidentify' | 'notClient' | 'history' | 'reset'>;
   /** Серверний час (clockFrom(now) з відповіді /state). */
   clock?: Clock;
   /** Свята з відповіді /state (зараз порожньо). */
@@ -223,6 +236,12 @@ export function mountIdentLine(el: HTMLElement, o: IdentLineOptions): IdentLineH
       if (e) { ui.err = e; render('unidWhy'); return; }
       void run(() => o.api.unidentify(s.txId, normText(ui.unidWhy), s.invoiceNo || ''));
     },
+    reset() { ui.open = 'reset'; ui.resetWhy = ''; ui.err = ''; ui.info = ''; render('resetWhy'); },
+    'reset-save'() {
+      const e = checkReason(ui.resetWhy);
+      if (e) { ui.err = e; render('resetWhy'); return; }
+      void run(() => o.api.reset(s.txId, normText(ui.resetWhy), s.invoiceNo || ''));
+    },
     nc() { ui.open = 'nc'; ui.err = ''; ui.info = ''; render('ncReason'); },
     'nc-save'() {
       const e = checkNotClient(ui.ncReason, ui.ncNote);
@@ -246,7 +265,7 @@ export function mountIdentLine(el: HTMLElement, o: IdentLineOptions): IdentLineH
       el.querySelectorAll('.bi-bad-b').forEach(x => x.classList.remove('bi-bad-b'));
     }
   };
-  const ENTER: Record<string, string> = { no: 'save', fixNo: 'fix-save', fixWhy: 'fix-save', unidWhy: 'unid-save', ncNote: 'nc-save' };
+  const ENTER: Record<string, string> = { no: 'save', fixNo: 'fix-save', fixWhy: 'fix-save', unidWhy: 'unid-save', ncNote: 'nc-save', resetWhy: 'reset-save' };
   const onKey = (e: KeyboardEvent) => {
     const k = (e.target as HTMLElement).dataset?.bf;
     if (e.key === 'Enter' && k && ENTER[k] && !ui.busy) { e.preventDefault(); act[ENTER[k]](); }

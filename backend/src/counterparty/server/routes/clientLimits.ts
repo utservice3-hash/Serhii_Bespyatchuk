@@ -8,25 +8,28 @@
  *   }));
  *   startCourtMonitor({ pool, youscore: ys });                       // server/courtMonitor.ts — раз на місяць
  *
- * Права: Сергій — змінює ліміт (з причиною), задає ліміт боржнику без ліміту, «лишає» ліміт після нової справи в суді;
+ * Права: Сергій — змінює ліміт (з причиною), задає ліміт боржнику без ліміту або клієнту з бази (/search, /add), «лишає» ліміт після нової справи в суді;
  * менеджер бачить своїх клієнтів, тім-лід — ще й команди (лише перегляд), бухгалтерія й керівники — усіх (без дій).
  * Нові умови менеджер подає через «Узгодження» (/api/counterparty) — тут лише читання.
  */
 import express, { Router } from 'express';
 import type { Pool } from 'pg';
-import { buildRows, canSeeLimit, cellsFor, isNoLimit, limitsBadge, parseLimitInput, type AnyRow, type LimitRow } from '../../shared/clientLimits.js';
+import { buildRows, canSeeLimit, cellsFor, clientQuery, isNoLimit, limitOfClient, limitsBadge, parseLimitInput, type AnyRow, type LimitRow } from '../../shared/clientLimits.js';
 import { FROM_LABEL, diffLines, seesRequests, sideLine, type CpRole, type CpUser, type Terms } from '../../shared/counterparty.js';
 import { DEFAULT_LAG, type Lag } from '../../shared/cpCalc.js';
 import { dayW, money } from '../../shared/cpFormat.js';
 import { monitorInfo } from '../courtMonitor.js';
 import { HttpError, defaultCpRoleOf, errorHandler, meOf, type AuthedRequest, type ReqUser } from '../cpRoles.js';
 import { addEvent, tx } from '../cpStore.js';
+import type { ClientDirectory } from '../clientDirectory.js';
 import type { DebtSource } from '../debtSource.js';
 import { addLimitEvent, getLimit, importLimit, insertSetLimit, listLimits, type ImportRow } from '../limitsStore.js';
 
 export interface ClientLimitsOptions {
   /** Борг і прострочка з дебіторки. */
   debts: DebtSource;
+  /** Клієнти бази для «＋ Додати клієнта» (задача 7137); немає — пошук і додавання відповідають 503. */
+  clients?: ClientDirectory;
   approverIds?: string[];
   roleOf?: (u: ReqUser) => CpRole | null;
   teamOf?: (u: ReqUser) => string[] | Promise<string[]>;
@@ -139,6 +142,44 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
         lid = await insertSetLimit(db, { debtorKey: key, name: d.name, kind: d.kind, members: d.members, limit: p.limit, days: p.days, from: p.from, managerId: d.managerId, managerName: d.managerName });
       }
       await addLimitEvent(db, lid, 'limitSet', u, `${money(p.limit)}, ${dayW(p.days)} ${FROM_LABEL[p.from]}\nПричина: ${p.reason}`);
+      return lid;
+    });
+    res.status(201).json(await rowOf(id));
+  });
+
+  // ---------- Сергій: клієнт із бази, якого немає в дебіторці (задача 7137) ----------
+  const directory = () => { if (!opts.clients) throw new HttpError(503, 'Пошук по базі клієнтів недоступний.'); return opts.clients; };
+  /** Пошук по всій базі за назвою або ЄДРПОУ / ІПН; limitId — уже діючий ліміт цього клієнта (за ключем або кодом). */
+  r.get('/search', async (req: AuthedRequest, res) => {
+    const u = await me(req); approver(u);
+    const q = clientQuery(String(req.query.q ?? ''));
+    if (!q) { res.json({ hits: [] }); return; }
+    const [hits, limits] = await Promise.all([directory().search(q), listLimits(pool, now())]);
+    res.json({ hits: hits.map(h => ({ key: h.key, name: h.name, codes: h.codes, managerId: h.managerId, managerName: h.managerName,
+      deals: h.deals, lastDealAt: h.lastDealAt, debtor: h.debtor, limitId: limitOfClient(limits, h) })) });
+  });
+  /** Ліміт клієнту з бази: ключ — його client_key, юрособи — його коди; коли стане боржником, дебіторка підхопить ліміт сама. */
+  r.post('/add', async (req: AuthedRequest, res) => {
+    const u = await me(req); approver(u);
+    const p = parseLimitInput(req.body); if ('error' in p) throw new HttpError(400, p.error);
+    const key = typeof (req.body || {}).clientKey === 'string' ? req.body.clientKey : '';
+    const h = key ? await directory().get(key) : null;
+    if (!h) throw new HttpError(404, 'Клієнта немає в базі — оновіть пошук.');
+    if (limitOfClient(await listLimits(pool, now()), h)) throw new HttpError(409, 'У цього клієнта вже є ліміт — відкрийте його в списку.');
+    const managerId = h.managerId || '0', managerName = h.managerName || 'без відповідального';
+    const id = await tx(pool, async db => {
+      const old = (await db.query('SELECT id, active FROM client_limits WHERE debtor_key = $1 FOR UPDATE', [key])).rows[0];
+      let lid: string;
+      if (old && old.active) throw new HttpError(409, 'У цього клієнта вже є ліміт — оновіть сторінку.');
+      if (old) {
+        await db.query(`UPDATE client_limits SET src = 'set', request_id = NULL, active = true, flag = NULL, limit_sum = $2, days = $3, count_from = $4,
+          manager_id = $5, manager_name = $6, name = $7, at = now(), updated_at = now() WHERE id = $1`, [old.id, p.limit, p.days, p.from, managerId, managerName, h.name]);
+        lid = String(old.id);
+      } else {
+        lid = await insertSetLimit(db, { debtorKey: key, name: h.name, kind: '', members: h.codes.map(code => ({ code, name: h.name })),
+          limit: p.limit, days: p.days, from: p.from, managerId, managerName });
+      }
+      await addLimitEvent(db, lid, 'limitSet', u, `${money(p.limit)}, ${dayW(p.days)} ${FROM_LABEL[p.from]}\nДодано з бази клієнтів${h.debtor ? '' : ' — боргу зараз немає'}\nПричина: ${p.reason}`);
       return lid;
     });
     res.status(201).json(await rowOf(id));

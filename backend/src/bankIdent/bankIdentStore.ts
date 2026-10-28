@@ -151,6 +151,20 @@ export async function updateUnidentify(q: Q, txId: number, expected: string, rea
   return rowOf(r.rows[0]);
 }
 
+/**
+ * [дашборд 28.10, погодив Сергій] Скинути вписаний № — платіж знову «Чекає №», менеджер впише правильний. Лише якщо номер
+ * той, що бачили на екрані (`expected`), і строк ще не минув (`deadline_at > now`). Попередній запис в історії лишається.
+ * false — номер уже інший / не вписаний / строк минув.
+ */
+export async function resetIdent(q: Q, txId: number, expected: string, reason: string, by: Person, now: number): Promise<boolean> {
+  const r = await q.query(
+    `DELETE FROM bank_tx_ident WHERE tx_id = $1 AND status = 'identified' AND invoice_no = $2 AND deadline_at > $3 RETURNING tx_id`,
+    [txId, expected, new Date(now)]);
+  if (!r.rows[0]) return false;
+  await addEvent(q, txId, 'reset', by, now, { fromNo: expected, reason });
+  return true;
+}
+
 export async function history(q: Q, txId: number): Promise<IdentEvent[]> {
   const r = await q.query(`SELECT ${EVENT_COLS} FROM bank_tx_ident_events WHERE tx_id = $1 ORDER BY at, id`, [txId]);
   return r.rows.map((x: R) => ({

@@ -13,7 +13,7 @@ import { HOUR, identDeadline } from './identDeadline.js';
 
 export type IdentStatus = 'wait' | 'identified' | 'not_client' | 'unidentified' | 'own';
 export type StoredStatus = 'identified' | 'not_client' | 'unidentified';
-export type IdentAct = 'set' | 'change' | 'unidentify' | 'not_client' | 'expired';
+export type IdentAct = 'set' | 'change' | 'unidentify' | 'not_client' | 'expired' | 'reset';
 export type UnidKind = 'expired' | 'finance';
 
 export interface Person { id: string; name: string; role: string }
@@ -39,7 +39,7 @@ export interface IdentState {
   /** Скільки записів в історії. */
   events: number;
   /** Що може поточний користувач — інтерфейс показує лише дозволене, сервер усе одно перевіряє. */
-  can: { set: boolean; fix: boolean; nc: boolean };
+  can: { set: boolean; fix: boolean; nc: boolean; reset?: boolean }; // reset — [дашборд 28.10]
 }
 
 export interface IdentEvent {
@@ -89,7 +89,7 @@ export interface TxLite {
 
 // ───────────── права ─────────────
 
-export type Right = 'tag_bank_invoice' | 'fix_bank_invoice' | 'mark_bank_not_client' | 'bank_out_comments';
+export type Right = 'tag_bank_invoice' | 'fix_bank_invoice' | 'mark_bank_not_client' | 'bank_out_comments' | 'reset_bank_invoice';
 
 /** Нові права для «Налаштування → Ролі та доступи». Адмін має все (рівень адміністратора). */
 export const RIGHTS: Record<Right, { label: string; roles: string[]; gives: string }> = {
@@ -107,6 +107,12 @@ export const RIGHTS: Record<Right, { label: string; roles: string[]; gives: stri
     label: 'Позначати «не оплата клієнта» (Виписка)',
     roles: ['accounting', 'accountant'],
     gives: 'Повернення, помилкові платежі, кошти власника — без номера, поки строк не минув.',
+  },
+  // [дашборд 28.10, погодив Сергій] скинути вписаний № → платіж знову «Чекає №» (менеджер помилився), поки строк не минув
+  reset_bank_invoice: {
+    label: 'Скидати № рахунку (Виписка)',
+    roles: ['finance', 'financier'],
+    gives: 'Прибрати вписаний номер, щоб платіж знову чекав № і менеджер вписав правильний. Лише поки не минули 48 год; з причиною, в історію.',
   },
   bank_out_comments: {
     label: 'Коментарі до вихідних ФОП (Виписка)',
@@ -189,10 +195,10 @@ export function baseStatus(tx: TxLite, row: IdentRow | null | undefined, now: nu
   return { status: 'wait', deadline };
 }
 
-export interface UserRights { tag: boolean; fix: boolean; nc: boolean }
+export interface UserRights { tag: boolean; fix: boolean; nc: boolean; reset?: boolean }
 
 /** Стан для інтерфейсу. */
-export function buildState(tx: TxLite, row: IdentRow | null | undefined, base: BaseStatus, rights: UserRights, events: number): IdentState {
+export function buildState(tx: TxLite, row: IdentRow | null | undefined, base: BaseStatus, rights: UserRights, events: number, now?: number): IdentState {
   const s = base.status;
   return {
     txId: tx.id,
@@ -212,6 +218,9 @@ export function buildState(tx: TxLite, row: IdentRow | null | undefined, base: B
       set: s === 'wait' && (rights.tag || rights.fix),
       fix: s === 'identified' && rights.fix,
       nc: s === 'wait' && rights.nc,
+      // [дашборд 28.10] скинути вписаний № — лише поки строк не минув (інакше фіналізатор одразу дасть «Неідентифікований»)
+      // поле — лише тим, хто має право (іншим його немає, як і до 28.10)
+      reset: rights.reset ? s === 'identified' && now !== undefined && now < base.deadline : undefined,
     },
   };
 }
@@ -264,6 +273,7 @@ export const MSG = {
   notInScope: 'Для цього платежу номер рахунку не потрібен.',
   notFound: 'Платіж не знайдено.',
   notFopOut: 'Коментарі — лише до вихідних ФОП Беспятчук.',
+  lateReset: 'Строк минув — скинути номер уже не можна: платіж став би «Неідентифікованим».',
 };
 
 /** Чому дію не виконано: стан уже інший (хтось устиг, строк минув) — текст за актуальним станом. */
