@@ -125,6 +125,7 @@ import * as paymentMatch from "../core/paymentMatch.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { receivablesScope } from "../auth/receivablesScope.js";
+import { loadReceivablesFx } from "../core/receivablesFx.js";
 import { paymentRequestsSql, toPaymentRequestRows, summarize as summarizePaymentRequests, PAYMENT_REQUEST_STATUSES } from "../core/paymentRequests.js";
 import {
   fkErrorMessage, limitRequestTitle, amountLimitState, amountLimitLabel,
@@ -3026,6 +3027,22 @@ dashboardRouter.delete("/receivables/limit/:clientKey", requirePerm("manage_cred
  * detail): every unpaid invoice with its number, date, amount and service link.
  * Role-scoped like /receivables — a manager only sees their own clients.
  */
+/**
+ * 💱 Валютна дебіторка — окрема вкладка «Дебіторки» (задача 7136, Сергій 26.10.2026; Роман 28.10 — «роби як пропонуєш»).
+ * Скоуп — той самий `receivablesScope`, що в усіх дверях вкладки; поля — явним переліком (#17e2). Логіка — `core/receivablesFx.ts`.
+ */
+dashboardRouter.get("/receivables/fx", async (req, res) => {
+  const sc = receivablesScope(req.auth!, req.query);
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  try {
+    const r = await loadReceivablesFx(pool as unknown as import("../core/finance.js").Db, { managerId: sc.managerId, teamId: sc.teamId }, kyivToday());
+    res.json({ syncedAt: r.syncedAt, error: r.error, from: r.from, rates: r.rates, totals: r.totals, clients: r.clients, kommoBase: config.kommo.baseUrl });
+  } catch (e) {
+    console.error("[receivables/fx]", e);
+    res.status(500).json({ error: "Не вдалося завантажити валютну дебіторку" });
+  }
+});
+
 dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const auth = req.auth!;
   /**

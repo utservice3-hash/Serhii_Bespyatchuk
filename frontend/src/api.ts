@@ -5986,6 +5986,18 @@ export interface FxUnpaidRow {
   number: string; date: string; organization: string; contractor: string; currency: string; invoiceSum: number; paidSum: number; remaining: number;
   realized: boolean; partiallyPaid: boolean; debtAccount: string | null; dueDate: string | null; manager: string | null; dealId: number | null; comment: string | null;
 }
+/** 💱 Валютна дебіторка у вкладці «Дебіторка» (задача 7136): клієнти зі скоупу й усі їхні валютні рахунки. */
+export interface RecvFxInvoice {
+  number: string; date: string; organization: string; currency: string; invoiceSum: number; paidSum: number; remaining: number;
+  uah: number | null; days: number; realized: boolean; partiallyPaid: boolean; dueDate: string | null; manager: string | null; dealId: number | null;
+}
+export interface RecvFxClient { key: string; name: string; edrpou: string | null; managers: string[]; organizations: string[]; days: number; remaining: Record<string, number>; uah: number | null; invoices: RecvFxInvoice[] }
+export interface RecvFx {
+  syncedAt: string | null; error: string | null; from: string; rates: Record<string, number | null>; kommoBase: string;
+  totals: { byCurrency: Record<string, number>; uah: number; uahMissing: number; invoices: number; notRealized: number; clients: number };
+  clients: RecvFxClient[];
+}
+export const fetchReceivablesFx = async (teamId: number | "") => (await api.get<RecvFx>("/dashboard/receivables/fx", { params: teamId ? { teamId } : {} })).data;
 export interface FxUnpaid { syncedAt: string | null; error: string | null; from: string; rowsAll: number | null; kommoBase: string; invoices: FxUnpaidRow[] }
 export const fetchFxUnpaid = async () => (await api.get<FxUnpaid>("/finance/fx-unpaid")).data;
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
