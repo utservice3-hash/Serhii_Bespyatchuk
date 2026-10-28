@@ -6333,6 +6333,9 @@ ALTER TABLE managers ADD COLUMN IF NOT EXISTS keep_without_crm BOOLEAN NOT NULL 
 -- має повністю все залишитися». Умова на kommo_user_id — щоб не позначити іншу людину, якщо id колись зсунеться.
 -- `is_active = true` — разом із позначкою: якщо в Kommo її видалили РАНІШЕ за викат, синк уже встиг вимкнути запис.
 UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;
+-- Денисюк Роман (managers.id 387273, Kommo 15537212): користувача в Kommo видалили, синк вимкнув запис — і Роман зник
+-- з вибору виконавця задач (Юля 28.10.2026: «не можу виставляти задачі тобі»). Роман 28.10.2026 — лишити в дашборді, без команди.
+UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 387273 AND kommo_user_id = '15537212' AND NOT keep_without_crm;
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🏛 PROZORRO-ЛІДИ (задача #5299, ТЗ «Щоденний збір лідів з Prozorro у Kommo»; прохід 1 — збір і пробний режим).
