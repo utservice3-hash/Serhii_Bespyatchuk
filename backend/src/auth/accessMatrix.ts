@@ -1814,7 +1814,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "GET", path: "/api/zakaz1c/lead/:leadId/invoice/:uid/pdf", cls: "deny-only",
     allow: [], deny: [] },
-  { method: "GET", path: "/api/zakaz1c/lead/:leadId/ttn", cls: "deny-only",
+  { method: "POST", path: "/api/zakaz1c/lead/:leadId/customer", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/zakaz1c/lead/:leadId/invoice/:uid/request", cls: "deny-only",
     allow: [], deny: [] },
   // 🤝 Узгодження й перевірка контрагента (пакет Сергія 23.10.2026; ролі — `counterparty/mount.ts` → `cpRoleOf`).
   // HR / КВП / бізнес-асистент — «staff»: лише «Перевірка контрагента»; запити й бюджет — 403. Бюджет — лише Сергій (users.id 1).

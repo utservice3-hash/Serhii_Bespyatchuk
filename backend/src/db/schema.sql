@@ -6697,6 +6697,14 @@ CREATE TABLE IF NOT EXISTS zakaz_onec_invoices (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS zakaz_onec_invoices_lead_idx ON zakaz_onec_invoices (lead_id, created_at DESC);
+-- Вікно за макетом (28.10.2026): що менеджер заповнив — позиції для «Змінити», і те, чого 1С ще не приймає
+-- («Дата акту», «Коментар СРМ», банк ФОП), щоб не загубилось до доробки 1С.
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS org_key TEXT;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS items JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS due_date DATE;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_date DATE;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS bank TEXT;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS crm_comment TEXT;
 REVOKE ALL ON zakaz_onec_invoices FROM ai_readonly;
 -- 💸 «ТЕСТ ЗАКАЗ 1С» — план оплат 1С → угоди Kommo (`zakaz1c/payments.ts`, 27.10.2026). Що МАЄ бути в «Оплачено 1с» /
 -- «Оплачено из 1с» / етапі за правилом власника, поруч — що записав Genesis (`genesis_paid1c`, де є) для звірки до

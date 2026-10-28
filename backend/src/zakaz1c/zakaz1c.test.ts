@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
-import { buildCreateInvoiceBody, fromCreateInvoiceReply, invoiceAllowed, parseInvoiceForm } from "./invoice.js";
+import {
+  buildCreateCustomerBody, buildCreateInvoiceBody, canEdit, customerInfoFrom1c, fromCreateInvoiceReply, genesisComment, invoiceAllowed,
+  orgRules, parseInvoiceForm, payStateOf, serviceSwaps,
+} from "./invoice.js";
 import { zakaz1cFieldsMode, zakaz1cMode } from "./env.js";
 import { BEFORE_PAID, PAID_STAGE, patchOf, planPayment, runPayments } from "./payments.js";
 
@@ -72,34 +75,50 @@ test("#7102 ТЕСТОВИЙ РЕЖИМ: off — нікому; test — лише
   assert.equal(zakaz1cMode({ ZAKAZ1C_MODE: "TEST" } as NodeJS.ProcessEnv), "test");
 });
 
+const TODAY = "2026-10-28";
+const ORGS = orgRules({} as NodeJS.ProcessEnv);
+const ctx = { today: TODAY, orgs: ORGS };
 const FORM = {
-  organization: "ТОВ АвтоМув", agreement: "", currency: "EUR", vatType: "Без ПДВ", discount: 100,
-  invoiceDate: "2026-10-26", dueDate: "2026-11-02", comment: "тест", stamp: false,
-  items: [{ name: "Організація міжнародного перевезення", content: "Praha (CZ) – Київ (UA), МАН АТ9718СР", qty: 1, price: 1800, vat: 0 }],
+  org: "avtomuv", agreement: "", currency: "EUR", vatType: "Без ПДВ", discount: 100, invoiceDate: "2026-01-01",
+  dueDate: "2026-11-04", actDate: "2026-10-30", crmComment: "клієнт просив до пʼятниці", bank: "", stamp: false,
+  items: [{ service: "Організація міжнародного перевезення", route: "м. Praha (CZ) – м. Київ (Київська обл.)", qty: 1, price: 1800, vat: 0 }],
 };
 
 test("#7103 ФОРМА → 1С: валюта, організація, ПДВ, знижка, позиції, печатка й deal_id доходять; контрагент — лише від сервера", () => {
-  const p = parseInvoiceForm({ ...FORM, customer_edrpou: "99999999" });
+  const p = parseInvoiceForm({ ...FORM, customer_edrpou: "99999999", customer_uid: "чужий" }, ctx);
   assert.equal(p.ok, true, p.ok ? "" : p.why);
   if (!p.ok) return;
-  const body = buildCreateInvoiceBody(62752319, p.form, { edrpou: "00100110", manager: "Федькевич Яна", orderDate: "26.10.2026" });
+  const body = buildCreateInvoiceBody(62752319, p.form, { customerUid: "00cb6b57-6007-11f1-b5de-000d181848ac", manager: "Федькевич Яна",
+    today: TODAY, orgCode: "000000004" });
+  const raw = body as Record<string, unknown>; // перевірки «поля немає» — по сирому обʼєкту: `in` звужує тип тіла до never
   assert.equal(body.currency, "EUR");
-  assert.equal(body.organization, "ТОВ АвтоМув");
+  assert.equal(body.organization, "000000004", "організація пішла не кодом 1С");
   assert.equal(body.vat_type, "Без ПДВ");
   assert.equal(body.discount, 100);
   assert.equal(body.stamp, false);
   assert.equal(body.deal_id, "62752319", "без deal_id 1С створить дубль при повторному натисканні");
-  assert.equal(body.customer_edrpou, "00100110", "ЄДРПОУ з браузера потрапив у запит до 1С");
+  assert.equal(body.customer_uid, "00cb6b57-6007-11f1-b5de-000d181848ac", "контрагент узявся не від сервера");
+  assert.ok(!("customer_edrpou" in raw), "код контрагента з браузера потрапив у запит до 1С");
+  assert.equal(body.invoice_date, TODAY, "дата рахунку взялась із вікна, а не «сьогодні» сервера");
+  assert.equal(body.due_date, "2026-11-04");
+  assert.equal(body.comment, "Федькевич Яна, Загружен из amoCRM по сделке №62752319", "коментар не як у Genesis");
+  assert.ok(!("order_date" in raw), "order_date 1С допише в коментар — і той перестане бути як у Genesis");
   assert.equal(body.items.length, 1);
-  assert.equal(body.items[0].price, 1800);
-  assert.equal(body.items[0].content, "Praha (CZ) – Київ (UA), МАН АТ9718СР");
+  assert.deepEqual([body.items[0].name, body.items[0].content, body.items[0].price, body.items[0].code],
+    ["Організація міжнародного перевезення", "м. Praha (CZ) – м. Київ (Київська обл.)", 1800, "000000179"]);
   assert.equal(body.pdf, true);
+  // Чого 1С ще не приймає — не шлемо (і не вдаємо, що шлемо); воно лежить у формі для журналу.
+  for (const k of ["act_date", "crm_comment", "bank_account", "deal_fields"]) assert.ok(!(k in raw), `${k} пішло в 1С, якої там ще немає`);
+  assert.equal(p.form.actDate, "2026-10-30", "дату акту загублено, а не збережено для журналу");
+  assert.equal(p.form.crmComment, "клієнт просив до пʼятниці");
+  // Без менеджера коментар лишається Genesis-подібним, без «undefined, ».
+  assert.equal(genesisComment("", 5), "Загружен из amoCRM по сделке №5");
   // Дзеркало перевірок форми: невалідне відхиляється з поясненням, валідне — проходить (вище).
-  assert.equal(parseInvoiceForm({ ...FORM, currency: "GBP" }).ok, false, "непідтримувану валюту пропущено");
-  assert.equal(parseInvoiceForm({ ...FORM, organization: "ФОП Невідомий" }).ok, false, "організацію не зі списку пропущено");
-  assert.equal(parseInvoiceForm({ ...FORM, items: [] }).ok, false, "рахунок без позицій пропущено");
-  assert.equal(parseInvoiceForm({ ...FORM, items: [{ ...FORM.items[0], price: 0 }] }).ok, false, "нульову ціну пропущено");
-  assert.equal(parseInvoiceForm({ ...FORM, discount: 5000 }).ok, false, "знижку більшу за суму пропущено");
+  assert.equal(parseInvoiceForm({ ...FORM, currency: "GBP" }, ctx).ok, false, "непідтримувану валюту пропущено");
+  assert.equal(parseInvoiceForm({ ...FORM, org: "ФОП Невідомий" }, ctx).ok, false, "організацію не зі списку пропущено");
+  assert.equal(parseInvoiceForm({ ...FORM, items: [] }, ctx).ok, false, "рахунок без позицій пропущено");
+  assert.equal(parseInvoiceForm({ ...FORM, items: [{ ...FORM.items[0], price: 0 }] }, ctx).ok, false, "нульову ціну пропущено");
+  assert.equal(parseInvoiceForm({ ...FORM, discount: 5000 }, ctx).ok, false, "знижку більшу за суму пропущено");
 });
 
 test("#7104 ВІДПОВІДЬ 1С: state:false — помилка словами; рахунок — номер, uid, existed і PDF з base64", () => {
@@ -187,12 +206,99 @@ test("#7107 ПОКИ ПРАЦЮЄ GENESIS (ZAKAZ1C_FIELDS_MODE=off) — у Kommo
   }
 });
 
-test("#7108 ТТН У ВКЛАДЦІ: кнопка є лише за наявної заявки перевізнику і йде підписаним каналом у той самий генератор Конструктора", () => {
-  const js = WIDGET("script.js");
-  assert.match(js, /d\.ttn\s*\n?\s*\?/, "кнопка ТТН не залежить від наявності заявки");
-  assert.match(js, /download\("\/lead\/" \+ leadId\(\) \+ "\/ttn"/, "ТТН качається не з маршруту модуля");
+test("#7109 ПРАВИЛА ОРГАНІЗАЦІЙ: ЮТС лише з ПДВ, АвтоМув лише без, послуга — своя, «Оплатити до» не в минулому; Єлогіст — з кодом, ФОП — чекає банку", () => {
+  const uts = { ...FORM, org: "uts", currency: "UAH", vatType: "ПДВ в тому числі",
+    items: [{ service: "Організація перевезення в межах території України за маршрутом", route: "м. Київ – м. Львів", qty: 1, price: 30000, vat: 20 }] };
+  // Дозволи — по обидва боки кожної межі.
+  assert.equal(parseInvoiceForm(uts, ctx).ok, true, "ЮТС з ПДВ і своєю послугою не пройшов");
+  assert.equal(parseInvoiceForm(FORM, ctx).ok, true, "АвтоМув без ПДВ з міжнародною не пройшов");
+  assert.equal(parseInvoiceForm({ ...uts, items: [{ ...uts.items[0], service: "Експедиторські послуги" }] }, ctx).ok, true, "спільну послугу ЮТС не пустило");
+  assert.equal(parseInvoiceForm({ ...FORM, dueDate: TODAY }, ctx).ok, true, "«Оплатити до» сьогодні не пустило");
+  assert.equal(parseInvoiceForm({ ...FORM, dueDate: "" }, ctx).ok, true, "порожнє «Оплатити до» (1С візьме з договору) не пустило");
+  // Заборони.
+  assert.equal(parseInvoiceForm({ ...uts, vatType: "Без ПДВ" }, ctx).ok, false, "ЮТС без ПДВ пройшов");
+  assert.equal(parseInvoiceForm({ ...uts, items: [{ ...uts.items[0], vat: 0 }] }, ctx).ok, false, "ЮТС зі ставкою 0 % пройшов");
+  assert.equal(parseInvoiceForm({ ...FORM, vatType: "ПДВ в тому числі" }, ctx).ok, false, "АвтоМув з ПДВ пройшов");
+  assert.equal(parseInvoiceForm({ ...FORM, items: [{ ...FORM.items[0], vat: 20 }] }, ctx).ok, false, "АвтоМув зі ставкою 20 % пройшов");
+  assert.equal(parseInvoiceForm({ ...uts, items: [{ ...uts.items[0], service: "Організація міжнародного перевезення" }] }, ctx).ok, false,
+    "ЮТС з послугою АвтоМува пройшов");
+  assert.equal(parseInvoiceForm({ ...FORM, items: [{ ...FORM.items[0], service: "Будь-що" }] }, ctx).ok, false, "послуга не зі списку пройшла");
+  assert.equal(parseInvoiceForm({ ...FORM, dueDate: "2026-10-27" }, ctx).ok, false, "«Оплатити до» вчора пройшло");
+  // Єлогіст: без коду 1С — відмова з поясненням; з кодом у env — проходить за правилами ЮТС.
+  const el = { ...uts, org: "elogist" };
+  const noCode = parseInvoiceForm(el, ctx);
+  assert.ok(!noCode.ok && /Єлогіст/.test(noCode.why), "Єлогіст без коду 1С пройшов або без пояснення");
+  assert.equal(parseInvoiceForm(el, { today: TODAY, orgs: orgRules({ ZAKAZ1C_ELOGIST_CODE: "000000012" } as NodeJS.ProcessEnv) }).ok, true,
+    "Єлогіст із кодом не пройшов");
+  // ФОП: 1С ще не приймає вибір банку → недоступний навіть із банком.
+  const fop = parseInvoiceForm({ ...FORM, org: "fop", bank: "monobank", items: [{ ...FORM.items[0], service: "Організація перевезення за маршрутом" }] }, ctx);
+  assert.ok(!fop.ok && /банк/.test(fop.why), "ФОП пройшов, хоча 1С обрала б банк сама");
+  assert.deepEqual(ORGS.map((o) => [o.key, o.code]), [["uts", "000000002"], ["elogist", null], ["avtomuv", "000000004"], ["fop", null]],
+    "коди організацій 1С не ті, що в листі 1С");
+});
+
+test("#7110 ОПЛАТА РАХУНКУ І «ЗМІНИТИ»: стан — зі знімка неоплачених 1С; змінити — лише в день виставлення і без оплати", () => {
+  const created = new Date("2026-10-28T09:00:00Z"), after = new Date("2026-10-28T10:15:00Z"), before = new Date("2026-10-28T08:15:00Z");
+  const inv = { createdAt: created, total: 1800 };
+  const c = (o: Partial<{ syncedAt: Date | null; dealPaid: number }>) => ({ syncedAt: after, dealPaid: 0, today: TODAY, ...o });
+  assert.equal(payStateOf(inv, { paid: 0, remaining: 1800, due: "2026-11-04" }, c({})).k, "unpaid");
+  assert.equal(payStateOf(inv, { paid: 500, remaining: 1300, due: "2026-11-04" }, c({})).k, "part");
+  assert.equal(payStateOf(inv, { paid: 0, remaining: 1800, due: "2026-10-27" }, c({})).k, "overdue");
+  assert.deepEqual(payStateOf(inv, null, c({ dealPaid: 1800 })), { k: "paid", paid: 1800, remaining: 0 });
+  // Немає в знімку — ще НЕ означає «оплачено»: без оплати угоди — «немає серед неоплачених»; знімок старший — «оновиться».
+  assert.equal(payStateOf(inv, null, c({ dealPaid: 0 })).k, "missing", "рахунок без оплат угоди зараховано оплаченим");
+  assert.equal(payStateOf(inv, null, c({ syncedAt: before, dealPaid: 1800 })).k, "pending", "знімок до рахунку прочитано як «оплачено»");
+  assert.equal(payStateOf(inv, null, c({ syncedAt: null })).k, "pending");
+  // «Змінити»: дозвіл — сьогодні й без оплати; заборона — вчора, частково, оплачено, невідомо.
+  const unpaid = payStateOf(inv, { paid: 0, remaining: 1800, due: null }, c({}));
+  assert.equal(canEdit(TODAY, unpaid, TODAY), true, "сьогоднішній неоплачений рахунок не можна змінити");
+  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({ syncedAt: before })), TODAY), true, "свіжий рахунок до синку не можна змінити");
+  assert.equal(canEdit("2026-10-27", unpaid, TODAY), false, "вчорашній рахунок можна змінити");
+  assert.equal(canEdit(TODAY, payStateOf(inv, { paid: 500, remaining: 1300, due: null }, c({})), TODAY), false, "частково оплачений можна змінити");
+  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({ dealPaid: 1800 })), TODAY), false, "оплачений можна змінити");
+  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({})), TODAY), false, "рахунок, якого немає серед неоплачених, можна змінити");
+});
+
+test("#7111 ЧОГО 1С НЕ ВМІЄ — НЕ ВДАЄМО: другий рахунок відхиляється до запиту в 1С, «+ ще рахунок», «Змінити», акт і ТТН — сірі з причиною", () => {
   const mount = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "mount.ts"), "utf8");
-  assert.match(mount, /buildTtn\(d\.s\)/, "ТТН будується не генератором Конструктора");
-  assert.match(mount, /waybillBlocker\(d\.s\)/, "клієнтська заявка може дати ТТН без перевізника");
-  assert.match(mount, /party = 'carrier'/, "ТТН береться не із заявки перевізнику");
+  const create = mount.slice(mount.indexOf('r.post("/lead/:leadId/invoice"'), mount.indexOf('r.get("/lead/:leadId/invoice/:uid/pdf"'));
+  const refuse = create.search(/listInvoices\(pool, leadId, today\)\)\.length > 0\) return res\.status\(409\)\.json\(\{ error: ONEC_WAITS\.multi \}\)/);
+  assert.ok(refuse > 0, "другий рахунок в угоді не відхиляється — 1С повернула б перший, а вікно показало б його як новий");
+  assert.ok(refuse < create.indexOf("createInvoiceIn1c("), "відмова в другому рахунку стоїть ПІСЛЯ запиту в 1С");
+  assert.doesNotMatch(mount, /\/ttn"|buildTtn|constructor/, "ТТН знову береться з Конструктора, а не з 1С");
+  const js = WIDGET("script.js");
+  assert.match(js, /<button class='btn link' disabled title='" \+ esc\(d\.waits\.multi\) \+ "'/, "«+ ще рахунок» не сіре");
+  assert.match(js, /inv\.can_edit\s*\n?\s*\? "<button class='btn sm dash' disabled title='" \+ esc\(state\.data\.waits\.update\)/, "«Змінити» не сіре до методу 1С");
+  assert.match(js, /data-z1c='req'/, "немає запиту бухгалтерії для рахунку, який змінювати вже не можна");
+  assert.equal((js.match(/disabled title='Зʼявиться, коли бухгалтерія проведе реалізацію в 1С'>(ТТН|Акт)</g) ?? []).length, 2, "ТТН і Акт не сірі");
+  assert.doesNotMatch(js, /\/ttn|Конструктор/, "у вікні лишилась ТТН із Конструктора");
+});
+
+test("#7112 ПІДМІНА ПОСЛУГИ: 1С поставила іншу номенклатуру — менеджер бачить попередження; та сама — тиша", () => {
+  assert.deepEqual(serviceSwaps(["Експедиторські послуги"], ["Експедиторські послуги"]), []);
+  const w = serviceSwaps(["Штрафні санкції за простій автомобільного транспорту"], ["Організація перевезення в межах території України за маршрутом"]);
+  assert.equal(w.length, 1, "підміну послуги проковтнуто");
+  assert.match(w[0], /Штрафні санкції/);
+  assert.deepEqual(serviceSwaps(["а"], []), [], "порожня відповідь 1С прочитана як підміна");
+  const r = fromCreateInvoiceReply({ state: true, invoice_number: "1", invoice_uid: "u", items: [{ name: "Х" }] });
+  assert.ok(r.ok && r.invoice.itemNames[0] === "Х", "номенклатуру з відповіді 1С не прочитано");
+});
+
+test("#7113 КОНТРАГЕНТ: 8 цифр — ЄДРПОУ, 10 — ІПН ФОП (і в customerInfo, і в createCustomer); інший код — відмова", async () => {
+  const u = buildCreateCustomerBody({ name: "ТОВ Ромашка", code: "12345678" }, "Федькевич Яна");
+  assert.deepEqual(u, { ok: true, body: { name: "ТОВ Ромашка", edrpou: "12345678", manager: "Федькевич Яна" } });
+  const f = buildCreateCustomerBody({ name: "ФОП Іваненко", code: "1234567890" }, "");
+  assert.deepEqual(f, { ok: true, body: { name: "ФОП Іваненко", inn: "1234567890" } }, "ФОП пішов не як inn");
+  assert.equal(buildCreateCustomerBody({ name: "Х", code: "123" }, "").ok, false, "код не 8 і не 10 цифр пройшов");
+  assert.equal(buildCreateCustomerBody({ name: " ", code: "12345678" }, "").ok, false, "контрагент без назви пройшов");
+  const urls: string[] = [];
+  const fake = (async (url: string) => { urls.push(url); return new Response(JSON.stringify({ state: true, uid: "U1", name: "Н",
+    agreements: [{ uid: "A1", name: "Основний", currency: "UAH", organization: "ТОВ \"АвтоМув\"" }] }), { status: 200 }); }) as never;
+  const fopInfo = await customerInfoFrom1c("http://1c", "1234567890", fake);
+  const legal = await customerInfoFrom1c("http://1c", "12345678", fake);
+  assert.match(urls[0], /customerInfo\?inn=1234567890$/, "ФОП шукається не за inn — 1С його не знайде");
+  assert.match(urls[1], /customerInfo\?edrpou=12345678$/);
+  assert.deepEqual([fopInfo.found, fopInfo.uid, legal.agreements[0].organization], [true, "U1", "ТОВ \"АвтоМув\""]);
+  assert.equal((await customerInfoFrom1c("http://1c", "", fake)).found, false);
+  assert.equal(urls.length, 2, "порожній код усе одно пішов у 1С");
 });
