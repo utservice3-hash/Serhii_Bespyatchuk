@@ -2,7 +2,7 @@
  * Що вкладки «Узгодження», «Перевірка контрагента» і «Ліміти клієнтів» чекають від «сервера».
  * У дашборді — api.ts (fetch до /api/counterparty і /api/client-limits); у макеті — mockup/src/demoCp.ts (у пам'яті).
  */
-import type { AnyRow, DebtorLimitCell, LimitRow } from '../../shared/clientLimits';
+import type { AnyRow, ClientHit, DebtorLimitCell, LimitRow } from '../../shared/clientLimits';
 import type { CpAction, CpFile, CpRequestView, CpUser, From, Rates, ReqStatus, Terms, TermsInput } from '../../shared/counterparty';
 import type { Lag } from '../../shared/cpCalc';
 import type { BudgetInfo, CheckView } from '../../shared/cpCheck';
@@ -53,7 +53,11 @@ export interface LimitsApi {
   edit(id: string, b: LimitBody): Promise<LimitRow>;
   keep(id: string, note?: string): Promise<LimitRow>;
   set(debtorKey: string, b: LimitBody): Promise<LimitRow>;
+  /** «＋ Додати клієнта» (Сергій): пошук по базі; limitId — у клієнта вже є ліміт. */
+  search(q: string): Promise<{ hits: ClientHitView[] }>;
+  add(clientKey: string, b: LimitBody): Promise<LimitRow>;
 }
+export interface ClientHitView extends ClientHit { limitId: string | null }
 
 /** Помилка API: message — для людини; request — свіжий стан запиту, якщо сервер його повернув (409). */
 export class CpApiError extends Error {

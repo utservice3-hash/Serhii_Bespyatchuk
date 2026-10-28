@@ -57,6 +57,8 @@ export const PERMISSION_CATALOG = [
   /** 💳 «Виписка» (пакет Сергія 27.10.2026): вписати № рахунку — менеджер, тімлід; змінити № — фінансист;
    *  «не оплата клієнта» і коментарі до вихідних ФОП — Бухгалтерія. Адмін — усе. */
   "tag_bank_invoice", "fix_bank_invoice", "mark_bank_not_client", "bank_out_comments",
+  /** 💳 «↺ Скинути №» — вписаний помилково номер знімається, платіж знову «Чекає №» (погодив Сергій 28.10) — фінансист. */
+  "reset_bank_invoice",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",

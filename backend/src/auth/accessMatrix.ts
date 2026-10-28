@@ -1899,6 +1899,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/client-limits/import", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  // «＋ Додати клієнта» (задача 7137): пошук по базі й ліміт клієнту без боргу — лише Сергій (погоджувач за id, не за роллю).
+  { method: "GET", path: "/api/client-limits/search?q=юмо", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/client-limits/add", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "GET", path: "/api/cargo/three.js", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/cargo/reference", cls: "GET",
@@ -1932,6 +1937,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "PATCH", path: "/api/bank-ident/:txId/invoice", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/bank-ident/:txId/unidentify", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
+  // [28.10, погодив Сергій] «↺ Скинути №» — право reset_bank_invoice: фінансист і адмін
+  { method: "POST", path: "/api/bank-ident/:txId/reset", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/bank-ident/:txId/not-client", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },

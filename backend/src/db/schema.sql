@@ -7174,6 +7174,15 @@ UPDATE roles SET permissions = permissions - 'bank_out_comments' WHERE key NOT I
 -- 🔒 Хто що вписав і коментарі до платежів ФОП — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON bank_ident_settings, bank_tx_ident, bank_tx_ident_events, bank_tx_comments FROM ai_readonly;
 
+-- 💳 «Виписка»: «↺ Скинути №» (28.10.2026, погодив Сергій) — вписаний помилково номер знімається, платіж знову «Чекає №».
+-- Нова дія в історії `reset` (CHECK — інлайн-обмеження пакета, імʼя за замовчуванням Postgres) і право лише фінансисту
+-- (+ адмін), парою «видати / зняти» тут, у кінці — синки ролей вище копіюють права адміна на СЕО/ОД/КВП.
+ALTER TABLE bank_tx_ident_events DROP CONSTRAINT IF EXISTS bank_tx_ident_events_act_check;
+ALTER TABLE bank_tx_ident_events ADD CONSTRAINT bank_tx_ident_events_act_check
+  CHECK (act IN ('set', 'change', 'unidentify', 'not_client', 'expired', 'reset'));
+UPDATE roles SET permissions = permissions || '{"reset_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'financier');
+UPDATE roles SET permissions = permissions - 'reset_bank_invoice' WHERE key NOT IN ('admin', 'financier');
+
 -- 💱 ВАЛЮТНА ДЕБІТОРКА В РОЗДІЛІ «ДЕБІТОРКА» (задача 7136; Сергій на TOP Weekly 26.10.2026: «виведи цю дебіторку окремо в
 -- лист дебіторки … валюта»; Роман 28.10: «роби як пропонуєш»). Курс НБУ, з яким синк порахував гривню, памʼятається поруч зі
 -- станом — щоб ≈ грн по рахунку на екрані збігалась із підсумком у «Фінансах», а не рахувалась за іншим курсом.

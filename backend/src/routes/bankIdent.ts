@@ -23,7 +23,7 @@ import {
   type IdentState, type NcReason, type StoredStatus, type Right,
 } from "../bankIdent/bankIdent.js";
 import {
-  addComment, commentSummaries, comments, history, idsByStatus, insertExpired, insertIdentified, insertNotClient, rowsByIds,
+  addComment, commentSummaries, comments, history, idsByStatus, insertExpired, insertIdentified, insertNotClient, resetIdent, rowsByIds,
   statusTotals, updateFix, updateUnidentify, withTx,
 } from "../bankIdent/bankIdentStore.js";
 import { bankIdentConfigFromEnv, identEngine, type BankIdentOptions, type FullRights } from "../bankIdent/identEngine.js";
@@ -231,6 +231,28 @@ r.post("/:txId/unidentify", async (req: AuthedRequest, res) => {
   const row = await withTx(pool, (c) => updateUnidentify(c, id, expected, reason, me, at));
   const state = await stateOf(t, rights, at);
   if (!row) return conflict(res, state.status === "identified" ? MSG.changed : conflictMsg(state), state);
+  res.json({ state });
+});
+
+// [дашборд 28.10, погодив Сергій] «↺ Скинути №» — платіж знову «Чекає №», щоб менеджер вписав правильний номер.
+// Право reset_bank_invoice; причина обовʼязкова; лише поки строк не минув; номер — той, що бачили (expected).
+r.post("/:txId/reset", async (req: AuthedRequest, res) => {
+  const me = personOf(req);
+  const rights = await engine.rightsOf(req.user!);
+  if (!rights.reset) throw new HttpError(403, MSG.noRight);
+  const e = checkReason(req.body?.reason);
+  if (e) throw new HttpError(400, e);
+  const reason = normText(req.body.reason), expected = normNo(req.body?.expected);
+  if (!expected) throw new HttpError(400, "Потрібен expected — номер, який ви бачили на екрані.");
+  const id = txIdOf(String(req.params.txId));
+  const { t } = await scoped(req.user!, id);
+  const at = engine.now();
+  const ok = await withTx(pool, (c) => resetIdent(c, id, expected, reason, me, at));
+  const state = await stateOf(t, rights, at);
+  if (!ok) {
+    const late = state.status === "identified" && state.invoiceNo === expected;
+    return conflict(res, late ? MSG.lateReset : state.status === "identified" ? MSG.changed : conflictMsg(state), state);
+  }
   res.json({ state });
 });
 
