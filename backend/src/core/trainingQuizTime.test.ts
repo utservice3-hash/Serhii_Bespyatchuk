@@ -221,8 +221,10 @@ test("#3108 ЖИВИЙ SQL: третій вихід — не складено н
   const fin = await answerRight(ok, st, 3, at(20));
   assert.ok(fin.cur.done && fin.cur.result.passed, "🔴 два попередження зіпсували складений тест");
   assert.equal(fin.cur.done && fin.cur.result.endedBy, null);
-  // Три виходи: дві правильні відповіді, потім третій вихід → спробу завершено, не складено, спробу витрачено.
+  // Три виходи: дві правильні відповіді (поріг тут 50% — тобто бал уже ПРОХІДНИЙ), потім третій вихід → спробу
+  // завершено як не складену. Без прохідного балу гейт доводив би лише «67% < 80%», а не «не складено через вихід».
   const bad = await fixture(s.c, "warn3");
+  await bad.q(`UPDATE training_quizzes SET pass_pct = 50 WHERE material_id = $1`, [bad.quiz]);
   const b0 = step(await bad.store.startQuiz(bad.db, bad.user, bad.quiz, Math.random, T0));
   const part = await answerRight(bad, b0, 2, T0);
   let last: Awaited<ReturnType<typeof bad.store.reportViolation>> | null = null;
@@ -259,7 +261,9 @@ test("#3109 ЖИВИЙ SQL: одне «виходження» — одне по�
 test("#3110 ЕКРАН ТЕСТУ: повний екран на «Почати», ловить вкладку, повний екран і програму; «Найм» показує причину", () => {
   const view = SRC("frontend/src/pages/dashboard/sections/QuizView.tsx");
   const learner = view.slice(0, view.indexOf("export function QuizEditorPanel"));
-  for (const ev of ["visibilitychange", "fullscreenchange", "blur"]) assert.match(learner, new RegExp(`"${ev}"`), `🔴 екран не ловить «${ev}»`);
+  // Саме ПІДПИСКА, а не будь-яка згадка: назва події лишається й у знятті слухача.
+  for (const ev of ["visibilitychange", "fullscreenchange", "blur"])
+    assert.match(learner, new RegExp(`addEventListener\\("${ev}"`), `🔴 екран не ловить «${ev}»`);
   assert.match(learner, /reportQuizViolation\(/, "🔴 вихід не повідомляється серверу");
   const begin = learner.slice(learner.indexOf("const begin = async"), learner.indexOf("const send = async"));
   assert.match(begin, /enterFullscreen\(/, "🔴 «Почати тест» не розгортає на весь екран");
