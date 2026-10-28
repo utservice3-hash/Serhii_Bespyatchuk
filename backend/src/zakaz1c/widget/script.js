@@ -124,7 +124,7 @@ define(["jquery"], function ($) {
       var d = state.data, o = d.orgs.filter(function (x) { return x.available; })[0] || d.orgs[0];
       return {
         org: o.key, currency: "UAH", bank: "", agreement: "", vatType: o.vatTypes[0], dueDate: addDays(d.today, 7), actDate: "",
-        discount: 0, crmComment: "", stamp: true,
+        crmComment: "", stamp: true,
         items: [{ service: o.services[0], route: routeOf(d.lead), qty: 1, price: d.lead.price || "", vat: o.itemVats[0] }]
       };
     }
@@ -134,11 +134,9 @@ define(["jquery"], function ($) {
       f.items.forEach(function (it) {
         var line = (Number(it.qty) || 0) * (Number(it.price) || 0), r = Number(it.vat) || 0;
         sub += line;
-        if (f.vatType === "ПДВ в тому числі") vat += line * r / (100 + r); else if (f.vatType === "ПДВ зверху") vat += line * r / 100;
+        if (f.vatType === "ПДВ в тому числі") vat += line * r / (100 + r);
       });
-      var disc = Number(f.discount) || 0, base = Math.max(0, sub - disc);
-      vat = sub > 0 ? vat * base / sub : 0;
-      return { sub: r2(sub), disc: r2(disc), vat: r2(vat), total: r2(base + (f.vatType === "ПДВ зверху" ? vat : 0)) };
+      return { sub: r2(sub), vat: r2(vat), total: r2(sub) };
     }
 
     function payChip(p) {
@@ -223,7 +221,7 @@ define(["jquery"], function ($) {
         + agrs.map(function (a) { return "<option value='" + esc(a.value) + "'" + (f.agreement === a.value ? " selected" : "") + ">" + esc(a.label) + "</option>"; }).join("") + "</select>";
       var vatSel = "<select class='in' data-k='vatType'" + (o.vatTypes.length < 2 ? " disabled" : "") + ">" + o.vatTypes.map(function (v) {
         return "<option" + (f.vatType === v ? " selected" : "") + ">" + esc(v) + "</option>"; }).join("") + "</select>"
-        + "<span class='hint'>" + (o.vatTypes[0] === "Без ПДВ" ? "для " + esc(o.short) + " лише без ПДВ" : "для " + esc(o.short) + " лише з ПДВ") + "</span>";
+        + "<span class='hint'>" + (o.vatTypes[0] === "Без ПДВ" ? "для " + esc(o.short) + " лише без ПДВ" : "для " + esc(o.short) + " лише ПДВ у тому числі") + "</span>";
       var items = f.items.map(function (it, i) {
         return "<div class='item'><div class='row between'><span class='lbl' style='margin:0'>Позиція " + (i + 1) + "</span>"
           + (f.items.length > 1 ? "<button class='x' data-z1c='rm' data-i='" + i + "' aria-label='Прибрати позицію'>✕</button>" : "") + "</div>"
@@ -241,7 +239,7 @@ define(["jquery"], function ($) {
         + "<div><span class='lbl'>Дата рахунку</span><div class='in ro' title='Рахунок завжди виставляється поточним числом'>" + esc(dmy(d.today)) + " · сьогодні</div></div>"
         + "<label><span class='lbl'>Оплатити до</span><input class='in' type='date' min='" + esc(d.today) + "' data-k='dueDate' value='" + esc(f.dueDate) + "'></label></div>"
         + items + "<div class='row'><button class='btn sm' data-z1c='add'>+ позиція</button></div>"
-        + "<div class='grid'><label><span class='lbl'>Знижка, " + esc(f.currency) + "</span><input class='in' type='number' min='0' step='0.01' data-k='discount' value='" + esc(f.discount) + "'></label>"
+        + "<div class='grid'>"
         + "<label><span class='lbl'>Дата акту <span class='hint'>лише якщо впевнені, інакше порожньо</span></span><input class='in' type='date' data-k='actDate' value='" + esc(f.actDate) + "'></label>"
         + "<label style='grid-column:span 2'><span class='lbl'>Коментар для бухгалтерії</span><input class='in' data-k='crmComment' value='" + esc(f.crmComment) + "' placeholder='необовʼязково, у 1С піде в «Коментар СРМ»'></label></div>"
         + "<div class='hint'>" + esc(d.waits.fields) + "</div>"
@@ -252,7 +250,7 @@ define(["jquery"], function ($) {
         + "<button class='btn main' data-z1c='submit'" + (state.busy ? " disabled" : "") + ">" + (state.busy ? "Відправляємо в 1С…" : "Виставити в 1С") + "</button></span></div></div>";
     }
     function totHtml(t, f) {
-      return "Сума <b>" + money(t.sub) + "</b>" + (t.disc ? " · знижка <b>−" + money(t.disc) + "</b>" : "")
+      return "Сума <b>" + money(t.sub) + "</b>"
         + (f.vatType !== "Без ПДВ" ? " · ПДВ <b>" + money(t.vat) + "</b>" : "") + " · Разом <b>" + money(t.total) + " " + esc(f.currency) + "</b>";
     }
 

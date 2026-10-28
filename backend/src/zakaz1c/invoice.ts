@@ -4,7 +4,8 @@
  *
  * Правила вікна — від Сергія й бухгалтера Інни (макет погоджено 27.10.2026), і сервер перевіряє їх сам, вікну не довіряє:
  *   - організації ЮТС / Єлогіст / АвтоМув / ФОП, у 1С — КОДОМ (лист 1С «неоплачені рахунки», 25.10.2026);
- *   - ЮТС і Єлогіст — лише з ПДВ (типово «в тому числі», 20 %); АвтоМув і ФОП — лише без ПДВ;
+ *   - ЮТС і Єлогіст — лише «ПДВ в тому числі» (ставка типово 20 %); АвтоМув і ФОП — лише без ПДВ;
+ *     «ПДВ зверху» і знижки у вікні немає (Сергій, 28.10.2026): `discount` завжди 0;
  *   - послуги — зі списку, свого для кожної організації; «Содержание» = маршрут (1С друкує «послуга: маршрут»);
  *   - дата рахунку — лише сьогоднішня (ставить сервер); «Оплатити до» — не в минулому; «Дата акту» — необовʼязкова;
  *   - коментар у 1С — як у Genesis: «<менеджер>, Загружен из amoCRM по сделке №…».
@@ -64,7 +65,7 @@ export const SERVICES: { name: string; orgs: OrgKey[] | "all"; code?: string }[]
 ];
 export const servicesFor = (org: OrgKey) => SERVICES.filter((x) => x.orgs === "all" || x.orgs.includes(org));
 
-export const vatTypesFor = (o: OrgRule): VatType[] => (o.vat === "with" ? ["ПДВ в тому числі", "ПДВ зверху"] : ["Без ПДВ"]);
+export const vatTypesFor = (o: OrgRule): VatType[] => (o.vat === "with" ? ["ПДВ в тому числі"] : ["Без ПДВ"]);
 export const itemVatsFor = (o: OrgRule): number[] => (o.vat === "with" ? [20, 14, 7] : [0]);
 
 export interface InvoiceItem { service: string; route: string; qty: number; price: number; vat: number }
@@ -75,7 +76,6 @@ export interface InvoiceForm {
   agreement: string;
   currency: Currency;
   vatType: VatType;
-  discount: number;
   dueDate: string;
   actDate: string;
   bank: string;
@@ -122,17 +122,13 @@ export function parseInvoiceForm(body: unknown, ctx: { today: string; orgs: OrgR
     if (!itemVatsFor(o).includes(vat)) return { ok: false, why: `Позиція ${i + 1}: ставка ПДВ ${itemVatsFor(o).join(", ")} %.` };
     items.push({ service, route, qty, price, vat });
   }
-  const discount = num(b.discount ?? 0);
-  const total = items.reduce((t, it) => t + it.qty * it.price, 0);
-  if (!(discount >= 0)) return { ok: false, why: "Знижка не може бути відʼємною." };
-  if (discount >= total) return { ok: false, why: "Знижка не може бути більшою за суму рахунку." };
   const dueDate = s(b.dueDate, 10), actDate = s(b.actDate, 10);
   if (dueDate && !DATE_RE.test(dueDate)) return { ok: false, why: "«Оплатити до» — у форматі РРРР-ММ-ДД." };
   if (dueDate && dueDate < ctx.today) return { ok: false, why: "«Оплатити до» не може бути в минулому." };
   if (actDate && !DATE_RE.test(actDate)) return { ok: false, why: "Дата акту — у форматі РРРР-ММ-ДД." };
   return {
     ok: true,
-    form: { org: o.key, agreement: s(b.agreement, 200), currency, vatType, discount, dueDate, actDate, bank,
+    form: { org: o.key, agreement: s(b.agreement, 200), currency, vatType, dueDate, actDate, bank,
       crmComment: s(b.crmComment, 1000), stamp: b.stamp !== false, items },
   };
 }
@@ -168,7 +164,7 @@ export function buildCreateInvoiceBody(dealId: number, form: InvoiceForm, who: {
     agreement: form.agreement,
     currency: form.currency,
     vat_type: form.vatType,
-    discount: form.discount,
+    discount: 0, // знижки у вікні немає (Сергій, 28.10.2026); 0 явно — щоб 1С не взяла її звідкись іще
     invoice_date: who.today,
     ...(form.dueDate ? { due_date: form.dueDate } : {}),
     manager: who.manager,

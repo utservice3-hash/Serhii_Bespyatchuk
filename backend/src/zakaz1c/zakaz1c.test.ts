@@ -98,7 +98,7 @@ test("#7103 ФОРМА → 1С: валюта, організація, ПДВ, з
   assert.equal(body.currency, "EUR");
   assert.equal(body.organization, "000000004", "організація пішла не кодом 1С");
   assert.equal(body.vat_type, "Без ПДВ");
-  assert.equal(body.discount, 100);
+  assert.equal(body.discount, 0, "знижка з вікна дійшла до 1С — у вікні її немає (Сергій, 28.10.2026)");
   assert.equal(body.stamp, false);
   assert.equal(body.deal_id, "62752319", "без deal_id 1С створить дубль при повторному натисканні");
   assert.equal(body.customer_uid, "00cb6b57-6007-11f1-b5de-000d181848ac", "контрагент узявся не від сервера");
@@ -122,7 +122,6 @@ test("#7103 ФОРМА → 1С: валюта, організація, ПДВ, з
   assert.equal(parseInvoiceForm({ ...FORM, org: "ФОП Невідомий" }, ctx).ok, false, "організацію не зі списку пропущено");
   assert.equal(parseInvoiceForm({ ...FORM, items: [] }, ctx).ok, false, "рахунок без позицій пропущено");
   assert.equal(parseInvoiceForm({ ...FORM, items: [{ ...FORM.items[0], price: 0 }] }, ctx).ok, false, "нульову ціну пропущено");
-  assert.equal(parseInvoiceForm({ ...FORM, discount: 5000 }, ctx).ok, false, "знижку більшу за суму пропущено");
 });
 
 test("#7104 ВІДПОВІДЬ 1С: state:false — помилка словами; рахунок — номер, uid, existed і PDF з base64", () => {
@@ -222,6 +221,7 @@ test("#7109 ПРАВИЛА ОРГАНІЗАЦІЙ: ЮТС лише з ПДВ, А
   assert.equal(parseInvoiceForm({ ...FORM, dueDate: "" }, ctx).ok, true, "порожнє «Оплатити до» (1С візьме з договору) не пустило");
   // Заборони.
   assert.equal(parseInvoiceForm({ ...uts, vatType: "Без ПДВ" }, ctx).ok, false, "ЮТС без ПДВ пройшов");
+  assert.equal(parseInvoiceForm({ ...uts, vatType: "ПДВ зверху" }, ctx).ok, false, "ЮТС з «ПДВ зверху» пройшов — його прибрали");
   assert.equal(parseInvoiceForm({ ...uts, items: [{ ...uts.items[0], vat: 0 }] }, ctx).ok, false, "ЮТС зі ставкою 0 % пройшов");
   assert.equal(parseInvoiceForm({ ...FORM, vatType: "ПДВ в тому числі" }, ctx).ok, false, "АвтоМув з ПДВ пройшов");
   assert.equal(parseInvoiceForm({ ...FORM, items: [{ ...FORM.items[0], vat: 20 }] }, ctx).ok, false, "АвтоМув зі ставкою 20 % пройшов");
