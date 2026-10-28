@@ -76,7 +76,7 @@ test("#7102 ТЕСТОВИЙ РЕЖИМ: off — нікому; test — лише
 });
 
 const TODAY = "2026-10-28";
-const ORGS = orgRules({} as NodeJS.ProcessEnv);
+const ORGS = orgRules();
 const ctx = { today: TODAY, orgs: ORGS };
 const FORM = {
   org: "avtomuv", agreement: "", currency: "EUR", vatType: "Без ПДВ", discount: 100, invoiceDate: "2026-01-01",
@@ -224,17 +224,15 @@ test("#7109 ПРАВИЛА ОРГАНІЗАЦІЙ: ЮТС лише з ПДВ, А
     "ЮТС з послугою АвтоМува пройшов");
   assert.equal(parseInvoiceForm({ ...FORM, items: [{ ...FORM.items[0], service: "Будь-що" }] }, ctx).ok, false, "послуга не зі списку пройшла");
   assert.equal(parseInvoiceForm({ ...FORM, dueDate: "2026-10-27" }, ctx).ok, false, "«Оплатити до» вчора пройшло");
-  // Єлогіст: без коду 1С — відмова з поясненням; з кодом у env — проходить за правилами ЮТС.
+  // Єлогіст (код 000000012): правила ЮТС — з ПДВ і своєю послугою проходить, без ПДВ — ні.
   const el = { ...uts, org: "elogist" };
-  const noCode = parseInvoiceForm(el, ctx);
-  assert.ok(!noCode.ok && /Єлогіст/.test(noCode.why), "Єлогіст без коду 1С пройшов або без пояснення");
-  assert.equal(parseInvoiceForm(el, { today: TODAY, orgs: orgRules({ ZAKAZ1C_ELOGIST_CODE: "000000012" } as NodeJS.ProcessEnv) }).ok, true,
-    "Єлогіст із кодом не пройшов");
+  assert.equal(parseInvoiceForm(el, ctx).ok, true, "Єлогіст з ПДВ не пройшов");
+  assert.equal(parseInvoiceForm({ ...el, vatType: "Без ПДВ" }, ctx).ok, false, "Єлогіст без ПДВ пройшов");
   // ФОП: 1С ще не приймає вибір банку → недоступний навіть із банком.
   const fop = parseInvoiceForm({ ...FORM, org: "fop", bank: "monobank", items: [{ ...FORM.items[0], service: "Організація перевезення за маршрутом" }] }, ctx);
   assert.ok(!fop.ok && /банк/.test(fop.why), "ФОП пройшов, хоча 1С обрала б банк сама");
-  assert.deepEqual(ORGS.map((o) => [o.key, o.code]), [["uts", "000000002"], ["elogist", null], ["avtomuv", "000000004"], ["fop", null]],
-    "коди організацій 1С не ті, що в листі 1С");
+  assert.deepEqual(ORGS.map((o) => [o.key, o.code]), [["uts", "000000002"], ["elogist", "000000012"], ["avtomuv", "000000004"], ["fop", null]],
+    "коди організацій 1С не ті, що дала 1С");
 });
 
 test("#7110 ОПЛАТА РАХУНКУ І «ЗМІНИТИ»: стан — зі знімка неоплачених 1С; змінити — лише в день виставлення і без оплати", () => {

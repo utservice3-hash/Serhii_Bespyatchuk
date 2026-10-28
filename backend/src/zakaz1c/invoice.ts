@@ -39,20 +39,15 @@ export interface OrgRule {
   waits?: string;
 }
 
-const CODE_RE = /^\d{1,9}$/;
-
 /**
- * Коди — з листа 1С (25.10.2026): 000000002 ЮНАЙТЕД, 000000004 АвтоМув. Єлогіста в тому списку немає (питання Андрію),
- * тож його код — з env (`ZAKAZ1C_ELOGIST_CODE`), коли Андрій назве. ФОП у 1С три (05 Шевчук, 06 Яцик, 11 Беспятчук) —
- * котрий, скаже Сергій; але й тоді ФОП чекає вибору банку в `createInvoice`, тому поки недоступний за будь-якого коду.
+ * Коди організацій 1С: 000000002 ЮНАЙТЕД, 000000004 АвтоМув (лист 1С 25.10.2026), 000000012 ТОВ «ЄЛОГІСТ» (Роман,
+ * 28.10.2026). ФОП у 1С три (05 Шевчук, 06 Яцик, 11 Беспятчук) — котрий, скаже Сергій; але й тоді ФОП чекає вибору
+ * банку в `createInvoice`, тому поки недоступний за будь-якого коду.
  */
-export function orgRules(env: NodeJS.ProcessEnv = process.env): OrgRule[] {
-  const elogist = String(env.ZAKAZ1C_ELOGIST_CODE ?? "").trim();
-  const elogistOk = CODE_RE.test(elogist);
+export function orgRules(): OrgRule[] {
   return [
     { key: "uts", short: "ЮТС", name: "ТОВ «ЮНАЙТЕД ТРАНСПОРТ СЕРВІС»", code: "000000002", vat: "with", match: "юнайтед" },
-    { key: "elogist", short: "Єлогіст", name: "ТОВ «Єлогіст»", code: elogistOk ? elogist : null, vat: "with", match: "логіст",
-      ...(elogistOk ? {} : { waits: "Єлогіста немає серед організацій 1С — чекаємо його код від Андрія." }) },
+    { key: "elogist", short: "Єлогіст", name: "ТОВ «ЄЛОГІСТ»", code: "000000012", vat: "with", match: "логіст" },
     { key: "avtomuv", short: "АвтоМув", name: "ТОВ «АвтоМув»", code: "000000004", vat: "without", match: "автомув" },
     { key: "fop", short: "ФОП", name: "ФОП (з 1С)", code: null, vat: "without", match: "фоп", banks: ["ПриватБанк", "monobank"],
       waits: "1С ще не приймає вибір банку (ПриватБанк / monobank) — ФОП відкриємо, щойно Андрій додасть." },
