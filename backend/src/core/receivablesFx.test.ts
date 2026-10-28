@@ -73,8 +73,11 @@ test("#1293b ЖИВИЙ SQL: курс синку збережено, Σ вкла
     await c.query(`INSERT INTO deals (kommo_id, manager_id) VALUES (61000001, 4), (61000002, 7)`);
     const inv = (o: Record<string, unknown>) => ({ uid: String(o.number), number: "", date: "2026-10-01", organization: "АвтоМув", contractor: "ТОВ «Альфа»", edrpou: "111", currency: "EUR",
       invoiceSum: 1000, paidSum: 0, remaining: 1000, realized: false, partiallyPaid: false, debtAccount: null, dueDate: null, manager: "Хтось з 1С", dealId: 61000001, comment: null, ...o });
-    await replaceUnpaid(db, [inv({ number: "1" }), inv({ number: "2", remaining: 333.33, dealId: 61000002 }), inv({ number: "3", currency: "UAH", remaining: 50000 }),
-      inv({ number: "4", currency: "USD", remaining: 200, contractor: "Бета", edrpou: "222", dealId: null })] as never, { EUR: 48.4123, USD: 41.5 });
+    const batch = [inv({ number: "1" }), inv({ number: "2", remaining: 333.33, dealId: 61000002 }), inv({ number: "3", currency: "UAH", remaining: 50000 }),
+      inv({ number: "4", currency: "USD", remaining: 200, contractor: "Бета", edrpou: "222", dealId: null })] as never;
+    // Два синки з різним курсом: «Дебіторка» мусить взяти курс ОСТАННЬОГО, як і журнал «Фінансів».
+    await replaceUnpaid(db, batch, { EUR: 40, USD: 39 });
+    await replaceUnpaid(db, batch, { EUR: 48.4123, USD: 41.5 });
     const fx = await loadReceivablesFx(db, { managerId: null, teamId: null }, "2026-10-28");
     const journal = (await c.query(`SELECT total_uah::float8 AS uah, eur::float8 AS eur, usd::float8 AS usd FROM receivables_fx_totals ORDER BY id DESC LIMIT 1`)).rows[0];
     assert.deepEqual([fx.rates.EUR, fx.rates.USD], [48.4123, 41.5], "🔴 курс синку не збережено");
