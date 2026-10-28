@@ -47,15 +47,30 @@ export interface GadsConversion {
   gclid: string; name: string; time: Date; value: number; transactionId: number; phone: string;
 }
 
-/** Київський час у форматі шаблону: `YYYY-MM-DD HH:MM:SS` (TimeZone задано рядком Parameters). */
+/**
+ * Київський час зі зсувом: `YYYY-MM-DD HH:MM:SS+03:00` (влітку) / `+02:00` (взимку).
+ * Пояс — у самому значенні, а не рядком `Parameters:TimeZone` нагорі: рекламниця 28.10.2026 — Google читає
+ * перший рядок таблиці як назви стовпців, тож файл має починатися одразу із заголовка. Зсув рахується для
+ * КОЖНОЇ дати окремо, тож перехід на літній/зимовий час не зсуває конверсії на годину.
+ */
 export function kyivTime(d: Date): string {
   const p = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
   }).formatToParts(d);
   const g = (t: string) => p.find((x) => x.type === t)?.value ?? "00";
-  return `${g("year")}-${g("month")}-${g("day")} ${g("hour")}:${g("minute")}:${g("second")}`;
+  const off = new Intl.DateTimeFormat("en-US", { timeZone: "Europe/Kyiv", timeZoneName: "longOffset" })
+    .formatToParts(d).find((x) => x.type === "timeZoneName")?.value ?? "GMT+00:00";
+  const zone = off === "GMT" ? "+00:00" : off.replace("GMT", "");
+  return `${g("year")}-${g("month")}-${g("day")} ${g("hour")}:${g("minute")}:${g("second")}${zone}`;
 }
+
+/**
+ * Згода на використання даних для реклами — сталі значення на прохання рекламниці (28.10.2026):
+ * Google вимагає стовпці `Ad User Data` / `Ad Personalization` для розширених конверсій.
+ * 🔴 «Granted» — це НАША заява Google про згоду клієнтів; підстава має бути в політиці конфіденційності сайту.
+ */
+export const GADS_CONSENT = "Granted";
 
 /** Номер для Google — E.164. У базі він уже нормалізований до цифр (`utils/phone.ts`): `380…` → `+380…`. */
 export function e164(phone: string | null): string {
@@ -98,13 +113,13 @@ function cell(v: string): string {
   return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
-/** CSV як у шаблоні рекламниці (рядок Parameters, заголовок, дані) + стовпець телефону для розширених конверсій. */
+/** CSV для таблиці рекламниці: одразу заголовок (без рядка Parameters), дані, телефон і згода для розширених конверсій. */
 export function conversionsCsv(rows: GadsConversion[]): string {
   const lines = [
-    "Parameters:TimeZone=Europe/Kiev",
-    "Google Click ID,Conversion Name,Conversion Time,Conversion Value,Conversion Currency,Transaction ID,Phone Number",
+    "Google Click ID,Conversion Name,Conversion Time,Conversion Value,Conversion Currency,Transaction ID,Phone Number,Ad User Data,Ad Personalization",
     ...rows.map((r) => [
       cell(r.gclid), cell(r.name), kyivTime(r.time), String(r.value), GADS_CURRENCY, String(r.transactionId), cell(r.phone),
+      GADS_CONSENT, GADS_CONSENT,
     ].join(",")),
   ];
   return lines.join("\n") + "\n";
