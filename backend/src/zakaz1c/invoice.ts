@@ -143,7 +143,8 @@ export function invoiceAllowed(mode: Zakaz1cMode, a: { edrpou: string; testEdrpo
   if (mode === "off") return { ok: false, why: "Виставлення рахунків вимкнено (ZAKAZ1C_MODE=off)." };
   if (!a.edrpou) return { ok: false, why: "У компанії угоди немає ЄДРПОУ / ІПН — заповніть поле в компанії." };
   if (mode === "test") {
-    if (!a.testers.has(a.userId)) return { ok: false, why: "Тестовий режим: рахунки створюють лише тестувальники." };
+    // Порожній список — будь-хто (Роман, 28.10.2026: вкладка всім); межу тримає тестовий ЄДРПОУ нижче.
+    if (a.testers.size > 0 && !a.testers.has(a.userId)) return { ok: false, why: "Тестовий режим: рахунки створюють лише тестувальники." };
     if (a.edrpou !== a.testEdrpou) {
       return { ok: false, why: `Тестовий режим: рахунок можна виставити лише тестовому контрагенту (ЄДРПОУ ${a.testEdrpou}).` };
     }

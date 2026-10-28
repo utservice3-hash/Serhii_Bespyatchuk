@@ -10,7 +10,7 @@
  *
  * Вкладка — прийом Genesis (розібрано 23.10.2026): `card_sdk` + `lcard-0`, `loadPreloadedData` повертає ОБʼЄКТ `{}`
  * (тоді Kommo тримає вкладку постійно), а вміст малюємо в контейнер `#<widget_code>`. Кому не можна — повертаємо `[]`,
- * і вкладки немає. Список тих, кому можна, — поле «testers» у налаштуваннях інтеграції.
+ * і вкладки немає. Хто бачить — поле «testers» у налаштуваннях інтеграції: порожньо — усі, інакше лише перелічені.
  */
 define(["jquery"], function ($) {
   return function () {
@@ -24,7 +24,8 @@ define(["jquery"], function ($) {
       return String(settings().testers || "").split(/[,\s]+/).map(Number).filter(function (n) { return n > 0; });
     }
     function me() { return Number(AMOCRM.constant("user").id); }
-    function allowedHere() { return testers().indexOf(me()) !== -1; }
+    /** Порожній список — вкладку бачать усі (рішення Романа 28.10.2026); заповнений — лише ті, хто в ньому. */
+    function allowedHere() { var t = testers(); return t.length === 0 || t.indexOf(me()) !== -1; }
     function leadId() { return AMOCRM.data && AMOCRM.data.current_card ? Number(AMOCRM.data.current_card.id) : 0; }
     function esc(v) { return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
     function r2(n) { return Math.round(Number(n || 0) * 100) / 100; }

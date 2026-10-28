@@ -69,6 +69,10 @@ test("#7102 ТЕСТОВИЙ РЕЖИМ: off — нікому; test — лише
   assert.equal(invoiceAllowed("test", { ...base, userId: 8 }).ok, false, "тестовий режим пустив не тестувальника");
   assert.equal(invoiceAllowed("live", { ...base, edrpou: "12345678", userId: 8, testers: new Set() }).ok, true, "live не пустив");
   assert.equal(invoiceAllowed("live", { ...base, edrpou: "" }).ok, false, "рахунок без ЄДРПОУ дозволено");
+  // Порожній список тестувальників — будь-хто, але межа ЄДРПОУ стоїть (вкладка всім, рішення Романа 28.10.2026).
+  const open = { ...base, userId: 8, testers: new Set<number>() };
+  assert.equal(invoiceAllowed("test", open).ok, true, "з порожнім списком тестувальників не пустило");
+  assert.equal(invoiceAllowed("test", { ...open, edrpou: "12345678" }).ok, false, "порожній список тестувальників пустив справжнього контрагента");
   // Перемикач за замовчуванням — вимкнено: невідоме значення не вмикає модуль.
   assert.equal(zakaz1cMode({} as NodeJS.ProcessEnv), "off");
   assert.equal(zakaz1cMode({ ZAKAZ1C_MODE: "yes" } as NodeJS.ProcessEnv), "off");
@@ -144,6 +148,7 @@ test("#7105 ВІДЖЕТ: вкладка card_sdk + lcard-0, `{}` лише те�
   assert.equal(JSON.parse(WIDGET("i18n/ru.json")).widget.name, "ТЕСТ ЗАКАЗ 1С");
   const js = WIDGET("script.js");
   assert.match(js, /if \(!allowedHere\(\)\) return Promise\.resolve\(\[\]\);/, "не-тестувальнику вкладка не прибирається");
+  assert.match(js, /return t\.length === 0 \|\| t\.indexOf\(me\(\)\) !== -1;/, "порожній список тестувальників не відкриває вкладку всім");
   assert.match(js, /return Promise\.resolve\(\{\}\);/, "тестувальнику вкладка не тримається (`{}`)");
   assert.match(js, /self\.\$authorizedAjax\(/, "запити йдуть не підписаним каналом Kommo");
   assert.doesNotMatch(js, /\$\.ajax\(|fetch\(/, "є запит повз $authorizedAjax — без підпису сервер його відхилить, а якщо ні — це діра");
