@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./firstTouch.css";
 import { fetchAiCalls, fetchAiCallsMeta, type AiCallsResp, type AiCallsMetaResp } from "../../../api";
-import { AiCallDrawer } from "./AiCallDrawer";
+import { AiCallDrawer, FeedbackButton } from "./AiCallDrawer";
 import { FirstTouchQueue } from "./FirstTouchQueue";
 import { FirstTouchPriceChart } from "./FirstTouchPriceChart";
 import { AnimatedNumber } from "./AnimatedNumber";
@@ -13,7 +13,7 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
   CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes, DECISION_UI,
-  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS,
+  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS, CLOSURE_UI,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
   DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams } from "../aiCallsView";
 
@@ -461,8 +461,12 @@ export function AiCallsSection() {
                           <td style={{ whiteSpace: "nowrap" }}>{r.reviewNote
                             ? <span style={{ color: "var(--ok, #166534)" }}>{r.reviewNote.byName ?? "розібрано"} · {new Date(r.reviewNote.at).toLocaleDateString("uk-UA", { day: "2-digit", month: "2-digit", timeZone: "Europe/Kyiv" })}</span>
                             : r.missedNote ? <span style={{ color: "var(--ok, #166534)" }}>опрацьовано</span>
-                            : r.needsReview ? <span style={{ color: "var(--danger, #b91c1c)" }}>не розібрано</span>
-                            : <span className="ftd-sub">—</span>}</td>
+                            : r.reviewClosure === "invoice" ? <span style={{ color: "var(--ok, #166534)" }} title={CLOSURE_UI.invoice.hint}>{CLOSURE_UI.invoice.label}</span>
+                            : r.needsReview ? <span style={{ color: "var(--danger, #b91c1c)" }}>{r.explainNote ? "менеджер пояснив" : "не розібрано"}</span>
+                            : <span className="ftd-sub">—</span>}
+                            {/* 💬 Задача 7183: чим закрито — «погоджено коментар» / «закрито тімлідом». */}
+                            {r.reviewClosure && r.reviewClosure !== "invoice" && <div className="ftd-sub" title={CLOSURE_UI[r.reviewClosure].hint}>{CLOSURE_UI[r.reviewClosure].label}</div>}
+                            {d.canFeedback && <div style={{ marginTop: 4 }}><FeedbackButton uniqueid={r.uniqueid} small /></div>}</td>
                         </tr>
                       ))}
                     </tbody>

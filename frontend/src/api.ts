@@ -412,6 +412,8 @@ export interface AiCallRowT {
   /** Екран D (08.10.2026): чек-лист з 3 пунктів і черга розбору — стани рахує сервер (`core/firstTouchTeamReport.ts`). */
   checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
   reviewReason: AiReviewReasonT | null; needsReview: boolean; reviewNote: AiNoteT | null;
+  /** 💬 Задача 7183: коментар менеджера і чим закрито розмову з черги; `null` — у черзі нічого не було або ще не закрито. */
+  explainNote: AiNoteT | null; reviewClosure: AiReviewClosureT | null;
   objection: AiObjectionT | null; dealOutcome: AiDealOutcomeT | null;
   /** 🤝 Згода після ціни (13.10.2026): лише для розмов з ціною, у бал не входить; `null` — ціни не було чи не розбирали. */
   clientDecision: AiClientDecisionT | null;
@@ -428,6 +430,8 @@ export interface AiClientDecisionT { value: "agreed" | "thinking" | "declined" |
 /** Успіх угоди з Kommo — стан ЗАРАЗ. */
 export interface AiDealOutcomeT { state: "success" | "lost" | "open"; lossReason: string | null }
 export type AiReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
+/** Чим закрито розмову з черги: погоджено коментар менеджера · закрито тімлідом без коментаря · угода дійшла до рахунку. */
+export type AiReviewClosureT = "approved" | "direct" | "invoice";
 export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
@@ -435,6 +439,8 @@ export interface AiCallsResp {
   canSeeExcluded: boolean;
   /** Чи може цей користувач ставити «Розібрано» (тімлід і адмін) — тоді є черга розбору. */
   canReview: boolean;
+  /** 💬 Кнопка «Зворотний звʼязок» біля розмови — тімлід, КВП, адмін (задача 7183). */
+  canFeedback: boolean;
   /** Ціль «ціну озвучено», % — з «Налаштувань» (адмін), за замовчуванням 50. */
   priceTargetPct: number;
   silence: { minGapHours: number; normFrom: string | null };
@@ -467,10 +473,11 @@ export interface AiCallCardResp {
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
   canEditType: boolean;
   /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
-  noteRights: { price: boolean; missed: boolean; offline: boolean };
+  noteRights: { price: boolean; missed: boolean; offline: boolean; explain: boolean };
+  canFeedback: boolean;
   /** Екран D: чек-лист і стан розбору — ті самі, що в рядку списку; `canReview` — тімлід і адмін. */
   checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
-  reviewReason: AiReviewReasonT | null; needsReview: boolean; canReview: boolean;
+  reviewReason: AiReviewReasonT | null; needsReview: boolean; canReview: boolean; reviewClosure: AiReviewClosureT | null;
   canListen: boolean;
   /** Та сама згода після ціни, що в рядку списку. */
   clientDecision: AiClientDecisionT | null;
@@ -485,8 +492,12 @@ export interface AiCloseOfferT {
   closed: { kommoId: number; reason: string; byName: string | null; at: string } | null;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
-export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review", text: string): Promise<void> {
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review" | "explain", text: string): Promise<void> {
   await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
+}
+/** 💬 «Зворотний звʼязок» з розмови: текст тімліда йде в розділ «Зворотний звʼязок» з підставленою розмовою й угодою. */
+export async function sendAiCallFeedback(uniqueid: string, text: string): Promise<void> {
+  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/feedback`, { text });
 }
 /** ❌ Закрити угоду розмови в Kommo як «не реалізовано» з причиною; повернути — на попередній етап. */
 export async function closeAiCallDeal(uniqueid: string, reasonId: number): Promise<{ kommoId: number }> {

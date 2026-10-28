@@ -75,7 +75,9 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
-import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview } from "../core/firstTouchTeamReport.js";
+import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview, reviewClosure } from "../core/firstTouchTeamReport.js";
+import { canSendCallFeedback, callFeedbackBody, CALL_FEEDBACK_MAX } from "../core/firstTouchFeedback.js";
+import { validateFeedback, composeMessage } from "../core/feedbackForm.js";
 import { loadTunables } from "../core/firstTouchTunables.js";
 
 import { canEditType } from "../core/callAiType.js";
@@ -11245,6 +11247,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
   const truncated = all.truncated;
   res.json({
     period: { from, to }, truncated, canSeeExcluded, canReview: canWriteNote(req.auth!.roleKey, "review"),
+    canFeedback: canSendCallFeedback(req.auth!.roleKey),
     // Явний перелік полів, а не спред (#17e2).
     rows: rows.map((r) => ({
       kommoIds: r.kommoIds, uniqueid: r.uniqueid, calledAt: r.calledAt,
@@ -11263,6 +11266,8 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
       // Екран D (08.10.2026): чек-лист і черга розбору — стани від ядра, фронт їх лише складає.
       checklist: checklist(r), checkScore: checklistScore(checklist(r)), reviewReason: reviewReason(r), needsReview: needsReview(r), reviewNote: r.reviewNote,
+      // 💬 Задача 7183: коментар менеджера і чим закрито розмову з черги («погоджено» / «тімлідом» / «дійшла до рахунку»).
+      explainNote: r.explainNote, reviewClosure: reviewReason(r) == null ? null : reviewClosure(r),
       // ТЗ «фінальні доробки» 08.10.2026: заперечення (окрема рубрика), успіх угоди з Kommo і знаменники плиток — від ядра.
       objection: r.objection, dealOutcome: r.dealOutcome,
       // 🤝 Згода після ціни (13.10.2026) — окрема інформація, у бал не входить; показувати чи ні, вирішує ядро.
@@ -11322,11 +11327,14 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
     managerChannel: card.managerChannel, durationSec: card.durationSec, mono: card.mono, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
     typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
-    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline") },
+    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline"),
+      explain: canWriteNote(auth.roleKey, "explain") },
+    canFeedback: canSendCallFeedback(auth.roleKey),
     canListen: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
     // Екран D (08.10.2026): той самий чек-лист і стан розбору, що в рядку списку, — картка однакова з будь-якого входу.
     checklist: checklist(card.row), checkScore: checklistScore(checklist(card.row)), reviewReason: reviewReason(card.row),
     needsReview: needsReview(card.row), canReview: canWriteNote(auth.roleKey, "review"),
+    reviewClosure: reviewReason(card.row) == null ? null : reviewClosure(card.row),
     clientDecision: clientDecision(card.row),
     // ❌ «Закрити угоду в Kommo» (рішення Романа 16.10.2026): лише тімлід (скоуп картки вже звужений), адмін, КВП.
     closeDeal: canCloseDeal(auth.roleKey) ? await closeOffer(pool, card.row) : null,
@@ -11407,7 +11415,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
 dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const auth = req.auth!;
   const kind = String(req.body?.kind ?? "");
-  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : kind === "review" ? "«Розібрано» ставлять тімлід (своя команда) і адмін" : kind === "offline" ? "«Передзвонив поза телефонією» позначають менеджер (свої), тімлід (команда) і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
+  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : kind === "review" ? "«Розібрано» ставлять тімлід (своя команда) і адмін" : kind === "offline" ? "«Передзвонив поза телефонією» позначають менеджер (свої), тімлід (команда) і адмін" : kind === "explain" ? "Коментар менеджера пишуть менеджер (свої), тімлід (команда) і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
   const text = req.body?.text;
   if (typeof text !== "string" || text.length > 2000) { res.status(400).json({ error: "text — рядок до 2000 символів" }); return; }
   const uniqueid = String(req.params.uniqueid);
@@ -11416,6 +11424,28 @@ dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
   await setCallNote(pool, uniqueid, kind as NoteKind, text, { userId: auth.userId ?? null, name: who }, new Date());
   res.json({ ok: true });
+});
+
+/**
+ * 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін пишуть, де система помилилась, — запис іде в розділ
+ * «Зворотний звʼязок» (таблиця `feedback`) з підставленими розмовою, угодою й менеджером. Скоуп — той самий, що картки.
+ */
+dashboardRouter.post("/ai-calls/:uniqueid/feedback", async (req, res) => {
+  const auth = req.auth!;
+  if (!canSendCallFeedback(auth.roleKey)) { res.status(403).json({ error: "«Зворотний звʼязок» з розмови пишуть тімлід, КВП і адмін" }); return; }
+  const text = req.body?.text;
+  if (typeof text !== "string" || !text.trim() || text.length > CALL_FEEDBACK_MAX) { res.status(400).json({ error: `Напишіть, що не так (до ${String(CALL_FEEDBACK_MAX)} символів)` }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  const v = validateFeedback(callFeedbackBody({ uniqueid, calledAt: card.row.calledAt, managerName: card.row.managerName, kommoIds: card.row.kommoIds }, text));
+  if (!v.ok) { res.status(400).json({ error: v.error }); return; }
+  const context = { fromSection: "ai-calls", path: `/ai-calls?call=${encodeURIComponent(uniqueid)}`.slice(0, 120), role: String(auth.roleKey ?? "") };
+  const ins = await pool.query<{ id: number }>(
+    `INSERT INTO feedback (author_user_id, section, message, kind, impact, fields_json, context_json)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [auth.userId, v.draft.section, composeMessage(v.draft), v.draft.kind, v.draft.impact, JSON.stringify(v.draft.fields), JSON.stringify(context)]);
+  res.status(201).json({ ok: true, id: ins.rows[0].id });
 });
 
 /**

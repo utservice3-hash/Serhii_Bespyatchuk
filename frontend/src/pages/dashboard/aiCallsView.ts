@@ -256,6 +256,15 @@ export const CHECK_ITEMS: readonly { key: keyof ChecklistT; label: string }[] = 
 export const CHECK_MARK_UI: Record<CheckMarkT, { label: string; color: string }> = {
   y: { label: "так", color: "#4ade80" }, n: { label: "ні", color: "#f87171" }, o: { label: "не рахується", color: "#d1d5db" },
 };
+/** 💬 Чим закрито розмову з черги (задача 7183) — один підпис для картки, черги й таблиці. */
+export type ReviewClosureT = "approved" | "direct" | "invoice";
+export const CLOSURE_UI: Readonly<Record<ReviewClosureT, { label: string; hint: string }>> = {
+  approved: { label: "погоджено коментар", hint: "Менеджер пояснив, тімлід погодив" },
+  direct: { label: "закрито тімлідом", hint: "Тімлід закрив сам, без коментаря менеджера" },
+  invoice: { label: "дійшла до рахунку", hint: "Угода дійшла до «Виставлення рахунку» або далі — з черги вийшла сама" },
+};
+/** Текст позначки «Розібрано»: з коментарем менеджера — це погодження, без нього — тімлід закрив сам. */
+export const reviewNoteText = (hasManagerComment: boolean): string => (hasManagerComment ? "Погоджено коментар менеджера" : "Розібрано");
 export const REVIEW_REASON_UI: Record<ReviewReasonT, { label: string; tone: Tone }> = {
   noCall: { label: "Немає дзвінка", tone: "bad" },
   late: { label: "Запізнився", tone: "warn" },
