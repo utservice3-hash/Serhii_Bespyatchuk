@@ -6,7 +6,7 @@ import {
   resolveRoutes, toVariants, parseKmOverride, parseVariant, RouteInputError, MOLDOVA_DETOUR_KM, UA_DETOUR_VIA,
   type CachedRoute, type RouteDeps, type RouteKey,
 } from "./roadRoute.js";
-import { orsRoute, failureOf, ORS_MOLDOVA, type LatLng, type OrsResult } from "./orsClient.js";
+import { orsRoute, failureOf, ORS_MOLDOVA, ORS_URL, type LatLng, type OrsResult } from "./orsClient.js";
 import { snapshotOf } from "./rateFeedback.js";
 
 /**
@@ -166,4 +166,13 @@ test("#2788 ЕКРАН: мапа в основному бандлі, відст�
   assert.match(SCREEN, /\}, \[runId\]\); \/\/ eslint-disable-line react-hooks\/exhaustive-deps/, "🔴 відгук перезапускається від правки км");
   assert.doesNotMatch(SCREEN, /label="Через"/, "🔴 поле «Через» повернулось (Роман 29.10.2026: прибрати)");
   assert.doesNotMatch(SCREEN, /По дорогах/, "🔴 повернувся підпис «По дорогах» (Роман 29.10.2026: прибрати)");
+});
+
+test("#2789 АДРЕСА СЕРВІСУ — api.heigit.org: стару api.openrouteservice.org вимикають 2–6.11.2026", async () => {
+  assert.match(ORS_URL, /^https:\/\/api\.heigit\.org\/openrouteservice\/v2\/directions\/driving-car\/geojson$/, "🔴 запит іде не на api.heigit.org");
+  let hit = "";
+  await orsRoute({ key: "k", fetch: (async (u: string) => { hit = String(u); return new Response("{}", { status: 500 }); }) as unknown as typeof fetch }, [[50, 30], [49, 24]]);
+  assert.equal(hit, ORS_URL, "🔴 клієнт ходить не на оголошену адресу");
+  assert.doesNotMatch(SRC("../../src/core/orsClient.ts").replace(/\/\*\*[\s\S]*?\*\//g, ""), /api\.openrouteservice\.org/,
+    "🔴 у коді клієнта знову стара адреса — після 06.11.2026 вона не відповідає зовсім");
 });

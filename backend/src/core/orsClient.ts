@@ -16,7 +16,12 @@ export type OrsResult = { ok: true; leg: RoadLeg } | { ok: false; reason: OrsFai
 
 export interface OrsDeps { fetch: typeof fetch; key: string; timeoutMs?: number }
 
-export const ORS_URL = "https://api.openrouteservice.org/v2/directions/driving-car/geojson";
+/**
+ * Адреса — `api.heigit.org`. Стару `api.openrouteservice.org` HeiGIT визнав застарілою 28.04.2026, урізав на ній ліміт
+ * і вимикає 2–6.11.2026 (оголошення: ask.openrouteservice.org/t/7912). Заміряно 29.10.2026: стара адреса на будь-який
+ * ключ — 403 «Quota exceeded», нова — 200, ліміт 2 000/день, той самий ключ (#2789).
+ */
+export const ORS_URL = "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson";
 /** Код Молдови в `countryinfo` сервісу (заміряно 29.10.2026: Ізмаїл→Хмельницький дав країни 211 і 129). */
 export const ORS_MOLDOVA = 129;
 const TIMEOUT_MS = 8000;
