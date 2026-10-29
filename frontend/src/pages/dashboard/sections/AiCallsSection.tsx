@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./firstTouch.css";
 import { fetchAiCalls, fetchAiCallsMeta, type AiCallsResp, type AiCallsMetaResp } from "../../../api";
-import { AiCallDrawer } from "./AiCallDrawer";
+import { AiCallDrawer, FeedbackButton } from "./AiCallDrawer";
 import { FirstTouchQueue } from "./FirstTouchQueue";
 import { FirstTouchPriceChart } from "./FirstTouchPriceChart";
 import { AnimatedNumber } from "./AnimatedNumber";
@@ -13,7 +13,8 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
   CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes, DECISION_UI,
-  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS,
+  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS, CLOSURE_UI,
+  TRANSPORT_LABEL, type ExcludedFilterT,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
   DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams } from "../aiCallsView";
 
@@ -137,7 +138,7 @@ export function AiCallsSection() {
 
   // ТЗ 30.09.2026: «Звіт» — запити на перевезення (і непевні з позначкою), «Виключені» — решта, з фільтром за типом.
   const [tab, setTab] = useState<ListTab>("report");
-  const [exType, setExType] = useState<ConversationTypeT | "all">("all");
+  const [exType, setExType] = useState<ExcludedFilterT>("all");
   const scopedAll = useMemo(() => (d ? applyListFilter(d.rows, lf) : []), [d, lf]);
   const scoped = useMemo(() => tabRows(scopedAll, tab, exType), [scopedAll, tab, exType]);
   // П3: прапорець «тиша» — лише з дати оголошення норми; до того фільтра немає зовсім.
@@ -370,8 +371,9 @@ export function AiCallsSection() {
             <div className="ftd-filters">
               {tab === "excluded" && (
                 <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Тип
-                  <select id="ai-extype" value={exType} onChange={(e) => setExType(e.target.value as ConversationTypeT | "all")}>
+                  <select id="ai-extype" value={exType} onChange={(e) => setExType(e.target.value as ExcludedFilterT)}>
                     <option value="all">усі</option>
+                    <option value="transport">вид перевезення (не оцінюємо)</option>
                     {(Object.keys(TYPE_LABEL) as ConversationTypeT[]).filter((k) => k !== "cargo_request").map((k) => <option key={k} value={k}>{TYPE_LABEL[k]}</option>)}
                   </select>
                 </label>
@@ -430,7 +432,9 @@ export function AiCallsSection() {
                               <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 3 }}>
                                 {r.typeCheck && <span className="ftd-chip" title={`Модель не впевнена в типі (${r.conversationType ? TYPE_LABEL[r.conversationType] : "—"}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}`}
                                   style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>Перевірити тип</span>}
-                                {!r.inReport && r.conversationType && <span className="ftd-chip" title={r.typeReason ?? ""} style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>{TYPE_LABEL[r.conversationType]}</span>}
+                                {!r.inReport && r.transportKind
+                                  ? <span className="ftd-chip" title="Не оцінюємо в першому дотику: на такому перевезенні ціну в першій розмові назвати майже неможливо (задача 7183)" style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>не оцінюємо · {TRANSPORT_LABEL[r.transportKind]}</span>
+                                  : !r.inReport && r.conversationType && <span className="ftd-chip" title={r.typeReason ?? ""} style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>{TYPE_LABEL[r.conversationType]}</span>}
                                 {r.typeOverride && <span className="ftd-sub">позначено вручну{r.typeOverride.byName ? ` · ${r.typeOverride.byName}` : ""}</span>}
                               </div>
                             )}
@@ -461,8 +465,12 @@ export function AiCallsSection() {
                           <td style={{ whiteSpace: "nowrap" }}>{r.reviewNote
                             ? <span style={{ color: "var(--ok, #166534)" }}>{r.reviewNote.byName ?? "розібрано"} · {new Date(r.reviewNote.at).toLocaleDateString("uk-UA", { day: "2-digit", month: "2-digit", timeZone: "Europe/Kyiv" })}</span>
                             : r.missedNote ? <span style={{ color: "var(--ok, #166534)" }}>опрацьовано</span>
-                            : r.needsReview ? <span style={{ color: "var(--danger, #b91c1c)" }}>не розібрано</span>
-                            : <span className="ftd-sub">—</span>}</td>
+                            : r.reviewClosure === "invoice" ? <span style={{ color: "var(--ok, #166534)" }} title={CLOSURE_UI.invoice.hint}>{CLOSURE_UI.invoice.label}</span>
+                            : r.needsReview ? <span style={{ color: "var(--danger, #b91c1c)" }}>{r.explainNote ? "менеджер пояснив" : "не розібрано"}</span>
+                            : <span className="ftd-sub">—</span>}
+                            {/* 💬 Задача 7183: чим закрито — «погоджено коментар» / «закрито тімлідом». */}
+                            {r.reviewClosure && r.reviewClosure !== "invoice" && <div className="ftd-sub" title={CLOSURE_UI[r.reviewClosure].hint}>{CLOSURE_UI[r.reviewClosure].label}</div>}
+                            {d.canFeedback && <div style={{ marginTop: 4 }}><FeedbackButton uniqueid={r.uniqueid} small /></div>}</td>
                         </tr>
                       ))}
                     </tbody>

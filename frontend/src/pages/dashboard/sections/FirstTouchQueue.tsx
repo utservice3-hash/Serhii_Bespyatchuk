@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchAiCallCard, fetchAiCallRecording, putAiCallNote, hiringError, type AiCallCardResp, type AiCallRowT } from "../../../api";
-import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel } from "../aiCallsView";
+import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel, reviewNoteText } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
-import { Analysis, QuoteSeek } from "./AiCallDrawer";
+import { Analysis, QuoteSeek, FeedbackButton } from "./AiCallDrawer";
 import { ChecklistBlock } from "./FirstTouchChecklist";
 
 /**
@@ -57,7 +57,8 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
   const review = async () => {
     if (!cur) return;
     setBusy(true); setErr(null);
-    try { await putAiCallNote(cur.uniqueid, "review", note.trim() || "Розібрано"); next(); onReviewed(); }
+    // Задача 7183: є коментар менеджера — це погодження; немає — тімлід закрив сам (у черзі видно різницю).
+    try { await putAiCallNote(cur.uniqueid, "review", note.trim() || reviewNoteText(cur.explainNote != null || cur.priceNote != null)); next(); onReviewed(); }
     catch (e) { setErr(hiringError(e)); }
     setBusy(false);
   };
@@ -94,7 +95,10 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
                       <b>{q.managerName ?? "Менеджер невідомий"}</b><span className="ftd-sub">{fmtShort(q.calledAt)}</span>
                     </span>
                     <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{q.summary ?? "—"}</span>
-                    {why && <span className="ftd-chip" style={{ alignSelf: "flex-start", background: tone.bg, color: tone.fg, fontWeight: 600 }}>{why.label}</span>}
+                    <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {why && <span className="ftd-chip" style={{ background: tone.bg, color: tone.fg, fontWeight: 600 }}>{why.label}</span>}
+                      {(q.explainNote || q.priceNote) && <span className="ftd-chip" style={{ background: TONE_COLOR.ok.bg, color: TONE_COLOR.ok.fg }}>менеджер пояснив</span>}
+                    </span>
                   </button>
                 );
               })}
@@ -122,16 +126,25 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
                   {r?.summary && <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55 }}>{r.summary}</p>}
                   <ChecklistBlock c={c} checklist={cur?.checklist ?? null} promiseState={cur?.promiseState ?? null} conversationType={cur?.conversationType ?? null}
                     onSeek={(t) => seekRef.current?.(t)} />
+                  {(cur?.explainNote || cur?.priceNote) && (
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", fontSize: 14 }}>
+                      <div className="ftd-sub" style={{ marginBottom: 2 }}>Коментар менеджера · {(cur.explainNote ?? cur.priceNote)!.byName ?? "—"}</div>
+                      {cur.explainNote && <div>{cur.explainNote.text}</div>}
+                      {cur.priceNote && <div>{cur.explainNote ? "Ціна: " : ""}{cur.priceNote.text}</div>}
+                    </div>
+                  )}
                   <label htmlFor="ftd-review-note" style={{ fontSize: 13, fontWeight: 600 }}>Коментар менеджеру <span className="ftd-sub">· необовʼязково</span></label>
                   <textarea id="ftd-review-note" value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)}
                     placeholder={`Що сказати ${cur?.managerName ?? "менеджеру"} по цій розмові`}
                     style={{ minHeight: 60, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", font: "inherit", resize: "vertical", background: "var(--card-bg)", color: "var(--text)" }} />
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    <button type="button" className="ftd-btn dark" disabled={busy} onClick={() => void review()}>{busy ? "Зберігаю…" : "Опрацьовано · наступна ›"}</button>
+                    <button type="button" className="ftd-btn dark" disabled={busy} onClick={() => void review()}>{busy ? "Зберігаю…"
+                      : cur?.explainNote || cur?.priceNote ? "Погодити коментар · наступна ›" : "Опрацьовано без коментаря · наступна ›"}</button>
                     {cur?.reviewReason === "noCall" && c.noteRights.offline && (
                       <button type="button" className="ftd-btn" disabled={busy} onClick={() => void offline()}>Передзвонив поза телефонією</button>
                     )}
                     <button type="button" className="ftd-btn" onClick={() => cur && onOpenCard(cur.uniqueid)}>Повна картка</button>
+                    {c.canFeedback && cur && <FeedbackButton uniqueid={cur.uniqueid} />}
                   </div>
                   <div className="ftd-q-cols">
                     <section aria-label="Розмова" className="ftd-q-sec">

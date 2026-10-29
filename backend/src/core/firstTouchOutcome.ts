@@ -1,5 +1,5 @@
 import type { Db } from "./adCallFacts.js";
-import { AUTO_WENT_STATUSES, FC_PIPELINE_IDS } from "./moneyBuckets.js";
+import { AUTO_WENT_STATUSES, AWAITING_STATUSES, CLOSED_STATUSES, FC_PIPELINE_IDS, RECEIVED_STATUSES } from "./moneyBuckets.js";
 
 /**
  * 🏁 «УСПІХ УГОДИ» ПЕРШОГО ДОТИКУ (ТЗ «фінальні доробки після показу 08.10», критерій 5). Не AI, а статус угоди в Kommo
@@ -75,3 +75,27 @@ export async function dealOutcomes(db: Db, kommoIds: readonly number[]): Promise
 
 /** Підписи для екрана. */
 export const OUTCOME_UA: Record<OutcomeState, string> = { success: "успіх", lost: "відмова", open: "у роботі" };
+
+/**
+ * 🧾 «Виставлення рахунку» і далі (задача 7183, 28.10.2026) — ТА САМА зона, що «дійшли до грошей» на «Рекламі»
+ * (`metrics.MONEY_ZONE`; парність тримає гейт), лише без імпорту `metrics` (той тягне пул).
+ */
+export const FROM_INVOICE_STATUSES: readonly number[] = [...AWAITING_STATUSES, ...RECEIVED_STATUSES, ...CLOSED_STATUSES];
+
+/**
+ * Які з угод заходили в «Виставлення рахунку» або далі — ЗА ФАКТОМ ВХОДУ (`deal_stage_events`) або стоять там зараз,
+ * лише в повному циклі (142 у кваліфікації — «Кваліфіковано», не рахунок). Угода кваліфікації — за дочірньою (`lead_child_links`).
+ * Повертає id ВХІДНИХ угод (батьків), а не дочірніх.
+ */
+export async function dealsReachedInvoice(db: Db, kommoIds: readonly number[]): Promise<Set<number>> {
+  if (!kommoIds.length) return new Set();
+  const r = await db.query<{ owner: string }>(
+    `WITH cand AS (SELECT unnest($1::bigint[]) AS owner, unnest($1::bigint[]) AS deal
+                   UNION SELECT l.parent_id, l.child_id FROM lead_child_links l WHERE l.parent_id = ANY($1::bigint[]))
+     SELECT DISTINCT c.owner::text AS owner FROM cand c JOIN deals d ON d.kommo_id = c.deal AND d.pipeline_id = ANY($3::bigint[])
+      WHERE d.status_id = ANY($2::bigint[])
+         OR EXISTS (SELECT 1 FROM deal_stage_events e WHERE e.kommo_id = c.deal AND e.status_id = ANY($2::bigint[])
+                     AND (e.status_id <> 142 OR e.pipeline_id = ANY($3::bigint[])))`,
+    [[...kommoIds], [...FROM_INVOICE_STATUSES], [...FC_PIPELINE_IDS]]);
+  return new Set(r.rows.map((x) => Number(x.owner)));
+}

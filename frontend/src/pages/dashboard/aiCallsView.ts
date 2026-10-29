@@ -213,9 +213,17 @@ export function fmtMinutes(m: number): string {
 
 export type ListTab = "report" | "excluded";
 /** Рядок у вкладці: «Звіт» — `inReport`, «Виключені» — решта. Фільтр за типом — лише у «Виключених». */
-export function tabRows<T extends { inReport: boolean; conversationType: ConversationTypeT | null }>(rows: readonly T[], tab: ListTab,
-  type: ConversationTypeT | "all" = "all"): T[] {
-  return rows.filter((r) => (tab === "report" ? r.inReport : !r.inReport) && (tab === "report" || type === "all" || r.conversationType === type));
+/** 🚛 Вид перевезення, який не оцінюємо (задача 7183) — підпис для «Виключених» і картки. */
+export type TransportKindT = "international" | "oversize" | "tanker" | "dump" | "grain";
+export const TRANSPORT_LABEL: Readonly<Record<TransportKindT, string>> = {
+  international: "міжнародне", oversize: "трал / негабарит", tanker: "цистерна", dump: "самоскид", grain: "зерновоз",
+};
+/** Фільтр «Виключених»: тип розмови, або «transport» — розмови, які не оцінюємо через вид перевезення. */
+export type ExcludedFilterT = ConversationTypeT | "transport" | "all";
+export function tabRows<T extends { inReport: boolean; conversationType: ConversationTypeT | null; transportKind?: TransportKindT | null }>(rows: readonly T[], tab: ListTab,
+  type: ExcludedFilterT = "all"): T[] {
+  return rows.filter((r) => (tab === "report" ? r.inReport : !r.inReport)
+    && (tab === "report" || type === "all" || (type === "transport" ? r.transportKind != null : r.transportKind == null && r.conversationType === type)));
 }
 
 /**
@@ -256,6 +264,15 @@ export const CHECK_ITEMS: readonly { key: keyof ChecklistT; label: string }[] = 
 export const CHECK_MARK_UI: Record<CheckMarkT, { label: string; color: string }> = {
   y: { label: "так", color: "#4ade80" }, n: { label: "ні", color: "#f87171" }, o: { label: "не рахується", color: "#d1d5db" },
 };
+/** 💬 Чим закрито розмову з черги (задача 7183) — один підпис для картки, черги й таблиці. */
+export type ReviewClosureT = "approved" | "direct" | "invoice";
+export const CLOSURE_UI: Readonly<Record<ReviewClosureT, { label: string; hint: string }>> = {
+  approved: { label: "погоджено коментар", hint: "Менеджер пояснив, тімлід погодив" },
+  direct: { label: "закрито тімлідом", hint: "Тімлід закрив сам, без коментаря менеджера" },
+  invoice: { label: "дійшла до рахунку", hint: "Угода дійшла до «Виставлення рахунку» або далі — з черги вийшла сама" },
+};
+/** Текст позначки «Розібрано»: з коментарем менеджера — це погодження, без нього — тімлід закрив сам. */
+export const reviewNoteText = (hasManagerComment: boolean): string => (hasManagerComment ? "Погоджено коментар менеджера" : "Розібрано");
 export const REVIEW_REASON_UI: Record<ReviewReasonT, { label: string; tone: Tone }> = {
   noCall: { label: "Немає дзвінка", tone: "bad" },
   late: { label: "Запізнився", tone: "warn" },

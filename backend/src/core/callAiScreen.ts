@@ -3,7 +3,8 @@ import { adDealFirstTalksSql } from "./adCallFactsRules.js";
 import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
 import { OBJECTION_RUBRICS, RUBRIC_OBJECTION_V2, type ClientDecision, type ObjectionResult } from "./callAiObjection.js";
-import { dealOutcomes, outcomeOfCall, type DealOutcome } from "./firstTouchOutcome.js";
+import { dealOutcomes, dealsReachedInvoice, outcomeOfCall, type DealOutcome } from "./firstTouchOutcome.js";
+import { INTL_REQUEST_TYPE, RUBRIC_TRANSPORT_V1, transportExclusion, type ExcludedTransport, type TransportResult } from "./firstTouchTransport.js";
 import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, FIRST_TOUCH_SHOWN_RUBRICS, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, RINGOSTAT_POLICY, RECORDING_MAX_BYTES, type AdPredicate } from "./callAiPilot.js";
 import { downloadRecording, type DownloadOutcome } from "./ringostatRecording.js";
@@ -80,6 +81,8 @@ export function canWriteNote(roleKey: string | null | undefined, kind: string): 
   // спершу фідбек тімлідів); тімлід і адмін ставлять.
   if (kind === "offline") return roleKey === "admin" || roleKey === "team_lead";
   if (kind === "missed" || kind === "review") return roleKey === "admin" || roleKey === "team_lead";
+  // 💬 «Коментар менеджера» до розмови з черги (задача 7183): менеджер (свої), тімлід (команда), адмін; погоджує тімлід «Розібрано».
+  if (kind === "explain") return roleKey === "admin" || roleKey === "team_lead" || roleKey === "manager";
   return false;
 }
 
@@ -156,8 +159,10 @@ export interface AiCallRow {
   typeReason: string | null;
   /** Названа ціна дослівно («18000 грн»); `null` — суми не прозвучало або ще не розібрано. */
   priceValue: string | null;
-  /** У звіті (ТЗ 30.09.2026) чи у «Виключених» — `core/callAiType.ts`. */
+  /** У звіті (ТЗ 30.09.2026) чи у «Виключених» — `core/callAiType.ts` і вид перевезення (`firstTouchTransport.ts`). */
   inReport: boolean;
+  /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183): міжнародка, трал, цистерна, самоскид, зерновоз; `null` — оцінюємо. */
+  transportKind: ExcludedTransport | null;
   /** Модель не впевнена (< 0.85) — у звіті з позначкою «Перевірити тип». */
   typeCheck: boolean;
   /** Остання ручна позначка тімліда чи адміна, якщо була. */
@@ -169,6 +174,10 @@ export interface AiCallRow {
   offlineNote: CallNote | null;
   /** «Розібрано» тімлідом з черги розбору (екран D, 08.10.2026) — `null`, якщо не розбирали. */
   reviewNote: CallNote | null;
+  /** 💬 «Коментар менеджера» (задача 7183) — пояснення до розмови з черги; `null` — не писав. */
+  explainNote: CallNote | null;
+  /** 🧾 Угода розмови заходила в «Виставлення рахунку» або далі — розмова виходить з черги (задача 7183). */
+  reachedInvoice: boolean;
   /** Модель витягла запит клієнта (що й куди везти) — пункт «Запит» чек-листа; `false` і до аналізу. */
   hasRequest: boolean;
   /** 🛡 Заперечення (окрема рубрика `first-touch-objection-v1`/`-v2`, ТЗ 08.10.2026); `null` — ще не розібрано цією рубрикою. */
@@ -205,6 +214,8 @@ interface RawRow {
   mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
   rv_text?: string | null; rv_by?: string | null; rv_at?: Date | null;
+  ex_text?: string | null; ex_by?: string | null; ex_at?: Date | null;
+  tr_result?: TransportResult | null; request_type?: string | null;
   obj_result?: ObjectionResult | null;
   dec_result?: ObjectionResult | null;
   first_out_at?: Date | null;
@@ -223,10 +234,17 @@ const OBJECTION_JOINS = `LEFT JOIN LATERAL (SELECT ox.result AS obj_result FROM 
 
 const IN_TYPES = new Set(["in", "transitin"]);
 
+/** 🚛 Готовий розбір виду перевезення (задача 7183) — для списку й картки однаково (`t` — розшифровка). */
+const TRANSPORT_JOIN = `LEFT JOIN LATERAL (SELECT trx.result AS tr_result FROM call_analyses trx
+                  WHERE trx.transcript_id = t.id AND trx.rubric_version = '${RUBRIC_TRANSPORT_V1}' AND trx.status = 'done'
+                  ORDER BY trx.id DESC LIMIT 1) trn ON true`;
+
 export function foldRow(r: RawRow): AiCallRow {
   const state = aiCallState(r.stt_status, r.llm_status, r.stt_empty === true);
   const res = state === "done" ? r.result : null;
   const quotes = res ? [res.price, ...res.objections, ...res.promises] : [];
+  const tf = typeFields(res, r);
+  const transportKind = transportExclusion({ ai: state === "done" ? r.tr_result ?? null : null, kommoInternational: r.request_type === INTL_REQUEST_TYPE });
   return {
     kommoId: Number(r.kommo_id), uniqueid: r.uniqueid, calledAt: new Date(r.calldate).toISOString(),
     direction: IN_TYPES.has(r.call_type) ? "in" : "out", billsec: Number(r.billsec),
@@ -247,11 +265,13 @@ export function foldRow(r: RawRow): AiCallRow {
     promiseState: null,
     managerPromises: res ? managerPromisesOf(res).length : 0,
     silentBeforeClose: null,
-    ...typeFields(res, r),
+    ...tf, inReport: tf.inReport && transportKind == null, transportKind,
     priceNote: r.pn_text ? { text: r.pn_text, byName: r.pn_by ?? null, at: r.pn_at ? new Date(r.pn_at).toISOString() : "" } : null,
     missedNote: r.mn_text ? { text: r.mn_text, byName: r.mn_by ?? null, at: r.mn_at ? new Date(r.mn_at).toISOString() : "" } : null,
     offlineNote: r.on_text ? { text: r.on_text, byName: r.on_by ?? null, at: r.on_at ? new Date(r.on_at).toISOString() : "" } : null,
     reviewNote: r.rv_text ? { text: r.rv_text, byName: r.rv_by ?? null, at: r.rv_at ? new Date(r.rv_at).toISOString() : "" } : null,
+    explainNote: r.ex_text ? { text: r.ex_text, byName: r.ex_by ?? null, at: r.ex_at ? new Date(r.ex_at).toISOString() : "" } : null,
+    reachedInvoice: false,
     hasRequest: (res?.client_request ?? "").trim() !== "",
     objection: state === "done" ? r.obj_result ?? null : null,
     decision: state === "done" && r.dec_result?.client_decision
@@ -269,9 +289,11 @@ export function foldRow(r: RawRow): AiCallRow {
 const notesJoin = (alias: string): string => `LEFT JOIN first_touch_notes pn ON pn.uniqueid = ${alias}.uniqueid AND pn.kind = 'price'
       LEFT JOIN first_touch_notes mn ON mn.uniqueid = ${alias}.uniqueid AND mn.kind = 'missed'
       LEFT JOIN first_touch_notes onx ON onx.uniqueid = ${alias}.uniqueid AND onx.kind = 'offline'
-      LEFT JOIN first_touch_notes rvx ON rvx.uniqueid = ${alias}.uniqueid AND rvx.kind = 'review'`;
+      LEFT JOIN first_touch_notes rvx ON rvx.uniqueid = ${alias}.uniqueid AND rvx.kind = 'review'
+      LEFT JOIN first_touch_notes exn ON exn.uniqueid = ${alias}.uniqueid AND exn.kind = 'explain'`;
 const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_at, mn.note AS mn_text, mn.set_by_name AS mn_by, mn.set_at AS mn_at, "
-  + "onx.note AS on_text, onx.set_by_name AS on_by, onx.set_at AS on_at, rvx.note AS rv_text, rvx.set_by_name AS rv_by, rvx.set_at AS rv_at";
+  + "onx.note AS on_text, onx.set_by_name AS on_by, onx.set_at AS on_at, rvx.note AS rv_text, rvx.set_by_name AS rv_by, rvx.set_at AS rv_at, "
+  + "exn.note AS ex_text, exn.set_by_name AS ex_by, exn.set_at AS ex_at";
 
 function typeFields(res: AnalysisResult | null, r: RawRow): Pick<AiCallRow, "conversationType" | "typeConfidence" | "typeReason" | "priceValue" | "inReport" | "typeCheck" | "typeOverride"> {
   const override: TypeOverride | null = r.ov_is_cargo == null ? null
@@ -384,6 +406,8 @@ export function collapseByCall(rows: readonly AiCallRow[]): AiCallListRow[] {
       // Перший вихідний рахується від створення угоди; найраніша угода дає найраніший — беремо мінімум.
       if (r.firstOutboundAt && (!seen.firstOutboundAt || r.firstOutboundAt < seen.firstOutboundAt)) seen.firstOutboundAt = r.firstOutboundAt;
       if (r.silentBeforeClose === true || (seen.silentBeforeClose == null && r.silentBeforeClose === false)) seen.silentBeforeClose = r.silentBeforeClose;
+      // 🚛 Одна з угод розмови — міжнародна за Kommo: розмова не оцінюється (задача 7183).
+      if (r.transportKind && !seen.transportKind) { seen.transportKind = r.transportKind; seen.inReport = false; }
       continue;
     }
     const { kommoId, ...rest } = r;
@@ -410,7 +434,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            ft.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            t.status AS stt_status, t.failure AS stt_failure,
            a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result,
-           rcx.client_phone, d.pipeline_id, d.reject_reason,
+           rcx.client_phone, d.pipeline_id, d.reject_reason, d.request_type, trn.tr_result,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
            (SELECT min(e.calldate) FROM ringostat_calls e WHERE rcx.client_phone IS NOT NULL AND e.client_phone = rcx.client_phone
@@ -427,6 +451,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
                   WHERE ax.transcript_id = t.id AND ax.provider = $10 AND ax.model = $11 AND ax.rubric_version = ANY($12::text[])
                   ORDER BY (ax.status = 'done') DESC, array_position($12::text[], ax.rubric_version) LIMIT 1) a ON true
       ${OBJECTION_JOINS}
+      ${TRANSPORT_JOIN}
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
        AND ${firstTouchExclusionSql("ft", "rcx.client_phone", tun.repeatWindowDays)}
@@ -465,6 +490,9 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
   // 🏁 Успіх угоди — стан Kommo ЗАРАЗ; розмова з кількома угодами — `outcomeOfCall`.
   const outcomes = await dealOutcomes(db, [...new Set(out.flatMap((r) => r.kommoIds))]);
   for (const r of out) r.dealOutcome = outcomeOfCall(r.kommoIds.map((id) => outcomes.get(id)).filter((x): x is DealOutcome => x != null));
+  // 🧾 Задача 7183: угода дійшла до «Виставлення рахунку» чи далі — розмова виходить з черги розбору.
+  const invoiced = await dealsReachedInvoice(db, [...new Set(out.flatMap((r) => r.kommoIds))]);
+  for (const r of out) r.reachedInvoice = r.kommoIds.some((id) => invoiced.has(id));
   return { rows: out, truncated: raw.length >= SCREEN_LIMIT };
 }
 
@@ -511,7 +539,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
-           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result
+           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result, trn.tr_result
       FROM ringostat_calls rc
       ${overrideJoin("rc")}
       ${notesJoin("rc")}
@@ -522,6 +550,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
                   WHERE ax.transcript_id = t.id AND ax.provider = $4 AND ax.model = $5 AND ax.rubric_version = ANY($6::text[])
                   ORDER BY (ax.status = 'done') DESC, array_position($6::text[], ax.rubric_version) LIMIT 1) a ON true
       ${OBJECTION_JOINS}
+      ${TRANSPORT_JOIN}
      WHERE rc.uniqueid = $1
        AND ($7::int IS NULL OR rc.manager_id = $7)
        AND ($8::int IS NULL OR m.team_id = $8)
@@ -537,9 +566,15 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
   if (!raw) return null;
   if (raw.result) raw.result = withClientCallback(raw.result);
   const row = foldRow(raw);
+  // Угоди номера: за ключем-номером АБО за телефоном контакту угоди — інакше угода компанії (ключ — назва) у картці
+  // не мала б ні посилання, ні «Закрити угоду», хоча в списку вона є (хвіст задачі 6439, 28.10.2026).
   const deals = raw.client_phone
     ? (await db.query<{ kommo_id: string }>(
-      `SELECT kommo_id::text FROM deals WHERE client_key IS NOT NULL AND '38' || client_key = $1 ORDER BY created_at_kommo DESC LIMIT 5`,
+      `SELECT d.kommo_id::text FROM deals d
+        WHERE (d.client_key IS NOT NULL AND '38' || d.client_key = $1)
+           OR EXISTS (SELECT 1 FROM deal_contacts dc JOIN contact_phones cp ON cp.contact_id = dc.contact_id
+                       WHERE dc.deal_kommo_id = d.kommo_id AND cp.phone = $1)
+        ORDER BY d.created_at_kommo DESC LIMIT 5`,
       [raw.client_phone])).rows.map((x) => Number(x.kommo_id))
     : [];
   const next = raw.client_phone
@@ -562,6 +597,12 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
   const mc = done && raw.result ? raw.result.manager_channel : null;
   const outc = await dealOutcomes(db, deals);
   rest.dealOutcome = outcomeOfCall(deals.map((id) => outc.get(id)).filter((x): x is DealOutcome => x != null));
+  rest.reachedInvoice = (await dealsReachedInvoice(db, deals)).size > 0;
+  // 🚛 Вид перевезення в картці — той самий, що в списку: розбір розмови + «Міжнародні» в Kommo будь-якої угоди номера.
+  const intl = deals.length > 0 && ((await db.query("SELECT 1 FROM deals WHERE kommo_id = ANY($1::bigint[]) AND request_type = $2 LIMIT 1",
+    [deals, INTL_REQUEST_TYPE])).rowCount ?? 0) > 0;
+  rest.transportKind = transportExclusion({ ai: done ? raw.tr_result ?? null : null, kommoInternational: intl });
+  if (rest.transportKind) rest.inReport = false;
   return {
     // 🩹 07.10.2026: стан рядка картки — той самий, що в списку (найгірша обіцянка + позначка «поза телефонією»).
     // Без нього `row.promiseState` лишався null з `foldRow`, і в картці НІКОЛИ не зʼявлялись поля «Передзвонив поза
@@ -620,7 +661,7 @@ export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by
     [uniqueid, isCargo, by.userId, by.name, at.toISOString()]);
 }
 
-export type NoteKind = "price" | "missed" | "offline" | "review";
+export type NoteKind = "price" | "missed" | "offline" | "review" | "explain";
 /** Записати (або замінити) коментар виду `kind`. Порожній текст — прибрати коментар. Право й скоуп — у роуті. */
 export async function setCallNote(db: Db, uniqueid: string, kind: NoteKind, text: string, by: { userId: number | null; name: string | null }, at: Date): Promise<void> {
   const t = text.trim();
