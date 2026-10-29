@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, closeAiCallDeal, revertAiCallDeal, type AiCallCardResp, type AiQuoted } from "../../../api";
+import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, closeAiCallDeal, revertAiCallDeal, sendAiCallFeedback, type AiCallCardResp, type AiQuoted } from "../../../api";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, type AiCallState, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { ChecklistBlock } from "./FirstTouchChecklist";
 import "./hiring.css";
@@ -164,8 +164,8 @@ function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void 
  * 📝 Коментарі (ТЗ 30.09.2026): «Чому не озвучено ціну» — коли ціни в розмові не було; «Опрацьовано» — коли менеджер
  * не передзвонив (після нього банер у звіті цю розмову не показує). Хто пише — вирішує сервер (`noteRights`).
  */
-function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind: "price" | "missed" | "offline"; title: string; hint: string; onSaved: () => void }) {
-  const cur = kind === "price" ? c.row.priceNote : kind === "missed" ? c.row.missedNote : c.row.offlineNote;
+function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind: "price" | "missed" | "offline" | "explain"; title: string; hint: string; onSaved: () => void }) {
+  const cur = kind === "price" ? c.row.priceNote : kind === "missed" ? c.row.missedNote : kind === "explain" ? c.row.explainNote : c.row.offlineNote;
   const can = c.noteRights[kind];
   const [text, setText] = useState(cur?.text ?? "");
   const [busy, setBusy] = useState(false);
@@ -197,9 +197,13 @@ function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) 
   const needMissed = c.row.promiseState === "broken";
   // 📞 01.10.2026: Ringostat не бачить мобільного й месенджера — передзвін поза телефонією позначає людина.
   const needOffline = c.row.promiseState === "broken" || c.row.promiseState === "late" || c.row.offlineNote != null;
-  if (!needPrice && !needMissed && !needOffline) return null;
+  // 💬 Задача 7183: розмова в черзі розбору — менеджер пояснює, тімлід погоджує.
+  const needExplain = c.reviewReason != null || c.row.explainNote != null;
+  if (!needPrice && !needMissed && !needOffline && !needExplain) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+      {needExplain && <NoteField c={c} kind="explain" title="Коментар менеджера"
+        hint="Розмова в черзі розбору. Поясніть, що сталось і що зроблено далі, — тімлід погодить, і вона вийде з черги." onSaved={onSaved} />}
       {needPrice && <NoteField c={c} kind="price" title="Чому не озвучено ціну" hint="Ціни в розмові не було, а причину ще не написали." onSaved={onSaved} />}
       {needOffline && <NoteField c={c} kind="offline" title="Передзвонив поза телефонією (мобільний, месенджер, інший номер)"
         hint="Якщо передзвін був не через Ringostat — напишіть коротко як і коли. Обіцянка тоді рахується виконаною." onSaved={onSaved} />}
@@ -275,20 +279,44 @@ function ReviewBar({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const rn = c.row.reviewNote;
-  if (rn) return <div style={{ fontSize: 12.5, color: "var(--ok, #166534)", marginTop: 6 }}>Розібрано · {rn.byName ?? "—"} · {fmtFull(rn.at)}{rn.text !== "Розібрано" ? ` · «${rn.text}»` : ""}</div>;
+  const closure = c.reviewClosure ? CLOSURE_UI[c.reviewClosure].label : "Розібрано";
+  if (rn) return <div style={{ fontSize: 12.5, color: "var(--ok, #166534)", marginTop: 6 }}>{closure} · {rn.byName ?? "—"} · {fmtFull(rn.at)}{rn.text !== "Розібрано" && rn.text !== reviewNoteText(true) ? ` · «${rn.text}»` : ""}</div>;
+  if (c.reviewClosure === "invoice") return <div style={{ fontSize: 12.5, color: "var(--ok, #166534)", marginTop: 6 }}>Вийшла з черги: {CLOSURE_UI.invoice.hint.toLowerCase()}</div>;
   if (!c.needsReview || !c.canReview) return null;
+  // Рішення Романа 28.10.2026 (п.1 «б»): є коментар менеджера — тімлід його погоджує; немає — може закрити сам.
+  const commented = c.row.explainNote != null || c.row.priceNote != null;
   const go = async () => {
     setBusy(true); setMsg(null);
-    try { await putAiCallNote(c.row.uniqueid, "review", "Розібрано"); onDone(); } catch (e) { setMsg(hiringError(e)); }
+    try { await putAiCallNote(c.row.uniqueid, "review", reviewNoteText(commented)); onDone(); } catch (e) { setMsg(hiringError(e)); }
     setBusy(false);
   };
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
-      <button type="button" className="hr-btn" disabled={busy} onClick={() => void go()}>{busy ? "Зберігаю…" : "Розібрано"}</button>
+      <button type="button" className="hr-btn" disabled={busy} onClick={() => void go()}
+        title={commented ? "Менеджер пояснив — погодити й вивести з черги" : "Закрити без коментаря менеджера — у черзі буде видно «закрито тімлідом»"}>
+        {busy ? "Зберігаю…" : commented ? "Погодити коментар" : "Розібрано без коментаря"}</button>
       {c.reviewReason && <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>у черзі розбору: {REVIEW_REASON_UI[c.reviewReason].label.toLowerCase()}</span>}
       {msg && <span style={{ fontSize: 12.5, color: "var(--danger)" }}>{msg}</span>}
     </div>
   );
+}
+
+/** 💬 «Зворотний звʼязок» (задача 7183): тімлід, КВП, адмін пишуть, де система помилилась, — запис іде Роману. */
+export function FeedbackButton({ uniqueid, small }: { uniqueid: string; small?: boolean }) {
+  const dlg = useDialogs();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const go = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const text = await dlg.prompt({ title: "Зворотний звʼязок", label: "Що система зробила не так у цій розмові?", multiline: true, required: true,
+      placeholder: "Наприклад: ціну назвали на 2:10, а AI пише «ціни не було»", okLabel: "Надіслати" });
+    if (!text) return;
+    setBusy(true);
+    try { await sendAiCallFeedback(uniqueid, text); toast("Надіслано в «Зворотний звʼязок»"); } catch (err) { toast(hiringError(err)); }
+    setBusy(false);
+  };
+  return <button type="button" className="hr-btn" disabled={busy} onClick={(e) => void go(e)} style={small ? { fontSize: 12, padding: "2px 8px" } : undefined}
+    title="Система помилилась? Напишіть — це піде Роману разом із розмовою й угодою">{busy ? "Надсилаю…" : "Зворотний звʼязок"}</button>;
 }
 
 export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: string; onClose: () => void; onChanged?: () => void }) {
@@ -346,7 +374,10 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
               <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{c.row.teamName ?? "поза командами"}</div>
             </div>
           ) : <div style={{ fontSize: 18, fontWeight: 700 }}>Картка дзвінка</div>}
-          <button type="button" className="hr-btn" onClick={onClose}>Закрити</button>
+          <div style={{ display: "flex", gap: 6 }}>
+            {c?.canFeedback && <FeedbackButton uniqueid={c.row.uniqueid} />}
+            <button type="button" className="hr-btn" onClick={onClose}>Закрити</button>
+          </div>
         </div>
 
         {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
@@ -356,6 +387,7 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
           <>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               <StateChip state={c.row.state} />
+              {c.row.transportKind && <Chip tone="muted">не оцінюємо · {TRANSPORT_LABEL[c.row.transportKind]}</Chip>}
               {r && (r.price.discussed ? <Chip tone="ok">ціну обговорили</Chip> : <Chip tone="muted">ціна не прозвучала</Chip>)}
               {r && (r.objections.length > 0 ? <Chip tone="bad">заперечень: {r.objections.length}</Chip> : <Chip tone="muted">заперечень немає</Chip>)}
               {r && <Chip tone={c.row.promises > c.row.promisesWithDeadline ? "warn" : "muted"}>{promisesLabel(c.row.promises, c.row.promisesWithDeadline)}</Chip>}

@@ -434,6 +434,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/close-deal/revert", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  /* 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін; запис у `feedback` — проба лише на відмову.
+     Менеджер — 403 першим оператором (`canSendCallFeedback`); HR — без вкладки. */
+  { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/feedback", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   /* 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ — керівництво (29.09.2026) + тімлід і менеджер (ТЗ Романа 30.09.2026 «Відсів
      перевізників»: менеджер — свої угоди, тімлід — команда; кламп — у ЯДРІ через `missedScopeFor`, не тут).
      Межа — вкладка `carrier-calls` (routeTab), звіряється із сидом. HR і фінансист — ні. */
