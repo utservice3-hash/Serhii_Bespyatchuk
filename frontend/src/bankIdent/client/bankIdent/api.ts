@@ -36,6 +36,7 @@ export function createBankIdentApi(o: { fetch?: FetchLike; base?: string } = {})
     set: (txId, no) => call<{ state: IdentState }>('POST', `/${id(txId)}/invoice`, { no }).then(j => j.state),
     fix: (txId, no, reason, expected) => call<{ state: IdentState }>('PATCH', `/${id(txId)}/invoice`, { no, reason, expected }).then(j => j.state),
     unidentify: (txId, reason, expected) => call<{ state: IdentState }>('POST', `/${id(txId)}/unidentify`, { reason, expected }).then(j => j.state),
+    reset: (txId, reason, expected) => call<{ state: IdentState }>('POST', `/${id(txId)}/reset`, { reason, expected }).then(j => j.state), // [дашборд 28.10]
     notClient: (txId, reason, note) => call<{ state: IdentState }>('POST', `/${id(txId)}/not-client`, { reason, note }).then(j => j.state),
     commentSummary: ids => call<{ summaries: Record<string, CommentSummary> }>('POST', '/comments/summary', { ids }).then(j => j.summaries),
     comments: txId => call<{ comments: OutComment[] }>('GET', `/${id(txId)}/comments`).then(j => j.comments),

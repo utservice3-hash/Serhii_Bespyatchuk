@@ -93,3 +93,115 @@ test("#585 ЖИВИЙ SQL: Exit-інтервʼю — валідація, зве�
     assert.equal((await ch.listExits(s.db)).stats.total, 3, "🔴 відновлення не повернуло запис");
   } finally { await s.done(); }
 });
+
+/**
+ * #2960 — КАТЕГОРІЯ ЗА ПОСАДОЮ (28.10.2026, ТЗ Івана). Справжні написання з реєстру (замір 28.10: 62 працюючі,
+ * 18 написань) лягають у свою категорію; порядок правил тримає «офіс-менеджер» в офісі, «керівник групи» — у
+ * тім-лідах; невпізнане — null, а не здогадка; ручна категорія перемагає правило.
+ * 🧨 Червоніє, якщо переставити «manager» перед «office», прибрати «мен» чи ігнорувати ручну.
+ */
+test("#2960 КАТЕГОРІЯ: посада → категорія за правилом, невпізнане — null, ручна перемагає", async () => {
+  const { categoryOf, effectiveCategory } = await import("./employeeCategory.js");
+  const cases: [string | null, string | null][] = [
+    ["віддалений менеджер", "manager"], ["Віддаленний менеджер", "manager"], ["Менеджер з продажу в логістичну компанію", "manager"],
+    ["мен по орг груз перев", "manager"], ["менеджер по тендерам", "manager"],
+    ["TeamLead", "teamlead"], ["Тім-Лід", "teamlead"], ["керівник групи продажу", "teamlead"],
+    ["віддалений лідген", "leadgen"], ["лідогенератор", "leadgen"],
+    ["бухгалтерія", "accounting"], ["помічник бухгалтера", "accounting"], ["Фінансист", "finance"],
+    ["операційний директор", "management"], ["CEO", "management"], ["Власники компанії", "management"], ["керівника відділу продажів", "management"],
+    ["рекрутер", "office"], ["офіс-менеджер", "office"], ["HR-менеджер", "office"], ["HRD", "office"], ["IT відділ", "it"],
+    ["бізнес ассистент", null], ["логіст", null], ["", null], [null, null], ["менторка", null],
+  ];
+  for (const [pos, want] of cases) assert.equal(categoryOf(pos), want, `🔴 «${pos}» → ${categoryOf(pos)}, а мало бути ${want}`);
+  assert.equal(effectiveCategory("finance", "віддалений менеджер"), "finance", "🔴 ручна категорія не перемогла правило");
+  assert.equal(effectiveCategory(null, "віддалений менеджер"), "manager", "🔴 без ручної — не за посадою");
+  assert.equal(effectiveCategory("щось", "TeamLead"), "teamlead", "🔴 невідоме значення в колонці стало категорією");
+});
+
+/**
+ * #2960b — ОДИН ПЕРЕЛІК КАТЕГОРІЙ: ядро, CHECK у схемі й дзеркало фронта (`api.ts`) збігаються поіменно й за порядком.
+ * 🧨 Червоніє, якщо додати категорію в одне місце й забути інше.
+ */
+test("#2960b КАТЕГОРІЇ: ядро = CHECK схеми = дзеркало фронта", async () => {
+  const { EMP_CATEGORIES } = await import("./employeeCategory.js");
+  const keys = EMP_CATEGORIES.map(([k]) => k);
+  const sql = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  const chk = sql.match(/employees_category_check\s+CHECK \(category IS NULL OR category IN \(([^)]*)\)\)/);
+  assert.ok(chk, "🔴 CHECK employees_category_check не знайдено");
+  assert.deepEqual(chk![1].split(",").map((x) => x.trim().replace(/'/g, "")), keys, "🔴 CHECK схеми розійшовся з ядром");
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "api.ts"), "utf8");
+  const block = fe.slice(fe.indexOf("export const EMP_CATEGORIES"), fe.indexOf("] as const;", fe.indexOf("export const EMP_CATEGORIES")));
+  const feKeys = [...block.matchAll(/\["([a-z]+)", "([^"]+)"\]/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(feKeys, EMP_CATEGORIES.map(([k, l]) => [k, l]), "🔴 дзеркало фронта розійшлось із ядром");
+});
+
+/**
+ * #2961 — ПЛИННІСТЬ ЗА ДОВІЛЬНИЙ ПЕРІОД І КАТЕГОРІЮ: тиждень пн–нд включно з обома кінцями; не цілі місяці →
+ * помісячної плинності немає (null, а не вигадане число); ціли місяці — як було; фільтр категорії звужує список,
+ * а `byCategory` рахується по всіх і в сумі дає «усі»; «дата невідома» поза розрахунком; стаж — від дати початку.
+ * 🧨 Червоніє, якщо межі тижня не включні, рахувати плинність тижня або фільтрувати `byCategory`.
+ */
+test("#2961 ЖИВИЙ SQL ПЛИННОСТІ: тиждень пн–нд, категорія звужує список, byCategory — по всіх, тиждень без %", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const ch = await import("./churn.js");
+  try {
+    await s.c.query(`INSERT INTO employees (full_name, import_key, status, position, category, hired_at, dismissed_at, dismiss_date_unknown) VALUES
+      ('Неділя Менеджер','a','dismissed','віддалений менеджер',NULL,'2026-10-05','2026-10-25',false),
+      ('Понеділок Наступний','b','dismissed','віддалений менеджер',NULL,'2026-10-01','2026-10-26',false),
+      ('Понеділок Тижня','c','dismissed','помічник бухгалтера',NULL,'2026-01-10','2026-10-19',false),
+      ('Вручну Фінансист','d','dismissed','віддалений менеджер','finance',NULL,'2026-10-22',false),
+      ('Дата Невідома','e','dismissed','віддалений менеджер',NULL,'2025-01-01','2026-10-21',true),
+      ('Працює','f','active','TeamLead',NULL,'2025-05-01',NULL,false)`);
+    const w = await ch.churnReport(s.db, "2026-10-19", "2026-10-25");
+    assert.deepEqual(w.people.map((p) => p.full_name), ["Неділя Менеджер", "Вручну Фінансист", "Понеділок Тижня"], "🔴 не той склад тижня 19–25.10");
+    assert.equal(w.total.avgTurnover, null, "🔴 для тижня вигадано помісячну плинність");
+    assert.deepEqual([w.wholeMonths, w.months.length], [false, 0]);
+    assert.deepEqual(w.byCategory, { manager: 1, finance: 1, accounting: 1 }, "🔴 кількості категорій тижня");
+    assert.equal(w.people.find((p) => p.full_name === "Неділя Менеджер")!.tenure_days, 20, "🔴 стаж не від дати початку");
+    assert.equal(w.people.find((p) => p.full_name === "Вручну Фінансист")!.tenure_days, null, "🔴 без дати початку стаж мусить бути невідомим");
+    assert.deepEqual([w.total.early, w.total.noHireDate, w.total.avgTenureDays], [1, 1, Math.round((20 + 282) / 2)]);
+    assert.equal(w.total.unknownDate, 1, "🔴 «дата невідома» не видно окремим числом");
+    const wm = await ch.churnReport(s.db, "2026-10-19", "2026-10-25", "manager");
+    assert.deepEqual(wm.people.map((p) => p.full_name), ["Неділя Менеджер"], "🔴 фільтр категорії не звузив список");
+    assert.deepEqual(wm.byCategory, w.byCategory, "🔴 byCategory залежить від вибраної категорії");
+    const m = await ch.churnReport(s.db, "2026-10", "2026-10");
+    assert.deepEqual([m.wholeMonths, m.months.length, m.total.dismissed], [true, 1, 4], "🔴 місяць як було");
+    assert.equal(Object.values(m.byCategory).reduce((a, n) => a + n, 0), m.total.dismissed, "🔴 сума категорій ≠ усі");
+    assert.notEqual(m.total.avgTurnover, null, "🔴 для цілого місяця плинність зникла");
+    await assert.rejects(ch.churnReport(s.db, "2026-10-25", "2026-10-19"), /пізніше/);
+    await assert.rejects(ch.churnReport(s.db, "2026-10", "2026-10", "кухарі"), /категорія/);
+  } finally { await s.done(); }
+});
+
+/**
+ * #2962 — ПРАВКА СТАЖУ ДАТАМИ І РУЧНА КАТЕГОРІЯ: «Змінити» править дату початку разом із датою звільнення, коментар
+ * обовʼязковий, обидві зміни — в одному записі журналу; початок пізніше за звільнення — 400. Ручна категорія
+ * пишеться через картку, невідома — 400, скидання повертає правило.
+ * 🧨 Червоніє, якщо дата початку не зберігається, журнал її не бачить або CHECK/перевірку категорії прибрати.
+ */
+test("#2962 ЖИВИЙ SQL: «Змінити» правка дат з коментарем у журнал; ручна категорія і скидання", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const off = await import("./offboarding.js");
+  const emp = await import("./employees.js");
+  try {
+    const id = (await s.c.query(`INSERT INTO employees (full_name, import_key, status, position, hired_at, dismissed_at)
+      VALUES ('Сікора Яна','s','dismissed','віддалений менеджер','2026-09-21','2026-10-09') RETURNING id`)).rows[0].id as number;
+    await assert.rejects(off.setDismissDate(s.db, s.hr, id, { date: "2026-10-09", hiredAt: "2026-09-15" }), /Коментар/);
+    await assert.rejects(off.setDismissDate(s.db, s.hr, id, { date: "2026-10-09", hiredAt: "2026-10-20", comment: "x" }), /пізніше/);
+    await off.setDismissDate(s.db, s.hr, id, { date: "2026-10-10", hiredAt: "2026-09-15", comment: "стажування раніше" });
+    const row = (await s.c.query(`SELECT hired_at::text AS h, dismissed_at::text AS d FROM employees WHERE id = $1`, [id])).rows[0];
+    assert.deepEqual([row.h, row.d], ["2026-09-15", "2026-10-10"], "🔴 дати не збереглись");
+    const a = (await s.c.query(`SELECT details FROM access_audit WHERE action = 'employees.dismiss_date' ORDER BY id DESC LIMIT 1`)).rows[0].details;
+    assert.deepEqual([a.hiredFrom, a.hiredTo, a.comment], ["2026-09-21", "2026-09-15", "стажування раніше"], "🔴 журнал не бачить зміни дати початку");
+    await off.setDismissDate(s.db, s.hr, id, { date: "2026-10-10", comment: "лише звільнення" });
+    assert.equal((await s.c.query(`SELECT hired_at::text AS h FROM employees WHERE id = $1`, [id])).rows[0].h, "2026-09-15", "🔴 без hiredAt дату початку зачепило");
+
+    await assert.rejects(emp.updateEmployee(s.db, s.hr, id, { category: "кухарі" }), /категорія/);
+    await emp.updateEmployee(s.db, s.hr, id, { category: "office" });
+    let r = (await emp.listEmployees(s.db)).find((x) => x.id === id)!;
+    assert.deepEqual([r.category, r.category_manual], ["office", true], "🔴 ручна категорія не дійшла до списку");
+    await emp.updateEmployee(s.db, s.hr, id, { category: "" });
+    r = (await emp.listEmployees(s.db)).find((x) => x.id === id)!;
+    assert.deepEqual([r.category, r.category_manual], ["manager", false], "🔴 скидання не повернуло правило за посадою");
+  } finally { await s.done(); }
+});

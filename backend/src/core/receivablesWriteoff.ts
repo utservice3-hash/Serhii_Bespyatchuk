@@ -86,7 +86,9 @@ export interface WriteoffTally {
  */
 export const WRITEOFF_TARGETS_SQL = (byInvoice: boolean): string =>
   `SELECT COALESCE(client_key_raw, client_key) AS client_key_raw,
-          COALESCE(invoice_no, '') AS invoice_no, SUM(amount) AS amount
+          COALESCE(invoice_no, '') AS invoice_no, SUM(amount) AS amount,
+          -- 💱 Валютний рахунок списується у валюті (рішення В, 28.10.2026): гривнева сума в нього 0.
+          MIN(currency) AS currency, SUM(amount_fx) AS amount_fx
      FROM receivable_invoices
     WHERE client_key = $1 ${byInvoice ? "AND COALESCE(invoice_no, '') = $2" : ""}
     GROUP BY 1, 2`;

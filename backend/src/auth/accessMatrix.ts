@@ -434,6 +434,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/close-deal/revert", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  /* 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін; запис у `feedback` — проба лише на відмову.
+     Менеджер — 403 першим оператором (`canSendCallFeedback`); HR — без вкладки. */
+  { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/feedback", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   /* 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ — керівництво (29.09.2026) + тімлід і менеджер (ТЗ Романа 30.09.2026 «Відсів
      перевізників»: менеджер — свої угоди, тімлід — команда; кламп — у ЯДРІ через `missedScopeFor`, не тут).
      Межа — вкладка `carrier-calls` (routeTab), звіряється із сидом. HR і фінансист — ні. */
@@ -915,9 +919,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "PUT", path: "/api/dashboard/receivables/invoice-note", cls: "deny-only",
     allow: [], deny: ["hr"] },
-  // 💱 Валютна дебіторка (задача 7136, 28.10.2026): та сама вкладка й той самий скоуп, що й гривнева.
-  { method: "GET", path: "/api/dashboard/receivables/fx", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/receivables/invoices", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/receivables/payment-requests", cls: "GET",
@@ -1539,6 +1540,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "POST", path: "/api/training/quiz/:id/submit", cls: "deny-only",
     allow: [], deny: [] },
+  // ⏱ Відповідь по одному питанню (28.10.2026) — та сама межа, що start/submit: вкладка й замок теми.
+  { method: "POST", path: "/api/training/quiz/:id/answer", cls: "deny-only",
+    allow: [], deny: [] },
+  // 🖥 Вихід із тесту (28.10.2026) — та сама межа: своя відкрита спроба; без неї 409.
+  { method: "POST", path: "/api/training/quiz/:id/violation", cls: "deny-only",
+    allow: [], deny: [] },
+  // ⏱ Ліміт часу питання — запис редактора навчання (`manage_training`), як решта правки уроків.
+  { method: "PATCH", path: "/api/training/quiz/:id/questions/:qid", cls: "deny-only",
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   /* Створення й правка курсу — те саме право, що решта редагування навчання. */
   { method: "POST", path: "/api/training/courses", cls: "deny-only",
     allow: [], deny: ["financier", "team_lead", "manager"] },
@@ -1895,6 +1905,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/client-limits/import", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  // «＋ Додати клієнта» (задача 7137): пошук по базі й ліміт клієнту без боргу — лише Сергій (погоджувач за id, не за роллю).
+  { method: "GET", path: "/api/client-limits/search?q=юмо", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/client-limits/add", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "GET", path: "/api/cargo/three.js", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/cargo/reference", cls: "GET",
@@ -1928,6 +1943,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "PATCH", path: "/api/bank-ident/:txId/invoice", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/bank-ident/:txId/unidentify", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
+  // [28.10, погодив Сергій] «↺ Скинути №» — право reset_bank_invoice: фінансист і адмін
+  { method: "POST", path: "/api/bank-ident/:txId/reset", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/bank-ident/:txId/not-client", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },

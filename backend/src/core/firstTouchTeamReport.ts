@@ -42,6 +42,10 @@ export interface ReportRowIn {
   objection?: { present: boolean; handled: string } | null;
   /** Сира відповідь моделі «чим закінчилось після ціни» (рубрика заперечень v2, з 13.10.2026). */
   decision?: { value: string; quote: string; quoteFound: boolean | null } | null;
+  /** 💬 «Коментар менеджера» до розмови з черги (задача 7183, 28.10.2026); `null` — не писав. */
+  explainNote?: { text: string; at?: string } | null;
+  /** Угода розмови заходила в «Виставлення рахунку» або далі (за фактом входу; `firstTouchOutcome.dealsReachedInvoice`). */
+  reachedInvoice?: boolean;
 }
 
 export interface ManagerLine {
@@ -197,7 +201,19 @@ export function reviewReason(r: ReportRowIn): ReviewReason | null {
   if (r.promiseState === "late") return "late";
   return null;
 }
-export const isReviewed = (r: ReportRowIn): boolean => r.reviewNote != null || r.missedNote != null;
+/**
+ * Виходить з черги (задача 7183, рішення Романа 28.10.2026, п.1 «б»): тімлід поставив «Розібрано» / «Опрацьовано» —
+ * сам або погодивши коментар менеджера, — АБО угода дійшла до «Виставлення рахунку» чи далі. Друге — лише про чергу:
+ * плитки й статистика рахують розмову як і раніше (п.2 «а»), успіх і далі — від «Авто працює».
+ */
+export const isReviewed = (r: ReportRowIn): boolean => r.reviewNote != null || r.missedNote != null || r.reachedInvoice === true;
+
+/** Чим закрито розмову з черги — підпис для екрана; `null` — не закрито (або в черзі нічого не було). */
+export type ReviewClosure = "approved" | "direct" | "invoice";
+export function reviewClosure(r: ReportRowIn): ReviewClosure | null {
+  if (r.reviewNote != null || r.missedNote != null) return r.explainNote != null || r.priceNote != null ? "approved" : "direct";
+  return r.reachedInvoice === true ? "invoice" : null;
+}
 export const needsReview = (r: ReportRowIn): boolean => reviewReason(r) != null && !isReviewed(r);
 
 export interface ReviewQueue { total: number; reviewed: number; left: number; byReason: Record<ReviewReason, number> }

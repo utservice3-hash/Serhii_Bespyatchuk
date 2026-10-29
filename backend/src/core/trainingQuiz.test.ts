@@ -17,7 +17,7 @@ const ROOT = path.join(import.meta.dirname, "..", "..", "..");
 const FE = (rel: string) => readFileSync(path.join(ROOT, "frontend", "src", rel), "utf8");
 const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 
-const one = (id: number, correct = 0): QuizQuestion => ({ id, kind: "one", text: `q${id}`, options: ["a", "b", "c"], correct: [correct], explanation: `why${id}`, sourceTitle: "Урок" });
+const one = (id: number, correct = 0): QuizQuestion => ({ id, kind: "one", text: `q${id}`, options: ["a", "b", "c"], correct: [correct], explanation: `why${id}`, sourceTitle: "Урок", timeLimitSec: 30 });
 
 /** #1650 — перевірка відповіді: один варіант, «кілька» лише точним збігом, число з допуском і з тексту людини. */
 test("#1650 ТЕСТ: перевірка відповіді — один, кілька (лише точно), число з допуском", () => {
@@ -158,7 +158,17 @@ test("#1655 ЖИВИЙ SQL: тест теми — замки Р1/Р2, без в�
       return out;
     };
     const id = (x: number) => ({ id: String(x) });
-    const answersAll = (qs: { id: number }[], right: number) => Object.fromEntries(qs.map((x, i) => [String(x.id), i < right ? 0 : 1]));
+    /** Пройти відкриту спробу до кінця по одному питанню (⏱ 28.10.2026): перші `right` — правильно (варіант 0 = «так»). */
+    const finish = async (step: { code: number; body: Record<string, unknown> }, right: number) => {
+      let r = step, i = 0;
+      while (r.code === 200 && r.body.done === false) {
+        assert.ok(!/"correct"|Пояснення/.test(JSON.stringify(r.body)), "🔴 Р5: питання поїхало з правильною відповіддю чи поясненням");
+        r = await call("cand", "post", "/quiz/:id/answer", id(quiz),
+          { attemptId: r.body.attemptId, questionId: (r.body.question as { id: number }).id, answer: i++ < right ? 0 : 1 });
+      }
+      assert.equal(r.code, 200, `🔴 спроба не завершилась: ${JSON.stringify(r.body)}`);
+      return r.body.result as Record<string, unknown>;
+    };
     try {
       // Р1: тест закритий, доки урок теми не пройдено.
       assert.equal((await call("cand", "post", "/quiz/:id/start", id(quiz))).code, 423, "🔴 Р1: тест відкрився до уроків теми");
@@ -178,9 +188,8 @@ test("#1655 ЖИВИЙ SQL: тест теми — замки Р1/Р2, без в�
         const r = await call("cand", "get", p, id(p === "/courses/:id" ? cc : quiz));
         assert.ok(!/"correct"|Пояснення 1/.test(JSON.stringify(r.body)), `🔴 ${p} віддав відповіді тесту`);
       }
-      const qs1 = st1.body.questions as { id: number }[];
-      const r1 = await call("cand", "post", "/quiz/:id/submit", id(quiz), { attemptId: st1.body.attemptId, answers: answersAll(qs1, 3) });
-      assert.deepEqual([r1.body.right, r1.body.passed, r1.body.left], [3, false, 2], "🔴 3 з 5 — не той результат");
+      const r1 = await finish(st1, 3);
+      assert.deepEqual([r1.right, r1.passed, r1.left], [3, false, 2], "🔴 3 з 5 — не той результат");
       assert.equal((await call("cand", "post", "/quiz/:id/submit", id(quiz), { attemptId: st1.body.attemptId, answers: {} })).code, 409, "🔴 ту саму спробу завершено двічі");
       assert.equal((await call("cand", "get", "/material/:id", id(b1))).code, 423, "🔴 несклалений тест відкрив тему 2");
       const prog = (await q(`SELECT status FROM training_progress WHERE user_id=$1 AND material_id=$2`, [cand, quiz]))[0]?.status;
@@ -188,8 +197,7 @@ test("#1655 ЖИВИЙ SQL: тест теми — замки Р1/Р2, без в�
 
       // Ще 2 провали → спроби вичерпано → 409; «ще спроба» — одна.
       for (let k = 0; k < 2; k++) {
-        const st = await call("cand", "post", "/quiz/:id/start", id(quiz));
-        await call("cand", "post", "/quiz/:id/submit", id(quiz), { attemptId: st.body.attemptId, answers: answersAll(st.body.questions as { id: number }[], 1) });
+        await finish(await call("cand", "post", "/quiz/:id/start", id(quiz)), 1);
       }
       assert.equal((await call("cand", "post", "/quiz/:id/start", id(quiz))).code, 409, "🔴 четверта спроба без дозволу");
       await store.grantAttempt(s.c as unknown as import("./trainingQuizStore.js").QuizDb, ed, cand, quiz, "переглянули уроки");
@@ -198,8 +206,8 @@ test("#1655 ЖИВИЙ SQL: тест теми — замки Р1/Р2, без в�
       // Складено → крок «пройдено» → тема 2 відкрита; новий старт — 409.
       const st4 = await call("cand", "post", "/quiz/:id/start", id(quiz));
       assert.equal(st4.code, 200, "🔴 видана спроба не дала почати");
-      const r4 = await call("cand", "post", "/quiz/:id/submit", id(quiz), { attemptId: st4.body.attemptId, answers: answersAll(st4.body.questions as { id: number }[], 5) });
-      assert.deepEqual([r4.body.passed, r4.body.pct], [true, 100]);
+      const r4 = await finish(st4, 5);
+      assert.deepEqual([r4.passed, r4.pct], [true, 100]);
       assert.equal((await q(`SELECT status FROM training_progress WHERE user_id=$1 AND material_id=$2`, [cand, quiz]))[0].status, "done", "🔴 складений тест не зарахований кроком");
       assert.equal((await call("cand", "get", "/material/:id", id(b1))).code, 200, "🔴 складений тест не відкрив тему 2");
       assert.equal((await call("cand", "post", "/quiz/:id/start", id(quiz))).code, 409, "🔴 складений тест починається знову");

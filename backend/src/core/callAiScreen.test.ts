@@ -301,7 +301,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
+    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -1105,7 +1105,8 @@ test("#899 ЕКРАН D: менеджери не зникають і вибір 
   const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
   assert.match(qx, /<CallConversation key=\{c\.row\.uniqueid\}[\s\S]{0,400}?active=\{open\} \/>/, "🔴 черга: старий запис грає після переходу чи закриття");
   assert.match(qx, /<Analysis c=\{c\} \/>/, "🔴 у черзі немає розбору AI");
-  assert.match(qx, /import \{ Analysis, QuoteSeek \} from "\.\/AiCallDrawer";/, "🔴 розбір у черзі — копія, а не той самий компонент");
+  // 28.10.2026 (7183): поруч імпортується й кнопка «Зворотний звʼязок» — розбір той самий компонент, як і був.
+  assert.match(qx, /import \{ Analysis, QuoteSeek(, FeedbackButton)? \} from "\.\/AiCallDrawer";/, "🔴 розбір у черзі — копія, а не той самий компонент");
   const chk = readFileSync(FE("pages/dashboard/sections/FirstTouchChecklist.tsx"), "utf8"); // текст переїхав у спільний чек-лист (#899b)
   assert.match(chk, /обіцянка написати: \$\{msgPromise\.what\} — перевірити нічим, Ringostat месенджерів не бачить/, "🔴 обіцянка у Viber підписана «не було»");
 });
@@ -1231,7 +1232,9 @@ test("#904 ЧЕК-ЛИСТ D: 4 пункти й бал від ядра (запе
   assert.equal(S.canWriteNote("team_lead", "review"), true, "дзеркало: тімлід розбирає");
   assert.equal(S.canWriteNote("admin", "review"), true);
   const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
-  assert.match(schema, /first_touch_notes_kind_check CHECK \(kind IN \('price', 'missed', 'offline', 'review'\)\);/, "🔴 база не приймає позначку «Розібрано»");
+  // 28.10.2026 (задача 7183): у списку додалось «explain»; обмеження — одне, остаточне (урок 22.10).
+  assert.match(schema, /first_touch_notes_kind_check CHECK \(kind IN \('price', 'missed', 'offline', 'review', 'explain'\)\);/, "🔴 база не приймає позначку «Розібрано»");
+  assert.equal((schema.match(/ADD CONSTRAINT first_touch_notes_kind_check/g) ?? []).length, 1, "🔴 обмеження видів приміток задане двічі — вузька версія поверне падіння міграції");
 });
 
 /**
@@ -1267,7 +1270,8 @@ test("#905 ЗАПЕРЕЧЕННЯ: окрема рубрика, лише нес�
   const T = await import("./callAiTick.js");
   assert.ok(T.OBJ_BUDGET_MS > 0 && T.OBJ_BUDGET_MS < T.LLM_BUDGET_MS, "🔴 бюджет заперечень поза бюджетом розбору");
   // 4631 (09.10.2026): розбір розмов про борг теж бере ЧАСТКУ того самого бюджету — твердження те саме.
-  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
+  // 28.10.2026 (7183): поруч відкушено й частку на вид перевезення — так само з бюджету розбору, не понад тік.
+  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?(?: - TRANSPORT_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
 });
 
 /**
@@ -1338,7 +1342,8 @@ test("#909 ЕКРАН D: колонки з «Успіх», черга лише �
   assert.match(sec, /: r\.state === "done" \? null : <StateChip state=\{r\.state\} \/>\}<\/td>/, "🔴 стан нерозібраної розмови сховано");
   const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
   assert.match(qx, /className=\{`ftd-queue\$\{open \? "" : " is-closed"\}`\}/, "🔴 черга не згортається класом");
-  assert.match(qx, /putAiCallNote\(cur\.uniqueid, "review", note\.trim\(\) \|\| "Розібрано"\)/, "🔴 «Опрацьовано · наступна» не ставить «Розібрано»");
+  // 28.10.2026 (7183): текст позначки — «Розібрано» або «Погоджено коментар менеджера» (`reviewNoteText`), позначка та сама.
+  assert.match(qx, /putAiCallNote\(cur\.uniqueid, "review", note\.trim\(\) \|\| reviewNoteText\(cur\.explainNote != null \|\| cur\.priceNote != null\)\)/, "🔴 «Опрацьовано · наступна» не ставить «Розібрано»");
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-queue\.is-closed \{ transform: translateY\(-20px\) scale\(\.42, \.12\); opacity: 0;/, "🔴 немає анімації згортання в смугу");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-over, \.ftd-queue, \.ftd-strip, \.ftd-progress > i \{ transition: none; \}/, "🔴 анімацію не вимкнено для «зменшення руху»");
@@ -1927,4 +1932,195 @@ test("#2207 ГРАФІК «ЦІНА → УСПІХ»: з ціною / без о�
   assert.match(sec, /const lines = managerChecklist\(mgrRows\);/, "🔴 таблиця рахує не ті рядки, що графік");
   assert.match(sec, /const priceConv = priceConversionByManager\(mgrRows\);/, "🔴 графік рахує не ті рядки, що таблиця");
   assert.doesNotMatch(sec, /<FirstTouchPriceChart rows=/, "🔴 окремий блок графіка повернувся поруч із перемикачем");
+});
+
+/**
+ * #2210 — ЧЕРГА РОЗБОРУ: ХТО ЗАКРИВАЄ І ЧИМ (задача 7183, рішення Романа 28.10.2026: п.1 «б», п.3 «б»). Розмова виходить з
+ * черги, коли тімлід поставив «Розібрано» / «Опрацьовано» — погодивши коментар менеджера чи сам, — або угода дійшла до
+ * «Виставлення рахунку». Підпис закриття — три різні слова; коментар менеджера пишуть менеджер, тімлід, адмін; кнопку
+ * «Зворотний звʼязок» мають тімлід, КВП, адмін — менеджер ні; звернення проходить ту саму перевірку, що форма розділу.
+ * 🧨 Червоніє, якщо рахунок не виводить з черги (або виводить без рахунку), «погоджено» сплутати з «закрито тімлідом»,
+ * дати менеджеру кнопку зворотного звʼязку чи забрати її в КВП, або звернення не пройде форму.
+ */
+test("#2210 ЧЕРГА: вихід — погодження, тімлід сам або рахунок; три підписи; коментар менеджера; «Зворотний звʼязок» — тімлід, КВП, адмін", async () => {
+  const R = await import("./firstTouchTeamReport.js");
+  const S = await import("./callAiScreen.js");
+  const F = await import("./firstTouchFeedback.js");
+  const { validateFeedback } = await import("./feedbackForm.js");
+  const base = { uniqueid: "u", calledAt: "2026-10-20T09:00:00Z", managerId: 1, managerName: "М", teamName: "Т", inReport: true, state: "done",
+    priceDiscussed: false, promiseState: null, typeCheck: false, priceNote: null, missedNote: null, hasRequest: true } as const;
+  assert.equal(R.needsReview(base), true, "дзеркало: без ціни й без розбору — у черзі");
+  assert.equal(R.reviewClosure(base), null);
+  assert.equal(R.needsReview({ ...base, reachedInvoice: true }), false, "🔴 угода дійшла до рахунку, а розмова лишилась у черзі");
+  assert.equal(R.reviewClosure({ ...base, reachedInvoice: true }), "invoice");
+  assert.equal(R.needsReview({ ...base, reachedInvoice: false }), true, "🔴 вийшла з черги без рахунку");
+  assert.equal(R.needsReview({ ...base, explainNote: { text: "клієнт сам чекав розрахунку" } }), true, "🔴 коментар менеджера сам вивів з черги — без тімліда");
+  assert.equal(R.reviewClosure({ ...base, explainNote: { text: "пояснення" }, reviewNote: { text: "Погоджено коментар менеджера" } }), "approved");
+  assert.equal(R.reviewClosure({ ...base, priceNote: { text: "ціна після прорахунку" }, reviewNote: { text: "Розібрано" } }), "approved", "🔴 коментар до ціни — теж пояснення менеджера");
+  assert.equal(R.reviewClosure({ ...base, reviewNote: { text: "Розібрано" } }), "direct", "🔴 закрите тімлідом без коментаря читається як погоджене");
+  assert.equal(R.reviewClosure({ ...base, missedNote: { text: "ок" } }), "direct");
+  assert.deepEqual(["manager", "team_lead", "admin", "hr", "kvp"].map((r) => S.canWriteNote(r, "explain")), [true, true, true, false, false],
+    "🔴 коментар менеджера пише не та роль");
+  assert.equal(S.canWriteNote("manager", "review"), false, "🔴 менеджер сам погоджує свій коментар");
+  assert.deepEqual(["team_lead", "kvp", "admin", "manager", "hr", null].map((r) => F.canSendCallFeedback(r)), [true, true, true, false, false, false],
+    "🔴 «Зворотний звʼязок» не в тих ролей (тімлід, КВП, адмін — так; менеджер — ні)");
+  const body = F.callFeedbackBody({ uniqueid: "1792.55", calledAt: "2026-10-20T09:00:00Z", managerName: "Олена", kommoIds: [62748631] }, "  ціну назвали на 2:10  ");
+  const v = validateFeedback(body);
+  assert.ok(v.ok, `🔴 звернення з розмови не проходить форму розділу: ${v.ok ? "" : v.error}`);
+  if (v.ok) {
+    assert.equal(v.draft.fields.actual, "ціну назвали на 2:10", "🔴 текст тімліда загубився або не обрізаний");
+    assert.match(v.draft.fields.example, /62748631/, "🔴 у зверненні немає угоди");
+    assert.match(v.draft.fields.example, /1792\.55/, "🔴 у зверненні немає розмови");
+    assert.match(v.draft.fields.where, /Олена/, "🔴 у зверненні немає менеджера");
+  }
+});
+
+/**
+ * #2211 — ЖИВА СХЕМА: «ДІЙШЛА ДО РАХУНКУ» ЗА ФАКТОМ ВХОДУ, ЛИШЕ ПОВНИЙ ЦИКЛ, КВАЛІФІКАЦІЯ — ЗА ДОЧІРНЬОЮ; картка знаходить угоду
+ * компанії за телефоном контакту (хвіст 6439). 142 у кваліфікації — «Кваліфіковано», не рахунок.
+ * 🧨 Червоніє, якщо рахувати лише поточний етап (програна після рахунку випаде), взяти 142 кваліфікації за рахунок,
+ * не дивитись у дочірню угоду, або картка шукатиме угоди лише за ключем-номером.
+ */
+test("#2211 ЖИВА СХЕМА: рахунок за фактом входу, лише повний цикл, кваліфікація за дочірньою; картка — угода компанії за контактом", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const O = await import("./firstTouchOutcome.js");
+  const { aiCallCard } = await import("./callAiScreen.js");
+  const d = (id: number, pipe: number, status: number, key = `ключ${String(id)}`) => c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel)
+    VALUES ($1,$2,$3,$4,'2026-10-10 10:00:00+03',$5,'ad')`, [id, `D${String(id)}`, pipe, status, key]);
+  const ev = (id: number, pipe: number | null, status: number) => c.raw.query(`INSERT INTO deal_stage_events(kommo_id,status_id,pipeline_id,changed_at) VALUES ($1,$2,$3,'2026-10-11 10:00:00+03')`, [id, status, pipe]);
+  await d(72101, 8921932, 100274340);            // зараз на «Виставлення рахунку»
+  await d(72102, 8921932, 143); await ev(72102, 8921932, 69716300);   // була в «Авто працює», потім програна
+  await d(72103, 8921932, 69693672);             // «Пропозицію зроблено» — ні
+  await d(72104, 8921928, 142);                  // кваліфікація «Кваліфіковано», дочірня — у 142 повного циклу
+  await d(72105, 8921932, 142); await c.raw.query("INSERT INTO lead_child_links(parent_id,child_id,created_at) VALUES (72104,72105,now())");
+  await d(72106, 8921928, 142); await ev(72106, 8921928, 142);        // кваліфікація без дочірньої — ні
+  await d(72107, 8921932, 69693672); await ev(72107, 8921928, 142);   // тепер у повному циклі, а 142 — ще з кваліфікації: ні
+  const got = await O.dealsReachedInvoice(c.db, [72101, 72102, 72103, 72104, 72106, 72107]);
+  assert.deepEqual([...got].sort(), [72101, 72102, 72104], "🔴 «дійшла до рахунку»: не за фактом входу, 142 кваліфікації або без дочірньої");
+  assert.equal(got.has(72105), false, "🔴 повернуто id дочірньої замість вхідної угоди");
+  // Картка: угода компанії (ключ — назва) знаходиться за телефоном свого контакту.
+  await d(72110, 8921932, 69693672, "компаніяпрікл");
+  await c.raw.query("INSERT INTO deal_contacts(deal_kommo_id,contact_id,is_main) VALUES (72110,772110,true)");
+  await c.raw.query("INSERT INTO contact_phones(contact_id,phone,is_main) VALUES (772110,'380507211000',true)");
+  await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone)
+    VALUES ('k7211','2026-10-10 10:20:00+03','out','ANSWERED',60,65,9011,'380507211000')`);
+  const card = await aiCallCard(c.db, "k7211", false, {});
+  assert.deepEqual(card?.row.kommoIds, [72110], "🔴 картка не знайшла угоду компанії за телефоном контакту");
+});
+
+/**
+ * #2212 — ПРОВОДКА 7183: роут «Зворотний звʼязок» — право першим оператором, скоуп картки, та сама перевірка форми, запис у
+ * `feedback`; роут у матриці; фронт показує кнопку лише за `canFeedback`, погодження — словами ядра, закриття — трьома підписами.
+ * 🧨 Червоніє, якщо прибрати перевірку права, писати звернення повз форму, забути матрицю чи показувати кнопку всім.
+ */
+test("#2212 ПРОВОДКА 7183: роут зворотного звʼязку з правом і формою, матриця, кнопка лише за canFeedback, підписи закриття", () => {
+  const dash = SRC("routes/dashboard.ts");
+  const i = dash.indexOf('dashboardRouter.post("/ai-calls/:uniqueid/feedback"');
+  assert.ok(i >= 0, "🔴 роуту «Зворотний звʼязок» немає");
+  const body = dash.slice(i, dash.indexOf("\n});", i));
+  assert.match(body, /^[^\n]*\n\s*const auth = req\.auth!;\n\s*if \(!canSendCallFeedback\(auth\.roleKey\)\)/, "🔴 право — не першим оператором");
+  assert.match(body, /aiCallCard\(pool, uniqueid, false, missedScopeFor\(auth, \{\}\)\)/, "🔴 звернення пишеться повз скоуп картки");
+  assert.match(body, /validateFeedback\(callFeedbackBody\(/, "🔴 звернення не проходить форму розділу");
+  assert.match(body, /INSERT INTO feedback \(/, "🔴 звернення не йде в «Зворотний звʼязок»");
+  assert.match(SRC("auth/accessMatrix.ts"), /path: "\/api\/dashboard\/ai-calls\/:uniqueid\/feedback", cls: "deny-only",\s*allow: \[\], deny: \["hr", "manager"\]/, "🔴 роуту немає в матриці");
+  const drawer = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drawer, /\{c\?\.canFeedback && <FeedbackButton uniqueid=\{c\.row\.uniqueid\} \/>\}/, "🔴 кнопка в картці не за правом сервера");
+  assert.match(drawer, /putAiCallNote\(c\.row\.uniqueid, "review", reviewNoteText\(commented\)\)/, "🔴 погодження в картці — не словами ядра");
+  const queue = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
+  assert.match(queue, /\{c\.canFeedback && cur && <FeedbackButton uniqueid=\{cur\.uniqueid\} \/>\}/, "🔴 кнопка в черзі не за правом сервера");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /\{d\.canFeedback && <div style=\{\{ marginTop: 4 \}\}><FeedbackButton uniqueid=\{r\.uniqueid\} small \/><\/div>\}/, "🔴 кнопка біля угоди не за правом сервера");
+  assert.match(sec, /CLOSURE_UI\[r\.reviewClosure\]\.label/, "🔴 у таблиці немає підпису, чим закрито");
+});
+
+/**
+ * #2213 — ВИД ПЕРЕВЕЗЕННЯ (задача 7183, п.1): міжнародка, трал і негабарит, цистерни, самоскиди, зерновози не оцінюються;
+ * довантаження — оцінюється. Міжнародне за Kommo — без AI; від моделі — лише «не звичайне» з цитатою, що знайшлась у
+ * розмові; сумнів — лишаємо в оцінці. Рубрика — частка бюджету розбору в тіку, з початку вибірки «Першого дотику».
+ * 🧨 Червоніє, якщо виключати без цитати чи з незнайденою, приймати «не звичайне» без цитати, загубити міжнародне з Kommo,
+ * розійтись із літералом «Міжнародні» номінацій або дати рубриці час понад тік.
+ */
+test("#2213 ВИД ПЕРЕВЕЗЕННЯ: Kommo «Міжнародні» без AI; AI — лише з цитатою з розмови; сумнів — в оцінці; частка бюджету тіку", async () => {
+  const X = await import("./firstTouchTransport.js");
+  const T = await import("./callAiTick.js");
+  assert.deepEqual(X.validateTransport({ kind: "oversize", quote: "" }).ok, false, "🔴 «трал» без цитати прийнято");
+  assert.deepEqual(X.validateTransport({ kind: "boat", quote: "x" }).ok, false, "🔴 вид поза переліком прийнято");
+  const reg = X.validateTransport({ kind: "regular", quote: "якісь слова" });
+  assert.ok(reg.ok && reg.value.quote === "", "🔴 для звичайного лишилась цитата");
+  const turns = [{ channel: 0, start: 0, end: 2, text: "Нам потрібен трал під екскаватор", lang: "ukr" }, { channel: 1, start: 2, end: 4, text: "Добре, порахую", lang: "ukr" }];
+  const ok = X.interpretTransport({ text: JSON.stringify({ kind: "oversize", quote: "потрібен трал" }), finishReason: "STOP" } as never, turns);
+  assert.ok(ok.ok && ok.result.quote_found === true, "🔴 цитата, що є в розмові, не знайшлась");
+  const lie = X.interpretTransport({ text: JSON.stringify({ kind: "tanker", quote: "потрібна цистерна" }), finishReason: "STOP" } as never, turns);
+  assert.ok(lie.ok && lie.result.quote_found === false, "🔴 вигадана цитата пройшла як знайдена");
+  const ex = (ai: unknown, kommoInternational = false) => X.transportExclusion({ ai: ai as never, kommoInternational });
+  assert.equal(ex(ok.ok ? ok.result : null), "oversize");
+  assert.equal(ex(lie.ok ? lie.result : null), null, "🔴 виключено за вигаданою цитатою");
+  assert.equal(ex({ kind: "dump", quote: "самоскид", quote_found: null }), null, "🔴 виключено без перевіреної цитати — сумнів має лишати в оцінці");
+  assert.equal(ex({ kind: "regular", quote: "", quote_found: null }), null);
+  assert.equal(ex(null, true), "international", "🔴 міжнародне з Kommo загубилось без AI");
+  assert.equal(ex({ kind: "regular", quote: "", quote_found: null }, true), "international", "🔴 Kommo «Міжнародні» перекрите відповіддю моделі");
+  assert.equal(ex(null), null, "дзеркало: нічого не відомо — оцінюємо");
+  assert.match(X.TRANSPORT_SYSTEM_PROMPT, /ДОВАНТАЖЕННЯ \(догруз, збірний вантаж\) — теж regular/, "🔴 довантаження перестало бути звичайним (п.1: «довантаження лишаємо»)");
+  assert.match(SRC("core/nominations.ts"), new RegExp(`INTL_REQUEST_TYPE = "${X.INTL_REQUEST_TYPE}"`), "🔴 літерал «Міжнародні» розійшовся з номінаціями");
+  assert.equal(X.TRANSPORT_FROM, T.FIRST_TOUCH_RULE.startDate, "🔴 рубрика ставиться не з початку вибірки «Першого дотику»");
+  assert.ok(T.TRANSPORT_BUDGET_MS > 0 && T.TRANSPORT_BUDGET_MS < T.LLM_BUDGET_MS - T.OBJ_BUDGET_MS - T.DEBT_BUDGET_MS, "🔴 бюджет виду перевезення поза бюджетом розбору");
+  const tick = SRC("core/callAiTick.ts");
+  assert.match(tick, /runObjection\(RUBRIC_TRANSPORT_V1, TRANSPORT_KIT, await objectionCandidates\(env\.db, TRANSPORT_FROM\), TRANSPORT_BUDGET_MS, TRANSPORT_MAX_OUTPUT_TOKENS\)/, "🔴 рубрика виду перевезення не в тіку");
+});
+
+/**
+ * #2214 — ЖИВА СХЕМА: розмова з розбором «трал» (цитата знайдена) і розмова угоди «Міжнародні» — у «Виключених» з причиною;
+ * звичайна — у звіті; картка каже те саме, що список.
+ * 🧨 Червоніє, якщо список не бере розбір виду перевезення, ігнорує «Тип запиту» угоди чи картка розходиться зі списком.
+ */
+test("#2214 ЖИВА СХЕМА: вид перевезення виключає розмову зі звіту з причиною; Kommo «Міжнародні»; список = картка", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard } = await import("./callAiScreen.js");
+  const X = await import("./firstTouchTransport.js");
+  const deal = (id: number, phone: string, rt: string | null) => c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id,request_type)
+    VALUES ($1,$2,8921932,1,'2026-10-20 10:00:00+03',$3,'ad',9011,$4)`, [id, `D${String(id)}`, phone, rt]);
+  await deal(72141, "0507214100", null); await deal(72142, "0507214200", "Міжнародні"); await deal(72143, "0507214300", null);
+  const call = (u: string, phone: string) => c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ($1,'2026-10-20 10:10:00+03','out','ANSWERED',60,65,9011,$2,'https://rec/x')`, [u, phone]);
+  await call("tr1", "380507214100"); await call("tr2", "380507214200"); await call("tr3", "380507214300");
+  const tr = async (u: string, text: string) => (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done',$2::jsonb) RETURNING id`, [u, JSON.stringify([{ channel: 0, start: 0, end: 2, text, lang: "ukr" }])])).rows[0].id;
+  const an = (tid: string, rubric: string, result: unknown) => c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash',$2,'done',$3::jsonb)`, [tid, rubric, JSON.stringify(result)]);
+  const t1 = await tr("tr1", "потрібен трал під екскаватор"); await an(t1, "first-touch-v4", RESULT);
+  await an(t1, X.RUBRIC_TRANSPORT_V1, { kind: "oversize", quote: "потрібен трал", quote_found: true });
+  const t2 = await tr("tr2", "тент двадцять тонн"); await an(t2, "first-touch-v4", RESULT);
+  const t3 = await tr("tr3", "тент двадцять тонн"); await an(t3, "first-touch-v4", RESULT);
+  await an(t3, X.RUBRIC_TRANSPORT_V1, { kind: "regular", quote: "", quote_found: null });
+  const rows = (await aiCallsList(c.db, FAKE_AD, "2026-10-20", "2026-10-20", new Date("2026-10-20T15:00:00Z"), {})).rows;
+  const by = new Map(rows.map((r) => [r.uniqueid, r]));
+  assert.ok(by.has("tr1") && by.has("tr2") && by.has("tr3"), "🔴 розмов 20.10 немає в списку — гейту нема що перевіряти");
+  assert.deepEqual([by.get("tr1")!.transportKind, by.get("tr1")!.inReport], ["oversize", false], "🔴 трал лишився в оцінці");
+  assert.deepEqual([by.get("tr2")!.transportKind, by.get("tr2")!.inReport], ["international", false], "🔴 Kommo «Міжнародні» не виключило розмову");
+  assert.deepEqual([by.get("tr3")!.transportKind, by.get("tr3")!.inReport], [null, true], "🔴 звичайне перевезення випало з оцінки");
+  const card = await aiCallCard(c.db, "tr1", false, {});
+  assert.deepEqual([card?.row.transportKind, card?.row.inReport], ["oversize", false], "🔴 картка розійшлась зі списком");
+});
+
+/**
+ * #2215 — ФРОНТ ВИДУ ПЕРЕВЕЗЕННЯ: у «Виключених» — фільтр «вид перевезення» рівно на такі розмови (а фільтри типів їх не
+ * захоплюють), підпис «не оцінюємо · трал / негабарит» у таблиці й картці.
+ * 🧨 Червоніє, якщо фільтр бере зайві розмови, тип «запит» захопить виключені за видом, або зникне підпис.
+ */
+test("#2215 ФРОНТ: «Виключені» — фільтр «вид перевезення» рівно на свої розмови, підпис «не оцінюємо» в таблиці й картці", async () => {
+  const V = await loadView() as unknown as { tabRows: (rows: readonly unknown[], tab: string, type?: string) => { id: string }[]; TRANSPORT_LABEL: Record<string, string> };
+  const rows = [
+    { id: "a", inReport: false, conversationType: "cargo_request", transportKind: "oversize" },
+    { id: "b", inReport: false, conversationType: "carrier", transportKind: null },
+    { id: "c", inReport: true, conversationType: "cargo_request", transportKind: null },
+  ];
+  assert.deepEqual(V.tabRows(rows, "excluded", "transport").map((r) => r.id), ["a"], "🔴 фільтр «вид перевезення» бере не свої розмови");
+  assert.deepEqual(V.tabRows(rows, "excluded", "cargo_request").map((r) => r.id), [], "🔴 тип «запит» захопив виключену за видом перевезення");
+  assert.deepEqual(V.tabRows(rows, "excluded", "carrier").map((r) => r.id), ["b"]);
+  assert.deepEqual(V.tabRows(rows, "excluded").map((r) => r.id), ["a", "b"], "дзеркало: «усі» — обидві виключені");
+  assert.equal(V.TRANSPORT_LABEL.oversize, "трал / негабарит");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /<option value="transport">вид перевезення \(не оцінюємо\)<\/option>/, "🔴 у «Виключених» немає фільтра виду перевезення");
+  assert.match(sec, /не оцінюємо · \{TRANSPORT_LABEL\[r\.transportKind\]\}/, "🔴 у таблиці немає причини виключення");
+  assert.match(readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8"), /\{c\.row\.transportKind && <Chip tone="muted">не оцінюємо · \{TRANSPORT_LABEL\[c\.row\.transportKind\]\}<\/Chip>\}/, "🔴 у картці немає причини виключення");
 });

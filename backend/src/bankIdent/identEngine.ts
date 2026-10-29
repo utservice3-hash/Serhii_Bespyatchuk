@@ -35,7 +35,7 @@ export interface BankIdentOptions {
   now?: () => Date;
 }
 
-export type FullRights = UserRights & { oc: boolean };
+export type FullRights = UserRights & { oc: boolean; reset: boolean };
 
 export function bankIdentConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<BankIdentOptions> {
   const ids = (s?: string) => (s ? s.split(',').map(x => Number(x.trim())).filter(n => Number.isInteger(n) && n > 0) : undefined);
@@ -70,14 +70,16 @@ export function identEngine(pool: Pool, opts: BankIdentOptions) {
   }
 
   async function rightsOf(u: ReqUser): Promise<FullRights> {
-    const [tag, fix, nc, oc] = await Promise.all(RIGHT_KEYS.map((k: Right) => Promise.resolve(can(u, k))));
-    return { tag: !!tag, fix: !!fix, nc: !!nc, oc: !!oc };
+    // [дашборд 28.10] за НАЗВОЮ ключа, а не позицією в списку: нове право в RIGHTS не має зсувати чужі (oc ← reset)
+    const got = await Promise.all(RIGHT_KEYS.map((k: Right) => Promise.resolve(can(u, k)).then((v) => [k, !!v] as const)));
+    const has = (k: Right) => got.some(([key, v]) => key === k && v);
+    return { tag: has('tag_bank_invoice'), fix: has('fix_bank_invoice'), nc: has('mark_bank_not_client'), oc: has('bank_out_comments'), reset: has('reset_bank_invoice') };
   }
 
   const newRow = (t: TxLite, deadline: number): NewRow => ({ txId: t.id, accountId: t.accountId, bookedAt: t.bookedAt, deadline });
 
   /** Стани для транзакцій (лише ті, що під правилом). Прострочені без рядка — фіксує як «неідентифіковані». */
-  async function states(txs: BankTx[], rights: UserRights, at = now()): Promise<Record<number, IdentState>> {
+  async function states(txs: BankTx[], rights: UserRights, at = now()): Promise<Record<number, IdentState>> { // rights.reset — FullRights
     const r = await rules();
     const lites = txs.map(toLite).filter(t => inScope(t, r));
     if (!lites.length) return {};
@@ -96,7 +98,7 @@ export function identEngine(pool: Pool, opts: BankIdentOptions) {
     const out: Record<number, IdentState> = {};
     for (const t of lites) {
       const row = rows.get(t.id) || null;
-      out[t.id] = buildState(t, row, baseStatus(t, row, at, r)!, rights, counts.get(t.id) || 0);
+      out[t.id] = buildState(t, row, baseStatus(t, row, at, r)!, rights, counts.get(t.id) || 0, at);
     }
     return out;
   }

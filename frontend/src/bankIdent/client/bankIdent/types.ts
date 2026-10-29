@@ -21,6 +21,8 @@ export interface BankIdentApi {
   set(txId: number, no: string): Promise<IdentState>;
   fix(txId: number, no: string, reason: string, expected: string): Promise<IdentState>;
   unidentify(txId: number, reason: string, expected: string): Promise<IdentState>;
+  /** [дашборд 28.10] скинути вписаний № — платіж знову «Чекає №» (право reset_bank_invoice). */
+  reset(txId: number, reason: string, expected: string): Promise<IdentState>;
   notClient(txId: number, reason: NcReason, note: string): Promise<IdentState>;
   /** 403 → у користувача немає права на коментарі до вихідних (тоді їх не показуємо зовсім). */
   commentSummary(ids: number[]): Promise<Record<string, CommentSummary>>;

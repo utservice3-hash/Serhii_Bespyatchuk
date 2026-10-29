@@ -46,7 +46,7 @@ const LS_TAB = "fin.tab";
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* приватне вікно */ } };
 
-const HINT_PERIOD: Record<PlanHint["period"], string> = { month: "щомісяця", quarter: "щокварталу", year: "раз на рік" };
+const HINT_PERIOD: Record<PlanHint["period"], string> = { month: "щомісяця", quarter: "щокварталу", halfyear: "раз на пів року", year: "раз на рік", once: "одноразово" };
 /** 📅 Підказки «Календаря оплат» біля статті: сума, як часто, чи вже в плані; «додати в план» — до наявного плану. */
 function PlanHints({ hints, canAdd, onAdd }: { hints: PlanHint[] | undefined; canAdd: boolean; onAdd: (h: PlanHint) => void }) {
   if (!hints?.length) return null;

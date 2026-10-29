@@ -243,3 +243,51 @@ test("#1292e МЕЖА: шість роутів календаря під view_pr
   assert.match(sec, /<PlanHints hints=\{hints\.get\(it\.id\)\}/, "🔴 підказки немає в рядку статті");
   assert.match(sec, /const canAdd = data\.canEdit && !planLocked;/, "🔴 кнопка без права чи на погодженому плані");
 });
+
+/**
+ * #1295 — «РАЗ НА ПІВ РОКУ» І «ОДНОРАЗОВО» (Тетяна 29.10.2026). Пів року — +6 місяців від якоря; одноразова — рівно одна дата
+ * (поза вікном — нічого), у смузі — лише свій місяць, підказка «План/факту» — лише в ньому; оплачена (закрита) одноразова
+ * більше не планується, а її оплата лишається; «Скасувати» можна саме ту позначку, що її закрила.
+ * 🧨 Червоніє, якщо одноразова повториться наступного місяця, пів року стане кварталом чи закрита одноразова й далі нагадуватиме.
+ */
+test("#1295 ПІВ РОКУ Й ОДНОРАЗОВА: +6 міс. від якоря, одноразова — одна дата, закрита — не планується, оплата лишається", () => {
+  assert.deepEqual([addPeriod("2026-11-01", "halfyear", 1), addPeriod("2026-08-31", "halfyear", 31)], ["2027-05-01", "2027-02-28"], "🔴 пів року");
+  assert.deepEqual(occurrences("2026-11-01", "once", 1, "2026-01-01", "2028-12-31"), ["2026-11-01"], "🔴 одноразова повторюється");
+  assert.deepEqual(occurrences("2026-11-01", "once", 1, "2026-12-01", "2027-12-31"), [], "🔴 одноразова поза вікном");
+  const once = item({ id: 9, itemId: 109, name: "Ремонт", amount: 12000, period: "once", next: "2026-11-01" });
+  const m = buildMonths([once], [], "2026-10-27");
+  assert.deepEqual(m.filter((x) => x.events.length).map((x) => [x.ym, x.events.length, x.events[0].due]), [["2026-11", 1, true]], "🔴 одноразова не лише в своєму місяці");
+  assert.deepEqual([planHintsOf([once], [], new Map(), "2026-11").length, planHintsOf([once], [], new Map(), "2026-12").length], [1, 0], "🔴 підказка одноразової не в своєму місяці");
+  const closed = { ...once, active: false }, p = paid({ id: 5, recurringId: 9, due: "2026-11-01", amount: 12500, planned: 12000 });
+  const mc = buildMonths([closed], [p], "2026-11-15");
+  assert.deepEqual(mc.filter((x) => x.events.length).map((x) => x.events.map((e) => e.kind)), [["paid"]], "🔴 закрита одноразова й далі планується чи оплата зникла");
+  assert.deepEqual([undoable(p, new Map([[9, closed]])), undoable(p, new Map([[9, once]]))], [true, false], "🔴 скасування одноразової");
+});
+
+/**
+ * #1295b — ЖИВИЙ SQL: ОДНОРАЗОВА. «Оплачено» — та сама дата й закриття (`active = false`), повторно — 400 (закрита);
+ * «Скасувати» — відкриває знову з тією самою датою; рядок оплати лишається «скасовано»; «пів року» зсуває на 6 міс.;
+ * невідомий період — 400.
+ * 🧨 Червоніє, якщо одноразова після оплати перескочить на наступну дату чи не закриється.
+ */
+test("#1295b ЖИВИЙ SQL: одноразова закривається оплатою й відкривається скасуванням, пів року — +6 міс., чужий період — 400", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const { createRecurring, payRecurring, undoPaid } = await import("./finRecurring.js");
+  const db = c as unknown as import("./finance.js").Db;
+  const row = async (id: number) => (await c.query(`SELECT next_due::text AS d, active FROM fin_recurring WHERE id = $1`, [id])).rows[0];
+  try {
+    const { rent } = await seed(c);
+    await assert.rejects(createRecurring(db, 50, { itemId: rent, amount: "100", period: "weekly", month: "2026-11" }), (e: any) => e?.status === 400, "🔴 чужий період пройшов");
+    const once = await createRecurring(db, 50, { itemId: rent, amount: "12000", period: "once", month: "2026-11" });
+    const p = await payRecurring(db, 8, once, { due: "2026-11-01", amount: "12500" });
+    assert.deepEqual([p.next, await row(once)], ["2026-11-01", { d: "2026-11-01", active: false }], "🔴 одноразова не закрилась чи перескочила");
+    await assert.rejects(payRecurring(db, 8, once, { due: "2026-11-01" }), (e: any) => e?.status === 400, "🔴 закриту одноразову оплачено вдруге");
+    assert.equal((await undoPaid(db, 50, p.paidId)).next, "2026-11-01", "🔴 скасування змінило дату");
+    assert.deepEqual(await row(once), { d: "2026-11-01", active: true }, "🔴 скасування не відкрило одноразову");
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM fin_recurring_paid WHERE recurring_id = $1 AND cancelled_at IS NOT NULL`, [once])).rows[0].n, 1, "🔴 скасована оплата зникла з історії");
+    const half = await createRecurring(db, 50, { itemId: rent, amount: "6000", period: "halfyear", month: "2026-11" });
+    assert.equal((await payRecurring(db, 8, half, { due: "2026-11-01" })).next, "2027-05-01", "🔴 пів року не +6 міс.");
+  } finally { await s.dispose(); }
+});

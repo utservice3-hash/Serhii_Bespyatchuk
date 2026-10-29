@@ -10,6 +10,7 @@ import { prepareSecret, insertSecrets, SecretError, type Db } from "./secrets.js
 import { SecretKeyMissing } from "./secretBox.js";
 import { DOC_COUNTS_SQL } from "./employeeDocs.js";
 import { PERSON_TEAM_JOINS } from "./teams.js";
+import { effectiveCategory, isEmpCategory } from "./employeeCategory.js";
 
 const MAX_ROWS = 3000, MAX_COLS = 120;
 const NAME = `COALESCE(NULLIF(u.full_name, ''), m.name, u.email)`;
@@ -271,7 +272,8 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
   return c;
 }
 
-const EDITABLE = ["full_name", "position", "team_label", "phone", "email", "telegram", "birth_date", "hired_at", "dismissed_at", "dismiss_reason", "note", "status"] as const;
+// `category` — ручна категорія (28.10.2026, #2960): порожнє = рахує правило за посадою.
+const EDITABLE = ["full_name", "position", "team_label", "phone", "email", "telegram", "birth_date", "hired_at", "dismissed_at", "dismiss_reason", "note", "status", "category"] as const;
 const DATES = new Set(["birth_date", "hired_at", "dismissed_at"]);
 
 /**
@@ -283,7 +285,7 @@ const DATES = new Set(["birth_date", "hired_at", "dismissed_at"]);
 export async function updateEmployee(db: Db, actorId: number, id: number, body: Record<string, unknown>) {
   const cur = (await db.query<Record<string, unknown>>(
     `SELECT id, full_name, position, team_label, phone, email, telegram, birth_date::text AS birth_date, hired_at::text AS hired_at,
-            dismissed_at::text AS dismissed_at, dismiss_reason, note, status FROM employees WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+            dismissed_at::text AS dismissed_at, dismiss_reason, note, status, category FROM employees WHERE id = $1 FOR UPDATE`, [id])).rows[0];
   if (!cur) throw new ImportError(404, "Співробітника не знайдено");
   // 🚪 Звільнення кнопками (`core/offboarding.ts`) веде статус і дату саме: правка форми обійшла б
   // стан менеджера й акаунт. Тримає #622.
@@ -295,6 +297,7 @@ export async function updateEmployee(db: Db, actorId: number, id: number, body: 
     let v: string | null = raw == null ? null : String(raw).trim() || null;
     if (k === "full_name" && !v) throw new ImportError(400, "ПІБ не може бути порожнім");
     if (k === "status" && v !== "active" && v !== "dismissed") throw new ImportError(400, "Статус: працює або звільнений");
+    if (k === "category" && v != null && !isEmpCategory(v)) throw new ImportError(400, "Невідома категорія");
     if (DATES.has(k) && v) { const d = parseDate(v); if (!d) throw new ImportError(400, `Дата «${v}» не розпізнана`); v = d; }
     if (k === "email" && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new ImportError(400, "Пошта не схожа на адресу");
     if (v != null && v.length > 300) throw new ImportError(400, "Задовге значення");
@@ -317,13 +320,13 @@ export async function updateEmployee(db: Db, actorId: number, id: number, body: 
 
 /** Реєстр: люди, акаунт, скільки записів у сейфі. */
 export async function listEmployees(db: Db) {
-  return (await db.query(
+  const rows = (await db.query(
     `SELECT e.id, CASE WHEN e.user_id IS NOT NULL THEN e.user_id::text ELSE 'e' || e.id END AS ref, e.full_name, e.status, e.position, e.team_label, e.phone, e.email, e.telegram,
             e.birth_date::text AS birth_date, e.hired_at::text AS hired_at, e.dismissed_at::text AS dismissed_at, e.dismiss_date_unknown,
             e.dismiss_reason, e.note, e.extra, e.user_id, ${NAME} AS account_name, u.is_active AS account_active,
             e.manager_id, km.name AS kommo_name, o.stage AS offboarding, o.last_day::text AS last_day, ${DOC_COUNTS_SQL},
             (SELECT count(*)::int FROM employee_secrets s WHERE (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
-            e.updated_at,
+            e.updated_at, e.category,
             -- 👥 Справжня команда (27.10.2026, \`core/teams.ts\`): з Kommo — заблокована; інакше — вибрана в картці (\`team_ref\`).
             COALESCE((SELECT name FROM teams WHERE id = COALESCE(tm1.team_id, tm2.team_id, e.team_id, tdt.kommo_team_id)), tdt.name) AS team_name,
             (COALESCE(tm1.team_id, tm2.team_id) IS NOT NULL) AS team_locked,
@@ -332,6 +335,8 @@ export async function listEmployees(db: Db) {
        LEFT JOIN managers km ON km.id = e.manager_id LEFT JOIN employee_offboarding o ON o.employee_id = e.id
        ${PERSON_TEAM_JOINS}
       ORDER BY (e.status = 'dismissed'), e.full_name`)).rows;
+  // 🗂 Категорія (#2960): ручна перемагає правило за посадою; `category_manual` — щоб екран показав «вручну».
+  return rows.map((r): Record<string, unknown> => ({ ...r, category: effectiveCategory(r.category as string | null, r.position as string | null), category_manual: r.category != null }));
 }
 
 export { ImportError };

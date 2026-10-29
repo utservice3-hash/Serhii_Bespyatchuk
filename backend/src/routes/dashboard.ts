@@ -75,7 +75,9 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
-import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview } from "../core/firstTouchTeamReport.js";
+import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview, reviewClosure } from "../core/firstTouchTeamReport.js";
+import { canSendCallFeedback, callFeedbackBody, CALL_FEEDBACK_MAX } from "../core/firstTouchFeedback.js";
+import { validateFeedback, composeMessage } from "../core/feedbackForm.js";
 import { loadTunables } from "../core/firstTouchTunables.js";
 
 import { canEditType } from "../core/callAiType.js";
@@ -118,6 +120,7 @@ import * as callLink from "../core/receivableCallLink.js";
 import { callsNormFor } from "../core/callsNormPlan.js";
 import { RUBRIC_DEBT_V1, type DebtResult } from "../core/receivableCallAi.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
+import { FX_UAH_SQL } from "../core/receivablesFxSql.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
 import * as unmergePreview from "../core/unmergePreview.js";
@@ -125,7 +128,6 @@ import * as paymentMatch from "../core/paymentMatch.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { receivablesScope } from "../auth/receivablesScope.js";
-import { loadReceivablesFx } from "../core/receivablesFx.js";
 import { paymentRequestsSql, toPaymentRequestRows, summarize as summarizePaymentRequests, PAYMENT_REQUEST_STATUSES } from "../core/paymentRequests.js";
 import {
   fkErrorMessage, limitRequestTitle, amountLimitState, amountLimitLabel,
@@ -2378,6 +2380,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
 
   type Client = {
     clientKey: string | null; clientName: string | null; amount: number;
+    fx: { uah: number; byCurrency: Record<string, number> };
     limitDays: number | null; limitAmount: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
     noteUpdatedAt: string | null; noteHistoryCount: number;
@@ -2464,6 +2467,8 @@ dashboardRouter.get("/receivables", async (req, res) => {
     const visibleAmount = r.amount - (cf?.writtenOffAmount ?? 0);
     entry.clients.push({
       clientKey: r.clientKey, clientName: r.clientName, amount: visibleAmount,
+      // 💱 Валютний борг клієнта (живі рахунки) — окремо від гривневого `amount`, який сюди його не додає (рішення А).
+      fx: { uah: r.fxUah, byCurrency: r.fxByCurrency },
       limitDays: r.limitDays, limitAmount: r.limitAmount, overdueDays: r.overdueDays,
       comment: n?.comment ?? null, dueDate: n?.dueDate ?? null,
       noteUpdatedAt: n?.updatedAt ?? null, noteHistoryCount: canonHist,
@@ -2595,7 +2600,7 @@ dashboardRouter.post("/receivables/writeoff", async (req, res) => {
   // На екрані це не було б видно взагалі: join накриває всі рядки з тим самим
   // ключем, і плитка просіла б на повну суму — а в журналі лежала б частина.
   // Тобто розбіжність тиха, і саме тому вона тут і закрита.
-  const target = await pool.query<{ client_key_raw: string; invoice_no: string; amount: string }>(
+  const target = await pool.query<{ client_key_raw: string; invoice_no: string; amount: string; currency: string | null; amount_fx: string | null }>(
     WRITEOFF_TARGETS_SQL(invoiceNo != null),
     invoiceNo ? [clientKey, invoiceNo] : [clientKey]
   );
@@ -2605,13 +2610,13 @@ dashboardRouter.post("/receivables/writeoff", async (req, res) => {
 
   for (const row of target.rows) {
     await pool.query(
-      `INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note, written_off_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note, written_off_by, currency, amount_fx)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (client_key_raw, invoice_no) DO UPDATE SET
-         amount = EXCLUDED.amount, note = EXCLUDED.note,
+         amount = EXCLUDED.amount, note = EXCLUDED.note, currency = EXCLUDED.currency, amount_fx = EXCLUDED.amount_fx,
          written_off_by = EXCLUDED.written_off_by, written_off_at = now(),
          revoked_by = NULL, revoked_at = NULL, revoke_note = NULL`,
-      [row.client_key_raw, row.invoice_no, Number(row.amount), note, auth.userId]
+      [row.client_key_raw, row.invoice_no, Number(row.amount), note, auth.userId, row.currency, row.amount_fx == null ? null : Number(row.amount_fx)]
     );
   }
   res.json({ ok: true, written: target.rowCount });
@@ -2856,7 +2861,7 @@ dashboardRouter.get("/receivables/limit-request", async (req, res) => {
   const row = await pool.query<{
     client_name: string; amount: string; limit_amount: string | null; team_id: number | null;
   }>(
-    `SELECT r.client_name, r.amount, r.limit_amount, m.team_id
+    `SELECT r.client_name, r.amount + ${FX_UAH_SQL("r")} AS amount, r.limit_amount, m.team_id
        FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
       WHERE r.client_key = $1 LIMIT 1`, [clientKey]);
   if (!row.rowCount) return res.status(404).json({ error: "Клієнта немає в дебіторці" });
@@ -2929,7 +2934,7 @@ dashboardRouter.post("/receivables/limit-task", async (req, res) => {
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
 
   const row = await pool.query<{ client_name: string; amount: string; limit_amount: string | null; team_id: number | null }>(
-    `SELECT r.client_name, r.amount, r.limit_amount, m.team_id
+    `SELECT r.client_name, r.amount + ${FX_UAH_SQL("r")} AS amount, r.limit_amount, m.team_id
        FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
       WHERE r.client_key = $1 LIMIT 1`, [clientKey]);
   if (!row.rowCount) return res.status(404).json({ error: "Клієнта немає в дебіторці" });
@@ -3027,22 +3032,6 @@ dashboardRouter.delete("/receivables/limit/:clientKey", requirePerm("manage_cred
  * detail): every unpaid invoice with its number, date, amount and service link.
  * Role-scoped like /receivables — a manager only sees their own clients.
  */
-/**
- * 💱 Валютна дебіторка — окрема вкладка «Дебіторки» (задача 7136, Сергій 26.10.2026; Роман 28.10 — «роби як пропонуєш»).
- * Скоуп — той самий `receivablesScope`, що в усіх дверях вкладки; поля — явним переліком (#17e2). Логіка — `core/receivablesFx.ts`.
- */
-dashboardRouter.get("/receivables/fx", async (req, res) => {
-  const sc = receivablesScope(req.auth!, req.query);
-  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
-  try {
-    const r = await loadReceivablesFx(pool as unknown as import("../core/finance.js").Db, { managerId: sc.managerId, teamId: sc.teamId }, kyivToday());
-    res.json({ syncedAt: r.syncedAt, error: r.error, from: r.from, rates: r.rates, totals: r.totals, clients: r.clients, kommoBase: config.kommo.baseUrl });
-  } catch (e) {
-    console.error("[receivables/fx]", e);
-    res.status(500).json({ error: "Не вдалося завантажити валютну дебіторку" });
-  }
-});
-
 dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const auth = req.auth!;
   /**
@@ -3102,7 +3091,7 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const conds = [flat ? "ri.client_key = ANY($1)" : "ri.client_key = $1"];
   const params: unknown[] = [flat ? visibleKeys : clientKey];
 
-  const r = await pool.query<{ client_key: string; invoice_time: string | null; invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; edrpou: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; client_merged: boolean; invoice_manager: string | null }>(
+  const r = await pool.query<{ client_key: string; invoice_time: string | null; invoice_no: string | null; invoice_date: string | null; amount: string; currency: string | null; amount_fx: number | null; amount_fx_uah: number | null; service_url: string | null; note: string | null; edrpou: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; client_merged: boolean; invoice_manager: string | null }>(
     `SELECT ri.client_key, ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
             -- 🕐 ЧАС ВИСТАВЛЕННЯ. NULL = часу не записано (сентинел 00:00:00 у
             -- 1С — 121 із 293 рядків), і це «не знаємо», а не «опівночі».
@@ -3110,6 +3099,8 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
             -- ⚠️ Без бектиків: усередині шаблонного літерала вони обірвали б рядок.
             to_char(ri.invoice_at AT TIME ZONE 'Europe/Kyiv', 'HH24:MI:SS') AS invoice_time,
             ri.amount, ri.service_url, ri.note, ri.edrpou,
+            -- 💱 Валютний рахунок: гривнева сума 0, валюта й ≈ ₴ — окремо (core/receivablesFxSql.ts).
+            ri.currency, ri.amount_fx::float8 AS amount_fx, ri.amount_fx_uah::float8 AS amount_fx_uah,
             -- 👤 Менеджер САМОГО РАХУНКУ (колонка «Відповідальний» у розкритті).
             -- Це НЕ той, хто веде клієнта: після override або склейки це різні
             -- люди, і саме тому колонка стоїть під «Відповідальним» — щоб різницю
@@ -3229,6 +3220,7 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         // і екран мусить сказати її словами, а не показати «00:00».
         invoiceTime: x.invoice_time,
         amount: Number(x.amount),
+        currency: x.currency, amountFx: x.amount_fx, amountFxUah: x.amount_fx_uah,
         serviceUrl: x.service_url,
         note: x.note,
         edrpou: x.edrpou,
@@ -11245,6 +11237,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
   const truncated = all.truncated;
   res.json({
     period: { from, to }, truncated, canSeeExcluded, canReview: canWriteNote(req.auth!.roleKey, "review"),
+    canFeedback: canSendCallFeedback(req.auth!.roleKey),
     // Явний перелік полів, а не спред (#17e2).
     rows: rows.map((r) => ({
       kommoIds: r.kommoIds, uniqueid: r.uniqueid, calledAt: r.calledAt,
@@ -11258,11 +11251,13 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       // П3: прапорець — лише за період після оголошення норми; до того поле є, а екран його не показує.
       silentBeforeClose: r.silentBeforeClose,
       conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
-      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride,
+      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride, transportKind: r.transportKind,
       priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
       reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
       // Екран D (08.10.2026): чек-лист і черга розбору — стани від ядра, фронт їх лише складає.
       checklist: checklist(r), checkScore: checklistScore(checklist(r)), reviewReason: reviewReason(r), needsReview: needsReview(r), reviewNote: r.reviewNote,
+      // 💬 Задача 7183: коментар менеджера і чим закрито розмову з черги («погоджено» / «тімлідом» / «дійшла до рахунку»).
+      explainNote: r.explainNote, reviewClosure: reviewReason(r) == null ? null : reviewClosure(r),
       // ТЗ «фінальні доробки» 08.10.2026: заперечення (окрема рубрика), успіх угоди з Kommo і знаменники плиток — від ядра.
       objection: r.objection, dealOutcome: r.dealOutcome,
       // 🤝 Згода після ціни (13.10.2026) — окрема інформація, у бал не входить; показувати чи ні, вирішує ядро.
@@ -11322,11 +11317,14 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
     managerChannel: card.managerChannel, durationSec: card.durationSec, mono: card.mono, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
     typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
-    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline") },
+    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline"),
+      explain: canWriteNote(auth.roleKey, "explain") },
+    canFeedback: canSendCallFeedback(auth.roleKey),
     canListen: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
     // Екран D (08.10.2026): той самий чек-лист і стан розбору, що в рядку списку, — картка однакова з будь-якого входу.
     checklist: checklist(card.row), checkScore: checklistScore(checklist(card.row)), reviewReason: reviewReason(card.row),
     needsReview: needsReview(card.row), canReview: canWriteNote(auth.roleKey, "review"),
+    reviewClosure: reviewReason(card.row) == null ? null : reviewClosure(card.row),
     clientDecision: clientDecision(card.row),
     // ❌ «Закрити угоду в Kommo» (рішення Романа 16.10.2026): лише тімлід (скоуп картки вже звужений), адмін, КВП.
     closeDeal: canCloseDeal(auth.roleKey) ? await closeOffer(pool, card.row) : null,
@@ -11407,7 +11405,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
 dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const auth = req.auth!;
   const kind = String(req.body?.kind ?? "");
-  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : kind === "review" ? "«Розібрано» ставлять тімлід (своя команда) і адмін" : kind === "offline" ? "«Передзвонив поза телефонією» позначають менеджер (свої), тімлід (команда) і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
+  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : kind === "review" ? "«Розібрано» ставлять тімлід (своя команда) і адмін" : kind === "offline" ? "«Передзвонив поза телефонією» позначають менеджер (свої), тімлід (команда) і адмін" : kind === "explain" ? "Коментар менеджера пишуть менеджер (свої), тімлід (команда) і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
   const text = req.body?.text;
   if (typeof text !== "string" || text.length > 2000) { res.status(400).json({ error: "text — рядок до 2000 символів" }); return; }
   const uniqueid = String(req.params.uniqueid);
@@ -11416,6 +11414,28 @@ dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
   await setCallNote(pool, uniqueid, kind as NoteKind, text, { userId: auth.userId ?? null, name: who }, new Date());
   res.json({ ok: true });
+});
+
+/**
+ * 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін пишуть, де система помилилась, — запис іде в розділ
+ * «Зворотний звʼязок» (таблиця `feedback`) з підставленими розмовою, угодою й менеджером. Скоуп — той самий, що картки.
+ */
+dashboardRouter.post("/ai-calls/:uniqueid/feedback", async (req, res) => {
+  const auth = req.auth!;
+  if (!canSendCallFeedback(auth.roleKey)) { res.status(403).json({ error: "«Зворотний звʼязок» з розмови пишуть тімлід, КВП і адмін" }); return; }
+  const text = req.body?.text;
+  if (typeof text !== "string" || !text.trim() || text.length > CALL_FEEDBACK_MAX) { res.status(400).json({ error: `Напишіть, що не так (до ${String(CALL_FEEDBACK_MAX)} символів)` }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  const v = validateFeedback(callFeedbackBody({ uniqueid, calledAt: card.row.calledAt, managerName: card.row.managerName, kommoIds: card.row.kommoIds }, text));
+  if (!v.ok) { res.status(400).json({ error: v.error }); return; }
+  const context = { fromSection: "ai-calls", path: `/ai-calls?call=${encodeURIComponent(uniqueid)}`.slice(0, 120), role: String(auth.roleKey ?? "") };
+  const ins = await pool.query<{ id: number }>(
+    `INSERT INTO feedback (author_user_id, section, message, kind, impact, fields_json, context_json)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [auth.userId, v.draft.section, composeMessage(v.draft), v.draft.kind, v.draft.impact, JSON.stringify(v.draft.fields), JSON.stringify(context)]);
+  res.status(201).json({ ok: true, id: ins.rows[0].id });
 });
 
 /**

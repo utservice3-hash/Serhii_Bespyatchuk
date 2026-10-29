@@ -48,6 +48,8 @@ export const clientLimitsApi: LimitsApi = {
   edit: (id, b) => call(api.post(`${CL}/${enc(id)}/edit`, b)),
   keep: (id, note) => call(api.post(`${CL}/${enc(id)}/keep`, { note })),
   set: (debtorKey, b) => call(api.post(`${CL}/set`, { ...b, debtorKey })),
+  search: q => call(api.get(`${CL}/search`, { params: { q } })),
+  add: (clientKey, b) => call(api.post(`${CL}/add`, { ...b, clientKey })),
 };
 
 /** Файл з нашого API (`/api/counterparty/...`) — з токеном, як blob; відкрити PDF у новій вкладці, решту — зберегти. */

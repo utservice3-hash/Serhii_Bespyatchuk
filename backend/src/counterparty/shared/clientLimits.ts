@@ -92,6 +92,30 @@ export interface Debtor {
 /** Ліміт ↔ боржник: ключ боржника збігається з debtorKey ліміту, АБО хоч одна юрособа ліміту є серед кодів боржника. */
 export const matches = (l: Pick<ClientLimit, 'debtorKey' | 'members'>, d: Pick<Debtor, 'key' | 'codes'>) =>
   (!!l.debtorKey && l.debtorKey === d.key) || d.codes.some(c => l.members.some(m => m.code === c));
+/**
+ * Клієнт із нашої бази (угоди CRM + дебіторка) — для «＋ Додати клієнта» (Сергій, UTS TOP Weekly 26.10: «сюди додати всіх
+ * клієнтів, які в нас є в нашій базі… по назві або по коду»). Дає сервер — counterparty/clientDirectoryDb.ts.
+ */
+export interface ClientHit {
+  key: string;                 // client_key — той самий ключ, що й у дебіторці (60 з 67 боржників, 28.10)
+  name: string;
+  codes: string[];             // ЄДРПОУ / ІПН — з компаній CRM і рахунків 1С
+  managerId: string | null;    // users.id відповідального (з дебіторки, інакше — з останньої угоди)
+  managerName: string;
+  deals: number;               // угод у CRM
+  lastDealAt: string | null;
+  debtor: boolean;             // зараз є борг у дебіторці
+}
+/** Пошук: 8 або 10 цифр — код (ЄДРПОУ / ІПН); інакше — назва від 2 знаків; коротше — шукати нічого. */
+export function clientQuery(q: string): { code: string } | { text: string } | null {
+  const s = q.trim();
+  if (/^\d{8}$|^\d{10}$/.test(s)) return { code: s };
+  return s.length >= 2 ? { text: s } : null;
+}
+/** Діючий ліміт, що вже покриває клієнта бази — за ключем або за кодом юрособи (те саме правило, що й ліміт ↔ боржник). */
+export const limitOfClient = (limits: Array<Pick<ClientLimit, 'id' | 'debtorKey' | 'members'>>, h: Pick<ClientHit, 'key' | 'codes'>): string | null =>
+  limits.find(l => matches(l, { key: h.key, codes: h.codes }))?.id ?? null;
+
 /** Рядки вкладки: ліміти з боргом + боржники з боргом без ліміту. cells — що показати в колонці «Ліміти» активної дебіторки по кожному боржнику. */
 export function buildRows(limits: ClientLimit[], debtors: Debtor[]): { rows: AnyRow[]; cells: Record<string, DebtorLimitCell> } {
   const rows: AnyRow[] = [], used = new Set<string>(), cells: Record<string, DebtorLimitCell> = {};
@@ -124,6 +148,46 @@ export const LFILTERS: Array<[LimFilter, string]> = [
 ];
 export const limIn = (x: AnyRow, k: LimFilter) => k === 'all' || (k === 'none' && isNoLimit(x))
   || (!isNoLimit(x) && ((k === 'over' && x.over) || (k === 'od' && x.odDays > 0) || (k === 'court' && x.suspended) || (k === 'notice' && !!x.notice) || (k === 'debt' && x.src === 'debt')));
+/**
+ * Групування вкладки (Сергій 28.10: «групувати клієнтів по різних параметрах, сума, к-сть днів»). Точних значень забагато
+ * (заміряно 28.10: 21 різна сума й 15 різних строків на 37 лімітів), тож — діапазони; межа входить у нижчу групу
+ * (50 000 — «до 50 тис.»). Боржник без ліміту — окрема група в кінці, не «нуль».
+ */
+export type LimGroupBy = 'none' | 'sum' | 'days' | 'manager';
+export const LGROUPS: Array<[LimGroupBy, string]> = [['none', 'Без групування'], ['sum', 'За сумою ліміту'], ['days', 'За днями'], ['manager', 'За менеджером']];
+const SUM_BANDS: Array<[number, string]> = [[50_000, 'до 50 тис. грн'], [100_000, '50–100 тис. грн'], [300_000, '100–300 тис. грн'], [500_000, '300–500 тис. грн']];
+const DAY_BANDS: Array<[number, string]> = [[7, 'до 7 днів'], [14, '8–14 днів'], [30, '15–30 днів']];
+export interface LimGroup { key: string; label: string; order: number }
+export function limGroup(x: AnyRow, by: LimGroupBy): LimGroup {
+  if (by === 'none') return { key: 'all', label: '', order: 0 };
+  if (by === 'manager') return { key: 'm:' + (x.managerName || ''), label: x.managerName || 'без відповідального', order: 0 };
+  if (isNoLimit(x)) return { key: 'none', label: 'Ліміт не узгоджено', order: 99 };
+  const v = by === 'sum' ? x.limit : x.days, bands = by === 'sum' ? SUM_BANDS : DAY_BANDS;
+  if (v === null) return { key: 'null', label: by === 'sum' ? 'Суму не погоджено' : 'Дні не погоджено', order: 98 };
+  const i = bands.findIndex(([max]) => v <= max);
+  return i >= 0 ? { key: 'b' + i, label: bands[i][1], order: i } : { key: 'b' + bands.length, label: by === 'sum' ? 'понад 500 тис. грн' : 'понад 30 днів', order: bands.length };
+}
+/**
+ * Назва без довгої юридичної форми на початку: «ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ "УНІВЕРСАЛСЕРВІС ПЛЮС"» →
+ * «УНІВЕРСАЛСЕРВІС ПЛЮС ТОВ». Інакше рядок сортується під «Т» і губиться внизу списку (Сергій 28.10). Лише вигляд і
+ * порядок — дані не змінюються. Латинська «I» в «ВIДПОВIДАЛЬНIСТЮ» трапляється в CRM — теж форма.
+ */
+const LEGAL_FORMS: Array<[RegExp, string]> = [
+  [/^ТОВАРИСТВО З ОБМЕЖЕНОЮ В[ІI]ДПОВ[ІI]ДАЛЬН[ІI]СТЮ\s+/i, 'ТОВ'],
+  [/^ПРИВАТНЕ АКЦ[ІI]ОНЕРНЕ ТОВАРИСТВО\s+/i, 'ПрАТ'],
+  [/^АКЦ[ІI]ОНЕРНЕ ТОВАРИСТВО\s+/i, 'АТ'],
+  [/^ПРИВАТНЕ П[ІI]ДПРИЄМСТВО\s+/i, 'ПП'],
+  [/^Ф[ІI]ЗИЧНА ОСОБА[-\s]+П[ІI]ДПРИЄМЕЦЬ\s+/i, 'ФОП'],
+];
+export function shortName(name: string): string {
+  for (const [re, abbr] of LEGAL_FORMS) {
+    if (!re.test(name)) continue;
+    const rest = name.replace(re, '').trim().replace(/^["'«“]+|["'»”]+$/g, '').trim();
+    return rest ? `${rest} ${abbr}` : name;
+  }
+  return name;
+}
+
 /** Порядок: те, що потребує уваги, — угорі; далі боржники без ліміту; далі решта. */
 export const rowRank = (x: AnyRow) => (isNoLimit(x) ? 1 : x.alert ? 0 : 2);
 export const useTone = (u: number) => (u > 100 ? 'bad' : u >= 80 ? 'warn' : '');

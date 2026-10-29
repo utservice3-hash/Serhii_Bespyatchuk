@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
   startDismissal, dismissNeedsConfirm, finishDismissal, revertDismissal, setDismissDate, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
-  fetchPeoplePhotos, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles, setEmployeeTeam,
+  fetchPeoplePhotos, EMP_CATEGORIES, empCategoryLabel, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles, setEmployeeTeam,
   type EmployeeAccount, type EmployeeAccountCan, type RoleDef,
   type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
@@ -73,6 +73,8 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const [view, setView] = useState<"active" | "dismissed" | "all">("active");
   const [team, setTeam] = useState<string>("");
   const [extra, setExtra] = useState<Extra>("all");
+  // 🗂 Категорія (28.10.2026, ТЗ Івана, #2960): "" — усі, "none" — без категорії, інакше ключ.
+  const [cat, setCat] = useState<string>("");
   const [importing, setImporting] = useState(false);
   const [adding, setAdding] = useState(false);
   const [bulk, setBulk] = useState(false);
@@ -103,13 +105,20 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   useEffect(load, [load]);
 
   const inView = useMemo(() => (rows ?? []).filter((r) => view === "all" || (view === "dismissed" ? r.status === "dismissed" : r.status !== "dismissed")), [rows, view]);
-  const shown = useMemo(() => inView.filter((r) => (!team || (team === "—" ? !r.team_name : r.team_name === team))
+  const filtered = useMemo(() => inView.filter((r) => (!team || (team === "—" ? !r.team_name : r.team_name === team))
     && (extra === "all" || (extra === "new" && (daysSince(r.hired_at) ?? 999) <= 30) || (extra === "noacc" && r.user_id == null)
       || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date))
       || (extra === "nonda" && !r.has_nda) || (extra === "nooffer" && !r.has_offer) || (extra === "nodocs" && r.docs === 0)
       || (extra === "nophoto" && !!photos && !photos.get(r.id)?.hasPhoto))
     && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_name ?? r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))),
   [inView, team, extra, q, photos]);
+  // Кількості на кнопках — серед уже відібраних іншими фільтрами, тож «Менеджери 41» = рівно стільки рядків покаже клік.
+  const catCount = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of filtered) { const k = r.category ?? "none"; m.set(k, (m.get(k) ?? 0) + 1); }
+    return m;
+  }, [filtered]);
+  const shown = useMemo(() => (cat ? filtered.filter((r) => (r.category ?? "none") === cat) : filtered), [filtered, cat]);
   const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_name).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
   if (err) return <div className="chart-card"><b>Реєстр недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
@@ -157,13 +166,22 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
           <button className="hr-btn" onClick={() => setImporting(true)}>Імпорт з таблиці</button>
           <button className="hr-btn p" onClick={() => setAdding(true)}>+ Співробітник</button>
         </div>
+        <div className="emp-cats" role="group" aria-label="Категорія">
+          <button className={`emp-cat ${cat === "" ? "on" : ""}`} onClick={() => setCat("")}>Усі <span>{filtered.length}</span></button>
+          {[...EMP_CATEGORIES, ["none", "Без категорії"] as const].map(([k, l]) => {
+            const n = catCount.get(k) ?? 0;
+            if (k === "none" && !n && cat !== "none") return null;
+            return <button key={k} className={`emp-cat ${cat === k ? "on" : ""} ${n ? "" : "zero"}`} onClick={() => setCat(cat === k ? "" : k)}>{l} <span>{n}</span></button>;
+          })}
+          {cat && <span className="hr-muted" style={{ fontSize: 12.5 }}>показано {shown.length} з {filtered.length}</span>}
+        </div>
         <Birthdays rows={rows} onOpen={(id) => setOpen({ id, tab: "profile" })} />
         {rows.length === 0 ? (
           <div style={{ padding: 16 }}><b>Реєстр порожній.</b> <span className="hr-muted">Натисніть «Імпорт з таблиці» і покладіть CSV з аркуша «Укр NEW».</span></div>
         ) : (
           <div className="hr-tw">
             <table className="data-table emp-table">
-              <thead><tr><th>Співробітник</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th>Документи</th><th className="num">Доступи</th></tr></thead>
+              <thead><tr><th>Співробітник</th><th>Категорія</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th>Документи</th><th className="num">Доступи</th></tr></thead>
               <tbody>
                 {shown.map((r) => {
                   const fresh = r.status === "active" && (daysSince(r.hired_at) ?? 999) <= 30;
@@ -179,6 +197,8 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                         <div className="hr-muted">{r.position ?? "посада не вказана"}</div>
                         </div>
                       </div></td>
+                      <td>{r.category ? empCategoryLabel(r.category) : <span className="hr-muted">без категорії</span>}
+                        {r.category_manual && <span className="emp-pill mute" title="Категорію поставлено вручну">вручну</span>}</td>
                       <td><TeamPill row={r} /></td>
                       <td>{r.phone ?? <span className={r.status === "active" ? "emp-miss" : "hr-muted"}>немає</span>}</td>
                       <td>{(r.status === "dismissed" ? d(r.dismissed_at) : d(r.hired_at)) ?? <span className="hr-muted">—</span>}
@@ -266,6 +286,30 @@ function TeamField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast; on
   );
 }
 
+/**
+ * 🗂 Категорія в картці (28.10.2026, ТЗ Івана, #2960): «за посадою» = рахує правило сервера, інакше — вручну
+ * (перемагає правило й лишається, навіть якщо посаду перейменують). Зберігається одразу, як і команда.
+ */
+function CategoryField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const change = async (v: string) => {
+    setBusy(true);
+    try {
+      await updateEmployee(row.id, { category: (v || null) as EmployeePatch["category"] });
+      toast(v ? `${row.full_name}: категорія «${empCategoryLabel(v)}» (вручну)` : `${row.full_name}: категорія знову за посадою`); onSaved();
+    } catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  return (
+    <label className="wide"><span>Категорія</span>
+      <select className="hr-inp" value={row.category_manual ? row.category ?? "" : ""} disabled={busy} onChange={(e) => void change(e.target.value)}>
+        <option value="">{row.category_manual ? "за посадою (скинути ручну)" : `за посадою: ${empCategoryLabel(row.category)}`}</option>
+        {EMP_CATEGORIES.map(([k, l]) => <option key={k} value={k}>{l} — вручну</option>)}
+      </select>
+    </label>
+  );
+}
+
 const FIELDS: [keyof EmployeePatch, string, "text" | "date" | "status"][] = [
   ["full_name", "ПІБ", "text"], ["position", "Посада", "text"], ["status", "Статус", "status"],
   ["phone", "Телефон", "text"], ["email", "Пошта", "text"], ["telegram", "Telegram", "text"], ["birth_date", "Дата народження", "date"],
@@ -332,6 +376,7 @@ function EmployeeDrawer({ row, tab, status, toast, photo, photoErr, onTab, onClo
             <AccountPanel employeeId={row.id} email={row.email} toast={toast} onChanged={onSaved} />
             <div className="emp-form">
               <TeamField row={row} toast={toast} onSaved={onSaved} />
+              <CategoryField row={row} toast={toast} onSaved={onSaved} />
               {FIELDS.map(([k, label, kind]) => (
                 <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>
                   <span>{label}</span>

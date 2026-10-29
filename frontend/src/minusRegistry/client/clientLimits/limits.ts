@@ -4,13 +4,13 @@
  * Вигляд = узгоджений макет v5 (23.10). Стилі — client/counterparty/cp.css (спільні з «Узгодженням»).
  */
 import {
-  LFILTERS, LIMIT_EVENT_LABEL, LIMIT_EVENT_TONE, canSeeLimit, isNoLimit, limIn, limitActions, limitState, limitsBadge, rowRank, srcText,
-  type AnyRow, type LimFilter, type LimitRow, type NoLimitRow,
+  LFILTERS, LGROUPS, LIMIT_EVENT_LABEL, LIMIT_EVENT_TONE, canSeeLimit, isNoLimit, limGroup, limIn, limitActions, limitState, limitsBadge, rowRank, shortName, srcText,
+  type AnyRow, type LimFilter, type LimGroupBy, type LimitRow, type NoLimitRow,
 } from '../../shared/clientLimits';
 import { ENT_LABEL, FROM_LABEL, PAY_SHORT, diffLines, sideLine, type CpUser, type From } from '../../shared/counterparty';
 import { PLANNED_CYCLE_DAYS } from '../../shared/cpCheck';
 import { dayW, dm, dt, esc, money, plural } from '../../shared/cpFormat';
-import type { LimitsApi, Navigate, NavTarget } from '../counterparty/types';
+import type { ClientHitView, LimitsApi, Navigate, NavTarget } from '../counterparty/types';
 import { CpApiError } from '../counterparty/types';
 import { SEARCH_ICON, closeBtn, errText, foot, hintFoot, histHtml, makeToast, opts, usebar } from '../counterparty/ui';
 
@@ -35,6 +35,16 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
   let me: CpUser | null = null, rows: AnyRow[] = [], debtAt: string | null = null, monitor: { last: string | null; next: string } | null = null;
   let loadErr = '', filter: LimFilter = 'all', query = '', openId: string | null = null, decision: Decision = null, busy = false, alive = true;
   let pending: NavTarget | null = o.initial || null;
+  /** «＋ Додати клієнта» (Сергій, задача 7137): пошук по всій базі → та сама форма «Задати ліміт». */
+  let adding: { q: string; hits: ClientHitView[] | null; loading: boolean; err: string; pick: ClientHitView | null } | null = null;
+  let searchSeq = 0, searchTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Групування (Сергій 28.10) — запамʼятовується в браузері; згорнуті групи — до перезавантаження. */
+  const GROUP_KEY = 'cpLimitsGroup';
+  let groupBy: LimGroupBy = 'none';
+  try { const g = localStorage.getItem(GROUP_KEY); if (LGROUPS.some(([k]) => k === g)) groupBy = g as LimGroupBy; } catch { /* приватне вікно — без памʼяті */ }
+  const collapsed = new Set<string>();
+  /** Щойно заданий ліміт — першим рядком і з позначкою, поки сторінку не перезавантажили: інакше він «пропадав» за фільтром чи внизу списку. */
+  let freshId: string | null = null;
 
   root.innerHTML = `<div class="cpx">
   <div class="cp-cq">
@@ -43,6 +53,8 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
         <div class="cp-ways" id="${P}filters" role="group" aria-label="Фільтр лімітів"></div>
         <span class="cp-grow"></span>
         <span class="cp-yc" id="${P}at"></span>
+        <span id="${P}add"></span>
+        <label class="cp-grp"><span>Групувати</span><select class="cp-in" id="${P}grp" aria-label="Групувати клієнтів">${LGROUPS.map(([k, t]) => `<option value="${k}"${k === groupBy ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="cp-search">${SEARCH_ICON}<input id="${P}q" placeholder="ЄДРПОУ або назва" aria-label="Пошук клієнта за ЄДРПОУ або назвою" autocomplete="off"></label>
       </div>
       <div class="cp-tblwrap"><table class="cp-reg">
@@ -71,31 +83,132 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     o.onCount?.(limitsBadge(u, all));
     $('filters')!.innerHTML = LFILTERS.map(([k, t]) => `<button type="button" data-lf="${k}" aria-pressed="${filter === k}">${t} <span class="cp-c">${all.filter(x => limIn(x, k)).length}</span></button>`).join('');
     $('at')!.textContent = debtAt ? `Борг — з дебіторки на ${dm(debtAt)}` : 'Дебіторка недоступна — борг не показано';
+    $('add')!.innerHTML = u.role === 'approver' ? '<button type="button" class="cp-btn cp-pri" data-add>＋ Додати клієнта</button>' : '';
     const qq = query.trim().toLowerCase();
-    const list = all.filter(x => limIn(x, filter) && (!qq || x.name.toLowerCase().includes(qq) || x.members.some(m => m.code.toLowerCase().includes(qq) || m.name.toLowerCase().includes(qq))))
-      .sort((a, b) => rowRank(a) - rowRank(b) || a.name.localeCompare(b.name, 'uk'));
-    body.innerHTML = list.map(x => {
-      const name = `<td class="cp-c-cl"><div class="cp-who">${esc(x.name)}</div><div class="cp-sub"><span class="cp-code">${esc(code0(x) || '—')}</span>${x.kind ? ' · ' + esc(x.kind) : ''}</div>${membersSub(x)}${!isNoLimit(x) && x.suspended ? '<div class="cp-flag">призупинено — нова справа в суді</div>' : ''}${!isNoLimit(x) && x.change ? '<div class="cp-flag cp-w">запит на зміну умов</div>' : ''}${!isNoLimit(x) && x.notice ? `<div class="cp-flag cp-w" title="${esc(x.notice.what)}">зміни в YouControl</div>` : ''}</td>`;
+    const list = all.filter(x => x.id === freshId || (limIn(x, filter) && (!qq || x.name.toLowerCase().includes(qq) || x.members.some(m => m.code.toLowerCase().includes(qq) || m.name.toLowerCase().includes(qq)))))
+      .sort((a, b) => Number(b.id === freshId) - Number(a.id === freshId) || rowRank(a) - rowRank(b) || shortName(a.name).localeCompare(shortName(b.name), 'uk'));
+    const rowHtml = (x: AnyRow) => {
+      const name = `<td class="cp-c-cl"><div class="cp-who">${esc(shortName(x.name))}${x.id === freshId ? ' <span class="cp-pill cp-ok">щойно задано</span>' : ''}</div><div class="cp-sub"><span class="cp-code">${esc(code0(x) || '—')}</span>${x.kind ? ' · ' + esc(x.kind) : ''}</div>${membersSub(x)}${!isNoLimit(x) && x.suspended ? '<div class="cp-flag">призупинено — нова справа в суді</div>' : ''}${!isNoLimit(x) && x.change ? '<div class="cp-flag cp-w">запит на зміну умов</div>' : ''}${!isNoLimit(x) && x.notice ? `<div class="cp-flag cp-w" title="${esc(x.notice.what)}">зміни в YouControl</div>` : ''}</td>`;
       const who = `<td class="cp-c-mg"><div class="cp-mgr">${esc(x.managerName)}</div><div class="cp-sub">${esc(srcText(x))}</div></td>`;
       const sel = openId === x.id ? ' cp-sel' : '';
-      if (isNoLimit(x)) return `<tr data-lid="${esc(x.id)}" tabindex="0" class="cp-nolim${sel}" aria-label="${esc(x.name)}">${name}
+      if (isNoLimit(x)) return `<tr data-lid="${esc(x.id)}" tabindex="0" class="cp-nolim${sel}" aria-label="${esc(shortName(x.name))}">${name}
         <td class="cp-c-lm"><span class="cp-ck cp-mut">не узгоджено</span></td>
         <td class="cp-c-tm"><span class="cp-sub">умов немає</span></td>
         <td class="cp-c-st"><b class="cp-num">${money(x.debt)}</b><div class="cp-sub">${dayW(x.ageDays)} без оплати</div></td>
         <td class="cp-c-od"><span class="cp-sub">—</span></td>${who}</tr>`;
-      return `<tr data-lid="${esc(x.id)}" tabindex="0" class="${x.alert ? 'cp-alert' : ''}${sel}" aria-label="${esc(x.name)}">${name}
+      return `<tr data-lid="${esc(x.id)}" tabindex="0" class="${x.alert ? 'cp-alert' : ''}${sel}" aria-label="${esc(shortName(x.name))}">${name}
         <td class="cp-c-lm"><b class="cp-num">${limitText(x)}</b>${x.limit !== null ? `${usebar(x.use)}<div class="cp-sub">використано ${x.use} %</div>` : ''}</td>
         <td class="cp-c-tm"><div class="cp-terms"><b>${esc(terms(x))}</b></div><div class="cp-sub">${[x.ent ? ENT_LABEL[x.ent] : '', x.pay ? PAY_SHORT[x.pay] : ''].filter(Boolean).join(' · ')}</div></td>
         <td class="cp-c-st"><b class="cp-num${x.over ? ' cp-neg' : ''}">${x.debt ? money(x.debt) : '—'}</b>${x.over && x.limit !== null ? `<div class="cp-flag">понад ліміт ${money(x.debt - x.limit)}</div>` : ''}</td>
         <td class="cp-c-od">${x.odDays ? `<b class="cp-neg">${dayW(x.odDays)}</b><div class="cp-sub">${money(x.odSum)}</div>` : '<span class="cp-sub">—</span>'}</td>${who}</tr>`;
-    }).join('') || '<tr><td colspan="6" class="cp-empty">Порожньо</td></tr>';
-    const sl = list.reduce((a, x) => a + (!isNoLimit(x) && x.limit ? x.limit : 0), 0), sd = list.reduce((a, x) => a + x.debt, 0);
+    };
+    const sumOf = (xs: AnyRow[]) => [xs.reduce((a, x) => a + (!isNoLimit(x) && x.limit ? x.limit : 0), 0), xs.reduce((a, x) => a + x.debt, 0)];
+    let html: string;
+    if (groupBy === 'none') html = list.map(rowHtml).join('');
+    else {
+      // щойно заданий — над групами, щоб не шукати його в згорнутій чи нижній групі
+      const top = list.filter(x => x.id === freshId), groups = new Map<string, { label: string; order: number; xs: AnyRow[] }>();
+      for (const x of list) {
+        if (x.id === freshId) continue;
+        const g = limGroup(x, groupBy), cur = groups.get(g.key) ?? { label: g.label, order: g.order, xs: [] };
+        cur.xs.push(x); groups.set(g.key, cur);
+      }
+      html = top.map(rowHtml).join('') + [...groups.entries()].sort(([, a], [, b]) => a.order - b.order || a.label.localeCompare(b.label, 'uk')).map(([k, g]) => {
+        const [gl, gd] = sumOf(g.xs), shut = collapsed.has(k);
+        return `<tr class="cp-gh" data-grp="${esc(k)}" tabindex="0" aria-expanded="${!shut}"><td colspan="6"><span class="cp-gh-arr">${shut ? '▸' : '▾'}</span> <b>${esc(g.label)}</b> <span class="cp-sub">· ${g.xs.length} ${plural(g.xs.length, 'клієнт', 'клієнти', 'клієнтів')}${gl ? ` · ліміти ${money(gl)}` : ''} · борг ${money(gd)}</span></td></tr>`
+          + (shut ? '' : g.xs.map(rowHtml).join(''));
+      }).join('');
+    }
+    body.innerHTML = html || '<tr><td colspan="6" class="cp-empty">Порожньо</td></tr>';
+    const [sl, sd] = sumOf(list);
     f.innerHTML = list.length ? `<tr><td colspan="6">${list.length} ${plural(list.length, 'клієнт', 'клієнти', 'клієнтів')} · ліміти разом ${money(sl)} · борг ${money(sd)}</td></tr>` : '';
   }
 
   // ---------- панель ----------
-  function openPanel(id: string) { openId = id; decision = null; $('scrim')!.hidden = false; $('drawer')!.hidden = false; renderPanel(); render(); $('drawer')!.querySelector<HTMLElement>('[data-close]')?.focus(); }
-  function closePanel() { openId = null; decision = null; $('scrim')!.hidden = true; $('drawer')!.hidden = true; render(); }
+  function openPanel(id: string) { adding = null; openId = id; decision = null; $('scrim')!.hidden = false; $('drawer')!.hidden = false; renderPanel(); render(); $('drawer')!.querySelector<HTMLElement>('[data-close]')?.focus(); }
+  function closePanel() { adding = null; clearTimeout(searchTimer); openId = null; decision = null; $('scrim')!.hidden = true; $('drawer')!.hidden = true; render(); }
+
+  // ---------- «＋ Додати клієнта» ----------
+  function openAdd() {
+    openId = null; decision = null; adding = { q: '', hits: null, loading: false, err: '', pick: null };
+    $('scrim')!.hidden = false; $('drawer')!.hidden = false; renderAdd(); render(); $('aq')?.focus();
+  }
+  function renderAdd() {
+    if (!alive || !adding) return;
+    const a = adding, D = $('drawer')!, dis = busy ? ' disabled' : '';
+    if (a.pick) {
+      const h = a.pick;
+      D.innerHTML = `
+      <div class="cp-dh"><h2 id="${P}dTitle">${esc(shortName(h.name))}</h2>${closeBtn}</div>
+      <div class="cp-db">
+        <div class="cp-src"><span class="cp-code">${esc(h.codes[0] || '—')}</span> · менеджер ${esc(h.managerName || 'без відповідального')}</div>
+        <div class="cp-note cp-mutn">${h.debtor ? '<b>Зараз є борг у дебіторці.</b>' : '<b>Боргу зараз немає.</b> Ліміт діятиме з першого рахунку.'} ${dealsLine(h)}${h.codes.length > 1 ? ` · ${h.codes.length} ${plural(h.codes.length, 'код', 'коди', 'кодів')}: ${h.codes.map(esc).join(', ')}` : ''}</div>
+        ${limForm(null, 'Задати ліміт', 'напр. погодили на зустрічі, платить вчасно')}
+      </div>
+      ${foot(`<button type="button" class="cp-btn cp-okb" data-act="add-go" disabled>Задати ліміт</button><button type="button" class="cp-btn" data-act="add-back"${dis}>Назад до пошуку</button>`, 'Ліміт одразу зʼявиться в списку; коли в клієнта буде борг — і в колонці «Ліміти» активної дебіторки.')}`;
+      return;
+    }
+    D.innerHTML = `
+      <div class="cp-dh"><h2 id="${P}dTitle">Додати клієнта</h2>${closeBtn}</div>
+      <div class="cp-db">
+        <label class="cp-search">${SEARCH_ICON}<input id="${P}aq" value="${esc(a.q)}" placeholder="ЄДРПОУ, ІПН або назва" aria-label="Пошук клієнта в базі" autocomplete="off"></label>
+        <div class="cp-hint">Усі клієнти, з ким була хоч одна угода в CRM, і боржники дебіторки. Код — 8 або 10 цифр, назва — від 2 літер.</div>
+        <div id="${P}ahits"></div>
+      </div>`;
+    renderHits();
+  }
+  const dealsLine = (h: ClientHitView) => (h.deals ? `${h.deals} ${plural(h.deals, 'угода', 'угоди', 'угод')} у CRM${h.lastDealAt ? `, остання ${dt(h.lastDealAt)}` : ''}` : 'угод у CRM немає');
+  function renderHits() {
+    const box = $('ahits'), a = adding; if (!box || !a) return;
+    if (a.err) { box.innerHTML = `<div class="cp-note">${esc(a.err)}</div>`; return; }
+    if (a.loading && !a.hits) { box.innerHTML = '<div class="cp-hint">Шукаю…</div>'; return; }
+    if (!a.hits) { box.innerHTML = ''; return; }
+    if (!a.hits.length) { box.innerHTML = `<div class="cp-hint">Нічого не знайдено за «${esc(a.q.trim())}».</div>`; return; }
+    box.innerHTML = `<div class="cp-tblwrap"><table class="cp-reg"><thead><tr><th>Клієнт</th><th>Угоди</th><th>Менеджер</th></tr></thead><tbody>${a.hits.map((h, i) => `
+      <tr data-hit="${i}" tabindex="0" aria-label="${esc(h.name)}">
+        <td><div class="cp-who">${esc(shortName(h.name))}</div><div class="cp-sub"><span class="cp-code">${esc(h.codes[0] || '—')}</span>${h.codes.length > 1 ? ` +${h.codes.length - 1}` : ''}${h.debtor ? ' · є борг' : ''}</div>${h.limitId ? '<div class="cp-flag cp-w">ліміт уже є — відкрити</div>' : ''}</td>
+        <td><b class="cp-num">${h.deals}</b><div class="cp-sub">${h.lastDealAt ? dt(h.lastDealAt) : '—'}</div></td>
+        <td><div class="cp-mgr">${esc(h.managerName || 'без відповідального')}</div></td></tr>`).join('')}</tbody></table></div>
+      ${a.hits.length >= 20 ? '<div class="cp-hint">Показано перші 20 — уточніть назву або введіть код.</div>' : ''}`;
+  }
+  function scheduleSearch() {
+    clearTimeout(searchTimer);
+    const a = adding; if (!a) return;
+    const q = a.q.trim();
+    if (!/^\d{8}$|^\d{10}$/.test(q) && q.length < 2) { a.hits = null; a.err = ''; a.loading = false; renderHits(); return; }
+    a.loading = true; renderHits();
+    searchTimer = setTimeout(() => {
+      const my = ++searchSeq;
+      o.api.search(q).then(j => { if (adding && my === searchSeq) { adding.hits = j.hits; adding.err = ''; adding.loading = false; renderHits(); } })
+        .catch(e => { if (adding && my === searchSeq) { adding.err = errText(e); adding.loading = false; renderHits(); } });
+    }, 300);
+  }
+  function pickHit(i: number) {
+    const a = adding, h = a?.hits?.[i]; if (!a || !h || busy) return;
+    if (h.limitId) {
+      if (rows.some(x => x.id === h.limitId)) openPanel(h.limitId); else toast.show('Ліміт цього клієнта не видно в списку — оновіть сторінку');
+      return;
+    }
+    a.pick = h; renderAdd(); $('l-limit')?.focus();
+  }
+  async function addGo() {
+    const a = adding, h = a?.pick; if (!a || !h || busy) return;
+    const v = formVals(); if (!v.reason) return;
+    // кнопки — без перемальовування: інакше на помилці форма втратила б уже введені ліміт, дні й причину
+    const btns = (on: boolean) => $('drawer')!.querySelectorAll<HTMLButtonElement>('[data-act^="add-"]').forEach(b => { b.disabled = !on; });
+    busy = true; btns(false);
+    try {
+      const r = await o.api.add(h.key, v);
+      busy = false;
+      rows = rows.filter(y => !(isNoLimit(y) && y.debtorKey === h.key));
+      replace(r); showFresh(r.id); openPanel(r.id);
+      toast.show(h.debtor ? 'Ліміт задано — зʼявиться в колонці «Ліміти» активної дебіторки' : 'Ліміт задано — дебіторка підхопить його з першим рахунком');
+    } catch (e) {
+      busy = false; btns(true);
+      if (e instanceof CpApiError && e.status === 409) void refresh();
+      toast.show(errText(e));
+    }
+  }
   const limForm = (x: LimitRow | null, title: string, ph: string) => `<div class="cp-box cp-edit"><div class="cp-lbl">${title}</div>
     <div class="cp-grid2">
       <label class="cp-f"><span>Ліміт боргу, грн <em>*</em></span><input class="cp-in cp-mono" id="${P}l-limit" inputmode="numeric" value="${x && x.limit !== null ? x.limit : ''}" placeholder="напр. 200000"></label>
@@ -112,7 +225,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     const st = limitState(x);
     if (isNoLimit(x)) {
       D.innerHTML = `
-      <div class="cp-dh"><h2 id="${P}dTitle">${esc(x.name)} <span class="cp-pill cp-${st[0]}">${st[1]}</span></h2>${closeBtn}</div>
+      <div class="cp-dh"><h2 id="${P}dTitle">${esc(shortName(x.name))} <span class="cp-pill cp-${st[0]}">${st[1]}</span></h2>${closeBtn}</div>
       <div class="cp-db">
         <div class="cp-src"><span class="cp-code">${esc(code0(x) || '—')}</span>${x.kind ? ' · ' + esc(x.kind) : ''} · менеджер ${esc(x.managerName)}</div>
         <div class="cp-note cp-warnn"><b>Борг є, а умови не погоджено.</b> ${money(x.debt)}, ${dayW(x.ageDays)} без оплати — з дебіторки на ${dm(debtAt)}. Після погодження ліміт зʼявиться тут і в колонці «Ліміти» активної дебіторки.</div>
@@ -137,7 +250,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     const plan = code0(x) ? `Планова перевірка YouControl — раз на 3 місяці, ${plannedNext}; суди — щомісяця, поки є борг${x.members.length > 1 ? ', по кожній юрособі' : ''}${x.debt > 0 && next ? ` (наступна ${next})` : ''}.`
       : 'Коду ЄДРПОУ немає — автоматичних перевірок YouControl немає.';
     D.innerHTML = `
-      <div class="cp-dh"><h2 id="${P}dTitle">${esc(x.name)} <span class="cp-pill cp-${st[0]}">${st[1]}</span></h2>${closeBtn}</div>
+      <div class="cp-dh"><h2 id="${P}dTitle">${esc(shortName(x.name))} <span class="cp-pill cp-${st[0]}">${st[1]}</span></h2>${closeBtn}</div>
       <div class="cp-db">
         <div class="cp-src"><span class="cp-code">${esc(code0(x) || '—')}</span>${x.kind ? ' · ' + esc(x.kind) : ''} · менеджер ${esc(x.managerName)}</div>
         ${x.flag ? `<div class="cp-note"><b>${x.src === 'req' ? 'Погодження призупинено.' : 'Ліміт призупинено.'}</b> ${esc(x.flag.what)}</div>` : ''}
@@ -183,6 +296,12 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     return '';
   }
 
+  /** Новий ліміт: скинути фільтр і пошук, поставити рядок першим — щоб він не «зникав» (Сергій 28.10). */
+  function showFresh(id: string) {
+    freshId = id; filter = 'all'; query = '';
+    const q = $<HTMLInputElement>('q'); if (q) q.value = '';
+  }
+
   // ---------- дії ----------
   const replace = (r: LimitRow) => { const i = rows.findIndex(y => y.id === r.id); if (i >= 0) rows[i] = r; else rows.push(r); };
   const formVals = () => ({ limit: ($('l-limit') as HTMLInputElement).value, days: ($('l-days') as HTMLInputElement).value, from: ($('l-from') as HTMLSelectElement).value as From, reason: ($('why') as HTMLTextAreaElement).value.trim() });
@@ -221,7 +340,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     if (a === 'lim-set-go' && isNoLimit(x)) {
       const v = formVals(); if (!v.reason) return;
       const was = x as NoLimitRow;
-      void run(() => o.api.set(was.debtorKey, v), 'Ліміт задано — зʼявиться в колонці «Ліміти» активної дебіторки', r => { rows = rows.filter(y => y.id !== was.id); openId = r.id; });
+      void run(() => o.api.set(was.debtorKey, v), 'Ліміт задано — зʼявиться в колонці «Ліміти» активної дебіторки', r => { rows = rows.filter(y => y.id !== was.id); openId = r.id; showFresh(r.id); });
     }
   }
 
@@ -230,26 +349,52 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     const t = e.target as HTMLElement;
     const fb = t.closest<HTMLElement>('[data-lf]');
     if (fb && $('filters')!.contains(fb)) { filter = fb.dataset.lf as LimFilter; render(); return; }
+    if (t.closest('[data-add]') && $('add')!.contains(t)) { openAdd(); return; }
     if (t.closest(`#${P}scrim`)) { closePanel(); return; }
+    const gh = t.closest<HTMLElement>('tr[data-grp]');
+    if (gh && $('rows')!.contains(gh)) { toggleGroup(gh.dataset.grp!); return; }
     const tr = t.closest<HTMLElement>('tr[data-lid]');
     if (tr && $('rows')!.contains(tr)) { openPanel(tr.dataset.lid!); return; }
     const D = $('drawer')!;
     if (!D.contains(t)) return;
     if (t.closest('[data-close]')) { closePanel(); return; }
+    if (adding) {
+      const hit = t.closest<HTMLElement>('tr[data-hit]');
+      if (hit) { pickHit(Number(hit.dataset.hit)); return; }
+      const ab = t.closest<HTMLButtonElement>('[data-act]');
+      if (ab && !ab.disabled && ab.dataset.act === 'add-back') { adding.pick = null; renderAdd(); $('aq')?.focus(); return; }
+      if (ab && !ab.disabled && ab.dataset.act === 'add-go') void addGo();
+      return;
+    }
     const b = t.closest<HTMLElement>('[data-act]');
     if (b && !(b as HTMLButtonElement).disabled) onAct(b.dataset.act!);
   };
   const onKeydown = (e: KeyboardEvent) => {
     if (e.key !== 'Enter') return;
+    const gh = (e.target as HTMLElement).closest<HTMLElement>('tr[data-grp]');
+    if (gh && $('rows')!.contains(gh)) { toggleGroup(gh.dataset.grp!); return; }
+    const hit = (e.target as HTMLElement).closest<HTMLElement>('tr[data-hit]');
+    if (hit && adding) { pickHit(Number(hit.dataset.hit)); return; }
     const tr = (e.target as HTMLElement).closest<HTMLElement>('tr[data-lid]');
     if (tr && $('rows')!.contains(tr)) openPanel(tr.dataset.lid!);
   };
   const onInput = (e: Event) => {
     const t = e.target as HTMLInputElement;
     if (t.id === P + 'q') { query = t.value; render(); return; }
+    if (t.id === P + 'grp') {
+      groupBy = t.value as LimGroupBy; collapsed.clear();
+      try { localStorage.setItem(GROUP_KEY, groupBy); } catch { /* приватне вікно — без памʼяті */ }
+      render(); return;
+    }
+    if (t.id === P + 'aq' && adding) { adding.q = t.value; scheduleSearch(); return; }
     if (t.id === P + 'why') { const b = $('drawer')!.querySelector<HTMLButtonElement>('[data-act$="-go"]'); if (b) b.disabled = !t.value.trim(); }
   };
-  const onDocKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && openId) closePanel(); };
+  function toggleGroup(k: string) {
+    if (collapsed.has(k)) collapsed.delete(k); else collapsed.add(k);
+    render();
+    $('rows')!.querySelector<HTMLElement>(`tr[data-grp="${CSS.escape(k)}"]`)?.focus();
+  }
+  const onDocKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && (openId || adding)) closePanel(); };
   root.addEventListener('click', onClick);
   root.addEventListener('keydown', onKeydown);
   root.addEventListener('input', onInput);
@@ -279,7 +424,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     refresh,
     open: doOpen,
     destroy() {
-      alive = false; toast.stop();
+      alive = false; toast.stop(); clearTimeout(searchTimer);
       root.removeEventListener('click', onClick);
       root.removeEventListener('keydown', onKeydown);
       root.removeEventListener('input', onInput);

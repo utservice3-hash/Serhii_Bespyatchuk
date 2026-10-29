@@ -6,7 +6,7 @@
  *     `managers.team_id` (`teamMemberUserIds`).
  *  3. YouScore — наш ключ `YOUCONTROL_API_KEY` (той самий, що в конструкторі); у пакеті він звався `YOUSCORE_API_KEY`.
  *  4. Файли й PDF-досьє — `documents/counterparty` (тека під нічним бекапом, як інші документи дашборда).
- *  5. Борг і прострочка — наша дебіторка (`debtSourceDb.ts`).
+ *  5. Борг і прострочка — наша дебіторка (`debtSourceDb.ts`); клієнти бази для «＋ Додати клієнта» — угоди CRM (`clientDirectoryDb.ts`).
  * Async-мідлвари `.use` наш патч `lib/asyncRoutes.ts` не обгортає — тому помилки тут явно йдуть у `next(err)`.
  */
 import path from "node:path";
@@ -23,6 +23,7 @@ import { checkRunner } from "./server/cpChecks.js";
 import { dirFileStore } from "./server/fileStore.js";
 import { cachedDebtSource } from "./server/debtSource.js";
 import { receivablesDebtSource } from "./debtSourceDb.js";
+import { clientDirectoryDb } from "./clientDirectoryDb.js";
 import { mirrorToReceivables } from "./legacyLimits.js";
 import type { CpRole } from "./shared/counterparty.js";
 import { cpApproverIds, cpRoleOf, youScoreFromOurEnv } from "./roles.js";
@@ -85,6 +86,6 @@ export function buildCounterpartyRouter(): Router {
 export function buildClientLimitsRouter(): Router {
   const r = gate(RECEIVABLES_TAB);
   r.use(mirrorAfterWrites());
-  r.use(clientLimitsRouter(pool, { debts, roleOf, teamOf }));
+  r.use(clientLimitsRouter(pool, { debts, clients: clientDirectoryDb(pool), roleOf, teamOf }));
   return r;
 }

@@ -8,6 +8,7 @@ import { loadReceivables1c, resolveManagerId, type Receivable1cRow } from "../co
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
 import { RECOMPUTE_RECEIVABLES_SQL } from "./clientKeySql.js";
 import { CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
+import { fxInvoiceRows, type UnpaidFxSource } from "../core/receivablesFxSql.js";
 import { journalReceivablesTotal } from "../core/financeKpi.js";
 import type { Db } from "../core/finance.js";
 
@@ -227,12 +228,21 @@ export async function syncReceivables(): Promise<void> {
     return res.json();
   }, previousCount);
 
+  // 💱 Валютні неоплачені рахунки 1С (той самий список, що «Валютна дебіторка» у «Фінансах»; пише `syncUnpaidInvoices`)
+  // — у ті самі таблиці, що й гривневі, з `amount = 0` і валютою окремо (`core/receivablesFxSql.ts`, Сергій 28.10.2026).
+  const fxState = (await pool.query<{ eur: number | null; usd: number | null }>(
+    `SELECT rate_eur::float8 AS eur, rate_usd::float8 AS usd FROM onec_unpaid_state WHERE id = 1`)).rows[0];
+  const fxRows = fxInvoiceRows((await pool.query<UnpaidFxSource>(
+    `SELECT number, invoice_date::text AS date, contractor, edrpou, currency, remaining::float8 AS remaining, manager,
+            deal_id::float8 AS "dealId", comment
+       FROM onec_unpaid_invoices WHERE currency <> 'UAH'`)).rows, { EUR: fxState?.eur, USD: fxState?.usd });
+
   const managerRows = await pool.query<{ id: number; name: string }>(`SELECT id, name FROM managers`);
   const managerIdByName = new Map(managerRows.rows.map((m) => [m.name, m.id]));
 
   // № угоди з коментаря 1С → менеджер угоди. ОДИН запит по всіх id одразу:
   // рахунків три сотні, і по одному це були б три сотні походів у БД.
-  const dealIds = [...new Set(rows.map((r) => r.dealId).filter((d): d is number => d != null))];
+  const dealIds = [...new Set([...rows, ...fxRows].map((r) => r.dealId).filter((d): d is number => d != null))];
   const dealRows = dealIds.length
     ? await pool.query<{ kommo_id: string; manager_id: number | null }>(
         `SELECT kommo_id, manager_id FROM deals WHERE kommo_id = ANY($1)`,
@@ -282,6 +292,18 @@ export async function syncReceivables(): Promise<void> {
         // застосовується наступним оператором, тим самим виразом, що й для угод.
         [row.clientKey, row.clientName, managerId, row.managerHint, row.invoiceNo, row.invoiceDate,
          row.amount, row.edrpou, serviceUrl, row.comment, row.invoiceAt]
+      );
+    }
+    // 💱 ВАЛЮТНІ — ТИМ САМИМ ПОРЯДКОМ, ДО СКЛЕЙКИ Й АГРЕГАТУ: інакше псевдоніми й відповідальний їх не побачили б.
+    // `amount = 0` — гривнева сума клієнта не змінюється; валюта й ≈ ₴ — окремими колонками.
+    for (const f of fxRows) {
+      await client.query(
+        `INSERT INTO receivable_invoices
+           (client_key, client_key_raw, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note,
+            currency, amount_fx, amount_fx_uah)
+         VALUES ($1,$1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12)`,
+        [f.clientKey, f.clientName, resolveManagerId(f, ctx), f.managerHint, f.invoiceNo, f.invoiceDate, f.edrpou,
+         f.dealId != null ? `${config.kommo.baseUrl}/leads/detail/${f.dealId}` : null, f.comment, f.currency, f.amountFx, f.amountFxUah]
       );
     }
     // 🔗 СКЛЕЙКА КЛІЄНТІВ. Той самий реєстр `client_key_alias`, що й в угодах, і
@@ -365,7 +387,7 @@ export async function syncReceivables(): Promise<void> {
     // числа привезеного нічого не означає (правило з CLAUDE.md, урок `syncCalls`).
     const byDeal = priced.filter((p) => p.row.dealId != null && managerIdByDeal.get(p.row.dealId!) != null).length;
     console.log(
-      `Synced ${grouped.rows.length} клієнтів + ${cashClients} CRM cash clients from ${rows.length} 1C invoice rows ` +
+      `Synced ${grouped.rows.length} клієнтів + ${cashClients} CRM cash clients from ${rows.length} 1C invoice rows + ${fxRows.length} валютних ` +
       `(злито псевдонімами ${merged.rowCount ?? 0} рах.; менеджер рахунку: за угодою ${byDeal}, без менеджера ${priced.filter((p) => p.managerId == null).length}; ` +
       `відповідальний: вручну ${owners.bySource.override}, мажоритар ${owners.bySource["auto-majority"]}, ` +
       `тімлід ${owners.bySource["auto-teamlead"]}, готівка ${owners.bySource["cash-invoice"]}, ` +

@@ -406,12 +406,16 @@ export interface AiCallRowT {
   /** Тип розмови (рубрика v2, ТЗ 30.09.2026) і куди вона йде: звіт чи «Виключені». */
   conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
+  /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183); `null` — оцінюємо. */
+  transportKind: AiTransportKindT | null;
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
   priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
   reactionMin?: number | null; reactionOffHours?: boolean;
   /** Екран D (08.10.2026): чек-лист з 3 пунктів і черга розбору — стани рахує сервер (`core/firstTouchTeamReport.ts`). */
   checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
   reviewReason: AiReviewReasonT | null; needsReview: boolean; reviewNote: AiNoteT | null;
+  /** 💬 Задача 7183: коментар менеджера і чим закрито розмову з черги; `null` — у черзі нічого не було або ще не закрито. */
+  explainNote: AiNoteT | null; reviewClosure: AiReviewClosureT | null;
   objection: AiObjectionT | null; dealOutcome: AiDealOutcomeT | null;
   /** 🤝 Згода після ціни (13.10.2026): лише для розмов з ціною, у бал не входить; `null` — ціни не було чи не розбирали. */
   clientDecision: AiClientDecisionT | null;
@@ -428,6 +432,9 @@ export interface AiClientDecisionT { value: "agreed" | "thinking" | "declined" |
 /** Успіх угоди з Kommo — стан ЗАРАЗ. */
 export interface AiDealOutcomeT { state: "success" | "lost" | "open"; lossReason: string | null }
 export type AiReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
+export type AiTransportKindT = "international" | "oversize" | "tanker" | "dump" | "grain";
+/** Чим закрито розмову з черги: погоджено коментар менеджера · закрито тімлідом без коментаря · угода дійшла до рахунку. */
+export type AiReviewClosureT = "approved" | "direct" | "invoice";
 export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
@@ -435,6 +442,8 @@ export interface AiCallsResp {
   canSeeExcluded: boolean;
   /** Чи може цей користувач ставити «Розібрано» (тімлід і адмін) — тоді є черга розбору. */
   canReview: boolean;
+  /** 💬 Кнопка «Зворотний звʼязок» біля розмови — тімлід, КВП, адмін (задача 7183). */
+  canFeedback: boolean;
   /** Ціль «ціну озвучено», % — з «Налаштувань» (адмін), за замовчуванням 50. */
   priceTargetPct: number;
   silence: { minGapHours: number; normFrom: string | null };
@@ -467,10 +476,11 @@ export interface AiCallCardResp {
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
   canEditType: boolean;
   /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
-  noteRights: { price: boolean; missed: boolean; offline: boolean };
+  noteRights: { price: boolean; missed: boolean; offline: boolean; explain: boolean };
+  canFeedback: boolean;
   /** Екран D: чек-лист і стан розбору — ті самі, що в рядку списку; `canReview` — тімлід і адмін. */
   checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
-  reviewReason: AiReviewReasonT | null; needsReview: boolean; canReview: boolean;
+  reviewReason: AiReviewReasonT | null; needsReview: boolean; canReview: boolean; reviewClosure: AiReviewClosureT | null;
   canListen: boolean;
   /** Та сама згода після ціни, що в рядку списку. */
   clientDecision: AiClientDecisionT | null;
@@ -485,8 +495,12 @@ export interface AiCloseOfferT {
   closed: { kommoId: number; reason: string; byName: string | null; at: string } | null;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
-export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review", text: string): Promise<void> {
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review" | "explain", text: string): Promise<void> {
   await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
+}
+/** 💬 «Зворотний звʼязок» з розмови: текст тімліда йде в розділ «Зворотний звʼязок» з підставленою розмовою й угодою. */
+export async function sendAiCallFeedback(uniqueid: string, text: string): Promise<void> {
+  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/feedback`, { text });
 }
 /** ❌ Закрити угоду розмови в Kommo як «не реалізовано» з причиною; повернути — на попередній етап. */
 export async function closeAiCallDeal(uniqueid: string, reasonId: number): Promise<{ kommoId: number }> {
@@ -2231,6 +2245,8 @@ export interface ReceivableClient {
   clientKey: string;
   clientName: string;
   amount: number;
+  /** 💱 Валютний борг (живі рахунки) — окремо від гривневого `amount`, який його НЕ містить (Сергій 28.10.2026). */
+  fx: { uah: number; byCurrency: Record<string, number> };
   limitDays: number | null;
   /** 💰 Ліміт по СУМІ — незалежний від денного (рішення власника 26.08.2026). */
   limitAmount: number | null;
@@ -2532,6 +2548,8 @@ export interface ReceivableInvoice {
   /** ЄДРПОУ контрагента з фіду 1С. Порожній у 14 із 298 рядків. */
   edrpou: string | null;
   amount: number;
+  /** 💱 Валютний рахунок: `amount` = 0, сума — у валюті; ≈ ₴ за курсом НБУ синку. `null` — гривневий. */
+  currency?: string | null; amountFx?: number | null; amountFxUah?: number | null;
   serviceUrl: string | null;
   note: string | null;
   dueDate: string | null;
@@ -5396,7 +5414,9 @@ export interface HiringTrainingRow {
   /** 📝 Тести курсу в порядку курсу (13.10.2026). */
   quizzes?: QuizSummary[];
 }
-export interface QuizSummary { materialId: number; title: string; used: number; grants: number; maxAttempts: number; left: number; passed: boolean; bestPct: number | null; lastPct: number | null }
+export type QuizViolationKind = "fullscreen_exit" | "tab_hidden" | "window_blur";
+export interface QuizSummary { endedByViolations?: number; lastViolations?: { kind: QuizViolationKind; at: string }[] | null;
+  materialId: number; title: string; used: number; grants: number; maxAttempts: number; left: number; passed: boolean; bestPct: number | null; lastPct: number | null }
 export interface HiringTrainingRules { inviteHours: number; noLoginHours: number; trainingDays: number; stuckHours: number }
 export interface HiringTrainingDetail {
   row: HiringTrainingRow;
@@ -5486,22 +5506,37 @@ export const fetchCandidateMe = async () => (await api.get<CandidateMe>("/traini
 export interface MyQuiz {
   materialId: number; title: string; passPct: number; questionCount: number; poolSize: number; maxAttempts: number;
   used: number; grants: number; left: number; passed: boolean; bestPct: number | null; hasOpenAttempt: boolean;
-  attempts: { right: number; total: number; pct: number; passed: boolean; submittedAt: string }[];
+  /** ⏱ Ліміт часу на питання в цьому тесті, секунди (28.10.2026). */
+  limitMinSec: number; limitMaxSec: number;
+  attempts: { right: number; total: number; pct: number; passed: boolean; submittedAt: string; endedBy?: "violations" | null }[];
 }
 export type QuizKind = "one" | "multi" | "number";
 export interface QuizPublicQuestion { id: number; kind: QuizKind; text: string; options: { i: number; text: string }[] | null }
 export type QuizAnswerValue = number | number[] | string;
 export interface QuizResult { right: number; total: number; pct: number; passed: boolean; left: number;
-  results: { id: number; text: string; ok: boolean; explanation: string | null; source: string | null }[] }
+  results: { id: number; text: string; ok: boolean; late: boolean; explanation: string | null; source: string | null }[];
+  /** 🖥 `violations` — спробу завершено трьома виходами з тесту: не складено, хоч би якими були відповіді. */
+  endedBy?: "violations" | null }
+/** ⏱ Хід тесту (28.10.2026): поточне питання з лімітом і залишком часу від сервера — або результат спроби. */
+export interface QuizStep { done: false; attemptId: number; passPct: number; total: number; index: number;
+  question: QuizPublicQuestion; limitSec: number; remainingSec: number }
+export type QuizTurn = QuizStep | { done: true; result: QuizResult };
 export interface QuizEditorView {
   settings: { materialId: number; title: string; status: string; passPct: number; showCount: number | null; maxAttempts: number };
-  questions: { id: number; kind: QuizKind; text: string; options: string[] | null; correct: number[] | { value: number; tol: number }; explanation: string | null; sourceTitle: string | null }[];
+  questions: { id: number; kind: QuizKind; text: string; options: string[] | null; correct: number[] | { value: number; tol: number }; explanation: string | null; sourceTitle: string | null; timeLimitSec: number }[];
 }
 export const fetchMyQuiz = async (id: number) => (await api.get<MyQuiz>(`/training/quiz/${id}/me`)).data;
-export const startQuiz = async (id: number) =>
-  (await api.post<{ attemptId: number; passPct: number; questions: QuizPublicQuestion[] }>(`/training/quiz/${id}/start`)).data;
-export const submitQuiz = async (id: number, attemptId: number, answers: Record<number, QuizAnswerValue>) =>
-  (await api.post<QuizResult>(`/training/quiz/${id}/submit`, { attemptId, answers })).data;
+export const startQuiz = async (id: number) => (await api.post<QuizTurn>(`/training/quiz/${id}/start`)).data;
+/** Відповідь на поточне питання; `null` — час вийшов без відповіді. У відповідь — наступне питання або результат. */
+export const answerQuiz = async (id: number, attemptId: number, questionId: number, answer: QuizAnswerValue | null) =>
+  (await api.post<QuizTurn>(`/training/quiz/${id}/answer`, { attemptId, questionId, answer })).data;
+/** 🖥 Вихід із тесту (повний екран / вкладка / програма). Третій — спроба завершена як не складена. */
+export const reportQuizViolation = async (id: number, attemptId: number, kind: QuizViolationKind) =>
+  (await api.post<{ done: false; violations: number; limit: number; counted: boolean } | { done: true; result: QuizResult }>(
+    `/training/quiz/${id}/violation`, { attemptId, kind })).data;
+/** Ліміт часу питання в редакторі (не менше 30 с). */
+export const setQuizQuestionLimit = async (id: number, questionId: number, timeLimitSec: number) =>
+  (await api.patch<{ ok: true; timeLimitSec: number }>(`/training/quiz/${id}/questions/${questionId}`, { timeLimitSec })).data;
 export const fetchQuizEditor = async (id: number) => (await api.get<QuizEditorView>(`/training/quiz/${id}/editor`)).data;
 export const fetchMyTrainingQuestions = async () => (await api.get<{ rows: MyTrainingQuestion[] }>("/training/questions")).data.rows;
 export const askTrainingQuestion = async (question: string, materialId: number | null) =>
@@ -5559,6 +5594,8 @@ export interface EmployeeRow {
   manager_id: number | null; kommo_name: string | null;
   /** 👥 Справжня команда (27.10.2026): з Kommo — `team_locked`; інакше вибрана в картці (`team_ref`: `k:<id>` / `d:<id>`). */
   team_name: string | null; team_locked: boolean; team_ref: string | null;
+  /** 🗂 Категорія (28.10.2026, #2960): ручна (`category_manual`) або за посадою; null — «Без категорії». */
+  category: EmpCategory | null; category_manual: boolean;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
   /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
@@ -5579,11 +5616,30 @@ export interface ImportPreview {
 export interface ImportCounts { rows: number; created: number; updated: number; duplicate: number; linked: number; secretsCreated: number; secretsExisting: number; secretsNoAccount: number; secretsInvalid: number }
 // ── Етапи 4–5: плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026) ──
 export interface ChurnMonthRow { month: string; headcount: number; hired: number; dismissed: number; turnover: number | null; early: number; noHireDate: number }
+/** 🗂 Категорії співробітників — дзеркало `backend/src/core/employeeCategory.ts` `EMP_CATEGORIES` (звіряє #2960b). */
+export const EMP_CATEGORIES = [
+  ["manager", "Менеджери"],
+  ["teamlead", "Тім-ліди"],
+  ["leadgen", "Лідогенерація"],
+  ["accounting", "Бухгалтерія"],
+  ["finance", "Фінансист"],
+  ["management", "Керівництво"],
+  ["office", "Офіс і HR"],
+  ["it", "IT"],
+] as const;
+export type EmpCategory = (typeof EMP_CATEGORIES)[number][0];
+export const empCategoryLabel = (k: string | null) => EMP_CATEGORIES.find(([c]) => c === k)?.[1] ?? "Без категорії";
+export interface ChurnPersonRow { id: number; full_name: string; category: EmpCategory | null; position: string | null; hired_at: string | null; dismissed_at: string; tenure_days: number | null }
 export interface ChurnReport {
-  months: ChurnMonthRow[]; total: { dismissed: number; hired: number; early: number; avgTurnover: number; active: number; unknownDate?: number };
+  from: string; to: string; wholeMonths: boolean;
+  months: ChurnMonthRow[];
+  total: { dismissed: number; hired: number; early: number; avgTurnover: number | null; avgTenureDays: number | null; noHireDate: number; active: number; unknownDate?: number };
+  people: ChurnPersonRow[]; byCategory: Record<string, number>;
   reasons: { label: string; n: number }[]; positions: { label: string; n: number }[];
 }
-export const fetchChurn = async (from: string, to: string) => (await api.get<ChurnReport>("/secrets/churn", { params: { from, to } })).data;
+/** Період — місяці «РРРР-ММ» або дні «РРРР-ММ-ДД»; `category` — ключ, «none» (без категорії) або порожньо (усі). */
+export const fetchChurn = async (from: string, to: string, category?: string | null) =>
+  (await api.get<ChurnReport>("/secrets/churn", { params: { from, to, ...(category ? { category } : {}) } })).data;
 export const linkEmployeesKommo = async () => (await api.post<{ linked: number; byId: number; byName: number; ambiguous: number; none: number }>("/secrets/employees/kommo-link")).data;
 export interface ExitInterview {
   id: number; employee_id: number | null; full_name: string; interview_date: string; position: string | null; tenure: string | null;
@@ -5597,14 +5653,14 @@ export const updateExit = async (id: number, b: Partial<ExitInterview>) => { awa
 export const deleteExit = async (id: number) => { await api.delete(`/secrets/exit/${id}`); };
 export const restoreExit = async (id: number) => { await api.post(`/secrets/exit/${id}/restore`); };
 export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; teams: string[] }>("/secrets/employees")).data;
-export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
+export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">> & { category?: EmpCategory | null };
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 // 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
 // ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
 export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false, dateUnknown = false) =>
   (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk, dateUnknown })).data;
 /** 📉 «Змінити дату звільнення» / «дата невідома» (#2100). */
-export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string }) =>
+export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string; hiredAt?: string | null }) =>
   (await api.post<{ dismissedAt: string | null; unknown: boolean }>(`/secrets/employees/${id}/dismiss-date`, b)).data;
 export const dismissNeedsConfirm = (e: unknown): boolean =>
   !!(e as { response?: { status?: number; data?: { needsConfirm?: boolean } } })?.response?.data?.needsConfirm;
@@ -5986,18 +6042,6 @@ export interface FxUnpaidRow {
   number: string; date: string; organization: string; contractor: string; currency: string; invoiceSum: number; paidSum: number; remaining: number;
   realized: boolean; partiallyPaid: boolean; debtAccount: string | null; dueDate: string | null; manager: string | null; dealId: number | null; comment: string | null;
 }
-/** 💱 Валютна дебіторка у вкладці «Дебіторка» (задача 7136): клієнти зі скоупу й усі їхні валютні рахунки. */
-export interface RecvFxInvoice {
-  number: string; date: string; organization: string; currency: string; invoiceSum: number; paidSum: number; remaining: number;
-  uah: number | null; days: number; realized: boolean; partiallyPaid: boolean; dueDate: string | null; manager: string | null; dealId: number | null;
-}
-export interface RecvFxClient { key: string; name: string; edrpou: string | null; managers: string[]; organizations: string[]; days: number; remaining: Record<string, number>; uah: number | null; invoices: RecvFxInvoice[] }
-export interface RecvFx {
-  syncedAt: string | null; error: string | null; from: string; rates: Record<string, number | null>; kommoBase: string;
-  totals: { byCurrency: Record<string, number>; uah: number; uahMissing: number; invoices: number; notRealized: number; clients: number };
-  clients: RecvFxClient[];
-}
-export const fetchReceivablesFx = async (teamId: number | "") => (await api.get<RecvFx>("/dashboard/receivables/fx", { params: teamId ? { teamId } : {} })).data;
 export interface FxUnpaid { syncedAt: string | null; error: string | null; from: string; rowsAll: number | null; kommoBase: string; invoices: FxUnpaidRow[] }
 export const fetchFxUnpaid = async () => (await api.get<FxUnpaid>("/finance/fx-unpaid")).data;
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
@@ -6015,7 +6059,7 @@ export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: 
   return { blob: res.data as Blob, filename: m?.[1] ?? `oplata_perevizny_${day}.xlsx` };
 }
 /** 📅 «Календар оплат» (задача #6369, 27.10.2026): періодичні витрати — нагадування, окремо від Плану/факту. */
-export type RecPeriod = "month" | "quarter" | "year";
+export type RecPeriod = "month" | "quarter" | "halfyear" | "year" | "once";
 export interface RecItem {
   id: number; itemId: number; name: string; amount: number; period: RecPeriod; anchorDay: number; next: string;
   note: string | null; active: boolean; upcoming: string[];

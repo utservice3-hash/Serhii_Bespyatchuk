@@ -17,7 +17,7 @@ import { useToast } from "../../../components/Toasts";
 const MUTED = "var(--text-muted)";
 const MON = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"];
 const MONF = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
-const PERIOD: Record<RecPeriod, string> = { month: "щомісяця", quarter: "щокварталу", year: "раз на рік" };
+const PERIOD: Record<RecPeriod, string> = { month: "щомісяця", quarter: "щокварталу", halfyear: "раз на пів року", year: "раз на рік", once: "одноразово" };
 const TONE: Record<RecEvent["kind"], [string, string]> = { paid: ["#e6f4ea", "#1e7a3c"], overdue: ["#fdecea", "#b42318"], soon: ["#fff4dc", "#8a5300"], plan: ["#eef1f5", "#3d4552"] };
 const CELL = 104; // ширина місяця в смузі + проміжок
 const money = (n: number) => `${Math.round(n).toLocaleString("uk-UA").replace(/ /g, " ")} ₴`;
@@ -26,7 +26,7 @@ const monthName = (d: string) => `${MONF[+d.slice(5, 7) - 1].toLowerCase()} ${d.
 const STATUS: Record<RecEvent["kind"], string> = { paid: "оплачено", overdue: "не оплачено", soon: "цього місяця", plan: "заплановано" };
 const plural = (n: number, a: string, b: string, c: string) => { const t = n % 10, h = n % 100; return t === 1 && h !== 11 ? a : t >= 2 && t <= 4 && (h < 12 || h > 14) ? b : c; };
 const oplat = (n: number) => `${n} ${plural(n, "оплата", "оплати", "оплат")}`;
-const meta = (i: RecItem) => (i.period === "month" ? PERIOD.month : `${PERIOD[i.period]} · наступна — ${monthName(i.next)}`);
+const meta = (i: RecItem) => (i.period === "month" ? PERIOD.month : i.period === "once" ? `одноразово · ${monthName(i.next)}` : `${PERIOD[i.period]} · наступна — ${monthName(i.next)}`);
 const title = (i: RecItem | undefined) => (i ? (i.note ? `${i.name} · ${i.note}` : i.name) : "—");
 const at = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const errText = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "помилка";
@@ -87,7 +87,7 @@ export function FinanceCalendarTab() {
     setBusy(true);
     try {
       const r = await payFinRecurring(it.id, { due: it.next, ...(amount != null ? { amount } : {}) });
-      toast(`«${title(it)}» — оплачено. Наступна оплата: ${monthName(r.next)}`, { tone: "ok", action: { label: "Скасувати", run: () => void undo(r.paidId, title(it)) } });
+      toast(it.period === "once" ? `«${title(it)}» — оплачено, одноразову оплату закрито` : `«${title(it)}» — оплачено. Наступна оплата: ${monthName(r.next)}`, { tone: "ok", action: { label: "Скасувати", run: () => void undo(r.paidId, title(it)) } });
       load();
     } catch (e) { toast(`Не позначено: ${errText(e)}`, { error: true }); load(); }
     finally { setBusy(false); }
@@ -123,7 +123,8 @@ export function FinanceCalendarTab() {
 
   const overdueElsewhere = data.items.filter((i) => i.active && i.next.slice(0, 7) < curYm && i.next.slice(0, 7) !== month.ym);
   const maxSum = Math.max(1, ...data.months.map((m) => m.sum));
-  const off = data.items.filter((i) => !i.active);
+  // Закрита одноразова — не «вимкнене нагадування»: вона оплачена й лежить в історії.
+  const off = data.items.filter((i) => !i.active && i.period !== "once");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -163,9 +164,9 @@ export function FinanceCalendarTab() {
             <label style={{ fontSize: 13 }}>Сума, ₴<br /><input className="hr-inp" style={{ width: "100%" }} inputMode="decimal" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label>
             <label style={{ fontSize: 13 }}>Як часто<br />
               <select className="hr-inp" style={{ width: "100%" }} value={form.period} onChange={(e) => setForm({ ...form, period: e.target.value as RecPeriod })}>
-                <option value="month">щомісяця</option><option value="quarter">щокварталу</option><option value="year">раз на рік</option>
+                <option value="month">щомісяця</option><option value="quarter">щокварталу</option><option value="halfyear">раз на пів року</option><option value="year">раз на рік</option><option value="once">одноразово</option>
               </select></label>
-            <label style={{ fontSize: 13 }}>{form.id ? "Найближчий місяць" : "Перший місяць"}<br /><input className="hr-inp" style={{ width: "100%" }} type="month" value={form.month} onChange={(e) => setForm({ ...form, month: e.target.value })} /></label>
+            <label style={{ fontSize: 13 }}>{form.period === "once" ? "Плановий місяць оплати" : form.id ? "Найближчий місяць" : "Перший місяць"}<br /><input className="hr-inp" style={{ width: "100%" }} type="month" value={form.month} onChange={(e) => setForm({ ...form, month: e.target.value })} /></label>
             <label style={{ fontSize: 13 }}>Примітка (необовʼязково)<br /><input className="hr-inp" style={{ width: "100%" }} value={form.note} placeholder="Напр., ФОП Коваль — щоб розрізнити дві оплати однієї статті" onChange={(e) => setForm({ ...form, note: e.target.value })} /></label>
           </div>
           <span className="hr-muted" style={{ fontSize: 12.5 }}>Нагадування — у «План/факті» відповідного місяця: біля статті сума й кнопка «додати в план».</span>
@@ -292,7 +293,7 @@ function EventCard({ e, it, history, open, toggle, amt, setAmt, pay, undo, disab
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "10px 18px", fontSize: 13.5 }}>
             <div><div style={label}>Стаття «План/факту»</div>{it?.name ?? "—"}</div>
             <div><div style={label}>Примітка</div>{it?.note || <span className="hr-muted">немає</span>}</div>
-            <div><div style={label}>Наступні місяці</div>{it && it.active ? it.upcoming.map((x) => <div key={x}>{monthName(x)}</div>) : <span className="hr-muted">нагадування вимкнене</span>}</div>
+            <div><div style={label}>Наступні місяці</div>{it && it.active ? it.upcoming.map((x) => <div key={x}>{monthName(x)}</div>) : <span className="hr-muted">{it?.period === "once" ? "одноразову оплату закрито" : "нагадування вимкнене"}</span>}</div>
             <div>
               <div style={label}>Історія оплат</div>
               {hist.map((p) => <div key={p.id} style={p.cancelledAt ? { textDecoration: "line-through", color: MUTED } : undefined}>{monthName(p.due)} — {money(p.amount)}{p.by ? ` · ${p.by}` : ""}</div>)}

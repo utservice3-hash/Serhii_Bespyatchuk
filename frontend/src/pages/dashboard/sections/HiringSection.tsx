@@ -92,7 +92,7 @@ export function HiringSection() {
       {active === "emp" && !canSecrets && canTeam && <HiringTeam toast={toast} />}
       {active === "sum" && meta.access === "edit" && <HiringSummary />}
       {active === "tpl" && meta.access === "edit" && <OfferTemplatesTab toast={toast} />}
-      {active === "churn" && canSecrets && <HiringChurnTab />}
+      {active === "churn" && canSecrets && <HiringChurnTab toast={toast} />}
       {active === "exit" && canSecrets && <HiringExitTab toast={toast} />}
       {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}
       {active === "daily" && <HiringDaily toast={toast} />}

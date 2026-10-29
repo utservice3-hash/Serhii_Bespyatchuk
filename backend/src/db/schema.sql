@@ -4853,8 +4853,11 @@ REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- кожному викаті, тож проміжна вузька версія обмеження — міна; лишається одна, остаточна.
 -- ✅ «Розібрано» (`review`, 08.10.2026, екран D): тімлід переглянув розмову з черги розбору — вона виходить з черги.
 -- Ставлять тімлід (своя команда) і адмін. Текст — коментар менеджеру або «Розібрано», якщо коментаря немає.
+-- 💬 «Коментар менеджера» (`explain`, задача 7183, 28.10.2026): менеджер пояснює розмову з черги розбору (будь-яка
+-- причина), тімлід погоджує кнопкою «Погодити» — це та сама позначка `review`, лише поставлена після коментаря.
+-- Пишуть менеджер (свої), тімлід (команда), адмін. Список нижче — ОДИН, остаточний (урок 22.10.2026 вище).
 ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
-ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline', 'review'));
+ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline', 'review', 'explain'));
 -- 🎛 НАЛАШТУВАННЯ «ПЕРШОГО ДОТИКУ» (05.10.2026): вікно повторного дзвінка, допуск і мінімальний дедлайн передзвону,
 -- колір блоку «дзвінка в телефонії немає». Журнал: кожна зміна — новий рядок з автором, чинне — останній рядок,
 -- порожньо — поточна поведінка (`core/firstTouchTunables.ts`). Змінює лише адмін у «Налаштуваннях».
@@ -6920,6 +6923,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_teams_kommo ON dashboard_teams (k
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
 ALTER TABLE org_units ADD COLUMN IF NOT EXISTS dashboard_team_id INTEGER REFERENCES dashboard_teams(id) ON DELETE SET NULL;
+
+-- 🗂 КАТЕГОРІЯ СПІВРОБІТНИКА ВРУЧНУ (28.10.2026, ТЗ Івана). NULL = рахує правило за посадою (`core/employeeCategory.ts`);
+-- значення = HR поставив вручну, і воно перемагає правило. Бекфілу немає: колонка порожня всім. ⚠️ revert коду колонку
+-- не прибирає, але без коду її ніхто не читає. Перелік у CHECK — дзеркало `EMP_CATEGORIES` (#2960b).
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_category_check;
+ALTER TABLE employees ADD CONSTRAINT employees_category_check
+  CHECK (category IS NULL OR category IN ('manager','teamlead','leadgen','accounting','finance','management','office','it'));
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'employees_one_team') THEN
     ALTER TABLE employees ADD CONSTRAINT employees_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);
@@ -7163,8 +7174,57 @@ UPDATE roles SET permissions = permissions - 'bank_out_comments' WHERE key NOT I
 -- 🔒 Хто що вписав і коментарі до платежів ФОП — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON bank_ident_settings, bank_tx_ident, bank_tx_ident_events, bank_tx_comments FROM ai_readonly;
 
+-- 💳 «Виписка»: «↺ Скинути №» (28.10.2026, погодив Сергій) — вписаний помилково номер знімається, платіж знову «Чекає №».
+-- Нова дія в історії `reset` (CHECK — інлайн-обмеження пакета, імʼя за замовчуванням Postgres) і право лише фінансисту
+-- (+ адмін), парою «видати / зняти» тут, у кінці — синки ролей вище копіюють права адміна на СЕО/ОД/КВП.
+ALTER TABLE bank_tx_ident_events DROP CONSTRAINT IF EXISTS bank_tx_ident_events_act_check;
+ALTER TABLE bank_tx_ident_events ADD CONSTRAINT bank_tx_ident_events_act_check
+  CHECK (act IN ('set', 'change', 'unidentify', 'not_client', 'expired', 'reset'));
+UPDATE roles SET permissions = permissions || '{"reset_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'financier');
+UPDATE roles SET permissions = permissions - 'reset_bank_invoice' WHERE key NOT IN ('admin', 'financier');
+
 -- 💱 ВАЛЮТНА ДЕБІТОРКА В РОЗДІЛІ «ДЕБІТОРКА» (задача 7136; Сергій на TOP Weekly 26.10.2026: «виведи цю дебіторку окремо в
 -- лист дебіторки … валюта»; Роман 28.10: «роби як пропонуєш»). Курс НБУ, з яким синк порахував гривню, памʼятається поруч зі
 -- станом — щоб ≈ грн по рахунку на екрані збігалась із підсумком у «Фінансах», а не рахувалась за іншим курсом.
 ALTER TABLE onec_unpaid_state ADD COLUMN IF NOT EXISTS rate_eur NUMERIC(12,6);
 ALTER TABLE onec_unpaid_state ADD COLUMN IF NOT EXISTS rate_usd NUMERIC(12,6);
+
+-- 💱 ВАЛЮТНА ДЕБІТОРКА ВСЕРЕДИНІ ОСНОВНОЇ (Сергій 28.10.2026: «вона ніяким чином не поєднується з функціоналом основної»;
+-- Роман 28.10 — «роби як пропонуєш»; `core/receivablesFxSql.ts`). Неоплачені валютні рахунки 1С (`onec_unpaid_invoices`) щосинку
+-- лягають у `receivable_invoices` поруч із гривневими — тож відповідальний, домовленість, ліміти, списання, «Проблемний
+-- клієнт», дедлайни й задачі працюють на них тим самим кодом. 🔴 `amount` у валютного рахунку = 0: гривнева дебіторка
+-- (плитки, КВП, Огляд, журнал «Фінансів») не змінюється за побудовою; валюта — у `amount_fx`, ≈ ₴ за курсом НБУ синку — у
+-- `amount_fx_uah` (його беруть ліміти й вибір відповідального). `currency` NULL — гривня.
+ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS currency TEXT;
+ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS amount_fx NUMERIC(14,2);
+ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS amount_fx_uah NUMERIC(14,2);
+-- Списання валютного рахунку — у валюті (рішення В): гривнева `amount` у нього 0, валюта — тут.
+ALTER TABLE receivable_writeoffs ADD COLUMN IF NOT EXISTS currency TEXT;
+ALTER TABLE receivable_writeoffs ADD COLUMN IF NOT EXISTS amount_fx NUMERIC(14,2);
+
+-- 📅 КАЛЕНДАР ОПЛАТ: «раз на пів року» й «одноразово» (Тетяна 29.10.2026). Одноразова — одна дата, «Оплачено» її закриває.
+ALTER TABLE fin_recurring DROP CONSTRAINT IF EXISTS fin_recurring_period_check;
+ALTER TABLE fin_recurring ADD CONSTRAINT fin_recurring_period_check CHECK (period IN ('month', 'quarter', 'halfyear', 'year', 'once'));
+-- ══════════════════════════════════════════════════════════════════════════
+-- ⏱ ЛІМІТ ЧАСУ НА ПИТАННЯ ТЕСТУ (28.10.2026, Роман: «30 секунд — це мінімум на питання»; розрахунок — 60 с).
+-- Час рахує сервер: спроба памʼятає поточне питання й мить, коли його видано (`cur_index`, `cur_shown_at`), а
+-- `timings` — скільки секунд ішла кожна відповідь і чи запізнилась. Правила — `core/trainingQuiz.ts`.
+-- 60 с питанням-числам ставиться ЛИШЕ разом зі створенням колонки: повторний прогін схеми не затирає ліміт,
+-- який редактор змінив руками.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema() AND table_name = 'training_quiz_questions' AND column_name = 'time_limit_sec') THEN
+    ALTER TABLE training_quiz_questions ADD COLUMN time_limit_sec INTEGER NOT NULL DEFAULT 30
+      CONSTRAINT training_quiz_questions_time_limit CHECK (time_limit_sec BETWEEN 30 AND 600);
+    UPDATE training_quiz_questions SET time_limit_sec = 60 WHERE kind = 'number';
+  END IF;
+END $$;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS cur_index    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS cur_shown_at TIMESTAMPTZ;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS timings      JSONB;
+-- 🖥 Вихід із тесту (28.10.2026): скільки разів людина виходила з повного екрана / вкладки / програми, коли саме,
+-- і чи спробу завершено через це (`ended_reason = 'violations'` — не складено, хоч би якими були відповіді).
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS violations    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS violation_log JSONB;
+ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS ended_reason  TEXT
+  CONSTRAINT training_quiz_attempts_ended_reason CHECK (ended_reason IS NULL OR ended_reason IN ('violations'));

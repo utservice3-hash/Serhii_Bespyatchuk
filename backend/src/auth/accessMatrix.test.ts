@@ -41,6 +41,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/bank-ident/:txId/invoice": "tag_bank_invoice / fix_bank_invoice — СЕО, ОД, КВП їх не мають (ТЗ Сергія 27.10: вписує менеджер, тімлід; змінює фінансист)",
   "PATCH /api/bank-ident/:txId/invoice": "fix_bank_invoice — лише фінансист і адмін (ТЗ Сергія 27.10)",
   "POST /api/bank-ident/:txId/unidentify": "fix_bank_invoice — лише фінансист і адмін (ТЗ Сергія 27.10)",
+  "POST /api/bank-ident/:txId/reset": "reset_bank_invoice — лише фінансист і адмін (погодив Сергій 28.10: скинути помилковий № менеджера)",
   "POST /api/bank-ident/:txId/not-client": "mark_bank_not_client — лише Бухгалтерія й адмін (ТЗ Сергія 27.10)",
   "POST /api/bank-ident/comments/summary": "bank_out_comments — лише Бухгалтерія й адмін; іншим коментарів не видно взагалі (ТЗ Сергія 27.10)",
   "POST /api/bank-ident/:txId/comments": "bank_out_comments — лише Бухгалтерія й адмін (ТЗ Сергія 27.10)",
@@ -127,6 +128,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "PUT /api/training/material/:id/file": "manage_training — те саме (повний редактор, 28.09.2026)",
   "POST /api/training/reorder": "manage_training — те саме (повний редактор, 28.09.2026)",
   "GET /api/training/quiz/:id/editor": "manage_training — тест із правильними відповідями бачить лише редактор (13.10.2026)",
+  "PATCH /api/training/quiz/:id/questions/:qid": "manage_training — ліміт часу питання змінює лише редактор навчання (28.10.2026)",
   // 🔐 Сейф доступів (18.09.2026): право `view_employee_secrets` на рівні роутера.
   "POST /api/secrets/link": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/unlink": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
@@ -204,6 +206,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/client-limits/:id/keep": "«лишити ліміт» — лише Сергій (ТЗ §7)",
   "POST /api/client-limits/set": "задати ліміт боржнику — лише Сергій (ТЗ §6.4)",
   "POST /api/client-limits/import": "перенос лімітів — лише Сергій (ТЗ §6.3)",
+  "GET /api/client-limits/search?q=юмо": "пошук клієнта по базі для «＋ Додати клієнта» — лише Сергій (задача 7137)",
+  "POST /api/client-limits/add": "ліміт клієнту з бази без боргу — лише Сергій (задача 7137)",
 };
 
 const GHOST = "__zzz_neisnuyucha_cil_9999__";

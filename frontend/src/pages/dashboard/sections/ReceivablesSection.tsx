@@ -4,7 +4,7 @@ import { useToast } from "../../../components/Toasts";
 import { commitOptimistic, failureReason } from "../../../actionFeedback";
 import {
   saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
-  fetchManagerOptions, type ManagerOption, fetchReceivablesFx, type RecvFx,
+  fetchManagerOptions, type ManagerOption,
   type ReceivableInvoice, type ReceivableManager, type ReceivableClient, type ReceivableTotals, type Team,
 } from "../../../api";
 import { WriteoffDialog } from "./WriteoffDialog";
@@ -12,7 +12,7 @@ import { WriteoffButton } from "./WriteoffButton";
 import { ProblemClientButton, useReceivableClaims } from "./ProblemClientButton";
 import { RowBoundary } from "./RowBoundary";
 import { ReceivablesArchive } from "./ReceivablesArchive";
-import { ReceivablesFxTab, FxBanner } from "./ReceivablesFx";
+import { FxBanner, ClientAmount, InvoiceAmount, hasFx } from "./ReceivablesFx";
 import { NoteHistoryDialog } from "./NoteHistoryDialog";
 import { Hint, Tip, TipLayer } from "../../../components/Hint";
 import { ReceivablesTiles } from "./ReceivablesTiles";
@@ -267,26 +267,15 @@ export function ReceivablesSection({
   const location = useLocation();
   const navigate = useNavigate();
   const urlTab = new URLSearchParams(location.search).get("tab") === "limits" ? "limits" : null;
-  const [tab, setTabState] = useState<"active" | "registry" | "fx" | "requests" | "archive" | "limits">(urlTab ?? "active");
+  const [tab, setTabState] = useState<"active" | "registry" | "requests" | "archive" | "limits">(urlTab ?? "active");
   useEffect(() => { if (urlTab) setTabState(urlTab); }, [urlTab, location.search]);
   const setTab = (k: typeof tab) => {
     setTabState(k);
     if (k !== "limits" && location.search) navigate(location.pathname, { replace: true });
   };
   const limitsBadge = useClientLimitsCount();
-  // 💱 Валютна дебіторка (задача 7136): один запит на розділ — і рядок над «Активною», і вкладка «Валютна» з тих самих даних.
-  const [fx, setFx] = useState<RecvFx | null>(null);
-  const [fxErr, setFxErr] = useState<string | null>(null);
-  const [fxLoading, setFxLoading] = useState(false);
-  useEffect(() => {
-    let live = true;
-    setFxLoading(true);
-    fetchReceivablesFx(receivablesTeamId)
-      .then((d) => { if (live) { setFx(d); setFxErr(null); } })
-      .catch((e) => { if (live) setFxErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Не вдалося завантажити"); })
-      .finally(() => { if (live) setFxLoading(false); });
-    return () => { live = false; };
-  }, [receivablesTeamId]);
+  // 💱 Валютна дебіторка — рядки основної (Сергій 28.10.2026); перемикач «лише валютні» замість окремої вкладки.
+  const [onlyFx, setOnlyFx] = useState(false);
   // 💰 Колонка «Ліміти» — з «Лімітів клієнтів» (ТЗ §6.4): олівці лише Сергію (`canEdit` віддає сервер), своїм — «Запросити зміну».
   const debtorLimits = useDebtorLimits();
   // 🗓 Один якір часу на весь рендер: інакше рядки, порахувані на різних
@@ -495,7 +484,7 @@ export function ReceivablesSection({
                   колонки розʼїхались би (тримає `#199h`). */}
               <td className="recv-num" style={{ ...cell, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}
                   title={formatAmountFull(x.amount)}>
-                {formatAmount(x.amount)}
+                <InvoiceAmount amount={x.amount} currency={x.currency} amountFx={x.amountFx} amountFxUah={x.amountFxUah} />
                 {/* Вік рахунка — другим рядком під сумою, дзеркально до рядка клієнта. */}
                 <div style={{ marginTop: 3, fontWeight: 400, fontSize: "var(--fs-xs)",
                        fontVariantNumeric: "tabular-nums",
@@ -666,7 +655,7 @@ export function ReceivablesSection({
      одразу за своїм клієнтом (`renderInvoices` усередині `.map`), тож відірвати
      їх від нього неможливо за побудовою. */
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
-  const shown = sortClients(all.filter((c) => passesFilters(c, filters)), sort);
+  const shown = sortClients(all.filter((c) => passesFilters(c, filters) && (!onlyFx || hasFx(c.fx))), sort);
   const shownSum = shown.reduce((s, c) => s + c.amount, 0);
 
   return (
@@ -708,7 +697,7 @@ export function ReceivablesSection({
           Джерело те саме, що в розкритті клієнта, тож числа розійтись не можуть. */}
       <div role="tablist" aria-label="Розділи дебіторки"
         style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 16 }}>
-        {([["active", "Активна дебіторка"], ["registry", "Реєстр рахунків"], ["fx", "Валютна"], ["requests", "Заявки на оплату"], ["archive", "Архів"], ["limits", "Ліміти клієнтів"]] as const).map(([k, label]) => (
+        {([["active", "Активна дебіторка"], ["registry", "Реєстр рахунків"], ["requests", "Заявки на оплату"], ["archive", "Архів"], ["limits", "Ліміти клієнтів"]] as const).map(([k, label]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
             style={{ font: "inherit", fontSize: "var(--fs-base)", background: "none", border: "none",
                      borderBottom: `2px solid ${tab === k ? "var(--brand, #c5141c)" : "transparent"}`,
@@ -719,10 +708,6 @@ export function ReceivablesSection({
               <span title="Переліміт, прострочка чи нова справа в суді" style={{ marginLeft: 6, background: "var(--brand, #c5141c)", color: "#fff",
                 borderRadius: 9, padding: "0 6px", fontSize: "var(--fs-xs)", fontWeight: 600 }}>{limitsBadge}</span>
             )}
-            {k === "fx" && !!fx?.totals.invoices && (
-              <span title="Неоплачених валютних рахунків" style={{ marginLeft: 6, background: "var(--border)", color: "var(--text)",
-                borderRadius: 9, padding: "0 6px", fontSize: "var(--fs-xs)", fontWeight: 600 }}>{fx.totals.invoices}</span>
-            )}
           </button>
         ))}
       </div>
@@ -731,8 +716,6 @@ export function ReceivablesSection({
         <ClientLimitsTab onNavigate={(_t, url) => navigate(url)} />
       ) : tab === "registry" ? (
         <ReceivablesRegistry />
-      ) : tab === "fx" ? (
-        <ReceivablesFxTab fx={fx} loading={fxLoading} error={fxErr} />
       ) : tab === "requests" ? (
         <ReceivablesPaymentRequests />
       ) : tab === "archive" ? (
@@ -743,7 +726,7 @@ export function ReceivablesSection({
         <p className="loading-text">Немає даних.</p>
       ) : (
         <>
-          <FxBanner fx={fx} onOpen={() => setTab("fx")} />
+          <FxBanner clients={all} only={onlyFx} toggle={() => setOnlyFx((v) => !v)} />
           <ReceivablesTiles
             totals={receivablesTotals}
             debtTotal={total}
@@ -981,7 +964,7 @@ export function ReceivablesSection({
                                 губилась у клітинці. Гейт цього не бачить — він
                                 читає джерело, а перенос вирішує браузер. */}
                             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                              {formatAmount(c.amount)}
+                              <ClientAmount amount={c.amount} fx={c.fx} />
                               {canRequestLimit && (
                                 <button onClick={() => setLimitReqFor(limitReqFor === c.clientKey ? null : c.clientKey)}
                                   title="Поставити задачу на перегляд ліміту"
