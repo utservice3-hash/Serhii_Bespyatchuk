@@ -5,6 +5,10 @@ import { lardiGet, lardiPost, LANG, hasLardiToken } from "../lardi/client.js";
 import { recordRoute, recordOffers, recordUsage, history, usageStats, learnedStats } from "../lardi/history.js";
 import { offerDate } from "../lardi/offerDate.js";
 import { parseFeedback, feedbackDue, snapshotOf, feedbackStats, RateFeedbackError, type FeedbackRow } from "../core/rateFeedback.js";
+import { config } from "../config.js";
+import { orsRoute } from "../core/orsClient.js";
+import { resolveRoutes, toVariants, parseKmOverride, parseVariant, RouteInputError, type RouteDeps, type RouteVariantOut } from "../core/roadRoute.js";
+import { routeCache } from "../core/routeCache.js";
 
 // «Калькулятор ставок» — точний порт Python-сервісу lardiweb у наш бекенд
 // (прод — shared cPanel без Python 3.10+). Формат відповіді збережено 1:1 з
@@ -13,7 +17,6 @@ export const ratesRouter = Router();
 ratesRouter.use(requireAuth);
 
 const UAH_NAMES = new Set(["грн.", "грн", "uah", "₴"]);
-const ROAD_FACTOR = 1.25; // повітряна відстань → дорожня
 const MIN_TOWN_RESULTS = 6; // менше по місту → розширюємо до області
 const FULL_TON_THRESHOLD = 18; // ≥ — «ціла машина», нижче — догруз
 
@@ -359,6 +362,17 @@ ratesRouter.get("/bodytypes", async (_req, res) => {
   res.json(bodyCache);
 });
 
+/** Маршрути по дорогах: сервіс маршрутів + кеш `road_routes` (`core/roadRoute.ts`). */
+const routeDeps = (): RouteDeps => ({
+  route: (points, opts) => orsRoute({ fetch, key: config.ors.key }, points, opts),
+  ...routeCache(pool),
+  log: (m) => console.warn(m),
+});
+/** Що з маршруту запамʼятовуємо в знімку розрахунку — щоб відгук знав, на яких км стояла ставка. */
+const routeInfo = (v: RouteVariantOut | undefined) => v
+  ? { distance_source: v.source, route_variant: v.id, road_km: v.road_km, moldova_km: v.moldova_km }
+  : undefined;
+
 ratesRouter.post("/analyze", async (req, res) => {
   if (!hasLardiToken()) return res.status(503).json({ error: "LARDI_API_TOKEN не заданий на сервері" });
   const b = req.body ?? {};
@@ -370,13 +384,49 @@ ratesRouter.post("/analyze", async (req, res) => {
     body_type_ids: Array.isArray(b.body_type_ids) ? b.body_type_ids.map(Number).filter(Boolean) : [],
     page_size: 100,
   };
+  let kmOverride: number | null;
+  try { kmOverride = parseKmOverride(b.km_override); } catch (e) {
+    return res.status(e instanceof RouteInputError ? e.status : 400).json({ error: (e as Error).message });
+  }
 
-  const hav = haversineKm(frm.lat, frm.lon, to.lat, to.lon);
-  let routeKm = hav ? Math.round(hav * ROAD_FACTOR) : null;
+  // 🗺 Відстань — ПО ДОРОГАХ (кеш або сервіс маршрутів), запасний варіант — пряма × 1,25 з позначкою «приблизно».
+  // Медіана відстаней із пропозицій Lardi на км більше НЕ впливає: при розширенні пошуку до області вона бралась з
+  // інших міст і давала Стрижавка→Вінниця 170 км замість 12 (#2780).
+  const areas = await areasMap().catch(() => ({} as Record<number, string>));
+  const areaOf = (p: Any): string | null =>
+    (typeof p?.area === "string" && p.area) || (p?.area_id ? areas[Number(p.area_id)] ?? null : null);
+  const zoneCtx = { fromArea: areaOf(frm as unknown as Any), toArea: areaOf(to as unknown as Any), mass: reqBody.mass_max ?? reqBody.mass_min ?? null };
+  const resolved = await resolveRoutes(routeDeps(), frm, to);
+  let variantIdx: number;
+  try { variantIdx = parseVariant(b.variant, resolved.length); } catch (e) {
+    return res.status(e instanceof RouteInputError ? e.status : 400).json({ error: (e as Error).message });
+  }
+  const variants = toVariants(resolved, zoneCtx, kmOverride != null ? { variant: variantIdx, km: kmOverride } : null);
+  const chosen = variants[variantIdx];
 
+  // ✍️ ПЕРЕРАХУНОК ТОГО САМОГО РОЗРАХУНКУ (менеджер виправив км або обрав інший варіант): Lardi вдруге не питаємо і
+  // нового рядка в журналі не пишемо — оновлюємо знімок свого ж розрахунку й віддаємо лише маршрутну частину.
+  if (b.usage_id != null) {
+    const usageId = Number(b.usage_id);
+    if (!Number.isInteger(usageId) || usageId <= 0) return res.status(400).json({ error: "Невідомий розрахунок" });
+    const own = await pool.query<{ frm: string; tox: string }>(`SELECT frm, tox FROM lardi_usage WHERE id = $1 AND user_id = $2`, [usageId, req.auth!.userId]);
+    const u = own.rows[0];
+    if (!u) return res.status(404).json({ error: "Розрахунок не знайдено" });
+    if (u.frm !== (frm.label ?? "") || u.tox !== (to.label ?? "")) return res.status(409).json({ error: "Це інший маршрут — розрахуйте заново" });
+    const zone = chosen?.zone_recommendation ?? null;
+    const calc = snapshotOf(reqBody as { mass_min: number | null; mass_max: number | null; body_type_ids: number[] }, chosen?.distance_km ?? null,
+      zone as Parameters<typeof snapshotOf>[2], routeInfo(chosen));
+    await pool.query(`UPDATE lardi_usage SET calc = $2 WHERE id = $1 AND user_id = $3`, [usageId, JSON.stringify(calc), req.auth!.userId]);
+    return res.json({ usage_id: usageId, routes: variants, route_variant: variantIdx, zone_recommendation: zone,
+      route: { from: frm.label ?? "", to: to.label ?? "", distance_km: chosen?.distance_km ?? null } });
+  }
+
+  const routeKm: number | null = chosen?.distance_km ?? null;
   const result: Any = {
     route: { from: frm.label ?? "", to: to.label ?? "", distance_km: routeKm },
     filter_echo: { mass_min: reqBody.mass_min, mass_max: reqBody.mass_max, body_type_ids: reqBody.body_type_ids },
+    routes: variants,
+    route_variant: variantIdx,
   };
 
   for (const [side, path] of [["cargo", "/v2/proposals/search/cargo"], ["lorry", "/v2/proposals/search/lorry"]] as const) {
@@ -394,11 +444,6 @@ ratesRouter.post("/analyze", async (req, res) => {
       result[side] = { error: "Lardi недоступний", detail: String(e).slice(0, 120) };
     }
   }
-
-  // Реальна відстань з пропозицій точніша за haversine.
-  const md = (side: string) => asObj(asObj(asObj(result[side]).classes).all).median_distance as number | undefined;
-  const realDist = md("cargo") || md("lorry");
-  if (realDist) { routeKm = realDist; (result.route as Any).distance_km = realDist; }
 
   // Архів: маршрут + пропозиції; історія за 31 день у кожну сторону.
   let usageId: number | null = null;
@@ -419,20 +464,15 @@ ratesRouter.post("/analyze", async (req, res) => {
 
   result.recommendation = recommend(result.cargo as Any, result.lorry as Any, routeKm);
 
-  // Зонна рекомендація (карта КВП) — головний орієнтир, коли пропозицій у Ларді
-  // немає. Назва області: з тіла запиту (фронт шле town.area) або з довідника за id.
+  // Зонна рекомендація (карта КВП) — головний орієнтир. Є маршрут — ставка обраного варіанта (на його км);
+  // немає координат — як раніше, на км без маршруту.
   try {
-    const areas = await areasMap();
-    const areaOf = (p: Any): string | null =>
-      (typeof p?.area === "string" && p.area) || (p?.area_id ? areas[Number(p.area_id)] ?? null : null);
-    const massForZone = reqBody.mass_max ?? reqBody.mass_min ?? null;
-    result.zone_recommendation = zoneRecommendation(areaOf(frm as unknown as Any), areaOf(to as unknown as Any), massForZone, routeKm);
+    result.zone_recommendation = chosen ? chosen.zone_recommendation : zoneRecommendation(zoneCtx.fromArea, zoneCtx.toArea, zoneCtx.mass, routeKm);
   } catch { result.zone_recommendation = null; }
 
   // Самонавчальна рекомендація з накопиченого архіву цін по маршруту.
   try {
-    const massForZone = reqBody.mass_max ?? reqBody.mass_min ?? null;
-    result.learned_recommendation = await learnedRecommendation(frm.town_id, to.town_id, routeKm, massForZone);
+    result.learned_recommendation = await learnedRecommendation(frm.town_id, to.town_id, routeKm, zoneCtx.mass);
   } catch { result.learned_recommendation = null; }
 
   // 🧮 Відгук «наскільки допоміг»: знімок показаних чисел — у розрахунок; питати — раз на маршрут на день (#2772).
@@ -441,7 +481,7 @@ ratesRouter.post("/analyze", async (req, res) => {
   if (usageId) {
     try {
       const calc = snapshotOf(reqBody as { mass_min: number | null; mass_max: number | null; body_type_ids: number[] }, routeKm,
-        result.zone_recommendation as Parameters<typeof snapshotOf>[2]);
+        result.zone_recommendation as Parameters<typeof snapshotOf>[2], routeInfo(chosen));
       await pool.query(`UPDATE lardi_usage SET calc = $2 WHERE id = $1`, [usageId, JSON.stringify(calc)]);
       const prev = await pool.query<{ frm: string; tox: string; at: Date }>(
         `SELECT u.frm, u.tox, f.created_at AS at FROM rate_feedback f JOIN lardi_usage u ON u.id = f.usage_id
