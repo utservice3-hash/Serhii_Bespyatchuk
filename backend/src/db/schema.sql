@@ -7198,3 +7198,7 @@ ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS amount_fx_uah NUMERIC(1
 -- Списання валютного рахунку — у валюті (рішення В): гривнева `amount` у нього 0, валюта — тут.
 ALTER TABLE receivable_writeoffs ADD COLUMN IF NOT EXISTS currency TEXT;
 ALTER TABLE receivable_writeoffs ADD COLUMN IF NOT EXISTS amount_fx NUMERIC(14,2);
+
+-- 📅 КАЛЕНДАР ОПЛАТ: «раз на пів року» й «одноразово» (Тетяна 29.10.2026). Одноразова — одна дата, «Оплачено» її закриває.
+ALTER TABLE fin_recurring DROP CONSTRAINT IF EXISTS fin_recurring_period_check;
+ALTER TABLE fin_recurring ADD CONSTRAINT fin_recurring_period_check CHECK (period IN ('month', 'quarter', 'halfyear', 'year', 'once'));

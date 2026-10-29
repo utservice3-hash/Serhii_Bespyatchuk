@@ -6028,7 +6028,7 @@ export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: 
   return { blob: res.data as Blob, filename: m?.[1] ?? `oplata_perevizny_${day}.xlsx` };
 }
 /** 📅 «Календар оплат» (задача #6369, 27.10.2026): періодичні витрати — нагадування, окремо від Плану/факту. */
-export type RecPeriod = "month" | "quarter" | "year";
+export type RecPeriod = "month" | "quarter" | "halfyear" | "year" | "once";
 export interface RecItem {
   id: number; itemId: number; name: string; amount: number; period: RecPeriod; anchorDay: number; next: string;
   note: string | null; active: boolean; upcoming: string[];

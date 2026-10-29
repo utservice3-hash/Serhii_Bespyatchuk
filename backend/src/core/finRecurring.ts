@@ -16,15 +16,20 @@
 import { FinError, saveValues, type Db } from "./finance.js";
 import { xlsxBook } from "./xlsx.js";
 
-export type Period = "month" | "quarter" | "year";
-export const STEP: Record<Period, number> = { month: 1, quarter: 3, year: 12 };
-export const PERIOD_LABEL: Record<Period, string> = { month: "щомісяця", quarter: "щокварталу", year: "раз на рік" };
+/**
+ * Як часто. «Раз на пів року» й «одноразово» — Тетяна 29.10.2026 («в календарі оплат треба додати: раз на пів року,
+ * одноразова оплата — і для неї лише плановий місяць оплати»). Одноразова має рівно одну дату; «Оплачено» її закриває
+ * (`active = false`), «Скасувати» — відкриває знову; графіка далі немає.
+ */
+export type Period = "month" | "quarter" | "halfyear" | "year" | "once";
+export const STEP: Record<Period, number> = { month: 1, quarter: 3, halfyear: 6, year: 12, once: 0 };
+export const PERIOD_LABEL: Record<Period, string> = { month: "щомісяця", quarter: "щокварталу", halfyear: "раз на пів року", year: "раз на рік", once: "одноразово" };
 /** Смуга місяців: назад — до першої оплати, але не менше 6 міс.; уперед — 18 міс. */
 export const BACK_MIN = 6, AHEAD = 18;
 
 const YM = /^\d{4}-(0[1-9]|1[0-2])$/;
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
-const isPeriod = (v: unknown): v is Period => v === "month" || v === "quarter" || v === "year";
+const isPeriod = (v: unknown): v is Period => typeof v === "string" && v in STEP;
 
 export function kyivToday(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
@@ -43,6 +48,7 @@ export function addPeriod(date: string, period: Period, anchorDay: number): stri
 }
 /** Дати оплати від `next` (включно) у вікні [from; to]. */
 export function occurrences(next: string, period: Period, anchorDay: number, from: string, to: string): string[] {
+  if (period === "once") return next >= from && next <= to ? [next] : [];
   const out: string[] = [];
   for (let d = next, g = 0; d <= to && g < 240; d = addPeriod(d, period, anchorDay), g++) if (d >= from) out.push(d);
   return out;
@@ -69,7 +75,10 @@ export interface CalMonth { ym: string; offset: number; sum: number; paid: numbe
 /** Позначка, яку ще можна скасувати: жива й остання — саме від неї пораховано поточний місяць. */
 export function undoable(p: PaidRow, items: Map<number, RecItem>): boolean {
   const it = items.get(p.recurringId);
-  return !p.cancelledAt && !!it && addPeriod(p.due, it.period, it.anchorDay) === it.next;
+  if (p.cancelledAt || !it) return false;
+  // Одноразова: остання (і єдина) жива позначка — та, що закрила її на тій самій даті.
+  if (it.period === "once") return !it.active && p.due === it.next;
+  return addPeriod(p.due, it.period, it.anchorDay) === it.next;
 }
 const kindOf = (date: string, cur: string): EventKind => (date.slice(0, 7) < cur ? "overdue" : date.slice(0, 7) === cur ? "soon" : "plan");
 
@@ -178,7 +187,8 @@ export async function loadCalendar(db: Db, today: string): Promise<Calendar> {
     today,
     items: items.map((i) => {
       const upcoming: string[] = [];
-      for (let d = i.next; upcoming.length < 4; d = addPeriod(d, i.period, i.anchorDay)) upcoming.push(d);
+      if (i.period === "once") upcoming.push(i.next);
+      else for (let d = i.next; upcoming.length < 4; d = addPeriod(d, i.period, i.anchorDay)) upcoming.push(d);
       return { ...i, upcoming };
     }),
     months: buildMonths(items, paid, today),
@@ -250,6 +260,11 @@ export async function payRecurring(db: Db, actor: number, id: number, b: any): P
   const amount = b?.amount == null || b.amount === "" ? it.amount : amountOf(b.amount);
   const ins = await db.query(`INSERT INTO fin_recurring_paid (recurring_id, due_date, amount, planned, paid_by) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
     [id, it.next, amount, it.amount, actor]);
+  if (it.period === "once") {
+    // Одноразова закривається: дата та сама, нагадувань і планування далі немає; «Скасувати» відкриє її знову.
+    await db.query(`UPDATE fin_recurring SET active = false, updated_by = $1, updated_at = now() WHERE id = $2`, [actor, id]);
+    return { next: it.next, paidId: ins.rows[0].id };
+  }
   const next = addPeriod(it.next, it.period, it.anchor);
   await db.query(`UPDATE fin_recurring SET next_due = $1, updated_by = $2, updated_at = now() WHERE id = $3`, [next, actor, id]);
   return { next, paidId: ins.rows[0].id };
@@ -260,10 +275,11 @@ export async function undoPaid(db: Db, actor: number, paidId: number): Promise<{
   const p = (await db.query(`SELECT id, recurring_id, due_date::text AS due, cancelled_at FROM fin_recurring_paid WHERE id = $1 FOR UPDATE`, [paidId])).rows[0];
   if (!p) throw new FinError(404, "Позначку не знайдено");
   if (p.cancelled_at) throw new FinError(409, "Цю позначку вже скасовано");
-  const it = (await db.query(`SELECT period, anchor_day AS anchor, next_due::text AS next FROM fin_recurring WHERE id = $1 FOR UPDATE`, [p.recurring_id])).rows[0];
-  if (!it || addPeriod(p.due, it.period, it.anchor) !== it.next) throw new FinError(409, "Скасувати можна лише останню позначку цієї оплати");
+  const it = (await db.query(`SELECT period, anchor_day AS anchor, next_due::text AS next, active FROM fin_recurring WHERE id = $1 FOR UPDATE`, [p.recurring_id])).rows[0];
+  const latest = it && (it.period === "once" ? !it.active && p.due === it.next : addPeriod(p.due, it.period, it.anchor) === it.next);
+  if (!latest) throw new FinError(409, "Скасувати можна лише останню позначку цієї оплати");
   await db.query(`UPDATE fin_recurring_paid SET cancelled_at = now(), cancelled_by = $1 WHERE id = $2`, [actor, paidId]);
-  await db.query(`UPDATE fin_recurring SET next_due = $1, updated_by = $2, updated_at = now() WHERE id = $3`, [p.due, actor, p.recurring_id]);
+  await db.query(`UPDATE fin_recurring SET next_due = $1, active = true, updated_by = $2, updated_at = now() WHERE id = $3`, [p.due, actor, p.recurring_id]);
   return { next: p.due };
 }
 
