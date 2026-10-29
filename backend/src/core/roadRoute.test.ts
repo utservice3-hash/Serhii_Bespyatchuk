@@ -101,7 +101,7 @@ test("#2783 МОЛДОВА: довше 30 км Молдовою — варіан
   assert.deepEqual(budjak.calls, ["main", "avoid", "via"], "🔴 без дороги в обхід Молдови не спробували через Одесу");
   assert.equal(r3[1].via?.name, UA_DETOUR_VIA.name);
   const out = toVariants(r3, { fromArea: "Одеська обл.", toArea: "Львівська обл.", mass: 20 }, null);
-  assert.deepEqual(out.map((v) => v.label), ["Найкоротший", "Через Україну · через Одесу"]);
+  assert.deepEqual(out.map((v) => v.label), ["Найшвидший", "Через Україну · через Одесу"], "🔴 основний варіант підписано «найкоротшим», а сервіс будує найшвидший");
   assert.notEqual(out[0].zone_recommendation?.client_min, out[1].zone_recommendation?.client_min, "🔴 у варіантів одна ставка — км варіанта не враховано");
   assert.equal(ORS_MOLDOVA, 129, "🔴 код Молдови в сервісі маршрутів не той (заміряно 29.10.2026: 129)");
 });

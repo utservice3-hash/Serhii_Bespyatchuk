@@ -140,10 +140,11 @@ export interface RouteVariantOut {
   line: LatLng[]; zone_recommendation: Zone;
 }
 
-/** Підпис варіанта людською мовою. */
+/** Підпис варіанта людською мовою. Основний — «Найшвидший», не «найкоротший»: сервіс будує маршрут за ЧАСОМ, і об'їзд
+ *  буває коротшим (заміряно 29.10.2026: Львів→Ізмаїл 803 км через Молдову проти 788 км Україною). */
 export function variantLabel(r: ResolvedRoute, count: number): string {
   if (r.id === "ua") return r.via ? `Через Україну · через ${r.via.acc}` : "Через Україну";
-  return count > 1 ? "Найкоротший" : "Маршрут";
+  return count > 1 ? "Найшвидший" : "Маршрут";
 }
 
 /**
