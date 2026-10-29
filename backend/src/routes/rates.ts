@@ -9,6 +9,7 @@ import { config } from "../config.js";
 import { orsRoute } from "../core/orsClient.js";
 import { resolveRoutes, toVariants, parseKmOverride, parseVariant, RouteInputError, type RouteDeps, type RouteVariantOut } from "../core/roadRoute.js";
 import { routeCache } from "../core/routeCache.js";
+import { saveQuota, loadQuota } from "../core/routeQuota.js";
 
 // «Калькулятор ставок» — точний порт Python-сервісу lardiweb у наш бекенд
 // (прод — shared cPanel без Python 3.10+). Формат відповіді збережено 1:1 з
@@ -364,7 +365,12 @@ ratesRouter.get("/bodytypes", async (_req, res) => {
 
 /** Маршрути по дорогах: сервіс маршрутів + кеш `road_routes` (`core/roadRoute.ts`). */
 const routeDeps = (): RouteDeps => ({
-  route: (points, opts) => orsRoute({ fetch, key: config.ors.key }, points, opts),
+  route: async (points, opts) => {
+    const r = await orsRoute({ fetch, key: config.ors.key }, points, opts);
+    // 📊 Сервіс сам каже, скільки лишилось на сьогодні — запамʼятовуємо для «Статистики»; збій запису ставку не чіпає.
+    if (r.quota) await saveQuota(pool, r.quota).catch((e) => console.warn("service_quota: запис не вдався —", String(e).slice(0, 120)));
+    return r;
+  },
   ...routeCache(pool),
   log: (m) => console.warn(m),
 });
@@ -541,7 +547,9 @@ ratesRouter.get("/stats", async (req, res) => {
   if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   const days = Math.max(1, Math.min(Number(req.query.days) || 30, 90));
   try {
-    res.json(await usageStats(days));
+    // 📊 Залишок запитів сервісу маршрутів на сьогодні (лише тут, у «Статистиці»; Роман 29.10.2026).
+    const routingQuota = await loadQuota(pool).catch(() => null);
+    res.json({ ...(await usageStats(days)), routing_quota: routingQuota });
   } catch (e) {
     res.status(500).json({ error: `stats error: ${String(e).slice(0, 120)}` });
   }

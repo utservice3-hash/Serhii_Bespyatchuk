@@ -710,8 +710,26 @@ export function StatsView() {
   if (err) return <div className="chart-card">Помилка: {err}</div>;
   if (!d) return <p className="loading-text">Завантаження…</p>;
   const maxR = Math.max(1, ...d.by_day.map((x) => x.requests));
+  const q = d.routing_quota ?? null;
+  const kyivTime = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" }) : "—");
   return (
     <>
+      {/* 📊 Залишок запитів сервісу маршрутів (Роман 29.10.2026: лише тут; попередження — менше 200). */}
+      <div className="chart-card" style={{ marginBottom: 16, borderLeft: `4px solid ${q?.low ? "#dc2626" : "var(--border)"}` }}>
+        <h2 className="chart-title" style={{ marginBottom: 6 }}>Сервіс маршрутів (відстань по дорогах)</h2>
+        {q ? (
+          <>
+            <div style={{ fontSize: 15 }}>
+              Сьогодні залишилось <b style={{ fontSize: 20, color: q.low ? "#dc2626" : "var(--text)" }}>{fmt(q.remaining)}</b> з {fmt(q.limit)} запитів
+              {q.reset_at ? <span style={{ color: "var(--text-muted)" }}> · {q.renewed ? "ліміт оновився о" : "оновлення о"} {kyivTime(q.reset_at)}</span> : null}
+            </div>
+            {q.low && <div style={{ marginTop: 8, color: "#dc2626", fontSize: 14 }}>⚠️ Залишилось менше 200. Коли ліміт закінчиться, нові маршрути до оновлення рахуватимуться приблизно (пряма × 1,25) з позначкою; вже пораховані — беруться з бази.</div>}
+            <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-muted)" }}>Число повідомляє сам сервіс, коли рахується новий маршрут (востаннє о {kyivTime(q.seen_at)}). Маршрути з бази ліміт не витрачають.</div>
+          </>
+        ) : (
+          <div style={{ fontSize: 14, color: "var(--text-muted)" }}>Даних ще немає — сервіс маршрутів ще не питали. Число зʼявиться після першого нового маршруту.</div>
+        )}
+      </div>
       <div className="kpi-grid" style={{ marginBottom: 16 }}>
         <div className="kpi-card"><span className="kpi-value" style={{ color: ACC }}>{fmt(d.today_requests)}</span><span className="kpi-label">запитів сьогодні</span></div>
         <div className="kpi-card"><span className="kpi-value" style={{ color: ACC }}>{fmt(d.today_users)}</span><span className="kpi-label">користувачів сьогодні</span></div>

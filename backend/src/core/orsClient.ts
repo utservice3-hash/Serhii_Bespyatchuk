@@ -12,7 +12,20 @@ export type LatLng = [number, number];
 export interface RoadLeg { km: number; minutes: number; moldovaKm: number; line: LatLng[] }
 
 export type OrsFailure = "no_key" | "no_route" | "quota" | "denied" | "timeout" | "network" | "bad_response" | `http_${number}`;
-export type OrsResult = { ok: true; leg: RoadLeg } | { ok: false; reason: OrsFailure };
+/** Денний ліміт сервісу, як він сам його повідомляє в заголовках відповіді (Роман 29.10.2026: «виводити, скільки лишилось»). */
+export interface OrsQuota { limit: number; remaining: number; resetAt: string | null }
+export type OrsResult = ({ ok: true; leg: RoadLeg } | { ok: false; reason: OrsFailure }) & { quota?: OrsQuota | null };
+
+/**
+ * Заголовки `x-ratelimit-*` → ліміт. Заміряно 29.10.2026: `limit 2000`, `remaining 1999`, `reset` — Unix-секунди.
+ * Немає ліміту чи залишку — `null` («невідомо»), а НЕ нуль: нуль читався б як «ліміт вичерпано» (#2795).
+ */
+export function parseQuota(h: { get(name: string): string | null }): OrsQuota | null {
+  const num = (v: string | null) => (v == null || v.trim() === "" ? NaN : Number(v));
+  const limit = num(h.get("x-ratelimit-limit")), remaining = num(h.get("x-ratelimit-remaining")), reset = num(h.get("x-ratelimit-reset"));
+  if (!Number.isFinite(limit) || !Number.isFinite(remaining) || limit <= 0 || remaining < 0) return null;
+  return { limit, remaining, resetAt: Number.isFinite(reset) && reset > 0 ? new Date(reset * 1000).toISOString() : null };
+}
 
 export interface OrsDeps { fetch: typeof fetch; key: string; timeoutMs?: number }
 
@@ -69,11 +82,12 @@ export async function orsRoute(deps: OrsDeps, points: LatLng[], opts: { avoidMol
         ...(opts.avoidMoldova ? { options: { avoid_countries: [ORS_MOLDOVA] } } : {}) }),
     });
     const text = await r.text();
-    if (r.status !== 200) return { ok: false, reason: failureOf(r.status, text) };
+    const quota = r.headers ? parseQuota(r.headers) : null;
+    if (r.status !== 200) return { ok: false, reason: failureOf(r.status, text), quota };
     let j: unknown;
-    try { j = JSON.parse(text); } catch { return { ok: false, reason: "bad_response" }; }
+    try { j = JSON.parse(text); } catch { return { ok: false, reason: "bad_response", quota }; }
     const leg = parseOrsGeojson(j);
-    return leg ? { ok: true, leg } : { ok: false, reason: "bad_response" };
+    return leg ? { ok: true, leg, quota } : { ok: false, reason: "bad_response", quota };
   } catch (e) {
     return { ok: false, reason: (e as { name?: string })?.name === "AbortError" ? "timeout" : "network" };
   } finally {

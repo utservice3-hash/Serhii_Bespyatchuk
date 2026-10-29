@@ -8,6 +8,8 @@ import {
 } from "./roadRoute.js";
 import { orsRoute, failureOf, ORS_MOLDOVA, ORS_URL, type LatLng, type OrsResult } from "./orsClient.js";
 import { snapshotOf } from "./rateFeedback.js";
+import { parseQuota } from "./orsClient.js";
+import { quotaView, QUOTA_LOW } from "./routeQuota.js";
 
 /**
  * 🗺 #2780–#2788 — ВІДСТАНЬ ДЛЯ СТАВКИ ПО ДОРОГАХ (Роман 29.10.2026, Сергій погодив). Чисті: мережа й база підмінені,
@@ -175,4 +177,41 @@ test("#2789 АДРЕСА СЕРВІСУ — api.heigit.org: стару api.openr
   assert.equal(hit, ORS_URL, "🔴 клієнт ходить не на оголошену адресу");
   assert.doesNotMatch(SRC("../../src/core/orsClient.ts").replace(/\/\*\*[\s\S]*?\*\//g, ""), /api\.openrouteservice\.org/,
     "🔴 у коді клієнта знову стара адреса — після 06.11.2026 вона не відповідає зовсім");
+});
+
+const hdr = (o: Record<string, string>) => ({ get: (k: string) => o[k] ?? null });
+
+test("#2795 ЛІМІТ СЕРВІСУ — З ЗАГОЛОВКІВ: 2000/1999 і час оновлення; без заголовків — «невідомо», а не 0", async () => {
+  assert.deepEqual(parseQuota(hdr({ "x-ratelimit-limit": "2000", "x-ratelimit-remaining": "1999", "x-ratelimit-reset": "1793305323" })),
+    { limit: 2000, remaining: 1999, resetAt: new Date(1793305323 * 1000).toISOString() }, "🔴 ліміт прочитано не так, як його шле сервіс");
+  assert.equal(parseQuota(hdr({})), null, "🔴 відповідь без заголовків ліміту стала числом");
+  assert.equal(parseQuota(hdr({ "x-ratelimit-limit": "2000", "x-ratelimit-remaining": "" })), null, "🔴 порожній залишок прочитано як 0 — «ліміт вичерпано» без причини");
+  assert.deepEqual(parseQuota(hdr({ "x-ratelimit-limit": "2000", "x-ratelimit-remaining": "0" }))?.remaining, 0, "🔴 справжній нуль загубився");
+  const res = await orsRoute({ key: "k", fetch: (async () => new Response("{}", { status: 500, headers: { "x-ratelimit-limit": "2000", "x-ratelimit-remaining": "17" } })) as unknown as typeof fetch }, [[50, 30], [49, 24]]);
+  assert.equal(res.quota?.remaining, 17, "🔴 клієнт не віддає ліміт із відповіді");
+});
+
+test("#2796 ЗАЛИШОК НА ЗАРАЗ: після часу оновлення — повний ліміт; менше 200 — попередження, рівно 200 — ні", () => {
+  const row = (remaining: number, reset: string | null) => ({ quota_limit: 2000, remaining, reset_at: reset, seen_at: "2026-10-29T20:00:00Z" });
+  const before = new Date("2026-10-29T21:00:00Z"), after = new Date("2026-10-30T00:00:01Z");
+  const q = quotaView(row(150, "2026-10-30T00:00:00Z"), before)!;
+  assert.deepEqual([q.remaining, q.renewed, q.low], [150, false, true], "🔴 150 до оновлення — без попередження");
+  const r = quotaView(row(150, "2026-10-30T00:00:00Z"), after)!;
+  assert.deepEqual([r.remaining, r.renewed, r.low], [2000, true, false], "🔴 після оновлення висить учорашній залишок");
+  assert.equal(QUOTA_LOW, 200, "🔴 поріг попередження змінено без рішення (Роман 29.10.2026: менше 200)");
+  assert.equal(quotaView(row(200, null), before)!.low, false, "🔴 рівно 200 — уже попередження, а мало бути «менше 200»");
+  assert.equal(quotaView(row(199, null), before)!.low, true);
+  assert.equal(quotaView(undefined, before), null, "🔴 без даних — вигадане число замість «ще не питали»");
+});
+
+test("#2797 ЛІЧИЛЬНИК: пишеться з кожної відповіді сервісу, віддається лише в /stats, показується у «Статистиці»", () => {
+  assert.match(RATES, /if \(r\.quota\) await saveQuota\(pool, r\.quota\)\.catch\(/, "🔴 залишок не записується з відповіді сервісу (або збій запису валить розрахунок)");
+  const stats = (() => { const at = RATES.indexOf('ratesRouter.get("/stats"'); return RATES.slice(at, RATES.indexOf("\nratesRouter.", at + 10)); })();
+  assert.match(stats, /routing_quota: routingQuota/, "🔴 /stats не віддає залишок");
+  assert.match(stats, /isAdminScope\(req\.auth!\)/, "🔴 /stats відкрито не лише адміну");
+  assert.doesNotMatch(ANALYZE, /loadQuota|routing_quota/, "🔴 залишок потрапив у розрахунок ставки — рішення: лише «Статистика»");
+  assert.match(SCHEMA, /CREATE TABLE IF NOT EXISTS service_quota \(/, "🔴 немає таблиці залишку");
+  const view = SRC("../../../frontend/src/pages/dashboard/sections/RatesSection.tsx");
+  assert.match(view, /Сьогодні залишилось <b[^>]*>\{fmt\(q\.remaining\)\}<\/b> з \{fmt\(q\.limit\)\}/, "🔴 у «Статистиці» немає рядка залишку");
+  assert.match(view, /\{q\.low && <div/, "🔴 попередження «менше 200» не показується");
 });

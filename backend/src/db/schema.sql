@@ -7247,3 +7247,13 @@ CREATE TABLE IF NOT EXISTS road_routes (
   fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (from_lat, from_lon, to_lat, to_lon, variant)
 );
+
+-- 📊 ЗАЛИШОК ЗАПИТІВ СЕРВІСУ МАРШРУТІВ (Роман 29.10.2026: «лише в статистиці, попередження при менше 200»). Один рядок на
+-- сервіс: останнє, що сервіс сам повідомив у заголовках відповіді. Окремо його не питаємо. Відкат даних: DROP TABLE service_quota;
+CREATE TABLE IF NOT EXISTS service_quota (
+  service TEXT PRIMARY KEY,
+  quota_limit INTEGER NOT NULL CHECK (quota_limit > 0),
+  remaining INTEGER NOT NULL CHECK (remaining >= 0),
+  reset_at TIMESTAMPTZ,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

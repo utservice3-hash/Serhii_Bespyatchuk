@@ -3840,6 +3840,8 @@ export interface RatesUsageStats {
   today_requests: number; today_users: number;
   by_day: { date: string; requests: number; users: number }[];
   top_routes: { route: string; count: number }[];
+  /** 📊 Залишок запитів сервісу маршрутів на сьогодні (останнє, що сервіс сказав); null — сервіс ще не питали. */
+  routing_quota?: { limit: number; remaining: number; reset_at: string | null; seen_at: string; renewed: boolean; low: boolean } | null;
 }
 
 export async function fetchTowns(q: string): Promise<Town[]> {
