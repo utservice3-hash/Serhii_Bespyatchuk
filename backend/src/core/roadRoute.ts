@@ -1,5 +1,5 @@
 import { zoneRecommendation } from "./zoneRates.js";
-import type { LatLng, OrsResult, RoadLeg } from "./orsClient.js";
+import { ORS_MOLDOVA, ORS_UKRAINE, type LatLng, type OrsResult, type RoadLeg } from "./orsClient.js";
 
 /**
  * 🗺 ВІДСТАНЬ ДЛЯ СТАВКИ — ПО ДОРОГАХ (Роман 29.10.2026, Сергій погодив того ж дня).
@@ -35,7 +35,7 @@ export type VariantId = "main" | "ua";
 export interface CachedRoute extends RoadLeg { via: Via | null }
 export interface RouteKey { from: LatLng; to: LatLng; variant: VariantId }
 export interface RouteDeps {
-  route(points: LatLng[], opts?: { avoidMoldova?: boolean }): Promise<OrsResult>;
+  route(points: LatLng[], opts?: { noBorders?: boolean }): Promise<OrsResult>;
   cacheGet(key: RouteKey): Promise<CachedRoute | null>;
   cachePut(key: RouteKey, r: CachedRoute): Promise<void>;
   log?(msg: string): void;
@@ -75,10 +75,14 @@ export function straightKm(a: LatLng, b: LatLng): number {
 
 /** Запасний варіант: пряма × 1,25, без часу в дорозі, лінія — два кінці (на мапі пунктир). */
 export function approxRoute(a: LatLng, b: LatLng, failure: string): ResolvedRoute {
-  return { id: "main", source: "approx", failure, via: null, km: Math.round(straightKm(a, b) * ROAD_FACTOR), minutes: 0, moldovaKm: 0, line: [a, b] };
+  return { id: "main", source: "approx", failure, via: null, km: Math.round(straightKm(a, b) * ROAD_FACTOR), minutes: 0, moldovaKm: 0, countries: [], line: [a, b] };
 }
 
-export const needsUaDetour = (r: ResolvedRoute) => r.source === "road" && r.moldovaKm > MOLDOVA_DETOUR_KM;
+/** Рейс внутрішній: маршрут іде лише Україною й Молдовою (транзитом). Для міжнародного «через Україну» не має сенсу. */
+const domestic = (countries: number[]) => countries.length > 0 && countries.every((c) => c === ORS_UKRAINE || c === ORS_MOLDOVA);
+export const needsUaDetour = (r: ResolvedRoute) => r.source === "road" && r.moldovaKm > MOLDOVA_DETOUR_KM && domestic(r.countries);
+/** Варіант «через Україну» годиться, лише якщо він справді Україною: жодної третьої країни, Молдовою — не довше порогу. */
+export const isUaRoute = (l: RoadLeg) => domestic(l.countries) && l.moldovaKm <= MOLDOVA_DETOUR_KM;
 
 async function cached(deps: RouteDeps, key: RouteKey, fetchIt: () => Promise<CachedRoute | string>): Promise<CachedRoute | string> {
   const hit = await deps.cacheGet(key).catch((e) => { deps.log?.(`road_routes: читання не вдалось — ${String(e).slice(0, 120)}`); return null; });
@@ -104,12 +108,13 @@ export async function resolveRoutes(deps: RouteDeps, frm: { lat?: unknown; lon?:
   const first: ResolvedRoute = { ...main, id: "main", source: "road", failure: null };
   if (!needsUaDetour(first)) return [first];
   const ua = await cached(deps, { from: a, to: b, variant: "ua" }, async () => {
-    const avoid = await deps.route([a, b], { avoidMoldova: true });
-    if (avoid.ok) return { ...avoid.leg, via: null };
-    if (avoid.reason !== "no_route") return avoid.reason;
+    const inside = await deps.route([a, b], { noBorders: true });
+    if (inside.ok) return isUaRoute(inside.leg) ? { ...inside.leg, via: null } : "not_ukraine";
+    if (inside.reason !== "no_route") return inside.reason;
     const v = UA_DETOUR_VIA;
     const via = await deps.route([a, [v.lat, v.lon], b]);
-    return via.ok ? { ...via.leg, via: { ...v } } : via.reason;
+    if (!via.ok) return via.reason;
+    return isUaRoute(via.leg) ? { ...via.leg, via: { ...v } } : "not_ukraine";
   });
   if (typeof ua === "string") { deps.log?.(`маршрути: варіант через Україну не отримано (${ua})`); return [first]; }
   return [first, { ...ua, id: "ua", source: "road", failure: null }];

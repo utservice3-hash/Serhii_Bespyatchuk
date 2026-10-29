@@ -25,7 +25,10 @@ const ANALYZE = (() => { const at = RATES.indexOf('ratesRouter.post("/analyze"')
 const KYIV = { lat: 50.45003, lon: 30.52414 }, LVIV = { lat: 49.84195, lon: 24.03159 }, IZMAIL = { lat: 45.35113, lon: 28.83615 };
 /** Однойменна «Одеса» в США — той самий випадок, що лежить у журналі маршрутів (14.10.2026). */
 const ODESSA_US = { lat: 45.25969, lon: -96.32894 };
-const leg = (km: number, moldovaKm = 0): OrsResult => ({ ok: true, leg: { km, minutes: km, moldovaKm, line: [[1, 1], [2, 2]] } });
+/** Коди країн сервісу: 211 — Україна, 129 — Молдова; 642 — будь-яка третя (тут — «Румунія» з живого випадку 29.10.2026). */
+const UA = 211, MD = 129, RO = 642;
+const leg = (km: number, moldovaKm = 0, countries: number[] = moldovaKm ? [MD, UA] : [UA]): OrsResult =>
+  ({ ok: true, leg: { km, minutes: km, moldovaKm, countries, line: [[1, 1], [2, 2]] } });
 
 /** Підмінені мережа й база: відповіді сервісу — чергою за типом запиту; лічильники — щоб бачити, хто кого кликав. */
 function fakeDeps(answers: { main?: OrsResult; avoid?: OrsResult; via?: OrsResult }) {
@@ -34,7 +37,7 @@ function fakeDeps(answers: { main?: OrsResult; avoid?: OrsResult; via?: OrsResul
   const k = (key: RouteKey) => JSON.stringify(key);
   const deps: RouteDeps = {
     async route(points: LatLng[], opts) {
-      const kind = points.length === 3 ? "via" : opts?.avoidMoldova ? "avoid" : "main";
+      const kind = points.length === 3 ? "via" : opts?.noBorders ? "avoid" : "main";
       calls.push(kind);
       return answers[kind] ?? { ok: false, reason: "no_route" };
     },
@@ -89,23 +92,35 @@ test("#2782 ЗБІЙ СЕРВІСУ — НЕ ПАДІННЯ: будь-яка в�
   assert.deepEqual(slow, { ok: false, reason: "timeout" }, "🔴 зависання сервісу не обривається таймаутом");
 });
 
-test("#2783 МОЛДОВА: довше 30 км Молдовою — варіант «через Україну»; рівно 30 — ні; без дороги в обхід — через Одесу", async () => {
+test("#2798 «ЧЕРЕЗ УКРАЇНУ» — БЕЗ ЖОДНОГО КОРДОНУ: лише внутрішній рейс, >30 км Молдовою; третя країна — не варіант", async () => {
   assert.equal(MOLDOVA_DETOUR_KM, 30, "🔴 поріг змінено без рішення (Роман 29.10.2026: 30 км)");
   const over = fakeDeps({ main: leg(683, 31), avoid: leg(791, 0) });
   const r1 = await resolveRoutes(over.deps, IZMAIL, LVIV);
   assert.deepEqual(r1.map((x) => x.id), ["main", "ua"], "🔴 31 км Молдовою — а варіанта через Україну немає");
-  assert.equal(r1[1].via, null, "🔴 сервіс оминув Молдову сам — проміжна точка не потрібна");
+  assert.equal(r1[1].via, null, "🔴 Україною без кордонів доїхали — проміжна точка не потрібна");
   const edge = fakeDeps({ main: leg(683, 30), avoid: leg(791, 0) });
   assert.deepEqual((await resolveRoutes(edge.deps, IZMAIL, LVIV)).map((x) => x.id), ["main"], "🔴 короткий транзит (≤30 км) отримав зайвий варіант");
   assert.deepEqual(edge.calls, ["main"], "🔴 на короткому транзиті сервіс питали про об'їзд — витрачено ліміт");
+  // Живий випадок 29.10.2026: «через Україну» пішов Румунією. Маршрут із третьою країною — НЕ варіант через Україну.
+  const romania = fakeDeps({ main: leg(803, 401), avoid: leg(788, 0, [RO, UA]) });
+  assert.deepEqual((await resolveRoutes(romania.deps, LVIV, IZMAIL)).map((x) => x.id), ["main"], "🔴 «через Україну» показано маршрут через третю країну");
+  // Міжнародний рейс (третя країна вже в основному маршруті) — «через Україну» не пропонуємо взагалі.
+  const intl = fakeDeps({ main: leg(1200, 60, [MD, RO, UA]), avoid: leg(1300, 0) });
+  assert.deepEqual((await resolveRoutes(intl.deps, LVIV, IZMAIL)).map((x) => x.id), ["main"], "🔴 міжнародному рейсу запропоновано «через Україну»");
+  assert.deepEqual(intl.calls, ["main"], "🔴 для міжнародного рейсу сервіс питали про об'їзд");
+  // Буджак: без кордонів дороги немає — через Одесу; короткий транзит біля Паланки допустимий.
   const budjak = fakeDeps({ main: leg(599, 402), avoid: { ok: false, reason: "no_route" }, via: leg(792, 8) });
   const r3 = await resolveRoutes(budjak.deps, IZMAIL, LVIV);
-  assert.deepEqual(budjak.calls, ["main", "avoid", "via"], "🔴 без дороги в обхід Молдови не спробували через Одесу");
+  assert.deepEqual(budjak.calls, ["main", "avoid", "via"], "🔴 без дороги в обхід кордонів не спробували через Одесу");
   assert.equal(r3[1].via?.name, UA_DETOUR_VIA.name);
   const out = toVariants(r3, { fromArea: "Одеська обл.", toArea: "Львівська обл.", mass: 20 }, null);
   assert.deepEqual(out.map((v) => v.label), ["Найшвидший", "Через Україну · через Одесу"], "🔴 основний варіант підписано «найкоротшим», а сервіс будує найшвидший");
   assert.notEqual(out[0].zone_recommendation?.client_min, out[1].zone_recommendation?.client_min, "🔴 у варіантів одна ставка — км варіанта не враховано");
   assert.equal(ORS_MOLDOVA, 129, "🔴 код Молдови в сервісі маршрутів не той (заміряно 29.10.2026: 129)");
+  let body = "";
+  await orsRoute({ key: "k", fetch: (async (_u: string, init: RequestInit) => { body = String(init.body); return new Response("{}", { status: 500 }); }) as unknown as typeof fetch },
+    [[50, 30], [49, 24]], { noBorders: true });
+  assert.match(body, /"avoid_borders":"all"/, "🔴 «через Україну» просить сервіс оминути лише одну країну — він об'їде іншою");
 });
 
 test("#2784 РУЧНІ КМ: 1…5 000 перераховують ставку лише обраного варіанта; 0, −5, 5 001, «abc» — 400", async () => {

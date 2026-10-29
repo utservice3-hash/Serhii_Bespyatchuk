@@ -8,8 +8,8 @@
  */
 export type LatLng = [number, number];
 
-/** Відрізок маршруту: км, хвилини, скільки км Молдовою, лінія для мапи. */
-export interface RoadLeg { km: number; minutes: number; moldovaKm: number; line: LatLng[] }
+/** Відрізок маршруту: км, хвилини, скільки км Молдовою, якими країнами (коди сервісу), лінія для мапи. */
+export interface RoadLeg { km: number; minutes: number; moldovaKm: number; countries: number[]; line: LatLng[] }
 
 export type OrsFailure = "no_key" | "no_route" | "quota" | "denied" | "timeout" | "network" | "bad_response" | `http_${number}`;
 /** Денний ліміт сервісу, як він сам його повідомляє в заголовках відповіді (Роман 29.10.2026: «виводити, скільки лишилось»). */
@@ -37,6 +37,8 @@ export interface OrsDeps { fetch: typeof fetch; key: string; timeoutMs?: number 
 export const ORS_URL = "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson";
 /** Код Молдови в `countryinfo` сервісу (заміряно 29.10.2026: Ізмаїл→Хмельницький дав країни 211 і 129). */
 export const ORS_MOLDOVA = 129;
+/** Код України (заміряно 29.10.2026: маршрути по Україні дають рівно [211]). */
+export const ORS_UKRAINE = 211;
 const TIMEOUT_MS = 8000;
 /** Скільки точок лінії лишаємо: мапі досить, а рядок у базі не роздувається (~5–15 КБ). */
 export const LINE_MAX_POINTS = 400;
@@ -56,9 +58,10 @@ export function parseOrsGeojson(j: unknown): RoadLeg | null {
   const dist = Number(f?.properties?.summary?.distance), dur = Number(f?.properties?.summary?.duration);
   const coords = f?.geometry?.coordinates;
   if (!Number.isFinite(dist) || dist <= 0 || !Number.isFinite(dur) || !Array.isArray(coords) || coords.length < 2) return null;
-  const md = (f?.properties?.extras?.countryinfo?.summary ?? [])
-    .filter((c) => Number(c.value) === ORS_MOLDOVA).reduce((s, c) => s + (Number(c.distance) || 0), 0);
-  return { km: Math.round(dist / 1000), minutes: Math.round(dur / 60), moldovaKm: Math.round(md / 1000), line: thinLine(coords as [number, number][]) };
+  const summary = f?.properties?.extras?.countryinfo?.summary ?? [];
+  const md = summary.filter((c) => Number(c.value) === ORS_MOLDOVA).reduce((s, c) => s + (Number(c.distance) || 0), 0);
+  const countries = [...new Set(summary.map((c) => Number(c.value)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+  return { km: Math.round(dist / 1000), minutes: Math.round(dur / 60), moldovaKm: Math.round(md / 1000), countries, line: thinLine(coords as [number, number][]) };
 }
 
 /** Код відповіді + текст → причина. «Quota exceeded» сервіс віддає і як 403, і як 429. */
@@ -69,8 +72,11 @@ export function failureOf(status: number, body: string): OrsFailure {
   return `http_${status}`;
 }
 
-/** Маршрут через точки (lat, lon). `avoidMoldova` — оминати Молдову (для варіанта «через Україну»). */
-export async function orsRoute(deps: OrsDeps, points: LatLng[], opts: { avoidMoldova?: boolean } = {}): Promise<OrsResult> {
+/**
+ * Маршрут через точки (lat, lon). `noBorders` — не перетинати ЖОДНОГО кордону (варіант «через Україну»). Не «оминати
+ * Молдову»: так сервіс об'їжджав Румунією (заміряно на проді 29.10.2026: Львів→Ізмаїл «через Україну» пішов через Сучаву).
+ */
+export async function orsRoute(deps: OrsDeps, points: LatLng[], opts: { noBorders?: boolean } = {}): Promise<OrsResult> {
   if (!deps.key) return { ok: false, reason: "no_key" };
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), deps.timeoutMs ?? TIMEOUT_MS);
@@ -79,7 +85,7 @@ export async function orsRoute(deps: OrsDeps, points: LatLng[], opts: { avoidMol
       method: "POST", signal: ctl.signal,
       headers: { Authorization: deps.key, "Content-Type": "application/json", Accept: "application/geo+json, application/json" },
       body: JSON.stringify({ coordinates: points.map(([lat, lon]) => [lon, lat]), extra_info: ["countryinfo"],
-        ...(opts.avoidMoldova ? { options: { avoid_countries: [ORS_MOLDOVA] } } : {}) }),
+        ...(opts.noBorders ? { options: { avoid_borders: "all" } } : {}) }),
     });
     const text = await r.text();
     const quota = r.headers ? parseQuota(r.headers) : null;
