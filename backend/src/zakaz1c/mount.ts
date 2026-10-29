@@ -23,7 +23,8 @@ import {
   CURRENCIES, buildCreateCustomerBody, buildCreateInvoiceBody, createCustomerIn1c, createInvoiceIn1c, customerInfoFrom1c,
   invoiceAllowed, invoicePdfFrom1c, itemVatsFor, kyivIso, orgRules, parseInvoiceForm, serviceSwaps, servicesFor, vatTypesFor,
 } from "./invoice.js";
-import { KOMMO_FIELDS, addLeadNote, attachPdfToLead, kommoUserName, loadLead, patchLeads } from "./kommoApi.js";
+import { KOMMO_FIELDS, addFileNote, addLeadNote, attachPdfToLead, kommoUserName, loadLead, patchLeads } from "./kommoApi.js";
+import { noteInvoice } from "./notes.js";
 import { invoiceOfLead, listInvoices, saveInvoice } from "./store.js";
 
 /** Чого 1С ще не вміє — показуємо у вікні словами (ТЗ Андрію 28.10.2026, пункти в дужках). */
@@ -135,15 +136,18 @@ export function buildZakaz1cRouter(): Router {
     let fileUuid: string | null = null;
     let attachError: string | null = null;
     if (!inv.existed && inv.pdf) {
+      let file: { uuid: string; versionUuid: string } | null = null;
       try {
-        fileUuid = await attachPdfToLead(leadId, inv.pdf.fileName, inv.pdf.bytes);
+        file = await attachPdfToLead(leadId, inv.pdf.fileName, inv.pdf.bytes);
+        fileUuid = file.uuid;
       } catch (e) {
         attachError = (e as Error).message.slice(0, 300);
       }
-      await addLeadNote(leadId, `${testMark(mode)}Рахунок 1С №${inv.numberPrint} від ${inv.date.slice(0, 10)} · ${inv.organization} · `
-        + `${inv.total} ${inv.currency}${attachError ? " · PDF не прикріпився, завантажте з вкладки" : ""}`).catch((e) => {
-        attachError = attachError ?? `примітка: ${(e as Error).message.slice(0, 200)}`;
-      });
+      // У стрічці — запис з PDF (як у макеті); не вдалося — текстовий, щоб рахунок не лишився без сліду в угоді.
+      const note = await noteInvoice({ testMode: mode === "test", numberPrint: inv.numberPrint, date: inv.date,
+        orgShort: orgs.find((o) => o.key === form.org)!.short, total: inv.total, currency: inv.currency }, file, {
+        fileNote: (f) => addFileNote(leadId, f), textNote: (t) => addLeadNote(leadId, t) });
+      if (note.kind !== "file") attachError = attachError ?? note.why;
     }
     // «Номер заказа» — лише коли Genesis вимкнено (ZAKAZ1C_FIELDS_MODE=live): поки він працює, це його поле.
     if (zakaz1cFieldsMode() === "live" && !inv.existed) {

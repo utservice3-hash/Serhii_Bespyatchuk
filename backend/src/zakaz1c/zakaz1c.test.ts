@@ -10,6 +10,8 @@ import {
 } from "./invoice.js";
 import { zakaz1cFieldsMode, zakaz1cMode } from "./env.js";
 import { BEFORE_PAID, PAID_STAGE, patchOf, planPayment, runPayments } from "./payments.js";
+import { invoiceCaption, noteInvoice } from "./notes.js";
+import { SERVICES } from "./invoice.js";
 
 /**
  * 🧾 «ТЕСТ ЗАКАЗ 1С» (26.10.2026, `zakaz1c/`). Без БД і мережі: межі модуля — чисті функції, і гейти ганяють рівно їх.
@@ -111,6 +113,15 @@ test("#7103 ФОРМА → 1С: валюта, організація, ПДВ, з
   assert.deepEqual([body.items[0].name, body.items[0].content, body.items[0].price, body.items[0].code],
     ["Організація міжнародного перевезення", "м. Praha (CZ) – м. Київ (Київська обл.)", 1800, "000000179"]);
   assert.equal(body.pdf, true);
+  // Кожна послуга — своїм кодом 1С (відповідь 1С 28.10.2026): за назвою «Експедиторські послуги» 1С не знаходить.
+  assert.deepEqual(SERVICES.map((x) => x.code), ["000000092", "000000008", "000000179", "000000252", "000000180"], "коди послуг не ті, що дала 1С");
+  const allSvc = parseInvoiceForm({ ...FORM, items: ["Організація перевезення за маршрутом", "Експедиторські послуги",
+    "Штрафні санкції за простій автомобільного транспорту"].map((service) => ({ service, route: "", qty: 1, price: 10, vat: 0 })) }, ctx);
+  assert.ok(allSvc.ok);
+  if (allSvc.ok) {
+    const codes = buildCreateInvoiceBody(1, allSvc.form, { customerUid: "u", manager: "", today: TODAY, orgCode: "000000004" }).items.map((i) => i.code);
+    assert.deepEqual(codes, ["000000008", "000000252", "000000180"], "код послуги загубився дорогою в 1С");
+  }
   // Чого 1С ще не приймає — не шлемо (і не вдаємо, що шлемо); воно лежить у формі для журналу.
   for (const k of ["act_date", "crm_comment", "bank_account", "deal_fields"]) assert.ok(!(k in raw), `${k} пішло в 1С, якої там ще немає`);
   assert.equal(p.form.actDate, "2026-10-30", "дату акту загублено, а не збережено для журналу");
@@ -304,4 +315,32 @@ test("#7113 КОНТРАГЕНТ: 8 цифр — ЄДРПОУ, 10 — ІПН Ф�
   assert.deepEqual([fopInfo.found, fopInfo.uid, legal.agreements[0].organization], [true, "U1", "ТОВ \"АвтоМув\""]);
   assert.equal((await customerInfoFrom1c("http://1c", "", fake)).found, false);
   assert.equal(urls.length, 2, "порожній код усе одно пішов у 1С");
+});
+
+const NOTE = { testMode: true, numberPrint: "9043", date: "2026-10-29T17:57:18", orgShort: "ЮТС", total: 1000, currency: "UAH" };
+
+test("#7114 PDF У СТРІЧЦІ: після рахунку — запис саме з файлом, у назві номер, дата, організація й сума", async () => {
+  assert.equal(invoiceCaption(NOTE), "[ТЕСТ] Рахунок 1С №9043 від 29.10.2026 · ЮТС · 1000 UAH");
+  assert.equal(invoiceCaption({ ...NOTE, testMode: false }).startsWith("Рахунок 1С №9043"), true, "у live лишилась мітка [ТЕСТ]");
+  const files: { uuid: string; versionUuid: string; name: string }[] = [], texts: string[] = [];
+  const r = await noteInvoice(NOTE, { uuid: "F1", versionUuid: "V1" }, { fileNote: async (f) => { files.push(f); }, textNote: async (t) => { texts.push(t); } });
+  assert.deepEqual(r, { kind: "file" });
+  assert.deepEqual(files, [{ uuid: "F1", versionUuid: "V1", name: "[ТЕСТ] Рахунок 1С №9043 від 29.10.2026 · ЮТС · 1000 UAH.pdf" }],
+    "у стрічку пішов не запис з файлом або без номера рахунку");
+  assert.deepEqual(texts, [], "поряд із записом з файлом пішов ще й текстовий — у стрічці буде дубль");
+  const mount = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "mount.ts"), "utf8");
+  assert.match(mount, /noteInvoice\(/, "створення рахунку не пише запис з файлом у стрічку");
+});
+
+test("#7115 ЗАПАСНИЙ ЗАПИС: файл не завантажився або Kommo відмовив у вкладенні — у стрічці однаково лишається текстовий слід", async () => {
+  const texts: string[] = [];
+  const t = async (x: string) => { texts.push(x); };
+  const noFile = await noteInvoice(NOTE, null, { fileNote: async () => { throw new Error("не має викликатись"); }, textNote: t });
+  assert.equal(noFile.kind, "text");
+  assert.match(texts[0], /№9043.*PDF не прикріпився/, "без PDF текстовий запис не каже, що файлу немає");
+  const refused = await noteInvoice(NOTE, { uuid: "F1", versionUuid: "" }, { fileNote: async () => { throw new Error("400"); }, textNote: t });
+  assert.equal(refused.kind, "text", "відмова Kommo у вкладенні не дала запасного текстового запису");
+  assert.equal(texts[1], "[ТЕСТ] Рахунок 1С №9043 від 29.10.2026 · ЮТС · 1000 UAH");
+  const none = await noteInvoice(NOTE, null, { fileNote: async () => undefined, textNote: async () => { throw new Error("500"); } });
+  assert.equal(none.kind, "none", "збій обох записів не повернувся як помилка — вікно сказало б, що все гаразд");
 });

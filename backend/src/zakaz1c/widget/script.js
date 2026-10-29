@@ -89,7 +89,8 @@ define(["jquery"], function ($) {
       + P + " .chip.test{background:var(--part);color:var(--partt);letter-spacing:.4px}"
       + P + " .steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}"
       + P + " .step{border:1px solid var(--line);border-radius:4px;padding:12px;background:var(--note);display:flex;flex-direction:column;gap:7px;min-width:0}"
-      + P + " .step .h{display:flex;justify-content:space-between;align-items:center;gap:6px;font-weight:700}"
+      + P + " .step .h{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px;font-weight:700}"
+      + P + " .step .h>span:first-child{white-space:nowrap}" + P + " .step .h>.chip{font-weight:400}"
       + P + " .step .big{font-size:18px;font-weight:700}"
       + P + " .step.done{border-color:var(--okt)}" + P + " .step.next{border-color:var(--acc)}"
       + P + " .meter{height:6px;background:var(--stage);border-radius:3px;overflow:hidden}" + P + " .meter i{display:block;height:100%;background:var(--okt)}"
@@ -143,8 +144,8 @@ define(["jquery"], function ($) {
       if (p.k === "paid") return { k: "ok", t: "оплачено" };
       if (p.k === "part") return { k: "part", t: "частково " + money(p.paid) };
       if (p.k === "overdue") return { k: "bad", t: "прострочено" };
-      if (p.k === "missing") return { k: "wait", t: "немає серед неоплачених у 1С" };
-      if (p.k === "pending") return { k: "wait", t: "оплата оновиться протягом години" };
+      if (p.k === "missing") return { k: "wait", t: "уточнити в бухгалтерії" };
+      if (p.k === "pending") return { k: "wait", t: "оновиться за годину" };
       return { k: "wait", t: "чекає оплату" };
     }
     function chip(c) { return "<span class='chip " + c.k + "'>" + esc(c.t) + "</span>"; }
@@ -176,20 +177,20 @@ define(["jquery"], function ($) {
     function steps() {
       var d = state.data, inv = lastInv();
       var s1 = inv
-        ? "<div class='step done'><div class='h'>1 · Рахунок " + chip({ k: "ok", t: "є" }) + "</div><div class='big'>№" + esc(inv.number_print) + "</div>"
+        ? "<div class='step done'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "ok", t: "є" }) + "</div><div class='big'>№" + esc(inv.number_print) + "</div>"
           + "<div class='mut'>" + esc(dmy(inv.invoice_date)) + " · " + esc(inv.organization) + " · " + money(inv.total) + " " + esc(inv.currency) + "</div>"
           + (inv.attach_error ? "<div class='mut'>PDF у файлах угоди немає — візьміть тут</div>" : "")
           + "<div class='row'>" + pdfBtns(inv) + "</div><div class='row'>" + editBtn(inv) + "</div>"
           + "<button class='btn link' disabled title='" + esc(d.waits.multi) + "' style='text-align:left'>+ ще рахунок</button></div>"
-        : "<div class='step next'><div class='h'>1 · Рахунок " + chip({ k: "wait", t: "немає" }) + "</div><div class='big'>—</div>"
+        : "<div class='step next'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "wait", t: "немає" }) + "</div><div class='big'>—</div>"
           + "<div class='mut'>Маршрут і суму підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (d.canCreate && d.onec.found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
       var p = inv ? inv.pay : null, paidAll = p && p.k === "paid";
       var ratio = inv && inv.total ? Math.min(100, Math.round(p.paid / inv.total * 100)) : 0;
-      var s2 = "<div class='step " + (paidAll ? "done" : inv ? "next" : "") + "'><div class='h'>2 · Оплата " + (inv ? chip(payChip(p)) : chip({ k: "wait", t: "чекає рахунок" })) + "</div>"
+      var s2 = "<div class='step " + (paidAll ? "done" : inv ? "next" : "") + "'><div class='h'><span>2 · Оплата</span>" + (inv ? chip(payChip(p)) : chip({ k: "wait", t: "чекає рахунок" })) + "</div>"
         + (inv ? "<div class='big'>" + money(p.paid) + " " + esc(inv.currency) + "</div><div class='mut'>із " + money(inv.total) + " " + esc(inv.currency) + "</div>"
           + "<div class='meter'><i style='width:" + ratio + "%'></i></div><div class='mut'>приходить з 1С сама, щогодини</div>"
           : "<div class='big'>—</div><div class='mut'>зʼявиться після рахунку</div>") + "</div>";
-      var s3 = "<div class='step'><div class='h'>3 · Документи " + chip({ k: "wait", t: "потім" }) + "</div>"
+      var s3 = "<div class='step'><div class='h'><span>3 · Документи</span>" + chip({ k: "wait", t: "потім" }) + "</div>"
         + "<div class='mut'>" + esc(d.waits.docs) + "</div><div class='row'>"
         + "<button class='btn sm dash' disabled title='Зʼявиться, коли бухгалтерія проведе реалізацію в 1С'>ТТН</button>"
         + "<button class='btn sm dash' disabled title='Зʼявиться, коли бухгалтерія проведе реалізацію в 1С'>Акт</button></div></div>";
