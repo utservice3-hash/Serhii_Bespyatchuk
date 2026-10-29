@@ -19,6 +19,8 @@ import { OfferBox, OFFER_STATE } from "./HiringOffer";
 
 /** 📝 Коротка мітка тесту для таблиці: «Тест: Логістика» → «Логістика» (повна назва — у підказці). */
 const quizShort = (t: string) => t.replace(/^Тест:\s*/i, "");
+/** 🖥 Як людина вийшла з тесту — словами для HR і тімліда. */
+const QUIZ_EXIT: Record<string, string> = { fullscreen_exit: "повний екран", tab_hidden: "інша вкладка / згорнув", window_blur: "інша програма" };
 /** Стан тесту одним рядком і тоном: склав / не склав (спроби) / ще не проходив. */
 function quizLine(q: QuizSummary): [string, string] {
   if (q.passed) return [`${q.bestPct}%`, "ok"];
@@ -492,7 +494,13 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
                     return (
                       <li key={q.materialId} className={q.passed ? "done" : ""}>
                         <span className="ic">{q.passed ? "✓" : q.used ? "✗" : "•"}</span>
-                        <span>{q.title} <span className={`hr-pill ${tone}`}>{q.passed ? `складено · ${t}` : q.used ? `не складено · ${t}` : "ще не проходив"}</span></span>
+                        <span>{q.title} <span className={`hr-pill ${tone}`}>{q.passed ? `складено · ${t}` : q.used ? `не складено · ${t}` : "ще не проходив"}</span>
+                          {/* 🖥 Вихід із тесту (28.10.2026): скільки спроб не зараховано через це і коли виходили. */}
+                          {!!q.endedByViolations && <span className="hr-pill dg" style={{ marginLeft: 6 }}>не зараховано через вихід із тесту{q.endedByViolations > 1 ? ` ×${q.endedByViolations}` : ""}</span>}
+                          {!!q.lastViolations?.length && <div className="hr-muted" style={{ fontSize: 12 }}>
+                            Виходи з тесту: {q.lastViolations.map((v) => `${new Date(v.at).toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" })} — ${QUIZ_EXIT[v.kind]}`).join(" · ")}
+                          </div>}
+                        </span>
                         <span>{canGrant
                           ? <button className="hr-btn" onClick={async () => {
                               const why = await dlg.prompt({ title: "Ще одна спроба", label: `${q.title}: причина (не обовʼязково)`, placeholder: "Наприклад: переглянув уроки разом з тімлідом", okLabel: "Дати спробу" });

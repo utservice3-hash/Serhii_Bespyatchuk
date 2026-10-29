@@ -23,7 +23,40 @@ export interface QuizQuestion {
   correct: number[] | { value: number; tol: number };
   explanation: string | null;
   sourceTitle: string | null;
+  /** Секунд на відповідь (28.10.2026). Не менше `QUIZ_MIN_LIMIT_SEC`. */
+  timeLimitSec: number;
 }
+
+/**
+ * ⏱ ЛІМІТ ЧАСУ НА ПИТАННЯ (28.10.2026, Роман: «30 секунд — це мінімум на питання»; розрахунок — 60 с).
+ * Час рахує СЕРВЕР від моменту, коли видав питання, — таймер на екрані лише показує залишок. Інакше оновлення
+ * сторінки чи годинник браузера обнуляли б ліміт. `QUIZ_GRACE_SEC` — запас на дорогу відповіді мережею, не на думання.
+ */
+export const QUIZ_MIN_LIMIT_SEC = 30;
+export const QUIZ_MAX_LIMIT_SEC = 600;
+export const QUIZ_GRACE_SEC = 3;
+
+/** Ліміт за замовчуванням: питання з розрахунком (число) — 60 с, решта — 30 с. */
+export const defaultLimitSec = (kind: QuizKind): number => (kind === "number" ? 60 : QUIZ_MIN_LIMIT_SEC);
+
+/** Чи годиться ліміт з редактора: ціле число секунд від 30 до 600. */
+export function limitVerdict(raw: unknown): { ok: true; sec: number } | { ok: false; reason: string } {
+  const sec = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+  if (typeof sec !== "number" || !Number.isInteger(sec)) return { ok: false, reason: "Ліміт — ціле число секунд" };
+  if (sec < QUIZ_MIN_LIMIT_SEC) return { ok: false, reason: `Ліміт не менше ${QUIZ_MIN_LIMIT_SEC} секунд` };
+  if (sec > QUIZ_MAX_LIMIT_SEC) return { ok: false, reason: `Ліміт не більше ${QUIZ_MAX_LIMIT_SEC} секунд` };
+  return { ok: true, sec };
+}
+
+/** Скільки секунд ішла відповідь і чи запізнилась вона (понад ліміт + запас на мережу). */
+export function answerTiming(shownAt: Date, now: Date, limitSec: number): { sec: number; late: boolean } {
+  const sec = Math.max(0, Math.round((now.getTime() - shownAt.getTime()) / 100) / 10);
+  return { sec, late: sec > limitSec + QUIZ_GRACE_SEC };
+}
+
+/** Залишок секунд на питання для екрана (ціле, не менше нуля). */
+export const remainingSec = (shownAt: Date, now: Date, limitSec: number): number =>
+  Math.max(0, Math.ceil(limitSec - (now.getTime() - shownAt.getTime()) / 1000));
 
 /** Відповідь кандидата: індекс (`one`), масив індексів (`multi`), рядок або число (`number`). */
 export type QuizAnswer = number | number[] | string | null | undefined;
@@ -118,19 +151,53 @@ export function publicQuestion(q: QuizQuestion, order: number[] | null): PublicQ
   return { id: q.id, kind: q.kind, text: q.text, options: opts };
 }
 
-/** Результат по питанню для екрана після спроби: пояснення й урок — ЛИШЕ для помилок; правильного варіанта немає. */
-export interface QuestionResult { id: number; text: string; ok: boolean; explanation: string | null; source: string | null }
+/**
+ * Результат по питанню для екрана після спроби: пояснення й урок — ЛИШЕ для помилок; правильного варіанта немає.
+ * `late` — відповідь прийшла після ліміту часу: зараховано як неправильну, хоч би якою вона була.
+ */
+export interface QuestionResult { id: number; text: string; ok: boolean; late: boolean; explanation: string | null; source: string | null }
 
 export function gradePlan(plan: readonly AttemptPlan[], byId: ReadonlyMap<number, QuizQuestion>,
-  answers: Readonly<Record<string, QuizAnswer>>): { marks: boolean[]; results: QuestionResult[] } {
+  answers: Readonly<Record<string, QuizAnswer>>, late: ReadonlySet<number> = new Set()): { marks: boolean[]; results: QuestionResult[] } {
   const marks: boolean[] = [];
   const results: QuestionResult[] = [];
   for (const p of plan) {
     const q = byId.get(p.questionId);
-    const ok = q ? gradeAnswer(q, answers[String(p.questionId)]) : false;
+    const isLate = late.has(p.questionId);
+    const ok = q && !isLate ? gradeAnswer(q, answers[String(p.questionId)]) : false;
     marks.push(ok);
-    results.push({ id: p.questionId, text: q?.text ?? "", ok,
+    results.push({ id: p.questionId, text: q?.text ?? "", ok, late: isLate,
       explanation: ok ? null : q?.explanation ?? null, source: ok ? null : q?.sourceTitle ?? null });
   }
   return { marks, results };
+}
+
+/**
+ * 🖥 ПОВНИЙ ЕКРАН І ВИХІД ІЗ ТЕСТУ (28.10.2026, Роман: «на весь екран, і не можна переключатися між вкладками…
+ * спочатку 2 попередження, і на 3 раз уже пише тест як не вдалий»).
+ * Порушення — вийти з повного екрана, перейти на іншу вкладку чи згорнути, перемкнутись в іншу програму довше 2 с.
+ * Лічильник веде СЕРВЕР (екран можна перезавантажити). Одне «виходження» часто дає кілька подій браузера одразу
+ * (вкладка + повний екран + фокус), тому подія ближче ніж за `QUIZ_VIOLATION_DEDUPE_SEC` до попередньої — та сама.
+ * ⚠️ Браузер не забороняє перемкнутись — лише помічає це; телефон поруч не ловиться ніяк.
+ */
+export const QUIZ_VIOLATION_KINDS = ["fullscreen_exit", "tab_hidden", "window_blur"] as const;
+export type QuizViolationKind = (typeof QUIZ_VIOLATION_KINDS)[number];
+export const QUIZ_VIOLATION_LABEL: Record<QuizViolationKind, string> = {
+  fullscreen_exit: "вийшов із повного екрана",
+  tab_hidden: "перейшов на іншу вкладку чи згорнув браузер",
+  window_blur: "перемкнувся в іншу програму",
+};
+/** Скільки порушень завершує спробу як не складену: два попередження, третє — кінець. */
+export const QUIZ_VIOLATION_LIMIT = 3;
+export const QUIZ_VIOLATION_DEDUPE_SEC = 2;
+
+export const isViolationKind = (x: unknown): x is QuizViolationKind => (QUIZ_VIOLATION_KINDS as readonly unknown[]).includes(x);
+
+/** Чи нова подія — окреме порушення, а не відлуння попереднього «виходження». */
+export const countsAsNewViolation = (lastAt: Date | null, now: Date): boolean =>
+  !lastAt || now.getTime() - lastAt.getTime() >= QUIZ_VIOLATION_DEDUPE_SEC * 1000;
+
+/** Після `count` порушень: чи спроба завершується, і скільки попереджень ще лишилось. */
+export function violationVerdict(count: number): { fail: boolean; warningsLeft: number } {
+  return { fail: count >= QUIZ_VIOLATION_LIMIT, warningsLeft: Math.max(0, QUIZ_VIOLATION_LIMIT - 1 - count) };
 }
