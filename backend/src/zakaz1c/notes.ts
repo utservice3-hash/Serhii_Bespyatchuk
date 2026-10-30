@@ -16,6 +16,8 @@ export interface InvoiceNoteInput {
   orgShort: string;
   total: number;
   currency: string;
+  /** «Змінити» (`updateInvoice`): той самий номер, новий PDF — позначаємо, щоб у стрічці було видно, що це не новий рахунок. */
+  edited?: boolean;
 }
 
 const dmy = (iso: string) => {
@@ -25,7 +27,7 @@ const dmy = (iso: string) => {
 
 /** Підпис рахунку — і назва файлу в стрічці, і текст запасного запису. */
 export function invoiceCaption(n: InvoiceNoteInput): string {
-  return `${n.testMode ? "[ТЕСТ] " : ""}Рахунок 1С №${n.numberPrint} від ${dmy(n.date)} · ${n.orgShort} · ${n.total} ${n.currency}`;
+  return `${n.testMode ? "[ТЕСТ] " : ""}Рахунок 1С №${n.numberPrint} від ${dmy(n.date)} · ${n.orgShort} · ${n.total} ${n.currency}${n.edited ? " · змінено" : ""}`;
 }
 
 export type NoteResult = { kind: "file" } | { kind: "text"; why: string } | { kind: "none"; why: string };

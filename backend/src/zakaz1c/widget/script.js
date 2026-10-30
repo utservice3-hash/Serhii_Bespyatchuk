@@ -6,8 +6,9 @@
  * Вигляд — варіант А макета, який погодив Сергій 27.10.2026 (https://claude.ai/artifact/4oa6EJoR194rGWeszf93VP):
  * три плитки «Рахунок → Оплата → Документи», форма відкривається кнопкою «Виставити рахунок». Правила форми
  * (організації, ПДВ, послуги, дати) приходять із сервера, і сервер перевіряє їх ще раз — вікно лише підказує.
- * Чого 1С ще не вміє (другий рахунок, зміна, акт) — кнопки сірі, причина словами з сервера (`waits`). ТТН у вікні немає:
- * її формують у Конструкторі дашборда (рішення Романа 30.10.2026 — 1С ТТН автоматично не друкує).
+ * Версія 0.4 (доробки 1С від 29.10.2026): кілька рахунків в угоді (кожна форма — свій `requestId`), «Змінити» в день
+ * виставлення без оплати, ФОП Беспятчук з вибором банку з 1С, акт з реалізації. В угоді, яку веде Genesis, вікно рахунку
+ * не виставляє (одна угода — одна система). ТТН у вікні немає: її формують у Конструкторі дашборда (Роман, 30.10.2026).
  *
  * Вкладка — прийом Genesis (розібрано 23.10.2026): `card_sdk` + `lcard-0`, `loadPreloadedData` повертає ОБʼЄКТ `{}`
  * (тоді Kommo тримає вкладку постійно), а вміст малюємо в контейнер `#<widget_code>`. Кому не можна — повертаємо `[]`,
@@ -122,12 +123,39 @@ define(["jquery"], function ($) {
     function lastInv() { return invoices()[0] || null; }
     function routeOf(lead) { return lead.cityFrom && lead.cityTo ? lead.cityFrom + " – " + lead.cityTo : ""; }
 
+    /** Ключ форми для 1С (`request_id`): одна відкрита форма — один рахунок, хоч скільки разів натиснуто «Виставити». */
+    function uuid() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+        var r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3 | 8)).toString(16);
+      });
+    }
+    /** Банки організації у валюті форми; основний — першим, щоб підставлявся сам. */
+    function banksFor(o, cur) {
+      return (o.banks || []).filter(function (b) { return b.currency === cur; })
+        .sort(function (a, b) { return (b.isMain ? 1 : 0) - (a.isMain ? 1 : 0); });
+    }
+    function defaultBank(o, cur) { var b = banksFor(o, cur).filter(function (x) { return x.isMain; })[0]; return b ? b.uid : ""; }
+
     function newForm() {
       var d = state.data, o = d.orgs.filter(function (x) { return x.available; })[0] || d.orgs[0];
       return {
-        org: o.key, currency: "UAH", bank: "", agreement: "", vatType: o.vatTypes[0], dueDate: addDays(d.today, 7), actDate: "",
+        requestId: uuid(), editUid: null,
+        org: o.key, currency: "UAH", bankUid: defaultBank(o, "UAH"), agreement: "", vatType: o.vatTypes[0], dueDate: addDays(d.today, 7), actDate: "",
         crmComment: "", stamp: true,
         items: [{ service: o.services[0], route: routeOf(d.lead), qty: 1, price: d.lead.price || "", vat: o.itemVats[0] }]
+      };
+    }
+    /** «Змінити»: та сама форма з даними рахунку з журналу. Організація й валюта зафіксовані (так і в 1С). */
+    function editForm(inv) {
+      var o = orgOf(inv.org_key) || state.data.orgs[0];
+      var items = (inv.items || []).map(function (it) { return { service: it.service, route: it.route, qty: it.qty, price: it.price, vat: it.vat }; });
+      return {
+        requestId: "", editUid: inv.invoice_uid, editNo: inv.number_print,
+        org: o.key, currency: inv.currency, bankUid: inv.bank_uid || defaultBank(o, inv.currency), agreement: inv.agreement_uid || "",
+        vatType: inv.vat_type && o.vatTypes.indexOf(inv.vat_type) !== -1 ? inv.vat_type : o.vatTypes[0],
+        dueDate: inv.due_date || "", actDate: inv.act_date || "", crmComment: inv.crm_comment || "", stamp: inv.stamp !== false,
+        items: items.length ? items : [{ service: o.services[0], route: "", qty: 1, price: inv.total, vat: o.itemVats[0] }]
       };
     }
 
@@ -170,9 +198,13 @@ define(["jquery"], function ($) {
         + "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='0'>без печатки</button>";
     }
     function editBtn(inv) {
-      return inv.can_edit
-        ? "<button class='btn sm dash' disabled title='" + esc(state.data.waits.update) + "'>Змінити</button>"
-        : "<button class='btn sm' data-z1c='req' data-uid='" + esc(inv.invoice_uid) + "' title='Після дня виставлення або після оплати рахунок змінює бухгалтерія'>Запит бухгалтерії</button>";
+      return inv.can_edit && state.data.owner !== "genesis"
+        ? "<button class='btn sm' data-z1c='edit' data-uid='" + esc(inv.invoice_uid) + "' title='Сьогодні й поки немає оплати рахунок можна виправити: номер лишиться той самий'>Змінити</button>"
+        : "<button class='btn sm' data-z1c='req' data-uid='" + esc(inv.invoice_uid) + "' title='" + esc(state.data.waits.edit) + "'>Запит бухгалтерії</button>";
+    }
+    function actBtns(inv) {
+      return "<button class='btn sm' data-z1c='act' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='1' title='" + esc(state.data.waits.docs) + "'>Акт</button>"
+        + "<button class='btn sm' data-z1c='act' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='0'>Акт без печатки</button>";
     }
 
     function steps() {
@@ -182,7 +214,7 @@ define(["jquery"], function ($) {
           + "<div class='mut'>" + esc(dmy(inv.invoice_date)) + " · " + esc(inv.organization) + " · " + money(inv.total) + " " + esc(inv.currency) + "</div>"
           + (inv.attach_error ? "<div class='mut'>PDF у файлах угоди немає — візьміть тут</div>" : "")
           + "<div class='row'>" + pdfBtns(inv) + "</div><div class='row'>" + editBtn(inv) + "</div>"
-          + "<button class='btn link' disabled title='" + esc(d.waits.multi) + "' style='text-align:left'>+ ще рахунок</button></div>"
+          + "<button class='btn link' data-z1c='open'" + (d.canCreate && d.onec.found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button></div>"
         : "<div class='step next'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "wait", t: "немає" }) + "</div><div class='big'>—</div>"
           + "<div class='mut'>Маршрут і суму підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (d.canCreate && d.onec.found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
       var p = inv ? inv.pay : null, paidAll = p && p.k === "paid";
@@ -191,9 +223,9 @@ define(["jquery"], function ($) {
         + (inv ? "<div class='big'>" + money(p.paid) + " " + esc(inv.currency) + "</div><div class='mut'>із " + money(inv.total) + " " + esc(inv.currency) + "</div>"
           + "<div class='meter'><i style='width:" + ratio + "%'></i></div><div class='mut'>приходить з 1С сама, щогодини</div>"
           : "<div class='big'>—</div><div class='mut'>зʼявиться після рахунку</div>") + "</div>";
-      var s3 = "<div class='step'><div class='h'><span>3 · Документи</span>" + chip({ k: "wait", t: "потім" }) + "</div>"
-        + "<div class='mut'>" + esc(d.waits.docs) + "</div><div class='row'>"
-        + "<button class='btn sm dash' disabled title='Зʼявиться, коли бухгалтерія проведе реалізацію в 1С'>Акт</button></div></div>";
+      var s3 = "<div class='step'><div class='h'><span>3 · Документи</span>" + chip({ k: "wait", t: inv ? "після реалізації" : "потім" }) + "</div>"
+        + "<div class='mut'>" + esc(d.waits.docs) + "</div>"
+        + (inv ? "<div class='row'>" + actBtns(inv) + "</div>" : "") + "</div>";
       return "<div class='steps'>" + s1 + s2 + s3 + "</div>";
     }
 
@@ -213,10 +245,15 @@ define(["jquery"], function ($) {
 
     function formHtml() {
       var d = state.data, f = state.form, o = orgOf(f.org), t = calc(f);
-      var orgSeg = seg("org", d.orgs.map(function (x) { return { v: x.key, t: x.short, off: !x.available, title: x.waits }; }), f.org);
-      var curSeg = seg("cur", d.currencies.map(function (c) { return { v: c, t: c }; }), f.currency);
+      var locked = !!f.editUid;
+      var orgSeg = seg("org", d.orgs.map(function (x) {
+        return { v: x.key, t: x.short, off: !x.available || (locked && x.key !== f.org), title: locked ? "Організацію рахунку змінити не можна" : x.waits };
+      }), f.org);
+      var curSeg = seg("cur", d.currencies.map(function (c) { return { v: c, t: c, off: locked && c !== f.currency, title: locked ? "Валюту рахунку змінити не можна" : "" }; }), f.currency);
+      var bl = o.banks ? banksFor(o, f.currency) : [];
       var bankSeg = o.banks ? "<div><span class='lbl'>Рахунок " + esc(o.short) + ", на який платить клієнт</span>"
-        + seg("bank", o.banks.map(function (b) { return { v: b, t: b }; }), f.bank) + "</div>" : "";
+        + (bl.length ? seg("bank", bl.map(function (b) { return { v: b.uid, t: b.label }; }), f.bankUid) : "<span class='mut'>у " + esc(f.currency) + " рахунку немає</span>")
+        + (f.bankUid ? "" : "<span class='hint'>оберіть, без цього рахунок не виставиться</span>") + "</div>" : "";
       var agrs = agreementsFor(f);
       var agrSel = "<select class='in' data-k='agreement'><option value=''>" + (agrs.length ? "основний (1С обере сама)" : "немає — 1С створить основний") + "</option>"
         + agrs.map(function (a) { return "<option value='" + esc(a.value) + "'" + (f.agreement === a.value ? " selected" : "") + ">" + esc(a.label) + "</option>"; }).join("") + "</select>";
@@ -234,7 +271,8 @@ define(["jquery"], function ($) {
           + "<label><span class='lbl'>ПДВ</span><select class='in' data-i='" + i + "' data-f='vat'" + (o.itemVats.length < 2 ? " disabled" : "") + ">" + o.itemVats.map(function (r) {
             return "<option value='" + r + "'" + (Number(it.vat) === r ? " selected" : "") + ">" + r + "%</option>"; }).join("") + "</select></label></div></div>";
       }).join("");
-      return "<div class='formbox'><div class='row between'><b>Новий рахунок</b><button class='x' data-z1c='close' aria-label='Закрити'>✕</button></div>"
+      return "<div class='formbox'><div class='row between'><b>" + (locked ? "Зміна рахунку №" + esc(f.editNo) : invoices().length ? "Ще один рахунок" : "Новий рахунок")
+        + "</b><button class='x' data-z1c='close' aria-label='Закрити'>✕</button></div>"
         + "<div class='row between'><div><span class='lbl'>Від кого виставляємо</span>" + orgSeg + "</div><div><span class='lbl'>Валюта</span>" + curSeg + "</div></div>" + bankSeg
         + "<div class='grid'><label><span class='lbl'>Договір (з 1С)</span>" + agrSel + "</label><label><span class='lbl'>ПДВ</span>" + vatSel + "</label>"
         + "<div><span class='lbl'>Дата рахунку</span><div class='in ro' title='Рахунок завжди виставляється поточним числом'>" + esc(dmy(d.today)) + " · сьогодні</div></div>"
@@ -248,7 +286,7 @@ define(["jquery"], function ($) {
         + "<div class='prev'><span class='lbl' style='margin:0'>Так піде в 1С, як зараз із Genesis:</span><span>Комментарий: <b>" + esc(d.managerName ? d.managerName + ", " : "")
         + "Загружен из amoCRM по сделке №" + esc(d.lead.id) + "</b></span></div>"
         + "<div class='row between'><div class='tot' data-z1c-tot>" + totHtml(t, f) + "</div><span class='row'><button class='btn' data-z1c='close'>Скасувати</button>"
-        + "<button class='btn main' data-z1c='submit'" + (state.busy ? " disabled" : "") + ">" + (state.busy ? "Відправляємо в 1С…" : "Виставити в 1С") + "</button></span></div></div>";
+        + "<button class='btn main' data-z1c='submit'" + (state.busy ? " disabled" : "") + ">" + (state.busy ? "Відправляємо в 1С…" : locked ? "Зберегти зміни в 1С" : "Виставити в 1С") + "</button></span></div></div>";
     }
     function totHtml(t, f) {
       return "Сума <b>" + money(t.sub) + "</b>"
@@ -285,7 +323,7 @@ define(["jquery"], function ($) {
         + (many ? "<div style='margin-top:16px'><b>Усі рахунки угоди</b><table><tr><th>№</th><th>Дата</th><th>Організація</th><th>Сума</th><th>Оплата</th><th></th></tr>"
           + invoices().map(function (i) {
             return "<tr><td><b>" + esc(i.number_print) + "</b></td><td>" + esc(dmy(i.invoice_date)) + "</td><td>" + esc(i.organization) + "</td><td>" + money(i.total) + " " + esc(i.currency)
-              + "</td><td>" + chip(payChip(i.pay)) + "</td><td><span class='row' style='gap:6px'>" + pdfBtns(i) + editBtn(i) + "</span></td></tr>";
+              + "</td><td>" + chip(payChip(i.pay)) + "</td><td><span class='row' style='gap:6px'>" + pdfBtns(i) + editBtn(i) + actBtns(i) + "</span></td></tr>";
           }).join("") + "</table></div>" : "")
         + modalHtml() + "</div>");
     }
@@ -307,13 +345,15 @@ define(["jquery"], function ($) {
       if (state.busy || !state.form) return;
       var f = state.form, o = orgOf(f.org);
       if (!o.available) { say("err", o.waits); render(); return; }
-      if (o.banks && !f.bank) { say("err", "Оберіть рахунок " + o.short + ": " + o.banks.join(" чи ") + "."); render(); return; }
+      if (o.banks && !f.bankUid) { say("err", "Оберіть рахунок " + o.short + ", на який платить клієнт."); render(); return; }
       if (f.dueDate && f.dueDate < state.data.today) { say("err", "«Оплатити до» не може бути в минулому."); render(); return; }
       state.busy = true; state.msg = null; render();
-      api("POST", "/lead/" + leadId() + "/invoice", f).then(function (r) {
+      var edit = !!f.editUid;
+      api("POST", "/lead/" + leadId() + "/invoice" + (edit ? "/" + f.editUid + "/update" : ""), f).then(function (r) {
         var inv = r.invoice;
-        say(inv.existed || !r.attached || (inv.warnings && inv.warnings.length) ? "warn" : "ok",
-          (inv.existed ? "У 1С уже був рахунок цієї угоди: " : "Рахунок ") + "№" + inv.number + " · " + inv.organization + " · " + money(inv.total) + " " + inv.currency
+        say(inv.existed && !edit || !r.attached || (inv.warnings && inv.warnings.length) ? "warn" : "ok",
+          (edit ? "Рахунок змінено: " : inv.existed ? "Цей рахунок уже виставлено: " : "Рахунок ") + "№" + inv.number + (inv.organization ? " · " + inv.organization : "")
+          + " · " + money(inv.total) + " " + inv.currency
           + (r.attached ? " · PDF у файлах угоди" : (inv.existed ? "" : " · PDF не прикріпився: " + (r.attachError || "")))
           + (inv.warnings && inv.warnings.length ? " · " + inv.warnings.join("; ") : ""));
         state.form = null;
@@ -342,7 +382,7 @@ define(["jquery"], function ($) {
         var a = document.createElement("a");
         a.href = url; a.download = r.fileName; document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
-      }).catch(function (e) { say("err", e.message); render(); });
+      }).catch(function (e) { say(/^Акт ще не сформовано/.test(e.message) ? "warn" : "err", e.message); render(); });
     }
 
     function sendRequest() {
@@ -374,21 +414,30 @@ define(["jquery"], function ($) {
       e.preventDefault();
       if (b.prop("disabled")) return;
       if (a === "open") { state.form = newForm(); state.msg = null; }
+      else if (a === "edit") {
+        var ei = invoices().filter(function (x) { return x.invoice_uid === String(b.data("uid")); })[0];
+        if (ei) { state.form = editForm(ei); state.msg = null; }
+      }
       else if (a === "close") state.form = null;
       else if (a === "org") {
         var o = orgOf(String(b.data("v")));
+        if (f.editUid && o.key !== f.org) { say("warn", "Організацію рахунку змінити не можна — виставте новий рахунок."); render(); return; }
         if (!o.available) { say("warn", o.waits); render(); return; }
-        f.org = o.key; f.bank = ""; f.agreement = ""; f.vatType = o.vatTypes[0];
+        f.org = o.key; f.bankUid = defaultBank(o, f.currency); f.agreement = ""; f.vatType = o.vatTypes[0];
         f.items.forEach(function (it) { if (o.services.indexOf(it.service) === -1) it.service = o.services[0]; it.vat = o.itemVats[0]; });
         state.msg = null;
       }
-      else if (a === "cur") { f.currency = String(b.data("v")); f.agreement = ""; }
-      else if (a === "bank") f.bank = String(b.data("v"));
+      else if (a === "cur") {
+        if (f.editUid && String(b.data("v")) !== f.currency) { say("warn", "Валюту рахунку змінити не можна — виставте новий рахунок."); render(); return; }
+        f.currency = String(b.data("v")); f.agreement = ""; f.bankUid = defaultBank(orgOf(f.org), f.currency);
+      }
+      else if (a === "bank") f.bankUid = String(b.data("v"));
       else if (a === "add") { var oo = orgOf(f.org); f.items.push({ service: oo.services[0], route: "", qty: 1, price: "", vat: oo.itemVats[0] }); }
       else if (a === "rm") f.items.splice(Number(b.data("i")), 1);
       else if (a === "submit") { submit(); return; }
       else if (a === "customer") { createCustomer(); return; }
       else if (a === "pdf") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/pdf?stamp=" + b.data("stamp"), "application/pdf"); return; }
+      else if (a === "act") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/act?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "req") state.modal = { uid: String(b.data("uid")), text: "" };
       else if (a === "mclose") state.modal = null;
       else if (a === "reqsend") { sendRequest(); return; }

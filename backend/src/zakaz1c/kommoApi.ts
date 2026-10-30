@@ -59,6 +59,9 @@ export interface LeadForInvoice {
   car: string;
   cityFrom: string;
   cityTo: string;
+  /** «Номер заказа» — його пише Genesis одразу після рахунку; ознака «угоду веде Genesis» (`owner.ts`). */
+  orderNo: string;
+  tags: string[];
   company: { id: number; name: string; edrpou: string } | null;
 }
 
@@ -79,6 +82,8 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
     car: cfText(l.custom_fields_values, KOMMO_FIELDS.leadCar),
     cityFrom: cfText(l.custom_fields_values, KOMMO_FIELDS.leadCityFrom),
     cityTo: cfText(l.custom_fields_values, KOMMO_FIELDS.leadCityTo),
+    orderNo: cfText(l.custom_fields_values, KOMMO_FIELDS.leadOrderNo),
+    tags: Array.isArray(l?._embedded?.tags) ? l._embedded.tags.map((t: any) => String(t?.name ?? "")) : [],
     company,
   };
 }
@@ -128,6 +133,8 @@ export interface LeadPatch {
   custom_fields_values?: { field_id: number; values: { value: string | boolean }[] }[];
   status_id?: number;
   pipeline_id?: number;
+  /** Додати теги, не чіпаючи наявних (Kommo v4: `tags_to_add`; `_embedded.tags` замінив би всі). */
+  tags_to_add?: { name: string }[];
 }
 
 /** Пакетне оновлення угод (до 50 за запит, як дозволяє Kommo). Помилка — разом із відповіддю Kommo. */

@@ -6748,6 +6748,14 @@ ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS due_date DATE;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_date DATE;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS bank TEXT;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS crm_comment TEXT;
+-- Версія 0.4 (30.10.2026, доробки 1С від 29.10): ключ форми (кілька рахунків в угоді), договір і банк для «Змінити»,
+-- лічильник змін, печатка, і де лежить акт у файлах угоди (кладемо один раз).
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS agreement_uid TEXT;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS bank_uid TEXT;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS stamp BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS edits INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_file_uuid TEXT;
 REVOKE ALL ON zakaz_onec_invoices FROM ai_readonly;
 -- 💸 «ТЕСТ ЗАКАЗ 1С» — план оплат 1С → угоди Kommo (`zakaz1c/payments.ts`, 27.10.2026). Що МАЄ бути в «Оплачено 1с» /
 -- «Оплачено из 1с» / етапі за правилом власника, поруч — що записав Genesis (`genesis_paid1c`, де є) для звірки до

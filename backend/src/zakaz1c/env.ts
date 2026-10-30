@@ -30,13 +30,17 @@ export function zakaz1cMode(env: NodeJS.ProcessEnv = process.env): Zakaz1cMode {
 }
 
 /**
- * Запис у поля й етапи, які зараз веде Genesis («Номер заказа», «Оплачено 1с», «Оплачено из 1с», етап
- * «Оплата отримана»). `off` (типово) — лише рахуємо й пишемо в журнал «що записали б»; `live` — пишемо в Kommo.
- * Вмикається, коли вимикають Genesis: поки він працює, два записувачі в ті самі поля перетирали б одне одного.
+ * Запис оплат у поля й етап, які зараз веде Genesis («Оплачено 1с», «Оплачено из 1с», етап «Оплата отримана»):
+ *   `off` (типово) — лише рахуємо й пишемо в журнал «що записали б»;
+ *   `own` — пишемо ЛИШЕ в угоди, які веде віджет («одна угода — одна система», Роман 28.10.2026): там Genesis не пише,
+ *           бо рахунків віджета немає в його регістрі. Угоди Genesis не чіпаємо;
+ *   `live` — пишемо в усі угоди з оплатами; лише коли Genesis вимкнено.
+ * `own` вмикаємо, коли 1С підтвердить, що оплати угоди (`paydata`) знаходяться за `idAMO`.
  */
-export type Zakaz1cFieldsMode = "off" | "live";
+export type Zakaz1cFieldsMode = "off" | "own" | "live";
 export function zakaz1cFieldsMode(env: NodeJS.ProcessEnv = process.env): Zakaz1cFieldsMode {
-  return str(env.ZAKAZ1C_FIELDS_MODE).toLowerCase() === "live" ? "live" : "off";
+  const m = str(env.ZAKAZ1C_FIELDS_MODE).toLowerCase();
+  return m === "live" || m === "own" ? m : "off";
 }
 
 /** Kommo user id тестувальників (через кому). У режимі test — єдині, кому відкрито створення рахунку. */

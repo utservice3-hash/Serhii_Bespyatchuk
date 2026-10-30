@@ -2,8 +2,10 @@
  * 🧾 «ТЕСТ ЗАКАЗ 1С» — роутер модуля (`/api/zakaz1c`). Усе, що стосується заміни Genesis, живе в теці `zakaz1c/`:
  *   env.ts       — перемикач off/test/live, тестувальники, секрет і токен інтеграції;
  *   kommoAuth.ts — вхід за підписом Kommo (`X-Auth-Token` від `$authorizedAjax`), без сесії дашборда;
- *   invoice.ts   — правила вікна → `POST /createInvoice` 1С, PDF `invoicePdf`, контрагент, стан оплати;
- *   kommoApi.ts  — угода/компанія/менеджер з Kommo, PDF у файли угоди, примітка;
+ *   invoice.ts   — правила вікна → 1С (`createInvoice`, `updateInvoice`, `invoicePdf`, `realizationPdf`, `organizations`);
+ *   owner.ts     — хто веде угоду: Genesis чи віджет («одна угода — одна система»);
+ *   kommoApi.ts  — угода/компанія/менеджер з Kommo, PDF у файли угоди, примітки, «Номер заказа», тег;
+ *   notes.ts     — слід рахунку в стрічці угоди (запис з PDF);
  *   store.ts     — журнал `zakaz_onec_invoices`;
  *   widget/      — сам віджет Kommo (вкладка й вікно), архів для завантаження в інтеграцію.
  * У спільних файлах дашборда — лише точки підключення: `routes/zakaz1c.ts`, `index.ts`, матриця доступу, маніфест,
@@ -12,29 +14,32 @@
  * Межа доступу — НЕ вкладка дашборда, а підпис Kommo: вікно відкривають менеджери в Kommo, яких може не бути серед
  * користувачів дашборда. Тому `requireAuth` тут немає, а токен дашборда (Bearer) нічого не відкриває — 401.
  *
- * Акт — з 1С, з реалізації за рахунком. ТТН у вікні немає: 1С ТТН автоматично не друкує (ручна форма; через Genesis
- * за 2026 рік — жодної), її формують у Конструкторі дашборда (рішення Романа 30.10.2026). Методу акту ще немає
- * (ТЗ Андрію п. 5), тож маршрутів для них тут немає, а кнопки у вікні сірі з поясненням.
+ * Акт — з 1С (`realizationPdf`), коли бухгалтерія провела реалізацію. ТТН у вікні немає: 1С ТТН автоматично не друкує
+ * (ручна форма; через Genesis за 2026 рік — жодної), її формують у Конструкторі дашборда (рішення Романа 30.10.2026).
  */
 import { Router, type Request, type Response } from "express";
 import { pool } from "../db/pool.js";
 import { requireKommoCaller } from "./kommoAuth.js";
-import { onecServiceBase, zakaz1cFieldsMode, zakaz1cMode, zakaz1cTestEdrpou, zakaz1cTesters } from "./env.js";
+import { onecServiceBase, zakaz1cMode, zakaz1cTestEdrpou, zakaz1cTesters } from "./env.js";
 import {
-  CURRENCIES, buildCreateCustomerBody, buildCreateInvoiceBody, createCustomerIn1c, createInvoiceIn1c, customerInfoFrom1c,
-  invoiceAllowed, invoicePdfFrom1c, itemVatsFor, kyivIso, orgRules, parseInvoiceForm, serviceSwaps, servicesFor, vatTypesFor,
+  CURRENCIES, actPdfFrom1c, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, codeOfService, createCustomerIn1c,
+  createInvoiceIn1c, customerInfoFrom1c, invoiceAllowed, invoicePdfFrom1c, itemVatsFor, kyivIso, orgRules, organizationsFrom1c,
+  parseInvoiceForm, serviceSwaps, servicesFor, updateInvoiceIn1c, vatTypesFor, type BankAccount, type CreatedInvoice, type InvoiceForm,
+  type OrgRule,
 } from "./invoice.js";
-import { KOMMO_FIELDS, addFileNote, addLeadNote, attachPdfToLead, kommoUserName, loadLead, patchLeads } from "./kommoApi.js";
+import { addFileNote, addLeadNote, attachPdfToLead, kommoUserName, loadLead, patchLeads, type LeadForInvoice } from "./kommoApi.js";
 import { noteInvoice } from "./notes.js";
-import { invoiceOfLead, listInvoices, saveInvoice } from "./store.js";
+import { GENESIS_DEAL_WHY, WIDGET_TAG, claimPatch, dealOwner, type DealOwner } from "./owner.js";
+import { actAttached, invoiceOfLead, listInvoices, markActAttached, onecNumbersOfDeal, saveInvoice } from "./store.js";
 
-/** Чого 1С ще не вміє — показуємо у вікні словами (ТЗ Андрію 28.10.2026, пункти в дужках). */
+/** Що показуємо словами у вікні. */
 export const ONEC_WAITS = {
-  multi: "Другий рахунок в угоді 1С поки не створює: за номером угоди повертає перший (ТЗ п. 1).",
-  update: "Змінити рахунок з Kommo 1С поки не дозволяє — чекаємо метод від Андрія (ТЗ п. 4).",
-  docs: "Акт зʼявиться тут, щойно бухгалтерія проведе реалізацію в 1С. ТТН формується в Конструкторі дашборда.",
-  fields: "«Дата акту» й «Коментар СРМ» зберігаємо в нас; у рахунок 1С вони підуть, щойно Андрій додасть поля (ТЗ п. 2).",
+  fields: "«Дата акту» і «Коментар для бухгалтерії» йдуть у рахунок 1С (реквізити «Дата акта» і «Коментар CRM»).",
+  docs: "Акт зʼявиться, щойно бухгалтерія проведе реалізацію в 1С. ТТН формується в Конструкторі дашборда.",
+  fopBanks: "1С не віддала рахунки ФОП — спробуйте пізніше.",
+  edit: "Змінити можна лише в день виставлення і поки немає оплати — далі через запит бухгалтерії.",
 } as const;
+
 
 const leadIdOf = (req: Request) => {
   const n = Number(req.params.leadId);
@@ -43,12 +48,44 @@ const leadIdOf = (req: Request) => {
 const UID_RE = /^[0-9a-f-]{36}$/i;
 const testMark = (mode: string) => (mode === "test" ? "[ТЕСТ] " : "");
 
-/** Організації для вікна: правила + що можна виставити зараз. Сервер перевіряє ті самі правила ще раз. */
-function orgsForWindow() {
-  return orgRules().map((o) => ({
-    key: o.key, short: o.short, name: o.name, match: o.match, available: !!o.code, waits: o.waits ?? null,
-    vatTypes: vatTypesFor(o), itemVats: itemVatsFor(o), banks: o.banks ?? null, services: servicesFor(o.key).map((x) => x.name),
-  }));
+/** Організації для вікна: правила + що можна виставити зараз + банки ФОП з 1С. Сервер перевіряє те саме ще раз. */
+function orgsForWindow(banks: Map<string, BankAccount[]> | null) {
+  return orgRules().map((o) => {
+    const own = o.needsBank && o.code ? (banks?.get(o.code) ?? null) : null;
+    const noBanks = o.needsBank && (!own || own.length === 0);
+    return {
+      key: o.key, short: o.short, name: o.name, match: o.match, available: !!o.code && !noBanks,
+      waits: o.waits ?? (noBanks ? ONEC_WAITS.fopBanks : null),
+      vatTypes: vatTypesFor(o), itemVats: itemVatsFor(o), services: servicesFor(o.key).map((x) => x.name),
+      banks: own ? own.map((b) => ({ uid: b.uid, label: b.bank || b.name, currency: b.currency, isMain: b.isMain })) : null,
+    };
+  });
+}
+
+/** Хто веде угоду — з «Номера заказа» Kommo, нашого журналу й рахунків 1С за угодою. */
+async function ownerOf(leadId: number, lead: LeadForInvoice): Promise<DealOwner> {
+  const [ours, onec] = await Promise.all([
+    pool.query<{ number: string }>(`SELECT number FROM zakaz_onec_invoices WHERE lead_id = $1`, [leadId]),
+    onecNumbersOfDeal(pool, leadId),
+  ]);
+  return dealOwner({ orderNo: lead.orderNo, ourNumbers: ours.rows.map((r) => r.number), onecNumbers: onec });
+}
+
+/** PDF рахунку → файли угоди + запис з файлом у стрічці. Помилки Kommo не гублять рахунок: повертаємо їх словами. */
+async function attachInvoice(leadId: number, inv: CreatedInvoice, o: OrgRule, mode: string, edited: boolean):
+  Promise<{ fileUuid: string | null; error: string | null }> {
+  if (!inv.pdf) return { fileUuid: null, error: "1С не віддала PDF" };
+  let file: { uuid: string; versionUuid: string } | null = null;
+  let error: string | null = null;
+  try {
+    file = await attachPdfToLead(leadId, inv.pdf.fileName, inv.pdf.bytes);
+  } catch (e) {
+    error = (e as Error).message.slice(0, 300);
+  }
+  const note = await noteInvoice({ testMode: mode === "test", numberPrint: inv.numberPrint, date: inv.date, orgShort: o.short,
+    total: inv.total, currency: inv.currency, edited }, file, { fileNote: (f) => addFileNote(leadId, f), textNote: (t) => addLeadNote(leadId, t) });
+  if (note.kind !== "file") error = error ?? note.why;
+  return { fileUuid: file?.uuid ?? null, error };
 }
 
 export function buildZakaz1cRouter(): Router {
@@ -59,7 +96,7 @@ export function buildZakaz1cRouter(): Router {
     next();
   });
 
-  /** Підстановка для вікна: угода, компанія, контрагент у 1С, правила організацій, рахунки угоди з оплатою. */
+  /** Підстановка для вікна: угода, хто її веде, контрагент у 1С, правила організацій з банками ФОП, рахунки з оплатою. */
   r.get("/lead/:leadId", async (req: Request, res: Response) => {
     const leadId = leadIdOf(req);
     if (!leadId) return res.status(400).json({ error: "Некоректний номер угоди." });
@@ -67,13 +104,13 @@ export function buildZakaz1cRouter(): Router {
     const today = kyivIso();
     const lead = await loadLead(leadId);
     const code = lead.company?.edrpou ?? "";
-    const [onec, invoices, managerName] = await Promise.all([customerInfoFrom1c(onecServiceBase(), code), listInvoices(pool, leadId, today),
-      kommoUserName(req.kommoCaller!.userId)]);
+    const [onec, invoices, managerName, banks, owner] = await Promise.all([customerInfoFrom1c(onecServiceBase(), code),
+      listInvoices(pool, leadId, today), kommoUserName(req.kommoCaller!.userId), organizationsFrom1c(onecServiceBase()), ownerOf(leadId, lead)]);
     const allowed = invoiceAllowed(mode, { edrpou: code, testEdrpou: zakaz1cTestEdrpou(), userId: req.kommoCaller!.userId, testers: zakaz1cTesters() });
     res.json({
-      mode, testEdrpou: zakaz1cTestEdrpou(), today, managerName,
-      canCreate: allowed.ok, blockedWhy: allowed.ok ? null : allowed.why,
-      orgs: orgsForWindow(), currencies: CURRENCIES, waits: ONEC_WAITS,
+      mode, testEdrpou: zakaz1cTestEdrpou(), today, managerName, owner, ownerWhy: owner === "genesis" ? GENESIS_DEAL_WHY : null,
+      canCreate: allowed.ok && owner !== "genesis", blockedWhy: owner === "genesis" ? GENESIS_DEAL_WHY : allowed.ok ? null : allowed.why,
+      orgs: orgsForWindow(banks), currencies: CURRENCIES, waits: ONEC_WAITS,
       lead: { id: lead.id, name: lead.name, price: lead.price, car: lead.car, cityFrom: lead.cityFrom, cityTo: lead.cityTo, company: lead.company },
       onec: { found: onec.found, name: onec.name, agreements: onec.agreements, error: onec.error ?? null },
       invoices,
@@ -94,6 +131,7 @@ export function buildZakaz1cRouter(): Router {
     const code = lead.company?.edrpou ?? "";
     const allowed = invoiceAllowed(mode, { edrpou: code, testEdrpou: zakaz1cTestEdrpou(), userId: caller.userId, testers: zakaz1cTesters() });
     if (!allowed.ok) return res.status(403).json({ error: allowed.why });
+    if ((await ownerOf(leadId, lead)) === "genesis") return res.status(409).json({ error: GENESIS_DEAL_WHY });
     const built = buildCreateCustomerBody({ name: lead.company?.name ?? "", code }, await kommoUserName(caller.userId));
     if (!built.ok) return res.status(400).json({ error: built.why });
     const c = await createCustomerIn1c(onecServiceBase(), built.body);
@@ -104,64 +142,96 @@ export function buildZakaz1cRouter(): Router {
     res.json({ existed: c.existed, warnings: c.warnings });
   });
 
-  /** «Виставити»: 1С → PDF у файли угоди → примітка → журнал. Повтор за тим самим `deal_id` дає той самий рахунок. */
+  /**
+   * «Виставити»: 1С → PDF у файли й стрічку угоди → «Номер заказа», тег → журнал. Кілька рахунків в угоді — кожна
+   * відкрита форма має свій `request_id`; повтор тієї самої форми (подвійний клік, повтор після збою) дає той самий
+   * рахунок з `existed: true`. В угоді Genesis — відмова ДО запиту в 1С.
+   */
   r.post("/lead/:leadId/invoice", async (req: Request, res: Response) => {
     const leadId = leadIdOf(req);
     if (!leadId) return res.status(400).json({ error: "Некоректний номер угоди." });
     const today = kyivIso();
     const orgs = orgRules();
-    const parsed = parseInvoiceForm(req.body, { today, orgs });
+    const banks = await organizationsFrom1c(onecServiceBase());
+    const parsed = parseInvoiceForm(req.body, { today, orgs, banksOf: (c) => banks?.get(c) ?? [] });
     if (!parsed.ok) return res.status(400).json({ error: parsed.why });
     const form = parsed.form;
+    if (!form.requestId) return res.status(400).json({ error: "Немає ключа форми — оновіть сторінку й відкрийте форму ще раз." });
     const mode = zakaz1cMode();
     const caller = req.kommoCaller!;
     const lead = await loadLead(leadId);
     const code = lead.company?.edrpou ?? "";
     const allowed = invoiceAllowed(mode, { edrpou: code, testEdrpou: zakaz1cTestEdrpou(), userId: caller.userId, testers: zakaz1cTesters() });
     if (!allowed.ok) return res.status(403).json({ error: allowed.why });
-    // Другий рахунок 1С не створить (повернула б перший за `deal_id`) — кажемо прямо, а не віддаємо старий як новий.
-    if ((await listInvoices(pool, leadId, today)).length > 0) return res.status(409).json({ error: ONEC_WAITS.multi });
+    if ((await ownerOf(leadId, lead)) === "genesis") return res.status(409).json({ error: GENESIS_DEAL_WHY });
     const customer = await customerInfoFrom1c(onecServiceBase(), code);
     if (!customer.found) {
       return res.status(409).json({ error: customer.error ? `1С: ${customer.error}.` : "Контрагента немає в 1С — спершу натисніть «Створити контрагента в 1С»." });
     }
 
+    const o = orgs.find((x) => x.key === form.org)!;
     const manager = await kommoUserName(caller.userId);
-    const body = buildCreateInvoiceBody(leadId, form, { customerUid: customer.uid, manager, today, orgCode: orgs.find((o) => o.key === form.org)!.code! });
+    const body = buildCreateInvoiceBody(leadId, form, { customerUid: customer.uid, manager, today, orgCode: o.code! });
     const result = await createInvoiceIn1c(onecServiceBase(), body);
     if (!result.ok) return res.status(502).json({ error: result.why });
     const inv = result.invoice;
-    const warnings = [...inv.warnings, ...serviceSwaps(form.items.map((it) => it.service), inv.itemNames)];
+    const warnings = [...inv.warnings, ...serviceSwaps(form.items.map((it) => ({ name: it.service, code: codeOfService(it.service) })),
+      inv.itemNames.map((name, i) => ({ name, code: inv.itemCodes[i] ?? "" })))];
 
-    // PDF і примітка — після рахунку: рахунок уже існує в 1С, тож збій Kommo не має губити номер. Кажемо словами.
-    let fileUuid: string | null = null;
-    let attachError: string | null = null;
-    if (!inv.existed && inv.pdf) {
-      let file: { uuid: string; versionUuid: string } | null = null;
-      try {
-        file = await attachPdfToLead(leadId, inv.pdf.fileName, inv.pdf.bytes);
-        fileUuid = file.uuid;
-      } catch (e) {
-        attachError = (e as Error).message.slice(0, 300);
+    // Повтор тієї самої форми (existed) — рахунок уже в угоді: PDF і примітку вдруге не кладемо.
+    const att = inv.existed ? { fileUuid: null, error: null } : await attachInvoice(leadId, inv, o, mode, false);
+    let attachError = att.error;
+    if (!inv.existed) {
+      const patch = claimPatch(leadId, lead, inv.number);
+      if (patch) await patchLeads([patch]).catch((e) => { attachError = attachError ?? `угода Kommo: ${(e as Error).message.slice(0, 200)}`; });
+      if (!lead.tags.includes(WIDGET_TAG)) {
+        await addLeadNote(leadId, `${testMark(mode)}Угоду веде віджет «ТЕСТ ЗАКАЗ 1С». Рахунки в цій угоді виставляйте там, Genesis не використовуйте.`)
+          .catch(() => undefined);
       }
-      // У стрічці — запис з PDF (як у макеті); не вдалося — текстовий, щоб рахунок не лишився без сліду в угоді.
-      const note = await noteInvoice({ testMode: mode === "test", numberPrint: inv.numberPrint, date: inv.date,
-        orgShort: orgs.find((o) => o.key === form.org)!.short, total: inv.total, currency: inv.currency }, file, {
-        fileNote: (f) => addFileNote(leadId, f), textNote: (t) => addLeadNote(leadId, t) });
-      if (note.kind !== "file") attachError = attachError ?? note.why;
-    }
-    // «Номер заказа» — лише коли Genesis вимкнено (ZAKAZ1C_FIELDS_MODE=live): поки він працює, це його поле.
-    if (zakaz1cFieldsMode() === "live" && !inv.existed) {
-      await patchLeads([{ id: leadId, custom_fields_values: [{ field_id: KOMMO_FIELDS.leadOrderNo, values: [{ value: inv.number }] }] }])
-        .catch((e) => { attachError = attachError ?? `«Номер заказа»: ${(e as Error).message.slice(0, 200)}`; });
     }
     await saveInvoice(pool, { leadId, inv: { ...inv, warnings }, form: inv.existed ? null : form, mode: mode === "live" ? "live" : "test",
-      kommoUserId: caller.userId, fileUuid, attachError });
+      kommoUserId: caller.userId, fileUuid: att.fileUuid, attachError });
     res.json({
       invoice: { uid: inv.uid, number: inv.numberPrint, date: inv.date, organization: inv.organization, agreement: inv.agreement,
         currency: inv.currency, vatType: inv.vatType, total: inv.total, existed: inv.existed, warnings },
-      attached: fileUuid !== null, attachError,
+      attached: att.fileUuid !== null, attachError,
     });
+  });
+
+  /**
+   * «Змінити» — лише свій рахунок, у день виставлення і без оплати (правило Сергія й Інни). Організацію й валюту
+   * змінити не можна (так і в 1С). 1С сама ще раз відмовить, якщо є оплата чи реалізація — її текст показуємо як є.
+   */
+  r.post("/lead/:leadId/invoice/:uid/update", async (req: Request, res: Response) => {
+    const leadId = leadIdOf(req);
+    const uid = String(req.params.uid ?? "");
+    if (!leadId || !UID_RE.test(uid)) return res.status(400).json({ error: "Некоректний запит." });
+    const today = kyivIso();
+    const row = (await listInvoices(pool, leadId, today)).find((x) => x.invoice_uid === uid);
+    if (!row) return res.status(404).json({ error: "Рахунок не з цієї угоди." });
+    if (!row.can_edit) return res.status(409).json({ error: ONEC_WAITS.edit });
+    const orgs = orgRules();
+    const banks = await organizationsFrom1c(onecServiceBase());
+    const parsed = parseInvoiceForm(req.body, { today, orgs, banksOf: (c) => banks?.get(c) ?? [] });
+    if (!parsed.ok) return res.status(400).json({ error: parsed.why });
+    const form = parsed.form;
+    if (form.org !== row.org_key || form.currency !== row.currency) {
+      return res.status(400).json({ error: "Організацію й валюту рахунку змінити не можна — виставте новий рахунок, а цей попросіть бухгалтерію позначити на видалення." });
+    }
+    const mode = zakaz1cMode();
+    const caller = req.kommoCaller!;
+    const lead = await loadLead(leadId);
+    if ((await ownerOf(leadId, lead)) === "genesis") return res.status(409).json({ error: GENESIS_DEAL_WHY });
+    const o = orgs.find((x) => x.key === form.org)!;
+    const manager = await kommoUserName(caller.userId);
+    const result = await updateInvoiceIn1c(onecServiceBase(), buildUpdateInvoiceBody(uid, form, { manager, dealId: leadId, orgCode: o.code! }));
+    if (!result.ok) return res.status(502).json({ error: result.why });
+    const inv = result.invoice;
+    const att = await attachInvoice(leadId, inv, o, mode, true);
+    await saveInvoice(pool, { leadId, inv, form, mode: mode === "live" ? "live" : "test", kommoUserId: caller.userId,
+      fileUuid: att.fileUuid, attachError: att.error, edit: true });
+    res.json({ invoice: { uid: inv.uid, number: inv.numberPrint, total: inv.total, currency: inv.currency, warnings: inv.warnings },
+      attached: att.fileUuid !== null, attachError: att.error });
   });
 
   /**
@@ -182,6 +252,30 @@ export function buildZakaz1cRouter(): Router {
   });
 
   /**
+   * Акт за рахунком — як у Genesis, на натискання: реалізації ще немає → 409 «ще не сформовано» (не помилка).
+   * Уперше отриманий акт кладемо й у файли/стрічку угоди — один раз, а не на кожне натискання.
+   */
+  r.get("/lead/:leadId/invoice/:uid/act", async (req: Request, res: Response) => {
+    const leadId = leadIdOf(req);
+    const uid = String(req.params.uid ?? "");
+    if (!leadId || !UID_RE.test(uid)) return res.status(400).json({ error: "Некоректний запит." });
+    const own = await invoiceOfLead(pool, uid);
+    if (own?.leadId !== leadId) return res.status(404).json({ error: "Рахунок не з цієї угоди." });
+    const stamp = req.query.stamp !== "0";
+    const act = await actPdfFrom1c(onecServiceBase(), uid, stamp);
+    if (!act.ok) return res.status(act.notYet ? 409 : 502).json({ error: act.why, notYet: act.notYet });
+    const fileName = `akt_${own.numberPrint}${stamp ? "" : "_bez_pechatky"}.pdf`;
+    if (!(await actAttached(pool, uid))) {
+      try {
+        const f = await attachPdfToLead(leadId, fileName, act.bytes);
+        await addFileNote(leadId, { ...f, name: `${testMark(zakaz1cMode())}Акт за рахунком №${own.numberPrint}.pdf` }).catch(() => undefined);
+        await markActAttached(pool, uid, f.uuid);
+      } catch { /* акт усе одно віддаємо менеджеру — у файли угоди покладемо наступного разу */ }
+    }
+    res.json({ fileName, base64: act.bytes.toString("base64") });
+  });
+
+  /**
    * Запит бухгалтерії на зміну рахунку. Самі запити поки йдуть у Telegram (Інна, 27.10.2026): текст для Telegram
    * збирає вікно, а сюди приходить лише «передано» — щоб у стрічці угоди лишився слід, хто й що просив змінити.
    */
@@ -199,3 +293,5 @@ export function buildZakaz1cRouter(): Router {
 
   return r;
 }
+
+export type { InvoiceForm };
