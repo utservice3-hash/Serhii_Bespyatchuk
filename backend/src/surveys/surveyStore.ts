@@ -8,7 +8,7 @@
  *  - роль — ефективна (`role_override` або `role`): `team_lead` → 'lead', `manager` → 'manager', решта — ключ ролі
  *    (hr, kvp…), щоб розріз «менеджери / тім-ліди» лишився тим самим, що в пакеті;
  *  - команда — назва команди (менеджера CRM або акаунта); `team_id` — для вибору адресатів «команда тім-ліда»;
- *  - «адмін» опитувань — право `manage_surveys` у ролі (admin, ceo, opdir, hr), а не буквально роль 'admin'.
+ *  - «адмін» опитувань — право `manage_surveys` у ролі (admin, ceo, opdir, hr, kvp), а не буквально роль 'admin'.
  * Кандидати й деактивовані (акаунт або менеджер CRM) — поза будь-якою аудиторією.
  */
 import type { Question, ResponseRow } from './surveyResults.js';

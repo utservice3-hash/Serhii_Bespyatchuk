@@ -3,7 +3,7 @@
  *
  * Код Сергія (`roman-package-opytuvannya/server/routes/surveys.ts`) перенесено з такими змінами — і лише ними:
  *  1. Вхід — наш `requireAuth` + вкладка `surveys` першим оператором; «адмін» пакета (`role === 'admin'`) — право
- *     `manage_surveys` (admin, ceo, opdir, hr — рішення Романа 30.09.2026), одне місце — `isAdmin`.
+ *     `manage_surveys` (admin, ceo, opdir, hr — рішення Романа 30.09.2026; kvp — 30.10.2026), одне місце — `isAdmin`.
  *  2. Люди — наші (`surveys/surveyStore.ts`): числові id, імʼя з менеджера/картки/акаунта, роль і команда.
  *  3. 🔒 АНОНІМНІСТЬ — ДІРКУ ПАКЕТА ЗАКРИТО. У пакеті `survey_assignments.responded_at` (з іменем) і
  *     `survey_responses.submitted_at` (без імені) писались ОДНИМ `now()` — рівний до мілісекунди час звʼязував

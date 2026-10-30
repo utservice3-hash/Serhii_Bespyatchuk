@@ -5436,11 +5436,12 @@ UPDATE roles SET screen_access = screen_access || '{"surveys":true}'::jsonb
   WHERE key <> 'candidate' AND NOT (screen_access ? 'surveys');
 
 -- Керувати опитуваннями (створювати, запускати, бачити відповіді) — admin, ceo, opdir, hr (рішення Романа
--- 30.09.2026). Склад фіксований кодом, парою «видати / зняти» ПІСЛЯ синку фінансиста (інакше розтеклось би).
+-- 30.09.2026) + kvp (рішення Романа 30.10.2026: «треба дати можливість створювати опитування… Юля Сергіївна, КВП»;
+-- у ролі КВП один акаунт). Склад фіксований кодом, парою «видати / зняти» ПІСЛЯ синку фінансиста (інакше розтеклось би).
 UPDATE roles SET permissions = permissions || '{"manage_surveys": true}'::jsonb
- WHERE key IN ('admin', 'ceo', 'opdir', 'hr');
+ WHERE key IN ('admin', 'ceo', 'opdir', 'hr', 'kvp');
 UPDATE roles SET permissions = permissions - 'manage_surveys'
- WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr');
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr', 'kvp');
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 💰 ФІНАНСИ, прохід 2а (01.10.2026): «Тиждень і місяць» — аркуш «ФМ» книги «UTS Щотижневі плани».
