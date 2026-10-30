@@ -26,19 +26,20 @@ const muted = { color: "var(--text-muted)", fontSize: 13 };
 
 function Groups({ title, col, rows, label }: { title: string; col: string; rows: RateAccuracyGroup[]; label?: (k: string) => string }) {
   return (
-    <div className="chart-card" style={{ flex: "1 1 360px", minWidth: 0 }}>
+    // Дві картки в ряд (не чотири): шість колонок у 330 px не вміщались — числа й «Оцінки» вилазили за край (Роман 30.10).
+    <div className="chart-card" style={{ flex: "1 1 520px", minWidth: 0, overflowX: "auto" }}>
       <h2 className="chart-title">{title}</h2>
-      <table className="data-table">
-        <thead><tr><th>{col}</th><th style={right}>Відгуків</th><th style={right}>З ціною</th><th style={right} title="медіана відхилення погодженої ставки від порахованої">Відхилення</th><th style={right} title="медіана |відхилення| — типова похибка">Похибка</th><th>Оцінки</th></tr></thead>
+      <table className="data-table" style={{ width: "100%" }}>
+        <thead><tr><th style={th}>{col}</th><th style={{ ...th, ...right }}>Відгуків</th><th style={{ ...th, ...right }}>З ціною</th><th style={{ ...th, ...right }} title="медіана відхилення погодженої ставки від порахованої">Відхилення</th><th style={{ ...th, ...right }} title="медіана |відхилення| — типова похибка">Похибка</th><th style={th}>Оцінки</th></tr></thead>
         <tbody>
           {rows.length ? rows.map((g) => (
             <tr key={g.key}>
-              <td>{label ? label(g.key) : g.key}</td>
-              <td style={right}>{g.n}</td>
-              <td style={right}>{g.priced || "—"}</td>
-              <td style={{ ...right, fontWeight: 600, color: devColor(g.median_dev) }}>{signed(g.median_dev)}</td>
-              <td style={{ ...right, color: devColor(g.median_abs) }}>{g.median_abs == null ? "—" : `±${pct(g.median_abs)}`}</td>
-              <td style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+              <td style={{ ...td, whiteSpace: "nowrap" }}>{label ? label(g.key) : g.key}</td>
+              <td style={{ ...td, ...right }}>{g.n}</td>
+              <td style={{ ...td, ...right }}>{g.priced || "—"}</td>
+              <td style={{ ...td, ...right, fontWeight: 600, color: devColor(g.median_dev), whiteSpace: "nowrap" }}>{signed(g.median_dev)}</td>
+              <td style={{ ...td, ...right, color: devColor(g.median_abs), whiteSpace: "nowrap" }}>{g.median_abs == null ? "—" : `±${pct(g.median_abs)}`}</td>
+              <td style={{ ...td, fontSize: 12, color: "var(--text-muted)", width: "40%" }}>
                 {([["ok", g.ok], ["high", g.high], ["low", g.low], ["no", g.no]] as [RateFeedbackRating, number][]).filter(([, n]) => n).map(([r, n]) => `${LABEL[r]} ${n}`).join(" · ") || "—"}
               </td>
             </tr>
