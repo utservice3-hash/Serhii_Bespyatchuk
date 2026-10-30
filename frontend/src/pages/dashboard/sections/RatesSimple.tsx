@@ -369,7 +369,7 @@ export function RatesSimple() {
                   <div className={`rs-note ${diffFlag ? "warn" : "info"}`} data-price-source={price.source}>
                     {price.source === "market" ? (
                       <>📈 <b>Ринкова ціна</b> — за {market?.n ?? "—"} схожими оголошеннями за {market?.window_days ?? 30} днів.
-                        {sel && price.tariff_diff_pct != null && <> Тариф КВП: {range(sel.client_min, sel.client_max)} грн ({pct(price.tariff_diff_pct)} до ринку){diffFlag ? " — розбіжність велика, перевірте ставку" : ""}.</>}</>
+                        {sel && price.tariff_diff_pct != null && <> Тариф КВП: {range(sel.client_min, sel.client_max)} грн — ринок {price.tariff_diff_pct > 0 ? "вищий" : "нижчий"} за тариф на {Math.abs(price.tariff_diff_pct)}%{diffFlag ? ", розбіжність велика — перевірте ставку" : ""}.</>}</>
                     ) : price.tariff_reason === "market_outlier" ? (
                       <>🧮 <b>Ставка за тарифом КВП.</b> Схожих оголошень ({market?.n ?? 0}) замало, щоб на них спиратись: вони дають перевізнику ≈ {fmt(market?.carrier_median)} грн ({pct(price.tariff_diff_pct ?? 0)} до тарифу) — надто далеко, схоже на шум.</>
                     ) : price.tariff_reason === "light_class" ? (
