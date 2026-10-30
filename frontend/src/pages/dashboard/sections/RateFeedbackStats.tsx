@@ -19,6 +19,9 @@ const range = (lo: number | null | undefined, hi: number | null | undefined) => 
 const devColor = (v: number | null) => (v == null ? "var(--text-muted)" : Math.abs(v) <= 10 ? "var(--text)" : Math.abs(v) <= 25 ? "#b45309" : ACC);
 const SOURCE_COLOR: Record<string, string> = { "ринок": "#2563eb", "тариф КВП": "#b45309" };
 const right = { textAlign: "right" as const };
+/** Заголовки й клітинки таблиці пар: 14 колонок на ширину екрана — без відступів «км» зливається з «Джерело». */
+const th = { whiteSpace: "nowrap" as const, padding: "6px 10px" };
+const td = { padding: "6px 10px" };
 const muted = { color: "var(--text-muted)", fontSize: 13 };
 
 function Groups({ title, col, rows, label }: { title: string; col: string; rows: RateAccuracyGroup[]; label?: (k: string) => string }) {
@@ -56,28 +59,28 @@ function Pairs({ rows }: { rows: RateAccuracyPair[] }) {
       </div>
       <table className="data-table" style={{ minWidth: 980 }}>
         <thead><tr>
-          <th>Дата</th><th>Хто</th><th>Маршрут</th><th>Авто</th><th style={right}>км</th><th>Джерело</th>
-          <th style={right}>Порахували клієнту</th><th style={right}>Погодили</th><th style={right}>Відхилення</th>
-          <th style={right}>Порахували перевізнику</th><th style={right}>Погодили</th><th style={right}>Відхилення</th>
-          <th>Оцінка</th><th>Коментар</th>
+          <th style={th}>Дата</th><th style={th}>Хто</th><th style={th}>Маршрут</th><th style={th}>Авто</th><th style={{ ...th, ...right }}>км</th><th style={th}>Джерело</th>
+          <th style={{ ...th, ...right }}>Клієнту: порахували</th><th style={{ ...th, ...right }}>погодили</th><th style={{ ...th, ...right }}>Δ</th>
+          <th style={{ ...th, ...right }}>Перевізнику: порахували</th><th style={{ ...th, ...right }}>погодили</th><th style={{ ...th, ...right }}>Δ</th>
+          <th style={th}>Оцінка</th><th style={th}>Коментар</th>
         </tr></thead>
         <tbody>
           {rows.length ? rows.map((p, i) => (
             <tr key={i}>
-              <td style={{ whiteSpace: "nowrap" }}>{new Date(p.at).toLocaleDateString("uk-UA")}</td>
-              <td>{p.author}</td>
-              <td style={{ whiteSpace: "nowrap" }}>{p.route}</td>
-              <td style={{ whiteSpace: "nowrap" }}>{p.tonnage ?? "—"}</td>
-              <td style={right}>{p.km ?? "—"}</td>
-              <td style={{ color: SOURCE_COLOR[sourceLabel(p.source)] ?? "var(--text-muted)", whiteSpace: "nowrap" }}>{sourceLabel(p.source)}</td>
-              <td style={{ ...right, whiteSpace: "nowrap" }}>{range(p.client_min, p.client_max)}</td>
-              <td style={{ ...right, fontWeight: 600, whiteSpace: "nowrap" }}>{money(p.agreed)}</td>
-              <td style={{ ...right, fontWeight: 700, color: devColor(p.dev_pct) }}>{signed(p.dev_pct)}</td>
-              <td style={{ ...right, whiteSpace: "nowrap", color: "var(--text-muted)" }}>{range(p.carrier_min, p.carrier_max)}</td>
-              <td style={{ ...right, whiteSpace: "nowrap" }}>{money(p.agreed_carrier)}</td>
-              <td style={{ ...right, fontWeight: 600, color: devColor(p.dev_carrier_pct) }}>{signed(p.dev_carrier_pct)}</td>
-              <td style={{ whiteSpace: "nowrap" }}>{LABEL[p.rating]}</td>
-              <td style={{ fontSize: 13, maxWidth: 280 }}>{p.comment ?? ""}</td>
+              <td style={{ ...td, whiteSpace: "nowrap" }}>{new Date(p.at).toLocaleDateString("uk-UA")}</td>
+              <td style={td}>{p.author}</td>
+              <td style={{ ...td, whiteSpace: "nowrap" }}>{p.route}</td>
+              <td style={{ ...td, whiteSpace: "nowrap" }}>{p.tonnage ?? "—"}</td>
+              <td style={{ ...td, ...right }}>{p.km ?? "—"}</td>
+              <td style={{ ...td, color: SOURCE_COLOR[sourceLabel(p.source)] ?? "var(--text-muted)", whiteSpace: "nowrap" }}>{sourceLabel(p.source)}</td>
+              <td style={{ ...td, ...right, whiteSpace: "nowrap" }}>{range(p.client_min, p.client_max)}</td>
+              <td style={{ ...td, ...right, fontWeight: 600, whiteSpace: "nowrap" }}>{money(p.agreed)}</td>
+              <td style={{ ...td, ...right, fontWeight: 700, color: devColor(p.dev_pct) }}>{signed(p.dev_pct)}</td>
+              <td style={{ ...td, ...right, whiteSpace: "nowrap", color: "var(--text-muted)" }}>{range(p.carrier_min, p.carrier_max)}</td>
+              <td style={{ ...td, ...right, whiteSpace: "nowrap" }}>{money(p.agreed_carrier)}</td>
+              <td style={{ ...td, ...right, fontWeight: 600, color: devColor(p.dev_carrier_pct) }}>{signed(p.dev_carrier_pct)}</td>
+              <td style={{ ...td, whiteSpace: "nowrap" }}>{LABEL[p.rating]}</td>
+              <td style={{ ...td, fontSize: 13, maxWidth: 280 }}>{p.comment ?? ""}</td>
             </tr>
           )) : <tr><td colSpan={14} style={muted}>ще ніхто не вписав погоджену ставку — без неї порівнювати нема з чим</td></tr>}
         </tbody>
