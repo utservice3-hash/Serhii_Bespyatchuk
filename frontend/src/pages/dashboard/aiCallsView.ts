@@ -319,11 +319,14 @@ export interface ChecklistLine { managerId: number | null; name: string; calls: 
   /** 🤝 Згода після ціни: розмов з відомим рішенням / з них «погодився» / «думає» (взяли паузу — передзвонити). У бал НЕ входить. */
   decided: number; agreed: number; thinking: number;
   /** Успіх угоди: успішних із розібраних. */
-  success: number }
+  success: number;
+  /** 💬 Задача 7184: розмов, де менеджер пообіцяв щось у месенджер (не перевірити), і де сам запропонував месенджер. */
+  messengerCalls: number; messengerSelf: number }
 /** Рядок на менеджера: розібрані розмови звіту, середній бал і частка по кожному пункту. Найслабші — згори. */
 export function managerChecklist<T extends { inReport: boolean; managerId: number | null; managerName: string | null;
   checklist: ChecklistT | null; checkScore: { yes: number; total: number } | null;
-  dealOutcome?: { state: string } | null; clientDecision?: { value: ClientDecisionValueT } | null }>(rows: readonly T[]): ChecklistLine[] {
+  dealOutcome?: { state: string } | null; clientDecision?: { value: ClientDecisionValueT } | null;
+  messengerPromises?: number; messengerSignal?: boolean | null }>(rows: readonly T[]): ChecklistLine[] {
   const by = new Map<string, T[]>();
   for (const r of rows) if (r.inReport && r.checklist) {
     const k = r.managerId == null ? "none" : String(r.managerId);
@@ -338,6 +341,8 @@ export function managerChecklist<T extends { inReport: boolean; managerId: numbe
     decided: g.filter((r) => decisionKnown(r.clientDecision)).length, agreed: g.filter((r) => r.clientDecision?.value === "agreed").length,
     thinking: g.filter((r) => r.clientDecision?.value === "thinking").length,
     success: g.filter((r) => r.dealOutcome?.state === "success").length,
+    messengerCalls: g.filter((r) => (r.messengerPromises ?? 0) > 0).length,
+    messengerSelf: g.filter((r) => r.messengerSignal === true).length,
   })).sort((a, b) => (a.score ?? 99) - (b.score ?? 99) || a.name.localeCompare(b.name, "uk"));
 }
 
@@ -393,11 +398,12 @@ export function medianMin(xs: readonly (number | null | undefined)[]): number | 
 // ОДНЕ правило на плитку: і число, і список після кліку беруть `TILE_MATCH[k]` — тож вони не можуть розійтися.
 // Стани й знаменники — від сервера (`checklist`, `flags`, `dealOutcome`); фронт лише рахує.
 
-export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "thinking" | "declined" | "agreedLost";
+export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "thinking" | "declined" | "agreedLost" | "messenger" | "messengerSelf";
 export interface TileRow {
   promiseState: PromiseStateT | null; checklist: ChecklistT | null; conversationType: ConversationTypeT | null;
   dealOutcome: { state: string } | null; flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
   clientDecision?: { value: ClientDecisionValueT } | null;
+  messengerPromises?: number; messengerSignal?: boolean | null;
 }
 export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   noCall: (r) => r.flags.agreement && r.promiseState === "broken",
@@ -414,6 +420,9 @@ export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   declined: (r) => r.clientDecision?.value === "declined",
   // 🤝 Рішення Романа 13.10.2026: у розмові погодився, а угода в Kommo закрита як втрачена — що сталось ПІСЛЯ дзвінка.
   agreedLost: (r) => r.clientDecision?.value === "agreed" && r.dealOutcome?.state === "lost",
+  // 💬 Задача 7184: менеджер пообіцяв щось у месенджер — система не перевірить; і «сам запропонував месенджер» (лише з цитатою).
+  messenger: (r) => (r.messengerPromises ?? 0) > 0,
+  messengerSelf: (r) => r.messengerSignal === true,
 };
 /** Скільки успіхів треба в КОЖНІЙ групі, щоб показувати відсоток, а не лише «X з N» (рішення Романа 08.10.2026). */
 export const SUCCESS_MIN_FOR_PCT = 30;
@@ -524,7 +533,7 @@ export function summaryTeams(rows: readonly { teamId: number | null; teamName?: 
   return [...m].map(([id, name]) => ({ id, name })).sort((a, b) => (a.id == null ? 1 : b.id == null ? -1 : a.name.localeCompare(b.name, "uk")));
 }
 
-const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success", "agreed", "thinking", "declined", "agreedLost"];
+const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success", "agreed", "thinking", "declined", "agreedLost", "messenger", "messengerSelf"];
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const LINK_PARAMS = ["from", "to", "tile", "team", "manager"] as const;
 

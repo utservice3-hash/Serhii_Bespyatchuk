@@ -388,6 +388,8 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               <StateChip state={c.row.state} />
               {c.row.transportKind && <Chip tone="muted">не оцінюємо · {TRANSPORT_LABEL[c.row.transportKind]}</Chip>}
+              {c.row.messengerSignal === true && <Chip tone="warn">сам запропонував месенджер</Chip>}
+              {c.row.messengerPromises > 0 && <Chip tone="muted">обіцянок у месенджер: {c.row.messengerPromises} — не перевірити</Chip>}
               {r && (r.price.discussed ? <Chip tone="ok">ціну обговорили</Chip> : <Chip tone="muted">ціна не прозвучала</Chip>)}
               {r && (r.objections.length > 0 ? <Chip tone="bad">заперечень: {r.objections.length}</Chip> : <Chip tone="muted">заперечень немає</Chip>)}
               {r && <Chip tone={c.row.promises > c.row.promisesWithDeadline ? "warn" : "muted"}>{promisesLabel(c.row.promises, c.row.promisesWithDeadline)}</Chip>}

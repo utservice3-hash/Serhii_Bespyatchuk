@@ -408,6 +408,9 @@ export interface AiCallRowT {
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
   /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183); `null` — оцінюємо. */
   transportKind: AiTransportKindT | null;
+  /** 💬 Задача 7184: обіцянок менеджера в месенджер (не перевірити); сигнал «сам запропонував месенджер» — `null`, якщо не
+   *  розбирали або цій ролі ще не показуємо. */
+  messengerPromises: number; messengerSignal: boolean | null;
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
   priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
   reactionMin?: number | null; reactionOffHours?: boolean;
@@ -444,6 +447,8 @@ export interface AiCallsResp {
   canReview: boolean;
   /** 💬 Кнопка «Зворотний звʼязок» біля розмови — тімлід, КВП, адмін (задача 7183). */
   canFeedback: boolean;
+  /** 💬 Чи бачить ця роль сигнал «сам запропонував месенджер» (задача 7184): адмін, КВП; тімлід — після звірки. */
+  canSeeMessengerSignal: boolean;
   /** Ціль «ціну озвучено», % — з «Налаштувань» (адмін), за замовчуванням 50. */
   priceTargetPct: number;
   silence: { minGapHours: number; normFrom: string | null };
@@ -549,7 +554,9 @@ export interface AiTeamReportResp {
 /** 🎛 Налаштування «Першого дотику» (лише адмін): вікно повторного, допуск і мінімум передзвону, колір блоку. */
 export interface FirstTouchTunablesT { repeatWindowDays: number | null; callbackGraceMin: number; callbackMinDeadlineMin: number; bannerTone: "neutral" | "alert";
   /** Ціль «ціну озвучено», % (ТЗ 08.10.2026). */
-  priceTargetPct: number }
+  priceTargetPct: number;
+  /** 💬 Сигнал «сам запропонував месенджер» бачать і тімліди (задача 7184; до звірки — вимкнено). */
+  messengerSignalTeamLeads: boolean }
 export interface FirstTouchSettingsResp {
   current: FirstTouchTunablesT;
   recommended: { repeatWindowDays: number; callbackGraceMin: number; callbackMinDeadlineMin: number };

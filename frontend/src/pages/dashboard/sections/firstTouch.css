@@ -37,7 +37,7 @@
 .ftd-card-h h2 { margin: 0; font-size: 15px; font-weight: 700; }
 .ftd-card-h span { font-size: 12px; color: var(--text-muted); }
 
-.ftd-mgr { display: grid; grid-template-columns: 210px 64px repeat(5, minmax(110px, 1fr)) 80px; gap: 10px 14px; align-items: center; font-size: 13px; min-width: 1000px; }
+.ftd-mgr { display: grid; grid-template-columns: 210px 64px repeat(5, minmax(110px, 1fr)) 110px 80px; gap: 10px 14px; align-items: center; font-size: 13px; min-width: 1110px; }
 /* 🤝 Згода після ціни — окремо від чек-листа: пунктир зліва, щоб не читалась як п'ятий пункт балу. */
 .ftd-dec { border-left: 1px dashed var(--border); padding-left: 10px; }
 .ftd-mgr-h { color: var(--text-muted); font-size: 12px; }

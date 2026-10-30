@@ -301,7 +301,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
+    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, messengerPromises: 0, messengerSignal: null, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -701,9 +701,10 @@ test("#867 НАЛАШТУВАННЯ ПЕРШОГО ДОТИКУ · ЯДРО: м�
   assert.deepEqual([st(30), st(31)], ["kept_talk", "late"], "🔴 межа зарахування не включна або зсунута");
 
   const { parseTunables, CURRENT_BEHAVIOUR } = await import("./firstTouchTunables.js");
-  assert.deepEqual(CURRENT_BEHAVIOUR, { repeatWindowDays: null, callbackGraceMin: 0, callbackMinDeadlineMin: 0, bannerTone: "neutral", priceTargetPct: 50 }, "🔴 старт ≠ поточна поведінка (ціль ціни — 50 % за ТЗ 08.10.2026)");
+  // 30.10.2026 (7184): поле «сигнал месенджера тімлідам» — за замовчуванням вимкнено, тобто старт той самий.
+  assert.deepEqual(CURRENT_BEHAVIOUR, { repeatWindowDays: null, callbackGraceMin: 0, callbackMinDeadlineMin: 0, bannerTone: "neutral", priceTargetPct: 50, messengerSignalTeamLeads: false }, "🔴 старт ≠ поточна поведінка (ціль ціни — 50 % за ТЗ 08.10.2026)");
   const ok = { repeatWindowDays: 30, callbackGraceMin: 10, callbackMinDeadlineMin: 20, bannerTone: "alert" };
-  assert.deepEqual(parseTunables(ok), { ok: true, value: { ...ok, priceTargetPct: 50 } }, "без поля цілі — ціль за замовчуванням 50 %, а не помилка");
+  assert.deepEqual(parseTunables(ok), { ok: true, value: { ...ok, priceTargetPct: 50, messengerSignalTeamLeads: false } }, "без поля цілі — ціль за замовчуванням 50 %, а не помилка");
   assert.equal(parseTunables({ ...ok, repeatWindowDays: null }).ok, true, "дзеркало: «без обмеження» — законне значення");
   for (const bad of [{ repeatWindowDays: 0 }, { repeatWindowDays: 366 }, { callbackGraceMin: 121 }, { callbackGraceMin: -1 }, { callbackGraceMin: "10" },
     { callbackMinDeadlineMin: 2.5 }, { bannerTone: "red" }, { bannerTone: undefined }])
@@ -1271,7 +1272,7 @@ test("#905 ЗАПЕРЕЧЕННЯ: окрема рубрика, лише нес�
   assert.ok(T.OBJ_BUDGET_MS > 0 && T.OBJ_BUDGET_MS < T.LLM_BUDGET_MS, "🔴 бюджет заперечень поза бюджетом розбору");
   // 4631 (09.10.2026): розбір розмов про борг теж бере ЧАСТКУ того самого бюджету — твердження те саме.
   // 28.10.2026 (7183): поруч відкушено й частку на вид перевезення — так само з бюджету розбору, не понад тік.
-  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?(?: - TRANSPORT_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
+  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?(?: - TRANSPORT_BUDGET_MS)?(?: - MESSENGER_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
 });
 
 /**
@@ -1320,7 +1321,7 @@ test("#907 ЦІЛЬ ЦІНИ: 50 % за замовчуванням, 1…100, з 
   const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
   assert.match(schema, /ADD COLUMN IF NOT EXISTS price_target_pct INTEGER\s+CHECK \(price_target_pct IS NULL OR price_target_pct BETWEEN 1 AND 100\);/, "🔴 база не тримає межі цілі");
   const routes = readFileSync(fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
-  assert.match(routes, /priceTargetPct: \(await loadTunables\(pool\)\)\.priceTargetPct,/, "🔴 список не віддає ціль");
+  assert.match(routes, /const tun = await loadTunables\(pool\);[\s\S]{0,3000}priceTargetPct: tun\.priceTargetPct,/, "🔴 список не віддає ціль");
   assert.match(routes, /flags: \{ analysed: isAnalysed\(r\), priceable: isPriceable\(r\), agreement: hasAgreement\(r\), lost: isLost\(r\) \},/, "🔴 знаменники плиток не від ядра");
 });
 
@@ -2123,4 +2124,110 @@ test("#2215 ФРОНТ: «Виключені» — фільтр «вид пер�
   assert.match(sec, /<option value="transport">вид перевезення \(не оцінюємо\)<\/option>/, "🔴 у «Виключених» немає фільтра виду перевезення");
   assert.match(sec, /не оцінюємо · \{TRANSPORT_LABEL\[r\.transportKind\]\}/, "🔴 у таблиці немає причини виключення");
   assert.match(readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8"), /\{c\.row\.transportKind && <Chip tone="muted">не оцінюємо · \{TRANSPORT_LABEL\[c\.row\.transportKind\]\}<\/Chip>\}/, "🔴 у картці немає причини виключення");
+});
+
+/**
+ * #3201 — МЕСЕНДЖЕР (задача 7184; Роман 30.10.2026): обіцянки менеджера в БУДЬ-ЯКИЙ месенджер рахуються з наявного розбору;
+ * сигнал «сам запропонував» — лише «менеджер» із цитатою, що знайшлась; «клієнт попросив» і сумнів — не сигнал. Сигнал бачать
+ * адмін і КВП, тімлід — лише після перемикача, менеджер — ніколи; перемикач за замовчуванням вимкнено. Рубрика в тіку —
+ * частка бюджету розбору, лише розмови, де месенджер звучить.
+ * 🧨 Червоніє, якщо рахувати обіцянки клієнта чи дзвінком, ставити сигнал без цитати чи на прохання клієнта, показати сигнал
+ * тімліду до перемикача або менеджеру, увімкнути перемикач за замовчуванням, або дати рубриці час понад тік.
+ */
+test("#3201 МЕСЕНДЖЕР: обіцянки менеджера в месенджер; сигнал лише «менеджер сам» із цитатою; видимість адмін/КВП, тімлід — перемикачем", async () => {
+  const M = await import("./firstTouchMessenger.js");
+  const T = await import("./callAiTick.js");
+  const { parseTunables, CURRENT_BEHAVIOUR } = await import("./firstTouchTunables.js");
+  assert.equal(M.messengerPromisesOf([{ who: "manager", channel: "message" }, { who: "manager", channel: "call" }, { who: "client", channel: "message" }, { who: "manager", channel: "message" }]), 2,
+    "🔴 у «обіцянки в месенджер» пішли обіцянки клієнта чи дзвінком");
+  assert.equal(M.validateMessenger({ move: "manager", quote: "" }).ok, false, "🔴 «менеджер запропонував» без цитати прийнято");
+  assert.equal(M.validateMessenger({ move: "email", quote: "x" }).ok, false, "🔴 значення поза переліком прийнято");
+  const none = M.validateMessenger({ move: "none", quote: "щось" });
+  assert.ok(none.ok && none.value.quote === "", "🔴 для «переходу не було» лишилась цитата");
+  const turns = [{ channel: 1, start: 0, end: 2, text: "Я вам скину у вайбер варіанти машин", lang: "ukr" }, { channel: 0, start: 2, end: 3, text: "Добре", lang: "ukr" }];
+  const ok = M.interpretMessenger({ text: JSON.stringify({ move: "manager", quote: "скину у вайбер" }), finishReason: "STOP" } as never, turns);
+  assert.ok(ok.ok && ok.result.quote_found === true, "🔴 цитата з розмови не знайшлась");
+  const lie = M.interpretMessenger({ text: JSON.stringify({ move: "manager", quote: "напишу в телеграм" }), finishReason: "STOP" } as never, turns);
+  assert.ok(lie.ok && lie.result.quote_found === false, "🔴 вигадана цитата пройшла як знайдена");
+  assert.equal(M.messengerSignal(ok.ok ? ok.result : null), true);
+  assert.equal(M.messengerSignal(lie.ok ? lie.result : null), false, "🔴 сигнал за вигаданою цитатою");
+  assert.equal(M.messengerSignal({ move: "client", quote: "скиньте у вайбер", quote_found: true }), false, "🔴 «клієнт попросив» став сигналом проти менеджера");
+  assert.equal(M.messengerSignal(null), null, "дзеркало: не розбирали — невідомо, а не «ні»");
+  assert.deepEqual(["admin", "kvp", "team_lead", "manager", "hr"].map((r) => M.canSeeMessengerSignal(r, false)), [true, true, false, false, false],
+    "🔴 до звірки сигнал бачить не адмін/КВП або вже бачить тімлід");
+  assert.deepEqual(["team_lead", "manager"].map((r) => M.canSeeMessengerSignal(r, true)), [true, false], "🔴 перемикач не відкрив тімліду або відкрив менеджеру");
+  assert.equal(CURRENT_BEHAVIOUR.messengerSignalTeamLeads, false, "🔴 сигнал тімлідам увімкнено за замовчуванням — до звірки з людьми");
+  const base = { repeatWindowDays: null, callbackGraceMin: 0, callbackMinDeadlineMin: 0, bannerTone: "neutral" };
+  const on = parseTunables({ ...base, messengerSignalTeamLeads: true });
+  assert.ok(on.ok && on.value.messengerSignalTeamLeads === true, "🔴 перемикач не зберігається");
+  assert.equal(parseTunables({ ...base, messengerSignalTeamLeads: "так" }).ok, false, "🔴 прийнято не так/ні");
+  assert.equal(M.MESSENGER_FROM, T.FIRST_TOUCH_RULE.startDate, "🔴 рубрика не з початку вибірки «Першого дотику»");
+  assert.ok(T.MESSENGER_BUDGET_MS > 0 && T.MESSENGER_BUDGET_MS + T.TRANSPORT_BUDGET_MS < T.LLM_BUDGET_MS - T.OBJ_BUDGET_MS - T.DEBT_BUDGET_MS, "🔴 бюджет рубрики месенджера поза бюджетом розбору");
+  assert.match(SRC("core/callAiTick.ts"), /runObjection\(RUBRIC_MESSENGER_V1, MESSENGER_KIT, await messengerCandidates\(env\.db, MESSENGER_FROM\), MESSENGER_BUDGET_MS, TRANSPORT_MAX_OUTPUT_TOKENS\)/, "🔴 рубрика месенджера не в тіку");
+});
+
+/**
+ * #3202 — ЖИВА СХЕМА: кандидати рубрики — лише розмови, де месенджер звучить; рядок списку рахує обіцянки в месенджер і бере
+ * сигнал із рубрики; картка = список; перемикач тімлідам переживає збереження й читання.
+ * 🧨 Червоніє, якщо в чергу підуть розмови без месенджера, список не бере рубрику чи обіцянки, або перемикач не пишеться в базу.
+ */
+test("#3202 ЖИВА СХЕМА: кандидати — лише з месенджером у тексті; рядок рахує обіцянки й бере сигнал; список = картка; перемикач у журналі", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard } = await import("./callAiScreen.js");
+  const T = await import("./callAiTick.js");
+  const M = await import("./firstTouchMessenger.js");
+  const { loadTunables, saveTunables, CURRENT_BEHAVIOUR } = await import("./firstTouchTunables.js");
+  const deal = (id: number, phone: string) => c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+    VALUES ($1,$2,8921932,1,'2026-10-22 10:00:00+03',$3,'ad',9011)`, [id, `D${String(id)}`, phone]);
+  await deal(73201, "0507320100"); await deal(73202, "0507320200");
+  const call = (u: string, phone: string) => c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ($1,'2026-10-22 10:10:00+03','out','ANSWERED',60,65,9011,$2,'https://rec/x')`, [u, phone]);
+  await call("ms1", "380507320100"); await call("ms2", "380507320200");
+  const tr = async (u: string, text: string) => (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done',$2::jsonb) RETURNING id`, [u, JSON.stringify([{ channel: 1, start: 0, end: 2, text, lang: "ukr" }])])).rows[0].id;
+  const an = (tid: string, rubric: string, result: unknown) => c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash',$2,'done',$3::jsonb)`, [tid, rubric, JSON.stringify(result)]);
+  // Базовий розбір БЕЗ обіцянок у месенджер (у спільній фікстурі `RESULT` одна така є — «надішлю договір»).
+  const noMsg = { ...RESULT, promises: RESULT.promises.filter((p) => p.channel !== "message") };
+  const withMsg = { ...noMsg, promises: [...noMsg.promises, { who: "manager", what: "скинути варіанти", deadline_text: "", quote: "скину у вайбер", quote_found: true, channel: "message", deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: false }] };
+  const t1 = await tr("ms1", "Я вам скину у Вайбер варіанти"); await an(t1, "first-touch-v4", withMsg);
+  await an(t1, M.RUBRIC_MESSENGER_V1, { move: "manager", quote: "скину у Вайбер", quote_found: true });
+  const t2 = await tr("ms2", "тент двадцять тонн"); await an(t2, "first-touch-v4", noMsg);
+  const cand = await T.messengerCandidates(c.db, "2026-10-22");
+  assert.ok(cand.includes("ms1") && !cand.includes("ms2"), `🔴 кандидати рубрики месенджера не ті: ${cand.join(",")}`);
+  const rows = (await aiCallsList(c.db, FAKE_AD, "2026-10-22", "2026-10-22", new Date("2026-10-22T15:00:00Z"), {})).rows;
+  const a = rows.find((r) => r.uniqueid === "ms1"), b = rows.find((r) => r.uniqueid === "ms2");
+  assert.ok(a && b, "🔴 розмов 22.10 немає в списку — гейту нема що перевіряти");
+  assert.deepEqual([a.messengerPromises, a.messengerSignal], [1, true], "🔴 рядок не рахує обіцянку в месенджер чи не бере сигнал");
+  assert.deepEqual([b.messengerPromises, b.messengerSignal], [0, null], "🔴 у розмови без месенджера зʼявився лічильник чи сигнал");
+  const card = await aiCallCard(c.db, "ms1", false, {});
+  assert.deepEqual([card?.row.messengerPromises, card?.row.messengerSignal], [1, true], "🔴 картка розійшлась зі списком");
+  await saveTunables(c.db, { ...CURRENT_BEHAVIOUR, messengerSignalTeamLeads: true }, { userId: null, name: "гейт" }, new Date());
+  assert.equal((await loadTunables(c.db)).messengerSignalTeamLeads, true, "🔴 перемикач не пережив збереження");
+  await saveTunables(c.db, { ...CURRENT_BEHAVIOUR }, { userId: null, name: "гейт" }, new Date());
+  assert.equal((await loadTunables(c.db)).messengerSignalTeamLeads, false);
+});
+
+/**
+ * #3203 — ФРОНТ І МЕЖА ВИДИМОСТІ: колонка «У месенджер» рахує розмови з обіцянкою в месенджер і «сам запропонував»; фільтри
+ * — одним правилом із лічильником; фільтр сигналу й лічильник «сам» — лише коли сервер дав право; сервер сам прибирає
+ * сигнал у списку й картці для ролей без права.
+ * 🧨 Червоніє, якщо колонка рахує інакше, ніж фільтр, фільтр сигналу видно без права, або сервер віддає сигнал усім.
+ */
+test("#3203 ФРОНТ: колонка й фільтри месенджера одним правилом; сигнал — лише з правом; сервер прибирає сигнал без права", async () => {
+  const V = await loadView() as unknown as { managerChecklist: (rows: readonly unknown[]) => { managerId: number | null; messengerCalls: number; messengerSelf: number }[];
+    TILE_MATCH: Record<string, (r: unknown) => boolean> };
+  const row = (o: Record<string, unknown>) => ({ inReport: true, managerId: 1, managerName: "М", checkScore: { yes: 1, total: 2 },
+    checklist: { request: "y", price: "y", promise: "o", objection: "o" }, messengerPromises: 0, messengerSignal: null, ...o });
+  const rows = [row({ messengerPromises: 2, messengerSignal: true }), row({ messengerPromises: 1, messengerSignal: false }), row({}), row({ inReport: false, messengerPromises: 1 })];
+  const l = V.managerChecklist(rows)[0];
+  assert.deepEqual([l.messengerCalls, l.messengerSelf], [2, 1], "🔴 колонка рахує обіцянки замість розмов, бере «Виключені» чи сигнал без «так»");
+  assert.equal(rows.slice(0, 3).filter(V.TILE_MATCH.messenger).length, l.messengerCalls, "🔴 фільтр і колонка «у месенджер» рахують по-різному");
+  assert.equal(rows.slice(0, 3).filter(V.TILE_MATCH.messengerSelf).length, l.messengerSelf, "🔴 фільтр і лічильник «сам запропонував» рахують по-різному");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /\.\.\.\(d\.canSeeMessengerSignal \? \[\["messengerSelf", "Сам запропонував месенджер"\] as const\] : \[\]\)/, "🔴 фільтр сигналу видно без права");
+  assert.match(sec, /\{d\.canSeeMessengerSignal && l\.messengerSelf > 0 && <div className="ftd-sub">сам запропонував: \{l\.messengerSelf\}<\/div>\}/, "🔴 лічильник «сам» видно без права");
+  const dash = SRC("routes/dashboard.ts");
+  assert.match(dash, /messengerPromises: r\.messengerPromises, messengerSignal: seeMsgSignal \? r\.messengerSignal : null,/, "🔴 список віддає сигнал ролям без права");
+  assert.match(dash, /if \(!canSeeMessengerSignal\(auth\.roleKey, \(await loadTunables\(pool\)\)\.messengerSignalTeamLeads\)\) card\.row\.messengerSignal = null;/, "🔴 картка віддає сигнал ролям без права");
 });

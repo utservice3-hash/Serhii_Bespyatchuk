@@ -4891,6 +4891,9 @@ REVOKE ALL ON first_touch_settings_log FROM ai_readonly;
 -- 🎯 Ціль «ціну озвучено», % (ТЗ «фінальні доробки» 08.10.2026: 50 %). NULL у старих рядках = 50 (`PRICE_TARGET_DEFAULT`).
 ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS price_target_pct INTEGER
   CHECK (price_target_pct IS NULL OR price_target_pct BETWEEN 1 AND 100);
+-- 💬 Задача 7184 (30.10.2026): сигнал «менеджер сам запропонував месенджер» бачать і тімліди — вмикає адмін після звірки з
+-- людьми. NULL у старих рядках = вимкнено.
+ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS messenger_signal_tl BOOLEAN;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би
