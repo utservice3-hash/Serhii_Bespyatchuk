@@ -415,7 +415,7 @@ test("#684 РЯДОК СПИСКУ ПЕРЕДАЧ: префікс Кваліфі
   assert.equal(blank.closedDay, "2026-09-05");
   // Форма — явними полями, рівно ті, що читає екран.
   assert.deepEqual(Object.keys(lost).sort(), ["autoDay", "carried", "client", "closedDay", "cls", "day", "dealId", "inPeriod", "lgId", "minus", "planPayDay", "price",
-    "pzId", "reason", "route", "salesManager", "stage", "url"]);
+    "pzId", "reason", "route", "salesManager", "split", "stage", "url"]);
 });
 
 /**

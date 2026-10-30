@@ -287,6 +287,11 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
       <td style={{ ...td, fontWeight: hasMoney && d.price ? 700 : 400, color: hasMoney && d.price ? undefined : MUTED }}>
         {d.minus ? <span title="У продажах угоду позначено «Мінусова угода»: перевезення розбито на мінус і окрему плюсову угоду, а плюсова з передачею лідгена не повʼязана. Машина рахується, сума — ні">мінусова · 0</span>
           : d.price ? formatAmountFull(d.price) : hasMoney ? "не проставлено" : "—"}
+        {d.split && d.split.length > 0 && (
+          <div style={{ fontSize: 11.5, fontWeight: 400, color: MUTED }} title="Одне перевезення, рахунок розділили на кілька угод; сума — разом, машина одна">
+            разом із рахунком {d.split.map((x, i) => <span key={x.dealId}>{i ? ", " : ""}<a href={x.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{x.dealId}</a></span>)}
+          </div>
+        )}
       </td>
       <td style={{ ...td, textAlign: "left", color: MUTED, whiteSpace: "normal", minWidth: 110, maxWidth: 220 }}>{detail}</td>
     </tr>
