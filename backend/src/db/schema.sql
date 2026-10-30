@@ -4894,6 +4894,12 @@ ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS price_target_pct I
 -- 💬 Задача 7184 (30.10.2026): сигнал «менеджер сам запропонував месенджер» бачать і тімліди — вмикає адмін після звірки з
 -- людьми. NULL у старих рядках = вимкнено.
 ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS messenger_signal_tl BOOLEAN;
+-- 💬 Рубрика месенджера — лише з 30.10.2026 (рішення Романа 30.10: «зупини чергу»; `MESSENGER_FROM`). Разово прибрати з
+-- черги історію, яку тік поставив до зміни: лише НЕрозібране (queued / failed / capped) по дзвінках до 30.10 — за нього
+-- ще не платили; розібране (`done`) лишається. Повторний прогін нічого не знаходить: нові записи до 30.10 не ставляться.
+DELETE FROM call_analyses a USING call_transcripts t, ringostat_calls rc
+ WHERE a.transcript_id = t.id AND rc.uniqueid = t.uniqueid AND a.rubric_version = 'first-touch-messenger-v1'
+   AND a.status IN ('queued', 'failed', 'capped') AND (rc.calldate AT TIME ZONE 'Europe/Kyiv')::date < DATE '2026-10-30';
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би

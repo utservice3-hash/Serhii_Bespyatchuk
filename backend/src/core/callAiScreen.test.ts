@@ -2161,9 +2161,26 @@ test("#3201 МЕСЕНДЖЕР: обіцянки менеджера в месе�
   const on = parseTunables({ ...base, messengerSignalTeamLeads: true });
   assert.ok(on.ok && on.value.messengerSignalTeamLeads === true, "🔴 перемикач не зберігається");
   assert.equal(parseTunables({ ...base, messengerSignalTeamLeads: "так" }).ok, false, "🔴 прийнято не так/ні");
-  assert.equal(M.MESSENGER_FROM, T.FIRST_TOUCH_RULE.startDate, "🔴 рубрика не з початку вибірки «Першого дотику»");
   assert.ok(T.MESSENGER_BUDGET_MS > 0 && T.MESSENGER_BUDGET_MS + T.TRANSPORT_BUDGET_MS < T.LLM_BUDGET_MS - T.OBJ_BUDGET_MS - T.DEBT_BUDGET_MS, "🔴 бюджет рубрики месенджера поза бюджетом розбору");
   assert.match(SRC("core/callAiTick.ts"), /runObjection\(RUBRIC_MESSENGER_V1, MESSENGER_KIT, await messengerCandidates\(env\.db, MESSENGER_FROM\), MESSENGER_BUDGET_MS, TRANSPORT_MAX_OUTPUT_TOKENS\)/, "🔴 рубрика месенджера не в тіку");
+});
+
+/**
+ * #3204 — РУБРИКА МЕСЕНДЖЕРА ЛИШЕ З 30.10.2026 (рішення Романа 30.10: «не треба 250 розбирати заново… зупини чергу»).
+ * Тік ставить у чергу кандидатів від `MESSENGER_FROM`, тож дата старту і є межею: поверни 20.09 — і тік знову поставить усю
+ * історію. Разове прибирання черги в схемі — лише НЕрозібране й лише до тієї самої дати.
+ */
+test("#3204 МЕСЕНДЖЕР ЛИШЕ НОВІ РОЗМОВИ: старт рубрики 30.10 (не з початку вибірки), схема прибирає з черги лише нерозібрану історію", async () => {
+  const M = await import("./firstTouchMessenger.js");
+  const T = await import("./callAiTick.js");
+  assert.equal(M.MESSENGER_FROM, "2026-10-30", "🔴 рубрика месенджера знову розбирає історію");
+  assert.ok(M.MESSENGER_FROM > T.FIRST_TOUCH_RULE.startDate, "дзеркало: старт рубрики пізніший за початок вибірки — історію не беремо");
+  const schema = SRC("db/schema.sql");
+  const del = /DELETE FROM call_analyses a USING call_transcripts t, ringostat_calls rc[^;]*;/.exec(schema)?.[0] ?? "";
+  assert.ok(del, "🔴 разового прибирання черги месенджера в схемі немає");
+  assert.match(del, /rubric_version = 'first-touch-messenger-v1'/, "🔴 прибирання не обмежене рубрикою месенджера");
+  assert.match(del, /status IN \('queued', 'failed', 'capped'\)/, "🔴 прибирання зачіпає розібране (done) — оплачені розбори зникли б з екрана");
+  assert.match(del, /< DATE '2026-10-30'/, "🔴 прибирання не обмежене історією до старту рубрики");
 });
 
 /**

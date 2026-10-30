@@ -15,8 +15,12 @@ import type { PromiseChannel } from "./callAiPromise.js";
  * Модуль чистий: рубрика, правило сигналу, хто бачить.
  */
 export const RUBRIC_MESSENGER_V1 = "first-touch-messenger-v1";
-/** Початок вибірки «Першого дотику» (`FIRST_TOUCH_RULE.startDate`). */
-export const MESSENGER_FROM = "2026-09-20";
+/**
+ * З якого дня рубрика розбирає розмови: лише нові (рішення Романа 30.10.2026: «не треба 250 розбирати заново… зупини
+ * чергу»). Було — з початку вибірки «Першого дотику» (20.09), і тік щопроходу ставив у чергу всю історію; уже розібрані
+ * 160 розмов лишаються на екрані, історію з черги разово прибирає `schema.sql`.
+ */
+export const MESSENGER_FROM = "2026-10-30";
 /** Хто запропонував перейти в месенджер. */
 export const MESSENGER_MOVES = ["none", "manager", "client"] as const;
 export type MessengerMove = typeof MESSENGER_MOVES[number];
