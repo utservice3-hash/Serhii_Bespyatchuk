@@ -3796,6 +3796,28 @@ export interface RateAnalysis {
   /** 🧮 Номер розрахунку — до нього привʼязується відгук; `feedback_due` — чи питати (раз на маршрут на день). */
   usage_id?: number | null;
   feedback_due?: boolean;
+  /** 🗺 Варіанти маршруту по дорогах (перший — основний; другий — «через Україну», коли основний іде Молдовою). */
+  routes?: RouteVariant[];
+  route_variant?: number;
+}
+/** 🗺 Один варіант маршруту: звідки км, скільки по Молдові, лінія для мапи й ставка саме на ці км. */
+export interface RouteVariant {
+  id: "main" | "ua";
+  label: string;
+  /** Проміжне місто автооб'їзду (Ізмаїл, Рені → через Одесу). */
+  via: { name: string; acc: string; lat: number; lon: number } | null;
+  distance_km: number;
+  /** Км за маршрутом до ручної правки (для «було N»); без правки — null. */
+  road_km: number | null;
+  /** Час у дорозі; лише для маршруту по дорогах без ручної правки. */
+  minutes: number | null;
+  /** road — по дорогах; approx — пряма × 1,25 (сервіс не відповів або місто поза зоною); manual — менеджер виправив км. */
+  source: "road" | "approx" | "manual";
+  /** Чому не по дорогах: `outside_area` — місто поза Європою (перевірити, чи те місто обрано), решта — збій сервісу. */
+  failure: string | null;
+  moldova_km: number;
+  line: [number, number][];
+  zone_recommendation: RateAnalysis["zone_recommendation"];
 }
 export type RateFeedbackRating = "ok" | "high" | "low" | "no";
 export async function sendRateFeedback(body: { usageId: number; rating: RateFeedbackRating; agreed: string; comment: string }): Promise<void> {
@@ -3818,6 +3840,8 @@ export interface RatesUsageStats {
   today_requests: number; today_users: number;
   by_day: { date: string; requests: number; users: number }[];
   top_routes: { route: string; count: number }[];
+  /** 📊 Залишок запитів сервісу маршрутів на сьогодні (останнє, що сервіс сказав); null — сервіс ще не питали. */
+  routing_quota?: { limit: number; remaining: number; reset_at: string | null; seen_at: string; renewed: boolean; low: boolean } | null;
 }
 
 export async function fetchTowns(q: string): Promise<Town[]> {
@@ -3841,6 +3865,12 @@ export async function analyzeRates(body: {
   frm: AnalyzePoint; to: AnalyzePoint; mass_min: number | null; mass_max: number | null; body_type_ids: number[];
 }): Promise<RateAnalysis> {
   const { data } = await api.post<RateAnalysis>("/rates/analyze", body);
+  return data;
+}
+/** ✍️ Перерахунок ТОГО САМОГО розрахунку: виправлені км або інший варіант маршруту. Lardi вдруге не питається. */
+export type RateReprice = Pick<RateAnalysis, "routes" | "route_variant" | "zone_recommendation" | "route"> & { usage_id: number };
+export async function repriceRates(body: Parameters<typeof analyzeRates>[0] & { usage_id: number; variant: number; km_override: number | null }): Promise<RateReprice> {
+  const { data } = await api.post<RateReprice>("/rates/analyze", body);
   return data;
 }
 

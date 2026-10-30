@@ -50,6 +50,11 @@ export const config = {
     // впізнає обидві мови (`core/zoneRates.ts`); з "uk" ще й розпізнались Волинська й Рівненська, яких "ru" не давала.
     lang: process.env.LARDIWEB_LANG ?? "uk",
   },
+  // 🗺 Сервіс маршрутів (OpenRouteService) — відстань по дорогах для калькулятора ставки (29.10.2026). Optional: без ключа
+  // калькулятор рахує «пряма × 1,25» з позначкою «приблизно» — як при будь-якій іншій відмові сервісу.
+  ors: {
+    key: process.env.ORS_API_KEY ?? "",
+  },
   // Time tracker: a separate system of ours with its own server and user table. Both optional
   // and empty by default — the nav item then does not render and the endpoints answer 503.
   // Deliberately not required(): the dashboard must boot without the tracker, which deploys on

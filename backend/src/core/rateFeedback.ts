@@ -51,12 +51,18 @@ export interface CalcSnapshot {
   zone: string | null; tonnage: string | null;
   client_min: number | null; client_max: number | null; carrier_min: number | null; carrier_max: number | null;
   margin: number | null; per_km_min: number | null; per_km_max: number | null;
+  /** 🗺 Звідки км (29.10.2026): `road` — по дорогах, `approx` — пряма × 1,25, `manual` — менеджер виправив; і який варіант
+   *  маршруту обрано. Старі знімки цих полів не мають — для них км бралися з пропозицій Lardi. */
+  distance_source?: "road" | "approx" | "manual" | null; route_variant?: string | null; road_km?: number | null; moldova_km?: number | null;
 }
+/** Маршрутна частина знімка (`routes/rates.ts → routeInfo`). */
+export type RouteInfo = { distance_source: "road" | "approx" | "manual"; route_variant: string; road_km: number | null; moldova_km: number };
 type ZoneOpt = { tonnage: string; selected: boolean; client_min: number | null; client_max: number | null; total_min: number | null; total_max: number | null; margin: number | null; per_km_min: number; per_km_max: number };
 export function snapshotOf(
   req: { mass_min: number | null; mass_max: number | null; body_type_ids: number[] },
   distanceKm: number | null,
   zone: { zone: string; options: ZoneOpt[] } | null | undefined,
+  route?: RouteInfo,
 ): CalcSnapshot {
   const sel = zone?.options.find((o) => o.selected) ?? null;
   return {
@@ -65,6 +71,8 @@ export function snapshotOf(
     client_min: sel?.client_min ?? null, client_max: sel?.client_max ?? null,
     carrier_min: sel?.total_min ?? null, carrier_max: sel?.total_max ?? null,
     margin: sel?.margin ?? null, per_km_min: sel?.per_km_min ?? null, per_km_max: sel?.per_km_max ?? null,
+    distance_source: route?.distance_source ?? null, route_variant: route?.route_variant ?? null,
+    road_km: route?.road_km ?? null, moldova_km: route?.moldova_km ?? null,
   };
 }
 

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  fetchTowns, fetchBodyTypes, analyzeRates, fetchRatesHealth, sendRateFeedback,
-  type Town, type BodyType, type RateAnalysis, type RateFeedbackRating,
+  fetchTowns, fetchBodyTypes, analyzeRates, repriceRates, fetchRatesHealth, sendRateFeedback,
+  type Town, type BodyType, type RateAnalysis, type RateFeedbackRating, type AnalyzePoint,
 } from "../../../api";
+import { RouteMap } from "./RouteMap";
 import { TownField, OfferTable, CityInfoView, CarriersView, StatsView } from "./RatesSection";
 import { RateFeedbackStats } from "./RateFeedbackStats";
 
@@ -19,6 +20,10 @@ const FEEDBACK_DELAY_MS = 15_000;
 const fmt = (n: number | null | undefined) => (n == null ? "—" : Number(n).toLocaleString("uk-UA"));
 const range = (a: number | null | undefined, b: number | null | undefined) =>
   a == null ? "—" : b == null || a === b ? fmt(a) : `${fmt(a)} – ${fmt(b)}`;
+const dur = (min: number | null) => (min == null ? null : min < 60 ? `${min} хв` : `${Math.floor(min / 60)} год${min % 60 ? ` ${min % 60} хв` : ""}`);
+const pointOf = (t: Town): AnalyzePoint => ({ town_id: t.id, area_id: t.area_id, lat: t.lat, lon: t.lon, label: t.name, area: t.area });
+/** Транзит іншою країною, коротший за це, — «короткий транзит» (інфо), довший — попередження з пропозицією об'їзду. */
+const SHORT_TRANSIT_KM = 30;
 
 /** Авто → вага, за якою сервер обирає рядок зонної карти (`ZONE_RATES`). */
 const AUTOS = [
@@ -57,6 +62,18 @@ const CSS = `
 .rs-fb.on{transform:none;opacity:1}
 @media (max-width:600px){.rs-fb{right:16px;bottom:16px}}
 @media (min-width:1100px){.rs-res{transition:margin-right .55s cubic-bezier(.2,.8,.2,1)}.rs-res.fb-on{margin-right:364px}}
+.rs-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+@media (min-width:1000px){.rs-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.1fr)}}
+.rs-map{height:300px;border-radius:12px;overflow:hidden;border:1px solid var(--border);z-index:0}
+@media (min-width:1000px){.rs-map{height:100%;min-height:420px}}
+.rs-left{container-type:inline-size}
+.rs-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@container (min-width:600px){.rs-tiles{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.rs-vars{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.rs-var{text-align:left;padding:12px 14px;border-radius:12px;cursor:pointer;color:var(--text)}
+.rs-note{font-size:13px;line-height:1.45;padding:8px 12px;border-radius:10px}
+.rs-note.warn{background:rgba(217,119,6,.10);border-left:3px solid #d97706}
+.rs-note.info{background:rgba(37,99,235,.08);border-left:3px solid #2563eb}
 @media (prefers-reduced-motion:reduce){.rs-in,.rs-skel{animation:none}.rs-btn,.rs-fb,.rs-res,.rs-acc::details-content,.rs-acc>summary::before{transition:none}}
 `;
 
@@ -95,6 +112,10 @@ export function RatesSimple() {
   const [to, setTo] = useState<Town | null>(null);
   const [frmText, setFrmText] = useState("");
   const [toText, setToText] = useState("");
+  const [vIdx, setVIdx] = useState(0);
+  const [kmEdit, setKmEdit] = useState<string | null>(null);
+  const [recalc, setRecalc] = useState(false);
+  const lastReq = useRef<Parameters<typeof analyzeRates>[0] | null>(null);
   const [auto, setAuto] = useState<(typeof AUTOS)[number]["id"]>("f20");
   const [bodies, setBodies] = useState<BodyType[]>([]);
   const [bodyId, setBodyId] = useState("");
@@ -118,12 +139,13 @@ export function RatesSimple() {
   }, []);
 
   // ⏱ Відгук — через 15 с перегляду результату і лише коли сервер каже «питати»; новий розрахунок — відлік заново.
+  // Лише НОВИЙ розрахунок (`runId`), не перерахунок км чи варіанта: інакше правка км закривала б відгук посеред відповіді.
   useEffect(() => {
     setFbOpen(false);
     if (!data?.feedback_due) return;
     const t = setTimeout(() => setFbOpen(true), FEEDBACK_DELAY_MS);
     return () => clearTimeout(t);
-  }, [data, runId]);
+  }, [runId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
 
   const resolve = async (picked: Town | null, q: string) => {
@@ -140,12 +162,13 @@ export function RatesSimple() {
       if (!f || !t) { setError("Вкажіть міста відправлення і призначення."); return; }
       setFrm(f); setFrmText(f.name); setTo(t); setToText(t.name);
       const a = AUTOS.find((x) => x.id === auto)!;
-      const r = await analyzeRates({
-        frm: { town_id: f.id, area_id: f.area_id, lat: f.lat, lon: f.lon, label: f.name, area: f.area },
-        to: { town_id: t.id, area_id: t.area_id, lat: t.lat, lon: t.lon, label: t.name, area: t.area },
+      const req = {
+        frm: pointOf(f), to: pointOf(t),
         mass_min: a.min, mass_max: a.max, body_type_ids: bodyId ? [Number(bodyId)] : [],
-      });
-      setData(r); setRunId((n) => n + 1);
+      };
+      lastReq.current = req;
+      const r = await analyzeRates(req);
+      setData(r); setRunId((n) => n + 1); setVIdx(0); setKmEdit(null);
       const key = `${f.name} → ${t.name}`;
       const next = [key, ...recent.filter((x) => x !== key)].slice(0, 5);
       setRecent(next); try { localStorage.setItem("ratesRecent", JSON.stringify(next)); } catch { /* приватне вікно */ }
@@ -169,7 +192,29 @@ export function RatesSimple() {
   };
 
   const swap = () => { setFrm(to); setTo(frm); setFrmText(toText); setToText(frmText); };
-  const zr = data?.zone_recommendation ?? null;
+
+  // ✍️ Той самий розрахунок, інші км чи інший варіант маршруту: сервер перераховує ставку і знімок для відгуку,
+  // Lardi вдруге не питає — пропозиції й ринок лишаються з першого розрахунку.
+  const reprice = async (variant: number, km: number | null) => {
+    if (!lastReq.current || !data?.usage_id) return;
+    setRecalc(true); setKmEdit(null);
+    try {
+      const r = await repriceRates({ ...lastReq.current, usage_id: data.usage_id, variant, km_override: km });
+      setData((d) => (d ? { ...d, routes: r.routes, route_variant: r.route_variant, zone_recommendation: r.zone_recommendation, route: r.route } : d));
+      setVIdx(r.route_variant ?? variant);
+    } catch { setError("Не вдалося перерахувати — спробуйте ще раз"); }
+    finally { setRecalc(false); }
+  };
+  const recalcKm = (km: number | null) => reprice(vIdx, km);
+  const saveKm = () => {
+    const v = Number(String(kmEdit ?? "").replace(/\s/g, "").replace(",", "."));
+    if (Number.isFinite(v) && v > 0 && v < 10000) void recalcKm(Math.round(v)); else setKmEdit(null);
+  };
+  const routes = data?.routes ?? [];
+  const rv = routes[Math.min(vIdx, Math.max(routes.length - 1, 0))] ?? null;
+  const otherRv = routes.length > 1 ? routes.find((x) => x !== rv) ?? null : null;
+  const uaAlt = routes.find((x) => x.id === "ua") ?? null;
+  const zr = rv?.zone_recommendation ?? data?.zone_recommendation ?? null;
   const sel = zr?.options.find((o) => o.selected) ?? null;
   const cMin = useCountUp(sel?.client_min, runId), cMax = useCountUp(sel?.client_max, runId);
   const autoLabel = AUTOS.find((x) => x.id === auto)!.label.toLowerCase();
@@ -178,6 +223,36 @@ export function RatesSimple() {
   const offersN = (data?.cargo?.offers?.length ?? 0) + (data?.lorry?.offers?.length ?? 0);
   const topBodies = bodies.filter((b) => TOP_BODIES.includes(b.name));
   const otherBodies = bodies.filter((b) => !TOP_BODIES.includes(b.name));
+
+  /** 📏 Плитка «Відстань»: км — головний множник ставки, тож їх видно поруч із тарифом і їх можна виправити олівцем. */
+  const distanceTile = () => {
+    if (!rv) return null;
+    const manual = rv.source === "manual", approx = rv.source === "approx" || rv.minutes == null;
+    return (
+      <div className="rs-in rs-d2" style={{ ...tile, position: "relative", boxShadow: manual ? `inset 0 0 0 1.5px ${ACC}` : approx ? "inset 0 0 0 1.5px #d97706" : undefined }}>
+        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Відстань</div>
+        {kmEdit == null ? (
+          <>
+            <button type="button" className="rs-btn" onClick={() => setKmEdit(String(rv.distance_km))} disabled={recalc} aria-label="Змінити км" title="Змінити км"
+              style={{ position: "absolute", top: 6, right: 6, width: 30, height: 30, border: 0, borderRadius: 8, background: "transparent", color: ACC, fontSize: 15, cursor: "pointer" }}>✎</button>
+            <div style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmt(rv.distance_km)} км</div>
+            <div style={{ fontSize: 12, color: manual ? ACC : approx ? "#b45309" : "var(--text-muted)", marginTop: 2 }}>
+              {manual ? <>вручну{rv.road_km != null ? ` · було ${fmt(rv.road_km)}` : ""} · <button type="button" onClick={() => void recalcKm(null)} style={{ border: 0, background: "transparent", color: ACC, padding: 0, fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>повернути</button></>
+                : approx ? "приблизно" : rv.minutes != null ? `~${dur(rv.minutes)}` : ""}
+            </div>
+          </>
+        ) : (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 2 }}>
+            <input autoFocus inputMode="numeric" value={kmEdit} aria-label="Відстань, км" onChange={(e) => setKmEdit(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") saveKm(); if (e.key === "Escape") setKmEdit(null); }}
+              style={{ ...ctl, height: 32, width: "100%", minWidth: 0, fontSize: 15, fontWeight: 700 }} />
+            <button type="button" className="rs-btn" onClick={saveKm} aria-label="Перерахувати" title="Перерахувати" style={{ flex: "none", width: 32, height: 32, border: 0, borderRadius: 8, background: ACC, color: "#fff", cursor: "pointer" }}>✓</button>
+            <button type="button" className="rs-btn" onClick={() => setKmEdit(null)} aria-label="Скасувати" title="Скасувати" style={{ flex: "none", width: 32, height: 32, border: "1px solid var(--border)", borderRadius: 8, background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>✕</button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, width: "100%" }}>
@@ -242,39 +317,83 @@ export function RatesSimple() {
       {error && <div className="rs-in" style={{ ...box, padding: 16, color: "#dc2626", fontSize: 14 }}>{error}</div>}
 
       {data && !loading && (
-        <section key={runId} className={`rs-in rs-res${fbOpen ? " fb-on" : ""}`} style={{ ...box, padding: 24, display: "flex", flexDirection: "column", gap: 18 }}>
-          <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
-            {data.route.from} → {data.route.to}{data.route.distance_km ? ` · ${fmt(data.route.distance_km)} км` : ""} · {autoLabel}
+        // З мапою відгук лягає поверх мапи, а не зсуває картку: інакше ставка й мапа стискаються вдвоє.
+        <section key={runId} className={`rs-in rs-res${fbOpen && !(rv && rv.line.length > 1) ? " fb-on" : ""}`} style={{ ...box, padding: 24, display: "flex", flexDirection: "column", gap: 18 }}>
+          <div className="rs-grid">
+            <div className="rs-left" style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                {data.route.from}{rv?.via ? ` → ${rv.via.name}` : ""} → {data.route.to}{rv ? ` · ${fmt(rv.distance_km)} км` : data.route.distance_km ? ` · ${fmt(data.route.distance_km)} км` : ""} · {autoLabel}
+              </div>
+
+              {routes.length > 1 && (
+                <div className="rs-in rs-d1" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>Варіанти маршруту — оберіть, як поїде перевізник</div>
+                  <div className="rs-vars" role="radiogroup" aria-label="Варіанти маршруту">
+                    {routes.map((v, i) => {
+                      const on = v === rv, o = v.zone_recommendation?.options.find((x) => x.selected);
+                      return (
+                        <button key={v.id} type="button" role="radio" aria-checked={on} className="rs-btn rs-var" onClick={() => { if (i !== vIdx) { setVIdx(i); void reprice(i, null); } }} disabled={recalc}
+                          style={{ border: on ? `2px solid ${ACC}` : "1px solid var(--border)", background: on ? "rgba(200,16,46,0.05)" : "var(--card-bg)" }}>
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>{on ? "◉" : "○"} {v.label}</div>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                            {fmt(v.distance_km)} км{v.minutes != null ? ` · ~${dur(v.minutes)}` : ""}{v.moldova_km ? ` · по Молдові ${fmt(v.moldova_km)} км` : ""}
+                          </div>
+                          <div style={{ fontSize: 15, fontWeight: 700, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{range(o?.client_min, o?.client_max)} грн</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {sel?.client_min != null ? (
+                <>
+                  <div className="rs-in rs-d1">
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>Ставка клієнту{routes.length > 1 && rv ? ` · ${rv.label}` : ""}</div>
+                    <div style={{ fontSize: "clamp(30px, 2.8vw, 40px)", fontWeight: 700, letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums", opacity: recalc ? 0.4 : 1, transition: "opacity .2s" }}>{range(cMin, cMax)} грн</div>
+                  </div>
+                  <div className="rs-tiles">
+                    {rv && distanceTile()}
+                    <div className="rs-in rs-d2" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>Перевізнику</div><div style={{ fontSize: 18, fontWeight: 700 }}>{range(sel.total_min, sel.total_max)}</div></div>
+                    <div className="rs-in rs-d3" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>Маржа UTS</div><div style={{ fontSize: 18, fontWeight: 700 }}>{fmt(sel.margin)}</div></div>
+                    <div className="rs-in rs-d4" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>грн/км</div><div style={{ fontSize: 18, fontWeight: 700 }}>{sel.per_km_min === sel.per_km_max ? sel.per_km_min : `${sel.per_km_min}–${sel.per_km_max}`}</div></div>
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 15, color: "var(--text-muted)" }}>Для цього напрямку зонна ставка не визначилась — дивіться пропозиції Lardi нижче.</div>
+              )}
+
+              {/* Зонна ставка не визначилась — відстань однаково показуємо: вона знадобиться для розмови з перевізником. */}
+              {rv && sel?.client_min == null && <div className="rs-tiles">{distanceTile()}</div>}
+
+              {rv && (rv.source === "approx" || rv.moldova_km > 0 || zr?.short_haul) && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {rv.source === "approx" && rv.failure === "outside_area" && <div className="rs-note warn">⚠️ <b>Місто поза Європою.</b> Схоже, обрано не те місто (є однойменні в інших країнах) — перевірте «Звідки» і «Куди». Відстань приблизна: пряма × 1,25.</div>}
+                  {rv.source === "approx" && rv.failure !== "outside_area" && <div className="rs-note warn">⚠️ <b>Відстань приблизна.</b> Сервіс маршрутів не відповів — рахуємо пряму × 1,25, на мапі пунктир. Перевірте км перед тим, як називати ставку.</div>}
+                  {rv.moldova_km > SHORT_TRANSIT_KM && <div className="rs-note warn">🇲🇩 <b>Маршрут іде через Молдову — {fmt(rv.moldova_km)} км із {fmt(rv.distance_km)}.</b> {uaAlt && uaAlt !== rv ? `Якщо перевізник їде Україною — оберіть варіант «${uaAlt.label}».` : "Якщо перевізник їде інакше — змініть км."}</div>}
+                  {rv.moldova_km > 0 && rv.moldova_km <= SHORT_TRANSIT_KM && <div className="rs-note info">🇲🇩 Короткий транзит через Молдову (~{fmt(rv.moldova_km)} км) — іншої дороги з цього району немає.</div>}
+                  {zr?.short_haul && <div className="rs-note info">↔️ Коротке плече (до 100 км) — тариф × 1,5.</div>}
+                </div>
+              )}
+
+              <div className="rs-in rs-d4" style={{ display: "flex", flexWrap: "wrap", gap: "6px 20px", fontSize: 13, color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+                <span>Ринок зараз: замовники <b style={{ color: "var(--text)" }}>{data.recommendation?.cargo_median ? `${fmt(data.recommendation.cargo_median)} грн` : "—"}</b> ({cargoPriced} зі ставкою)</span>
+                <span>перевізники <b style={{ color: "var(--text)" }}>{data.recommendation?.lorry_median ? `${fmt(data.recommendation.lorry_median)} грн` : "договірна"}</b> ({lorryPriced} зі ставкою)</span>
+              </div>
+              {zr && (
+                <details className="rs-acc" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                  <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 600 }}>Як порахували</summary>
+                  <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 8, lineHeight: 1.5 }}>
+                    Зонна карта: зона «{zr.zone_label}» ({zr.zone_src}) · {zr.from_area ?? "?"} → {zr.to_area ?? "?"}
+                    {sel ? ` · тариф ${sel.per_km_min}–${sel.per_km_max} грн/км × ${fmt(rv?.distance_km ?? zr.distance_km)} км + маржа ${fmt(sel.margin)} грн` : ""}
+                    {zr.short_haul ? " · ×1,5 за коротке плече" : ""}
+                    {rv ? ` · відстань: ${rv.source === "road" ? "маршрут по дорогах" : rv.source === "manual" ? "вказана менеджером" : "пряма × 1,25"}` : ""}
+                  </div>
+                </details>
+              )}
+            </div>
+            {rv && rv.line.length > 1 && <RouteMap line={rv.line} other={otherRv?.line ?? null} approx={rv.source === "approx" || rv.minutes == null /* ручні км поверх приблизної лінії — лінія лишається пунктиром */} via={rv.via ? [rv.via.lat, rv.via.lon] : null} />}
           </div>
-          {sel?.client_min != null ? (
-            <>
-              <div className="rs-in rs-d1">
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>Ставка клієнту</div>
-                <div style={{ fontSize: 40, fontWeight: 700, letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums" }}>{range(cMin, cMax)} грн</div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-                <div className="rs-in rs-d2" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>Перевізнику</div><div style={{ fontSize: 18, fontWeight: 700 }}>{range(sel.total_min, sel.total_max)}</div></div>
-                <div className="rs-in rs-d3" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>Маржа UTS</div><div style={{ fontSize: 18, fontWeight: 700 }}>{fmt(sel.margin)}</div></div>
-                <div className="rs-in rs-d4" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>грн/км</div><div style={{ fontSize: 18, fontWeight: 700 }}>{sel.per_km_min === sel.per_km_max ? sel.per_km_min : `${sel.per_km_min}–${sel.per_km_max}`}</div></div>
-              </div>
-            </>
-          ) : (
-            <div style={{ fontSize: 15, color: "var(--text-muted)" }}>Для цього напрямку зонна ставка не визначилась — дивіться пропозиції Lardi нижче.</div>
-          )}
-          <div className="rs-in rs-d4" style={{ display: "flex", flexWrap: "wrap", gap: "6px 20px", fontSize: 13, color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-            <span>Ринок зараз: замовники <b style={{ color: "var(--text)" }}>{data.recommendation?.cargo_median ? `${fmt(data.recommendation.cargo_median)} грн` : "—"}</b> ({cargoPriced} зі ставкою)</span>
-            <span>перевізники <b style={{ color: "var(--text)" }}>{data.recommendation?.lorry_median ? `${fmt(data.recommendation.lorry_median)} грн` : "договірна"}</b> ({lorryPriced} зі ставкою)</span>
-          </div>
-          {zr && (
-            <details className="rs-acc" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-              <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 600 }}>Як порахували</summary>
-              <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 8, lineHeight: 1.5 }}>
-                Зонна карта: зона «{zr.zone_label}» ({zr.zone_src}) · {zr.from_area ?? "?"} → {zr.to_area ?? "?"}
-                {sel ? ` · тариф ${sel.per_km_min}–${sel.per_km_max} грн/км × відстань + маржа ${fmt(sel.margin)} грн` : ""}
-                {zr.short_haul ? " · ×1,5 за коротке плече" : ""}
-              </div>
-            </details>
-          )}
           <details className="rs-acc">
             <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 600 }}>Пропозиції Lardi · {offersN}</summary>
             <OfferTable title="Замовники (вантажі)" side={data.cargo} cls="all" />

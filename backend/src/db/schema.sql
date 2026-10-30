@@ -7228,3 +7228,37 @@ ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS violations    INTEGE
 ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS violation_log JSONB;
 ALTER TABLE training_quiz_attempts ADD COLUMN IF NOT EXISTS ended_reason  TEXT
   CONSTRAINT training_quiz_attempts_ended_reason CHECK (ended_reason IS NULL OR ended_reason IN ('violations'));
+
+-- 🗺 МАРШРУТИ ДЛЯ СТАВКИ ПО ДОРОГАХ (Роман 29.10.2026, Сергій погодив). Один рядок на пару міст і варіант: сервіс маршрутів
+-- питаємо РАЗ, далі — звідси (у сервісу денний ліміт). Ключ — координати з точністю ~100 м (`core/roadRoute.ts → keyPoint`).
+-- Без строку дії (рішення Романа 29.10: дороги міняються рідко; за потреби — TRUNCATE, наступні розрахунки наповнять знову).
+-- «Приблизні» маршрути (сервіс не відповів) сюди НЕ пишуться. Відкат даних (код їх не прибирає): DROP TABLE road_routes;
+CREATE TABLE IF NOT EXISTS road_routes (
+  from_lat NUMERIC(7,3) NOT NULL,
+  from_lon NUMERIC(7,3) NOT NULL,
+  to_lat NUMERIC(7,3) NOT NULL,
+  to_lon NUMERIC(7,3) NOT NULL,
+  variant TEXT NOT NULL CHECK (variant IN ('main', 'ua')),
+  km INTEGER NOT NULL CHECK (km > 0),
+  minutes INTEGER NOT NULL CHECK (minutes >= 0),
+  moldova_km INTEGER NOT NULL DEFAULT 0 CHECK (moldova_km >= 0),
+  via JSONB,
+  line JSONB NOT NULL,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_lat, from_lon, to_lat, to_lon, variant)
+);
+-- 🌍 Країни маршруту (коди сервісу; 211 — Україна, 129 — Молдова). Потрібні, щоб «через Україну» справді йшов Україною:
+-- перша редакція (29.10.2026) оминала лише Молдову і вела Львів→Ізмаїл через Румунію. Рядки без країн — з тієї редакції:
+-- видаляються ОДИН раз за умовою (нові рядки країни мають завжди), наступні розрахунки наповнять кеш знову.
+ALTER TABLE road_routes ADD COLUMN IF NOT EXISTS countries INTEGER[];
+DELETE FROM road_routes WHERE countries IS NULL;
+
+-- 📊 ЗАЛИШОК ЗАПИТІВ СЕРВІСУ МАРШРУТІВ (Роман 29.10.2026: «лише в статистиці, попередження при менше 200»). Один рядок на
+-- сервіс: останнє, що сервіс сам повідомив у заголовках відповіді. Окремо його не питаємо. Відкат даних: DROP TABLE service_quota;
+CREATE TABLE IF NOT EXISTS service_quota (
+  service TEXT PRIMARY KEY,
+  quota_limit INTEGER NOT NULL CHECK (quota_limit > 0),
+  remaining INTEGER NOT NULL CHECK (remaining >= 0),
+  reset_at TIMESTAMPTZ,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
