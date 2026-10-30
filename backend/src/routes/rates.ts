@@ -533,9 +533,9 @@ ratesRouter.post("/feedback", async (req, res) => {
     const own = await pool.query(`SELECT 1 FROM lardi_usage WHERE id = $1 AND user_id = $2`, [f.usageId, req.auth!.userId]);
     if (!own.rowCount) return res.status(404).json({ error: "Розрахунок не знайдено" });
     const r = await pool.query(
-      `INSERT INTO rate_feedback (usage_id, user_id, rating, agreed_rate, comment) VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO rate_feedback (usage_id, user_id, rating, agreed_rate, agreed_carrier, comment) VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (usage_id) DO NOTHING RETURNING id`,
-      [f.usageId, req.auth!.userId, f.rating, f.agreed, f.comment]);
+      [f.usageId, req.auth!.userId, f.rating, f.agreed, f.agreedCarrier, f.comment]);
     if (!r.rowCount) return res.status(409).json({ error: "Відгук на цей розрахунок уже є" });
     res.status(201).json({ id: r.rows[0].id });
   } catch (e) {
@@ -548,20 +548,20 @@ ratesRouter.post("/feedback", async (req, res) => {
 ratesRouter.get("/feedback/stats", requirePerm("view_rate_feedback"), async (req, res) => {
   const days = Math.max(1, Math.min(Number(req.query.days) || 30, 365));
   try {
-    const rows = await pool.query<{ rating: FeedbackRow["rating"]; agreed: string | null; comment: string | null; at: Date; author: string | null; frm: string; tox: string; calc: FeedbackRow["calc"] }>(
+    const rows = await pool.query<{ rating: FeedbackRow["rating"]; agreed: string | null; agreed_carrier: string | null; comment: string | null; at: Date; author: string | null; frm: string; tox: string; calc: FeedbackRow["calc"] }>(
       // Автор: у 52 з 68 активних акаунтів ПІБ порожнє (замір 27.10.2026) — тоді імʼя менеджера CRM, інакше пошта.
-      `SELECT f.rating, f.agreed_rate AS agreed, f.comment, f.created_at AS at,
+      `SELECT f.rating, f.agreed_rate AS agreed, f.agreed_carrier, f.comment, f.created_at AS at,
               COALESCE(NULLIF(btrim(us.full_name), ''), m.name, us.email) AS author, u.frm, u.tox, u.calc
          FROM rate_feedback f JOIN lardi_usage u ON u.id = f.usage_id
          LEFT JOIN users us ON us.id = f.user_id LEFT JOIN managers m ON m.id = us.manager_id
         WHERE f.created_at >= now() - ($1 || ' days')::interval`, [days]);
     const calcs = await pool.query<{ n: string }>(
       `SELECT COUNT(*) AS n FROM lardi_usage WHERE ts >= now() - ($1 || ' days')::interval`, [days]);
-    const feed: FeedbackRow[] = rows.rows.map((r) => ({ rating: r.rating, agreed: r.agreed == null ? null : Number(r.agreed), comment: r.comment,
-      at: r.at, author: r.author, frm: r.frm, tox: r.tox, calc: r.calc }));
+    const feed: FeedbackRow[] = rows.rows.map((r) => ({ rating: r.rating, agreed: r.agreed == null ? null : Number(r.agreed),
+      agreedCarrier: r.agreed_carrier == null ? null : Number(r.agreed_carrier), comment: r.comment, at: r.at, author: r.author, frm: r.frm, tox: r.tox, calc: r.calc }));
     const st = feedbackStats(feed, Number(calcs.rows[0]?.n ?? 0));
     res.json({ days, total: st.total, calculations: st.calculations, coverage: st.coverage, byRating: st.byRating, okShare: st.okShare,
-      deviation: st.deviation, byTonnage: st.byTonnage, byZone: st.byZone, comments: st.comments });
+      deviation: st.deviation, byTonnage: st.byTonnage, byZone: st.byZone, comments: st.comments, accuracy: st.accuracy });
   } catch (e) {
     res.status(500).json({ error: `feedback stats error: ${String(e).slice(0, 120)}` });
   }

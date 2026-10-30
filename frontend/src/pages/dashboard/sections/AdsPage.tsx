@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AdsSection } from "./AdsSection";
+import { AdBalanceChip } from "./AdBalanceChip";
 import { PeriodNav } from "../PeriodNav";
 import { monthStart, periodOf, todayKyiv, type PeriodState } from "../periodRules";
 
@@ -22,7 +23,10 @@ export default function AdsPage({ role }: { role?: string }) {
   const adsPeriod = periodOf(nav);
   return (
     <div>
-      <h1 className="page-title">📣 Реклама</h1>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <h1 className="page-title">📣 Реклама</h1>
+        <AdBalanceChip />
+      </div>
       <PeriodNav state={nav} onPatch={(patch) => setNav((s) => ({ ...s, ...patch }))} today={today} />
       {/* Право змінювати план мусить збігатися з межами роуту PUT /settings/ad-plan
           (deny: kvp, financier, hr, team_lead, manager). */}

@@ -304,6 +304,22 @@ CREATE TABLE IF NOT EXISTS ad_ga4_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_ad_ga4_daily_day ON ad_ga4_daily(day);
 
+-- 💳 БАЛАНС РЕКЛАМНОГО КАБІНЕТУ — ТОЧКИ ЗВІРКИ (30.10.2026, `core/adBalance.ts`, гейт #7140).
+-- Залишок з ПДВ на ПОЧАТОК дня `as_of`; від останньої точки дашборд рахує: + поповнення з «Виписки» − 1,2 × витрати GA4.
+-- Перша точка — 01.06.2026 від нуля: того дня в «Виписці» перша оплата ТОВ «ГУГЛ». Звірено 30.10.2026: розрахунок
+-- 29 452 проти 29 205,81 у кабінеті (0,8%). Нові точки ставить адмін кнопкою «Звірити з кабінетом» (`cabinet_balance` —
+-- число, яке він вписав; `balance` — те саме на початок дня).
+CREATE TABLE IF NOT EXISTS ad_balance_anchor (
+  id SERIAL PRIMARY KEY,
+  as_of DATE NOT NULL,
+  balance NUMERIC NOT NULL,
+  cabinet_balance NUMERIC,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO ad_balance_anchor (as_of, balance)
+  SELECT DATE '2026-06-01', 0 WHERE NOT EXISTS (SELECT 1 FROM ad_balance_anchor);
+
 -- 💰 МІСЯЧНИЙ ПЛАН ВИТРАТ НА РЕКЛАМУ — ручний, і це не тимчасово (рішення власника 09.09.2026).
 --
 -- 🔴 ЧОМУ РУЧНИЙ, ЯКЩО В НАС УМОВА «ВСЕ АВТОМАТИЧНО». Умова стосується того, що МОЖНА
@@ -6336,6 +6352,9 @@ ALTER TABLE managers ADD COLUMN IF NOT EXISTS keep_without_crm BOOLEAN NOT NULL 
 -- має повністю все залишитися». Умова на kommo_user_id — щоб не позначити іншу людину, якщо id колись зсунеться.
 -- `is_active = true` — разом із позначкою: якщо в Kommo її видалили РАНІШЕ за викат, синк уже встиг вимкнути запис.
 UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;
+-- Денисюк Роман (managers.id 387273, Kommo 15537212): користувача в Kommo видалили, синк вимкнув запис — і Роман зник
+-- з вибору виконавця задач (Юля 28.10.2026: «не можу виставляти задачі тобі»). Роман 28.10.2026 — лишити в дашборді, без команди.
+UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 387273 AND kommo_user_id = '15537212' AND NOT keep_without_crm;
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🏛 PROZORRO-ЛІДИ (задача #5299, ТЗ «Щоденний збір лідів з Prozorro у Kommo»; прохід 1 — збір і пробний режим).
@@ -7321,3 +7340,15 @@ UPDATE lardi_offers o SET from_lat = t.lat, from_lon = t.lon FROM towns_geo t
 UPDATE lardi_offers o SET to_lat = t.lat, to_lon = t.lon FROM towns_geo t
   WHERE o.to_lat IS NULL AND o.tox IS NOT NULL AND t.name_key = lower(regexp_replace(btrim(o.tox), '[’''`ʼ]', '', 'g'));
 CREATE INDEX IF NOT EXISTS idx_lardi_offers_market ON lardi_offers (first_seen) WHERE side = 'cargo' AND is_uah AND from_lat IS NOT NULL;
+
+-- ═══ 📐 «ПОРАХУВАЛИ → ВИЙШЛО» (Роман 30.10.2026; core/rateAccuracy.ts) ═══
+-- Ставка ПЕРЕВІЗНИКУ, на яку домовились: саме її прогнозує ринок (клієнтська = перевізнику + маржа), тож без неї
+-- ринкову ціну нема з чим звіряти. Необовʼязкова. Відкат даних: ALTER TABLE rate_feedback DROP COLUMN agreed_carrier;
+ALTER TABLE rate_feedback ADD COLUMN IF NOT EXISTS agreed_carrier NUMERIC(12,2) CHECK (agreed_carrier IS NULL OR agreed_carrier > 0);
+
+-- 🙅 «Тендери Prozorro» — НЕ для фінансиста (рішення Романа 29.10.2026: «фінансист не має бачити прозорро, його весь час
+-- хтось включає»). «Хтось» — це сам викат: синк «financier = екрани адміна» вище копіює фінансисту кожен екран адміна,
+-- і вимкнене 29.10 у Налаштуваннях повернулось на викаті 4c13577 30.10 (матриця #11: 403 → 400) без запису в аудиті —
+-- той самий механізм, що з «Наймом» (#741) і БА (#741b). Зняття — тут, ПІСЛЯ синку. Тримає #2812.
+UPDATE roles SET screen_access = screen_access - 'prozorro'
+ WHERE key = 'financier';

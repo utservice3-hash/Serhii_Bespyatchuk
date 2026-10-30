@@ -367,6 +367,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
      відмова в обробнику) з власним прийманням, а не вибір при резолюції мержу. */
   { method: "GET", path: "/api/dashboard/ads/deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
+  /* 💳 Баланс рекламного кабінету (30.10.2026): «тільки адміни» — tab-гейт «ads» + requireRole("admin"),
+     тож тімлід, у якого вкладка «Реклама» є, отримує 403. POST — звірка числом із кабінету (запис). */
+  { method: "GET", path: "/api/dashboard/ads/balance", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/dashboard/ads/balance", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   /* 📵 ПРОПУЩЕНІ ДЗВІНКИ (ТЗ-1, 14.09.2026).
      🟢 МЕНЕДЖЕР ТУТ ДОЗВОЛЕНИЙ — і це РОЗБІЖНІСТЬ із сусідніми екранами, зроблена
      свідомо, а не недогляд. `/ads`, `/leadgen`, `/lead-quality` закриті менеджеру

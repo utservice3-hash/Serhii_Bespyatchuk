@@ -132,6 +132,7 @@ export function RatesSimple() {
   const [fbError, setFbError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const [agreed, setAgreed] = useState("");
+  const [agreedCarrier, setAgreedCarrier] = useState("");
   const [note, setNote] = useState("");
   const [recent, setRecent] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem("ratesRecent") ?? "[]"); } catch { return []; } });
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -159,7 +160,7 @@ export function RatesSimple() {
   };
 
   const run = async (fText = frmText, tText = toText, fPicked = frm, tPicked = to) => {
-    setLoading(true); setError(null); setData(null); setPick(null); setSent(false); setAgreed(""); setNote(""); setFbError(null);
+    setLoading(true); setError(null); setData(null); setPick(null); setSent(false); setAgreed(""); setAgreedCarrier(""); setNote(""); setFbError(null);
     try {
       const f = await resolve(fPicked, fText), t = await resolve(tPicked, tText);
       if (!f || !t) { setError("Вкажіть міста відправлення і призначення."); return; }
@@ -185,7 +186,7 @@ export function RatesSimple() {
     if (!data?.usage_id || !pick) return;
     setSending(true); setFbError(null);
     try {
-      await sendRateFeedback({ usageId: data.usage_id, rating: pick, agreed, comment: note });
+      await sendRateFeedback({ usageId: data.usage_id, rating: pick, agreed, agreedCarrier, comment: note });
       setSent(true);
       hideTimer.current = setTimeout(() => setFbOpen(false), 2600);
     } catch (e: unknown) {
@@ -369,7 +370,7 @@ export function RatesSimple() {
                   <div className={`rs-note ${diffFlag ? "warn" : "info"}`} data-price-source={price.source}>
                     {price.source === "market" ? (
                       <>📈 <b>Ринкова ціна</b> — за {market?.n ?? "—"} схожими оголошеннями за {market?.window_days ?? 30} днів.
-                        {sel && price.tariff_diff_pct != null && <> Тариф КВП: {range(sel.client_min, sel.client_max)} грн ({pct(price.tariff_diff_pct)} до ринку){diffFlag ? " — розбіжність велика, перевірте ставку" : ""}.</>}</>
+                        {sel && price.tariff_diff_pct != null && <> Тариф КВП: {range(sel.client_min, sel.client_max)} грн — ринок {price.tariff_diff_pct > 0 ? "вищий" : "нижчий"} за тариф на {Math.abs(price.tariff_diff_pct)}%{diffFlag ? ", розбіжність велика — перевірте ставку" : ""}.</>}</>
                     ) : price.tariff_reason === "market_outlier" ? (
                       <>🧮 <b>Ставка за тарифом КВП.</b> Схожих оголошень ({market?.n ?? 0}) замало, щоб на них спиратись: вони дають перевізнику ≈ {fmt(market?.carrier_median)} грн ({pct(price.tariff_diff_pct ?? 0)} до тарифу) — надто далеко, схоже на шум.</>
                     ) : price.tariff_reason === "light_class" ? (
@@ -450,6 +451,9 @@ export function RatesSimple() {
             </div>
             <label style={lbl}>Ставка, яку погодили з клієнтом (необовʼязково)
               <input value={agreed} onChange={(e) => setAgreed(e.target.value)} inputMode="numeric" placeholder="напр. 44 000" tabIndex={fbOpen ? 0 : -1} style={{ ...ctl, padding: "0 12px" }} />
+            </label>
+            <label style={lbl}>Ставка перевізнику, яку погодили (необовʼязково)
+              <input value={agreedCarrier} onChange={(e) => setAgreedCarrier(e.target.value)} inputMode="numeric" placeholder="напр. 38 000" tabIndex={fbOpen ? 0 : -1} style={{ ...ctl, padding: "0 12px" }} />
             </label>
             <label style={lbl}>Коментар (необовʼязково)
               <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Що не так або чого бракує" tabIndex={fbOpen ? 0 : -1}

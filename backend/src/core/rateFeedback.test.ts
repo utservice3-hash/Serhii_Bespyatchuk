@@ -37,7 +37,7 @@ test("#2770 ВІДГУК: невідома оцінка, нульова став
   rejects({ usageId: 5, rating: "ok", agreed: "дорого" }, 400);
   for (const rating of ["ok", "high", "low", "no"]) assert.equal(parseFeedback({ usageId: 5, rating }).rating, rating);
   const f = parseFeedback({ usageId: "7", rating: "low", agreed: "44 000 ₴", comment: "  клієнт торгувався  " });
-  assert.deepEqual(f, { usageId: 7, rating: "low", agreed: 44000, comment: "клієнт торгувався" });
+  assert.deepEqual(f, { usageId: 7, rating: "low", agreed: 44000, agreedCarrier: null, comment: "клієнт торгувався" });
   assert.equal(parseFeedback({ usageId: 7, rating: "ok", agreed: "44000,50" }).agreed, 44000.5);
   assert.equal(parseFeedback({ usageId: 7, rating: "ok", agreed: "", comment: "   " }).comment, null, "🔴 порожній коментар став текстом");
 });

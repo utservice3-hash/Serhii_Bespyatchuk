@@ -1243,6 +1243,20 @@ export async function fetchAds(params: { from?: string; to?: string }): Promise<
   return data;
 }
 
+/** 💳 Баланс рекламного кабінету Google Ads — лише адмін-рівень (інші отримують 403). Формула — `core/adBalance.ts`. */
+export interface AdBalance {
+  balance: number; balanceNet: number; avgDaily: number | null; daysLeft: number | null; low: boolean;
+  lastPayment: { day: string; amount: number } | null; anchor: { asOf: string; balance: number };
+  paidSince: number; spentSince: number;
+}
+export async function fetchAdBalance(): Promise<{ balance: AdBalance | null; syncedAt: string | null }> {
+  const { data } = await api.get<{ balance: AdBalance | null; syncedAt: string | null }>("/dashboard/ads/balance");
+  return data;
+}
+export async function saveAdBalance(balance: number): Promise<{ balance: AdBalance | null; syncedAt: string | null }> {
+  const { data } = await api.post<{ balance: AdBalance | null; syncedAt: string | null }>("/dashboard/ads/balance", { balance });
+  return data;
+}
 export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[] }> {
   const { data } = await api.get<{ day: string; deals: AdsDeal[] }>("/dashboard/ads/deals", { params: { day } });
   return data;
@@ -3835,16 +3849,30 @@ export interface RouteVariant {
   price: PriceView | null;
 }
 export type RateFeedbackRating = "ok" | "high" | "low" | "no";
-export async function sendRateFeedback(body: { usageId: number; rating: RateFeedbackRating; agreed: string; comment: string }): Promise<void> {
+export async function sendRateFeedback(body: { usageId: number; rating: RateFeedbackRating; agreed: string; agreedCarrier: string; comment: string }): Promise<void> {
   await api.post("/rates/feedback", body);
 }
 export interface RateFeedbackBucket { key: string; n: number; ok: number }
+/** 📐 «Порахували → вийшло» (30.10.2026): рядок на відгук із ціною; `source` — звідки була показана ставка. */
+export interface RateAccuracyPair {
+  at: string; author: string; route: string; tonnage: string | null; km: number | null; source: "market" | "tariff" | "before";
+  client_min: number; client_max: number; carrier_min: number | null; carrier_max: number | null;
+  agreed: number | null; agreed_carrier: number | null; dev_pct: number | null; dev_carrier_pct: number | null;
+  rating: RateFeedbackRating; comment: string | null;
+}
+/** Група «де помиляємось»: оцінки за всіма, медіани — за тими, де є ціна; найгірша перша. */
+export interface RateAccuracyGroup { key: string; n: number; priced: number; median_dev: number | null; median_abs: number | null; ok: number; high: number; low: number; no: number }
+export interface RateAccuracy {
+  priced: number; median_dev: number | null; median_abs: number | null; pairs: RateAccuracyPair[];
+  bySource: RateAccuracyGroup[]; byTonnage: RateAccuracyGroup[]; byDistance: RateAccuracyGroup[]; byZone: RateAccuracyGroup[];
+}
 export interface RateFeedbackStats {
+  accuracy: RateAccuracy;
   days: number; total: number; calculations: number; coverage: number | null;
   byRating: Record<RateFeedbackRating, number>; okShare: number | null;
   deviation: { avg: number; n: number } | null;
   byTonnage: RateFeedbackBucket[]; byZone: RateFeedbackBucket[];
-  comments: { at: string; author: string; route: string; rating: RateFeedbackRating; agreed: number | null; comment: string }[];
+  comments: { at: string; author: string; route: string; rating: RateFeedbackRating; agreed: number | null; comment: string; client_min: number | null; client_max: number | null }[];
 }
 export async function fetchRateFeedbackStats(days = 30): Promise<RateFeedbackStats> {
   const { data } = await api.get<RateFeedbackStats>("/rates/feedback/stats", { params: { days } });
