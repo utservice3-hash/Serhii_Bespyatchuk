@@ -7270,3 +7270,39 @@ CREATE TABLE IF NOT EXISTS service_quota (
   reset_at TIMESTAMPTZ,
   seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 🏙 СЛОВНИК МІСТ → КООРДИНАТИ для ринкової ціни (прохід A, Роман 30.10.2026). Координати в `lardi_routes` — координати
+-- ЗАПИТУ, а не оголошення (пошук, розширений до області, кладе оголошення чужого міста під координати запиту), тому
+-- оголошенню координати даються за ЙОГО назвами міст. Наповнення: разово з назв запитів (нижче) + кожна відповідь `/towns`.
+-- Межа Європи — щоб «Одеса» з координатами США (була в журналі 14.10.2026) сюди не потрапила. Відкат даних: DROP TABLE towns_geo.
+CREATE TABLE IF NOT EXISTS towns_geo (
+  name_key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  lat NUMERIC(8,5) NOT NULL CHECK (lat BETWEEN 34 AND 72),
+  lon NUMERIC(8,5) NOT NULL CHECK (lon BETWEEN -11 AND 45),
+  town_id BIGINT,
+  area TEXT,
+  source TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO towns_geo (name_key, name, lat, lon, town_id, source)
+  SELECT DISTINCT ON (k) k, n, lat, lon, id, 'routes' FROM (
+    SELECT lower(regexp_replace(btrim(from_name), '[’''`ʼ]', '', 'g')) AS k, from_name AS n, from_lat AS lat, from_lon AS lon, from_id AS id, last_query FROM lardi_routes
+    UNION ALL
+    SELECT lower(regexp_replace(btrim(to_name), '[’''`ʼ]', '', 'g')), to_name, to_lat, to_lon, to_id, last_query FROM lardi_routes) x
+  WHERE n IS NOT NULL AND k <> '' AND lat BETWEEN 34 AND 72 AND lon BETWEEN -11 AND 45
+  ORDER BY k, last_query DESC
+ON CONFLICT (name_key) DO NOTHING;
+
+-- Координати ОГОЛОШЕННЯ (за його містами, зі словника). Бекфіл ~76 тис. рядків — разово, лише порожні; повторний
+-- прогін нічого не чіпає. Нові оголошення пишуться з координатами одразу (`lardi/history.ts → recordOffers`).
+-- Відкат даних: ALTER TABLE lardi_offers DROP COLUMN from_lat, DROP COLUMN from_lon, DROP COLUMN to_lat, DROP COLUMN to_lon.
+ALTER TABLE lardi_offers ADD COLUMN IF NOT EXISTS from_lat NUMERIC(8,5);
+ALTER TABLE lardi_offers ADD COLUMN IF NOT EXISTS from_lon NUMERIC(8,5);
+ALTER TABLE lardi_offers ADD COLUMN IF NOT EXISTS to_lat NUMERIC(8,5);
+ALTER TABLE lardi_offers ADD COLUMN IF NOT EXISTS to_lon NUMERIC(8,5);
+UPDATE lardi_offers o SET from_lat = t.lat, from_lon = t.lon FROM towns_geo t
+  WHERE o.from_lat IS NULL AND o.frm IS NOT NULL AND t.name_key = lower(regexp_replace(btrim(o.frm), '[’''`ʼ]', '', 'g'));
+UPDATE lardi_offers o SET to_lat = t.lat, to_lon = t.lon FROM towns_geo t
+  WHERE o.to_lat IS NULL AND o.tox IS NOT NULL AND t.name_key = lower(regexp_replace(btrim(o.tox), '[’''`ʼ]', '', 'g'));
+CREATE INDEX IF NOT EXISTS idx_lardi_offers_market ON lardi_offers (first_seen) WHERE side = 'cargo' AND is_uah AND from_lat IS NOT NULL;

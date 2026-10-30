@@ -168,7 +168,7 @@ test("#2787 ЗНІМОК ДЛЯ ВІДГУКУ знає джерело км і �
   const zone = { zone: "green", options: [{ tonnage: "20 т (фура)", selected: true, client_min: 1, client_max: 2, total_min: 1, total_max: 1, margin: 5000, per_km_min: 70, per_km_max: 75 }] };
   const s = snapshotOf({ mass_min: 18, mass_max: 22, body_type_ids: [] }, 850, zone, { distance_source: "manual", route_variant: "ua", road_km: 792, moldova_km: 8 });
   assert.deepEqual([s.distance_km, s.distance_source, s.route_variant, s.road_km, s.moldova_km], [850, "manual", "ua", 792, 8], "🔴 знімок не знає, звідки км");
-  assert.equal([...ANALYZE.matchAll(/routeInfo\(chosen\)\)/g)].length, 2, "🔴 знімок без маршрутної частини (і в розрахунку, і в перерахунку)");
+  assert.equal([...ANALYZE.matchAll(/routeInfo\(chosen\)/g)].length, 2, "🔴 знімок без маршрутної частини (і в розрахунку, і в перерахунку)");
   assert.match(ANALYZE, /SELECT frm, tox FROM lardi_usage WHERE id = \$1 AND user_id = \$2`, \[usageId, req\.auth!\.userId\]/, "🔴 перерахувати можна чужий розрахунок");
   assert.match(ANALYZE, /return res\.status\(409\)/, "🔴 перерахунок іншого маршруту під старим номером не відхиляється");
   assert.match(ANALYZE, /UPDATE lardi_usage SET calc = \$2 WHERE id = \$1 AND user_id = \$3/, "🔴 перерахунок не оновлює знімок свого розрахунку");

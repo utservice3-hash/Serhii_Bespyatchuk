@@ -452,6 +452,10 @@ export interface SpreadExemption { file: string; frag: string; why: string }
  * акумулятори.
  */
 export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
+  // 📈 Калькулятор, ринкова ціна (прохід A, 30.10.2026): `v` — варіант маршруту `RouteVariantOut` з чистого ядра
+  // `core/roadRoute.ts → toVariants` (поля перелічені в типі), не рядок БД; дописуються ринок і показана ставка.
+  { file: "routes/rates.ts", frag: "return { ...v, market_price: market, price: priceView",
+    why: "`v` — `RouteVariantOut` із `toVariants` (обчислений обʼєкт ядра з явними полями), не рядок БД; `market_price`/`price` — обчислені `core/marketPrice.ts`." },
   // 🏁 «Результат місяця» (#5583, 23.10.2026): `r` — обчислений обʼєкт ядра `loadMonthResult` (`MonthResult`, поля
   // перелічені в типі), не рядок БД; дописується лише `canEdit` — право глядача.
   { file: "routes/finance.ts", frag: "res.json({ ...r, canEdit: roleHasPerm",
