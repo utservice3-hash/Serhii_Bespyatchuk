@@ -23,6 +23,7 @@ export const MANIFEST_FILES: string[] = [
   "auth/matrixCoverage.test.js",
   "jobs/dealContactPairs.test.js",
   "core/clientPlans.test.js",
+  "core/adBalance.test.js",
   "core/googleAdsConversions.test.js",
   "core/forecast.test.js",
   "core/clientCard.test.js",
@@ -399,6 +400,8 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
 export const MANIFEST_TESTS: string[] = [
+  "#7140 БАЛАНС КАБІНЕТУ: ×1,2 на витратах, ÷1,2 для без ПДВ, середня без сьогодні, звірка з кабінетом",
+  "#7140b БАЛАНС КАБІНЕТУ — ЛИШЕ АДМІНИ: requireRole на обох маршрутах, тімлід у deny",
   // core/rateFeedback.test.ts — відгук на розрахунок ставки (27.10.2026)
   "#2770 ВІДГУК: невідома оцінка, нульова ставка й чужий формат — відмова; кожна з чотирьох оцінок і «44 000 ₴» — приймаються",
   "#2771 ЗВЕДЕННЯ: частка «Точно», відхилення від середини діапазону зі знаком, розбивка за авто й зоною, покриття",

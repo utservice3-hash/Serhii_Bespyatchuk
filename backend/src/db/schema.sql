@@ -304,6 +304,22 @@ CREATE TABLE IF NOT EXISTS ad_ga4_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_ad_ga4_daily_day ON ad_ga4_daily(day);
 
+-- 💳 БАЛАНС РЕКЛАМНОГО КАБІНЕТУ — ТОЧКИ ЗВІРКИ (30.10.2026, `core/adBalance.ts`, гейт #7140).
+-- Залишок з ПДВ на ПОЧАТОК дня `as_of`; від останньої точки дашборд рахує: + поповнення з «Виписки» − 1,2 × витрати GA4.
+-- Перша точка — 01.06.2026 від нуля: того дня в «Виписці» перша оплата ТОВ «ГУГЛ». Звірено 30.10.2026: розрахунок
+-- 29 452 проти 29 205,81 у кабінеті (0,8%). Нові точки ставить адмін кнопкою «Звірити з кабінетом» (`cabinet_balance` —
+-- число, яке він вписав; `balance` — те саме на початок дня).
+CREATE TABLE IF NOT EXISTS ad_balance_anchor (
+  id SERIAL PRIMARY KEY,
+  as_of DATE NOT NULL,
+  balance NUMERIC NOT NULL,
+  cabinet_balance NUMERIC,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO ad_balance_anchor (as_of, balance)
+  SELECT DATE '2026-06-01', 0 WHERE NOT EXISTS (SELECT 1 FROM ad_balance_anchor);
+
 -- 💰 МІСЯЧНИЙ ПЛАН ВИТРАТ НА РЕКЛАМУ — ручний, і це не тимчасово (рішення власника 09.09.2026).
 --
 -- 🔴 ЧОМУ РУЧНИЙ, ЯКЩО В НАС УМОВА «ВСЕ АВТОМАТИЧНО». Умова стосується того, що МОЖНА
