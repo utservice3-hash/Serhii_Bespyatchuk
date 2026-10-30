@@ -109,7 +109,7 @@ const LABELS: Array<[string, 't' | 'pay', string]> = [
 export interface ParsedOldDoc {
   dealNo?: string;
   party: 'client' | 'carrier';
-  ent: 'uts' | 'avm' | 'fop' | null;
+  ent: 'uts' | 'avm' | 'elg' | null;
   cp: Partial<ParsedRequisites>;
   trip: Record<string, string>;
   pay?: { sum: string; cur: string; form: string };
@@ -127,7 +127,8 @@ export function parseOldDoc(text: string): ParsedOldDoc {
   const m = text.match(/ДОГОВІР\s*№\s*([\w\-\/]+)/i);
   if (m) out.dealNo = m[1];
   out.party = /далі\s*[-—–]\s*Перевізник/i.test(text) ? 'carrier' : 'client';
-  out.ent = text.includes('45618360') ? 'avm' : (text.includes('3478512294') ? 'fop' : (text.includes('44186230') ? 'uts' : null));
+  // ФОП (3478512294) більше не впізнаємо: нових документів ФОП немає з 30.10.2026 — стара заявка ФОП піднімається без юрособи
+  out.ent = text.includes('45618360') ? 'avm' : text.includes('45149289') ? 'elg' : (text.includes('44186230') ? 'uts' : null);
 
   const allm = (re: RegExp) => [...text.matchAll(re)].map(x => x[1]);
   out.cp.edrpou = allm(/ЄДРПОУ\D{0,12}(\d{8})/gi).find(v => !OWN_IDS.has(v)) || '';

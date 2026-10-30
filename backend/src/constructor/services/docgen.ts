@@ -16,7 +16,8 @@ import { isNr, nrContractNo, nrBlocker, nrHead, nrPreamble, nrClauses, nrReq, nr
 
 /* ─────────────────────────── Типи ─────────────────────────── */
 
-export type EntityKey = 'uts' | 'avm' | 'fop';
+/** `fop` — лише архів: нових документів ФОП немає з 30.10.2026 (місце зайняла ЄЛОГІСТ, `access.ts`). */
+export type EntityKey = 'uts' | 'avm' | 'elg' | 'fop';
 /** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; services/nonresident.ts, 14.10.2026).
  *  `annex` — заявка-додаток до річного договору з клієнтом: шапка «Додаток до Договору № … від …», таблиця рейсу,
  *  реквізити й підписи, БЕЗ юртексту (задача 5777, прохання Шаврової Лілії 14.10.2026). № і дата — у `mainNo`/`mainDate`. */
@@ -92,6 +93,7 @@ export const STAMP_CM = 4.0;
 
 export const DEFAULT_IMG_DIM: Record<string, [number, number]> = {
   sigB: [200, 276], sigK: [240, 205], stU: [300, 308], stA: [300, 300], logoU: [441, 330], logoA: [799, 180],
+  sigP: [240, 196], stE: [300, 306], logoE: [800, 262],   // ЄЛОГІСТ (30.10.2026)
 };
 
 /* ──────────────────── Довідкові збирачі контенту ────────────────────
@@ -551,7 +553,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
   /* шапка — таблиця в один рядок: [логотип · юрособа] [№ у рамці]; зліва смуга акценту, знизу тонка лінія.
      Таблиця, а не табулятор: рамка номера біля правого табулятора в LibreOffice губить праву сторону. */
   const logoPt = img.logo ? (s.ent === 'avm' ? 17 : dn.logoU) : 0;
-  const logoDim = img.logoDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'logoA' : 'logoU'];
+  const logoDim = img.logoDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'logoA' : s.ent === 'elg' ? 'logoE' : 'logoU'];
   const logoRun = img.logo ? draw('rIdLogo', Math.round(logoPt * 12700 * logoDim[0] / logoDim[1]), Math.round(logoPt * 12700)) : '';
   const numW = 2700;
   let body = `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/>` +
@@ -622,9 +624,9 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
       sigCell(wPa(wR('Від Експедитора:', { sz: 19 }), { jc: 'left', before: dn.sigB }) +
         ((hasSig || hasStamp)
           ? `<w:p><w:pPr><w:spacing w:before="0" w:after="40"/></w:pPr>` +
-            (hasSig ? imgRun('rIdSig', img.sigDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'sigK' : 'sigB'], 2.3) : '') +
+            (hasSig ? imgRun('rIdSig', img.sigDim || DEFAULT_IMG_DIM[e.sig], 2.3) : '') +
             `<w:r><w:rPr>${RF}</w:rPr><w:t xml:space="preserve">  </w:t></w:r>` +
-            (hasStamp ? imgRun('rIdSt', img.stampDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'stA' : 'stU'], STAMP_CM) : '') + `</w:p>`
+            (hasStamp ? imgRun('rIdSt', img.stampDim || DEFAULT_IMG_DIM[e.stampImg ?? 'stU'], STAMP_CM) : '') + `</w:p>`
           : sp('')) +
         wPa(wR('__________________  ' + (s.ent === 'fop' ? 'ФОП ' : 'Директор '), { sz: 19 }) + wR(e.dirShort, { b: 1, sz: 19 }), { jc: 'left' }) +
         (hasStampFile ? sp('М.П.') : '')) +

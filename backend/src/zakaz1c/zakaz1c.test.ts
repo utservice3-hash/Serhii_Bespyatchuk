@@ -11,6 +11,8 @@ import {
 } from "./invoice.js";
 import { WIDGET_TAG, claimPatch, dealOwner } from "./owner.js";
 import { writable } from "./payments.js";
+import { PAID_TAG, dealPayState, decidePayment, parseEvent, webhookKeyOk, type PaymentEvent } from "./events.js";
+import { isNetError, withNetRetry } from "./kommoApi.js";
 import { zakaz1cFieldsMode, zakaz1cMode } from "./env.js";
 import { BEFORE_PAID, PAID_STAGE, patchOf, planPayment, runPayments } from "./payments.js";
 import { invoiceCaption, noteInvoice } from "./notes.js";
@@ -409,7 +411,8 @@ test("#7120 АКТ: not_realized — «ще не сформовано», а не
   assert.ok(!json.ok && json.notYet, "відповідь «не проведено» у форматі file не розпізнано");
   const act = routeSrc(MOUNT(), 'r.get("/lead/:leadId/invoice/:uid/act"', "r.post(");
   assert.ok(act.indexOf("own?.leadId !== leadId") > 0 && act.indexOf("own?.leadId !== leadId") < act.indexOf("actPdfFrom1c("), "акт віддається без перевірки, що рахунок з цієї угоди");
-  assert.match(act, /if \(!\(await actAttached\(pool, uid\)\)\)/, "акт кладеться у файли угоди на кожне натискання");
+  assert.match(act, /attachActOnce\(/, "акт кладеться у файли угоди повз перевірку «вже лежить»");
+  assert.match(MOUNT(), /async function attachActOnce\([^)]*\)[^{]*\{\s*if \(await actAttached\(pool, uid\)\) return false;/, "акт кладеться у файли угоди на кожне натискання");
   const js = WIDGET("script.js");
   assert.match(js, /data-z1c='act'/, "у вікні немає кнопки акту");
   assert.doesNotMatch(js, />ТТН</, "у вікні знову є ТТН — її формують у Конструкторі (Роман, 30.10.2026)");
@@ -458,4 +461,115 @@ test("#7123 ОПЛАТИ В KOMMO, РЕЖИМ own: лише угоди відж�
   const pay = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "payments.ts"), "utf8");
   assert.match(pay, /ltrim\(di\.number, '0'\) NOT IN \(SELECT ltrim\(z\.number, '0'\) FROM zakaz_onec_invoices z WHERE z\.lead_id = j\.lead_id\)/,
     "до «своїх» угод потрапляють угоди з чужими рахунками 1С");
+});
+
+const STORE = () => readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "store.ts"), "utf8");
+const PAY_EV = (o: Partial<Record<string, unknown>> = {}) => ({ event: "payment", event_id: "E1", sent_at: "2026-10-30T14:05:12",
+  invoice_uid: "c49fc79a-d3a8-11f1-b5e5-000d181848ac", invoice_number: "000009070", deal_id: "62818383", currency: "UAH",
+  invoice_total: 1200, paid_total: 1200, remaining: 0, fully_paid: true, realized: false, payment: { sum: 1200 }, ...o });
+const ev = (o: Partial<Record<string, unknown>> = {}) => { const p = parseEvent(PAY_EV(o)); assert.ok(p.ok, p.ok ? "" : p.why); return (p as any).ev as PaymentEvent; };
+const CTX = { known: true, owner: "widget" as const, writeMode: true, testMode: true, wasFull: false, pipelineId: 8921932, statusId: 69716312, tags: [] as string[] };
+
+test("#7125 ВЕБХУК 1С: вхід лише з ключем X-Api-Key (чужий / порожній — ні, і порожній налаштований ключ не пускає нікого); маршрут — до підпису Kommo", () => {
+  assert.equal(webhookKeyOk("k-123", "k-123"), true, "правильний ключ не пустило");
+  assert.equal(webhookKeyOk("k-124", "k-123"), false, "чужий ключ пустило");
+  assert.equal(webhookKeyOk("", "k-123"), false, "без ключа пустило");
+  assert.equal(webhookKeyOk("", ""), false, "незаданий ключ відкрив приймач усім");
+  const m = MOUNT();
+  const hook = m.indexOf('r.post("/onec/events"'), kommo = m.indexOf("r.use(requireKommoCaller)");
+  assert.ok(hook > 0 && hook < kommo, "вебхук стоїть після перевірки підпису Kommo — 1С отримала б 401 завжди");
+  const src = routeSrc(m, 'r.post("/onec/events"', "r.use(requireKommoCaller)");
+  assert.ok(src.indexOf("if (!key) return res.status(503)") < src.indexOf("webhookKeyOk("), "без налаштованого ключа приймач не закритий");
+  assert.ok(src.indexOf("webhookKeyOk(") < src.indexOf("recordEvent("), "подія записується до перевірки ключа");
+});
+
+test("#7126 ПОВТОР ПОДІЇ: та сама event_id — 200 без обробки; збій обробки — подію прибрано, 1С повторить; без event_id — відмова", () => {
+  assert.equal(parseEvent({ ...PAY_EV(), event_id: "" }).ok, false, "подію без event_id прийнято — повтори не відсіяти");
+  const src = routeSrc(MOUNT(), 'r.post("/onec/events"', "r.use(requireKommoCaller)");
+  const dup = src.indexOf("if (!(await recordEvent(pool, ev, req.body))) return res.json({ ok: true, duplicate: true })");
+  assert.ok(dup > 0 && dup < src.indexOf("handleEvent(ev)"), "повтор події обробляється вдруге — подвійна примітка й запис");
+  assert.match(src, /catch \(e\) \{\s*await pool\.query\(`DELETE FROM zakaz_onec_events WHERE event_id = \$1`/, "після збою подія лишилась у журналі — повтор 1С її вже не обробить");
+  assert.match(STORE(), /ON CONFLICT \(event_id\) DO NOTHING RETURNING event_id/);
+});
+
+test("#7127 СТАН УГОДИ З ПОДІЙ: «Оплачено 1с» — усі рахунки по валютах; «оплачено повністю», тег і етап — лише коли оплачено ВСЕ; стан абсолютний", () => {
+  assert.deepEqual(dealPayState([{ currency: "UAH", paidTotal: 1200, fullyPaid: true }, { currency: "UAH", paidTotal: 500, fullyPaid: false }]),
+    { paidText: "1700", fullyPaid: false }, "угода з неоплаченим рахунком вважається оплаченою");
+  assert.equal(dealPayState([{ currency: "EUR", paidTotal: 100, fullyPaid: true }, { currency: "UAH", paidTotal: 800, fullyPaid: true }]).paidText, "100 EUR + 800 UAH");
+  assert.deepEqual(dealPayState([]), { paidText: "0", fullyPaid: false }, "угода без рахунків «оплачена»");
+  const full = decidePayment(ev(), { ...CTX, invoices: [{ currency: "UAH", paidTotal: 1200, fullyPaid: true }] });
+  assert.deepEqual(full.patch?.custom_fields_values?.map((f) => [f.field_id, f.values[0].value]), [[2096323, "1200"], [2096325, true]]);
+  assert.deepEqual(full.patch?.tags_to_add, [{ name: PAID_TAG }], "тег «полная оплата» не ставиться");
+  assert.equal(full.patch?.status_id, 69716460, "повна оплата не переводить на «Оплата отримана»");
+  assert.match(full.note ?? "", /Оплата 1200 UAH за рахунком 1С №9070 · рахунок оплачено повністю · угоду оплачено повністю/);
+  const part = decidePayment(ev({ paid_total: 500, remaining: 700, fully_paid: false, payment: { sum: 500 } }), { ...CTX,
+    invoices: [{ currency: "UAH", paidTotal: 500, fullyPaid: false }] });
+  assert.deepEqual(part.patch?.custom_fields_values?.map((f) => f.field_id), [2096323], "часткова оплата ставить «Оплачено из 1с»");
+  assert.equal(part.patch?.status_id, undefined, "часткова оплата рухає етап");
+  assert.equal(decidePayment(ev(), { ...CTX, statusId: 142, invoices: [{ currency: "UAH", paidTotal: 1200, fullyPaid: true }] }).patch?.status_id, undefined,
+    "етап «Успішна» зрушено назад на «Оплата отримана»");
+  assert.match(STORE(), /AND \(pay_event_at IS NULL OR pay_event_at <= \$6::timestamptz\)/, "старіша подія, що прийшла пізніше, відкотила б свіжіший стан");
+});
+
+test("#7128 МЕЖІ ВЕБХУКА: чужий рахунок, угода Genesis або режим off — у Kommo нічого; невідомий рахунок відсікається до будь-якого запису", () => {
+  const inv = [{ currency: "UAH", paidTotal: 1200, fullyPaid: true }];
+  assert.equal(decidePayment(ev(), { ...CTX, known: false, invoices: inv }).patch, null, "оплату чужого рахунку записано в угоду");
+  assert.equal(decidePayment(ev(), { ...CTX, owner: "genesis", invoices: inv }).patch, null, "у угоду Genesis записали оплату — дві системи в одному полі");
+  assert.equal(decidePayment(ev(), { ...CTX, writeMode: false, invoices: inv }).patch, null, "у режимі off записали в Kommo");
+  assert.ok(decidePayment(ev(), { ...CTX, owner: "free", invoices: inv }).patch, "угоду без чужих рахунків не оновлено");
+  const h = MOUNT().slice(MOUNT().indexOf("async function handleEvent("), MOUNT().indexOf("export function buildZakaz1cRouter"));
+  const guard = h.indexOf("if (!own || own.leadId !== ev.dealId) return");
+  assert.ok(guard > 0 && guard < h.indexOf("applyPaymentEvent(") && guard < h.indexOf("patchLeads("), "подія по чужому рахунку дійшла до запису");
+  assert.equal(parseEvent({ ...PAY_EV(), invoice_uid: "не-uid" }).ok, false);
+  assert.equal(parseEvent({ ...PAY_EV(), fully_paid: "так" }).ok, false, "fully_paid не булевий — прийнято");
+});
+
+test("#7129 СКАСУВАННЯ ОПЛАТИ: угода вже не оплачена повністю → галочку «Оплачено из 1с» і тег «полная оплата» знято; етап назад не рухаємо", () => {
+  const c = decidePayment(ev({ event: "payment_cancelled", paid_total: 0, remaining: 1200, fully_paid: false, payment: { sum: 1200 } }),
+    { ...CTX, wasFull: true, tags: [PAID_TAG], statusId: 69716460, invoices: [{ currency: "UAH", paidTotal: 0, fullyPaid: false }] });
+  assert.deepEqual(c.patch?.custom_fields_values?.map((f) => [f.field_id, f.values[0].value]), [[2096323, "0"], [2096325, false]],
+    "після скасування «Оплачено из 1с» лишилась — в угоді неправда");
+  assert.deepEqual(c.patch?.tags_to_delete, [{ name: PAID_TAG }], "тег «полная оплата» не знято");
+  assert.equal(c.patch?.status_id, undefined, "скасування рухає етап");
+  assert.match(c.note ?? "", /скасовано або змінено в 1С · оплачено 0 з 1200 UAH\. Перевірте\./);
+  const stillFull = decidePayment(ev(), { ...CTX, wasFull: true, tags: [PAID_TAG], invoices: [{ currency: "UAH", paidTotal: 1200, fullyPaid: true }] });
+  assert.equal(stillFull.patch?.tags_to_delete, undefined, "у повністю оплаченої угоди зняли тег");
+  assert.equal(stillFull.patch?.tags_to_add, undefined, "тег, що вже стоїть, ставиться вдруге");
+});
+
+test("#7130 РЕАЛІЗАЦІЯ: проведено → акт у файлах угоди ОДИН раз (і з кнопки, і з події); скасовано → примітка; угода Genesis — нічого", () => {
+  const p = parseEvent({ event: "realization", event_id: "R1", invoice_uid: "c49fc79a-d3a8-11f1-b5e5-000d181848ac", deal_id: "62818383",
+    realization_number: "000006327", realization_date: "2026-10-30", posted: true });
+  assert.ok(p.ok && p.ev.kind === "realization" && p.ev.posted);
+  assert.equal(parseEvent({ event: "realization", event_id: "R2", invoice_uid: "c49fc79a-d3a8-11f1-b5e5-000d181848ac", deal_id: "1" }).ok, false, "реалізація без posted прийнята");
+  const m = MOUNT();
+  const once = m.slice(m.indexOf("async function attachActOnce("), m.indexOf("async function handleEvent("));
+  assert.match(once, /if \(await actAttached\(pool, uid\)\) return false;/, "акт кладеться у файли угоди при кожній події");
+  const h = m.slice(m.indexOf("async function handleEvent("), m.indexOf("export function buildZakaz1cRouter"));
+  assert.ok(h.indexOf('if (owner === "genesis") return') < h.indexOf("actPdfFrom1c("), "в угоду Genesis кладемо акт");
+  assert.match(h, /attachActOnce\(ev\.dealId/);
+  assert.match(routeSrc(m, 'r.get("/lead/:leadId/invoice/:uid/act"', "r.post("), /attachActOnce\(/, "кнопка «Акт» кладе акт повз «один раз»");
+});
+
+test("#7131 ПЛИТКА «ОПЛАТА» — ВСЯ УГОДА: сума всіх рахунків по валютах, загальний стан, а не останній рахунок", () => {
+  const js = WIDGET("script.js");
+  assert.match(js, /function dealPay\(\)/, "немає розрахунку оплати по угоді");
+  const steps = js.slice(js.indexOf("function steps()"), js.indexOf("function seg("));
+  assert.match(steps, /var dp = inv \? dealPay\(\) : null;/, "плитка оплати рахує лише останній рахунок");
+  assert.doesNotMatch(steps, /chip\(payChip\(p\)\)/, "у плитці лишився стан одного рахунку");
+  assert.match(js, /if \(d\.owner === "genesis"\) \{[\s\S]{0,200}genesisView\(\)/, "угода Genesis показує плитки «рахунку немає»");
+});
+
+test("#7132 ОБРИВ ЗВʼЯЗКУ: PDF — ще одна спроба після «fetch failed»; відповідь Kommo з кодом не повторюємо; друга невдача — помилка", async () => {
+  let n = 0;
+  assert.equal(await withNetRetry(async () => { n++; if (n === 1) throw new TypeError("fetch failed"); return "ok"; }, 0), "ok");
+  assert.equal(n, 2, "після обриву не було другої спроби");
+  let m = 0;
+  await assert.rejects(withNetRetry(async () => { m++; throw new Error("Kommo частина файлу: 400"); }, 0));
+  assert.equal(m, 1, "відповідь Kommo з кодом повторено — причина сама не мине");
+  let k = 0;
+  await assert.rejects(withNetRetry(async () => { k++; throw new TypeError("fetch failed"); }, 0));
+  assert.equal(k, 2, "повторів більше одного");
+  assert.equal(isNetError(Object.assign(new Error("x"), { name: "TimeoutError" })), true);
+  assert.match(MOUNT(), /withNetRetry\(\(\) => attachPdfToLead\(leadId, pdf\.fileName, pdf\.bytes\)\)/, "PDF рахунку вантажиться без повтору");
 });

@@ -9,13 +9,13 @@ import { ctorStampImage, ctorStampPdf, type CtorStamp } from "../../../api";
  * Менеджер кладе готовий PDF і додає печатки — скільки треба, на будь-які сторінки. Кожну видно в списку:
  * перетягнути, повернути, змінити розмір, прибрати. Сервер накладає їх поверх (текст лишається текстом).
  * Позиція й розмір — у частках сторінки, кут — у градусах за годинниковою стрілкою; від масштабу прев'ю не залежать.
- * ФОП печатки не має — вибрати не можна.
+ * Печатки: ЮТС, АвтоМув і ЄЛОГІСТ (з 30.10.2026; ФОП із конструктора прибрано).
  */
 GlobalWorkerOptions.workerSrc = workerUrl;
 
 const VIEW_W = 520;                     // ширина прев'ю сторінки, px
 const SIZE0 = 0.19;                     // діаметр печатки — частка ширини сторінки (≈ 4 см на A4)
-const STAMP_ENTS: Array<{ k: "uts" | "avm"; t: string }> = [{ k: "uts", t: "ЮТС" }, { k: "avm", t: "АвтоМув" }];
+const STAMP_ENTS: Array<{ k: CtorStamp["ent"]; t: string }> = [{ k: "uts", t: "ЮТС" }, { k: "avm", t: "АвтоМув" }, { k: "elg", t: "ЄЛОГІСТ" }];
 const ENT_NAME: Record<string, string> = { uts: "ЮТС", avm: "АвтоМув" };
 const cm = (size: number) => (Math.round(size * 210) / 10).toFixed(1);
 
@@ -25,7 +25,7 @@ export function StampView({ errText }: { errText: (e: unknown) => Promise<string
   const [file, setFile] = useState<File | null>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(1);
-  const [ent, setEnt] = useState<"uts" | "avm">("avm");
+  const [ent, setEnt] = useState<CtorStamp["ent"]>("avm");
   const [img, setImg] = useState<Record<string, string>>({});
   const [stamps, setStamps] = useState<Placed[]>([]);
   const [sel, setSel] = useState<number | null>(null);
@@ -151,7 +151,6 @@ export function StampView({ errText }: { errText: (e: unknown) => Promise<string
             <div className="fld"><label>Чия печатка</label>
             <div className="ways" role="group" aria-label="Чия печатка">
               {STAMP_ENTS.map((x) => <button key={x.k} aria-pressed={ent === x.k} onClick={() => { setEnt(x.k); if (selected) upd(selected.id, () => ({ ent: x.k })); }}>{x.t}</button>)}
-              <button disabled title="У ФОП немає печатки — лише підпис" style={{ opacity: .45, cursor: "not-allowed" }}>ФОП · без печатки</button>
             </div></div>
             <button className="btn pri" disabled={!doc} onClick={add}>＋ Додати печатку</button>
           </div>
@@ -163,7 +162,7 @@ export function StampView({ errText }: { errText: (e: unknown) => Promise<string
                   {stamps.map((s, i) => {
                     const on = s.id === sel;
                     return (
-                      <div key={s.id} onClick={() => { setSel(s.id); setPage(s.page); setEnt(s.ent as "uts" | "avm"); }}
+                      <div key={s.id} onClick={() => { setSel(s.id); setPage(s.page); setEnt(s.ent); }}
                         style={{ border: `1px solid ${on ? "var(--ent)" : "var(--line)"}`, borderRadius: 10, padding: "8px 10px", cursor: "pointer",
                           background: on ? "color-mix(in srgb, var(--ent) 6%, var(--surface))" : "var(--surface)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>

@@ -179,6 +179,30 @@ define(["jquery"], function ($) {
     }
     function chip(c) { return "<span class='chip " + c.k + "'>" + esc(c.t) + "</span>"; }
 
+    /**
+     * Оплата всієї угоди (як у погодженому макеті): по кожній валюті «оплачено з виставленого», загальний стан —
+     * «оплачено повністю», якщо оплачено все; «є прострочка», якщо хоч один прострочено; «частково», якщо є оплата.
+     */
+    function dealPay() {
+      var list = invoices(), paid = {}, total = {}, share = 0, k = "wait", t = "чекаємо оплату";
+      list.forEach(function (i) {
+        paid[i.currency] = (paid[i.currency] || 0) + (Number(i.pay.paid) || 0);
+        total[i.currency] = (total[i.currency] || 0) + (Number(i.total) || 0);
+        share += i.total ? Math.min(1, (Number(i.pay.paid) || 0) / i.total) : 0;
+      });
+      var all = list.length && list.every(function (i) { return i.pay.k === "paid"; });
+      if (all) { k = "ok"; t = "оплачено повністю"; }
+      else if (list.some(function (i) { return i.pay.k === "overdue"; })) { k = "bad"; t = "є прострочка"; }
+      else if (list.some(function (i) { return Number(i.pay.paid) > 0; })) { k = "part"; t = "оплачено частково"; }
+      else if (list.length && list.every(function (i) { return i.pay.k === "pending"; })) { t = "оновиться за годину"; }
+      var cur = Object.keys(total).sort();
+      return {
+        chip: { k: k, t: t }, all: !!all, ratio: list.length ? Math.round(share / list.length * 100) : 0,
+        paidText: cur.map(function (c) { return money(paid[c]) + " " + c; }).join(" + "),
+        totalText: cur.map(function (c) { return money(total[c]) + " " + c; }).join(" + ")
+      };
+    }
+
     /* ——— шматки вікна ——— */
 
     function head() {
@@ -210,18 +234,17 @@ define(["jquery"], function ($) {
     function steps() {
       var d = state.data, inv = lastInv();
       var s1 = inv
-        ? "<div class='step done'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "ok", t: "є" }) + "</div><div class='big'>№" + esc(inv.number_print) + "</div>"
+        ? "<div class='step done'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "ok", t: invoices().length > 1 ? invoices().length + " шт." : "є" }) + "</div><div class='big'>№" + esc(inv.number_print) + "</div>"
           + "<div class='mut'>" + esc(dmy(inv.invoice_date)) + " · " + esc(inv.organization) + " · " + money(inv.total) + " " + esc(inv.currency) + "</div>"
           + (inv.attach_error ? "<div class='mut'>PDF у файлах угоди немає — візьміть тут</div>" : "")
           + "<div class='row'>" + pdfBtns(inv) + "</div><div class='row'>" + editBtn(inv) + "</div>"
           + "<button class='btn link' data-z1c='open'" + (d.canCreate && d.onec.found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button></div>"
         : "<div class='step next'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "wait", t: "немає" }) + "</div><div class='big'>—</div>"
           + "<div class='mut'>Маршрут і суму підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (d.canCreate && d.onec.found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
-      var p = inv ? inv.pay : null, paidAll = p && p.k === "paid";
-      var ratio = inv && inv.total ? Math.min(100, Math.round(p.paid / inv.total * 100)) : 0;
-      var s2 = "<div class='step " + (paidAll ? "done" : inv ? "next" : "") + "'><div class='h'><span>2 · Оплата</span>" + (inv ? chip(payChip(p)) : chip({ k: "wait", t: "чекає рахунок" })) + "</div>"
-        + (inv ? "<div class='big'>" + money(p.paid) + " " + esc(inv.currency) + "</div><div class='mut'>із " + money(inv.total) + " " + esc(inv.currency) + "</div>"
-          + "<div class='meter'><i style='width:" + ratio + "%'></i></div><div class='mut'>приходить з 1С сама, щогодини</div>"
+      var dp = inv ? dealPay() : null;
+      var s2 = "<div class='step " + (dp && dp.all ? "done" : inv ? "next" : "") + "'><div class='h'><span>2 · Оплата</span>" + (inv ? chip(dp.chip) : chip({ k: "wait", t: "чекає рахунок" })) + "</div>"
+        + (inv ? "<div class='big'>" + esc(dp.paidText) + "</div><div class='mut'>із " + esc(dp.totalText) + (invoices().length > 1 ? " · " + invoices().length + " рахунки" : "") + "</div>"
+          + "<div class='meter'><i style='width:" + dp.ratio + "%'></i></div><div class='mut'>оплата приходить з 1С сама</div>"
           : "<div class='big'>—</div><div class='mut'>зʼявиться після рахунку</div>") + "</div>";
       var s3 = "<div class='step'><div class='h'><span>3 · Документи</span>" + chip({ k: "wait", t: inv ? "після реалізації" : "потім" }) + "</div>"
         + "<div class='mut'>" + esc(d.waits.docs) + "</div>"
@@ -313,9 +336,21 @@ define(["jquery"], function ($) {
         + "<button class='btn main' data-z1c='reqsend'>" + (m.manual ? "Надіслав" : "Скопіювати для Telegram") + "</button></span></div></div></div>";
     }
 
+    /** Угода Genesis: лише пояснення й номер рахунку Genesis — без плиток «рахунку немає» і без кнопок. */
+    function genesisView() {
+      var d = state.data, nums = d.genesisNumbers || [];
+      return "<div class='step' style='margin-top:4px'><div class='h'><span>Рахунок через Genesis</span>" + chip({ k: "wait", t: "Genesis" }) + "</div>"
+        + (nums.length ? "<div class='big'>№" + nums.map(esc).join(", №") + "</div>" : "")
+        + "<div class='mut'>Рахунки, оплати й акти цієї угоди — у вкладці «Заказ 1С» (Genesis).</div></div>";
+    }
+
     function render() {
       var d = state.data;
       if (!d) return;
+      if (d.owner === "genesis") {
+        root().html("<div class='" + NS + (isDark() ? " dark" : "") + "'><style>" + CSS + "</style>" + head() + genesisView() + "</div>");
+        return;
+      }
       var many = invoices().length > 1;
       root().html("<div class='" + NS + (isDark() ? " dark" : "") + "'><style>" + CSS + "</style>" + head() + steps()
         + (state.form ? formHtml() : "")

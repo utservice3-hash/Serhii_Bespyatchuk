@@ -34,6 +34,7 @@ export const DOC_CSS = `
 @media print{.docfmt .sigend{display:none}}
 .docfmt.doc-b{--acc:#c30010}
 .docfmt.doc-b.ent-avm,.docfmt.doc-b.ent-fop{--acc:#2b2f3a}
+.docfmt.doc-b.ent-elg{--acc:#1e8be3}
 .doc-b .dband{background:#fff;color:#17181c;border-left:4pt solid var(--acc);border-bottom:.75pt solid #e3ddd7;padding:6pt 2pt 6pt 10pt;margin:0 0 12pt;font-size:8.5pt;gap:10pt}
 .doc-b .dband .dlogo{height:21pt;width:auto;display:block;flex:none}
 .doc-b .dband .dco{color:#17181c;font-weight:600}
