@@ -166,11 +166,15 @@ export async function lastWritten(pool: Pool, dealId: number): Promise<{ paid: b
   const q = await pool.query<{ written_paid: boolean | null }>(`SELECT written_paid FROM zakaz_onec_pay_plan WHERE deal_id = $1`, [dealId]);
   return { paid: q.rows[0]?.written_paid === true };
 }
+/**
+ * ⚠️ Типи параметрів — явно: без них `CASE … THEN $3 END` Postgres виводить як text, а `$3` у `fully_paid` — boolean, і
+ * запит падає «inconsistent types deduced for parameter $3» (спіймано на проді 30.10.2026 першою ж подією вебхука).
+ */
 export async function saveWritten(pool: Pool, r: { dealId: number; paidText: string; fullyPaid: boolean; status: number | null; error: string | null }): Promise<void> {
   await pool.query(
     `INSERT INTO zakaz_onec_pay_plan AS t (deal_id, paid_text, fully_paid, computed_at, written_text, written_paid, written_status, written_at, write_error)
-     VALUES ($1, $2, $3, now(), CASE WHEN $5::text IS NULL THEN $2 END, CASE WHEN $5::text IS NULL THEN $3 END, CASE WHEN $5::text IS NULL THEN $4::bigint END,
-             CASE WHEN $5::text IS NULL THEN now() END, $5)
+     VALUES ($1::bigint, $2::text, $3::boolean, now(), CASE WHEN $5::text IS NULL THEN $2::text END, CASE WHEN $5::text IS NULL THEN $3::boolean END,
+             CASE WHEN $5::text IS NULL THEN $4::bigint END, CASE WHEN $5::text IS NULL THEN now() END, $5::text)
      ON CONFLICT (deal_id) DO UPDATE SET paid_text = EXCLUDED.paid_text, fully_paid = EXCLUDED.fully_paid, computed_at = now(),
        written_text = COALESCE(EXCLUDED.written_text, t.written_text), written_paid = COALESCE(EXCLUDED.written_paid, t.written_paid),
        written_status = COALESCE(EXCLUDED.written_status, t.written_status), written_at = COALESCE(EXCLUDED.written_at, t.written_at),

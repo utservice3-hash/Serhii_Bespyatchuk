@@ -573,3 +573,14 @@ test("#7132 ОБРИВ ЗВʼЯЗКУ: PDF — ще одна спроба піс
   assert.equal(isNetError(Object.assign(new Error("x"), { name: "TimeoutError" })), true);
   assert.match(MOUNT(), /withNetRetry\(\(\) => attachPdfToLead\(leadId, pdf\.fileName, pdf\.bytes\)\)/, "PDF рахунку вантажиться без повтору");
 });
+
+test("#7133 SQL ВЕБХУКА — ТИПИ ПАРАМЕТРІВ ЯВНО: «що записали» (zakaz_onec_pay_plan) не падає «inconsistent types» на CASE без типу", () => {
+  // Спіймано на проді 30.10.2026 першою ж подією: `CASE … THEN $3 END` Postgres вивів як text, а `$3` у fully_paid — boolean.
+  // Без БД SQL не перевірити, тож стережемо саме прийом: кожен параметр у CASE — з явним типом.
+  const st = STORE();
+  const sw = st.slice(st.indexOf("export async function saveWritten("), st.indexOf("]);", st.indexOf("export async function saveWritten(")));
+  for (const piece of ["$2::text", "$3::boolean", "$4::bigint", "THEN $2::text END", "THEN $3::boolean END"]) {
+    assert.ok(sw.includes(piece), `у saveWritten параметр без явного типу (${piece}) — Postgres виведе text і запит упаде`);
+  }
+  assert.doesNotMatch(sw, /THEN \$[23] END/, "у CASE лишився параметр без типу");
+});
