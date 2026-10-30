@@ -180,6 +180,21 @@ export type ClassifiedHandoff<T extends HandoffEntry> = T & {
  * передачею лідгена не повʼязана. Тож лідгену мінус не рахуємо: машина лишається, сума — 0.
  * Продажі (`core/money.ts`) і далі віднімають мінус із виручки — правило живе ЛИШЕ тут.
  */
+/**
+ * 🧾 РАХУНОК, ВИДІЛЕНИЙ З УГОДИ МЕНЕДЖЕРА — рішення поштучно, не правило. Одне перевезення з одного прорахунку,
+ * але менеджер розділив рахунок на дві угоди; друга створена з угоди менеджера, а не з угоди Продзвону, тож до
+ * передачі вона не привʼязується. Для угод зі списку бюджет передачі = основна угода + виділені рахунки
+ * (`money.handoffDealStates`), машина — одна, стан і дати — основної угоди. Загальне правило «одна передача — одна
+ * угода менеджера» НЕ змінено; повторні замовлення клієнта сюди не потрапляють.
+ */
+export const HANDOFF_SPLIT_INVOICES: readonly { mainDealId: number; extraDealIds: readonly number[]; decided: string; reason: string }[] = [
+  { mainDealId: 62807983, extraDealIds: [62817473], decided: "Юлія Левентова й Роман, 30.10.2026",
+    reason: "Демчук, передача 62613661 від 27.10: одна машина Дніпро – Харків, рахунок розділили на ЕКСПЕРТ БОКС ПАК (760) і ВАРАН (3 420)" },
+];
+/** Виділені рахунки угоди менеджера (порожньо — немає). */
+export const splitInvoicesOf = (dealId: number | null | undefined): readonly number[] =>
+  dealId == null ? [] : HANDOFF_SPLIT_INVOICES.find((x) => x.mainDealId === dealId)?.extraDealIds ?? [];
+
 export const leadgenPrice = (st: Pick<DealState, "price" | "minus">): number => (st.minus ? 0 : st.price);
 
 /**
@@ -472,6 +487,8 @@ export interface LeadgenHandoffDeal {
   carried: boolean;
   /** Угода менеджера мінусова: сума лідгену не рахується (`leadgenPrice`), машина — так. */
   minus: boolean;
+  /** Виділені з угоди менеджера рахунки, чий бюджет уже в `price` (`HANDOFF_SPLIT_INVOICES`). */
+  split: { dealId: number; url: string }[];
 }
 
 /** Порожній або з самих пробілів текст CRM — «не заповнено», а не порожній підпис. */
@@ -519,6 +536,7 @@ export function handoffDealRow(
     reason: h.cls === "lost" ? blankToNull(h.dealReason) : null,
     url: deps.leadUrl(h.dealId ?? h.pzId),
     autoDay: h.autoDay, inPeriod: h.inPeriod !== false, carried: h.carried === true, minus: h.minus === true,
+    split: linked ? splitInvoicesOf(h.dealId).map((id) => ({ dealId: id, url: deps.leadUrl(id) })) : [],
   };
 }
 
