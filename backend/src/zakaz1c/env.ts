@@ -64,6 +64,12 @@ export function zakaz1cKommoAuthEnv(env: NodeJS.ProcessEnv = process.env): Zakaz
   };
 }
 
+/**
+ * Ключ вебхука 1С → віджет (`X-Api-Key`, `POST /api/zakaz1c/onec/events`). Вписує власник у `.env`, те саме значення
+ * передає 1С. Порожній — приймач закритий (503): без ключа вебхук не відкриваємо взагалі.
+ */
+export const zakaz1cOnecWebhookKey = (env: NodeJS.ProcessEnv = process.env) => str(env.ZAKAZ1C_ONEC_WEBHOOK_KEY);
+
 export const zakaz1cTestEdrpou = (env: NodeJS.ProcessEnv = process.env) => str(env.ZAKAZ1C_TEST_EDRPOU) || DEFAULT_TEST_EDRPOU;
 export const onecServiceBase = (env: NodeJS.ProcessEnv = process.env) => (str(env.ONEC_SERVICE_BASE) || ONEC_SERVICE_BASE).replace(/\/+$/, "");
 

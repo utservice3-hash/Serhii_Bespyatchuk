@@ -20,17 +20,21 @@
 import { Router, type Request, type Response } from "express";
 import { pool } from "../db/pool.js";
 import { requireKommoCaller } from "./kommoAuth.js";
-import { onecServiceBase, zakaz1cMode, zakaz1cTestEdrpou, zakaz1cTesters } from "./env.js";
+import { onecServiceBase, zakaz1cFieldsMode, zakaz1cMode, zakaz1cOnecWebhookKey, zakaz1cTestEdrpou, zakaz1cTesters } from "./env.js";
+import { decidePayment, parseEvent, webhookKeyOk, type OnecEvent } from "./events.js";
 import {
   CURRENCIES, actPdfFrom1c, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, codeOfService, createCustomerIn1c,
   createInvoiceIn1c, customerInfoFrom1c, invoiceAllowed, invoicePdfFrom1c, itemVatsFor, kyivIso, orgRules, organizationsFrom1c,
   parseInvoiceForm, serviceSwaps, servicesFor, updateInvoiceIn1c, vatTypesFor, type BankAccount, type CreatedInvoice, type InvoiceForm,
   type OrgRule,
 } from "./invoice.js";
-import { addFileNote, addLeadNote, attachPdfToLead, kommoUserName, loadLead, patchLeads, type LeadForInvoice } from "./kommoApi.js";
+import { addFileNote, addLeadNote, attachPdfToLead, kommoUserName, loadLead, patchLeads, withNetRetry, type LeadForInvoice } from "./kommoApi.js";
 import { noteInvoice } from "./notes.js";
 import { GENESIS_DEAL_WHY, WIDGET_TAG, claimPatch, dealOwner, type DealOwner } from "./owner.js";
-import { actAttached, invoiceOfLead, listInvoices, markActAttached, onecNumbersOfDeal, saveInvoice } from "./store.js";
+import {
+  actAttached, applyPaymentEvent, dealInvoicesPay, invoiceOfLead, lastWritten, listInvoices, markActAttached, markEvent, onecNumbersOfDeal,
+  recordEvent, saveInvoice, saveWritten,
+} from "./store.js";
 
 /** Що показуємо словами у вікні. */
 export const ONEC_WAITS = {
@@ -64,11 +68,19 @@ function orgsForWindow(banks: Map<string, BankAccount[]> | null) {
 
 /** Хто веде угоду — з «Номера заказа» Kommo, нашого журналу й рахунків 1С за угодою. */
 async function ownerOf(leadId: number, lead: LeadForInvoice): Promise<DealOwner> {
+  return (await ownerInfo(leadId, lead)).owner;
+}
+/** Те саме + номери чужих рахунків (Genesis) — їх показує вікно замість «рахунку немає». */
+async function ownerInfo(leadId: number, lead: LeadForInvoice): Promise<{ owner: DealOwner; foreign: string[] }> {
   const [ours, onec] = await Promise.all([
     pool.query<{ number: string }>(`SELECT number FROM zakaz_onec_invoices WHERE lead_id = $1`, [leadId]),
     onecNumbersOfDeal(pool, leadId),
   ]);
-  return dealOwner({ orderNo: lead.orderNo, ourNumbers: ours.rows.map((r) => r.number), onecNumbers: onec });
+  const ourNumbers = ours.rows.map((r) => r.number);
+  const norm = (n: string) => n.replace(/^0+/, "");
+  const mine = new Set(ourNumbers.map(norm));
+  const foreign = [...new Set([lead.orderNo, ...onec].map((n) => String(n ?? "").trim()).filter((n) => n && !mine.has(norm(n))).map(norm))];
+  return { owner: dealOwner({ orderNo: lead.orderNo, ourNumbers, onecNumbers: onec }), foreign };
 }
 
 /** PDF рахунку → файли угоди + запис з файлом у стрічці. Помилки Kommo не гублять рахунок: повертаємо їх словами. */
@@ -78,7 +90,8 @@ async function attachInvoice(leadId: number, inv: CreatedInvoice, o: OrgRule, mo
   let file: { uuid: string; versionUuid: string } | null = null;
   let error: string | null = null;
   try {
-    file = await attachPdfToLead(leadId, inv.pdf.fileName, inv.pdf.bytes);
+    const pdf = inv.pdf;
+    file = await withNetRetry(() => attachPdfToLead(leadId, pdf.fileName, pdf.bytes));
   } catch (e) {
     error = (e as Error).message.slice(0, 300);
   }
@@ -88,8 +101,75 @@ async function attachInvoice(leadId: number, inv: CreatedInvoice, o: OrgRule, mo
   return { fileUuid: file?.uuid ?? null, error };
 }
 
+/** Акт за рахунком — у файли й стрічку угоди, один раз (і з кнопки «Акт», і з події реалізації). */
+async function attachActOnce(leadId: number, uid: string, numberPrint: string, bytes: Buffer, fileName: string): Promise<boolean> {
+  if (await actAttached(pool, uid)) return false;
+  const f = await withNetRetry(() => attachPdfToLead(leadId, fileName, bytes));
+  await addFileNote(leadId, { ...f, name: `${testMark(zakaz1cMode())}Акт за рахунком №${numberPrint}.pdf` }).catch(() => undefined);
+  await markActAttached(pool, uid, f.uuid);
+  return true;
+}
+
+/** Обробка події 1С. Повертає підсумок для журналу подій. Кидає — лише коли варто, щоб 1С повторила (збій Kommo). */
+async function handleEvent(ev: OnecEvent): Promise<string> {
+  const own = await invoiceOfLead(pool, ev.invoiceUid);
+  if (!own || own.leadId !== ev.dealId) return "рахунку немає в журналі віджета або він з іншої угоди — пропущено";
+  const lead = await loadLead(ev.dealId);
+  const owner = await ownerOf(ev.dealId, lead);
+  if (ev.kind === "realization") {
+    await pool.query(`UPDATE zakaz_onec_invoices SET realized = $2, updated_at = now() WHERE invoice_uid = $1`, [ev.invoiceUid, ev.posted]);
+    if (owner === "genesis") return "угоду веде Genesis — акт не кладемо";
+    if (!ev.posted) {
+      await addLeadNote(ev.dealId, `${testMark(zakaz1cMode())}Реалізацію за рахунком 1С №${own.numberPrint} скасовано в 1С`);
+      return "реалізацію скасовано — примітка";
+    }
+    const act = await actPdfFrom1c(onecServiceBase(), ev.invoiceUid, true);
+    if (!act.ok) return `акт не отримано: ${act.why}`;
+    const put = await attachActOnce(ev.dealId, ev.invoiceUid, own.numberPrint, act.bytes, `akt_${own.numberPrint}.pdf`);
+    return put ? "акт у файлах угоди" : "акт уже був у файлах угоди";
+  }
+  await applyPaymentEvent(pool, ev);
+  const fieldsMode = zakaz1cFieldsMode();
+  const d = decidePayment(ev, { known: true, owner, writeMode: fieldsMode !== "off", testMode: zakaz1cMode() === "test",
+    invoices: await dealInvoicesPay(pool, ev.dealId), wasFull: (await lastWritten(pool, ev.dealId)).paid,
+    pipelineId: lead.pipelineId, statusId: lead.statusId, tags: lead.tags });
+  if (!d.patch) return `стан записано, в угоду не пишемо: ${d.skip}`;
+  let error: string | null = null;
+  try { await patchLeads([d.patch]); } catch (e) { error = (e as Error).message.slice(0, 300); }
+  await saveWritten(pool, { dealId: ev.dealId, paidText: d.paidText, fullyPaid: d.fullyPaid, status: d.patch.status_id ?? null, error });
+  if (error) throw new Error(`Kommo: ${error}`);
+  if (d.note) await addLeadNote(ev.dealId, d.note).catch(() => undefined);
+  return `в угоду: «Оплачено 1с» ${d.paidText}${d.fullyPaid ? ", оплачено повністю" : ""}${d.patch.status_id ? ", етап «Оплата отримана»" : ""}`;
+}
+
 export function buildZakaz1cRouter(): Router {
   const r = Router();
+
+  /**
+   * 📨 Вебхук 1С → віджет (ТЗ Андрію 30.10.2026). Вхід — ключ `X-Api-Key` (`ZAKAZ1C_ONEC_WEBHOOK_KEY`), а НЕ підпис
+   * Kommo: це сервер 1С, а не менеджер у Kommo. Тому маршрут стоїть ДО `requireKommoCaller`.
+   * Повтор тієї самої події (`event_id`) — 200 без обробки. Збій Kommo — подію прибираємо з журналу й відповідаємо
+   * 500, щоб 1С повторила; пропущені рахунки (не наші) — 200, щоб 1С не повторювала без кінця.
+   */
+  r.post("/onec/events", async (req: Request, res: Response) => {
+    const key = zakaz1cOnecWebhookKey();
+    if (!key) return res.status(503).json({ error: "Приймач вимкнено: не задано ZAKAZ1C_ONEC_WEBHOOK_KEY." });
+    if (!webhookKeyOk(String(req.headers["x-api-key"] ?? ""), key)) return res.status(401).json({ error: "Невірний ключ." });
+    if (zakaz1cMode() === "off") return res.status(503).json({ error: "Модуль вимкнено (ZAKAZ1C_MODE=off)." });
+    const parsed = parseEvent(req.body);
+    if (!parsed.ok) return res.status(400).json({ error: parsed.why });
+    const ev = parsed.ev;
+    if (!(await recordEvent(pool, ev, req.body))) return res.json({ ok: true, duplicate: true });
+    try {
+      const result = await handleEvent(ev);
+      await markEvent(pool, ev.eventId, result, null);
+      res.json({ ok: true, result });
+    } catch (e) {
+      await pool.query(`DELETE FROM zakaz_onec_events WHERE event_id = $1`, [ev.eventId]).catch(() => undefined);
+      res.status(500).json({ error: `Не оброблено, повторіть: ${(e as Error).message.slice(0, 200)}` });
+    }
+  });
+
   r.use(requireKommoCaller);
   r.use((_req, res, next) => {
     if (zakaz1cMode() === "off") { res.status(503).json({ error: "Виставлення рахунків вимкнено." }); return; }
@@ -104,11 +184,13 @@ export function buildZakaz1cRouter(): Router {
     const today = kyivIso();
     const lead = await loadLead(leadId);
     const code = lead.company?.edrpou ?? "";
-    const [onec, invoices, managerName, banks, owner] = await Promise.all([customerInfoFrom1c(onecServiceBase(), code),
-      listInvoices(pool, leadId, today), kommoUserName(req.kommoCaller!.userId), organizationsFrom1c(onecServiceBase()), ownerOf(leadId, lead)]);
+    const [onec, invoices, managerName, banks, info] = await Promise.all([customerInfoFrom1c(onecServiceBase(), code),
+      listInvoices(pool, leadId, today), kommoUserName(req.kommoCaller!.userId), organizationsFrom1c(onecServiceBase()), ownerInfo(leadId, lead)]);
+    const owner = info.owner;
     const allowed = invoiceAllowed(mode, { edrpou: code, testEdrpou: zakaz1cTestEdrpou(), userId: req.kommoCaller!.userId, testers: zakaz1cTesters() });
     res.json({
       mode, testEdrpou: zakaz1cTestEdrpou(), today, managerName, owner, ownerWhy: owner === "genesis" ? GENESIS_DEAL_WHY : null,
+      genesisNumbers: owner === "genesis" ? info.foreign : [],
       canCreate: allowed.ok && owner !== "genesis", blockedWhy: owner === "genesis" ? GENESIS_DEAL_WHY : allowed.ok ? null : allowed.why,
       orgs: orgsForWindow(banks), currencies: CURRENCIES, waits: ONEC_WAITS,
       lead: { id: lead.id, name: lead.name, price: lead.price, car: lead.car, cityFrom: lead.cityFrom, cityTo: lead.cityTo, company: lead.company },
@@ -265,13 +347,8 @@ export function buildZakaz1cRouter(): Router {
     const act = await actPdfFrom1c(onecServiceBase(), uid, stamp);
     if (!act.ok) return res.status(act.notYet ? 409 : 502).json({ error: act.why, notYet: act.notYet });
     const fileName = `akt_${own.numberPrint}${stamp ? "" : "_bez_pechatky"}.pdf`;
-    if (!(await actAttached(pool, uid))) {
-      try {
-        const f = await attachPdfToLead(leadId, fileName, act.bytes);
-        await addFileNote(leadId, { ...f, name: `${testMark(zakaz1cMode())}Акт за рахунком №${own.numberPrint}.pdf` }).catch(() => undefined);
-        await markActAttached(pool, uid, f.uuid);
-      } catch { /* акт усе одно віддаємо менеджеру — у файли угоди покладемо наступного разу */ }
-    }
+    // Акт усе одно віддаємо менеджеру; не ліг у файли угоди — покладемо наступного разу.
+    await attachActOnce(leadId, uid, own.numberPrint, act.bytes, fileName).catch(() => undefined);
     res.json({ fileName, base64: act.bytes.toString("base64") });
   });
 

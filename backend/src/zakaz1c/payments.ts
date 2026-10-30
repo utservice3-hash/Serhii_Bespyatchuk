@@ -66,13 +66,15 @@ export function patchOf(p: PayPlan, pipelineId: number | null): LeadPatch {
 
 /**
  * Угоди, які веде віджет: є наш рахунок і НЕМАЄ жодного рахунку 1С за угодою поза нашим журналом (той — Genesis або
- * бухгалтерії; та сама ознака, що `owner.ts`, але по всіх угодах одним запитом).
+ * бухгалтерії; та сама ознака, що `owner.ts`, але по всіх угодах одним запитом). Угоди, куди оплати вже приходять
+ * вебхуком (`pay_event_at`), щогодинна звірка не чіпає: вебхук свіжіший, і два записувачі перетирали б одне одного.
  */
 export const OWN_DEALS_SQL = `
   SELECT j.lead_id::text AS lead_id FROM (SELECT DISTINCT lead_id FROM zakaz_onec_invoices) j
    WHERE NOT EXISTS (SELECT 1 FROM onec_deal_invoices di WHERE di.deal_id = j.lead_id
            AND ltrim(COALESCE(di.number, ''), '0') <> ''
-           AND ltrim(di.number, '0') NOT IN (SELECT ltrim(z.number, '0') FROM zakaz_onec_invoices z WHERE z.lead_id = j.lead_id))`;
+           AND ltrim(di.number, '0') NOT IN (SELECT ltrim(z.number, '0') FROM zakaz_onec_invoices z WHERE z.lead_id = j.lead_id))
+     AND NOT EXISTS (SELECT 1 FROM zakaz_onec_invoices e WHERE e.lead_id = j.lead_id AND e.pay_event_at IS NOT NULL)`;
 
 /** Куди дозволено писати в цьому режимі. Чиста — гейт `#7123` ганяє рівно її. */
 export function writable(mode: "off" | "own" | "live", dealIds: number[], own: Set<number> | null): Set<number> {

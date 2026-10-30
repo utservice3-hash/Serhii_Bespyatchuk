@@ -62,6 +62,8 @@ export interface LeadForInvoice {
   /** «Номер заказа» — його пише Genesis одразу після рахунку; ознака «угоду веде Genesis» (`owner.ts`). */
   orderNo: string;
   tags: string[];
+  pipelineId: number | null;
+  statusId: number | null;
   company: { id: number; name: string; edrpou: string } | null;
 }
 
@@ -84,6 +86,8 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
     cityTo: cfText(l.custom_fields_values, KOMMO_FIELDS.leadCityTo),
     orderNo: cfText(l.custom_fields_values, KOMMO_FIELDS.leadOrderNo),
     tags: Array.isArray(l?._embedded?.tags) ? l._embedded.tags.map((t: any) => String(t?.name ?? "")) : [],
+    pipelineId: Number(l.pipeline_id) || null,
+    statusId: Number(l.status_id) || null,
     company,
   };
 }
@@ -96,6 +100,25 @@ export async function kommoUserName(userId: number): Promise<string> {
     return "";
   }
 }
+
+/**
+ * Один повтор, якщо обірвався зв'язок (`fetch failed`, таймаут) — заміряно 30.10.2026: завантаження PDF після
+ * `updateInvoice` впало «fetch failed», а те саме завантаження за хвилину пройшло з першої спроби. Відповідь Kommo
+ * з кодом (4xx/5xx) — не обрив, її не повторюємо: там причина не мине сама.
+ */
+export async function withNetRetry<T>(fn: () => Promise<T>, waitMs = 1500): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!isNetError(e)) throw e;
+    await new Promise((r) => setTimeout(r, waitMs));
+    return fn();
+  }
+}
+export const isNetError = (e: unknown) => {
+  const err = e as Error & { cause?: unknown };
+  return err?.name === "TimeoutError" || err?.name === "AbortError" || (err instanceof TypeError && /fetch failed/i.test(err.message));
+};
 
 /** PDF → файли угоди. Повертає uuid файлу Kommo і його версію (для запису-вкладення в стрічці). */
 export async function attachPdfToLead(leadId: number, fileName: string, bytes: Buffer): Promise<{ uuid: string; versionUuid: string }> {
@@ -135,6 +158,7 @@ export interface LeadPatch {
   pipeline_id?: number;
   /** Додати теги, не чіпаючи наявних (Kommo v4: `tags_to_add`; `_embedded.tags` замінив би всі). */
   tags_to_add?: { name: string }[];
+  tags_to_delete?: { name: string }[];
 }
 
 /** Пакетне оновлення угод (до 50 за запит, як дозволяє Kommo). Помилка — разом із відповіддю Kommo. */

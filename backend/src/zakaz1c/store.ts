@@ -11,6 +11,7 @@
  */
 import type { Pool } from "pg";
 import { canEdit, payStateOf, type CreatedInvoice, type InvoiceForm, type PayState } from "./invoice.js";
+import type { OnecEvent, PaymentEvent } from "./events.js";
 import type { Zakaz1cMode } from "./env.js";
 
 export interface InvoiceRow {
@@ -76,7 +77,8 @@ export async function listInvoices(pool: Pool, leadId: number, today: string): P
               to_char(i.due_date, 'YYYY-MM-DD') AS due_date, to_char(i.act_date, 'YYYY-MM-DD') AS act_date,
               i.created_at AS created_ts, to_char(i.created_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS created_day,
               to_char(i.created_at AT TIME ZONE 'Europe/Kyiv', 'DD.MM.YYYY HH24:MI') AS created_at,
-              u.uid AS u_uid, u.paid_sum::float8 AS u_paid, u.remaining::float8 AS u_remaining, to_char(u.due_date, 'YYYY-MM-DD') AS u_due
+              u.uid AS u_uid, u.paid_sum::float8 AS u_paid, u.remaining::float8 AS u_remaining, to_char(u.due_date, 'YYYY-MM-DD') AS u_due,
+              i.paid_total::float8 AS e_paid, i.remaining::float8 AS e_remaining, i.fully_paid AS e_full, i.pay_event_at AS e_at
          FROM zakaz_onec_invoices i LEFT JOIN onec_unpaid_invoices u ON u.uid = i.invoice_uid
         WHERE i.lead_id = $1 ORDER BY i.created_at DESC`, // `i.` — колонка часу, а не текстовий псевдонім вище
       [leadId]),
@@ -86,9 +88,13 @@ export async function listInvoices(pool: Pool, leadId: number, today: string): P
   const syncedAt = st.rows[0]?.synced_at ?? null;
   const dealPaid = Number(dp.rows[0]?.paid) || 0;
   return q.rows.map((r) => {
-    const pay = payStateOf({ createdAt: new Date(r.created_ts), total: Number(r.total) || 0 },
-      r.u_uid ? { paid: Number(r.u_paid) || 0, remaining: Number(r.u_remaining) || 0, due: r.u_due ?? null } : null,
-      { syncedAt, dealPaid, today });
+    // Подія 1С (вебхук) — найсвіжіше джерело: їй вірімо першою; знімок неоплачених — для рахунків без подій.
+    const pay: PayState = r.e_at
+      ? (r.e_full ? { k: "paid", paid: Number(r.e_paid) || 0, remaining: 0 }
+        : { k: Number(r.e_paid) > 0 ? "part" : "unpaid", paid: Number(r.e_paid) || 0, remaining: Number(r.e_remaining) || 0 })
+      : payStateOf({ createdAt: new Date(r.created_ts), total: Number(r.total) || 0 },
+        r.u_uid ? { paid: Number(r.u_paid) || 0, remaining: Number(r.u_remaining) || 0, due: r.u_due ?? null } : null,
+        { syncedAt, dealPaid, today });
     return {
       invoice_uid: r.invoice_uid, number: r.number, number_print: r.number_print, invoice_date: r.invoice_date, organization: r.organization,
       org_key: r.org_key, currency: r.currency, vat_type: r.vat_type, total: Number(r.total) || 0, existed: r.existed,
@@ -120,4 +126,54 @@ export async function actAttached(pool: Pool, uid: string): Promise<boolean> {
 }
 export async function markActAttached(pool: Pool, uid: string, fileUuid: string): Promise<void> {
   await pool.query(`UPDATE zakaz_onec_invoices SET act_file_uuid = $2, updated_at = now() WHERE invoice_uid = $1`, [uid, fileUuid]);
+}
+
+/* ——— вебхук 1С ——— */
+
+/** Записати подію. `false` — така `event_id` уже була (повтор): вдруге не обробляємо. */
+export async function recordEvent(pool: Pool, ev: OnecEvent, payload: unknown): Promise<boolean> {
+  const q = await pool.query(
+    `INSERT INTO zakaz_onec_events (event_id, kind, invoice_uid, deal_id, payload) VALUES ($1, $2, $3, $4, $5::jsonb)
+     ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
+    [ev.eventId, ev.kind, ev.invoiceUid, ev.dealId, JSON.stringify(payload)]);
+  return (q.rowCount ?? 0) > 0;
+}
+export async function markEvent(pool: Pool, eventId: string, result: string, error: string | null): Promise<void> {
+  await pool.query(`UPDATE zakaz_onec_events SET result = $2, error = $3 WHERE event_id = $1`, [eventId, result.slice(0, 300), error?.slice(0, 500) ?? null]);
+}
+
+/**
+ * Стан рахунку з події — лише якщо подія не старша за вже записану (`sent_at`): стан абсолютний, тож старіша подія,
+ * що прийшла пізніше (повтор після збою), не має відкотити свіжіший.
+ */
+export async function applyPaymentEvent(pool: Pool, ev: PaymentEvent): Promise<void> {
+  const at = ev.sentAt && !Number.isNaN(Date.parse(ev.sentAt)) ? ev.sentAt : new Date().toISOString();
+  await pool.query(
+    `UPDATE zakaz_onec_invoices SET paid_total = $2, remaining = $3, fully_paid = $4, realized = $5, pay_event_at = $6::timestamptz, updated_at = now()
+      WHERE invoice_uid = $1 AND (pay_event_at IS NULL OR pay_event_at <= $6::timestamptz)`,
+    [ev.invoiceUid, ev.paidTotal, ev.remaining, ev.fullyPaid, ev.realized, at]);
+}
+
+/** Рахунки віджета угоди зі станом оплати (рахунок без подій — неоплачений). */
+export async function dealInvoicesPay(pool: Pool, leadId: number): Promise<{ currency: string; paidTotal: number; fullyPaid: boolean }[]> {
+  const q = await pool.query<{ currency: string; paid: number | null; full: boolean | null }>(
+    `SELECT currency, paid_total::float8 AS paid, fully_paid AS full FROM zakaz_onec_invoices WHERE lead_id = $1`, [leadId]);
+  return q.rows.map((r) => ({ currency: r.currency, paidTotal: Number(r.paid) || 0, fullyPaid: r.full === true }));
+}
+
+/** Що ми записали в угоду минулого разу — спільно з щогодинною звіркою (`zakaz_onec_pay_plan`). */
+export async function lastWritten(pool: Pool, dealId: number): Promise<{ paid: boolean }> {
+  const q = await pool.query<{ written_paid: boolean | null }>(`SELECT written_paid FROM zakaz_onec_pay_plan WHERE deal_id = $1`, [dealId]);
+  return { paid: q.rows[0]?.written_paid === true };
+}
+export async function saveWritten(pool: Pool, r: { dealId: number; paidText: string; fullyPaid: boolean; status: number | null; error: string | null }): Promise<void> {
+  await pool.query(
+    `INSERT INTO zakaz_onec_pay_plan AS t (deal_id, paid_text, fully_paid, computed_at, written_text, written_paid, written_status, written_at, write_error)
+     VALUES ($1, $2, $3, now(), CASE WHEN $5::text IS NULL THEN $2 END, CASE WHEN $5::text IS NULL THEN $3 END, CASE WHEN $5::text IS NULL THEN $4::bigint END,
+             CASE WHEN $5::text IS NULL THEN now() END, $5)
+     ON CONFLICT (deal_id) DO UPDATE SET paid_text = EXCLUDED.paid_text, fully_paid = EXCLUDED.fully_paid, computed_at = now(),
+       written_text = COALESCE(EXCLUDED.written_text, t.written_text), written_paid = COALESCE(EXCLUDED.written_paid, t.written_paid),
+       written_status = COALESCE(EXCLUDED.written_status, t.written_status), written_at = COALESCE(EXCLUDED.written_at, t.written_at),
+       write_error = EXCLUDED.write_error`,
+    [r.dealId, r.paidText, r.fullyPaid, r.status, r.error]);
 }

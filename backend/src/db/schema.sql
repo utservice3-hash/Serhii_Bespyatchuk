@@ -6756,6 +6756,21 @@ ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS bank_uid TEXT;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS stamp BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS edits INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_file_uuid TEXT;
+-- Версія 0.5 (30.10.2026): вебхук 1С → віджет. Стан оплати рахунку з ОСТАННЬОЇ події 1С (абсолютний: оплачено всього,
+-- залишок) — не різниця, тож повтор чи інший порядок подій не ламають. `pay_event_at` — коли 1С надіслала цей стан.
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS paid_total NUMERIC(14,2);
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS remaining NUMERIC(14,2);
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS fully_paid BOOLEAN;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS realized BOOLEAN;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS pay_event_at TIMESTAMPTZ;
+-- 📨 Журнал подій вебхука 1С (`zakaz1c/events.ts`): що прийшло, коли, чим закінчилось. `event_id` — ключ: повтор тієї
+-- самої події не обробляється вдруге.
+CREATE TABLE IF NOT EXISTS zakaz_onec_events (
+  event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, invoice_uid TEXT, deal_id BIGINT, payload JSONB NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(), result TEXT, error TEXT
+);
+CREATE INDEX IF NOT EXISTS zakaz_onec_events_deal_idx ON zakaz_onec_events (deal_id, received_at DESC);
+REVOKE ALL ON zakaz_onec_events FROM ai_readonly;
 REVOKE ALL ON zakaz_onec_invoices FROM ai_readonly;
 -- 💸 «ТЕСТ ЗАКАЗ 1С» — план оплат 1С → угоди Kommo (`zakaz1c/payments.ts`, 27.10.2026). Що МАЄ бути в «Оплачено 1с» /
 -- «Оплачено из 1с» / етапі за правилом власника, поруч — що записав Genesis (`genesis_paid1c`, де є) для звірки до
