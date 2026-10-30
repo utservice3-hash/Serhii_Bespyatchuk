@@ -11,6 +11,7 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth, requirePerm, requireRole } from "../auth/middleware.js";
+import { anchorFromCabinet, loadAdBalance } from "../core/adBalance.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
 import { assignAllowed, assignDenyReason, assignTeamIdFor, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
          type MergePairScope } from "../auth/mergeScope.js";
@@ -6091,6 +6092,31 @@ dashboardRouter.get("/ads/deals", async (req, res) => {
       url: kommoLeadUrl(d.kommoId), // спільний хелпер: база береться з конфігу в одному місці
     })),
   });
+});
+
+/**
+ * 💳 БАЛАНС РЕКЛАМНОГО КАБІНЕТУ (30.10.2026) — лише адмін-рівень. Формула й чому рахуємо, а не беремо з Google —
+ * `core/adBalance.ts`. GET — залишок; POST — звірка з кабінетом (адмін вписує число з «Платежі → Підсумок»).
+ */
+dashboardRouter.get("/ads/balance", requireRole("admin"), async (_req, res) => {
+  const r = await loadAdBalance(pool, kyivToday());
+  if (!r) return res.json({ balance: null, syncedAt: null });
+  res.json({ balance: r.balance, syncedAt: r.syncedAt });
+});
+
+dashboardRouter.post("/ads/balance", requireRole("admin"), async (req, res) => {
+  const value = Number(req.body?.balance);
+  if (!Number.isFinite(value) || value < 0 || value > 10_000_000) {
+    return res.status(400).json({ error: "Вкажіть залишок із кабінету числом, наприклад 29205.81" });
+  }
+  const today = kyivToday();
+  const t = await pool.query<{ cost: string | null }>(`SELECT sum(cost) AS cost FROM ad_ga4_daily WHERE day = $1::date`, [today]);
+  const anchor = anchorFromCabinet(value, Number(t.rows[0]?.cost ?? 0), today);
+  await pool.query(
+    `INSERT INTO ad_balance_anchor (as_of, balance, cabinet_balance, created_by) VALUES ($1::date, $2, $3, $4)`,
+    [anchor.asOf, anchor.balance, value, req.auth!.userId]);
+  const r = await loadAdBalance(pool, today);
+  res.status(201).json({ balance: r?.balance ?? null, syncedAt: r?.syncedAt ?? null });
 });
 
 dashboardRouter.get("/lead-quality", async (req, res) => {

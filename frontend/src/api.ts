@@ -1243,6 +1243,20 @@ export async function fetchAds(params: { from?: string; to?: string }): Promise<
   return data;
 }
 
+/** 💳 Баланс рекламного кабінету Google Ads — лише адмін-рівень (інші отримують 403). Формула — `core/adBalance.ts`. */
+export interface AdBalance {
+  balance: number; balanceNet: number; avgDaily: number | null; daysLeft: number | null; low: boolean;
+  lastPayment: { day: string; amount: number } | null; anchor: { asOf: string; balance: number };
+  paidSince: number; spentSince: number;
+}
+export async function fetchAdBalance(): Promise<{ balance: AdBalance | null; syncedAt: string | null }> {
+  const { data } = await api.get<{ balance: AdBalance | null; syncedAt: string | null }>("/dashboard/ads/balance");
+  return data;
+}
+export async function saveAdBalance(balance: number): Promise<{ balance: AdBalance | null; syncedAt: string | null }> {
+  const { data } = await api.post<{ balance: AdBalance | null; syncedAt: string | null }>("/dashboard/ads/balance", { balance });
+  return data;
+}
 export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[] }> {
   const { data } = await api.get<{ day: string; deals: AdsDeal[] }>("/dashboard/ads/deals", { params: { day } });
   return data;

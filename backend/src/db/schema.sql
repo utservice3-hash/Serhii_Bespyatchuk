@@ -304,6 +304,22 @@ CREATE TABLE IF NOT EXISTS ad_ga4_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_ad_ga4_daily_day ON ad_ga4_daily(day);
 
+-- 💳 БАЛАНС РЕКЛАМНОГО КАБІНЕТУ — ТОЧКИ ЗВІРКИ (30.10.2026, `core/adBalance.ts`, гейт #7140).
+-- Залишок з ПДВ на ПОЧАТОК дня `as_of`; від останньої точки дашборд рахує: + поповнення з «Виписки» − 1,2 × витрати GA4.
+-- Перша точка — 01.06.2026 від нуля: того дня в «Виписці» перша оплата ТОВ «ГУГЛ». Звірено 30.10.2026: розрахунок
+-- 29 452 проти 29 205,81 у кабінеті (0,8%). Нові точки ставить адмін кнопкою «Звірити з кабінетом» (`cabinet_balance` —
+-- число, яке він вписав; `balance` — те саме на початок дня).
+CREATE TABLE IF NOT EXISTS ad_balance_anchor (
+  id SERIAL PRIMARY KEY,
+  as_of DATE NOT NULL,
+  balance NUMERIC NOT NULL,
+  cabinet_balance NUMERIC,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO ad_balance_anchor (as_of, balance)
+  SELECT DATE '2026-06-01', 0 WHERE NOT EXISTS (SELECT 1 FROM ad_balance_anchor);
+
 -- 💰 МІСЯЧНИЙ ПЛАН ВИТРАТ НА РЕКЛАМУ — ручний, і це не тимчасово (рішення власника 09.09.2026).
 --
 -- 🔴 ЧОМУ РУЧНИЙ, ЯКЩО В НАС УМОВА «ВСЕ АВТОМАТИЧНО». Умова стосується того, що МОЖНА
@@ -6336,6 +6352,9 @@ ALTER TABLE managers ADD COLUMN IF NOT EXISTS keep_without_crm BOOLEAN NOT NULL 
 -- має повністю все залишитися». Умова на kommo_user_id — щоб не позначити іншу людину, якщо id колись зсунеться.
 -- `is_active = true` — разом із позначкою: якщо в Kommo її видалили РАНІШЕ за викат, синк уже встиг вимкнути запис.
 UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;
+-- Денисюк Роман (managers.id 387273, Kommo 15537212): користувача в Kommo видалили, синк вимкнув запис — і Роман зник
+-- з вибору виконавця задач (Юля 28.10.2026: «не можу виставляти задачі тобі»). Роман 28.10.2026 — лишити в дашборді, без команди.
+UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 387273 AND kommo_user_id = '15537212' AND NOT keep_without_crm;
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🏛 PROZORRO-ЛІДИ (задача #5299, ТЗ «Щоденний збір лідів з Prozorro у Kommo»; прохід 1 — збір і пробний режим).
@@ -6748,6 +6767,14 @@ ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS due_date DATE;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_date DATE;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS bank TEXT;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS crm_comment TEXT;
+-- Версія 0.4 (30.10.2026, доробки 1С від 29.10): ключ форми (кілька рахунків в угоді), договір і банк для «Змінити»,
+-- лічильник змін, печатка, і де лежить акт у файлах угоди (кладемо один раз).
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS agreement_uid TEXT;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS bank_uid TEXT;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS stamp BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS edits INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_file_uuid TEXT;
 REVOKE ALL ON zakaz_onec_invoices FROM ai_readonly;
 -- 💸 «ТЕСТ ЗАКАЗ 1С» — план оплат 1С → угоди Kommo (`zakaz1c/payments.ts`, 27.10.2026). Що МАЄ бути в «Оплачено 1с» /
 -- «Оплачено из 1с» / етапі за правилом власника, поруч — що записав Genesis (`genesis_paid1c`, де є) для звірки до
