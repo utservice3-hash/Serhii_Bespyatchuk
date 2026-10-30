@@ -3813,6 +3813,19 @@ export interface RateAnalysis {
   /** 🗺 Варіанти маршруту по дорогах (перший — основний; другий — «через Україну», коли основний іде Молдовою). */
   routes?: RouteVariant[];
   route_variant?: number;
+  /** 📈 Показана ставка (ринок для авто > 5 т, коли схожих ≥ 5; інакше тариф КВП) і сирий ринок обраного варіанта. */
+  price?: PriceView | null;
+  market_price?: MarketPrice | null;
+}
+/** 📈 Ринкова ціна перевізнику зі схожих оголошень Lardi за 30 днів (`core/marketPrice.ts`). */
+export interface MarketPrice { carrier_median: number; carrier_p25: number; carrier_p75: number; n: number; pool: number; window_days: number; km: number; mass: number }
+/** Що показуємо як ставку: звідки вона, числа, і на скільки ринок розійшовся з тарифом. */
+export interface PriceView {
+  source: "market" | "tariff";
+  client_min: number; client_max: number; carrier_min: number; carrier_max: number; margin: number; per_km_min: number; per_km_max: number;
+  tariff_diff_pct: number | null;
+  /** Чому не ринок: `few_offers` — схожих замало; `light_class` — для авто до 5 т ринок лише довідково (відкрите питання). */
+  tariff_reason: "few_offers" | "light_class" | "market_outlier" | null;
 }
 /** 🗺 Один варіант маршруту: звідки км, скільки по Молдові, лінія для мапи й ставка саме на ці км. */
 export interface RouteVariant {
@@ -3832,6 +3845,8 @@ export interface RouteVariant {
   moldova_km: number;
   line: [number, number][];
   zone_recommendation: RateAnalysis["zone_recommendation"];
+  market_price: MarketPrice | null;
+  price: PriceView | null;
 }
 export type RateFeedbackRating = "ok" | "high" | "low" | "no";
 export async function sendRateFeedback(body: { usageId: number; rating: RateFeedbackRating; agreed: string; comment: string }): Promise<void> {
@@ -3882,7 +3897,7 @@ export async function analyzeRates(body: {
   return data;
 }
 /** ✍️ Перерахунок ТОГО САМОГО розрахунку: виправлені км або інший варіант маршруту. Lardi вдруге не питається. */
-export type RateReprice = Pick<RateAnalysis, "routes" | "route_variant" | "zone_recommendation" | "route"> & { usage_id: number };
+export type RateReprice = Pick<RateAnalysis, "routes" | "route_variant" | "zone_recommendation" | "route" | "price" | "market_price"> & { usage_id: number };
 export async function repriceRates(body: Parameters<typeof analyzeRates>[0] & { usage_id: number; variant: number; km_override: number | null }): Promise<RateReprice> {
   const { data } = await api.post<RateReprice>("/rates/analyze", body);
   return data;

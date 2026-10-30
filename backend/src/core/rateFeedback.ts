@@ -54,7 +54,13 @@ export interface CalcSnapshot {
   /** 🗺 Звідки км (29.10.2026): `road` — по дорогах, `approx` — пряма × 1,25, `manual` — менеджер виправив; і який варіант
    *  маршруту обрано. Старі знімки цих полів не мають — для них км бралися з пропозицій Lardi. */
   distance_source?: "road" | "approx" | "manual" | null; route_variant?: string | null; road_km?: number | null; moldova_km?: number | null;
+  /** 📈 Прохід A (30.10.2026): звідки ПОКАЗАНА ставка (`client_*` вище — саме показана), ринок і тариф поруч. */
+  price_source?: "market" | "tariff" | null; market_n?: number | null; market_carrier_median?: number | null;
+  tariff_client_min?: number | null; tariff_client_max?: number | null; tariff_diff_pct?: number | null;
 }
+/** Показана ставка (`core/marketPrice.ts → priceView`) + сирий ринок — для знімка. */
+export type PriceInfo = { source: "market" | "tariff"; client_min: number; client_max: number; carrier_min: number; carrier_max: number; margin: number;
+  per_km_min: number; per_km_max: number; tariff_diff_pct: number | null; market: { carrier_median: number; n: number } | null };
 /** Маршрутна частина знімка (`routes/rates.ts → routeInfo`). */
 export type RouteInfo = { distance_source: "road" | "approx" | "manual"; route_variant: string; road_km: number | null; moldova_km: number };
 type ZoneOpt = { tonnage: string; selected: boolean; client_min: number | null; client_max: number | null; total_min: number | null; total_max: number | null; margin: number | null; per_km_min: number; per_km_max: number };
@@ -63,16 +69,21 @@ export function snapshotOf(
   distanceKm: number | null,
   zone: { zone: string; options: ZoneOpt[] } | null | undefined,
   route?: RouteInfo,
+  price?: PriceInfo | null,
 ): CalcSnapshot {
   const sel = zone?.options.find((o) => o.selected) ?? null;
+  // Показана ставка: з ринку (коли він головний) або з тарифу — у `client_*`, бо відгук «завищено/занижено» судить ПОКАЗАНЕ.
+  const shown = price ?? null;
   return {
     mass_min: req.mass_min, mass_max: req.mass_max, body_type_ids: req.body_type_ids, distance_km: distanceKm,
     zone: zone?.zone ?? null, tonnage: sel?.tonnage ?? null,
-    client_min: sel?.client_min ?? null, client_max: sel?.client_max ?? null,
-    carrier_min: sel?.total_min ?? null, carrier_max: sel?.total_max ?? null,
-    margin: sel?.margin ?? null, per_km_min: sel?.per_km_min ?? null, per_km_max: sel?.per_km_max ?? null,
+    client_min: shown?.client_min ?? sel?.client_min ?? null, client_max: shown?.client_max ?? sel?.client_max ?? null,
+    carrier_min: shown?.carrier_min ?? sel?.total_min ?? null, carrier_max: shown?.carrier_max ?? sel?.total_max ?? null,
+    margin: shown?.margin ?? sel?.margin ?? null, per_km_min: shown?.per_km_min ?? sel?.per_km_min ?? null, per_km_max: shown?.per_km_max ?? sel?.per_km_max ?? null,
     distance_source: route?.distance_source ?? null, route_variant: route?.route_variant ?? null,
     road_km: route?.road_km ?? null, moldova_km: route?.moldova_km ?? null,
+    price_source: shown?.source ?? null, market_n: shown?.market?.n ?? null, market_carrier_median: shown?.market?.carrier_median ?? null,
+    tariff_client_min: sel?.client_min ?? null, tariff_client_max: sel?.client_max ?? null, tariff_diff_pct: shown?.tariff_diff_pct ?? null,
   };
 }
 

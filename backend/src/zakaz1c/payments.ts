@@ -64,6 +64,23 @@ export function patchOf(p: PayPlan, pipelineId: number | null): LeadPatch {
   return { id: p.dealId, custom_fields_values: cf, ...(p.moveTo && pipelineId ? { status_id: p.moveTo, pipeline_id: pipelineId } : {}) };
 }
 
+/**
+ * Угоди, які веде віджет: є наш рахунок і НЕМАЄ жодного рахунку 1С за угодою поза нашим журналом (той — Genesis або
+ * бухгалтерії; та сама ознака, що `owner.ts`, але по всіх угодах одним запитом).
+ */
+export const OWN_DEALS_SQL = `
+  SELECT j.lead_id::text AS lead_id FROM (SELECT DISTINCT lead_id FROM zakaz_onec_invoices) j
+   WHERE NOT EXISTS (SELECT 1 FROM onec_deal_invoices di WHERE di.deal_id = j.lead_id
+           AND ltrim(COALESCE(di.number, ''), '0') <> ''
+           AND ltrim(di.number, '0') NOT IN (SELECT ltrim(z.number, '0') FROM zakaz_onec_invoices z WHERE z.lead_id = j.lead_id))`;
+
+/** Куди дозволено писати в цьому режимі. Чиста — гейт `#7123` ганяє рівно її. */
+export function writable(mode: "off" | "own" | "live", dealIds: number[], own: Set<number> | null): Set<number> {
+  if (mode === "off") return new Set();
+  if (mode === "live") return new Set(dealIds);
+  return new Set(dealIds.filter((id) => own?.has(id)));
+}
+
 /** Кандидати — угоди з оплатою за останні 90 днів; суму рахуємо по ВСІХ оплатах угоди, не лише за вікно. */
 const CANDIDATES_SQL = `
   WITH c AS (SELECT DISTINCT deal_id FROM onec_deal_payments WHERE paid_on >= (now() AT TIME ZONE 'Europe/Kyiv')::date - 90)
@@ -90,7 +107,10 @@ export async function runPayments(pool: Pool): Promise<{ deals: number; fullyPai
   const prev = new Map((await pool.query<{ deal_id: string; written_text: string | null; written_paid: boolean | null; written_status: number | null }>(
     `SELECT deal_id::text AS deal_id, written_text, written_paid, written_status FROM zakaz_onec_pay_plan`)).rows.map((r) => [Number(r.deal_id), r]));
 
-  const toWrite = mode === "live" ? plans.filter(({ plan }) => {
+  // `own` — лише угоди віджета без чужих рахунків 1С («одна угода — одна система»); `live` — усі; `off` — нічого.
+  const own = mode === "own" ? new Set((await pool.query<{ lead_id: string }>(OWN_DEALS_SQL)).rows.map((r) => Number(r.lead_id))) : null;
+  const toWrite = writable(mode, plans.map((p) => p.plan.dealId), own).size ? plans.filter(({ plan }) => {
+    if (!writable(mode, [plan.dealId], own).has(plan.dealId)) return false;
     const w = prev.get(plan.dealId);
     return !w || w.written_text !== plan.paidText || (plan.fullyPaid && w.written_paid !== true) || (plan.moveTo != null && w.written_status !== plan.moveTo);
   }) : [];

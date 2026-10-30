@@ -59,6 +59,9 @@ export interface LeadForInvoice {
   car: string;
   cityFrom: string;
   cityTo: string;
+  /** «Номер заказа» — його пише Genesis одразу після рахунку; ознака «угоду веде Genesis» (`owner.ts`). */
+  orderNo: string;
+  tags: string[];
   company: { id: number; name: string; edrpou: string } | null;
 }
 
@@ -79,6 +82,8 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
     car: cfText(l.custom_fields_values, KOMMO_FIELDS.leadCar),
     cityFrom: cfText(l.custom_fields_values, KOMMO_FIELDS.leadCityFrom),
     cityTo: cfText(l.custom_fields_values, KOMMO_FIELDS.leadCityTo),
+    orderNo: cfText(l.custom_fields_values, KOMMO_FIELDS.leadOrderNo),
+    tags: Array.isArray(l?._embedded?.tags) ? l._embedded.tags.map((t: any) => String(t?.name ?? "")) : [],
     company,
   };
 }
@@ -92,8 +97,8 @@ export async function kommoUserName(userId: number): Promise<string> {
   }
 }
 
-/** PDF → файли угоди. Повертає uuid файлу Kommo. */
-export async function attachPdfToLead(leadId: number, fileName: string, bytes: Buffer): Promise<string> {
+/** PDF → файли угоди. Повертає uuid файлу Kommo і його версію (для запису-вкладення в стрічці). */
+export async function attachPdfToLead(leadId: number, fileName: string, bytes: Buffer): Promise<{ uuid: string; versionUuid: string }> {
   const acc = await kommoJson<any>("/api/v4/account?with=drive_url");
   const drive = String(acc?.drive_url ?? "").replace(/\/+$/, "");
   if (!drive) throw new Error("Kommo не віддав адресу файлового сховища (drive_url)");
@@ -106,13 +111,13 @@ export async function attachPdfToLead(leadId: number, fileName: string, bytes: B
   const session = await sr.json() as { upload_url?: string; max_part_size?: number };
   let url = String(session.upload_url ?? "");
   const part = Number(session.max_part_size) || 524_288;
-  let uuid = "";
+  let uuid = "", versionUuid = "";
   for (let off = 0; off < bytes.length && url; off += part) {
     const chunk = new Uint8Array(bytes.subarray(off, off + part));
     const r = await kommo(url, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: chunk });
     if (!r.ok) throw new Error(`Kommo частина файлу: ${r.status}`);
-    const j = await r.json() as { next_url?: string; uuid?: string };
-    if (j.uuid) { uuid = j.uuid; break; }
+    const j = await r.json() as { next_url?: string; uuid?: string; version_uuid?: string };
+    if (j.uuid) { uuid = j.uuid; versionUuid = String(j.version_uuid ?? ""); break; }
     url = String(j.next_url ?? "");
   }
   if (!uuid) throw new Error("Kommo не повернув uuid файлу після завантаження");
@@ -120,7 +125,7 @@ export async function attachPdfToLead(leadId: number, fileName: string, bytes: B
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify([{ file_uuid: uuid }]),
   });
   if (!lr.ok) throw new Error(`Kommo прикріплення файлу до угоди: ${lr.status}`);
-  return uuid;
+  return { uuid, versionUuid };
 }
 
 export interface LeadPatch {
@@ -128,6 +133,8 @@ export interface LeadPatch {
   custom_fields_values?: { field_id: number; values: { value: string | boolean }[] }[];
   status_id?: number;
   pipeline_id?: number;
+  /** Додати теги, не чіпаючи наявних (Kommo v4: `tags_to_add`; `_embedded.tags` замінив би всі). */
+  tags_to_add?: { name: string }[];
 }
 
 /** Пакетне оновлення угод (до 50 за запит, як дозволяє Kommo). Помилка — разом із відповіддю Kommo. */
@@ -147,4 +154,18 @@ export async function addLeadNote(leadId: number, text: string): Promise<void> {
     body: JSON.stringify([{ note_type: "common", params: { text } }]),
   });
   if (!r.ok) throw new Error(`Kommo примітка: ${r.status}`);
+}
+
+/**
+ * Запис у стрічці угоди з прикріпленим файлом (тип примітки `attachment`, документація amoCRM «События и примечания»):
+ * файл уже лежить у сховищі Kommo після `attachPdfToLead`, тут лише посилання на нього. `version_uuid` необовʼязковий —
+ * без нього Kommo бере останню версію. `file_name` — те, що людина бачить у стрічці.
+ */
+export async function addFileNote(leadId: number, file: { uuid: string; versionUuid: string; name: string }): Promise<void> {
+  const r = await kommo(`/api/v4/leads/${leadId}/notes`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify([{ note_type: "attachment", params: { file_uuid: file.uuid, ...(file.versionUuid ? { version_uuid: file.versionUuid } : {}),
+      file_name: file.name } }]),
+  });
+  if (!r.ok) throw new Error(`Kommo примітка з файлом: ${r.status} ${(await r.text()).slice(0, 200)}`);
 }

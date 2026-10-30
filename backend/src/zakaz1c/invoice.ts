@@ -4,15 +4,18 @@
  *
  * Правила вікна — від Сергія й бухгалтера Інни (макет погоджено 27.10.2026), і сервер перевіряє їх сам, вікну не довіряє:
  *   - організації ЮТС / Єлогіст / АвтоМув / ФОП, у 1С — КОДОМ (лист 1С «неоплачені рахунки», 25.10.2026);
- *   - ЮТС і Єлогіст — лише з ПДВ (типово «в тому числі», 20 %); АвтоМув і ФОП — лише без ПДВ;
+ *   - ЮТС і Єлогіст — лише «ПДВ в тому числі» (ставка типово 20 %); АвтоМув і ФОП — лише без ПДВ;
+ *     «ПДВ зверху» і знижки у вікні немає (Сергій, 28.10.2026): `discount` завжди 0;
  *   - послуги — зі списку, свого для кожної організації; «Содержание» = маршрут (1С друкує «послуга: маршрут»);
  *   - дата рахунку — лише сьогоднішня (ставить сервер); «Оплатити до» — не в минулому; «Дата акту» — необовʼязкова;
  *   - коментар у 1С — як у Genesis: «<менеджер>, Загружен из amoCRM по сделке №…».
  *
- * Чого 1С ще не вміє (ТЗ Андрію 28.10.2026) — того сервер у 1С не шле і не вдає, що шле:
- *   - другий рахунок в угоді (`deal_id` повертає наявний) → другий не створюємо, кажемо словами (`mount.ts`);
- *   - вибір банку → ФОП недоступний (у ФОП два рахунки, а 1С обрала б сама);
- *   - «Дата акту» й «Коментар СРМ» → зберігаємо в журналі, у 1С поки не йдуть (немає параметрів).
+ * Доробки 1С від 29.10.2026 (лист «Віджет "Заказ 1С": що зроблено в 1С»):
+ *   - `request_id` — кілька рахунків в угоді; захист від дубля — за ключем ВІДКРИТОЇ ФОРМИ, а не за угодою;
+ *   - `bank_account` + `GET /organizations` — ФОП Беспятчук: менеджер обирає ПриватБанк чи monobank;
+ *   - `deal_fields` — «Дата акта» (+ «від менеджера») і «Коментар CRM»; решта полів угоди чекає відповідності Kommo → 1С;
+ *   - `POST /updateInvoice` — зміна рахунку (1С сама відмовляє, якщо є оплата чи реалізація);
+ *   - `GET /realizationPdf?form=act` — акт, коли бухгалтерія провела реалізацію.
  *
  * Межа довіри: з браузера беремо лише те, що менеджер ОБРАВ у вікні. Контрагента (uid з `customerInfo` за кодом компанії
  * угоди) і менеджера сервер бере сам — інакше в режимі test можна було б підставити будь-кого.
@@ -35,36 +38,40 @@ export interface OrgRule {
   vat: "with" | "without";
   /** Слово, за яким договір з `customerInfo` належить цій організації (там лише назва організації). */
   match: string;
-  banks?: string[];
+  /** ФОП приймає оплату на кілька рахунків — без явного банку 1С обрала б будь-який (основний не вказано). */
+  needsBank?: boolean;
   waits?: string;
 }
 
 /**
  * Коди організацій 1С: 000000002 ЮНАЙТЕД, 000000004 АвтоМув (лист 1С 25.10.2026), 000000012 ТОВ «ЄЛОГІСТ» (Роман,
- * 28.10.2026). ФОП у 1С три (05 Шевчук, 06 Яцик, 11 Беспятчук) — котрий, скаже Сергій; але й тоді ФОП чекає вибору
- * банку в `createInvoice`, тому поки недоступний за будь-якого коду.
+ * 28.10.2026), 000000011 ФОП Беспятчук (Сергій, 28.10.2026: «Яцик не працює — тільки Беспятчук»). Банки ФОП — з
+ * `GET /organizations`, а не з коду: їх веде бухгалтерія в 1С.
  */
 export function orgRules(): OrgRule[] {
   return [
     { key: "uts", short: "ЮТС", name: "ТОВ «ЮНАЙТЕД ТРАНСПОРТ СЕРВІС»", code: "000000002", vat: "with", match: "юнайтед" },
     { key: "elogist", short: "Єлогіст", name: "ТОВ «ЄЛОГІСТ»", code: "000000012", vat: "with", match: "логіст" },
     { key: "avtomuv", short: "АвтоМув", name: "ТОВ «АвтоМув»", code: "000000004", vat: "without", match: "автомув" },
-    { key: "fop", short: "ФОП", name: "ФОП (з 1С)", code: null, vat: "without", match: "фоп", banks: ["ПриватБанк", "monobank"],
-      waits: "1С ще не приймає вибір банку (ПриватБанк / monobank) — ФОП відкриємо, щойно Андрій додасть." },
+    { key: "fop", short: "ФОП", name: "ФОП Беспятчук С. С.", code: "000000011", vat: "without", match: "беспятчук", needsBank: true },
   ];
 }
 
-/** Послуги вікна: свій список для кожної організації (Сергій, 27.10.2026). Код — лише підтверджений відповіддю 1С. */
-export const SERVICES: { name: string; orgs: OrgKey[] | "all"; code?: string }[] = [
-  { name: "Організація перевезення в межах території України за маршрутом", orgs: ["uts", "elogist"] },
-  { name: "Організація перевезення за маршрутом", orgs: ["avtomuv", "fop"] },
+/**
+ * Послуги вікна: свій список для кожної організації (Сергій, 27.10.2026). Коди — з відповіді 1С на ТЗ (28.10.2026):
+ * у 1С шлемо КОДОМ, бо за назвою «Експедиторські послуги» не знаходяться (у назві в 1С латинська «i»), а невідомий
+ * код 1С тепер відхиляє, а не підміняє стандартною послугою.
+ */
+export const SERVICES: { name: string; orgs: OrgKey[] | "all"; code: string }[] = [
+  { name: "Організація перевезення в межах території України за маршрутом", orgs: ["uts", "elogist"], code: "000000092" },
+  { name: "Організація перевезення за маршрутом", orgs: ["avtomuv", "fop"], code: "000000008" },
   { name: "Організація міжнародного перевезення", orgs: ["avtomuv"], code: "000000179" },
-  { name: "Експедиторські послуги", orgs: "all" },
-  { name: "Штрафні санкції за простій автомобільного транспорту", orgs: "all" },
+  { name: "Експедиторські послуги", orgs: "all", code: "000000252" },
+  { name: "Штрафні санкції за простій автомобільного транспорту", orgs: "all", code: "000000180" },
 ];
 export const servicesFor = (org: OrgKey) => SERVICES.filter((x) => x.orgs === "all" || x.orgs.includes(org));
 
-export const vatTypesFor = (o: OrgRule): VatType[] => (o.vat === "with" ? ["ПДВ в тому числі", "ПДВ зверху"] : ["Без ПДВ"]);
+export const vatTypesFor = (o: OrgRule): VatType[] => (o.vat === "with" ? ["ПДВ в тому числі"] : ["Без ПДВ"]);
 export const itemVatsFor = (o: OrgRule): number[] => (o.vat === "with" ? [20, 14, 7] : [0]);
 
 export interface InvoiceItem { service: string; route: string; qty: number; price: number; vat: number }
@@ -75,10 +82,12 @@ export interface InvoiceForm {
   agreement: string;
   currency: Currency;
   vatType: VatType;
-  discount: number;
   dueDate: string;
   actDate: string;
-  bank: string;
+  /** uid банківського рахунку організації з `/organizations` (лише ФОП). */
+  bankUid: string;
+  /** Ключ відкритої форми (UUID): повтор того самого «Виставити» дає той самий рахунок, нова форма — новий. */
+  requestId: string;
   crmComment: string;
   stamp: boolean;
   items: InvoiceItem[];
@@ -93,8 +102,12 @@ export const kyivIso = (d = new Date()) => new Intl.DateTimeFormat("en-CA", { ti
 
 export type FormCheck = { ok: true; form: InvoiceForm } | { ok: false; why: string };
 
+/** Банківський рахунок організації з `GET /organizations`. */
+export interface BankAccount { uid: string; name: string; iban: string; currency: string; bank: string; isMain: boolean }
+const REQ_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Розбір і перевірка тіла запиту за правилами організації. Помилки — словами для менеджера: їх показує вікно. */
-export function parseInvoiceForm(body: unknown, ctx: { today: string; orgs: OrgRule[] }): FormCheck {
+export function parseInvoiceForm(body: unknown, ctx: { today: string; orgs: OrgRule[]; banksOf?: (orgCode: string) => BankAccount[] }): FormCheck {
   const b = (body ?? {}) as Record<string, unknown>;
   const o = ctx.orgs.find((x) => x.key === s(b.org, 20));
   if (!o) return { ok: false, why: "Оберіть організацію зі списку." };
@@ -105,8 +118,15 @@ export function parseInvoiceForm(body: unknown, ctx: { today: string; orgs: OrgR
   if (!vatTypesFor(o).includes(vatType)) {
     return { ok: false, why: o.vat === "with" ? `${o.short} виставляє рахунки лише з ПДВ.` : `${o.short} виставляє рахунки лише без ПДВ.` };
   }
-  const bank = s(b.bank, 40);
-  if (o.banks && !o.banks.includes(bank)) return { ok: false, why: `Оберіть рахунок ${o.short}: ${o.banks.join(" чи ")}.` };
+  let bankUid = "";
+  if (o.needsBank) {
+    bankUid = s(b.bankUid, 64);
+    const own = (ctx.banksOf?.(o.code) ?? []).filter((x) => x.currency === currency);
+    if (!own.length) return { ok: false, why: `У ${o.short} в 1С немає рахунку у ${currency}.` };
+    if (!own.some((x) => x.uid === bankUid)) return { ok: false, why: `Оберіть рахунок ${o.short}, на який платить клієнт: ${own.map((x) => x.bank || x.name).join(" чи ")}.` };
+  }
+  const requestId = s(b.requestId, 50);
+  if (requestId && !REQ_RE.test(requestId)) return { ok: false, why: "Некоректний ключ форми — відкрийте форму ще раз." };
   const allowed = servicesFor(o.key).map((x) => x.name);
   const rawItems = Array.isArray(b.items) ? b.items : [];
   if (rawItems.length === 0) return { ok: false, why: "Додайте хоча б одну послугу." };
@@ -122,18 +142,14 @@ export function parseInvoiceForm(body: unknown, ctx: { today: string; orgs: OrgR
     if (!itemVatsFor(o).includes(vat)) return { ok: false, why: `Позиція ${i + 1}: ставка ПДВ ${itemVatsFor(o).join(", ")} %.` };
     items.push({ service, route, qty, price, vat });
   }
-  const discount = num(b.discount ?? 0);
-  const total = items.reduce((t, it) => t + it.qty * it.price, 0);
-  if (!(discount >= 0)) return { ok: false, why: "Знижка не може бути відʼємною." };
-  if (discount >= total) return { ok: false, why: "Знижка не може бути більшою за суму рахунку." };
   const dueDate = s(b.dueDate, 10), actDate = s(b.actDate, 10);
   if (dueDate && !DATE_RE.test(dueDate)) return { ok: false, why: "«Оплатити до» — у форматі РРРР-ММ-ДД." };
   if (dueDate && dueDate < ctx.today) return { ok: false, why: "«Оплатити до» не може бути в минулому." };
   if (actDate && !DATE_RE.test(actDate)) return { ok: false, why: "Дата акту — у форматі РРРР-ММ-ДД." };
   return {
     ok: true,
-    form: { org: o.key, agreement: s(b.agreement, 200), currency, vatType, discount, dueDate, actDate, bank,
-      crmComment: s(b.crmComment, 1000), stamp: b.stamp !== false, items },
+    form: { org: o.key, agreement: s(b.agreement, 200), currency, vatType, dueDate, actDate, bankUid, requestId,
+      crmComment: s(b.crmComment, 150), stamp: b.stamp !== false, items },
   };
 }
 
@@ -157,25 +173,65 @@ export const genesisComment = (manager: string, dealId: number) =>
   `${manager ? `${manager}, ` : ""}Загружен из amoCRM по сделке №${dealId}`;
 
 /**
+ * Поля угоди в рахунку (`deal_fields`, 1С 29.10.2026). Поки — лише те, що менеджер вводить у вікні: «Дата акта» (тоді
+ * й «Дата акта от менеджера» ☑) і «Коментар CRM». Порожня дата → поле не шлемо, і 1С лишає реквізит порожнім, а
+ * позначку не ставить. Решта («Документооборот», «Розходи») — коли буде відповідність полів Kommo → реквізити.
+ */
+export function dealFieldsOf(form: Pick<InvoiceForm, "actDate" | "crmComment">) {
+  return {
+    ...(form.actDate ? { act_date: form.actDate, act_date_by_manager: true } : {}),
+    ...(form.crmComment ? { crm_comment: form.crmComment } : {}),
+  };
+}
+
+const itemsOf = (form: InvoiceForm) => form.items.map((it) => ({ code: SERVICES.find((x) => x.name === it.service)?.code ?? "", article: "",
+  name: it.service, unit: "Послуга", qty: it.qty, price: it.price, vat: it.vat, content: it.route }));
+
+/**
  * Тіло `POST /createInvoice`. Чиста функція: гейт звіряє, що жодне поле вікна не загубилось дорогою.
- * `order_date` свідомо НЕ шлемо: 1С дописує його в коментар, а коментар має бути рівно як у Genesis.
- * «Дата акту», «Коментар СРМ», банк — не шлемо, бо 1С їх ще не приймає (ТЗ п. 2–3); вони лежать у журналі.
+ * `order_date` свідомо НЕ шлемо: коментар має бути рівно як у Genesis.
  */
 export function buildCreateInvoiceBody(dealId: number, form: InvoiceForm, who: { customerUid: string; manager: string; today: string; orgCode: string }) {
+  const df = dealFieldsOf(form);
   return {
     customer_uid: who.customerUid,
     organization: who.orgCode,
     agreement: form.agreement,
     currency: form.currency,
     vat_type: form.vatType,
-    discount: form.discount,
+    discount: 0, // знижки у вікні немає (Сергій, 28.10.2026); 0 явно — щоб 1С не взяла її звідкись іще
     invoice_date: who.today,
     ...(form.dueDate ? { due_date: form.dueDate } : {}),
     manager: who.manager,
     comment: genesisComment(who.manager, dealId),
     deal_id: String(dealId),
-    items: form.items.map((it) => ({ code: SERVICES.find((x) => x.name === it.service)?.code ?? "", article: "", name: it.service,
-      unit: "Послуга", qty: it.qty, price: it.price, vat: it.vat, content: it.route })),
+    ...(form.requestId ? { request_id: form.requestId } : {}),
+    ...(form.bankUid ? { bank_account: form.bankUid } : {}),
+    ...(Object.keys(df).length ? { deal_fields: df } : {}),
+    items: itemsOf(form),
+    pdf: true,
+    stamp: form.stamp,
+  };
+}
+
+/**
+ * Тіло `POST /updateInvoice` (1С 29.10.2026): ті самі поля + `invoice_uid`; позиції замінюються повністю. Організацію
+ * й валюту 1С змінити не дасть — шлемо ті самі, а розбіжність сервер відсікає ще до запиту (`mount.ts`).
+ * У `deal_fields` порожнє поле = очистити реквізит: менеджер міг стерти дату акту, тож шлемо обидва поля явно.
+ */
+export function buildUpdateInvoiceBody(invoiceUid: string, form: InvoiceForm, who: { manager: string; dealId: number; orgCode: string }) {
+  return {
+    invoice_uid: invoiceUid,
+    organization: who.orgCode,
+    agreement: form.agreement,
+    currency: form.currency,
+    vat_type: form.vatType,
+    discount: 0,
+    ...(form.dueDate ? { due_date: form.dueDate } : {}),
+    comment: genesisComment(who.manager, who.dealId),
+    ...(form.bankUid ? { bank_account: form.bankUid } : {}),
+    deal_fields: { act_date: form.actDate || null, act_date_by_manager: !!form.actDate, crm_comment: form.crmComment || null },
+    items: itemsOf(form),
     pdf: true,
     stamp: form.stamp,
   };
@@ -193,8 +249,11 @@ export interface CreatedInvoice {
   vatType: string;
   total: number;
   warnings: string[];
-  /** Номенклатура, яку 1С поставила в рядки (за назвою; не знайшла — стандартну). */
+  /** Номенклатура, яку 1С поставила в рядки: назва і код. */
   itemNames: string[];
+  itemCodes: string[];
+  updated: boolean;
+  requestId: string;
   pdf: { fileName: string; bytes: Buffer } | null;
 }
 
@@ -222,19 +281,25 @@ export function fromCreateInvoiceReply(j: any): OneCInvoiceResult {
       total: Number(j.total) || 0,
       warnings: Array.isArray(j.warnings) ? j.warnings.map(String) : [],
       itemNames: Array.isArray(j.items) ? j.items.map((x: any) => String(x?.name ?? "")) : [],
+      itemCodes: Array.isArray(j.items) ? j.items.map((x: any) => String(x?.code ?? "")) : [],
+      updated: j.updated === true,
+      requestId: String(j.request_id ?? ""),
       pdf: body ? { fileName: String(pf.file_name || `invoice_${j.invoice_number_print ?? j.invoice_number}.pdf`), bytes: Buffer.from(body, "base64") } : null,
     },
   };
 }
 
 /**
- * 1С не знайшла послугу за назвою → мовчки ставить стандартну (лист 1С, «Номенклатура позиції»). На вигляд рахунку
- * це не впливає, але в обліку послуга інша — тож кажемо менеджеру, а не ковтаємо.
+ * 1С поставила в рядок не ту послугу, що просили → кажемо менеджеру, а не ковтаємо. Звіряємо КОДИ, а не назви: назва
+ * «Експедиторські послуги» в 1С має латинську «i» (лист 1С 28.10.2026), і порівняння назв кричало б щоразу хибно.
  */
-export function serviceSwaps(requested: string[], got: string[]): string[] {
+const codeNorm = (c: string) => c.replace(/^0+/, "");
+export function serviceSwaps(requested: { name: string; code: string }[], got: { name: string; code: string }[]): string[] {
   if (got.length !== requested.length) return [];
-  return requested.flatMap((r, i) => (got[i] && got[i] !== r ? [`1С поставила послугу «${got[i]}» замість «${r}» — такої назви в 1С немає.`] : []));
+  return requested.flatMap((r, i) => (got[i] && got[i].code && r.code && codeNorm(got[i].code) !== codeNorm(r.code)
+    ? [`1С поставила послугу «${got[i].name}» (${got[i].code}) замість «${r.name}» (${r.code}).`] : []));
 }
+export const codeOfService = (name: string) => SERVICES.find((x) => x.name === name)?.code ?? "";
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -242,8 +307,14 @@ type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 const ONEC_TIMEOUT_MS = 30_000;
 
 export async function createInvoiceIn1c(base: string, body: unknown, doFetch: FetchLike = fetch): Promise<OneCInvoiceResult> {
+  return invoiceCall(base, "createInvoice", body, doFetch);
+}
+export async function updateInvoiceIn1c(base: string, body: unknown, doFetch: FetchLike = fetch): Promise<OneCInvoiceResult> {
+  return invoiceCall(base, "updateInvoice", body, doFetch);
+}
+async function invoiceCall(base: string, method: "createInvoice" | "updateInvoice", body: unknown, doFetch: FetchLike): Promise<OneCInvoiceResult> {
   try {
-    const r = await doFetch(`${base}/createInvoice`, {
+    const r = await doFetch(`${base}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify(body),
@@ -369,4 +440,63 @@ export function payStateOf(inv: { createdAt: Date; total: number }, unpaid: { pa
  */
 export function canEdit(createdDay: string, pay: PayState, today: string): boolean {
   return createdDay === today && pay.paid <= 0 && (pay.k === "unpaid" || pay.k === "overdue" || pay.k === "pending");
+}
+
+/* ——— організації й банки (`GET /organizations`) ——— */
+
+/** Відповідь 1С → банківські рахунки за кодом організації. Чиста. Лише поточні рахунки — 1С інші й не віддає. */
+export function parseOrganizations(j: any): Map<string, BankAccount[]> | null {
+  if (!j || j.state !== true || !Array.isArray(j.organizations)) return null;
+  const out = new Map<string, BankAccount[]>();
+  for (const o of j.organizations) {
+    const code = String(o?.code ?? "");
+    if (!code) continue;
+    out.set(code, (Array.isArray(o.bank_accounts) ? o.bank_accounts : []).map((b: any) => ({
+      uid: String(b?.uid ?? ""), name: String(b?.name ?? ""), iban: String(b?.iban ?? ""), currency: String(b?.currency ?? ""),
+      bank: String(b?.bank ?? ""), isMain: b?.is_main === true,
+    })).filter((b: BankAccount) => b.uid));
+  }
+  return out;
+}
+
+let orgCache: { at: number; data: Map<string, BankAccount[]> } | null = null;
+/** Банки рідко міняються, а вікно відкривають часто — тримаємо 10 хв. Збій 1С → `null`, і ФОП у вікні недоступний. */
+export async function organizationsFrom1c(base: string, doFetch: FetchLike = fetch, now = Date.now()): Promise<Map<string, BankAccount[]> | null> {
+  if (orgCache && now - orgCache.at < 10 * 60_000) return orgCache.data;
+  try {
+    const r = await doFetch(`${base}/organizations`, { signal: AbortSignal.timeout(15_000) });
+    const data = r.status === 200 ? parseOrganizations(await r.json().catch(() => null)) : null;
+    if (data) orgCache = { at: now, data };
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/* ——— акт (`GET /realizationPdf?form=act`) ——— */
+
+export type ActResult = { ok: true; bytes: Buffer } | { ok: false; notYet: boolean; why: string };
+
+/**
+ * PDF акту за рахунком — одним файлом (`format=file`): акт з печаткою важить ~2 МБ, а в JSON іде двічі (лист 1С).
+ * Реалізації ще немає (`not_realized`) — це не помилка, а «ще рано»: вікно каже словами. Кілька реалізацій
+ * (`multiple_realizations`) у `format=file` 1С не віддає — кажемо звернутись до бухгалтерії.
+ */
+export async function actPdfFrom1c(base: string, uid: string, stamp: boolean, doFetch: FetchLike = fetch): Promise<ActResult> {
+  try {
+    const q = new URLSearchParams({ invoice_uid: uid, form: "act", format: "file", ...(stamp ? {} : { stamp: "0" }) });
+    const r = await doFetch(`${base}/realizationPdf?${q}`, { signal: AbortSignal.timeout(ONEC_TIMEOUT_MS) });
+    if (r.status !== 200) return { ok: false, notYet: false, why: `1С відповіла ${r.status}.` };
+    const bytes = Buffer.from(await r.arrayBuffer());
+    if (bytes.subarray(0, 4).toString() === "%PDF") return { ok: true, bytes };
+    return actRefusal(JSON.parse(bytes.toString("utf8") || "null"));
+  } catch (e) {
+    return { ok: false, notYet: false, why: (e as Error)?.name === "TimeoutError" ? "1С не відповіла за 30 с." : "1С недоступна." };
+  }
+}
+export function actRefusal(j: any): ActResult {
+  const code = String(j?.code ?? "");
+  if (code === "not_realized") return { ok: false, notYet: true, why: "Акт ще не сформовано: бухгалтерія не провела реалізацію за цим рахунком." };
+  if (code === "multiple_realizations") return { ok: false, notYet: false, why: "За рахунком кілька реалізацій — акти візьміть у бухгалтерії." };
+  return { ok: false, notYet: false, why: `1С: ${String(j?.message ?? "акт не сформовано").slice(0, 300)}` };
 }
