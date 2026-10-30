@@ -273,7 +273,7 @@ test("#7110 ОПЛАТА РАХУНКУ І «ЗМІНИТИ»: стан — зі
   assert.equal(canEdit(TODAY, payStateOf(inv, null, c({})), TODAY), false, "рахунок, якого немає серед неоплачених, можна змінити");
 });
 
-test("#7111 ЧОГО 1С НЕ ВМІЄ — НЕ ВДАЄМО: другий рахунок відхиляється до запиту в 1С, «+ ще рахунок», «Змінити», акт і ТТН — сірі з причиною", () => {
+test("#7116 ЧОГО 1С НЕ ВМІЄ — НЕ ВДАЄМО: другий рахунок відхиляється до запиту в 1С, «+ ще рахунок», «Змінити», акт — сірі з причиною; ТТН у вікні немає", () => {
   const mount = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "mount.ts"), "utf8");
   const create = mount.slice(mount.indexOf('r.post("/lead/:leadId/invoice"'), mount.indexOf('r.get("/lead/:leadId/invoice/:uid/pdf"'));
   const refuse = create.search(/listInvoices\(pool, leadId, today\)\)\.length > 0\) return res\.status\(409\)\.json\(\{ error: ONEC_WAITS\.multi \}\)/);
@@ -284,8 +284,9 @@ test("#7111 ЧОГО 1С НЕ ВМІЄ — НЕ ВДАЄМО: другий ра�
   assert.match(js, /<button class='btn link' disabled title='" \+ esc\(d\.waits\.multi\) \+ "'/, "«+ ще рахунок» не сіре");
   assert.match(js, /inv\.can_edit\s*\n?\s*\? "<button class='btn sm dash' disabled title='" \+ esc\(state\.data\.waits\.update\)/, "«Змінити» не сіре до методу 1С");
   assert.match(js, /data-z1c='req'/, "немає запиту бухгалтерії для рахунку, який змінювати вже не можна");
-  assert.equal((js.match(/disabled title='Зʼявиться, коли бухгалтерія проведе реалізацію в 1С'>(ТТН|Акт)</g) ?? []).length, 2, "ТТН і Акт не сірі");
-  assert.doesNotMatch(js, /\/ttn|Конструктор/, "у вікні лишилась ТТН із Конструктора");
+  assert.equal((js.match(/disabled title='Зʼявиться, коли бухгалтерія проведе реалізацію в 1С'>Акт</g) ?? []).length, 1, "Акт не сірий");
+  assert.doesNotMatch(js, />ТТН</, "у вікні знову є кнопка ТТН — ТТН формують у Конструкторі (рішення Романа 30.10.2026)");
+  assert.doesNotMatch(js, /"\/lead\/" \+ leadId\(\) \+ "\/ttn"/, "вікно знову качає ТТН через модуль");
 });
 
 test("#7112 ПІДМІНА ПОСЛУГИ: 1С поставила іншу номенклатуру — менеджер бачить попередження; та сама — тиша", () => {
