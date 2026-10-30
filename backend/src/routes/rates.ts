@@ -10,6 +10,11 @@ import { orsRoute } from "../core/orsClient.js";
 import { resolveRoutes, toVariants, parseKmOverride, parseVariant, RouteInputError, type RouteDeps, type RouteVariantOut } from "../core/roadRoute.js";
 import { routeCache } from "../core/routeCache.js";
 import { saveQuota, loadQuota } from "../core/routeQuota.js";
+import { marketQuote, priceView, type MarketPrice, type PriceView } from "../core/marketPrice.js";
+import { getMarketPool } from "../core/marketCache.js";
+import { townRow, upsertTowns } from "../core/townsGeo.js";
+import { hasPoint } from "../core/roadRoute.js";
+import type { PriceInfo } from "../core/rateFeedback.js";
 
 // «Калькулятор ставок» — точний порт Python-сервісу lardiweb у наш бекенд
 // (прод — shared cPanel без Python 3.10+). Формат відповіді збережено 1:1 з
@@ -332,6 +337,8 @@ ratesRouter.get("/towns", async (req, res) => {
       };
     });
     out.sort((a, b) => (a.country === "UA" ? 0 : 1) - (b.country === "UA" ? 0 : 1) || String(a.name).localeCompare(String(b.name)));
+    // 🏙 Кожна відповідь пошуку міст поповнює словник координат для ринкової ціни (поза Європою — не береться).
+    upsertTowns(pool, out.map(townRow).filter((t): t is NonNullable<typeof t> => t != null)).catch((e) => console.warn("towns_geo:", String(e).slice(0, 120)));
     res.json(out.slice(0, 30));
   } catch (e) {
     res.status(502).json({ error: "Lardi towns недоступний", detail: String(e).slice(0, 120) });
@@ -374,6 +381,19 @@ const routeDeps = (): RouteDeps => ({
   ...routeCache(pool),
   log: (m) => console.warn(m),
 });
+/** 📈 Варіант маршруту + ринкова ціна на його км + те, що показуємо як ставку (`priceView`). */
+type PricedVariant = RouteVariantOut & { market_price: MarketPrice | null; price: PriceView | null };
+async function priceVariants(variants: RouteVariantOut[], frm: Point, to: Point, mass: number | null): Promise<PricedVariant[]> {
+  const marketPool = hasPoint(frm) && hasPoint(to) ? await getMarketPool(pool).catch((e) => { console.warn("ринковий пул:", String(e).slice(0, 120)); return []; }) : [];
+  return variants.map((v) => {
+    const market = marketPool.length && hasPoint(frm) && hasPoint(to)
+      ? marketQuote(marketPool, { from: { lat: frm.lat, lon: frm.lon }, to: { lat: to.lat, lon: to.lon }, mass: mass ?? 20, km: v.distance_km }) : null;
+    return { ...v, market_price: market, price: priceView(v.zone_recommendation, market, mass) };
+  });
+}
+const priceInfo = (v: PricedVariant | undefined): PriceInfo | null => v?.price
+  ? { ...v.price, market: v.market_price ? { carrier_median: v.market_price.carrier_median, n: v.market_price.n } : null } : null;
+
 /** Що з маршруту запамʼятовуємо в знімку розрахунку — щоб відгук знав, на яких км стояла ставка. */
 const routeInfo = (v: RouteVariantOut | undefined) => v
   ? { distance_source: v.source, route_variant: v.id, road_km: v.road_km, moldova_km: v.moldova_km }
@@ -407,7 +427,7 @@ ratesRouter.post("/analyze", async (req, res) => {
   try { variantIdx = parseVariant(b.variant, resolved.length); } catch (e) {
     return res.status(e instanceof RouteInputError ? e.status : 400).json({ error: (e as Error).message });
   }
-  const variants = toVariants(resolved, zoneCtx, kmOverride != null ? { variant: variantIdx, km: kmOverride } : null);
+  const variants = await priceVariants(toVariants(resolved, zoneCtx, kmOverride != null ? { variant: variantIdx, km: kmOverride } : null), frm, to, zoneCtx.mass);
   const chosen = variants[variantIdx];
 
   // ✍️ ПЕРЕРАХУНОК ТОГО САМОГО РОЗРАХУНКУ (менеджер виправив км або обрав інший варіант): Lardi вдруге не питаємо і
@@ -421,9 +441,10 @@ ratesRouter.post("/analyze", async (req, res) => {
     if (u.frm !== (frm.label ?? "") || u.tox !== (to.label ?? "")) return res.status(409).json({ error: "Це інший маршрут — розрахуйте заново" });
     const zone = chosen?.zone_recommendation ?? null;
     const calc = snapshotOf(reqBody as { mass_min: number | null; mass_max: number | null; body_type_ids: number[] }, chosen?.distance_km ?? null,
-      zone as Parameters<typeof snapshotOf>[2], routeInfo(chosen));
+      zone as Parameters<typeof snapshotOf>[2], routeInfo(chosen), priceInfo(chosen));
     await pool.query(`UPDATE lardi_usage SET calc = $2 WHERE id = $1 AND user_id = $3`, [usageId, JSON.stringify(calc), req.auth!.userId]);
     return res.json({ usage_id: usageId, routes: variants, route_variant: variantIdx, zone_recommendation: zone,
+      price: chosen?.price ?? null, market_price: chosen?.market_price ?? null,
       route: { from: frm.label ?? "", to: to.label ?? "", distance_km: chosen?.distance_km ?? null } });
   }
 
@@ -475,6 +496,9 @@ ratesRouter.post("/analyze", async (req, res) => {
   try {
     result.zone_recommendation = chosen ? chosen.zone_recommendation : zoneRecommendation(zoneCtx.fromArea, zoneCtx.toArea, zoneCtx.mass, routeKm);
   } catch { result.zone_recommendation = null; }
+  // 📈 Показана ставка: ринок (авто > 5 т, схожих ≥ 5) або тариф КВП; без маршруту (немає координат) — лише тариф.
+  result.price = chosen?.price ?? priceView(result.zone_recommendation as Parameters<typeof priceView>[0], null, zoneCtx.mass);
+  result.market_price = chosen?.market_price ?? null;
 
   // Самонавчальна рекомендація з накопиченого архіву цін по маршруту.
   try {
@@ -487,7 +511,8 @@ ratesRouter.post("/analyze", async (req, res) => {
   if (usageId) {
     try {
       const calc = snapshotOf(reqBody as { mass_min: number | null; mass_max: number | null; body_type_ids: number[] }, routeKm,
-        result.zone_recommendation as Parameters<typeof snapshotOf>[2], routeInfo(chosen));
+        result.zone_recommendation as Parameters<typeof snapshotOf>[2], routeInfo(chosen),
+        chosen ? priceInfo(chosen) : (result.price ? { ...(result.price as PriceView), market: null } : null));
       await pool.query(`UPDATE lardi_usage SET calc = $2 WHERE id = $1`, [usageId, JSON.stringify(calc)]);
       const prev = await pool.query<{ frm: string; tox: string; at: Date }>(
         `SELECT u.frm, u.tox, f.created_at AS at FROM rate_feedback f JOIN lardi_usage u ON u.id = f.usage_id

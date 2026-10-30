@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { nameKey } from "../core/townsGeo.js";
 import { offerDate } from "./offerDate.js";
 
 // Порт lardiweb history.py на Postgres: власний архів цін (Lardi не віддає
@@ -51,6 +52,15 @@ export async function recordOffers(
        o.company ?? null, o.face ?? null, JSON.stringify(o.phones ?? []),
        o.from ?? null, o.to ?? null, o.dist_km ?? null, o.date ?? null, o.payform ?? null]
     );
+    // 📈 Координати ОГОЛОШЕННЯ — за його містами зі словника (не за запитом: пошук по області кладе чуже місто під
+    // координати запиту). Словника немає для цієї назви — лишається NULL, і в ринковий пул оголошення не потрапляє.
+    if (r.rowCount) {
+      await pool.query(
+        `UPDATE lardi_offers o SET from_lat = f.lat, from_lon = f.lon, to_lat = t.lat, to_lon = t.lon
+           FROM (SELECT 1) AS one LEFT JOIN towns_geo f ON f.name_key = $5 LEFT JOIN towns_geo t ON t.name_key = $6
+          WHERE o.side = $1 AND o.offer_id = $2 AND o.from_id = $3 AND o.to_id = $4`,
+        [side, o.id, fromId, toId, nameKey(o.from), nameKey(o.to)]);
+    }
     added += r.rowCount ?? 0;
   }
   return added;

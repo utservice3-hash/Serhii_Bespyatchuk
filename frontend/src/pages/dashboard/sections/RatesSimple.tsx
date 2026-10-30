@@ -24,6 +24,9 @@ const dur = (min: number | null) => (min == null ? null : min < 60 ? `${min} х�
 const pointOf = (t: Town): AnalyzePoint => ({ town_id: t.id, area_id: t.area_id, lat: t.lat, lon: t.lon, label: t.name, area: t.area });
 /** Транзит іншою країною, коротший за це, — «короткий транзит» (інфо), довший — попередження з пропозицією об'їзду. */
 const SHORT_TRANSIT_KM = 30;
+/** Ринок і тариф КВП розійшлись більше — помаранчева позначка (те саме число на сервері, `core/marketPrice.ts`). */
+const TARIFF_DIFF_FLAG_PCT = 20;
+const pct = (n: number) => `${n > 0 ? "+" : ""}${n}%`;
 
 /** Авто → вага, за якою сервер обирає рядок зонної карти (`ZONE_RATES`). */
 const AUTOS = [
@@ -216,7 +219,11 @@ export function RatesSimple() {
   const uaAlt = routes.find((x) => x.id === "ua") ?? null;
   const zr = rv?.zone_recommendation ?? data?.zone_recommendation ?? null;
   const sel = zr?.options.find((o) => o.selected) ?? null;
-  const cMin = useCountUp(sel?.client_min, runId), cMax = useCountUp(sel?.client_max, runId);
+  // 📈 Показана ставка — з сервера (`price`): ринок зі схожих оголошень або тариф КВП; `sel` далі — лише довідка про тариф.
+  const price = rv?.price ?? data?.price ?? null;
+  const market = rv?.market_price ?? data?.market_price ?? null;
+  const cMin = useCountUp(price?.client_min, runId), cMax = useCountUp(price?.client_max, runId);
+  const diffFlag = price?.tariff_diff_pct != null && Math.abs(price.tariff_diff_pct) > TARIFF_DIFF_FLAG_PCT;
   const autoLabel = AUTOS.find((x) => x.id === auto)!.label.toLowerCase();
   const cargoPriced = (data?.cargo?.offers ?? []).filter((o) => o.is_uah && o.total).length;
   const lorryPriced = (data?.lorry?.offers ?? []).filter((o) => o.is_uah && o.total).length;
@@ -330,7 +337,7 @@ export function RatesSimple() {
                   <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>Варіанти маршруту — оберіть, як поїде перевізник</div>
                   <div className="rs-vars" role="radiogroup" aria-label="Варіанти маршруту">
                     {routes.map((v, i) => {
-                      const on = v === rv, o = v.zone_recommendation?.options.find((x) => x.selected);
+                      const on = v === rv, o = v.price;
                       return (
                         <button key={v.id} type="button" role="radio" aria-checked={on} className="rs-btn rs-var" onClick={() => { if (i !== vIdx) { setVIdx(i); void reprice(i, null); } }} disabled={recalc}
                           style={{ border: on ? `2px solid ${ACC}` : "1px solid var(--border)", background: on ? "rgba(200,16,46,0.05)" : "var(--card-bg)" }}>
@@ -346,7 +353,7 @@ export function RatesSimple() {
                 </div>
               )}
 
-              {sel?.client_min != null ? (
+              {price ? (
                 <>
                   <div className="rs-in rs-d1">
                     <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>Ставка клієнту{routes.length > 1 && rv ? ` · ${rv.label}` : ""}</div>
@@ -354,17 +361,30 @@ export function RatesSimple() {
                   </div>
                   <div className="rs-tiles">
                     {rv && distanceTile()}
-                    <div className="rs-in rs-d2" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>Перевізнику</div><div style={{ fontSize: 18, fontWeight: 700 }}>{range(sel.total_min, sel.total_max)}</div></div>
-                    <div className="rs-in rs-d3" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>Маржа UTS</div><div style={{ fontSize: 18, fontWeight: 700 }}>{fmt(sel.margin)}</div></div>
-                    <div className="rs-in rs-d4" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>грн/км</div><div style={{ fontSize: 18, fontWeight: 700 }}>{sel.per_km_min === sel.per_km_max ? sel.per_km_min : `${sel.per_km_min}–${sel.per_km_max}`}</div></div>
+                    <div className="rs-in rs-d2" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>Перевізнику</div><div style={{ fontSize: 18, fontWeight: 700 }}>{range(price.carrier_min, price.carrier_max)}</div></div>
+                    <div className="rs-in rs-d3" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>Маржа UTS</div><div style={{ fontSize: 18, fontWeight: 700 }}>{fmt(price.margin)}</div></div>
+                    <div className="rs-in rs-d4" style={tile}><div style={{ fontSize: 12, color: "var(--text-muted)" }}>грн/км</div><div style={{ fontSize: 18, fontWeight: 700 }}>{price.per_km_min === price.per_km_max ? price.per_km_min : `${price.per_km_min}–${price.per_km_max}`}</div></div>
+                  </div>
+                  {/* 📈 Звідки ставка: ринок зі схожих оголошень (головний для авто > 5 т) або тариф КВП; розбіжність між ними — завжди видно. */}
+                  <div className={`rs-note ${diffFlag ? "warn" : "info"}`} data-price-source={price.source}>
+                    {price.source === "market" ? (
+                      <>📈 <b>Ринкова ціна</b> — за {market?.n ?? "—"} схожими оголошеннями за {market?.window_days ?? 30} днів.
+                        {sel && price.tariff_diff_pct != null && <> Тариф КВП: {range(sel.client_min, sel.client_max)} грн ({pct(price.tariff_diff_pct)} до ринку){diffFlag ? " — розбіжність велика, перевірте ставку" : ""}.</>}</>
+                    ) : price.tariff_reason === "market_outlier" ? (
+                      <>🧮 <b>Ставка за тарифом КВП.</b> Схожих оголошень ({market?.n ?? 0}) замало, щоб на них спиратись: вони дають перевізнику ≈ {fmt(market?.carrier_median)} грн ({pct(price.tariff_diff_pct ?? 0)} до тарифу) — надто далеко, схоже на шум.</>
+                    ) : price.tariff_reason === "light_class" ? (
+                      <>🧮 <b>Ставка за тарифом КВП.</b> Для авто до 5 т ринок — лише довідково: схожі оголошення ({market?.n ?? 0}) дають перевізнику ≈ {fmt(market?.carrier_median)} грн — здебільшого це догруз, а не окрема машина.</>
+                    ) : (
+                      <>🧮 <b>Ставка за тарифом КВП.</b> Схожих оголошень на ринку замало ({market?.pool ?? 0}), щоб вивести ринкову ціну для цього маршруту.</>
+                    )}
                   </div>
                 </>
               ) : (
-                <div style={{ fontSize: 15, color: "var(--text-muted)" }}>Для цього напрямку зонна ставка не визначилась — дивіться пропозиції Lardi нижче.</div>
+                <div style={{ fontSize: 15, color: "var(--text-muted)" }}>Для цього напрямку ставка не визначилась — дивіться пропозиції Lardi нижче.</div>
               )}
 
-              {/* Зонна ставка не визначилась — відстань однаково показуємо: вона знадобиться для розмови з перевізником. */}
-              {rv && sel?.client_min == null && <div className="rs-tiles">{distanceTile()}</div>}
+              {/* Ставка не визначилась — відстань однаково показуємо: вона знадобиться для розмови з перевізником. */}
+              {rv && !price && <div className="rs-tiles">{distanceTile()}</div>}
 
               {rv && (rv.source === "approx" || rv.moldova_km > 0 || zr?.short_haul) && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -384,6 +404,9 @@ export function RatesSimple() {
                 <details className="rs-acc" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
                   <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: 600 }}>Як порахували</summary>
                   <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 8, lineHeight: 1.5 }}>
+                    {price?.source === "market" && market
+                      ? `Ринок: ${market.n} схожих оголошень за ${market.window_days} днів (вага ≈ ${market.mass} т, схожа відстань, міста поруч), ціни перераховано на ${fmt(market.km)} км; перевізнику — середина ${fmt(market.carrier_median)} грн, діапазон — чверті; + маржа ${fmt(price.margin)} грн. `
+                      : ""}
                     Зонна карта: зона «{zr.zone_label}» ({zr.zone_src}) · {zr.from_area ?? "?"} → {zr.to_area ?? "?"}
                     {sel ? ` · тариф ${sel.per_km_min}–${sel.per_km_max} грн/км × ${fmt(rv?.distance_km ?? zr.distance_km)} км + маржа ${fmt(sel.margin)} грн` : ""}
                     {zr.short_haul ? " · ×1,5 за коротке плече" : ""}
