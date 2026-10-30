@@ -78,6 +78,7 @@ import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILE
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
 import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview, reviewClosure } from "../core/firstTouchTeamReport.js";
 import { canSendCallFeedback, callFeedbackBody, CALL_FEEDBACK_MAX } from "../core/firstTouchFeedback.js";
+import { canSeeMessengerSignal } from "../core/firstTouchMessenger.js";
 import { validateFeedback, composeMessage } from "../core/feedbackForm.js";
 import { loadTunables } from "../core/firstTouchTunables.js";
 
@@ -11261,9 +11262,12 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
   const canSeeExcluded = req.auth!.roleKey !== "manager";
   const rows = canSeeExcluded ? all.rows : all.rows.filter((r) => r.inReport);
   const truncated = all.truncated;
+  const tun = await loadTunables(pool);
+  // 💬 Задача 7184: сигнал «сам запропонував месенджер» — адмін і КВП; тімлід — лише після звірки (перемикач адміна).
+  const seeMsgSignal = canSeeMessengerSignal(req.auth!.roleKey, tun.messengerSignalTeamLeads);
   res.json({
     period: { from, to }, truncated, canSeeExcluded, canReview: canWriteNote(req.auth!.roleKey, "review"),
-    canFeedback: canSendCallFeedback(req.auth!.roleKey),
+    canFeedback: canSendCallFeedback(req.auth!.roleKey), canSeeMessengerSignal: seeMsgSignal,
     // Явний перелік полів, а не спред (#17e2).
     rows: rows.map((r) => ({
       kommoIds: r.kommoIds, uniqueid: r.uniqueid, calledAt: r.calledAt,
@@ -11278,6 +11282,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       silentBeforeClose: r.silentBeforeClose,
       conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
       inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride, transportKind: r.transportKind,
+      messengerPromises: r.messengerPromises, messengerSignal: seeMsgSignal ? r.messengerSignal : null,
       priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
       reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
       // Екран D (08.10.2026): чек-лист і черга розбору — стани від ядра, фронт їх лише складає.
@@ -11291,7 +11296,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       flags: { analysed: isAnalysed(r), priceable: isPriceable(r), agreement: hasAgreement(r), lost: isLost(r) },
     })),
     // Ціль «ціну озвучено» — бачать усі ролі вкладки (колір плитки), змінює лише адмін у «Налаштуваннях».
-    priceTargetPct: (await loadTunables(pool)).priceTargetPct,
+    priceTargetPct: tun.priceTargetPct,
     silence: { minGapHours: SILENCE_RULE.minGapHours, normFrom: SILENCE_RULE.normFrom },
   });
 });
@@ -11337,6 +11342,8 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
   const card = await aiCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES), missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  // 💬 Задача 7184: сигнал «сам запропонував месенджер» — тим самим правилом видимості, що й у списку.
+  if (!canSeeMessengerSignal(auth.roleKey, (await loadTunables(pool)).messengerSignalTeamLeads)) card.row.messengerSignal = null;
   res.json({
     row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
     result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,

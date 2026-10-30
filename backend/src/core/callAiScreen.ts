@@ -5,6 +5,7 @@ import type { MissedScope } from "./missedCallsRules.js";
 import { OBJECTION_RUBRICS, RUBRIC_OBJECTION_V2, type ClientDecision, type ObjectionResult } from "./callAiObjection.js";
 import { dealOutcomes, dealsReachedInvoice, outcomeOfCall, type DealOutcome } from "./firstTouchOutcome.js";
 import { INTL_REQUEST_TYPE, RUBRIC_TRANSPORT_V1, transportExclusion, type ExcludedTransport, type TransportResult } from "./firstTouchTransport.js";
+import { RUBRIC_MESSENGER_V1, messengerPromisesOf, messengerSignal, type MessengerResult } from "./firstTouchMessenger.js";
 import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, FIRST_TOUCH_SHOWN_RUBRICS, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, RINGOSTAT_POLICY, RECORDING_MAX_BYTES, type AdPredicate } from "./callAiPilot.js";
 import { downloadRecording, type DownloadOutcome } from "./ringostatRecording.js";
@@ -163,6 +164,10 @@ export interface AiCallRow {
   inReport: boolean;
   /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183): міжнародка, трал, цистерна, самоскид, зерновоз; `null` — оцінюємо. */
   transportKind: ExcludedTransport | null;
+  /** 💬 Обіцянок менеджера в месенджер (Viber, Telegram…) — Ringostat їх не бачить, перевірити не можна (задача 7184). */
+  messengerPromises: number;
+  /** 💬 Менеджер сам запропонував месенджер (з цитатою); `false` — розібрано, сигналу немає; `null` — не розбирали (задача 7184). */
+  messengerSignal: boolean | null;
   /** Модель не впевнена (< 0.85) — у звіті з позначкою «Перевірити тип». */
   typeCheck: boolean;
   /** Остання ручна позначка тімліда чи адміна, якщо була. */
@@ -216,6 +221,7 @@ interface RawRow {
   rv_text?: string | null; rv_by?: string | null; rv_at?: Date | null;
   ex_text?: string | null; ex_by?: string | null; ex_at?: Date | null;
   tr_result?: TransportResult | null; request_type?: string | null;
+  ms_result?: MessengerResult | null;
   obj_result?: ObjectionResult | null;
   dec_result?: ObjectionResult | null;
   first_out_at?: Date | null;
@@ -234,6 +240,10 @@ const OBJECTION_JOINS = `LEFT JOIN LATERAL (SELECT ox.result AS obj_result FROM 
 
 const IN_TYPES = new Set(["in", "transitin"]);
 
+/** 💬 Готовий розбір «хто запропонував месенджер» (задача 7184) — для списку й картки однаково. */
+const MESSENGER_JOIN = `LEFT JOIN LATERAL (SELECT msx.result AS ms_result FROM call_analyses msx
+                  WHERE msx.transcript_id = t.id AND msx.rubric_version = '${RUBRIC_MESSENGER_V1}' AND msx.status = 'done'
+                  ORDER BY msx.id DESC LIMIT 1) msn ON true`;
 /** 🚛 Готовий розбір виду перевезення (задача 7183) — для списку й картки однаково (`t` — розшифровка). */
 const TRANSPORT_JOIN = `LEFT JOIN LATERAL (SELECT trx.result AS tr_result FROM call_analyses trx
                   WHERE trx.transcript_id = t.id AND trx.rubric_version = '${RUBRIC_TRANSPORT_V1}' AND trx.status = 'done'
@@ -266,6 +276,8 @@ export function foldRow(r: RawRow): AiCallRow {
     managerPromises: res ? managerPromisesOf(res).length : 0,
     silentBeforeClose: null,
     ...tf, inReport: tf.inReport && transportKind == null, transportKind,
+    messengerPromises: res ? messengerPromisesOf(res.promises) : 0,
+    messengerSignal: state === "done" ? messengerSignal(r.ms_result ?? null) : null,
     priceNote: r.pn_text ? { text: r.pn_text, byName: r.pn_by ?? null, at: r.pn_at ? new Date(r.pn_at).toISOString() : "" } : null,
     missedNote: r.mn_text ? { text: r.mn_text, byName: r.mn_by ?? null, at: r.mn_at ? new Date(r.mn_at).toISOString() : "" } : null,
     offlineNote: r.on_text ? { text: r.on_text, byName: r.on_by ?? null, at: r.on_at ? new Date(r.on_at).toISOString() : "" } : null,
@@ -434,7 +446,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            ft.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            t.status AS stt_status, t.failure AS stt_failure,
            a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result,
-           rcx.client_phone, d.pipeline_id, d.reject_reason, d.request_type, trn.tr_result,
+           rcx.client_phone, d.pipeline_id, d.reject_reason, d.request_type, trn.tr_result, msn.ms_result,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
            (SELECT min(e.calldate) FROM ringostat_calls e WHERE rcx.client_phone IS NOT NULL AND e.client_phone = rcx.client_phone
@@ -452,6 +464,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
                   ORDER BY (ax.status = 'done') DESC, array_position($12::text[], ax.rubric_version) LIMIT 1) a ON true
       ${OBJECTION_JOINS}
       ${TRANSPORT_JOIN}
+      ${MESSENGER_JOIN}
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
        AND ${firstTouchExclusionSql("ft", "rcx.client_phone", tun.repeatWindowDays)}
@@ -539,7 +552,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
-           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result, trn.tr_result
+           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result, trn.tr_result, msn.ms_result
       FROM ringostat_calls rc
       ${overrideJoin("rc")}
       ${notesJoin("rc")}
@@ -551,6 +564,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
                   ORDER BY (ax.status = 'done') DESC, array_position($6::text[], ax.rubric_version) LIMIT 1) a ON true
       ${OBJECTION_JOINS}
       ${TRANSPORT_JOIN}
+      ${MESSENGER_JOIN}
      WHERE rc.uniqueid = $1
        AND ($7::int IS NULL OR rc.manager_id = $7)
        AND ($8::int IS NULL OR m.team_id = $8)

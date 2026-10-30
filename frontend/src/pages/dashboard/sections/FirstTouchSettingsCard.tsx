@@ -10,7 +10,7 @@ const inp = { display: "block", marginTop: 4, padding: "8px 10px", borderRadius:
 const hint = { display: "block", marginTop: 4, fontSize: 11, fontWeight: 400, color: "var(--text-muted)" } as const;
 const fmt = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const describe = (t: FirstTouchTunablesT) =>
-  `вікно ${t.repeatWindowDays == null ? "без обмеження" : `${String(t.repeatWindowDays)} дн.`} · допуск ${String(t.callbackGraceMin)} хв · мінімум ${String(t.callbackMinDeadlineMin)} хв · блок ${t.bannerTone === "alert" ? "червоний" : "сірий"} · ціль ціни ${String(t.priceTargetPct)} %`;
+  `вікно ${t.repeatWindowDays == null ? "без обмеження" : `${String(t.repeatWindowDays)} дн.`} · допуск ${String(t.callbackGraceMin)} хв · мінімум ${String(t.callbackMinDeadlineMin)} хв · блок ${t.bannerTone === "alert" ? "червоний" : "сірий"} · ціль ціни ${String(t.priceTargetPct)} % · сигнал месенджера тімлідам ${t.messengerSignalTeamLeads ? "так" : "ні"}`;
 
 export function FirstTouchSettingsCard() {
   const [d, setD] = useState<FirstTouchSettingsResp | null>(null);
@@ -62,6 +62,13 @@ export function FirstTouchSettingsCard() {
           <input id="ft-price-target" type="number" min={d.bounds.priceTargetPct.min} max={d.bounds.priceTargetPct.max}
             value={Number.isFinite(form.priceTargetPct) ? form.priceTargetPct : ""} onChange={(e) => setForm({ ...form, priceTargetPct: num(e.target.value) })} style={inp} />
           <span style={hint}>Плитка «Ціна озвучена» і смуги менеджерів нижче цілі — червоні, від цілі — зелені. За ТЗ 08.10 — 50.</span>
+        </label>
+        <label htmlFor="ft-msg-tl" style={{ fontSize: 13, fontWeight: 600, display: "flex", flexDirection: "column", gap: 4 }}>Сигнал «менеджер сам запропонував месенджер» — тімлідам
+          <span style={{ display: "flex", gap: 6, alignItems: "center", fontWeight: 400 }}>
+            <input id="ft-msg-tl" type="checkbox" checked={form.messengerSignalTeamLeads === true} onChange={(e) => setForm({ ...form, messengerSignalTeamLeads: e.target.checked })} />
+            показувати тімлідам
+          </span>
+          <span style={hint}>Адмін і КВП бачать сигнал завжди. Тімлідам — вмикати після звірки прикладів з Юлею (задача 7184).</span>
         </label>
       </div>
       <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>

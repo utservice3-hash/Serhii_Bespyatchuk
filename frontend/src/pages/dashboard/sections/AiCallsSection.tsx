@@ -322,6 +322,7 @@ export function AiCallsSection() {
                 {sortHead("name", "Менеджер")}{sortHead("score", "Бал")}
                 {CHECK_ITEMS.map((it) => <div key={it.key} style={{ display: "contents" }}>{sortHead(it.key, it.key === "price" ? `Ціна · ціль ${String(target)}%` : it.key === "objection" ? "Заперечення (опрац. / було)" : it.label)}</div>)}
                 {sortHead("decision", "Згода після ціни")}
+                <div className="ftd-mgr-h" title="Розмов, де менеджер пообіцяв щось у месенджер (Viber, Telegram…): Ringostat цього не бачить, перевірити не можна. У бал не входить.">У месенджер</div>
                 {sortHead("success", "Успіх")}
                 {shownLines.map((l) => (
                   <div key={String(l.managerId)} style={{ display: "contents" }}>
@@ -336,6 +337,11 @@ export function AiCallsSection() {
                       ? <div className="ftd-sub" title="Згода після ціни розбирається для розмов від 13.10 і лише там, де ціну назвали">—</div>
                       : <div className="ftd-obj ftd-dec" title={`Погодився в ${String(l.agreed)} з ${String(l.decided)} розмов, де назвали ціну. У бал не входить.`}>
                           {bar(Math.round((l.agreed / l.decided) * 100))}<span className="ftd-sub">{l.agreed}/{l.decided}{l.thinking ? ` · думає ${String(l.thinking)}` : ""}</span></div>}
+                    {/* 💬 Задача 7184: обіцянки в месенджер (не перевірити) і «сам запропонував» — лише ролям, яким сервер дав сигнал. */}
+                    <div style={{ fontVariantNumeric: "tabular-nums" }} title={`У ${String(l.messengerCalls)} з ${String(l.calls)} розмов пообіцяв щось у месенджер${d.canSeeMessengerSignal ? ` · сам запропонував месенджер: ${String(l.messengerSelf)}` : ""}`}>
+                      {l.messengerCalls} з {l.calls}{l.calls ? <span className="ftd-sub"> · {Math.round((l.messengerCalls / l.calls) * 100)}%</span> : null}
+                      {d.canSeeMessengerSignal && l.messengerSelf > 0 && <div className="ftd-sub">сам запропонував: {l.messengerSelf}</div>}
+                    </div>
                     <div style={{ fontVariantNumeric: "tabular-nums" }}>{l.success} з {l.calls}</div>
                   </div>
                 ))}
@@ -360,7 +366,8 @@ export function AiCallsSection() {
               {pickedName && (
                 <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
               )}
-              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["thinking", "Думає"], ["declined", "Відмовив"], ["agreedLost", "Погодився, а в Kommo втрачено"]] as const).map(([k, label]) => (
+              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["thinking", "Думає"], ["declined", "Відмовив"], ["agreedLost", "Погодився, а в Kommo втрачено"],
+                ["messenger", "Обіцяв у месенджер"], ...(d.canSeeMessengerSignal ? [["messengerSelf", "Сам запропонував месенджер"] as const] : [])] as const).map(([k, label]) => (
                 <button key={k} type="button" className={`ftd-pill${preset === k ? " on" : ""}`} aria-pressed={preset === k}
                   onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{scoped.filter(TILE_MATCH[k]).length}</b></button>
               ))}
@@ -432,6 +439,7 @@ export function AiCallsSection() {
                               <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 3 }}>
                                 {r.typeCheck && <span className="ftd-chip" title={`Модель не впевнена в типі (${r.conversationType ? TYPE_LABEL[r.conversationType] : "—"}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}`}
                                   style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>Перевірити тип</span>}
+                                {r.messengerSignal === true && <span className="ftd-chip" title="Менеджер сам запропонував перейти в месенджер — клієнт не просив (задача 7184)" style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>сам запропонував месенджер</span>}
                                 {!r.inReport && r.transportKind
                                   ? <span className="ftd-chip" title="Не оцінюємо в першому дотику: на такому перевезенні ціну в першій розмові назвати майже неможливо (задача 7183)" style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>не оцінюємо · {TRANSPORT_LABEL[r.transportKind]}</span>
                                   : !r.inReport && r.conversationType && <span className="ftd-chip" title={r.typeReason ?? ""} style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>{TYPE_LABEL[r.conversationType]}</span>}

@@ -6,6 +6,7 @@ import { downloadRecording } from "./ringostatRecording.js";
 import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, FIRST_TOUCH_LEGACY_TYPED, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
 import { DECISION_FROM, OBJECTION_FROM, OBJECTION_KIT, OBJECTION_KIT_V2, RUBRIC_OBJECTION_V1, RUBRIC_OBJECTION_V2 } from "./callAiObjection.js";
 import { RUBRIC_TRANSPORT_V1, TRANSPORT_FROM, TRANSPORT_KIT } from "./firstTouchTransport.js";
+import { MESSENGER_FROM, MESSENGER_KIT, MESSENGER_TEXT_RE, RUBRIC_MESSENGER_V1 } from "./firstTouchMessenger.js";
 import { carrierActiveIds } from "./carrierCallQueue.js";
 import { DEBT_KIT, RUBRIC_DEBT_V1, receivableLinkedCallIds } from "./receivableCallAi.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
@@ -71,6 +72,8 @@ export const DEBT_BUDGET_MS = 20_000;
 export const TRANSPORT_BUDGET_MS = 20_000;
 /** Відповідь рубрики виду перевезення — вид і цитата. */
 export const TRANSPORT_MAX_OUTPUT_TOKENS = 256;
+/** Частина `LLM_BUDGET_MS` для рубрики «хто запропонував месенджер» (задача 7184): лише розмови, де месенджер звучить. */
+export const MESSENGER_BUDGET_MS = 10_000;
 /** Між тіками — 10 хв; сума бюджетів мусить лишати запас на вибірку й останню порцію. */
 export const TICK_EVERY_MIN = 10;
 export const MAX_OUTPUT_TOKENS = 2048;
@@ -93,6 +96,19 @@ export async function objectionCandidates(db: Db, from: string, before: string |
         AND ($3::date IS NULL OR (rc.calldate AT TIME ZONE 'Europe/Kyiv')::date < $3::date)
         AND COALESCE(a.result->>'conversation_type', '') NOT IN ('carrier', 'vendor', 'job_seeker', 'wrong_number')`,
     [[RUBRIC_CURRENT, ...FIRST_TOUCH_LEGACY_TYPED], from, before]);
+  return r.rows.map((x) => x.uniqueid);
+}
+
+/**
+ * Кандидати рубрики «хто запропонував месенджер» (задача 7184): ті самі розібрані розмови, що для заперечень, але лише ті,
+ * у розшифровці яких звучить месенджер (`MESSENGER_TEXT_RE`) — розмови без нього рубрика не бачить і не оплачує.
+ */
+export async function messengerCandidates(db: Db, from: string): Promise<string[]> {
+  const ids = await objectionCandidates(db, from);
+  if (!ids.length) return [];
+  const r = await db.query<{ uniqueid: string }>(
+    `SELECT t.uniqueid FROM call_transcripts t WHERE t.uniqueid = ANY($1::text[]) AND t.status = 'done' AND t.segments::text ~* $2`,
+    [ids, MESSENGER_TEXT_RE]);
   return r.rows.map((x) => x.uniqueid);
 }
 
@@ -265,7 +281,7 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
     maxOutputTokens: MAX_OUTPUT_TOKENS,
     usdPerInputToken: env.prices.llmUsdPerMtokIn == null ? null : env.prices.llmUsdPerMtokIn / 1e6,
     usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
-  }), LLM_BUDGET_MS - OBJ_BUDGET_MS - DEBT_BUDGET_MS - TRANSPORT_BUDGET_MS, env.http.nowMs, out.llm);
+  }), LLM_BUDGET_MS - OBJ_BUDGET_MS - DEBT_BUDGET_MS - TRANSPORT_BUDGET_MS - MESSENGER_BUDGET_MS, env.http.nowMs, out.llm);
   out.llmStoppedBy = llm.stoppedBy;
 
   // 🛡 Заперечення (ТЗ 08.10.2026): окрема рубрика поверх УЖЕ розібраних розмов, лише від дня викату — старші тільки
@@ -292,6 +308,9 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   // 🚛 Вид перевезення (задача 7183): та сама вибірка розібраних розмов, що й заперечення, — з початку «Першого дотику».
   const transport = await runObjection(RUBRIC_TRANSPORT_V1, TRANSPORT_KIT, await objectionCandidates(env.db, TRANSPORT_FROM), TRANSPORT_BUDGET_MS, TRANSPORT_MAX_OUTPUT_TOKENS);
   if (!out.llmStoppedBy) out.llmStoppedBy = transport.stoppedBy;
+  // 💬 Хто запропонував месенджер (задача 7184): лише розмови, де месенджер звучить у тексті, — решту не оплачуємо.
+  const messenger = await runObjection(RUBRIC_MESSENGER_V1, MESSENGER_KIT, await messengerCandidates(env.db, MESSENGER_FROM), MESSENGER_BUDGET_MS, TRANSPORT_MAX_OUTPUT_TOKENS);
+  if (!out.llmStoppedBy) out.llmStoppedBy = messenger.stoppedBy;
 
   // 💬 Розбір розмов про борг (4631) — своя рубрика, лише для прикріплених до домовленості дзвінків.
   const dp = { ...ap, rubricVersion: RUBRIC_DEBT_V1 };
@@ -310,7 +329,7 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
   if (capped && env.alert) await notifyCapOnce(env.db, "first_touch", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
 
-  const errs = [stt.error, llm.error, objTail.error, obj.error, transport.error, dbt.error].filter((e): e is Error => e != null);
+  const errs = [stt.error, llm.error, objTail.error, obj.error, transport.error, messenger.error, dbt.error].filter((e): e is Error => e != null);
   if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));
   return out;
 }
