@@ -34,6 +34,8 @@ import "./constructor.css";
 const ENT_UI: Record<CtorEntityKey, { c: string; warn?: string; fallback: string }> = {
   uts: { c: "--e-uts", fallback: "ТОВ «Юнайтед Транспорт Сервіс»" },
   avm: { c: "--e-avm", fallback: "ТОВ «АвтоМув»" },
+  elg: { c: "--e-elg", fallback: "ТОВ «ЄЛОГІСТ»" },
+  // ФОП — лише для архівного документа, піднятого «У форму» (кнопки вибору немає з 30.10.2026)
   fop: { c: "--e-fop", fallback: "ФОП Беспятчук С.С. · 2 група", warn: "Клієнти — лише ФОП; оплата — СОФТ платіж. Без печатки, лише підпис" },
 };
 /* Оформлення «Б» (v20): стартова щільність прев'ю за типом документа — та сама, з якої починає автопідгонка PDF
@@ -205,6 +207,8 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const entRow = (k: CtorEntityKey) => entities.find((e) => e.key === k);
   const E = entRow(form.ent);
   const fop = form.ent === "fop";
+  /** Готівкою не можна від ТОВ ЮТС (5887) і так само від ЄЛОГІСТ (30.10.2026); сервер перевіряє те саме (`validate.ts`). */
+  const noCash = form.ent === "uts" || form.ent === "elg";
   // «Інше…» (задача 5453, 12.10.2026; і для ФОП — Сергій «так, це можна»): текст не з готового списку = власний.
   // 6475: готового значення немає — порожнє поле це «— оберіть —», а не «Інше…»; «Інше…» з порожнім текстом тримає `orderOtherOn`.
   const orderPresets = payOrderPresets(form.party, fop);
@@ -575,12 +579,12 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
       {view === "stamp" ? <StampView errText={errOf} /> : view === "pool" && me?.canSeeAll ? <PoolView onOpen={openPdf} onDownload={download} /> : (<>
         {/* ── Юрособа ── */}
         <div className="entities">
-          {(["uts", "avm", "fop"] as CtorEntityKey[]).map((k) => {
+          {(["uts", "avm", "elg"] as CtorEntityKey[]).map((k) => {
             const e = entRow(k); const ui = ENT_UI[k];
             return (
               <button key={k} className="ent" style={{ "--ec": `var(${ui.c})` } as CSSProperties} aria-pressed={form.ent === k}
                 disabled={form.intl && k !== "avm"} title={form.intl && k !== "avm" ? "Міжнародні перевезення — лише від ТОВ «АвтоМув». Зніміть галочку «Міжнародне перевезення», щоб обрати іншу юрособу." : undefined}
-                onClick={() => setForm((f) => ({ ...f, ent: k, doc: k === "fop" && f.doc === "main" ? "once" : f.doc }))}>
+                onClick={() => setForm((f) => ({ ...f, ent: k }))}>
                 <span className="nm">{e?.name ?? ui.fallback}</span>
                 <span className="vat">{e?.vat_label ?? ""}</span>
                 <span className="sub">{e ? `ЄДРПОУ ${e.edrpou}` : ""}</span>
@@ -821,9 +825,9 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   <div className="fld"><label htmlFor="paycur">Валюта</label><select id="paycur" value={form.pay.cur} onChange={(e) => setPay("cur", e.target.value)}>
                     {isNrApp ? <option>EUR</option> : <><option>грн</option><option>€ по курсу НБУ на день завантаження</option><option>€ по курсу НБУ на день розвантаження</option></>}</select></div>
                   {!isNrApp && <><div className="fld"><label htmlFor="payform">Форма</label><select id="payform" value={form.pay.form} disabled={fop} onChange={(e) => setPay("form", e.target.value)}>
-                    {(fop ? ["СОФТ платіж"] : form.ent === "uts" ? PAY_FORMS.filter((o) => o !== CASH) : PAY_FORMS).map((o) => <option key={o}>{o}</option>)}
+                    {(fop ? ["СОФТ платіж"] : noCash ? PAY_FORMS.filter((o) => o !== CASH) : PAY_FORMS).map((o) => <option key={o}>{o}</option>)}
                     {/* 5887: від ЮТС готівки в списку немає; прийшла зі старої заявки — видно, і «Сформувати» заблоковано */}
-                    {form.ent === "uts" && form.pay.form === CASH && <option value={CASH} disabled>готівка — заборонено для ЮТС</option>}</select>
+                    {noCash && form.pay.form === CASH && <option value={CASH} disabled>готівка — заборонено для {form.ent === "elg" ? "ЄЛОГІСТ" : "ЮТС"}</option>}</select>
                     <FieldMsg is={iss("pay.form")} /></div>
                   <div className="fld"><label htmlFor="payorder">Порядок і строки оплати</label><select id="payorder" value={orderOther ? OTHER : form.pay.order} onChange={(e) => { const v = e.target.value; setOrderOtherOn(v === OTHER); setPay("order", v === OTHER ? "" : v); }}>
                     <option value="" disabled>— оберіть порядок оплати —</option>

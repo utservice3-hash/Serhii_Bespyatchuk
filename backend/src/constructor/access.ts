@@ -34,7 +34,10 @@ const DOCS: readonly DocKind[] = ['once', 'main', 'carr', 'nrmain', 'nrapp', 'an
 export function stateFromBody(body: unknown, manager: { name: string; phone: string }): DocumentState | string {
   const b = ((body as { state?: unknown })?.state ?? body ?? {}) as Record<string, unknown>;
   const ent = String(b.ent ?? '') as EntityKey;
-  if (!(ent in ENTITIES)) return 'Оберіть юрособу: ЮТС, АвтоМув або ФОП.';
+  if (!(ent in ENTITIES)) return 'Оберіть юрособу: ЮТС, АвтоМув або ЄЛОГІСТ.';
+  // ФОП прибрано з конструктора 30.10.2026 (місце — ЄЛОГІСТ). Архів ФОП перевидається з рядка БД (`routes/constructor.ts`
+  // `stateFromRow`), не звідси, — тож нових документів ФОП не буде, а старі відкриваються як були.
+  if (ent === 'fop') return 'ФОП більше не оформлюється — оберіть ЮТС, АвтоМув або ЄЛОГІСТ.';
   const doc = String(b.doc ?? '') as DocKind;
   if (!DOCS.includes(doc)) return 'Невідомий вид документа.';
   const party: Party = doc === 'carr' ? 'carrier' : 'client';

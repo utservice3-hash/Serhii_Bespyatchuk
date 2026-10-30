@@ -48,7 +48,8 @@ const ref = FIX("docgen-ref.json") as Ref;
 function fakeAssets(): { dir: string; dispose: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), "constructor-assets-"));
   const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082", "hex");
-  for (const f of ["logo-uts.png", "logo-avm.png", "sig-bespyatchuk.png", "sig-kovtonyuk.png", "stamp-uts.png", "stamp-avtomuv.png"]) writeFileSync(path.join(dir, f), png);
+  for (const f of ["logo-uts.png", "logo-avm.png", "sig-bespyatchuk.png", "sig-kovtonyuk.png", "stamp-uts.png", "stamp-avtomuv.png",
+    "logo-elogist.png", "sig-protas.png", "stamp-elogist.png"]) writeFileSync(path.join(dir, f), png);
   return { dir, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -605,7 +606,7 @@ test("#1641 ОПЛАТА: € на день розвантаження і вла
 test("#1642 МІЖНАРОДНІ — ЛИШЕ АВТОМУВ: галочка ставить АвтоМув, інші юрособи вимкнено, сервер блокує ЮТС/ФОП", async () => {
   const { validateForm } = await import("./validate.js");
   const s = ref["once-client-uts"].state;
-  for (const ent of ["uts", "fop"] as const) {
+  for (const ent of ["uts", "elg"] as const) {
     const xs = validateForm({ ...s, ent, intl: true }, { today: "2026-10-12" });
     assert.ok(xs.some((i) => i.field === "ent" && i.level === "error"), `🔴 міжнародну від ${ent} не заблоковано`);
   }
@@ -639,7 +640,7 @@ test("#1680 ПІБ У РОДОВОМУ: чоловічі й жіночі прі�
     ["Косач-Квітка Лариса Петрівна", "Косач-Квітки Лариси Петрівни"],
   ]) assert.equal((await genitiveName(nom)).gen, gen, `🔴 «${nom}» у родовому`);
   // наші директори в довіднику юросіб — те саме, що дає бібліотека (статичне значення не розійдеться мовчки)
-  for (const k of ["uts", "avm", "fop"] as const) {
+  for (const k of ["uts", "avm", "elg", "fop"] as const) {
     const e = ENTITIES[k];
     const r = await genitiveName(e.dir);
     assert.equal(e.dirGen, r.gen, `🔴 ${k}: dirGen у довіднику ≠ відмінюванню`);
@@ -786,7 +787,7 @@ test("#1732 ПРОСТІЙ 5.6: тент (ізотерм) 150 €, рефриж�
  * 🧨 Дозволити ЮТС — червоніє; заборонити всім — теж.
  */
 test("#1733 НЕРЕЗИДЕНТ ЛИШЕ ВІД АВТОМУВ: ЮТС і ФОП — відмова, АвтоМув — формується; вид дозволено в базі", () => {
-  for (const ent of ["uts", "fop"]) assert.match(blockers({ ...nrState(), ent: ent as DocumentState["ent"] }) ?? "", /лише від ТОВ «АвтоМув»/, `🔴 ${ent}: пропустило`);
+  for (const ent of ["uts", "elg"]) assert.match(blockers({ ...nrState(), ent: ent as DocumentState["ent"] }) ?? "", /лише від ТОВ «АвтоМув»/, `🔴 ${ent}: пропустило`);
   assert.equal(blockers(nrState()), null, "🔴 АвтоМув: договір не формується (дзеркало)");
   assert.equal(nrState().intl, true, "🔴 договір з нерезидентом не позначено міжнародним");
   assert.equal(typeof stateFromBody({ ent: "avm", doc: "nrapp" }, NR_MGR), "object", "🔴 сервер не приймає вид «заявка нерезиденту»");
@@ -944,8 +945,8 @@ test("#1800 ЗАЯВКА ДО РІЧНОГО ДОГОВОРУ: «Додаток 
   const once = ref["once-client-uts"].state;
   const legalMark = txt(printHTML(once, once.num, {})).slice(0, 4000).match(/уклали цей Договір про наступне/)?.[0];
   assert.ok(legalMark, "🔴 у разовій заявці немає преамбули — нема з чим порівнювати");
-  for (const ent of ["uts", "avm", "fop"] as const) {
-    const s = anState({ ent, cp: ent === "fop" ? { ...AN_CP, name: "ФОП Тестовий Тест Тестович", edrpou: "1234567890" } : AN_CP });
+  for (const ent of ["uts", "avm", "elg"] as const) {
+    const s = anState({ ent });
     assert.equal(blockers(s), null, `🔴 ${ent}: заявка-додаток не формується`);
     for (const [name, t] of [["PDF", txt(printHTML(s, currentNum(s), {}))], ["Word", docxTxt(s)]] as const) {
       const head = t.indexOf("Додаток до Договору № 62702131 від 21.09.2026"), title = t.indexOf("ЗАЯВКА № 62741747");
@@ -1037,8 +1038,9 @@ test("#1810 ЮТС БЕЗ ГОТІВКИ: заявка клієнту й пер�
  */
 test("#1810b ФОРМА: у ЮТС немає «готівки» в списку оплати, стара — позначена забороненою з причиною", () => {
   const front = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
-  assert.match(front, /form\.ent === "uts" \? PAY_FORMS\.filter\(\(o\) => o !== CASH\)/, "🔴 ЮТС пропонує готівку");
-  assert.match(front, /<option value=\{CASH\} disabled>готівка — заборонено для ЮТС<\/option>/, "🔴 стара готівка не позначена");
+  assert.match(front, /const noCash = form\.ent === "uts" \|\| form\.ent === "elg";/, "🔴 ЮТС чи ЄЛОГІСТ пропонує готівку");
+  assert.match(front, /noCash \? PAY_FORMS\.filter\(\(o\) => o !== CASH\)/, "🔴 ЮТС пропонує готівку");
+  assert.match(front, /<option value=\{CASH\} disabled>готівка — заборонено для \{form\.ent === "elg" \? "ЄЛОГІСТ" : "ЮТС"\}<\/option>/, "🔴 стара готівка не позначена");
   assert.match(front, /<FieldMsg is=\{iss\("pay\.form"\)\} \/>/, "🔴 під полем форми оплати немає причини");
 });
 
@@ -1133,7 +1135,7 @@ test("#1820b ПЕЧАТКА НА PDF: поворот за годинниково
  */
 test("#1821 ПЕЧАТКА НА PDF: відмови словами — ФОП, поза сторінкою, немає сторінки, не PDF, захищений паролем", async () => {
   assert.match(String(parseStamps([])), /хоча б одну/);
-  assert.match(String(parseStamps([st({ ent: "fop" as Stamp["ent"] })])), /лише в ЮТС і АвтоМув/);
+  assert.match(String(parseStamps([st({ ent: "fop" as Stamp["ent"] })])), /лише в ЮТС, АвтоМув і ЄЛОГІСТ/);
   assert.match(String(parseStamps([st({ size: 0.9 })])), /розмір/);
   assert.match(String(parseStamps([st({ x: 0.95 })])), /за межі сторінки/);
   assert.match(String(parseStamps(Array.from({ length: 31 }, () => st({})))), /Забагато/);
@@ -1326,3 +1328,123 @@ test("#2482 ПОРЯДОК ОПЛАТИ: без готового значенн�
     assert.ok(!validateForm(ok, { today: "2026-10-27" }).some((i) => i.field === "pay.order"), `🔴 ${party}: обраний порядок оплати не приймається`);
   }
 });
+
+/* ══════════════ 🏢 ТОВ «ЄЛОГІСТ» ЗАМІСТЬ ФОП (Роман 30.10.2026: «прибрати фоп повністю і додати єлогіста на його місце»,
+   «тов єлогіст більше схожа до uts, роби за цим прикладом»; шаблони Даші ЄЛОГІСТ_*.docx) ══════════════ */
+
+const elg = (over: Record<string, unknown> = {}) => stateFromBody({ ...ref["once-client-uts"].state, ent: "elg", ...over }, NR_MGR) as DocumentState;
+
+/**
+ * #2530 — ДОКУМЕНТИ ЄЛОГІСТ ЯК У ШАБЛОНАХ ДАШІ: разова, основний, додаток до річного і заявка перевізнику, у PDF і Word —
+ * повна назва, «в особі директора Протас Дар'ї В'ячеславівни, яка діє на підставі Статуту», реквізити дослівно з шаблонів
+ * («Платник ПДВ»), підпис «Директор Протас Д.В.»; штрафи разової — як у ЮТС. 🧨 Загубити будь-який рядок — червоніє.
+ */
+test("#2530 ЄЛОГІСТ: реквізити, директорка в родовому, «Платник ПДВ» і штрафи ЮТС — у разовій, основному, додатку й перевізнику", () => {
+  const our = ["ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ «ЄЛОГІСТ»", "Місцезнаходження: Україна, 02141, м. Київ, вул. Лариси Руденко, буд. 6-А",
+    "Ідентифікаційний код в ЄДРПОУ 45149289", "ІПН 451492826513", "п/р UA873052990000026008035031953", "в АТ КБ «ПриватБанк», МФО 305299",
+    "Платник ПДВ", "Протас Д.В."];
+  const cases: Array<[string, DocumentState]> = [
+    ["разова", elg()],
+    ["основний", elg({ doc: "main", mainNo: "7", mainDate: "30.10.2026", dealNo: "" })],
+    ["додаток", anState({ ent: "elg" })],
+    ["перевізник", elg({ doc: "carr" })],
+  ];
+  for (const [name, s] of cases) {
+    assert.equal(typeof s, "object", `🔴 ${name}: сервер не прийняв ЄЛОГІСТ`);
+    assert.equal(blockers(s), null, `🔴 ${name}: не формується`);
+    for (const [fmt, t] of [["PDF", txt(printHTML(s, currentNum(s), {}))], ["Word", docxTxt(s)]] as const) {
+      // у додатку до річного преамбули немає (#1800) — повна назва лише там, де є преамбула
+      for (const need of name === "додаток" ? our.slice(1) : our) assert.ok(t.includes(need), `🔴 ${name}/${fmt}: немає «${need}»`);
+      assert.ok(!/Беспятчук|ФОП/.test(t.replace(/ФОП Тест[^,]*/g, "")), `🔴 ${name}/${fmt}: протік ФОП / Беспятчук`);
+    }
+  }
+  const pre = preambleSegs(elg()).map((x) => x.t).join("");
+  assert.ok(pre.includes("ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ «ЄЛОГІСТ», далі — Експедитор, в особі директора Протас Дар'ї В'ячеславівни, яка діє на підставі Статуту"),
+    "🔴 преамбула ЄЛОГІСТ: " + pre);
+  const once = txt(printHTML(elg(), "1", {}));
+  for (const fine of ["1500 (тисяча п’ятсот) грн", "150 (сто п’ятдесят) євро", "20% від ціни послуг"]) assert.ok(once.includes(fine), `🔴 штраф разової ЄЛОГІСТ — не як у ЮТС: «${fine}»`);
+  assert.ok(!once.includes("Нова Пошта"), "🔴 у ЄЛОГІСТ рамка «оригінали надсилати» — у шаблонах Даші її немає");
+});
+
+/**
+ * #2531 — ОФОРМЛЕННЯ ЄЛОГІСТ: логотип, підпис і печатка — свої файли (`logo-elogist.png`, `sig-protas.png`, `stamp-elogist.png`),
+ * не ЮТС; перемикач вимикає підпис і печатку, логотип лишається; синій акцент. Печатку ЄЛОГІСТ можна накласти на PDF.
+ * 🧨 Підставити печатку чи підпис іншої юрособи або заборонити печатку ЄЛОГІСТ — червоніє.
+ */
+test("#2531 ЄЛОГІСТ: свій логотип, підпис і печатка; перемикач; печатка на PDF дозволена", () => {
+  const a = fakeAssets();
+  try {
+    const on = docImageDataUris(a.dir, "elg", true), off = docImageDataUris(a.dir, "elg", false);
+    assert.ok(on.logo && on.sig && on.stamp, "🔴 ЄЛОГІСТ без логотипа, підпису чи печатки");
+    assert.ok(off.logo && !off.sig && !off.stamp, "🔴 перемикач «Авто-підпис і печатка» не прибирає підпис/печатку ЄЛОГІСТ");
+  } finally { a.dispose(); }
+  // свіжа тека (файли кешуються за шляхом): без stamp-elogist.png ЄЛОГІСТ відмовляє, а не бере чужу печатку
+  const b = fakeAssets();
+  try {
+    rmSync(path.join(b.dir, "stamp-elogist.png"));
+    assert.throws(() => loadDocImages(b.dir, "elg", true), (e: unknown) => e instanceof AssetsMissing && /stamp-elogist\.png/.test(String((e as Error).message)),
+      "🔴 ЄЛОГІСТ бере не свою печатку");
+  } finally { b.dispose(); }
+  const c = fakeAssets();
+  try {
+    const html = printHTML(elg(), "1", docImageDataUris(c.dir, "elg", true));
+    assert.ok(html.includes('alt="ELG"'), "🔴 логотип ЄЛОГІСТ не підписаний ELG");
+  } finally { c.dispose(); }
+  assert.equal(ENTITIES.elg.acc, "1E8BE3", "🔴 акцент ЄЛОГІСТ");
+  assert.deepEqual(parseStamps([st({ ent: "elg" })]), [st({ ent: "elg" })], "🔴 печатку ЄЛОГІСТ на PDF не прийнято");
+});
+
+/**
+ * #2532 — ФОП ПРИБРАНО, АРХІВ ЖИВИЙ: сервер не приймає нових документів ФОП, у формі кнопки ФОП немає (є ЄЛОГІСТ), у базі ФОП
+ * вимкнений (`is_active = false`), а не видалений; архівний документ ФОП перевидається з рядка БД як був.
+ * 🧨 Повернути ФОП у форму, прийняти його на сервері чи видалити рядок (зламає архів) — червоніє.
+ */
+test("#2532 ФОП ПРИБРАНО: нових документів ФОП немає, кнопки немає, у базі вимкнений; архів ФОП перевидається", () => {
+  assert.match(String(stateFromBody({ ...ref["once-client-uts"].state, ent: "fop" }, NR_MGR)), /ФОП більше не оформлюється/, "🔴 сервер прийняв новий документ ФОП");
+  const front = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  assert.match(front, /\{\(\["uts", "avm", "elg"\] as CtorEntityKey\[\]\)\.map/, "🔴 у формі не ЮТС / АвтоМув / ЄЛОГІСТ");
+  assert.ok(!/\["uts", "avm", "fop"\]/.test(front), "🔴 кнопка ФОП повернулась у форму");
+  const schema = readFileSync(path.join(REPO, "backend", "src", "db", "schema.sql"), "utf8");
+  assert.match(schema, /UPDATE constructor_entities SET is_active = false WHERE key = 'fop' AND is_active;/, "🔴 ФОП у довіднику не вимкнено");
+  assert.match(schema, /\('elg', 'ELG', 'ТОВ «ЄЛОГІСТ»'/, "🔴 ЄЛОГІСТ немає в довіднику юросіб");
+  assert.ok(!/DELETE FROM constructor_entities/.test(schema), "🔴 юрособу видаляють — архівні документи посилаються на неї");
+  // архів: рядок БД з entity_key = 'fop' будує стан напряму (routes/constructor.ts stateFromRow), без stateFromBody
+  const old = ref["carr-fop"];
+  const html = normHtml(printHTML(old.state, old.state.num, {}));
+  assert.ok(html.includes("ФОП Беспятчук") && html.includes("3478512294"), "🔴 архівний документ ФОП не перевидається з його реквізитами");
+});
+
+/**
+ * #2533 — ВПІЗНАЄМО ЄЛОГІСТ У СТАРІЙ ЗАЯВЦІ Й НЕ БЕРЕМО ЇЇ ЗА КОНТРАГЕНТА: імпорт заявки з кодом 45149289 ставить ЄЛОГІСТ;
+ * її код, рахунки й директорку не підставляє як контрагента; ЄЛОГІСТ контрагентом — помилка «це наша юрособа».
+ * 🧨 Прибрати ЄЛОГІСТ з наших кодів — імпорт вихопить нашу ж компанію в контрагенти.
+ */
+test("#2533 ЄЛОГІСТ У СТАРІЙ ЗАЯВЦІ: впізнається як наша юрособа, у контрагенти не потрапляє", () => {
+  const old = ["РАЗОВИЙ ДОГОВІР № 62000001", "ТОВ «Тест Агро», далі — Замовник, в особі директора Петренка Івана Івановича",
+    "ЗАМОВНИК", "ТОВ «Тест Агро»", "Код ЄДРПОУ 12345678", "п/р UA213223130000026007233566001",
+    "ЕКСПЕДИТОР", "ТОВ «ЄЛОГІСТ»", "Ідентифікаційний код в ЄДРПОУ 45149289", "ІПН 451492826513", "п/р UA873052990000026008035031953",
+    "Директор Протас Д.В."].join("\n");
+  const r = parseOldDoc(old);
+  assert.equal(r.ent, "elg", "🔴 заявку ЄЛОГІСТ не впізнано");
+  assert.equal(r.cp.edrpou, "12345678", "🔴 контрагентом узято ЄЛОГІСТ");
+  assert.equal(r.cp.iban, "UA213223130000026007233566001", "🔴 рахунок ЄЛОГІСТ узято за рахунок контрагента");
+  const xs = validateForm({ ...elg(), cp: { ...elg().cp, name: "ТОВ «ЄЛОГІСТ»", edrpou: "45149289" } }, { today: "2026-10-30" });
+  assert.ok(xs.some((i) => i.field === "cp.edrpou" && i.level === "error"), "🔴 ЄЛОГІСТ можна вписати контрагентом");
+});
+
+/**
+ * #2534 — ЯК У ЮТС: від ЄЛОГІСТ готівкою не можна (сервер і форма), міжнародні й нерезиденти — лише АвтоМув;
+ * у основному договорі п. 10.12 посилається на гарантії п. 10.11 (у ЮТС було «п. 8.11» — такого пункту про гарантії немає).
+ * 🧨 Дозволити готівку від ЄЛОГІСТ чи повернути «п. 8.11» — червоніє.
+ */
+test("#2534 ЯК У ЮТС: ЄЛОГІСТ без готівки, без міжнародних; п. 10.12 → гарантії п. 10.11", () => {
+  for (const party of ["once", "carr"]) {
+    const xs = validateForm(elg({ doc: party, pay: { sum: "1000", cur: "грн", form: "готівка", order: "по факту" } }), { today: "2026-10-30" });
+    assert.ok(xs.some((i) => i.field === "pay.form" && i.level === "error" && /ЄЛОГІСТ/.test(i.msg)), `🔴 ${party}: від ЄЛОГІСТ пропустило готівку`);
+  }
+  assert.ok(validateForm(elg({ intl: true }), { today: "2026-10-30" }).some((i) => i.field === "ent" && i.level === "error"), "🔴 міжнародну від ЄЛОГІСТ пропустило");
+  const main = txt(printHTML(elg({ doc: "main", mainNo: "7", mainDate: "30.10.2026", dealNo: "" }), "7", {}));
+  assert.ok(main.includes("10.11. Підписанням цього Договору Замовник підтверджує та гарантує"), "🔴 п. 10.11 — не гарантії Замовника");
+  assert.ok(main.includes("гарантій, наданих у п. 10.11 Договору") && !main.includes("п. 8.11"), "🔴 п. 10.12 посилається не на п. 10.11");
+});
+

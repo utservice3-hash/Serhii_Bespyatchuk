@@ -5,7 +5,7 @@
  * не замінювати на «кращі» скани без пере-затвердження вигляду документа.
  *
  * Логотип (рішення 14–15.10): ЮТС — logo-uts.png, АвтоМув — logo-avm.png (напис AVTOMUV зі стрілкою,
- * без слогану), ФОП — без логотипа. Логотип є завжди — перемикач «Авто-підпис і печатка» його не прибирає.
+ * без слогану), ЄЛОГІСТ — logo-elogist.png (30.10.2026), ФОП (лише архів) — без логотипа. Логотип є завжди — перемикач «Авто-підпис і печатка» його не прибирає.
  * ФОП: печатки немає (рішення 29.09 — «ЮТС і ФОП Беспятчук один і той самий підпис»).
  */
 import { readFileSync } from 'node:fs';
@@ -24,6 +24,8 @@ const FILES: Record<EntityKey, EntityFiles> = {
          sig: 'sig-bespyatchuk.png', sigDim: DEFAULT_IMG_DIM.sigB, stamp: 'stamp-uts.png', stampDim: DEFAULT_IMG_DIM.stU },
   avm: { logo: 'logo-avm.png', logoDim: DEFAULT_IMG_DIM.logoA,
          sig: 'sig-kovtonyuk.png', sigDim: DEFAULT_IMG_DIM.sigK, stamp: 'stamp-avtomuv.png', stampDim: DEFAULT_IMG_DIM.stA },
+  elg: { logo: 'logo-elogist.png', logoDim: DEFAULT_IMG_DIM.logoE,
+         sig: 'sig-protas.png', sigDim: DEFAULT_IMG_DIM.sigP, stamp: 'stamp-elogist.png', stampDim: DEFAULT_IMG_DIM.stE },
   fop: { sig: 'sig-bespyatchuk.png', sigDim: DEFAULT_IMG_DIM.sigB }, // без логотипа і без печатки
 };
 

@@ -29,7 +29,8 @@ interface PdfLib {
 let lib: PdfLib | null = null;
 const pdfLib = (): PdfLib => (lib ??= createRequire(import.meta.url)('../vendor/pdf-lib.min.cjs') as PdfLib);
 
-export type StampEnt = 'uts' | 'avm';
+export type StampEnt = 'uts' | 'avm' | 'elg';
+export const STAMP_ENTS: readonly StampEnt[] = ['uts', 'avm', 'elg'];
 /** Одна печатка: сторінка з 1; x, y — лівий верхній кут, size — діаметр (частки видимої сторінки); rot — градуси за годинниковою. */
 export interface Stamp { ent: StampEnt; page: number; x: number; y: number; size: number; rot: number }
 
@@ -46,7 +47,7 @@ export function parseStamps(raw: unknown): Stamp[] | string {
     const n = (k: string) => Number(o[k]);
     const s: Stamp = { ent: o.ent as StampEnt, page: n('page'), x: n('x'), y: n('y'), size: n('size'), rot: n('rot') || 0 };
     const no = `Печатка ${i + 1}`;
-    if (s.ent !== 'uts' && s.ent !== 'avm') return `${no}: печатка є лише в ЮТС і АвтоМув (у ФОП — тільки підпис).`;
+    if (!STAMP_ENTS.includes(s.ent)) return `${no}: печатка є лише в ЮТС, АвтоМув і ЄЛОГІСТ.`;
     if (!Number.isInteger(s.page) || s.page < 1) return `${no}: невідома сторінка.`;
     if (![s.x, s.y, s.size, s.rot].every(Number.isFinite)) return `${no}: неправильне розташування.`;
     if (s.size < SIZE_MIN || s.size > SIZE_MAX) return `${no}: розмір поза межами.`;
@@ -89,7 +90,7 @@ export function placeOnPage(g: PageGeom, s: Stamp, imgRatio: number): Placement 
 export class StampRefused extends Error { constructor(msg: string, readonly status = 400) { super(msg); } }
 
 /** Накласти печатки. `pngs` — байти печаток юросіб (ті самі файли, що й у документах). Сторінки без печаток не чіпаються. */
-export async function stampPdf(pdf: Uint8Array, stamps: Stamp[], pngs: Record<StampEnt, Uint8Array>): Promise<{ pdf: Uint8Array; pages: number }> {
+export async function stampPdf(pdf: Uint8Array, stamps: Stamp[], pngs: Partial<Record<StampEnt, Uint8Array>>): Promise<{ pdf: Uint8Array; pages: number }> {
   const { PDFDocument, degrees, EncryptedPDFError } = pdfLib();
   let doc: PdfDoc, pages: PdfPage[];
   // пошкоджений файл pdf-lib інколи «відкриває» і падає вже на сторінках — тому обидва кроки під однією відмовою
@@ -104,7 +105,9 @@ export async function stampPdf(pdf: Uint8Array, stamps: Stamp[], pngs: Record<St
   if (bad) throw new StampRefused(`У файлі ${pages.length} стор. — сторінки ${bad.page} немає.`);
   const img: Partial<Record<StampEnt, PdfImage>> = {};
   for (const s of stamps) {
-    const im = img[s.ent] ??= await doc.embedPng(pngs[s.ent]);
+    const png = pngs[s.ent];
+    if (!png) throw new StampRefused(`Немає файла печатки «${s.ent}» на сервері.`, 503);
+    const im = img[s.ent] ??= await doc.embedPng(png);
     const p = pages[s.page - 1], c = p.getCropBox();
     const pl = placeOnPage({ W: c.width, H: c.height, ox: c.x, oy: c.y, R: p.getRotation().angle }, s, im.height / im.width);
     p.drawImage(im, { x: pl.x, y: pl.y, width: pl.width, height: pl.height, rotate: degrees(pl.rotate) });

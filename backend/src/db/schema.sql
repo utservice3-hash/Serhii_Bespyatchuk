@@ -7352,3 +7352,29 @@ ALTER TABLE rate_feedback ADD COLUMN IF NOT EXISTS agreed_carrier NUMERIC(12,2) 
 -- той самий механізм, що з «Наймом» (#741) і БА (#741b). Зняття — тут, ПІСЛЯ синку. Тримає #2812.
 UPDATE roles SET screen_access = screen_access - 'prozorro'
  WHERE key = 'financier';
+
+-- 📄 КОНСТРУКТОР: ТОВ «ЄЛОГІСТ» ЗАМІСТЬ ФОП (Роман 30.10.2026: «прибрати фоп повністю і додати єлогіста на його місце»,
+-- «тов єлогіст більше схожа до uts, роби за цим прикладом»). Реквізити — з шаблонів Даші (ЄЛОГІСТ_*.docx), як у
+-- `constructor/data/entities.ts` (там джерело для генерації; тут — довідник `/entities` для форми).
+--  · ФОП НЕ видаляється: `constructor_documents.entity_key` посилається на нього, архів ФОП перевидається як був.
+--    `is_active = false` ховає його з `/entities`; нові документи ФОП відхиляє `access.ts`.
+--  · Повторний запуск безпечний (upsert по key). ВІДКАТ: UPDATE constructor_entities SET is_active = (key <> 'elg').
+INSERT INTO constructor_entities
+  (key, code, name, full_name, edrpou, ipn, vat_label, tax_line, address, phone, email,
+   director, director_short, accounts, fines, dwell_default, sig_file, stamp_file, logo_file, accent, originals_address, is_active)
+VALUES
+('elg', 'ELG', 'ТОВ «ЄЛОГІСТ»', 'ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ «ЄЛОГІСТ»', '45149289', '451492826513', 'з ПДВ', 'Платник ПДВ',
+ 'Україна, 02141, м. Київ, вул. Лариси Руденко, буд. 6-А', '+380 68 807 08 16', 'bukhgalter@uts.ua',
+ 'Протас Дар''я В''ячеславівна', 'Протас Д.В.',
+ '[{"bank":"АТ КБ «ПриватБанк», МФО 305299","iban":"UA873052990000026008035031953"}]'::jsonb,
+ '{"rows":[["Простій, внутрішні","1500 / 3000 / 6000 грн"],["Простій, міжнародні","150 / 200 / 300 €"],["Відмова від договору","20%, але не менше 100 €"]],"note":"Три суми — за типом авто: тент/цільномет · реф/цистерна · трал/платформа."}'::jsonb,
+ '24 години на завантаження/розвантаження (внутрішні), 48+48 годин (міжнародні)', 'sig-protas.png', 'stamp-elogist.png',
+ 'logo-elogist.png', '1E8BE3', NULL, true)
+ON CONFLICT (key) DO UPDATE SET
+  code=EXCLUDED.code, name=EXCLUDED.name, full_name=EXCLUDED.full_name, edrpou=EXCLUDED.edrpou,
+  ipn=EXCLUDED.ipn, vat_label=EXCLUDED.vat_label, tax_line=EXCLUDED.tax_line, address=EXCLUDED.address,
+  phone=EXCLUDED.phone, email=EXCLUDED.email, director=EXCLUDED.director,
+  director_short=EXCLUDED.director_short, accounts=EXCLUDED.accounts, fines=EXCLUDED.fines,
+  dwell_default=EXCLUDED.dwell_default, sig_file=EXCLUDED.sig_file, stamp_file=EXCLUDED.stamp_file,
+  logo_file=EXCLUDED.logo_file, accent=EXCLUDED.accent, originals_address=EXCLUDED.originals_address;
+UPDATE constructor_entities SET is_active = false WHERE key = 'fop' AND is_active;

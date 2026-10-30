@@ -34,7 +34,7 @@ import { mkdtemp, writeFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { fullPageHTML, printHTML } from "../constructor/services/printTemplate.js";
 import { loadDocImages, docImageDataUris, stampPng, AssetsMissing } from "../constructor/services/docAssets.js";
-import { parseStamps, stampPdf, StampRefused, type StampEnt } from "../constructor/services/pdfStamp.js";
+import { parseStamps, stampPdf, StampRefused, STAMP_ENTS, type StampEnt } from "../constructor/services/pdfStamp.js";
 import { translateNr, googleTranslator } from "../constructor/services/nrTranslate.js";
 import { htmlToPdf, renderDocumentPdf, PdfUnavailable, type RenderedPdf } from "../constructor/services/pdfRenderer.js";
 import { canSeeConstructorDoc, stateFromBody, fileBase, contractMemo, VIEW_ALL_PERM } from "../constructor/access.js";
@@ -461,8 +461,8 @@ constructorRouter.post("/convert/from-pdf", h(async (req, res) => {
 
 /* ── 🔏 ПЕЧАТКА НА PDF (задача 5779): будь-хто з вкладкою «Конструктор»; кожне накладання — у журнал ── */
 constructorRouter.get("/stamp-image/:ent", h((req, res) => {
-  const ent = req.params.ent;
-  if (ent !== "uts" && ent !== "avm") throw new HttpError(404, "Печатка є лише в ЮТС і АвтоМув.");
+  const ent = req.params.ent as StampEnt;
+  if (!STAMP_ENTS.includes(ent)) throw new HttpError(404, "Печатка є лише в ЮТС, АвтоМув і ЄЛОГІСТ.");
   let png: Uint8Array | null;
   try { png = stampPng(CONSTRUCTOR_ASSETS_DIR, ent); }
   catch (e) { if (e instanceof AssetsMissing) throw new HttpError(503, e.message); throw e; }
@@ -475,8 +475,9 @@ constructorRouter.post("/stamp", h(async (req, res) => {
   if (buf.subarray(0, 5).toString("latin1") !== "%PDF-") throw new HttpError(400, "Це не PDF.");
   const stamps = parseStamps(req.body?.stamps);
   if (typeof stamps === "string") throw new HttpError(400, stamps);
-  let pngs: Record<StampEnt, Uint8Array>;
-  try { pngs = { uts: stampPng(CONSTRUCTOR_ASSETS_DIR, "uts")!, avm: stampPng(CONSTRUCTOR_ASSETS_DIR, "avm")! }; }
+  // лише печатки, що є в запиті: відсутній файл однієї юрособи не ламає накладання іншої
+  const pngs: Partial<Record<StampEnt, Uint8Array>> = {};
+  try { for (const k of new Set(stamps.map((s) => s.ent))) pngs[k] = stampPng(CONSTRUCTOR_ASSETS_DIR, k)!; }
   catch (e) { if (e instanceof AssetsMissing) throw new HttpError(503, e.message); throw e; }
   let out: { pdf: Uint8Array; pages: number };
   try { out = await stampPdf(new Uint8Array(buf), stamps, pngs); }

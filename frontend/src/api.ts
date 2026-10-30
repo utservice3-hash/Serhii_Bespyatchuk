@@ -6221,7 +6221,8 @@ export const finErrorData = (e: unknown) => (e as { response?: { status?: number
 // з голого fetch на наш `api`: вхід у дашборді — заголовком із токеном, не кукою, тож `<a href="/api/…">`
 // на Word/PDF повертав би 401. Файли — blob через `api`, як скрини клієнтів.
 // ═══════════════════════════════════════════════════════════════════════════
-export type CtorEntityKey = "uts" | "avm" | "fop";
+/** `fop` — лише архівні документи (нових ФОП немає з 30.10.2026, місце зайняла ЄЛОГІСТ `elg`). */
+export type CtorEntityKey = "uts" | "avm" | "elg" | "fop";
 /** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; 14.10.2026); `annex` — заявка-додаток до річного договору (5777). */
 export type CtorDocKind = "once" | "main" | "carr" | "nrmain" | "nrapp" | "annex";
 export type CtorParty = "client" | "carrier";
@@ -6354,7 +6355,7 @@ export async function ctorStampImage(ent: CtorEntityKey): Promise<Blob> {
   return (await api.get<Blob>(`/constructor/stamp-image/${ent}`, { responseType: "blob" })).data;
 }
 /** Одна печатка: сторінка (з 1), лівий верхній кут і діаметр — частки сторінки, кут — градуси за годинниковою. */
-export interface CtorStamp { ent: "uts" | "avm"; page: number; x: number; y: number; size: number; rot: number }
+export interface CtorStamp { ent: "uts" | "avm" | "elg"; page: number; x: number; y: number; size: number; rot: number }
 export async function ctorStampPdf(file: File, stamps: CtorStamp[]): Promise<Blob> {
   const data = await new Promise<string>((resolve, reject) => {
     const r = new FileReader();
