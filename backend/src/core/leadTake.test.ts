@@ -185,7 +185,8 @@ test("#1313b ЖИВИЙ SQL: кожне джерело й кампанія ви�
   const groups = all.rows.filter((r) => r.kind === "group");
   for (const g of groups) assert.equal(all.rows.filter((r) => r.kind === "manager" && r.group === g.label).reduce((a, r) => a + r.n, 0), g.n, `🔴 група ${g.label} ≠ Σ менеджерів`);
   assert.equal(groups.reduce((a, r) => a + r.n, 0), 8, "🔴 відділ ≠ Σ груп");
-  assert.deepEqual(groups.map((g) => g.label), ["РНК - Андрія", "РНК - Дарини", "РПК"], "🔴 групування не «команди РНК окремо, РПК разом»");
+  // 30.10.2026 (задача 7371): решта комерційних команд — під підписом «Постійні клієнти», а не «РПК»; групування те саме.
+  assert.deepEqual(groups.map((g) => g.label), ["РНК - Андрія", "РНК - Дарини", "Постійні клієнти"], "🔴 групування не «команди нових клієнтів окремо, решта разом»");
   assert.equal(await n({ ...Q, source: "all", time: "work" }) + await n({ ...Q, source: "all", time: "off" }), 8, "🔴 робочий + неробочий ≠ все");
   const dl = await x.lt.leadTakeDeals({ ...Q, source: "all" }, "dept", "none");
   assert.equal(dl.length, all.rows.find((r) => r.kind === "dept")!.notTaken, "🔴 список «не взято» ≠ числу в клітинці");

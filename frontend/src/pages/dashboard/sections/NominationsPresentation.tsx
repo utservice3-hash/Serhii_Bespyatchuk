@@ -265,7 +265,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       <>
         <div className="ps-kick">ТИЖДЕНЬ {dm(week.weekFrom)}–{dmy(week.weekTo)}</div>
         <div className="ps-h">Рейтинг менеджерів</div>
-        <div className="ps-two">{card("rpk", "ВРПК — відділ роботи з постійними клієнтами")}{card("rnk", "ВРНК — відділ роботи з новими клієнтами")}</div>
+        <div className="ps-two">{card("rpk", "Відділ роботи з постійними клієнтами")}{card("rnk", "Відділ роботи з новими клієнтами")}</div>
       </>
     )) });
 
@@ -304,7 +304,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       out.push({ key: "rnk-conv", node: frame(SECTIONS[2], (
         <>
           <div className="ps-kick">ТИЖДЕНЬ {dm(week.weekFrom)}–{dmy(week.weekTo)}</div>
-          <div className="ps-h">Статистика відділу РНК</div>
+          <div className="ps-h">Статистика відділу нових клієнтів</div>
           <div className="ps-conv">
             <div className="ps-conv-t">
               <div className="ps-head">Найкраща конверсія</div>

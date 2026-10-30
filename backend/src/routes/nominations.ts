@@ -181,7 +181,7 @@ nominationsRouter.post("/rnk-conv", safe(async (req: Request, res: Response) => 
     // Лише таблиця конверсії цього тижня — без перерахунку всіх номінацій (ревʼю 22.09).
     const conv = await rnkConvWeek(b.weekFrom, weekOf(b.weekFrom).to);
     const row = conv.rows.find((r) => r.managerId === b.managerId);
-    if (!row) return res.status(404).json({ error: "Цього менеджера немає в статистиці відділу РНК за тиждень" });
+    if (!row) return res.status(404).json({ error: "Цього менеджера немає в статистиці відділу нових клієнтів за тиждень" });
     if (v.role !== "admin" && row.teamId !== v.teamId) return res.status(403).json({ error: "тімлід править лише свою команду" });
   }
   await pool.query(

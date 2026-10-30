@@ -432,3 +432,51 @@ test("#1364 РОУТ ДАТИ ПЕРЕХОДУ: межа manage_users перши
   assert.match(matrix, /method: "PATCH", path: "\/api\/settings\/team-moves\/:managerId\/last", cls: "deny-only"/,
     "🔴 роуту немає в матриці доступу");
 });
+
+/**
+ * 🏷 «РНК / РПК» ПРИБРАНО З ІНТЕРФЕЙСУ (задачі 7371/7412, 30.10.2026: «прибрати всі згадки РНК, РПК — залишити тільки
+ * назви команд»). Назви команд приходять із Kommo, і їх там перейменовують — тому:
+ *   #3300 — тип команди (чергування, кольори) визначається НОМЕРОМ, а не словом у назві;
+ *   #3301 — номери відділу нових клієнтів на фронті ті самі, що `RNK_TEAM_IDS` ядра;
+ *   #3302 — у текстах інтерфейсу (фронт і серверні повідомлення на екран) немає «РНК»/«РПК» — лише в коментарях коду.
+ */
+const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+const RNK_RPK = /РНК|РПК/;
+
+test("#3300 тип команди за номером: чергування й кольори не шукають «РНК/РПК» у назві", () => {
+  const duty = readFileSync(path.join(ROOT, "backend/src/routes/duty.ts"), "utf8");
+  assert.doesNotMatch(stripComments(duty), /ILIKE '%РНК%'/, "🔴 чергування знову шукає «РНК» у назві команди — після перейменування в Kommo відмовить усім");
+  assert.match(duty, /const RNK_TEAM = `t\.id = ANY\(ARRAY\[\$\{RNK_TEAM_IDS\.join\(", "\)\}\]::int\[\]\)`;/, "🔴 команди чергування визначаються не номером");
+  assert.match(duty, /\(\$\{RNK_TEAM\}\) AS is_rnk/, "🔴 перевірка «команда нових клієнтів» у записі чергування не за номером");
+  const colors = readFileSync(path.join(ROOT, "frontend/src/pages/dashboard/teamColors.tsx"), "utf8");
+  assert.doesNotMatch(stripComments(colors), RNK_RPK, "🔴 кольори команд знову читають «РНК/РПК» з назви");
+  assert.match(colors, /export function teamKind\(id: number \| null \| undefined\)/, "🔴 тип команди на фронті не за номером");
+  assert.match(colors, /style=\{\{ color: teamColor\(t\.id\) \}\}/, "🔴 колір опції команди не за номером");
+});
+
+test("#3301 номери відділу нових клієнтів на фронті = RNK_TEAM_IDS ядра", () => {
+  const ids = (src: string, re: RegExp) => { const m = re.exec(src); assert.ok(m, `🔴 не знайдено ${re}`); return m[1].split(",").map((x) => Number(x.trim())).sort(); };
+  const core = ids(readFileSync(path.join(ROOT, "backend/src/core/metrics.ts"), "utf8"), /export const RNK_TEAM_IDS = \[([\d, ]+)\];/);
+  const fe = ids(readFileSync(path.join(ROOT, "frontend/src/pages/dashboard/teamColors.tsx"), "utf8"), /export const NEW_CLIENTS_TEAM_IDS: readonly number\[\] = \[([\d, ]+)\];/);
+  assert.deepEqual(fe, core, "🔴 фронт і ядро по-різному визначають відділ нових клієнтів");
+});
+
+test("#3302 у текстах інтерфейсу немає «РНК»/«РПК» (лише в коментарях коду)", async () => {
+  const { readdirSync, statSync } = await import("node:fs");
+  const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => {
+    const p = path.join(dir, f);
+    return statSync(p).isDirectory() ? walk(p) : /\.(tsx?|css)$/.test(f) && !/\.test\.tsx?$/.test(f) ? [p] : [];
+  });
+  // Контроль: сканер бачить слово в рядку й не бачить у коментарі — інакше «нуль знахідок» нічого не доводить.
+  assert.match(stripComments(`const a = "РПК"; // РНК`), RNK_RPK);
+  assert.doesNotMatch(stripComments(`/* РНК */ const a = 1; // РПК`), RNK_RPK);
+  const files = [
+    ...walk(path.join(ROOT, "frontend/src")),
+    // Серверні тексти, що доходять до екрана: помилки, підписи груп, назви серій, підказки форм.
+    ...["routes/duty.ts", "routes/nominations.ts", "statistics/seriesCatalog.ts", "statistics/anomalies.ts",
+      "core/nominationRules.ts", "core/leadTake.ts", "core/hiring.ts"].map((f) => path.join(ROOT, "backend/src", f)),
+  ];
+  assert.ok(files.length > 100, `🔴 сканер пройшов лише ${files.length} файлів — простір задано не так`);
+  const hits = files.filter((f) => RNK_RPK.test(stripComments(readFileSync(f, "utf8")))).map((f) => path.relative(ROOT, f));
+  assert.deepEqual(hits, [], `🔴 «РНК/РПК» в інтерфейсі: ${hits.join(", ")}`);
+});

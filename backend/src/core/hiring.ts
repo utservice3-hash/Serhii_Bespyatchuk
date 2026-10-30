@@ -695,7 +695,7 @@ export async function hiringMeta(db: Db) {
   const teams = (await db.query<{ id: number; name: string }>(`SELECT id, name FROM teams ORDER BY name`)).rows;
   return {
     sources: merge(["work.ua", "robota.ua", "Telegram-канали", "Instagram", "LinkedIn", "OLX", "рекомендація співробітника", "рекомендація колишніх", "самостійний пошук", "університет", "агенція"], await distinct("source", "hiring_candidates")),
-    positions: merge(["Менеджер з продажу (РНК)", "Менеджер з продажу (РПК)", "Бухгалтер", "Менеджер по тендерах", "Юрист", "Брокер", "Менеджер з організації вантажоперевезень"], await distinct("position", "hiring_candidates")),
+    positions: merge(["Менеджер з продажу (нові клієнти)", "Менеджер з продажу (постійні клієнти)", "Бухгалтер", "Менеджер по тендерах", "Юрист", "Брокер", "Менеджер з організації вантажоперевезень"], await distinct("position", "hiring_candidates")),
     responsibles: await distinct("responsible", "hiring_interviews"),
     teams,
     vacancies: (await db.query(`SELECT id, title, status FROM hiring_vacancies ORDER BY status IN ('closed','cancelled'), title`)).rows,

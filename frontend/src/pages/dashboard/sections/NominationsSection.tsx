@@ -36,7 +36,7 @@ const dm = (ymd: string) => `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}`;
 const kyivDateOf = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
 const mondayOf = (ymd: string) => { const dow = new Date(`${ymd}T12:00:00Z`).getUTCDay(); return addDays(ymd, -((dow + 6) % 7)); };
 const whenText = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-const DEPT_LABEL = { rnk: "ВРНК — нові клієнти", rpk: "ВРПК — постійні клієнти" } as const;
+const DEPT_LABEL = { rnk: "Нові клієнти", rpk: "Постійні клієнти" } as const;
 
 /** Означення номінації — менеджерської чи лідогенераторської (одне місце пошуку, щоб не розійтись). */
 const defOf = (week: NominationWeek, key: NominationKey): NominationDef =>
@@ -103,7 +103,7 @@ export function NominationsSection() {
 
   // 🔒 Остаточна фіксація незворотна — тому підтвердження словами, а не лише кліком.
   const lockWeek = async () => {
-    if (!(await dlg.confirm(`Зафіксувати тиждень ${dm(data.weekFrom)}–${dm(data.weekTo)} остаточно? Після цього ніхто — ні тімліди, ні ви — не зможе змінити жодного числа, зокрема лідогенерацію й конверсію РНК.`))) return;
+    if (!(await dlg.confirm(`Зафіксувати тиждень ${dm(data.weekFrom)}–${dm(data.weekTo)} остаточно? Після цього ніхто — ні тімліди, ні ви — не зможе змінити жодного числа, зокрема лідогенерацію й конверсію нових клієнтів.`))) return;
     setLocking(true);
     try { applyData(await lockNominationWeek(data.weekFrom)); }
     catch (e) { toast(errorOf(e), { error: true }); }
@@ -272,7 +272,7 @@ function AdminOverview({ week, onOpen }: { week: NominationWeek; onOpen: (teamId
                   </tr>
                 )),
                 <tr className="win" key={`${dept}-w`}>
-                  <td><b>🏆 Переможець {dept === "rnk" ? "ВРНК" : "ВРПК"}</b></td>
+                  <td><b>🏆 Переможець · {dept === "rnk" ? "нові клієнти" : "постійні клієнти"}</b></td>
                   {week.defs.map((d) => {
                     const w = week.depts.find((x) => x.dept === dept && x.nomination === d.key);
                     return <td key={d.key}>{w && w.state === "ok" ? <b>{w.winners.map(name).join(", ")} · {fmtValue(d.unit, w.value)}</b> : <span className="nm-muted">ніхто не набрав</span>}</td>;
@@ -639,7 +639,7 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
   const onSlideN = conv.rows.filter((r) => r.onSlide).length;
   return (
     <div className="nm-card">
-      <div className="nm-card-h"><b>Статистика відділу РНК · найкраща конверсія</b>
+      <div className="nm-card-h"><b>Статистика відділу нових клієнтів · найкраща конверсія</b>
         <span className="nm-muted">Система рахує як фільтри Kommo: <b>цільові</b> — створені за тиждень угоди з рекламних джерел і реактивації («Источник клиента») без «Не цільових»; <b>успіх</b> — угоди, що зараз від «Контролю перед завантаженням» до «Успішної», з «Датою загрузки» в тижні. Успіх і цільові — різні угоди, тож відсоток буває понад 100%. Змініть числа, якщо рахуєте інакше, і позначте, хто йде на слайд (зараз {onSlideN}).</span>
         {conv.outside != null ? <span className="nm-muted">Поза фільтром (джерело порожнє чи інше): {conv.outside} угод відділу за тиждень.</span> : null}</div>
       {err ? <div className="nm-banner"><span className="nm-err">{err}</span></div> : null}
@@ -674,7 +674,7 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
                 </tr>
               );
             })}
-            {conv.rows.length === 0 ? <tr><td colSpan={7} className="nm-muted">Менеджерів РНК у заліку цього тижня немає.</td></tr> : null}
+            {conv.rows.length === 0 ? <tr><td colSpan={7} className="nm-muted">Менеджерів відділу нових клієнтів у заліку цього тижня немає.</td></tr> : null}
           </tbody>
         </table>
       </div>

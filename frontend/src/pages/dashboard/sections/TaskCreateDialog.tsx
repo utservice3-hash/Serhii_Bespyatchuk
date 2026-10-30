@@ -143,14 +143,14 @@ export function TaskCreateDialog({
 
         <textarea ref={titleRef} className="tc-title" rows={2} value={form.title}
           onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-          placeholder={kind === "goal" ? "Яка стратегічна задача? Напр.: вивести РПК на 3 млн на місяць" : "Що зробити? Опишіть задачу"} aria-label="Опис задачі" />
+          placeholder={kind === "goal" ? "Яка стратегічна задача? Напр.: вивести постійних клієнтів на 3 млн на місяць" : "Що зробити? Опишіть задачу"} aria-label="Опис задачі" />
 
         {kind === "goal" && (
           <div className="tc-res">
             <label htmlFor="tc-res">Результат — як зрозуміти, що задачу виконано <span className="tc-req">обовʼязково</span></label>
             <input id="tc-res" className={form.goalResult.trim() ? "" : "bad"} value={form.goalResult} maxLength={500}
               onChange={(e) => setForm((f) => ({ ...f, goalResult: e.target.value }))}
-              placeholder="Напр.: гроші РПК за грудень ≥ 3 млн ₴ у Звіті КВП" />
+              placeholder="Напр.: гроші постійних клієнтів за грудень ≥ 3 млн ₴ у Звіті КВП" />
             {!form.goalResult.trim() && <span className="tc-hint">Без результату стратегічна задача не створиться</span>}
           </div>
         )}

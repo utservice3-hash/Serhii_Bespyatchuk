@@ -497,7 +497,7 @@ const WEBINAR_POINTS = [
 
 export const SLIDE_TEMPLATES: readonly SlideTemplate[] = [
   { key: "newcomer", label: "Новий працівник", fields: [
-    { key: "headline", label: "Кого вітаємо (посада, команда)", required: true, max: 140, placeholder: "Вітаємо нового менеджера РНК в команді Андрія Безпамʼятного (період адаптації)" },
+    { key: "headline", label: "Кого вітаємо (посада, команда)", required: true, max: 140, placeholder: "Вітаємо нового менеджера в команді Андрія Безпамʼятного (період адаптації)" },
     { key: "person", label: "Прізвище Імʼя", required: true, max: 80 },
     { key: "achievement", label: "Досягнення (необовʼязково)", required: false, max: 120, placeholder: "Вітаємо з 8ми поставленими машинами!" },
     { key: "wish", label: "Побажання", required: false, max: 160, default: "Легкого старту та сильних результатів!" },
@@ -513,7 +513,7 @@ export const SLIDE_TEMPLATES: readonly SlideTemplate[] = [
   ] },
   { key: "news", label: "Новини", fields: [
     { key: "title", label: "Заголовок", required: false, max: 60, default: "Новини!" },
-    { key: "text", label: "Новина", required: true, max: 400, multiline: true, placeholder: "Ковтонюк Тетяна переходить до команди РНК Андрія Безпамʼятного." },
+    { key: "text", label: "Новина", required: true, max: 400, multiline: true, placeholder: "Ковтонюк Тетяна переходить до команди Андрія Безпамʼятного." },
     { key: "wish", label: "Побажання", required: false, max: 160, default: "Бажаємо успіхів у нових ролях та команді! 🚀" },
   ] },
   { key: "contest", label: "Конкурс тижня", fields: [

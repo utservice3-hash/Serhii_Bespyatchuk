@@ -87,7 +87,7 @@ const HINT: Record<string, string> = {
     + "не сховано, і входять у Σ (інваріант «нові + постійні + залишок == каса» тримається точно). "
     + "СУМА БУВАЄ ВІДʼЄМНОЮ, і це не помилка: сюди потрапляють мінусові угоди (сторно/повернення), "
     + "а ядро їх нетить — рівно як задумано. Дивитись треба на кількість угод поруч, а не лише на суму.",
-  newRepeat: "Нові/постійні (client-grain лінз): клієнт з першою оплатою в періоді = новий. ОКРЕМО від team-based РПК/РНК (то ознака команди). Кожен клієнт → primary-менеджер, Σ = відділ.",
+  newRepeat: "Нові/постійні (client-grain лінз): клієнт з першою оплатою в періоді = новий. ОКРЕМО від відділу команди (постійні / нові клієнти — то ознака команди). Кожен клієнт → primary-менеджер, Σ = відділ.",
   // 🔴 ПІДПИС ПЕРЕПИСАНО 18.08.2026 РАЗОМ ІЗ ПРАВИЛОМ. Тут стояв дослівний опис
   // старої логіки («B=канал угоди: реклама/лідоген → новий»), і лишити його означало
   // б лишити на екрані підпис, який описує вже неіснуюче правило. Тримає гейт `#67e`.
@@ -98,7 +98,7 @@ const HINT: Record<string, string> = {
   expected: "Очікування менеджера = його угоди в зоні виставлено→оплата (знімок).",
 };
 
-const teamKindLabel: Record<string, string> = { rpk: "РПК · повний цикл", rnk: "РНК · реклама", leadgen: "Лідогенерація" };
+const teamKindLabel: Record<string, string> = { rpk: "Постійні клієнти · повний цикл", rnk: "Нові клієнти · реклама", leadgen: "Лідогенерація" };
 
 // Блок B — секція «Логістика». Чесні мітки: ✓ пряме джерело · ~ проксі/наближення · ✗ нема даних.
 // ⓘ у ТІЙ САМІЙ позиції, що в решті звіту (поряд із заголовком, у flex-лейблі) — тултіп працює.
@@ -390,14 +390,14 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                 </colgroup>
                 <thead><tr>
                   <th>Команда / менеджер</th>
-                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, «наст» — наступний, «мин» — з МИНУЛИХ місяців (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Факт + очік. <InfoHint text={HINT.withExp} /></th><th style={{ textAlign: "right" }}>Конв. <InfoHint text="Лайфтайм-конверсія (весь час, чесна воронка): РНК = рекламні угоди, що досягли «авто працює» ÷ прийнята реклама; РПК = лідген-угоди, що досягли «авто працює» ÷ лідген-заявки. Команда = Σчисельників÷Σзнаменників. Тонкий знаменник (0) → «—»." /></th>
+                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, «наст» — наступний, «мин» — з МИНУЛИХ місяців (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Факт + очік. <InfoHint text={HINT.withExp} /></th><th style={{ textAlign: "right" }}>Конв. <InfoHint text="Лайфтайм-конверсія (весь час, чесна воронка): нові клієнти = рекламні угоди, що досягли «авто працює» ÷ прийнята реклама; постійні клієнти = лідген-угоди, що досягли «авто працює» ÷ лідген-заявки. Команда = Σчисельників÷Σзнаменників. Тонкий знаменник (0) → «—»." /></th>
                   {rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}
                 </tr></thead>
                 <tbody>
                   {rep.teams.map((t) => (
                     <Fragment key={t.teamId}>
                       <tr onClick={() => setOpenTeam(openTeam === t.teamId ? null : t.teamId)} style={{ cursor: "pointer" }}>
-                        <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з РПК/повним циклом)." />}</span></td>
+                        <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з відділом постійних клієнтів / повним циклом)." />}</span></td>
                         <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}<RemainingLine v={t.remainingToPlan} /></td>
                         <td><div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Факт ${fmtPct(t.pct)} · з очікуванням за плановою датою ${fmtPct(t.forecastPct)}`}><PlanBar factPct={t.pct} forecastPct={t.forecastPct} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
@@ -566,7 +566,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
 
           {/* ── ДВИГУНИ (4) ── */}
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
-            {([["🏭 РПК", rep.engines.rpk, false], ["📢 РНК", rep.engines.rnk, true]] as const).map(([lbl, e, showConv]) => (
+            {([["🏭 Постійні клієнти", rep.engines.rpk, false], ["📢 Нові клієнти", rep.engines.rnk, true]] as const).map(([lbl, e, showConv]) => (
               <div key={lbl} className="chart-card">
                 <h2 className="chart-title">{lbl}</h2>
                 <Stat label="Факт / план" value={`${fmtMoney(e.revenue)}`} sub={`план ${fmtMoney(e.plan)} · ${fmtPct(e.pct)}`} color={pctColor(e.pct)} hint={HINT.teamPlan} />
@@ -1134,9 +1134,9 @@ function FullTable({ rep, plans, onSave }: { rep: KvpReport; plans: KvpPlans; on
         wk: { money: true, f: (wi) => dw(wi)?.fact ?? null, p: (wi) => dw(wi)?.plan ?? null } },
       { label: "Успішно закриті (142)", hint: "Статус 142 за датою закриття, по тижнях. План КВП декомпозується на тижні.", fact: fmtMoney(sumDW("success")), planKey: "success_plan", pct: pctOf(sumDW("success"), planVal("success_plan")),
         wk: { money: true, f: (wi) => dw(wi)?.success ?? null, p: (wi) => decomp(planVal("success_plan"), wi) } },
-      { label: "Нові — отримано", hint: "Каса нових клієнтів (перша оплата в періоді), по тижнях. План РНК декомпозується.", fact: fmtMoney(sumDW("newRecv")), planKey: "new_revenue_plan", pct: pctOf(sumDW("newRecv"), planVal("new_revenue_plan")),
+      { label: "Нові — отримано", hint: "Каса нових клієнтів (перша оплата в періоді), по тижнях. План нових клієнтів декомпозується.", fact: fmtMoney(sumDW("newRecv")), planKey: "new_revenue_plan", pct: pctOf(sumDW("newRecv"), planVal("new_revenue_plan")),
         wk: { money: true, f: (wi) => dw(wi)?.newRecv ?? null, p: (wi) => decomp(planVal("new_revenue_plan"), wi) } },
-      { label: "Постійні — отримано", hint: "Каса постійних клієнтів, по тижнях. План РПК декомпозується.", fact: fmtMoney(sumDW("repeatRecv")), planKey: "repeat_revenue_plan", pct: pctOf(sumDW("repeatRecv"), planVal("repeat_revenue_plan")),
+      { label: "Постійні — отримано", hint: "Каса постійних клієнтів, по тижнях. План постійних клієнтів декомпозується.", fact: fmtMoney(sumDW("repeatRecv")), planKey: "repeat_revenue_plan", pct: pctOf(sumDW("repeatRecv"), planVal("repeat_revenue_plan")),
         wk: { money: true, f: (wi) => dw(wi)?.repeatRecv ?? null, p: (wi) => decomp(planVal("repeat_revenue_plan"), wi) } },
       { label: "Дохід в очікуванні (план. дата)", hint: "Зона визнання за ПЛАНОВОЮ датою оплати (коли має зайти), по тижнях періоду.", fact: fmtMoney(sumDW("expectedPlanned")),
         wk: { money: true, f: (wi) => dw(wi)?.expectedPlanned ?? null, p: () => null } },
