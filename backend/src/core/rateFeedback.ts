@@ -7,6 +7,8 @@
  * Чисті функції без бази — тримають #2770–#2774.
  */
 
+import { accuracyReport } from "./rateAccuracy.js";
+
 export const RATINGS = ["ok", "high", "low", "no"] as const;
 export type Rating = (typeof RATINGS)[number];
 export const RATING_LABEL: Record<Rating, string> = { ok: "Точно", high: "Завищено", low: "Занижено", no: "Не допоміг" };
@@ -16,7 +18,7 @@ export class RateFeedbackError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-export interface FeedbackInput { usageId: number; rating: Rating; agreed: number | null; comment: string | null }
+export interface FeedbackInput { usageId: number; rating: Rating; agreed: number | null; agreedCarrier: number | null; comment: string | null }
 
 /** Тіло відгуку → перевірене значення; погоджена ставка — «44 000», «44000,50» чи порожньо. */
 export function parseFeedback(b: Record<string, unknown>): FeedbackInput {
@@ -24,14 +26,18 @@ export function parseFeedback(b: Record<string, unknown>): FeedbackInput {
   if (!Number.isInteger(usageId) || usageId <= 0) throw new RateFeedbackError(400, "Невідомий розрахунок");
   const rating = String(b.rating ?? "");
   if (!(RATINGS as readonly string[]).includes(rating)) throw new RateFeedbackError(400, "Оберіть оцінку");
-  const rawAgreed = String(b.agreed ?? "").replace(/[\s ₴]|грн/g, "").replace(",", ".");
-  let agreed: number | null = null;
-  if (rawAgreed) {
-    agreed = Number(rawAgreed);
-    if (!Number.isFinite(agreed) || agreed <= 0) throw new RateFeedbackError(400, "Погоджена ставка — число більше нуля");
-  }
+  // Погоджені ставки: клієнту і (з 30.10.2026) перевізнику — «44 000», «44000,50» чи порожньо; обидві необовʼязкові.
+  const money = (v: unknown, what: string): number | null => {
+    const raw = String(v ?? "").replace(/[\s ₴]|грн/g, "").replace(",", ".");
+    if (!raw) return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) throw new RateFeedbackError(400, `${what} — число більше нуля`);
+    return n;
+  };
+  const agreed = money(b.agreed, "Погоджена ставка");
+  const agreedCarrier = money(b.agreedCarrier, "Ставка перевізнику");
   const comment = String(b.comment ?? "").trim().slice(0, COMMENT_MAX) || null;
-  return { usageId, rating: rating as Rating, agreed, comment };
+  return { usageId, rating: rating as Rating, agreed, agreedCarrier, comment };
 }
 
 /** Календарний день по-київськи: «YYYY-MM-DD». */
@@ -88,7 +94,8 @@ export function snapshotOf(
 }
 
 export interface FeedbackRow {
-  rating: Rating; agreed: number | null; comment: string | null; at: Date; author: string | null;
+  rating: Rating; agreed: number | null; /** Погоджена ставка перевізнику (з 30.10.2026). */ agreedCarrier?: number | null;
+  comment: string | null; at: Date; author: string | null;
   frm: string; tox: string; calc: Partial<CalcSnapshot> | null;
 }
 interface Bucket { key: string; n: number; ok: number }
@@ -96,6 +103,7 @@ interface Bucket { key: string; n: number; ok: number }
 /**
  * Зведення: частка «Точно», середнє відхилення погодженої ставки від розрахованої (від середини діапазону клієнту),
  * розбивка за авто й зоною, останні коментарі. Відхилення «+» — погодили дорожче, тобто калькулятор занизив.
+ * З 30.10.2026 — ще й `accuracy` («порахували → вийшло», `core/rateAccuracy.ts`): пари з цінами й групи з медіаною.
  */
 export function feedbackStats(rows: FeedbackRow[], calculations: number) {
   const byRating = Object.fromEntries(RATINGS.map((r) => [r, 0])) as Record<Rating, number>;
@@ -126,6 +134,8 @@ export function feedbackStats(rows: FeedbackRow[], calculations: number) {
     byTonnage: bucket((r) => r.calc?.tonnage ?? "невідомо"),
     byZone: bucket((r) => r.calc?.zone ?? "невідомо"),
     comments: rows.filter((r) => r.comment).sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, 10)
-      .map((r) => ({ at: r.at.toISOString(), author: r.author ?? "—", route: `${r.frm} → ${r.tox}`, rating: r.rating, agreed: r.agreed, comment: r.comment })),
+      .map((r) => ({ at: r.at.toISOString(), author: r.author ?? "—", route: `${r.frm} → ${r.tox}`, rating: r.rating, agreed: r.agreed, comment: r.comment,
+        client_min: r.calc?.client_min ?? null, client_max: r.calc?.client_max ?? null })),
+    accuracy: accuracyReport(rows),
   };
 }

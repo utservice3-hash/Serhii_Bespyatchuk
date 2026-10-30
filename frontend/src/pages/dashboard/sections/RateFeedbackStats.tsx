@@ -1,32 +1,92 @@
 import { useEffect, useState } from "react";
-import { fetchRateFeedbackStats, type RateFeedbackStats as Stats, type RateFeedbackRating, type RateFeedbackBucket } from "../../../api";
+import { fetchRateFeedbackStats, type RateFeedbackStats as Stats, type RateFeedbackRating, type RateAccuracyGroup, type RateAccuracyPair } from "../../../api";
 
 /**
- * 🧮 Зведення відгуків «наскільки допоміг розрахунок» (Роман 27.10.2026). Бачать адмін, СЕО, ОД, КВП — межу тримає
- * сервер (право `view_rate_feedback`); без права (403) блок просто не показується, і перелогін не потрібен.
+ * 📐 «Порахували → вийшло» (Роман 30.10.2026): що калькулятор показав у момент розрахунку і на яку ставку домовились —
+ * рядок на відгук із відхиленням у %, і групи «де помиляємось» (найгірша перша). Раніше тут були лише частки оцінок
+ * і коментарі без цін — «статистика нічого не дає». Бачать адмін, СЕО, ОД, КВП — межу тримає сервер
+ * (право `view_rate_feedback`); без права (403) блок просто не показується, і перелогін не потрібен.
  */
 const ACC = "#c8102e";
 const LABEL: Record<RateFeedbackRating, string> = { ok: "Точно", high: "Завищено", low: "Занижено", no: "Не допоміг" };
 const ZONE: Record<string, string> = { green: "зелена", yellow: "жовта", red: "червона" };
 const PERIODS: [number, string][] = [[7, "Тиждень"], [30, "Місяць"], [90, "3 місяці"]];
 const pct = (v: number | null) => (v == null ? "—" : `${String(v).replace(".", ",")}%`);
+const signed = (v: number | null) => (v == null ? "—" : `${v > 0 ? "+" : ""}${pct(v)}`);
+const money = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("uk-UA"));
+const range = (lo: number | null | undefined, hi: number | null | undefined) => (lo == null ? "—" : hi == null || hi === lo ? money(lo) : `${money(lo)} – ${money(hi)}`);
+/** Відхилення: у межах ±10% — звичайний колір, до ±25% — помаранчевий, далі — червоний. */
+const devColor = (v: number | null) => (v == null ? "var(--text-muted)" : Math.abs(v) <= 10 ? "var(--text)" : Math.abs(v) <= 25 ? "#b45309" : ACC);
+const SOURCE_COLOR: Record<string, string> = { "ринок": "#2563eb", "тариф КВП": "#b45309" };
+const right = { textAlign: "right" as const };
+const muted = { color: "var(--text-muted)", fontSize: 13 };
 
-function Buckets({ title, rows, label }: { title: string; rows: RateFeedbackBucket[]; label?: (k: string) => string }) {
+function Groups({ title, col, rows, label }: { title: string; col: string; rows: RateAccuracyGroup[]; label?: (k: string) => string }) {
   return (
-    <div className="chart-card" style={{ flex: "1 1 320px", minWidth: 0 }}>
+    <div className="chart-card" style={{ flex: "1 1 360px", minWidth: 0 }}>
       <h2 className="chart-title">{title}</h2>
       <table className="data-table">
-        <thead><tr><th>{title.includes("зон") ? "Зона" : "Авто"}</th><th style={{ textAlign: "right" }}>Відгуків</th><th style={{ textAlign: "right" }}>«Точно»</th></tr></thead>
+        <thead><tr><th>{col}</th><th style={right}>Відгуків</th><th style={right}>З ціною</th><th style={right} title="медіана відхилення погодженої ставки від порахованої">Відхилення</th><th style={right} title="медіана |відхилення| — типова похибка">Похибка</th><th>Оцінки</th></tr></thead>
         <tbody>
-          {rows.length ? rows.map((b) => (
-            <tr key={b.key}><td>{label ? label(b.key) : b.key}</td><td style={{ textAlign: "right" }}>{b.n}</td>
-              <td style={{ textAlign: "right", fontWeight: 600 }}>{pct(Math.round((b.ok / b.n) * 1000) / 10)}</td></tr>
-          )) : <tr><td colSpan={3} style={{ color: "var(--text-muted)" }}>ще немає відгуків</td></tr>}
+          {rows.length ? rows.map((g) => (
+            <tr key={g.key}>
+              <td>{label ? label(g.key) : g.key}</td>
+              <td style={right}>{g.n}</td>
+              <td style={right}>{g.priced || "—"}</td>
+              <td style={{ ...right, fontWeight: 600, color: devColor(g.median_dev) }}>{signed(g.median_dev)}</td>
+              <td style={{ ...right, color: devColor(g.median_abs) }}>{g.median_abs == null ? "—" : `±${pct(g.median_abs)}`}</td>
+              <td style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                {([["ok", g.ok], ["high", g.high], ["low", g.low], ["no", g.no]] as [RateFeedbackRating, number][]).filter(([, n]) => n).map(([r, n]) => `${LABEL[r]} ${n}`).join(" · ") || "—"}
+              </td>
+            </tr>
+          )) : <tr><td colSpan={6} style={muted}>ще немає відгуків</td></tr>}
         </tbody>
       </table>
     </div>
   );
 }
+
+function Pairs({ rows }: { rows: RateAccuracyPair[] }) {
+  return (
+    <div className="chart-card" style={{ overflowX: "auto" }}>
+      <h2 className="chart-title">Порахували → вийшло</h2>
+      <div style={{ ...muted, fontSize: 12, marginBottom: 8 }}>
+        Кожен відгук, де вписали погоджену ставку: що калькулятор показав у момент розрахунку і на чому домовились.
+        «+» — домовились дорожче (калькулятор занизив), «−» — дешевше (завищив); відхилення — від середини показаного діапазону.
+      </div>
+      <table className="data-table" style={{ minWidth: 980 }}>
+        <thead><tr>
+          <th>Дата</th><th>Хто</th><th>Маршрут</th><th>Авто</th><th style={right}>км</th><th>Джерело</th>
+          <th style={right}>Порахували клієнту</th><th style={right}>Погодили</th><th style={right}>Відхилення</th>
+          <th style={right}>Порахували перевізнику</th><th style={right}>Погодили</th><th style={right}>Відхилення</th>
+          <th>Оцінка</th><th>Коментар</th>
+        </tr></thead>
+        <tbody>
+          {rows.length ? rows.map((p, i) => (
+            <tr key={i}>
+              <td style={{ whiteSpace: "nowrap" }}>{new Date(p.at).toLocaleDateString("uk-UA")}</td>
+              <td>{p.author}</td>
+              <td style={{ whiteSpace: "nowrap" }}>{p.route}</td>
+              <td style={{ whiteSpace: "nowrap" }}>{p.tonnage ?? "—"}</td>
+              <td style={right}>{p.km ?? "—"}</td>
+              <td style={{ color: SOURCE_COLOR[sourceLabel(p.source)] ?? "var(--text-muted)", whiteSpace: "nowrap" }}>{sourceLabel(p.source)}</td>
+              <td style={{ ...right, whiteSpace: "nowrap" }}>{range(p.client_min, p.client_max)}</td>
+              <td style={{ ...right, fontWeight: 600, whiteSpace: "nowrap" }}>{money(p.agreed)}</td>
+              <td style={{ ...right, fontWeight: 700, color: devColor(p.dev_pct) }}>{signed(p.dev_pct)}</td>
+              <td style={{ ...right, whiteSpace: "nowrap", color: "var(--text-muted)" }}>{range(p.carrier_min, p.carrier_max)}</td>
+              <td style={{ ...right, whiteSpace: "nowrap" }}>{money(p.agreed_carrier)}</td>
+              <td style={{ ...right, fontWeight: 600, color: devColor(p.dev_carrier_pct) }}>{signed(p.dev_carrier_pct)}</td>
+              <td style={{ whiteSpace: "nowrap" }}>{LABEL[p.rating]}</td>
+              <td style={{ fontSize: 13, maxWidth: 280 }}>{p.comment ?? ""}</td>
+            </tr>
+          )) : <tr><td colSpan={14} style={muted}>ще ніхто не вписав погоджену ставку — без неї порівнювати нема з чим</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const sourceLabel = (s: RateAccuracyPair["source"]) => (s === "market" ? "ринок" : s === "tariff" ? "тариф КВП" : "до 30.10 (тариф)");
 
 export function RateFeedbackStats() {
   const [days, setDays] = useState(30);
@@ -40,11 +100,11 @@ export function RateFeedbackStats() {
   if (state === "denied") return null;
   if (state === "error") return <div className="chart-card" style={{ marginBottom: 16 }}>Відгуки зараз недоступні — спробуйте пізніше.</div>;
   if (!d) return <p className="loading-text">Завантаження відгуків…</p>;
-  const dev = d.deviation;
+  const a = d.accuracy;
   return (
-    <section aria-label="Відгуки на розрахунок" style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 24 }}>
+    <section aria-label="Точність розрахунку" style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 24 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-        <h2 className="chart-title" style={{ margin: 0 }}>Відгуки: наскільки допоміг розрахунок</h2>
+        <h2 className="chart-title" style={{ margin: 0 }}>Точність калькулятора: порахували → вийшло</h2>
         <span style={{ flex: 1 }} />
         {PERIODS.map(([n, l]) => (
           <button key={n} type="button" onClick={() => setDays(n)} aria-pressed={days === n}
@@ -53,12 +113,12 @@ export function RateFeedbackStats() {
         ))}
       </div>
       <div className="kpi-grid">
+        <div className="kpi-card">
+          <span className="kpi-value" style={{ color: devColor(a.median_dev) }}>{signed(a.median_dev)}</span>
+          <span className="kpi-label">{a.priced ? `медіана відхилення · ${a.priced} з ціною · типова похибка ±${pct(a.median_abs)}` : "ще ніхто не вписав погоджену ставку"}</span>
+        </div>
         <div className="kpi-card"><span className="kpi-value" style={{ color: ACC }}>{pct(d.okShare)}</span><span className="kpi-label">«Точно, взяв цю ставку»</span></div>
         <div className="kpi-card"><span className="kpi-value">{d.total}</span><span className="kpi-label">відгуків · {pct(d.coverage)} від {d.calculations} розрахунків</span></div>
-        <div className="kpi-card">
-          <span className="kpi-value">{dev ? `${dev.avg > 0 ? "+" : ""}${pct(dev.avg)}` : "—"}</span>
-          <span className="kpi-label">{dev ? `погоджена ставка проти розрахованої · ${dev.n} з сумою` : "ще ніхто не вписав погоджену ставку"}</span>
-        </div>
         <div className="kpi-card">
           <span className="kpi-value" style={{ fontSize: 15, lineHeight: 1.5 }}>
             {(Object.keys(LABEL) as RateFeedbackRating[]).map((r) => `${LABEL[r]} ${d.byRating[r]}`).join(" · ")}
@@ -66,12 +126,16 @@ export function RateFeedbackStats() {
           <span className="kpi-label">оцінки</span>
         </div>
       </div>
-      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8 }}>
-        «+» — погодили дорожче, ніж порахував калькулятор (занижує); «−» — дешевше (завищує). Порівнюємо із серединою діапазону «Ставка клієнту».
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
-        <Buckets title="За авто" rows={d.byTonnage} />
-        <Buckets title="За зоною карти" rows={d.byZone} label={(k) => ZONE[k] ?? k} />
+      <Pairs rows={a.pairs} />
+      <div>
+        <h2 className="chart-title" style={{ marginBottom: 4 }}>Де помиляємось</h2>
+        <div style={{ ...muted, fontSize: 12, marginBottom: 8 }}>Групи за джерелом ціни, авто, відстанню й зоною — найбільша похибка зверху. Оцінки — за всіма відгуками, відхилення — лише за тими, де є ціна.</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
+          <Groups title="За джерелом ціни" col="Джерело" rows={a.bySource} />
+          <Groups title="За авто" col="Авто" rows={a.byTonnage} />
+          <Groups title="За відстанню" col="Відстань" rows={a.byDistance} />
+          <Groups title="За зоною карти" col="Зона" rows={a.byZone} label={(k) => ZONE[k] ?? k} />
+        </div>
       </div>
       <div className="chart-card">
         <h2 className="chart-title">Останні коментарі</h2>
@@ -80,13 +144,15 @@ export function RateFeedbackStats() {
             {d.comments.map((c, i) => (
               <div key={i} style={{ borderTop: i ? "1px solid var(--border)" : undefined, paddingTop: i ? 10 : 0 }}>
                 <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                  {new Date(c.at).toLocaleDateString("uk-UA")} · {c.author} · {c.route} · {LABEL[c.rating]}{c.agreed ? ` · погодили ${c.agreed.toLocaleString("uk-UA")} грн` : ""}
+                  {new Date(c.at).toLocaleDateString("uk-UA")} · {c.author} · {c.route} · {LABEL[c.rating]}
+                  {c.client_min != null ? ` · порахували ${range(c.client_min, c.client_max)} грн` : ""}
+                  {c.agreed ? ` → погодили ${money(c.agreed)} грн` : ""}
                 </div>
                 <div style={{ fontSize: 14, marginTop: 2 }}>{c.comment}</div>
               </div>
             ))}
           </div>
-        ) : <div style={{ color: "var(--text-muted)", fontSize: 13 }}>коментарів поки немає</div>}
+        ) : <div style={muted}>коментарів поки немає</div>}
       </div>
     </section>
   );

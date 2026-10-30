@@ -230,3 +230,14 @@ test("#390i порожньо ≠ відмова: чотири двері 1×1 в
     "   /stats/scores, /enps, /analytics. `/conduct-types` НАВМИСНО лишається 200 — це\n" +
     "   довідка, з якої фронт дізнається, що людині доступно.");
 });
+
+test("#2812 PROZORRO НЕ ДЛЯ ФІНАНСИСТА — ЗНЯТТЯ В СХЕМІ ПІСЛЯ СИНКУ «financier = екрани адміна»", () => {
+  // Роман 29.10.2026: «фінансист не має бачити прозорро, його весь час хтось включає». Вимкнене в Налаштуваннях
+  // повернув викат 4c13577 (30.10): синк копіює екрани адміна фінансисту — той самий механізм, що в #741/#741b.
+  const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
+  const sync = schema.indexOf("screen_access = (SELECT screen_access FROM roles WHERE key='admin')");
+  const strip = schema.indexOf("UPDATE roles SET screen_access = screen_access - 'prozorro'\n WHERE key = 'financier';");
+  assert.ok(sync > 0, "🔴 синку «financier = екрани адміна» в схемі немає — гейт міряє не те");
+  assert.ok(strip > 0, "🔴 зняття prozorro у фінансиста в схемі немає — наступний викат знову його увімкне");
+  assert.ok(strip > sync, "🔴 зняття стоїть ПЕРЕД синком — синк перекриє його тим самим прогоном");
+});

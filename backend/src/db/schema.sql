@@ -7325,3 +7325,15 @@ UPDATE lardi_offers o SET from_lat = t.lat, from_lon = t.lon FROM towns_geo t
 UPDATE lardi_offers o SET to_lat = t.lat, to_lon = t.lon FROM towns_geo t
   WHERE o.to_lat IS NULL AND o.tox IS NOT NULL AND t.name_key = lower(regexp_replace(btrim(o.tox), '[’''`ʼ]', '', 'g'));
 CREATE INDEX IF NOT EXISTS idx_lardi_offers_market ON lardi_offers (first_seen) WHERE side = 'cargo' AND is_uah AND from_lat IS NOT NULL;
+
+-- ═══ 📐 «ПОРАХУВАЛИ → ВИЙШЛО» (Роман 30.10.2026; core/rateAccuracy.ts) ═══
+-- Ставка ПЕРЕВІЗНИКУ, на яку домовились: саме її прогнозує ринок (клієнтська = перевізнику + маржа), тож без неї
+-- ринкову ціну нема з чим звіряти. Необовʼязкова. Відкат даних: ALTER TABLE rate_feedback DROP COLUMN agreed_carrier;
+ALTER TABLE rate_feedback ADD COLUMN IF NOT EXISTS agreed_carrier NUMERIC(12,2) CHECK (agreed_carrier IS NULL OR agreed_carrier > 0);
+
+-- 🙅 «Тендери Prozorro» — НЕ для фінансиста (рішення Романа 29.10.2026: «фінансист не має бачити прозорро, його весь час
+-- хтось включає»). «Хтось» — це сам викат: синк «financier = екрани адміна» вище копіює фінансисту кожен екран адміна,
+-- і вимкнене 29.10 у Налаштуваннях повернулось на викаті 4c13577 30.10 (матриця #11: 403 → 400) без запису в аудиті —
+-- той самий механізм, що з «Наймом» (#741) і БА (#741b). Зняття — тут, ПІСЛЯ синку. Тримає #2812.
+UPDATE roles SET screen_access = screen_access - 'prozorro'
+ WHERE key = 'financier';
