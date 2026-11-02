@@ -2,6 +2,8 @@ import { pool } from "../db/pool.js";
 import { QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 import { FC_PIPELINES, successForSources } from "./money.js";
 import { RNK_TEAM_IDS, NON_COMMERCIAL_TEAM_IDS } from "./metrics.js";
+/** Група «решта комерційних команд» у таблиці часу опрацювання (30.10.2026: без «РПК» у підписах, задача 7371). */
+const REPEAT_GROUP = "Постійні клієнти";
 import { teamAtSql } from "./teamAt.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import { elogistMarkSql } from "./elogist.js";
@@ -122,7 +124,7 @@ async function loadRows(q: TakeQuery): Promise<Row[]> {
       duplicate: isDuplicateLost(x.status_id, x.reject_reason) });
     const status = x.status_id === "142" ? "won" : x.status_id === "143" ? "lost" : "open";
     const group = x.team_id != null && rnk.has(x.team_id) ? (x.team ?? `Команда #${x.team_id}`)
-      : x.team_id != null && !nonCom.has(x.team_id) ? "РПК" : "Інші";
+      : x.team_id != null && !nonCom.has(x.team_id) ? REPEAT_GROUP : "Інші";
     rows.push({
       take, lost: status === "lost",
       d: {
@@ -152,8 +154,8 @@ export interface TakeTable {
   campaigns: { campaign: string; n: number }[];
 }
 
-/** Порядок груп: РНК-команди за назвою, далі «РПК», «Інші» в кінці. */
-const groupOrder = (g: string) => (g === "Інші" ? 2 : g === "РПК" ? 1 : 0);
+/** Порядок груп: команди відділу нових клієнтів за назвою, далі «Постійні клієнти», «Інші» в кінці. */
+const groupOrder = (g: string) => (g === "Інші" ? 2 : g === REPEAT_GROUP ? 1 : 0);
 
 export async function leadTakeTable(q: TakeQuery): Promise<TakeTable> {
   const [rows, succ] = await Promise.all([loadRows(q), successForSources({ from: q.from, to: q.to }, AD_SOURCES)]);

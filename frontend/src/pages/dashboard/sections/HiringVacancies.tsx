@@ -287,7 +287,7 @@ function AddVacancy({ meta, onClose, onDone }: { meta: HiringMeta; onClose: () =
       <div className="hr-modal" style={{ maxWidth: 520 }} role="dialog" aria-label="Нова вакансія" onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 12px", fontSize: 16 }}>Нова вакансія</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 10 }}>
-          {f("title", "Назва", { placeholder: "Менеджер з продажу (РНК)", autoFocus: true })}
+          {f("title", "Назва", { placeholder: "Менеджер з продажу", autoFocus: true })}
           {f("openedBy", "Хто відкрив", { placeholder: "Безпамʼятний" })}
           {f("responsible", "Веде", { list: "hr-vac-resp" })}
           {f("need", "Скільки людей потрібно", { type: "number", min: 0 })}

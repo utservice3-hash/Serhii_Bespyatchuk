@@ -115,7 +115,7 @@ export function OfferTemplatesTab({ toast }: { toast: Toast }) {
           (напр. <b>{"{{Ставка}}"}</b>, <b>{"{{Дата старту}}"}</b>) HR дописує перед формуванням. Збережіть як .docx і завантажте сюди.
         </div>
         <div className="page-filters">
-          <input className="hr-inp" placeholder="Назва: напр. «Офер РПК»" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Назва шаблону" style={{ minWidth: 220 }} />
+          <input className="hr-inp" placeholder="Назва: напр. «Офер менеджера з продажу»" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Назва шаблону" style={{ minWidth: 220 }} />
           <label className="hr-btn" style={{ cursor: "pointer" }}>
             {file ? file.name : "Обрати .docx…"}
             <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style={{ display: "none" }} onChange={(e) => setFile(e.target.files?.[0] ?? null)} />

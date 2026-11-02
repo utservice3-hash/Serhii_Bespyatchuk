@@ -5,6 +5,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { calendarAccountsSql, absencesSql, isMine, ownScopeSql, resolveOwner } from "../core/absences.js";
 import { vacationIssuesFor, issueText, canApproveVacationRules, onVacationSql, VACATION_RULE_APPROVER_LABEL, type VacationIssue } from "../core/vacationRules.js";
 import { kyivToday } from "../core/dates.js";
+import { RNK_TEAM_IDS } from "../core/metrics.js";
 
 /**
  * Графік чергування. Тімлід (РНК) призначає менеджерів своєї команди на дні,
@@ -30,7 +31,9 @@ const SHIFTS = new Set(["day", "evening", "weekend"]);
 
 // У чергуванні беруть участь ЛИШЕ команди РНК (робота з наявними клієнтами),
 // включно з їхніми тімлідами. Менеджерів РПК/інших до графіка не пропонуємо.
-const RNK_TEAM = "t.name ILIKE '%РНК%'";
+// 🔢 За НОМЕРОМ команди, а не за словом у назві (30.10.2026, задача 7371): назви приходять із Kommo, і з них прибирають
+// «РНК/РПК» — пошук `ILIKE '%РНК%'` після перейменування відмовив би всім. Джерело номерів — `metrics.RNK_TEAM_IDS`.
+const RNK_TEAM = `t.id = ANY(ARRAY[${RNK_TEAM_IDS.join(", ")}]::int[])`;
 
 /** Менеджери, доступні для призначення тому, хто дивиться (лід → своя команда). */
 async function assignableManagers(auth: { role: string; teamId: number | null }, teamId: number | null) {
@@ -128,7 +131,7 @@ dutyRouter.post("/", async (req, res) => {
   }
   // Команда менеджера + гейт для тімліда (лише своя команда) + лише РНК-команди.
   const mgr = await pool.query<{ team_id: number | null; is_rnk: boolean }>(
-    `SELECT m.team_id, (t.name ILIKE '%РНК%') AS is_rnk
+    `SELECT m.team_id, (${RNK_TEAM}) AS is_rnk
        FROM managers m LEFT JOIN teams t ON t.id = m.team_id
       WHERE m.id = $1 AND m.is_active`, [managerId]);
   if (!mgr.rowCount) return res.status(404).json({ error: "Менеджера не знайдено" });
@@ -136,7 +139,7 @@ dutyRouter.post("/", async (req, res) => {
   // Тімлід — лише своя РНК-команда (як було). Адмін — будь-яка команда (РНК і РПК): RNK-гейт
   // до адміна НЕ застосовуємо (рішення власника — адмін може призначити чергового і в РПК).
   if (auth.role === "team_lead") {
-    if (!mgr.rows[0].is_rnk) return res.status(400).json({ error: "У чергуванні беруть участь лише команди РНК" });
+    if (!mgr.rows[0].is_rnk) return res.status(400).json({ error: "У чергуванні беруть участь лише команди відділу нових клієнтів" });
     if (teamId !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
   }
   const r = await pool.query<{ id: number }>(

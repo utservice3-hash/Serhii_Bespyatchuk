@@ -1516,7 +1516,7 @@ function DayDrill({ managerId, period, focusDay, today, weeksFirst }: { managerI
 
 // #18 — застряглі угоди (реюз КВП /stuck-deals, роль-скоуп за токеном; найдовші вгорі).
 // Тег команди → підпис + колір (РПК/РНК/лідоген).
-const STUCK_TAG: Record<string, { label: string; c: string }> = { rpk: { label: "РПК", c: BAR }, rnk: { label: "РНК", c: "#7a52c7" }, leadgen: { label: "ЛГ", c: GREEN } };
+const STUCK_TAG: Record<string, { label: string; c: string }> = { rpk: { label: "Постійні", c: BAR }, rnk: { label: "Нові", c: "#7a52c7" }, leadgen: { label: "ЛГ", c: GREEN } };
 // Стадія → чип-колір.
 const STUCK_STAGE_C = (s: string) => s === "Авто працює" ? GREEN : s === "Взято в роботу" ? BAR : AMBER;
 const idleColor = (d: number) => d >= 90 ? RED : d >= 21 ? AMBER : MUTED;
