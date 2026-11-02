@@ -87,7 +87,7 @@ const HINT: Record<string, string> = {
     + "не сховано, і входять у Σ (інваріант «нові + постійні + залишок == каса» тримається точно). "
     + "СУМА БУВАЄ ВІДʼЄМНОЮ, і це не помилка: сюди потрапляють мінусові угоди (сторно/повернення), "
     + "а ядро їх нетить — рівно як задумано. Дивитись треба на кількість угод поруч, а не лише на суму.",
-  newRepeat: "Нові/постійні (client-grain лінз): клієнт з першою оплатою в періоді = новий. ОКРЕМО від відділу команди (постійні / нові клієнти — то ознака команди). Кожен клієнт → primary-менеджер, Σ = відділ.",
+  newRepeat: "Нові/постійні (client-grain лінз): клієнт з першою оплатою в періоді = новий. ОКРЕМО від каналу команди (реклама / повний цикл — то ознака команди). Кожен клієнт → primary-менеджер, Σ = відділ.",
   // 🔴 ПІДПИС ПЕРЕПИСАНО 18.08.2026 РАЗОМ ІЗ ПРАВИЛОМ. Тут стояв дослівний опис
   // старої логіки («B=канал угоди: реклама/лідоген → новий»), і лишити його означало
   // б лишити на екрані підпис, який описує вже неіснуюче правило. Тримає гейт `#67e`.
@@ -98,7 +98,7 @@ const HINT: Record<string, string> = {
   expected: "Очікування менеджера = його угоди в зоні виставлено→оплата (знімок).",
 };
 
-const teamKindLabel: Record<string, string> = { rpk: "Постійні клієнти · повний цикл", rnk: "Нові клієнти · реклама", leadgen: "Лідогенерація" };
+const teamKindLabel: Record<string, string> = { rpk: "Повний цикл", rnk: "Реклама", leadgen: "Лідогенерація" };
 
 // Блок B — секція «Логістика». Чесні мітки: ✓ пряме джерело · ~ проксі/наближення · ✗ нема даних.
 // ⓘ у ТІЙ САМІЙ позиції, що в решті звіту (поряд із заголовком, у flex-лейблі) — тултіп працює.
@@ -397,7 +397,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                   {rep.teams.map((t) => (
                     <Fragment key={t.teamId}>
                       <tr onClick={() => setOpenTeam(openTeam === t.teamId ? null : t.teamId)} style={{ cursor: "pointer" }}>
-                        <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з відділом постійних клієнтів / повним циклом)." />}</span></td>
+                        <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з командами повного циклу)." />}</span></td>
                         <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}<RemainingLine v={t.remainingToPlan} /></td>
                         <td><div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Факт ${fmtPct(t.pct)} · з очікуванням за плановою датою ${fmtPct(t.forecastPct)}`}><PlanBar factPct={t.pct} forecastPct={t.forecastPct} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
@@ -568,7 +568,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
 
           {/* ── ДВИГУНИ (4) ── */}
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
-            {([["🏭 Постійні клієнти", rep.engines.rpk, false], ["📢 Нові клієнти", rep.engines.rnk, true]] as const).map(([lbl, e, showConv]) => (
+            {([["🏭 Повний цикл", rep.engines.rpk, false], ["📢 Реклама", rep.engines.rnk, true]] as const).map(([lbl, e, showConv]) => (
               <div key={lbl} className="chart-card">
                 <h2 className="chart-title">{lbl}</h2>
                 <Stat label="Факт / план" value={`${fmtMoney(e.revenue)}`} sub={`план ${fmtMoney(e.plan)} · ${fmtPct(e.pct)}`} color={pctColor(e.pct)} hint={HINT.teamPlan} />

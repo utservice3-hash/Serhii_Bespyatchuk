@@ -480,3 +480,33 @@ test("#3302 у текстах інтерфейсу немає «РНК»/«РП�
   const hits = files.filter((f) => RNK_RPK.test(stripComments(readFileSync(f, "utf8")))).map((f) => path.relative(ROOT, f));
   assert.deepEqual(hits, [], `🔴 «РНК/РПК» в інтерфейсі: ${hits.join(", ")}`);
 });
+
+/**
+ * 🏷 ПОДІЛ КОМАНД — ЗА КАНАЛОМ, А НЕ «НОВІ / ПОСТІЙНІ КЛІЄНТИ» (Роман 02.11.2026, варіант А, назви «1»).
+ * Логіка поділу лишається (номінації, чергування, конверсія реклами), групи на екрані звуться «Реклама» /
+ * «Повний цикл». Сегмент КЛІЄНТА («Нові — отримано», плани нових/постійних, екран «Постійні клієнти») — інше
+ * поняття, і гейт його свідомо не чіпає: шукає лише форми, якими називали ВІДДІЛ.
+ */
+const DIVISION_WORDING = /відділ(?:у|ом|і)? (?:роботи з )?(?:нових|новими|постійних|постійними) клієнт|(?:Нові|Постійні) клієнти ·|Переможець · (?:нові|постійні)|Менеджер з продажу \((?:нові|постійні)|REPEAT_GROUP = "Постійні|label: "(?:Нові|Постійні)", c:/;
+
+test("#3309 поділ команд на екрані — «Реклама / Повний цикл»; «відділ нових / постійних клієнтів» не повертається", async () => {
+  const { readdirSync, statSync } = await import("node:fs");
+  const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => {
+    const p = path.join(dir, f);
+    return statSync(p).isDirectory() ? walk(p) : /\.(tsx?|css)$/.test(f) && !/\.test\.tsx?$/.test(f) ? [p] : [];
+  });
+  // Контроль по обидва боки: назва відділу ловиться, сегмент клієнта — ні.
+  assert.match(`"Статистика відділу нових клієнтів"`, DIVISION_WORDING);
+  assert.match(`{ rpk: "Постійні клієнти · повний цикл" }`, DIVISION_WORDING);
+  assert.doesNotMatch(`{ label: "Нові — отримано", hint: "Каса нових клієнтів" } "Постійні клієнти"`, DIVISION_WORDING);
+  const files = [
+    ...walk(path.join(ROOT, "frontend/src")),
+    ...["routes/duty.ts", "routes/nominations.ts", "statistics/seriesCatalog.ts", "core/nominationRules.ts",
+      "core/leadTake.ts", "core/hiring.ts"].map((f) => path.join(ROOT, "backend/src", f)),
+  ];
+  assert.ok(files.length > 100, `🔴 сканер пройшов лише ${files.length} файлів — простір задано не так`);
+  const hits = files.filter((f) => DIVISION_WORDING.test(stripComments(readFileSync(f, "utf8")))).map((f) => path.relative(ROOT, f));
+  assert.deepEqual(hits, [], `🔴 поділ команд знову названо «нові / постійні клієнти»: ${hits.join(", ")}`);
+  const kvp = readFileSync(path.join(ROOT, "frontend/src/pages/dashboard/sections/KvpReportSection.tsx"), "utf8");
+  assert.match(kvp, /\{ rpk: "Повний цикл", rnk: "Реклама", leadgen: "Лідогенерація" \}/, "🔴 підпис каналу під командою у Звіті КВП зник");
+});
