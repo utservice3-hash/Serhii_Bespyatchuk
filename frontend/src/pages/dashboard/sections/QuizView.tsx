@@ -131,45 +131,51 @@ export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel,
   if (err && !me) return <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>;
   if (!me) return <p className="loading-text">Завантаження…</p>;
   const need = Math.ceil((me.passPct * me.questionCount) / 100);
+  const errNote = err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>;
+  const leftWord = (n: number) => (n === 1 ? "спроба лишилась" : n >= 2 && n <= 4 ? "спроби лишилось" : "спроб лишилось");
+
+  // 🎨 ВИГЛЯД (02.11.2026, Роман: «кнопки й поля розкидані — зроби гарно»; макет «Екрани тесту UTS»): кожен екран —
+  // ОДНА картка: шапка (що це й де ми), тіло, підвал із дією. Нічого не «плаває» по фону розділу.
 
   // ── Результат щойно завершеної спроби ─────────────────────────────────
   if (result) {
     const wrong = result.results.filter((x) => !x.ok);
+    const byExit = result.endedBy === "violations";
+    const leftText = result.left > 0 ? `Лишилось спроб: ${result.left}.` : "Спроби закінчились — тімлід або рекрутер може дати ще одну.";
     return (
-      <div className="qz">
-        <div className="qz-score">
+      <div className="qz-card">
+        <div className="qz-res-top">
           <Ring pct={result.pct} ok={result.passed} sub={`${result.right} з ${result.total}`} />
-          <div className="qz-score-t">
-            <h2>{result.passed ? "Тест складено" : result.endedBy === "violations" ? "Тест не зараховано" : "Тест не складено"}</h2>
-            {result.endedBy === "violations" ? <div className="qz-banner bad"><b>Ви 3 рази виходили з тесту</b>
-              <span>Спробу завершено як не складену, незалежно від відповідей. Тімлід і рекрутер бачать причину. {result.left > 0 ? `Лишилось спроб: ${result.left}.` : "Спроби закінчились — тімлід або рекрутер може дати ще одну."}</span></div>
-            : result.passed
-              ? <div className="qz-banner ok"><b>Наступну тему відкрито</b><span>Рекрутер і ваш тімлід бачать результат: {result.right} з {result.total}.</span></div>
-              : <div className="qz-banner bad"><b>Потрібно {need} з {result.total}, у вас {result.right}</b>
-                  <span>{result.left > 0 ? `Лишилось спроб: ${result.left}. Перегляньте уроки з помилками нижче й спробуйте знову.` : "Спроби закінчились — тімлід або рекрутер може дати ще одну."}</span></div>}
-            <div className="qz-actions">
-              {result.passed
-                ? (onNext && nextLabel ? <button className="hr-btn p" onClick={onNext}>{nextLabel} →</button> : null)
-                : result.left > 0 && <button className="hr-btn p" disabled={busy} onClick={() => void begin()}>Спробувати ще раз</button>}
-            </div>
+          <div className="qz-verdict">
+            {result.passed ? <span className="qz-tag ok">✓ Складено</span> : byExit ? <span className="qz-tag warn">⛶ Не зараховано</span> : <span className="qz-tag bad">✗ Не складено</span>}
+            <h2>{result.passed ? "Наступну тему відкрито" : byExit ? "Ви 3 рази виходили з тесту" : `Потрібно ${need} з ${result.total}, у вас ${result.right}`}</h2>
+            <p>{result.passed ? `Рекрутер і ваш тімлід бачать результат: ${result.right} з ${result.total}.`
+              : byExit ? `Спробу завершено як не складену, незалежно від відповідей. Тімлід і рекрутер бачать причину. ${leftText}`
+              : `${leftText}${result.left > 0 ? " Перегляньте уроки з помилками нижче й спробуйте знову." : ""}`}</p>
           </div>
         </div>
-        <h3 className="qz-h">{wrong.length ? `Де помилились (${wrong.length})` : "Помилок немає"}</h3>
-        <div className="qz-res-list">
+        <div className="qz-foot">
+          <span className="qz-hint">{me.title}</span>
+          {result.passed
+            ? (onNext && nextLabel ? <button className="qz-btn" onClick={onNext}>{nextLabel} →</button> : null)
+            : result.left > 0 && <button className="qz-btn" disabled={busy} onClick={() => void begin()}>Спробувати ще раз</button>}
+        </div>
+        <div className="qz-mist">
+          <h3>{wrong.length ? `Де помилились · ${wrong.length}` : "Помилок немає"}</h3>
           {wrong.map((x) => (
-            <div key={x.id} className="qz-res">
-              <span className="m">✗</span>
+            <div key={x.id} className="qz-m">
+              <span className="x">✗</span>
               <div>
                 <b>{x.text}</b>
-                {x.late && <div className="qz-late">⏱ Час вийшов — відповідь не зарахована</div>}
+                {x.late && <span className="qz-late">⏱ Час вийшов — відповідь не зарахована</span>}
                 {x.explanation && <p>{x.explanation}</p>}
                 {x.source && onOpenLesson && <button className="qz-link" onClick={() => onOpenLesson(x.source!)}>Повторити урок «{x.source}» →</button>}
               </div>
             </div>
           ))}
-          {!wrong.length && <p className="hr-muted" style={{ margin: 0 }}>Усі {result.total} відповідей правильні.</p>}
+          {!wrong.length && <p className="qz-hint">Усі {result.total} відповідей правильні.</p>}
+          {errNote}
         </div>
-        {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>}
       </div>
     );
   }
@@ -180,87 +186,115 @@ export function QuizView({ materialId, intro, onPassed, onOpenLesson, nextLabel,
     const answered = a != null && (Array.isArray(a) ? a.length > 0 : String(a).trim() !== "");
     const secs = Math.ceil(left);
     const last = step.index + 1 >= step.total;
+    const kindText = q.kind === "multi" ? "оберіть усі правильні" : q.kind === "number" ? "введіть число" : "одна правильна відповідь";
     return (
-      <div className="qz qz-fs">
+      <div className="qz-fs">
+        <div className="qz-card qz-run">
+          <div className="qz-head">
+            <div className="qz-head-t">
+              <div className="qz-eyebrow">Питання {step.index + 1} з {step.total} · {kindText}</div>
+              <h1>{me.title}</h1>
+            </div>
+            <TimerRing left={left} limit={step.limitSec} secs={secs} />
+          </div>
+          <div className="qz-steps" aria-hidden="true">
+            {Array.from({ length: step.total }, (_, i) => <i key={i} className={i < step.index ? "done" : i === step.index ? "cur" : ""} />)}
+          </div>
+          <div className="qz-body">
+            <p className="qz-q">{q.text}</p>
+            {q.kind === "number" ? (
+              <div className="qz-numin">
+                <input id={`qz-num-${q.id}`} inputMode="decimal" placeholder="0" aria-label="Відповідь числом" autoFocus
+                  value={typeof a === "string" || typeof a === "number" ? String(a) : ""} onChange={(e) => setA(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && answered && !busy) void send(a!); }} />
+              </div>
+            ) : (
+              <div className="qz-opts">
+                {(q.options ?? []).map((o, n) => {
+                  const sel = q.kind === "multi" ? Array.isArray(a) && a.includes(o.i) : a === o.i;
+                  return (
+                    <button key={o.i} type="button" className={`qz-opt${q.kind === "multi" ? " multi" : ""}${sel ? " sel" : ""}`} aria-pressed={sel}
+                      onClick={() => {
+                        if (q.kind === "multi") { const st = new Set(Array.isArray(a) ? a : []); if (st.has(o.i)) st.delete(o.i); else st.add(o.i); setA([...st].sort((x, y) => x - y)); }
+                        else setA(o.i);
+                      }}>
+                      <span className="k">{q.kind === "multi" ? (sel ? "✓" : "") : LETTERS[n] ?? n + 1}</span><span>{o.text}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {errNote}
+          </div>
+          <div className="qz-foot">
+            <span className="qz-hint">↺ Повернутись до попереднього питання не можна</span>
+            <button className="qz-btn" disabled={busy || !answered} onClick={() => void send(a!)}>
+              {busy ? "Зберігаємо…" : last ? "Завершити тест" : "Відповісти →"}</button>
+          </div>
+        </div>
         {warn && (
           <div className="qz-warn" role="alertdialog" aria-modal="true" aria-labelledby="qz-warn-h">
             <div className="qz-warn-box">
+              <div className="ic">!</div>
               <h3 id="qz-warn-h">{warn.n ? `Попередження ${warn.n} з ${warn.limit - 1}` : "Ви вийшли з тесту"}</h3>
+              <div className="qz-dots" aria-hidden="true">{Array.from({ length: warn.limit }, (_, i) => <i key={i} className={i < warn.n ? "on" : ""} />)}</div>
               <p>Ви {VIOLATION_TEXT[warn.kind]}. {warn.n >= warn.limit - 1
                 ? "Наступний вихід завершить тест як не складений."
-                : `Ще ${warn.limit - warn.n} виходи — і тест не буде зараховано.`}</p>
-              <p className="hr-muted">Таймер питання не зупинявся.</p>
-              <button className="hr-btn p" autoFocus onClick={backToQuiz}>Повернутись до тесту</button>
+                : `Ще ${warn.limit - warn.n} виходи — і тест не буде зараховано.`} Таймер питання не зупинявся.</p>
+              <button className="qz-btn" autoFocus onClick={backToQuiz}>Повернутись до тесту</button>
             </div>
           </div>
         )}
-        <div className="qz-top">
-          <span className="hr-pill gr">{me.title} · спроба {me.used + 1}</span>
-          <span className={`qz-timer${secs <= 10 ? " low" : ""}`} role="timer" aria-label={`Лишилось ${secs} секунд`}>⏱ {secs} с</span>
-        </div>
-        <div className="lr-bar qz-tbar"><i style={{ width: `${Math.max(0, Math.min(100, (left / step.limitSec) * 100))}%` }} /></div>
-        <div className="qz-kind">Питання {step.index + 1} з {step.total} · {q.kind === "multi" ? "оберіть усі правильні" : q.kind === "number" ? "введіть число" : "одна правильна відповідь"}</div>
-        <div className="qz-text">{q.text}</div>
-        {q.kind === "number" ? (
-          <div className="qz-numin">
-            <input id={`qz-num-${q.id}`} className="hr-inp" inputMode="decimal" placeholder="Ваша відповідь" aria-label="Відповідь числом" autoFocus
-              value={typeof a === "string" || typeof a === "number" ? String(a) : ""} onChange={(e) => setA(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && answered && !busy) void send(a!); }} />
-          </div>
-        ) : (
-          <div className="qz-opts">
-            {(q.options ?? []).map((o) => {
-              const sel = q.kind === "multi" ? Array.isArray(a) && a.includes(o.i) : a === o.i;
-              return (
-                <button key={o.i} type="button" className={`qz-opt${q.kind === "multi" ? " multi" : ""}${sel ? " sel" : ""}`} aria-pressed={sel}
-                  onClick={() => {
-                    if (q.kind === "multi") { const st = new Set(Array.isArray(a) ? a : []); if (st.has(o.i)) st.delete(o.i); else st.add(o.i); setA([...st].sort((x, y) => x - y)); }
-                    else setA(o.i);
-                  }}>
-                  <span className="mk" /><span>{o.text}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-        <div className="qz-foot">
-          <span className="hr-muted" style={{ fontSize: 12 }}>Повернутись до попереднього питання не можна</span>
-          <button className="hr-btn p" disabled={busy || !answered} onClick={() => void send(a!)}>
-            {busy ? "Зберігаємо…" : last ? "Завершити тест" : "Відповісти →"}</button>
-        </div>
-        {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>}
       </div>
     );
   }
 
   // ── Вступ / підсумок, якщо вже складено ─────────────────────────────
-  const last = me.attempts[me.attempts.length - 1];
+  const prev = me.attempts[me.attempts.length - 1];
+  const limits = me.limitMinSec === me.limitMaxSec ? `${me.limitMinSec} секунд на питання` : `${me.limitMinSec}–${me.limitMaxSec} секунд на питання`;
   return (
-    <div className="qz">
-      {me.passed && <div className="qz-banner ok"><b>Тест складено · {me.bestPct}%</b><span>Наступна тема відкрита.</span></div>}
-      {intro && <p className="qz-introtext">{intro}</p>}
-      {!me.passed && last && <div className="qz-banner bad"><b>Минула спроба: {last.right} з {last.total} ({last.pct}%)</b><span>Потрібно {need} з {me.questionCount}.</span></div>}
-      <div className="qz-intro">
-        <div><b>{me.questionCount}</b><span>питань</span></div>
-        <div><b>{need} з {me.questionCount}</b><span>щоб скласти ({me.passPct}%)</span></div>
-        <div><b>{me.passed ? "—" : me.left}</b><span>{me.passed ? "спроби більше не потрібні" : me.left === 1 ? "спроба лишилась" : "спроб лишилось"}</span></div>
+    <div className="qz-card">
+      <div className="qz-body">
+        {me.passed && <div className="qz-banner ok"><b>Тест складено · {me.bestPct}%</b><span>Наступна тема відкрита.</span></div>}
+        {!me.passed && prev && <div className="qz-banner bad"><b>Минула спроба: {prev.right} з {prev.total} ({prev.pct}%)</b><span>Потрібно {need} з {me.questionCount}.</span></div>}
+        {intro && <p className="qz-introtext">{intro}</p>}
+        <div className="qz-facts">
+          <div><b>{me.questionCount}</b><span>питань</span></div>
+          <div><b>{need} з {me.questionCount}</b><span>щоб скласти ({me.passPct}%)</span></div>
+          <div><b>{me.passed ? "—" : me.left}</b><span>{me.passed ? "спроби більше не потрібні" : leftWord(me.left)}</span></div>
+        </div>
+        <ul className="qz-rules">
+          <li><span className="ic">⏱</span><div><b>{limits}</b><span>Час вийшов — питання зараховується як неправильне.</span></div></li>
+          <li><span className="ic">→</span><div><b>Питання по одному</b><span>Повернутись до попереднього не можна. Оновлення сторінки таймер не зупиняє.</span></div></li>
+          <li><span className="ic">⛶</span><div><b>На весь екран</b><span>Вихід із тесту, інша вкладка чи програма — порушення. Два попередження, на третій раз спроба не зараховується.</span></div></li>
+        </ul>
+        {errNote}
       </div>
-      <ul className="qz-rules">
-        <li>На кожне питання — {me.limitMinSec === me.limitMaxSec ? `${me.limitMinSec} секунд` : `від ${me.limitMinSec} до ${me.limitMaxSec} секунд`}; таймер видно над питанням. Час вийшов — питання зараховується як неправильне.</li>
-        <li>Питання йдуть по одному, повернутись до попереднього не можна. Оновлення сторінки таймер не зупиняє.</li>
-        <li>Тест відкривається на весь екран. Вийти з нього, перейти на іншу вкладку чи програму — порушення: два попередження, на третій раз спроба не зараховується.</li>
-        <li>Після тесту побачите, де помилились, і урок, де про це сказано.</li>
-        <li>Склали — відкривається наступна тема. Ні — перегляньте уроки й спробуйте знову.</li>
-      </ul>
-      <div className="qz-actions">
+      <div className="qz-foot">
+        <span className="qz-hint">Після тесту побачите, де помилились, і урок, де про це сказано</span>
         {!me.passed && (me.left > 0 || me.hasOpenAttempt)
-          ? <button className="hr-btn p" disabled={busy || me.questionCount === 0} onClick={() => void begin()}>
-              {busy ? "Готуємо питання…" : me.hasOpenAttempt ? "Продовжити тест" : me.used ? "Спробувати ще раз" : "Почати тест"}</button>
-          : !me.passed && <span className="hr-muted">Спроби закінчились — тімлід або рекрутер може дати ще одну.</span>}
-        {me.passed && onNext && nextLabel && <button className="hr-btn p" onClick={onNext}>{nextLabel} →</button>}
-        {me.questionCount === 0 && <span className="hr-muted">У тесті ще немає питань.</span>}
+          ? <button className="qz-btn" disabled={busy || me.questionCount === 0} onClick={() => void begin()}>
+              {busy ? "Готуємо питання…" : me.hasOpenAttempt ? "Продовжити тест →" : me.used ? "Спробувати ще раз" : "Почати тест →"}</button>
+          : !me.passed ? <span className="qz-hint">Спроби закінчились — тімлід або рекрутер може дати ще одну.</span>
+          : onNext && nextLabel ? <button className="qz-btn" onClick={onNext}>{nextLabel} →</button> : null}
       </div>
-      {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>}
+      {me.questionCount === 0 && <p className="qz-hint" style={{ padding: "0 22px 16px" }}>У тесті ще немає питань.</p>}
+    </div>
+  );
+}
+
+const LETTERS = ["А", "Б", "В", "Г", "Д", "Е", "Є", "Ж"];
+
+/** Таймер-кільце: дуга — залишок від ліміту; останні 10 секунд — червоним. */
+function TimerRing({ left, limit, secs }: { left: number; limit: number; secs: number }) {
+  const R = 21, C = 2 * Math.PI * R, frac = Math.max(0, Math.min(1, left / limit));
+  return (
+    <div className={`qz-timer${secs <= 10 ? " low" : ""}`} role="timer" aria-label={`Лишилось ${secs} секунд`}>
+      <svg viewBox="0 0 52 52" aria-hidden="true">
+        <circle className="track" cx="26" cy="26" r={R} />
+        <circle className="arc" cx="26" cy="26" r={R} strokeDasharray={C} strokeDashoffset={C * (1 - frac)} />
+      </svg>
+      <b>{secs}</b>
     </div>
   );
 }

@@ -277,3 +277,33 @@ test("#3110 ЕКРАН ТЕСТУ: повний екран на «Почати»
   assert.match(learner, /Повернутись до тесту/, "🔴 немає попередження з поверненням");
   assert.match(SRC("frontend/src/pages/dashboard/sections/HiringTraining.tsx"), /endedByViolations/, "🔴 «Найм» не показує незарахування через вихід");
 });
+
+/**
+ * #3111 — ВИГЛЯД (02.11.2026, Роман: «кнопки й поля розкидані»). Твердження про СТРУКТУРУ, а не про текст: у розмітці
+ * екрана питання таймер, текст питання й кнопка «Відповісти» — нащадки ОДНОГО елемента-картки `qz-card`. Читає
+ * компілятор TypeScript, тож перенос рядків чи коментар межі не зсувають; винести будь-що з картки — червоне.
+ */
+test("#3111 ЕКРАН ПИТАННЯ: таймер, питання й кнопка «Відповісти» — в одній картці", async () => {
+  const ts = (await import("typescript")).default;
+  const src = SRC("frontend/src/pages/dashboard/sections/QuizView.tsx");
+  const sf = ts.createSourceFile("QuizView.tsx", src, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+  const cls = (n: import("typescript").Node): string => {
+    const attrs = ts.isJsxElement(n) ? n.openingElement.attributes : ts.isJsxSelfClosingElement(n) ? n.attributes : null;
+    const a = attrs?.properties.find((p) => ts.isJsxAttribute(p) && p.name.getText(sf) === "className");
+    return a && ts.isJsxAttribute(a) && a.initializer ? a.initializer.getText(sf) : "";
+  };
+  const tag = (n: import("typescript").Node) => (ts.isJsxElement(n) ? n.openingElement.tagName.getText(sf) : ts.isJsxSelfClosingElement(n) ? n.tagName.getText(sf) : "");
+  const cards: import("typescript").Node[] = [];
+  const walk = (n: import("typescript").Node): void => { if (/qz-card qz-run/.test(cls(n))) cards.push(n); ts.forEachChild(n, walk); };
+  walk(sf);
+  assert.equal(cards.length, 1, `🔴 картка питання (qz-card qz-run) — ${cards.length} замість однієї`);
+  const inside = { timer: false, question: false, answer: false };
+  const scan = (n: import("typescript").Node): void => {
+    if (tag(n) === "TimerRing") inside.timer = true;
+    if (/"qz-q"/.test(cls(n))) inside.question = true;
+    if (tag(n) === "button" && /qz-btn/.test(cls(n)) && /Відповісти/.test(n.getText(sf))) inside.answer = true;
+    ts.forEachChild(n, scan);
+  };
+  scan(cards[0]);
+  assert.deepEqual(inside, { timer: true, question: true, answer: true }, "🔴 таймер, питання чи кнопка «Відповісти» стоять поза карткою");
+});
