@@ -96,3 +96,41 @@ test("#8b ДЗЕРКАЛО: зламану схему тест ЛОВИТЬ, а 
     scratch.dispose();
   }
 });
+
+/** Усі `ADD CONSTRAINT <імʼя> CHECK (<колонка> IN (...))` схеми по порядку: імʼя → списки значень у тому порядку, як ідуть у файлі. */
+export function checkInLists(sql: string): Map<string, string[][]> {
+  const out = new Map<string, string[][]>();
+  for (const m of sql.matchAll(/ADD CONSTRAINT (\w+)\s+CHECK\s*\(\s*\w+\s+IN\s*\(([^)]*)\)\s*\)/g)) {
+    const vals = [...m[2].matchAll(/'([^']*)'/g)].map((x) => x[1]);
+    out.set(m[1], [...(out.get(m[1]) ?? []), vals]);
+  }
+  return out;
+}
+
+/**
+ * #2973 — ПРОМІЖНИЙ CHECK НЕ ВУЖЧИЙ ЗА ПІДСУМКОВИЙ (02.11.2026). Схема ганяється ЦІЛОЮ на кожному викаті, тож CHECK, який
+ * перестворюють кілька разів, на живій базі перевіряється і в РАННІЙ редакції. Вужчий ранній перелік мовчить, поки в
+ * даних немає нового значення, і валить міграцію в день, коли воно зʼявляється: так 02.11 перший файл Реєстру УТБ
+ * (`ba_files.owner_kind = 'utb'`) зупинив викат на кроці migrate з прод-сторінкою, що вже поїхала вперед.
+ * Ширший ранній перелік — законний (`hiring_candidates_status_check`: старі статуси, поки дані не перенесено).
+ * 🧨 Червоніє, якщо прибрати 'utb' з раннього `ba_files_owner_kind_check`.
+ */
+test("#2973 СХЕМА: кожна рання редакція CHECK вміщає всі значення підсумкової", () => {
+  const sql = readFileSync(path.join(import.meta.dirname, "schema.sql"), "utf8");
+  const lists = checkInLists(sql);
+  assert.ok((lists.get("ba_files_owner_kind_check")?.length ?? 0) >= 2, "🔴 парсер не бачить перестворюваних CHECK — гейт осліп");
+  const bad: string[] = [];
+  for (const [name, eds] of lists) {
+    const last = eds[eds.length - 1];
+    eds.slice(0, -1).forEach((ed, i) => {
+      const miss = last.filter((v) => !ed.includes(v));
+      if (miss.length) bad.push(`${name} (редакція ${i + 1} з ${eds.length}) без: ${miss.join(", ")}`);
+    });
+  }
+  assert.deepEqual(bad, [], "🔴 рання редакція CHECK вужча за підсумкову — міграція впаде, щойно в даних зʼявиться це значення");
+  // Фікстура з обох боків межі: вужча рання — ловиться, ширша — ні.
+  const narrow = checkInLists("ADD CONSTRAINT x CHECK (k IN ('a')); ADD CONSTRAINT x CHECK (k IN ('a','b'));").get("x")!;
+  const wide = checkInLists("ADD CONSTRAINT y CHECK (k IN ('a','b','c')); ADD CONSTRAINT y CHECK (k IN ('a','b'));").get("y")!;
+  assert.deepEqual(narrow[1].filter((v) => !narrow[0].includes(v)), ["b"]);
+  assert.deepEqual(wide[1].filter((v) => !wide[0].includes(v)), []);
+});
