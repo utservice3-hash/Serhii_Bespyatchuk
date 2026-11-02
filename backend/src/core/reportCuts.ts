@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { FC_PIPELINES, STAGE_RECEIVED } from "./money.js";
+import { STATUS_LOST } from "./moneyBuckets.js";
 import { mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 // 🔀 Команда в денних розрізах — на дату рядка (задача 4892); знімки стадій — на поточній.
 import { teamOnDateSql } from "./teamAt.js";
@@ -188,6 +189,10 @@ export interface DispatchCohortRow {
   awaitDatedSum: number;
   /** Очікування БЕЗ планової дати — у прогноз НЕ входить, тому названо окремо. */
   awaitNoDateSum: number;
+  /** З `await` — ті, що ЗАРАЗ «Закрито і не реалізовано» (143). ПІДМНОЖИНА `await`, не четвертий
+   *  стан: `await` лишається як був (його читає розгортка дня), а Звіт КВП (задача 7185)
+   *  віднімає це число, щоб показати «чекаємо» і «без оплати» окремо. */
+  lostDeals: number; lostSum: number;
 }
 /**
  * 🟫 КОГОРТА ДНЯ — АВТО, ВІДПРАВЛЕНІ ТОГО ДНЯ, І ЩО З НИМИ ЗАРАЗ (макет `zvit-4`).
@@ -215,7 +220,7 @@ export async function dispatchCohortByManagerDay(
   if (scope.managerId) { p.push(scope.managerId); conds.push(`d.manager_id = $${p.length}`); }
   if (scope.teamId) { p.push(scope.teamId); conds.push(teamOnDateSql("m", `(d.load_at ${K})::date`, `$${p.length}`)); }
   const r = await pool.query<{ manager_id: number; day: string; n: string; s: string;
-    pn: string; ps: string; an: string; as_: string; ad_: string; an_: string }>(
+    pn: string; ps: string; an: string; as_: string; ad_: string; an_: string; ln: string; ls: string }>(
     `SELECT d.manager_id, to_char((d.load_at ${K})::date,'YYYY-MM-DD') AS day,
             COUNT(*)::int AS n, COALESCE(SUM(d.price),0) AS s,
             COUNT(*) FILTER (WHERE d.status_id = ANY($4))::int AS pn,
@@ -223,7 +228,9 @@ export async function dispatchCohortByManagerDay(
             COUNT(*) FILTER (WHERE NOT (d.status_id = ANY($4)))::int AS an,
             COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4))),0) AS as_,
             COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4)) AND d.planned_payment_at IS NOT NULL),0) AS ad_,
-            COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4)) AND d.planned_payment_at IS NULL),0) AS an_
+            COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4)) AND d.planned_payment_at IS NULL),0) AS an_,
+            COUNT(*) FILTER (WHERE d.status_id = ${STATUS_LOST})::int AS ln,
+            COALESCE(SUM(d.price) FILTER (WHERE d.status_id = ${STATUS_LOST}),0) AS ls
        FROM deals d JOIN managers m ON m.id = d.manager_id
       WHERE ${conds.join(" AND ")}
       GROUP BY 1, 2`, p);
@@ -233,5 +240,7 @@ export async function dispatchCohortByManagerDay(
     paidDeals: Number(x.pn), paidSum: Number(x.ps),
     awaitDeals: Number(x.an), awaitSum: Number(x.as_),
     awaitDatedSum: Number(x.ad_), awaitNoDateSum: Number(x.an_),
+    lostDeals: Number(x.ln), lostSum: Number(x.ls),
   }));
 }
+

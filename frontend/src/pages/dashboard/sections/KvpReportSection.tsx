@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek, type CreatedSplit } from "../../../api";
+import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek, type KvpShipWeek, type CreatedSplit } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { useToast } from "../../../components/Toasts";
 import { commitOptimistic, failureReason } from "../../../actionFeedback";
@@ -301,7 +301,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
   /** ▸ «Детальний звіт» — усе, що було на екрані до ядра (ТЗ 12.10: «Звіт КВП перевантажений»), згорнуте, але не видалене. */
   const [showDetails, setShowDetails] = useState(() => { try { return localStorage.getItem("kvpDetails") === "1"; } catch { return false; } });
   const toggleDetails = () => setShowDetails((x) => { try { localStorage.setItem("kvpDetails", x ? "0" : "1"); } catch { /* сховище недоступне */ } return !x; });
-  const [weekMode, setWeekMode] = useState<"money" | "activity">("money");
+  const [weekMode, setWeekMode] = useState<WeekMode>("money");
   // #6: тижнево-скоупований дрил — клік по клітинці тижня команди → менеджери ЦЬОГО тижня.
   const [openWeekDrill, setOpenWeekDrill] = useState<{ teamId: number; weekIdx: number } | null>(null);
   const [openMgr, setOpenMgr] = useState<number | null>(null);   // денний дрил менеджера (weeks→days)
@@ -374,7 +374,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = фіксовані блоки місяця (1-7/8-14/15-21/22-28/29-кінець). План тижня — ДИНАМІЧНИЙ: минулий тиждень — план, зафіксований на його початок; поточний — (план місяця − факт на початок тижня) ÷ робочі дні до кінця місяця × дні тижня (ручна ціль тімліда перемагає); майбутні — той самий залишок і темп, оновлюються в понеділок. Тому Σ тижнів більша за план місяця, коли минулі тижні недовиконано, — з планом сходиться «залишок» під фактом. Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; поточний тиждень — ще й «з очік.» (факт + оплати з плановою датою в цьому тижні, % плану тижня) і мітка «Закриємо?»; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні)." /></h2>
               {rep.weekBlocks.length > 0 && (
                 <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", fontSize: 12 }}>
-                  {([["money", "💰 Гроші"], ["activity", "⚙️ Активність"]] as const).map(([k, lbl]) => (
+                  {([["money", "💰 Гроші"], ["activity", "⚙️ Активність"], ["ship", "🚚 Відправлені авто"]] as const).map(([k, lbl]) => (
                     <button key={k} onClick={() => setWeekMode(k)}
                       style={{ padding: "5px 12px", border: "none", cursor: "pointer", background: weekMode === k ? "#c5141c" : "var(--card-bg)", color: weekMode === k ? "#fff" : "var(--text)", fontWeight: weekMode === k ? 600 : 400 }}>{lbl}</button>
                   ))}
@@ -405,7 +405,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                         <WithExpCell on={oneMonth} plan={t.plan} fact={t.revenue} expected={t.expectedThisMonth} />
                         <td style={{ textAlign: "right" }} title={`Лайфтайм (весь час): ${t.convLifetime.num} / ${t.convLifetime.den}${t.kind === "rnk" ? " (реклама)" : t.kind === "rpk" ? " (лідген)" : ""}`}>{t.kind === "rnk" || t.kind === "rpk" ? fmtPct(t.convLifetime.pct) : "—"}</td>
                         {rep.weekBlocks.map((w) => (
-                          <WeekCell key={w.idx} mode={weekMode}
+                          <WeekCell key={w.idx} mode={weekMode} blk={w}
                             w={t.weeks?.find((x) => x.idx === w.idx)}
                             prev={t.weeks?.find((x) => x.idx === w.idx - 1)}
                             active={openWeekDrill?.teamId === t.teamId && openWeekDrill?.weekIdx === w.idx}
@@ -417,7 +417,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                           спарклайн 5 тижнів; тижневі числа + діагноз + дні — на клік. Без банера. */}
                       {openTeam === t.teamId && (
                         <tr><td colSpan={7 + rep.weekBlocks.length} style={{ padding: 0, background: "var(--bg)" }}>
-                          <CalmManagers team={t} rep={rep} plans={plans} openMgr={openMgr} setOpenMgr={setOpenMgr} />
+                          <CalmManagers team={t} rep={rep} plans={plans} openMgr={openMgr} setOpenMgr={setOpenMgr} mode={weekMode} />
                         </td></tr>
                       )}
                     </Fragment>
@@ -433,7 +433,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                         expected={rep.teams.reduce((s, t) => s + t.expectedThisMonth, 0)} />
                       <td></td>
                       {rep.deptWeeks.map((w) => (
-                        <WeekCell key={w.idx} mode={weekMode} w={w} prev={rep.deptWeeks.find((x) => x.idx === w.idx - 1)} />
+                        <WeekCell key={w.idx} mode={weekMode} blk={w} w={w} prev={rep.deptWeeks.find((x) => x.idx === w.idx - 1)} />
                       ))}
                     </tr>
                   )}
@@ -441,6 +441,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               </table>
             </div>
             {weekMode === "money" && rep.weekBlocks.some((w) => w.isCurrent) && <CloseLegend />}
+            {weekMode === "ship" && rep.weekBlocks.length > 0 && <ShipLegend />}
           </div>
 
           {/* ── 🎧 ПЕРШИЙ ДОТИК (задача 5314): одразу під «де ми зараз», як у макеті «Звіт КВП - ядро». ── */}
@@ -791,6 +792,28 @@ function Sparkline({ weeks, blocks }: { weeks: KvpWeek[]; blocks: KvpReport["wee
   );
 }
 
+// 🚚 Спарклайн «Відправлені авто» (задача 7185): стовпчик тижня = сума відправлених, поділена
+// знизу вгору на оплачено / без оплати / чекаємо; висота — від найбільшого тижня менеджера.
+// Числа — при наведенні, як у макеті.
+function ShipSparkline({ weeks, blocks }: { weeks: KvpWeek[]; blocks: KvpReport["weekBlocks"] }) {
+  const max = Math.max(1, ...blocks.map((b) => Math.abs(weeks?.find((x) => x.idx === b.idx)?.ship?.sum ?? 0)));
+  return (
+    <div style={{ display: "flex", gap: 3, alignItems: "flex-end", justifyContent: "flex-end", height: 20 }}>
+      {blocks.map((b) => {
+        const w = weeks?.find((x) => x.idx === b.idx), sh = w?.ship, isCur = w?.isCurrent ?? false;
+        const tip = shipTip(b, sh);
+        if (!sh || sh.deals === 0) return <span key={b.idx} title={tip} style={{ width: 15, height: 4, borderRadius: "2px 2px 0 0", background: "var(--border)", outline: isCur ? `1.5px solid ${BLUE}` : undefined, outlineOffset: 1 }} />;
+        const h = Math.max(6, Math.round((Math.abs(sh.sum) / max) * 20)), parts = shipParts(sh);
+        return (
+          <span key={b.idx} title={tip} style={{ width: 15, height: h, display: "flex", flexDirection: "column-reverse", borderRadius: "2px 2px 0 0", overflow: "hidden", outline: isCur ? `1.5px solid ${BLUE}` : undefined, outlineOffset: 1 }}>
+            {parts.map((p) => <span key={p.color} style={{ flex: `0 0 ${p.pct}%`, background: p.color }} />)}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 // Детермінований рушій рекомендацій (БЕЗ AI). ПЕРВИННИЙ провал → дія з числами. Скоуп за
 // роллю: РПК=лідоген, РНК=реклама. Флаг «відстає» — проти ТЕМПУ на сьогодні, не проти 100%.
 type Rec = { level: "crit" | "warn" | "ok"; why: string; action: string };
@@ -824,7 +847,7 @@ function mgrRecommendation(m: KvpManager, kind: string, plans: KvpPlans, proj: K
     action: m.expected > 0 ? `Дотиснути очікувані ${fmtMoney(m.expected)}.` : `Тримати темп, закривати заплановане.` };
 }
 
-function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam; rep: KvpReport; plans: KvpPlans; openMgr: number | null; setOpenMgr: (v: number | null) => void }) {
+function CalmManagers({ team, rep, plans, openMgr, setOpenMgr, mode }: { team: KvpTeam; rep: KvpReport; plans: KvpPlans; openMgr: number | null; setOpenMgr: (v: number | null) => void; mode: WeekMode }) {
   const proj = rep.verdict.projection;
   const recCol = (l: Rec["level"]) => (l === "crit" ? RED : l === "warn" ? AMBER : GREEN);
   return (
@@ -865,7 +888,7 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
               <span style={{ textAlign: "right", color: m.expectedThisMonth > 0 ? AMBER : MUTED }} title={`За плановою датою оплати — цей міс: ${fmtMoney(m.expectedThisMonth)} · наступний: ${fmtMoney(m.expectedNextMonth)} · з МИНУЛИХ місяців: ${fmtMoney(m.expectedPastMonths)}`}>{m.expectedThisMonth > 0 ? fmtMoney(m.expectedThisMonth) : "—"}</span>
               <MgrWithExp on={rep.weekBlocks.length > 0} plan={m.plan} fact={m.revenue} expected={m.expectedThisMonth} />
               <span style={{ textAlign: "right", color: MUTED }}>{team.kind === "rnk" && m.conversion != null ? `${m.conversion}%` : "—"}</span>
-              <Sparkline weeks={m.weeks} blocks={rep.weekBlocks} />
+              {mode === "ship" ? <ShipSparkline weeks={m.weeks} blocks={rep.weekBlocks} /> : <Sparkline weeks={m.weeks} blocks={rep.weekBlocks} />}
             </div>
             {open && (
               <div style={{ padding: "8px 16px 14px 30px", background: "rgba(37,99,235,0.03)", borderBottom: "1px solid var(--border)" }}>
@@ -895,7 +918,26 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
 const wkPct = (fact: number, plan: number) => (plan > 0 ? Math.round((fact / plan) * 100) : null);
 const pctOf = (fact: number, plan: number | null): number | null => (plan && plan > 0 ? Math.round((fact / plan) * 100) : null);
 const barColor = (p: number | null) => (p == null ? MUTED : p >= 100 ? GREEN : p >= 70 ? AMBER : RED);
-type WeekLike = { plan: number; fact: number; expected: number; auto: number; autoRevenue?: number; leadsAd: number; leadsLeadgen: number; isCurrent: boolean; isFuture: boolean; pace: number | null };
+type WeekLike = { plan: number; fact: number; expected: number; auto: number; autoRevenue?: number; leadsAd: number; leadsLeadgen: number; ship?: KvpShipWeek; isCurrent: boolean; isFuture: boolean; pace: number | null };
+type WeekMode = "money" | "activity" | "ship";
+const SHIP_PAID = GREEN, SHIP_WAIT = "#f59e0b", SHIP_LOST = RED;
+/** Частки смуги «оплачено · чекаємо · без оплати» — від суми; якщо сума не додатна (мінусові угоди), то від кількості авто. */
+function shipParts(sh: KvpShipWeek): { color: string; pct: number }[] {
+  const bySum = sh.sum > 0 && sh.paidSum >= 0 && sh.waitSum >= 0 && sh.lostSum >= 0;
+  const tot = bySum ? sh.sum : sh.deals;
+  const pct = (sum: number, n: number) => (tot > 0 ? Math.max(0, ((bySum ? sum : n) / tot) * 100) : 0);
+  return [
+    { color: SHIP_PAID, pct: pct(sh.paidSum, sh.paidDeals) },
+    { color: SHIP_LOST, pct: pct(sh.lostSum, sh.lostDeals) },
+    { color: SHIP_WAIT, pct: pct(sh.waitSum, sh.waitDeals) },
+  ].filter((p) => p.pct > 0);
+}
+function shipTip(b: { idx: number; from: string; to: string }, sh: KvpShipWeek | undefined): string {
+  const head = `Т${b.idx} ${b.from.slice(8)}–${b.to.slice(8)}: `;
+  if (!sh || sh.deals === 0) return head + "відправлених авто немає";
+  return head + `відправили ${sh.deals} авто на ${fmtMoney(sh.sum)} · оплачено ${fmtMoney(sh.paidSum)} (${sh.paidDeals} авто) · чекаємо ${fmtMoney(sh.waitSum)} (${sh.waitDeals} авто)`
+    + (sh.lostDeals ? ` · без оплати ${fmtMoney(sh.lostSum)} (${sh.lostDeals} авто)` : "");
+}
 // Фіксована ширина КОЖНОЇ тижневої колонки (команди, відділ, менеджери) — одна вертикальна
 // сітка. table-layout:fixed + <colgroup> кріплять ці ширини, contain обрізає переповнення.
 const WK_W = 94;
@@ -911,11 +953,32 @@ const clip: CSSProperties = { whiteSpace: "nowrap", overflow: "hidden", textOver
 // Очікування — на майбутніх тижнях і на ПОТОЧНОМУ (задача 6442, Юля 21.10.2026: «у поточному тижні показати так само
 // факт + очікування»): ще рядок «з очік. сума · % плану тижня» і мітка «Закриємо?». Минулі тижні — лише факт.
 // mode 'activity' → авто·ліди. onClick (лише командні) → менеджери цього тижня.
-function WeekCell({ w, prev, mode, onClick, active }: { w: WeekLike | undefined; prev?: WeekLike; mode: "money" | "activity"; onClick?: () => void; active?: boolean }) {
+function WeekCell({ w, prev, mode, onClick, active, blk }: { w: WeekLike | undefined; prev?: WeekLike; mode: WeekMode; onClick?: () => void; active?: boolean; blk?: { idx: number; from: string; to: string } }) {
   const bg = active ? "rgba(197,20,28,0.12)" : w?.isCurrent ? "rgba(37,99,235,0.07)" : undefined;
   const handle = onClick ? (e: { stopPropagation: () => void }) => { e.stopPropagation(); onClick(); } : undefined;
   if (!w) return <td style={{ ...wkTd(bg), textAlign: "center", color: MUTED, fontSize: 11 }}>—</td>;
   const width = wkW(w.isCurrent);
+  if (mode === "ship") {
+    // 🚚 Задача 7185: сума /кількість відправлених авто тижня (за «Датою загрузки»), смужка
+    // «оплачено · без оплати · чекаємо» за станом ЗАРАЗ і, як у «Гроші», — скільки отримали за тиждень.
+    const sh = w.ship;
+    if (w.isFuture) return <td onClick={handle} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11, color: MUTED }}>—</td>;
+    const recv = <div style={{ ...clip, color: MUTED, fontSize: 10 }}>отримали {fmtMoney(w.fact)}</div>;
+    if (!sh || sh.deals === 0) return <td onClick={handle} title={blk ? shipTip(blk, sh) : undefined} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11 }}><div style={{ color: MUTED }}>— авто</div>{recv}</td>;
+    const st = sh.waitDeals > 0 ? <span style={{ color: AMBER }}>чекаємо {fmtMoney(sh.waitSum)}</span>
+      : sh.lostDeals > 0 ? <span style={{ color: RED }}>✕ без оплати {sh.lostDeals} авто</span>
+      : <span style={{ color: GREEN }}>✓ усе оплачено</span>;
+    return (
+      <td onClick={handle} title={blk ? shipTip(blk, sh) : undefined} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11 }}>
+        <div style={{ ...clip, lineHeight: 1.25 }}><b>{fmtMoney(sh.sum)}</b><span style={{ color: MUTED, fontSize: 10 }}> /{sh.deals} авто</span></div>
+        <div style={{ display: "flex", height: 5, background: "var(--border)", borderRadius: 3, margin: "2px 0", overflow: "hidden" }}>
+          {shipParts(sh).map((p) => <div key={p.color} style={{ width: `${p.pct}%`, background: p.color }} />)}
+        </div>
+        <div style={{ ...clip, fontWeight: 600, fontSize: 10, lineHeight: 1.1 }}>{st}</div>
+        {recv}
+      </td>
+    );
+  }
   if (mode === "activity") return (
     <td onClick={handle} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11 }}>
       {w.isFuture ? <span style={{ color: MUTED }}>—</span> : <>
@@ -963,6 +1026,17 @@ function CloseChip({ plan, fact, expected }: { plan: number; fact: number; expec
   return (
     <div style={{ ...clip, marginTop: 2 }} title={closeNote(s, fmtMoney) ?? CLOSE_LABEL[s.kind]}>
       <span style={{ fontSize: 9.5, fontWeight: 600, padding: "0 5px", borderRadius: 8, background: CLOSE_TONE[s.kind].bg, color: CLOSE_TONE[s.kind].fg }}>{CLOSE_LABEL[s.kind]}</span>
+    </div>
+  );
+}
+/** 🚚 Легенда режиму «Відправлені авто» (задача 7185). */
+function ShipLegend() {
+  const sw = (c: string) => <i style={{ display: "inline-block", width: 10, height: 5, borderRadius: 2, background: c, marginRight: 4, verticalAlign: "middle" }} />;
+  return (
+    <div style={{ fontSize: 12, color: MUTED, marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+      <span><b style={{ color: "var(--text)" }}>🚚 Відправлені авто:</b> маржа / кількість авто з «Датою загрузки» в тижні (ті самі авто, що в «Активність»)</span>
+      <span>{sw(SHIP_PAID)}оплачено</span><span>{sw(SHIP_WAIT)}чекаємо</span><span>{sw(SHIP_LOST)}без оплати (закрито і не реалізовано)</span>
+      <span>стан — на зараз · «отримали» — гроші за тиждень, як у «Гроші»</span>
     </div>
   );
 }
