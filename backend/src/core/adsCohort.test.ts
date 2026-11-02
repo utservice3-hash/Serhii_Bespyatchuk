@@ -135,28 +135,30 @@ test("#3311 ЖИВА БД: Σ «надійшло» по днях == плитці
 });
 
 /**
- * #3312 — «ПРИНЕСЛИ ЛІДИ ДНЯ» == Σ ЦІН «ОПЛАЧЕНО» В РОЗКРИТТІ ДНЯ (правило «розкриття пояснює число»). Обидва рахуються
- * тим самим `pop` (`dealCohortCte`), тож рівність — за побудовою, і гейт стереже, щоб так і лишилось. Беремо день із
- * найбільшою кількістю оплачених — там є що звіряти; і дзеркало: угоди «в роботі» й програні в суму НЕ входять.
+ * #3312 — «ПРИНЕСЛИ ЛІДИ ДНЯ» == Σ ЦІН «ОПЛАЧЕНО» В РОЗКРИТТІ, ПО КОЖНОМУ ДНЮ (правило «розкриття пояснює число»).
+ * Обидва рахуються тим самим `pop` (`dealCohortCte`), тож рівність — за побудовою, і гейт стереже, щоб так і лишилось.
+ * 📐 Перша редакція звіряла ОДИН день (найбільше оплачених) — і саботаж «рахувати й неоплачені» лишив її ЗЕЛЕНОЮ: у тому
+ * дні угоди «в роботі» мали нульову ціну. Тому тепер — КОЖЕН день вікна, плюс доказ, що у вікні є неоплачені угоди з
+ * ненульовою ціною (інакше рівність не відрізняла б «лише 142» від «усі»).
  * 🧨 Червоніє, якщо гроші когорти рахувати іншим фільтром (не 142) чи іншою популяцією, ніж розкриття.
  */
-test("#3312 ЖИВА БД: «принесли ліди дня» == Σ цін угод «Оплачено» в розкритті цього дня", needsBackendEnv(), async (t) => {
+test("#3312 ЖИВА БД: «принесли ліди дня» == Σ цін угод «Оплачено» в розкритті, по кожному дню", needsBackendEnv(), async (t) => {
   const { getSettings } = await import("../routes/settings.js");
   const metrics = await import("./metrics.js");
   const { emptyPeriodSkip } = await import("../testMode.js");
   const { adSources } = await getSettings();
-  const days = await metrics.conversionAdsByDay({ from: FROM, to: TO }, adSources);
-  const best = [...days].sort((a, b) => b.paid - a.paid)[0];
-  const skip = emptyPeriodSkip("оплачених угод із платних лідів у вікні заміру", best?.paid ?? 0, `${FROM}..${TO}`);
+  const days = (await metrics.conversionAdsByDay({ from: FROM, to: TO }, adSources)).filter((d) => d.entered > 0);
+  const skip = emptyPeriodSkip("оплачених угод із платних лідів у вікні заміру", days.reduce((s, d) => s + d.paid, 0), `${FROM}..${TO}`);
   if (skip) return t.skip(skip);
-  const deals = await metrics.adDealsByDay(best.day, adSources);
-  const paidSum = deals.filter((d) => d.state === "paid").reduce((s, d) => s + d.price, 0);
-  assert.equal(Math.round(best.paidMargin * 100), Math.round(paidSum * 100),
-    `🔴 ${best.day}: у колонці ${String(best.paidMargin)} ₴, а Σ «Оплачено» в розкритті ${String(paidSum)} ₴`);
-  // 🪞 Дзеркало: якщо в дні є неоплачені угоди з ненульовою ціною, сума всього дня МУСИТЬ відрізнятись від колонки —
-  // інакше колонка рахує й «в роботі», і програні, а рівність вище збіглася б випадково.
-  const allSum = deals.reduce((s, d) => s + d.price, 0);
-  if (deals.some((d) => d.state !== "paid" && d.price !== 0)) {
-    assert.notEqual(Math.round(best.paidMargin * 100), Math.round(allSum * 100), "🔴 у суму потрапили угоди «в роботі» чи програні");
+  const broken: string[] = [];
+  let pricedNotPaid = 0;
+  for (const d of days) {
+    const deals = await metrics.adDealsByDay(d.day, adSources);
+    const paidSum = deals.filter((x) => x.state === "paid").reduce((s, x) => s + x.price, 0);
+    pricedNotPaid += deals.filter((x) => x.state !== "paid" && x.price !== 0).length;
+    if (Math.round(d.paidMargin * 100) !== Math.round(paidSum * 100)) broken.push(`${d.day}: колонка ${String(d.paidMargin)} ₴ ≠ Σ «Оплачено» ${String(paidSum)} ₴`);
   }
+  assert.deepEqual(broken, [], "🔴 «принесли ліди дня» розійшлись із розкриттям — гроші когорти рахуються не тим фільтром чи не тією популяцією");
+  // 🪞 Без цього рівність вище не відрізняла б «лише оплачені» від «усі угоди дня».
+  assert.ok(pricedNotPaid > 0, "у вікні немає жодної неоплаченої угоди з ціною — гейт не має чого ловити, вікно треба змінити");
 });
