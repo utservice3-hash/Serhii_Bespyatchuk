@@ -11,7 +11,7 @@
 
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { STATS_AUTO_FROM } from "../statistics/catalog.js";
+import { leadOfTeam, STATS_AUTO_FROM } from "../statistics/catalog.js";
 
 export interface RingostatStatus {
   lastRunAt: string | null; lastError: string | null;
@@ -44,24 +44,14 @@ function mondayOf(y: number, m: number, d: number, dow: number): string {
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[ʼ'’`]/g, "'").replace(/\s+/g, "");
-function leadOfTeam(team: string | null): string | null {
-  if (!team) return null;
-  if (/Яцик/i.test(team)) return "Яцик";
-  if (/Дмитрук/i.test(team)) return "Дмитрук";
-  if (/Безпам/i.test(team)) return "Безпамятний";
-  if (/Шаврово/i.test(team)) return "Шаврова";
-  if (/Михальчевсь/i.test(team)) return "Михальчевська";
-  if (/Самост/i.test(team)) return "Шевчук Назар";
-  return null;
-}
 /** ПІБ (employee_fio) → тімлід. Ключі: «прізвищеімʼя» + прізвище (fallback). Експортовано для плиток Статистик — одне правило. */
 export async function buildLeadMap(): Promise<Map<string, string>> {
-  const r = await pool.query<{ name: string; team: string | null }>(
-    `SELECT m.name, t.name AS team FROM managers m LEFT JOIN teams t ON t.id = m.team_id WHERE m.is_active`
+  const r = await pool.query<{ name: string; team_id: number | null }>(
+    `SELECT m.name, m.team_id FROM managers m WHERE m.is_active`
   );
   const map = new Map<string, string>();
   for (const row of r.rows) {
-    const lead = leadOfTeam(row.team);
+    const lead = leadOfTeam(row.team_id);
     if (!lead) continue;
     const toks = row.name.trim().split(/\s+/);
     map.set(norm(toks.slice(0, 2).join("")), lead);

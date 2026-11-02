@@ -45,3 +45,20 @@ test("#3306 синк кличе перейменування для НАЯВНО
   assert.match(fn, /teamRenameFromKommo\(/, "рішення про назву має йти через чисту функцію, яку стережуть #3303–#3305");
   assert.match(fn, /"23505"/, "зіткнення унікальної назви має бути пропуском, а не падінням синку");
 });
+
+test("#3307 дзвінки депстату: команда → тімлід ЗА НОМЕРОМ — нова назва з Kommo не викидає команду", async () => {
+  const { leadOfTeam } = await import("../statistics/catalog.js");
+  // та сама відповідність, що давали старі назви «РПК - Шаврової Лілії», «РНК - Безпамʼятного Андрія»…
+  assert.deepEqual([5, 6, 13, 14, 15, 4, 36283].map(leadOfTeam),
+    ["Яцик", "Дмитрук", "Безпамятний", "Шаврова", "Михальчевська", "Шевчук Назар", "Шевчук Назар"]);
+  // по той бік межі: команди поза депстатом (Хомік, лідоген, фінвідділ) — без тімліда, як і було
+  assert.deepEqual([36284, 11, 12, null].map(leadOfTeam), [null, null, null, null]);
+});
+
+test("#3308 buildLeadMap не читає назву команди — лише її номер", () => {
+  const src = readFileSync(path.join(ROOT, "backend/src/jobs/syncRingostatCalls.ts"), "utf8");
+  const fn = src.slice(src.indexOf("export async function buildLeadMap"), src.indexOf("export function resolveLead"));
+  assert.match(fn, /leadOfTeam\(row\.team_id\)/, "тімлід має братись за номером команди");
+  assert.doesNotMatch(fn, /\bt\.name\b|JOIN teams/, "назва команди знову в привʼязці дзвінків — перейменування в Kommo її зламає");
+  assert.doesNotMatch(src, /\/(Яцик|Дмитрук|Безпам|Шавров|Михальчевсь|Самост)[^/]*\/i?\.test\(/, "тімлід знову шукається словом у назві");
+});
