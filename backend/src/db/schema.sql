@@ -7388,3 +7388,22 @@ ON CONFLICT (key) DO UPDATE SET
   dwell_default=EXCLUDED.dwell_default, sig_file=EXCLUDED.sig_file, stamp_file=EXCLUDED.stamp_file,
   logo_file=EXCLUDED.logo_file, accent=EXCLUDED.accent, originals_address=EXCLUDED.originals_address;
 UPDATE constructor_entities SET is_active = false WHERE key = 'fop' AND is_active;
+
+-- 🎚 РІВЕНЬ УМОВ «СТАРТ» / «ПРОФІ» (03.11.2026, ТЗ Івана; рішення Романа: лише статус, без грошей). Рівень мають лише
+-- менеджери з продажу (категорія `manager`); без запису — «Старт». Кожен перехід — рядок історії (з якого місяця,
+-- хто, коментар); «Профі» назад на «Старт» не переводять (як в офері), помилку скасовують (`cancelled_at`), не видаляють.
+-- Бекфілу немає: таблиця порожня. ⚠️ revert коду таблицю не прибирає. Тримає #2970–#2972.
+CREATE TABLE IF NOT EXISTS employee_levels (
+  id            SERIAL PRIMARY KEY,
+  employee_id   INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  level         TEXT NOT NULL CHECK (level IN ('start', 'pro')),
+  from_month    DATE NOT NULL CHECK (date_trunc('month', from_month)::date = from_month),
+  note          TEXT NOT NULL CHECK (btrim(note) <> ''),
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cancelled_at  TIMESTAMPTZ,
+  cancelled_by  INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_employee_levels_emp ON employee_levels (employee_id) WHERE cancelled_at IS NULL;
+-- Персональні дані про умови роботи — не для моделі.
+REVOKE ALL ON employee_levels FROM ai_readonly;

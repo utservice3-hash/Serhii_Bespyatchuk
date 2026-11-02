@@ -5683,6 +5683,8 @@ export interface EmployeeRow {
   team_name: string | null; team_locked: boolean; team_ref: string | null;
   /** 🗂 Категорія (28.10.2026, #2960): ручна (`category_manual`) або за посадою; null — «Без категорії». */
   category: EmpCategory | null; category_manual: boolean;
+  /** 🎚 Рівень «Старт / Профі» (03.11.2026, #2970): лише менеджерам з продажу (null — не стосується); статус, не гроші. */
+  level: EmpLevel | null; level_from: string | null; level_history: EmpLevelEntry[];
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
   /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
@@ -5746,6 +5748,14 @@ export const updateEmployee = async (id: number, b: EmployeePatch) => (await api
 // ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
 export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false, dateUnknown = false) =>
   (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk, dateUnknown })).data;
+export type EmpLevel = "start" | "pro";
+export interface EmpLevelEntry { id: number; level: EmpLevel; from_month: string; note: string; by: string | null; at: string; cancelled: boolean }
+export const EMP_LEVEL_LABEL: Record<EmpLevel, string> = { start: "Старт", pro: "Профі" };
+/** 🎚 «Перевести на Профі» (місяць «РРРР-ММ» + коментар) і «Скасувати» помилковий перехід (#2970). */
+export const promoteEmployeeLevel = async (id: number, b: { month: string; comment: string }) =>
+  (await api.post<{ level: EmpLevel; from: string }>(`/secrets/employees/${id}/level`, b)).data;
+export const cancelEmployeeLevel = async (id: number) =>
+  (await api.post<{ level: EmpLevel; from: string | null }>(`/secrets/employees/${id}/level/cancel`)).data;
 /** 📉 «Змінити дату звільнення» / «дата невідома» (#2100). */
 export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string; hiredAt?: string | null }) =>
   (await api.post<{ dismissedAt: string | null; unknown: boolean }>(`/secrets/employees/${id}/dismiss-date`, b)).data;

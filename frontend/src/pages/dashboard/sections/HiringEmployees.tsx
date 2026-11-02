@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
   startDismissal, dismissNeedsConfirm, finishDismissal, revertDismissal, setDismissDate, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
-  fetchPeoplePhotos, EMP_CATEGORIES, empCategoryLabel, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles, setEmployeeTeam,
+  fetchPeoplePhotos, EMP_CATEGORIES, empCategoryLabel, EMP_LEVEL_LABEL, promoteEmployeeLevel, cancelEmployeeLevel, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles, setEmployeeTeam,
   type EmployeeAccount, type EmployeeAccountCan, type RoleDef,
   type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
@@ -75,6 +75,8 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const [extra, setExtra] = useState<Extra>("all");
   // 🗂 Категорія (28.10.2026, ТЗ Івана, #2960): "" — усі, "none" — без категорії, інакше ключ.
   const [cat, setCat] = useState<string>("");
+  // 🎚 Рівень «Старт / Профі» (03.11.2026, #2970): "" — усі, інакше start / pro.
+  const [lvl, setLvl] = useState<string>("");
   const [importing, setImporting] = useState(false);
   const [adding, setAdding] = useState(false);
   const [bulk, setBulk] = useState(false);
@@ -118,7 +120,9 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
     for (const r of filtered) { const k = r.category ?? "none"; m.set(k, (m.get(k) ?? 0) + 1); }
     return m;
   }, [filtered]);
-  const shown = useMemo(() => (cat ? filtered.filter((r) => (r.category ?? "none") === cat) : filtered), [filtered, cat]);
+  const byCat = useMemo(() => (cat ? filtered.filter((r) => (r.category ?? "none") === cat) : filtered), [filtered, cat]);
+  const shown = useMemo(() => (lvl ? byCat.filter((r) => r.level === lvl) : byCat), [byCat, lvl]);
+  const lvlCount = (k: string) => byCat.filter((r) => r.level === k).length;
   const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_name).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
   if (err) return <div className="chart-card"><b>Реєстр недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
@@ -173,7 +177,15 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
             if (k === "none" && !n && cat !== "none") return null;
             return <button key={k} className={`emp-cat ${cat === k ? "on" : ""} ${n ? "" : "zero"}`} onClick={() => setCat(cat === k ? "" : k)}>{l} <span>{n}</span></button>;
           })}
-          {cat && <span className="hr-muted" style={{ fontSize: 12.5 }}>показано {shown.length} з {filtered.length}</span>}
+          {(cat || lvl) && <span className="hr-muted" style={{ fontSize: 12.5 }}>показано {shown.length} з {filtered.length}</span>}
+        </div>
+        <div className="emp-cats" role="group" aria-label="Рівень умов">
+          <span className="emp-cats-label">Рівень умов</span>
+          <button className={`emp-cat ${lvl === "" ? "on" : ""}`} onClick={() => setLvl("")}>Усі <span>{lvlCount("start") + lvlCount("pro")}</span></button>
+          {(["start", "pro"] as const).map((k) => (
+            <button key={k} className={`emp-cat ${lvl === k ? "on" : ""} ${lvlCount(k) ? "" : "zero"}`} onClick={() => setLvl(lvl === k ? "" : k)}>
+              <i className={`emp-lvl-dot ${k}`} />{EMP_LEVEL_LABEL[k]} <span>{lvlCount(k)}</span>
+            </button>))}
         </div>
         <Birthdays rows={rows} onOpen={(id) => setOpen({ id, tab: "profile" })} />
         {rows.length === 0 ? (
@@ -181,7 +193,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
         ) : (
           <div className="hr-tw">
             <table className="data-table emp-table">
-              <thead><tr><th>Співробітник</th><th>Категорія</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th>Документи</th><th className="num">Доступи</th></tr></thead>
+              <thead><tr><th>Співробітник</th><th>Категорія</th><th>Рівень</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th>Документи</th><th className="num">Доступи</th></tr></thead>
               <tbody>
                 {shown.map((r) => {
                   const fresh = r.status === "active" && (daysSince(r.hired_at) ?? 999) <= 30;
@@ -199,6 +211,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                       </div></td>
                       <td>{r.category ? empCategoryLabel(r.category) : <span className="hr-muted">без категорії</span>}
                         {r.category_manual && <span className="emp-pill mute" title="Категорію поставлено вручну">вручну</span>}</td>
+                      <td>{r.level ? <span className={`emp-lvl ${r.level}`}>{EMP_LEVEL_LABEL[r.level]}</span> : <span className="hr-muted">—</span>}</td>
                       <td><TeamPill row={r} /></td>
                       <td>{r.phone ?? <span className={r.status === "active" ? "emp-miss" : "hr-muted"}>немає</span>}</td>
                       <td>{(r.status === "dismissed" ? d(r.dismissed_at) : d(r.hired_at)) ?? <span className="hr-muted">—</span>}
@@ -310,6 +323,74 @@ function CategoryField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast
   );
 }
 
+const monthName = (iso: string | null) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString("uk-UA", { month: "long", year: "numeric" }).replace(" р.", "") : null);
+const ymNow = (k = 0) => { const n = new Date(); const d = new Date(n.getFullYear(), n.getMonth() + k, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+
+/**
+ * 🎚 Рівень «Старт / Профі» в картці (03.11.2026, ТЗ Івана, #2970). Статус, а не гроші: «Перевести на Профі» з місяцем і
+ * коментарем; назад на «Старт» не переводять (як в офері), помилку скасовують — запис лишається в історії.
+ */
+function LevelField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [month, setMonth] = useState(ymNow());
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (!row.level) return (
+    <label className="wide"><span>Рівень умов</span><span className="hr-muted" style={{ fontSize: 13 }}>Рівень «Старт / Профі» є лише в менеджерів з продажу.</span></label>
+  );
+  const live = row.level_history.filter((h) => !h.cancelled);
+  const promote = async () => {
+    if (!comment.trim()) { setErr("Коментар обовʼязковий"); return; }
+    setBusy(true); setErr(null);
+    try { await promoteEmployeeLevel(row.id, { month, comment: comment.trim() }); toast(`${row.full_name}: «Профі» з ${monthName(`${month}-01`)}`); setOpen(false); setComment(""); onSaved(); }
+    catch (e) { setErr(hiringError(e)); }
+    setBusy(false);
+  };
+  const cancel = async () => {
+    setBusy(true);
+    try { await cancelEmployeeLevel(row.id); toast(`${row.full_name}: перехід скасовано`); onSaved(); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  return (
+    <div className="wide emp-level">
+      <span>Рівень умов</span>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span className={`emp-lvl ${row.level}`}>{EMP_LEVEL_LABEL[row.level]}</span>
+        <span className="hr-muted" style={{ fontSize: 12.5 }}>{row.level_from ? `з ${monthName(row.level_from)}` : "з виходу на роботу"}</span>
+        {row.level === "start" && !open && <button className="hr-btn xs p" disabled={busy} onClick={() => setOpen(true)}>Перевести на «Профі»</button>}
+        {row.level === "pro" && <span className="hr-muted" style={{ fontSize: 12.5 }}>«Профі» назад на «Старт» не переводять</span>}
+      </div>
+      {open && (
+        <div className="emp-level-form">
+          <label><span>З якого місяця</span>
+            <select className="hr-inp" value={month} onChange={(e) => setMonth(e.target.value)}>
+              {[-1, 0, 1].map((k) => <option key={k} value={ymNow(k)}>{monthName(`${ymNow(k)}-01`)}</option>)}
+            </select></label>
+          <label className="wide"><span>Коментар *</span>
+            <input className="hr-inp" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="напр.: двічі поспіль від 70 000 / за власним бажанням" /></label>
+          {err && <div style={{ color: "var(--danger)", fontSize: 13 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="hr-btn" onClick={() => { setOpen(false); setErr(null); }}>Скасувати</button>
+            <button className="hr-btn p" disabled={busy || !comment.trim()} onClick={() => void promote()}>Перевести</button>
+          </div>
+        </div>
+      )}
+      {row.level_history.length > 0 && (
+        <div className="emp-level-hist">
+          {row.level_history.map((h) => (
+            <div key={h.id} className={h.cancelled ? "off" : ""}>
+              <b>{EMP_LEVEL_LABEL[h.level]}</b> з {monthName(h.from_month)} · {h.by ?? "—"}, {h.at.slice(0, 10).split("-").reverse().join(".")} · «{h.note}»
+              {h.cancelled && " · скасовано"}
+              {!h.cancelled && h.id === live[0]?.id && <> <button className="hr-btn xs" disabled={busy} onClick={() => void cancel()} title="Перевели помилково — скасувати">Скасувати</button></>}
+            </div>))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const FIELDS: [keyof EmployeePatch, string, "text" | "date" | "status"][] = [
   ["full_name", "ПІБ", "text"], ["position", "Посада", "text"], ["status", "Статус", "status"],
   ["phone", "Телефон", "text"], ["email", "Пошта", "text"], ["telegram", "Telegram", "text"], ["birth_date", "Дата народження", "date"],
@@ -377,6 +458,7 @@ function EmployeeDrawer({ row, tab, status, toast, photo, photoErr, onTab, onClo
             <div className="emp-form">
               <TeamField row={row} toast={toast} onSaved={onSaved} />
               <CategoryField row={row} toast={toast} onSaved={onSaved} />
+              <LevelField row={row} toast={toast} onSaved={onSaved} />
               {FIELDS.map(([k, label, kind]) => (
                 <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>
                   <span>{label}</span>
