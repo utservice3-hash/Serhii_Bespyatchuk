@@ -63,7 +63,7 @@ import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS,
-         archiveListSql, carrierCandidatesSql } from "../core/clientArchive.js";
+         archiveListSql, carrierCandidatesSql, ARCHIVE_UPSERT_SQL } from "../core/clientArchive.js";
 import { clientsListSql } from "../core/clientPlansList.js";
 import { logClientAdmin, clientAdminLog } from "../core/clientAdminLog.js";
 import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
@@ -107,7 +107,7 @@ import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFor
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
-import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL, orphanPoolAccess, orphanRowOrder, type OrphanPoolAccess } from "../core/orphanClients.js";
+import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL, ORPHAN_CLOSE_REASON_KEYS, orphanPoolAccess, orphanRowOrder, type OrphanPoolAccess } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as callNorm from "../core/callNorm.js";
@@ -3818,13 +3818,7 @@ dashboardRouter.post("/client-archive", async (req, res) => {
   const reason = String(req.body?.reason ?? "").trim();
   if (!ARCHIVE_REASON_KEYS.includes(reason))
     return res.status(400).json({ error: `Причина обовʼязкова: ${ARCHIVE_REASON_KEYS.join(", ")}` });
-  await pool.query(
-    `INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason, archived_by, updated_by, updated_at)
-     VALUES ($1, now(), $2, $3, $3, now())
-     ON CONFLICT (client_key) DO UPDATE
-       SET archived_at = now(), archive_reason = EXCLUDED.archive_reason,
-           archived_by = EXCLUDED.archived_by, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, reason, req.auth!.userId]);
+  await pool.query(ARCHIVE_UPSERT_SQL, [clientKey, reason, req.auth!.userId]);
   await logClientAdmin("archive", clientKey, req.auth!.userId, { reason });
   res.json({ ok: true, archived: true });
 });
@@ -7912,6 +7906,8 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
     scope: all ? "all" : `${ORPHAN_DEFAULT_MONTHS}m`,
     // «self» — менеджер із прапорцем: бачить пул, але закріпити може лише за собою.
     access,
+    // 🚫 Причини кнопки «Закрити» (задача 7187) — підписи зі спільного словника, а не з фронту.
+    closeReasons: reactivationRules.CLOSE_REASONS.filter((r) => ORPHAN_CLOSE_REASON_KEYS.includes(r.key)),
     // Плитки — з тієї самої вибірки, не окремим запитом.
     tiles: {
       clients: rows.length,
@@ -7963,6 +7959,30 @@ dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
     return res.status(409).json({ error: `Клієнта вже взяв ${who.rows[0]?.name ?? "інший менеджер"}` });
   }
   res.json({ ok: true, clientKey, managerId });
+});
+
+/**
+ * 🚫 «Закрити» в «Нічийних» (задача 7187): перевізник / не цікаво / не актуально / дубль → архів з причиною,
+ * датою й автором, і клієнт зникає з пулу. Допуск — той самий, що «Взяти в роботу» (менеджер із прапорцем
+ * «Нічийні», тімлід, КВП/ОД/адмін). Закрити можна лише клієнта, який ЗАРАЗ у пулі: інакше менеджер із
+ * прапорцем архівував би будь-кого за ключем. Коментар (якщо є) лягає в коментарі клієнта.
+ */
+dashboardRouter.post("/orphan-clients/close", async (req, res) => {
+  const auth = req.auth!;
+  const access = await poolAccessOf(auth);
+  if (access === "none") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const reason = String(req.body?.reason ?? "").trim();
+  const comment = String(req.body?.comment ?? "").trim().slice(0, 2000);
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!ORPHAN_CLOSE_REASON_KEYS.includes(reason))
+    return res.status(400).json({ error: `Причина обовʼязкова: ${ORPHAN_CLOSE_REASON_KEYS.join(", ")}` });
+  const inPool = (await metrics.orphanClients(600)).some((c) => c.clientKey === clientKey);
+  if (!inPool) return res.status(409).json({ error: "Клієнта вже немає в нічийних — його взяли або закрили" });
+  await pool.query(ARCHIVE_UPSERT_SQL, [clientKey, reason, auth.userId]);
+  if (comment) await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`, [clientKey, auth.userId, comment]);
+  await logClientAdmin("archive", clientKey, auth.userId, { reason, from: "orphan", ...(comment ? { comment } : {}) });
+  res.json({ ok: true, clientKey, reason });
 });
 
 dashboardRouter.get("/reactivation-list", async (req, res) => {
@@ -9559,8 +9579,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     getSettings(),
     reportCuts.invoicingJamByManager({ managerId, teamId }),
     reportCuts.expectedNoDateByManager(metrics.EXPECT_ZONE, { managerId, teamId }),
-    // 🎯 ТЗ-3 «перший дотик»: оцінки бота за період, звʼязані з тим, хто ДЗВОНИВ (рішення 17.09.2026).
-    firstTouchReport(from, to),
+    // 🎯 «Перший дотик»: ті самі розмови й те саме правило, що плитка «Ціна озвучена» на екрані AI (задача 7237).
+    getSettings().then((s) => firstTouchReport(from, to, s.adSources)),
   ]);
   const callsM = new Map(callsRows.map((r) => [r.managerId, r]));
   const callDaysM = new Map<number, callNorm.CallDay[]>();
@@ -9833,7 +9853,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // 📞 Норма — з «Планів» (4632, Роман 10.10.2026): чинна на місяць кінця періоду, та сама, що на Статистиках.
       callNorm: callNorm.callNormCell(callDaysM.get(m.id) ?? [], callsNormNow, from, to, kyivToday),
       // 🎯 «Ціну названо в перший дотик»: стан + лічильники; відсоток рахує фронт із лічильників.
-      firstTouch: firstTouchCell(ft.byManager.get(m.id), m.team_id, ft.coveredTeamIds),
+      firstTouch: firstTouchCell(ft.byManager.get(m.id), ft.covered),
       // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.
       expectNoDate: Math.round(noDateM.get(m.id)?.sum ?? 0), expectNoDateDeals: noDateM.get(m.id)?.deals ?? 0,
       // 🧱 Затор на «Виставленні рахунку»: скільки з очікувань стоїть саме тут.
@@ -10017,9 +10037,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     // Окремим масивом, а не серед `managers`: у них немає плану, %, світлофора й темпу,
     // тож змішувати їх у той самий список означало б рахувати статуси по людях, яких немає.
     dismissed,
-    // 🎯 Про ДЖЕРЕЛО «першого дотику», а не про скоуп: скільки оцінок не звʼязалось з менеджером,
-    // коли бот присилав останню, скільки команд він оцінює взагалі. Від ролі не залежить.
-    firstTouchMeta: { unmapped: ft.unmapped, lastAnalyzedAt: ft.lastAnalyzedAt, coveredTeams: ft.coveredTeamIds.size },
+    // 🎯 Про ДЖЕРЕЛО «першого дотику», а не про скоуп: скільки розмов без менеджера, коли AI розібрав
+    // останню, чи розбір узагалі існував у періоді. Від ролі не залежить.
+    firstTouchMeta: { unmapped: ft.unmapped, lastAnalyzedAt: ft.lastAnalyzedAt, covered: ft.covered },
   });
 });
 

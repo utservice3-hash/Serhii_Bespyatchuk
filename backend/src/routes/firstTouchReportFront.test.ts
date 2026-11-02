@@ -39,9 +39,9 @@ test("#477 ПЕРШИЙ ДОТИК · ФРОНТ: підсумок — част�
   assert.deepEqual(C.firstTouchLabel({ state: "not_covered", analyzed: 0, voiced: 0, noRecord: 0 }), { main: "не вимірюється", sub: null, muted: true });
   assert.deepEqual(C.firstTouchLabel({ state: "measured", analyzed: 0, voiced: 0, noRecord: 0 }), { main: "—", sub: "оцінок немає", muted: true },
     "🔴 «оцінок немає» злилось із «не вимірюється» або з нулем");
-  assert.deepEqual(C.firstTouchLabel({ state: "measured", analyzed: 0, voiced: 0, noRecord: 2 }), { main: "—", sub: "без запису 2", muted: true });
-  assert.deepEqual(C.firstTouchLabel({ state: "measured", analyzed: 4, voiced: 1, noRecord: 1 }), { main: "25%", sub: "1 з 4 · без запису 1", muted: false },
-    "🔴 «без запису» увійшло у знаменник або зникло з підпису");
+  assert.deepEqual(C.firstTouchLabel({ state: "measured", analyzed: 0, voiced: 0, noRecord: 2 }), { main: "—", sub: "не розібрано 2", muted: true });
+  assert.deepEqual(C.firstTouchLabel({ state: "measured", analyzed: 4, voiced: 1, noRecord: 1 }), { main: "25%", sub: "1 з 4 · не розібрано 1", muted: false },
+    "🔴 «не розібрано» увійшло у знаменник або зникло з підпису");
 
   assert.equal(C.firstTouchStale("2026-09-14", "2026-09-17", "2026-09-30"), false, "🔴 три дні (вихідні) — ще не «бот мовчить»");
   assert.equal(C.firstTouchStale("2026-09-13", "2026-09-17", "2026-09-30"), true, "🔴 чотири дні без оцінок не позначено");

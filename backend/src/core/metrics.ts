@@ -6,6 +6,7 @@ import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckCloc
   asOfStaleAfterMin, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, clientKind, type OrphanReason, type ClientKind, type ClientKindWhy } from "./orphanClients.js";
+import { archivedSql, LAST_PAID_CTE } from "./clientArchive.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 import type { LazyCache } from "./lazyCache.js";
@@ -4084,7 +4085,8 @@ export interface OrphanClient {
  */
 export async function orphanClients(months: number): Promise<OrphanClient[]> {
   const r = await pool.query<Record<string, string | null>>(
-    `WITH pay AS (
+    `WITH ${LAST_PAID_CTE},
+     pay AS (
        SELECT d.client_key ck, d.manager_id mid, d.closed_at_kommo dt, d.price, d.client_name nm,
               d.payment_type ptype,
               CASE WHEN lower(COALESCE(d.payment_type,'')) LIKE '%налич%'
@@ -4123,9 +4125,13 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
        JOIN prim p ON p.ck=a.ck
        JOIN managers m ON m.id=p.mid
        LEFT JOIN loyalty_overrides lo ON lo.client_key=a.ck
+       LEFT JOIN arch_paid ap ON ap.client_key=a.ck
        LEFT JOIN LATERAL (SELECT max(calldate) last_call FROM ringostat_calls c WHERE c.client_key=a.ck) rc ON true
       WHERE ${orphanManagerSql("m")}
         AND lo.pinned_manager_id IS NULL
+        -- 🗄 Архівний клієнт (зокрема закритий кнопкою «Закрити», задача 7187) у пул не потрапляє — тим самим
+        -- правилом, що й архів: повертається сам, щойно прийде оплата, пізніша за архівацію.
+        AND NOT ${archivedSql("lo", "ap")}
         AND a.last_dt >= now() - ($2 || ' months')::interval`,
     [GENERIC_CLIENT_KEYS, String(months)]);
   // ☎️🏢 Код компанії й телефони — ОКРЕМИМ запитом за ключами пулу, а не підзапитом у великому:

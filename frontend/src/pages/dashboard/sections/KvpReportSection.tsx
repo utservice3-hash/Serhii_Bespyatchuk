@@ -966,8 +966,9 @@ function WeekCell({ w, prev, mode, onClick, active, blk }: { w: WeekLike | undef
     if (w.isFuture) return <td onClick={handle} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11, color: MUTED }}>—</td>;
     const recv = <div style={{ ...clip, color: MUTED, fontSize: 10 }}>отримали {fmtMoney(w.fact)}</div>;
     if (!sh || sh.deals === 0) return <td onClick={handle} title={blk ? shipTip(blk, sh) : undefined} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11 }}><div style={{ color: MUTED }}>— авто</div>{recv}</td>;
-    const st = sh.waitDeals > 0 ? <span style={{ color: AMBER }}>чекаємо {fmtMoney(sh.waitSum)}</span>
-      : sh.lostDeals > 0 ? <span style={{ color: RED }}>✕ без оплати {sh.lostDeals} авто</span>
+    // Нульовий бюджет у «чекаємо» — це авто без суми, а не «нічого не чекаємо»: тоді називаємо кількість.
+    const st = sh.waitDeals > 0 ? <span style={{ color: AMBER }}>чекаємо {sh.waitSum !== 0 ? fmtMoney(sh.waitSum) : `${sh.waitDeals} авто`}</span>
+      : sh.lostDeals > 0 ? <span style={{ color: RED }}>✕ {sh.lostDeals} без оплати</span>
       : <span style={{ color: GREEN }}>✓ усе оплачено</span>;
     return (
       <td onClick={handle} title={blk ? shipTip(blk, sh) : undefined} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11 }}>
