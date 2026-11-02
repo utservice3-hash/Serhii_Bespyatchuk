@@ -432,6 +432,8 @@ export interface TileStats {
   objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number };
   /** 🤝 Згода після ціни: серед розмов із ціною й відомим рішенням; `pct` — частка «погодився». Ті самі правила, що фільтри. */
   decision: { agreed: number; thinking: number; declined: number; of: number; pct: number | null };
+  /** 💬 «Сам запропонував месенджер»: `n` — тим самим правилом, що фільтр плитки; `of` — розмови, які рубрика розібрала. */
+  messengerSelf: { n: number; of: number };
 }
 export function tileStats(rows: readonly TileRow[]): TileStats {
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : null);
@@ -446,6 +448,7 @@ export function tileStats(rows: readonly TileRow[]): TileStats {
     lost: rows.filter(TILE_MATCH.lost).length,
     success: { n: rows.filter(TILE_MATCH.success).length, of: rows.filter((r) => r.flags.analysed).length },
     decision: decisionStats(rows),
+    messengerSelf: { n: rows.filter(TILE_MATCH.messengerSelf).length, of: rows.filter((r) => r.messengerSignal != null).length },
   };
 }
 
@@ -570,3 +573,21 @@ export function withoutAiLinkParams(href: string): string {
   for (const k of LINK_PARAMS) u.searchParams.delete(k);
   return u.pathname + u.search + u.hash;
 }
+
+// ─── 💬 Рядок «Месенджер» у картці дзвінка (задача 7184; окрема перевірка з цитатою — Роман 02.11.2026) ──────────────
+// Вердикт — тим самим правилом, що сигнал у списку (`messengerSignal` на сервері): «менеджер сам» лише коли цитату
+// знайдено в розмові. Цитата, якої в розмові немає, — «не підтверджено», а не сигнал. Не розбирали — так і пишемо:
+// порожнеча не може читатись як «не пропонував».
+export type MessengerVerdict = "self" | "unconfirmed" | "client" | "none" | "notAnalysed";
+export function messengerVerdict(m: { move: "none" | "manager" | "client"; quote_found?: boolean | null } | null): MessengerVerdict {
+  if (!m) return "notAnalysed";
+  if (m.move === "manager") return m.quote_found === true ? "self" : "unconfirmed";
+  return m.move;
+}
+export const MESSENGER_VERDICT_UI: Record<MessengerVerdict, { text: string; tone: Tone }> = {
+  self: { text: "Менеджер сам запропонував перейти в месенджер — клієнт не просив", tone: "warn" },
+  unconfirmed: { text: "Модель вважає, що запропонував менеджер, але такої фрази в розмові немає — не підтверджено", tone: "muted" },
+  client: { text: "Клієнт сам попросив месенджер", tone: "ok" },
+  none: { text: "Переходу в месенджер не було", tone: "muted" },
+  notAnalysed: { text: "Не розбиралось: перевірка діє для розмов від 30.10, де звучить месенджер", tone: "muted" },
+};

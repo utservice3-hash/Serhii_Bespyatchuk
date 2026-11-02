@@ -530,6 +530,12 @@ export interface AiCallCard {
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
   /** Дзвінки на номер після розмови (до 12, за 7 днів) — щоб стан обіцянки можна було перевірити очима. */
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
+  /**
+   * 💬 Розбір «хто запропонував месенджер» (задача 7184, окремий рядок картки — Роман 02.11.2026): хто, дослівна цитата й
+   * чи знайшлась вона в розмові. `null` — рубрика цю розмову не розбирала (до 30.10 або месенджер не звучав). Роль без
+   * права на сигнал отримує `null` — прибирає роут тим самим правилом, що й `row.messengerSignal`.
+   */
+  messenger: MessengerResult | null;
 }
 
 /**
@@ -632,6 +638,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     nextOutboundAt: next ? new Date(next).toISOString() : null,
     promiseChecks,
     callsAfter,
+    messenger: done ? raw.ms_result ?? null : null,
     typeHistory: (await db.query<{ is_cargo: boolean; set_by_name: string | null; set_at: Date }>(
       "SELECT is_cargo, set_by_name, set_at FROM call_type_overrides WHERE uniqueid = $1 ORDER BY set_at DESC, id DESC LIMIT 20", [uniqueid]))
       .rows.map((x) => ({ isCargo: x.is_cargo === true, byName: x.set_by_name, at: new Date(x.set_at).toISOString() })),

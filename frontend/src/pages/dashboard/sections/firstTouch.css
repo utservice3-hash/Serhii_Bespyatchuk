@@ -26,6 +26,7 @@
 .ftd-go:hover { background: var(--brand-dark); }
 
 .ftd-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+@media (min-width: 1101px) { .ftd-kpis.is-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .ftd-kpi { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
 .ftd-kpi-l { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
 .ftd-kpi-v { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }

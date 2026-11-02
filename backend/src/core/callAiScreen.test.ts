@@ -2246,5 +2246,83 @@ test("#3203 ФРОНТ: колонка й фільтри месенджера о
   assert.match(sec, /\{d\.canSeeMessengerSignal && l\.messengerSelf > 0 && <div className="ftd-sub">сам запропонував: \{l\.messengerSelf\}<\/div>\}/, "🔴 лічильник «сам» видно без права");
   const dash = SRC("routes/dashboard.ts");
   assert.match(dash, /messengerPromises: r\.messengerPromises, messengerSignal: seeMsgSignal \? r\.messengerSignal : null,/, "🔴 список віддає сигнал ролям без права");
-  assert.match(dash, /if \(!canSeeMessengerSignal\(auth\.roleKey, \(await loadTunables\(pool\)\)\.messengerSignalTeamLeads\)\) card\.row\.messengerSignal = null;/, "🔴 картка віддає сигнал ролям без права");
+  assert.match(dash, /const seeMsg = canSeeMessengerSignal\(auth\.roleKey, \(await loadTunables\(pool\)\)\.messengerSignalTeamLeads\);\s*if \(!seeMsg\) \{ card\.row\.messengerSignal = null;/, "🔴 картка віддає сигнал ролям без права");
+});
+
+/**
+ * #3205 — КАРТКА НЕСЕ РОЗБІР МЕСЕНДЖЕРА З ЦИТАТОЮ (задача 7184; окрема перевірка в картці — Роман 02.11.2026): хто
+ * запропонував, дослівна цитата, чи звірена; розмова без рубрики — `null` («не розбиралось»), а не «не пропонував». Роут
+ * прибирає блок разом із сигналом для ролей без права й каже фронту, чи показувати рядок.
+ * 🧨 Червоніє, якщо картка не віддає цитату, вигадує розбір там, де рубрики не було, або віддає його ролі без права.
+ */
+test("#3205 КАРТКА МЕСЕНДЖЕРА: розбір із цитатою в картці, без рубрики — null; роль без права не отримує ні сигналу, ні цитати", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallCard } = await import("./callAiScreen.js");
+  const M = await import("./firstTouchMessenger.js");
+  const dash = SRC("routes/dashboard.ts");
+  assert.match(dash, /if \(!seeMsg\) \{ card\.row\.messengerSignal = null; card\.messenger = null; \}/, "🔴 картка віддає цитату месенджера ролі без права");
+  assert.match(dash, /messenger: card\.messenger, canSeeMessengerSignal: seeMsg,/, "🔴 картка не віддає розбір месенджера чи право на нього");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+    VALUES (73205,'D73205',8921932,1,'2026-10-31 10:00:00+02','0507320500','ad',9011), (73206,'D73206',8921932,1,'2026-10-31 10:00:00+02','0507320600','ad',9011)`);
+  await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ('ms5','2026-10-31 10:10:00+02','out','ANSWERED',60,65,9011,'380507320500','https://rec/x'),
+           ('ms6','2026-10-31 10:10:00+02','out','ANSWERED',60,65,9011,'380507320600','https://rec/x')`);
+  const tr = async (u: string, text: string) => (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done',$2::jsonb) RETURNING id`, [u, JSON.stringify([{ channel: 1, start: 0, end: 2, text, lang: "ukr" }])])).rows[0].id;
+  const an = (tid: string, rubric: string, result: unknown) => c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash',$2,'done',$3::jsonb)`, [tid, rubric, JSON.stringify(result)]);
+  const noMsg = { ...RESULT, promises: RESULT.promises.filter((p) => p.channel !== "message") };
+  const t5 = await tr("ms5", "Я вам зараз напишу на Viber"); await an(t5, "first-touch-v4", noMsg);
+  await an(t5, M.RUBRIC_MESSENGER_V1, { move: "manager", quote: "напишу на Viber", quote_found: true });
+  const t6 = await tr("ms6", "тент двадцять тонн"); await an(t6, "first-touch-v4", noMsg);
+  const a = await aiCallCard(c.db, "ms5", false, {}), b = await aiCallCard(c.db, "ms6", false, {});
+  assert.ok(a && b, "🔴 карток немає — гейту нема що перевіряти");
+  assert.deepEqual(a.messenger, { move: "manager", quote: "напишу на Viber", quote_found: true }, "🔴 картка не несе розбір месенджера з цитатою");
+  assert.equal(a.row.messengerSignal, true, "дзеркало: рядок і розбір картки — та сама розмова, той самий сигнал");
+  assert.equal(b.messenger, null, "🔴 розмова без рубрики отримала вигаданий розбір месенджера");
+});
+
+/**
+ * #3206 — ОКРЕМА ПЛИТКА «САМ ЗАПРОПОНУВАВ МЕСЕНДЖЕР» (Роман 02.11.2026): число = рівно ті рядки, що лишає фільтр плитки
+ * після кліку; «з N розібраних» — лише розмови, які рубрика розібрала (`null` — не в знаменнику); плитку видно лише з правом.
+ * 🧨 Червоніє, якщо число плитки рахує інакше, ніж її фільтр, знаменник бере нерозібрані, або плитку видно без права.
+ */
+test("#3206 ПЛИТКА МЕСЕНДЖЕРА: число = фільтр, знаменник — лише розібрані рубрикою, плитка лише з правом", async () => {
+  const V = await loadView() as unknown as { tileStats: (rows: readonly unknown[]) => { messengerSelf: { n: number; of: number } };
+    TILE_MATCH: Record<string, (r: unknown) => boolean> };
+  const row = (sig: boolean | null) => ({ inReport: true, flags: { agreement: false, analysed: true }, checklist: null, dealOutcome: null,
+    clientDecision: null, messengerPromises: 0, messengerSignal: sig });
+  const rows = [row(true), row(true), row(false), row(null), row(null)];
+  const st = V.tileStats(rows).messengerSelf;
+  assert.deepEqual([st.n, st.of], [2, 3], "🔴 плитка рахує сигнал без «так» чи кладе нерозібрані в знаменник");
+  assert.equal(rows.filter(V.TILE_MATCH.messengerSelf).length, st.n, "🔴 число плитки і список після кліку розходяться");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /\{d\.canSeeMessengerSignal && kpi\("messengerSelf", "Сам запропонував месенджер", <AnimatedNumber value=\{ts\.messengerSelf\.n\} \/>/,
+    "🔴 плитки немає, вона бере інше число або видна без права");
+});
+
+/**
+ * #3207 — РЯДОК «МЕСЕНДЖЕР» У КАРТЦІ: вердикт «менеджер сам запропонував» — лише коли цитату знайдено в розмові (те саме
+ * правило, що сигнал); незвірена цитата — «не підтверджено»; клієнт попросив — окремий вердикт; не розбирали — словами.
+ * Рядок видно лише з правом, цитата — під вердиктом.
+ * 🧨 Червоніє, якщо вигадана цитата дає «сам запропонував», порожнеча читається як «не пропонував», або рядок видно без права.
+ */
+test("#3207 ВЕРДИКТ МЕСЕНДЖЕРА В КАРТЦІ: «сам» лише зі звіреною цитатою; незвірене — «не підтверджено»; не розбирали — словами", async () => {
+  const V = await loadView() as unknown as { messengerVerdict: (m: unknown) => string; MESSENGER_VERDICT_UI: Record<string, { text: string }> };
+  const M = await import("./firstTouchMessenger.js");
+  const cases: [unknown, string][] = [
+    [{ move: "manager", quote: "напишу на Viber", quote_found: true }, "self"],
+    [{ move: "manager", quote: "напишу в телеграм", quote_found: false }, "unconfirmed"],
+    [{ move: "client", quote: "скиньте у вайбер", quote_found: true }, "client"],
+    [{ move: "none", quote: "" }, "none"],
+    [null, "notAnalysed"],
+  ];
+  for (const [m, want] of cases) assert.equal(V.messengerVerdict(m), want, `🔴 вердикт для ${JSON.stringify(m)} — не «${want}»`);
+  for (const [m] of cases) assert.equal(V.messengerVerdict(m) === "self", M.messengerSignal(m as never) === true,
+    `🔴 вердикт картки і сигнал списку розходяться для ${JSON.stringify(m)}`);
+  assert.match(V.MESSENGER_VERDICT_UI.notAnalysed.text, /Не розбиралось/, "🔴 нерозібрана розмова не каже, що її не розбирали");
+  const dr = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(dr, /\{c\.canSeeMessengerSignal && \(\s*<div style=\{row\}>\s*<span style=\{key\}>Месенджер<\/span>/, "🔴 рядок «Месенджер» видно без права або його немає");
+  assert.match(dr, /\{c\.messenger && c\.messenger\.move !== "none" && <Quote q=\{\{ quote: c\.messenger\.quote, quote_found: c\.messenger\.quote_found \?\? null \}\} \/>\}/,
+    "🔴 під вердиктом немає цитати");
 });

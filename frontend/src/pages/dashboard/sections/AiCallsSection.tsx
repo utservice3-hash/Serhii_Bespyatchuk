@@ -274,7 +274,7 @@ export function AiCallsSection() {
             </section>
           )}
 
-          <section aria-label="Головні числа" className="ftd-kpis">
+          <section aria-label="Головні числа" className={`ftd-kpis${d.canSeeMessengerSignal ? " is-6" : ""}`}>
             {kpi("noCall", "Обіцяли — дзвінка в телефонії немає", <AnimatedNumber value={ts.noCall.n} />,
               `${ts.noCall.of ? `${String(Math.round((ts.noCall.n / ts.noCall.of) * 100))}% від ` : "з "}${String(ts.noCall.of)} обіцянок`,
               "Менеджер пообіцяв передзвонити, а в телефонії його дзвінка немає. Ringostat не бачить особистого мобільного й месенджерів — тому «в телефонії».")}
@@ -287,6 +287,10 @@ export function AiCallsSection() {
             {kpi("success", "Успіх", <><AnimatedNumber value={ts.success.n} /> з <AnimatedNumber value={ts.success.of} /></>,
               ts.success.n >= SUCCESS_MIN_FOR_PCT ? `${String(Math.round((ts.success.n / Math.max(1, ts.success.of)) * 100))}% угод` : "замало угод для відсотка",
               "Машина поїхала: угода з цієї розмови ЗАРАЗ в етапі «Авто працює» або далі, включно з «Успішно реалізовано» (для кваліфікації — її дочірня угода). Оновлюється з Kommo щопівгодини.")}
+            {/* 💬 Задача 7184: окрема плитка — лише ролям, яким сервер дав сигнал; число й список після кліку — одним правилом (TILE_MATCH). */}
+            {d.canSeeMessengerSignal && kpi("messengerSelf", "Сам запропонував месенджер", <AnimatedNumber value={ts.messengerSelf.n} />,
+              ts.messengerSelf.of ? `з ${String(ts.messengerSelf.of)} розібраних · ${String(Math.round((ts.messengerSelf.n / ts.messengerSelf.of) * 100))}%` : "розбирається для розмов від 30.10",
+              "Менеджер сам запропонував перейти у Viber / Telegram / WhatsApp, клієнт про це не просив. Лише з дослівною цитатою, знайденою в розмові. Розбираються розмови від 30.10, де звучить месенджер. Клік — ці розмови; у картці — цитата.")}
           </section>
 
           <section aria-label="Менеджери за чек-листом" className="ftd-card ftd-card-pad">

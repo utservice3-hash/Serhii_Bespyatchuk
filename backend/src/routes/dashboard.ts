@@ -11342,13 +11342,15 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
   const card = await aiCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES), missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
-  // 💬 Задача 7184: сигнал «сам запропонував месенджер» — тим самим правилом видимості, що й у списку.
-  if (!canSeeMessengerSignal(auth.roleKey, (await loadTunables(pool)).messengerSignalTeamLeads)) card.row.messengerSignal = null;
+  // 💬 Задача 7184: сигнал «сам запропонував месенджер» і його розбір з цитатою — тим самим правилом видимості, що й у списку.
+  const seeMsg = canSeeMessengerSignal(auth.roleKey, (await loadTunables(pool)).messengerSignalTeamLeads);
+  if (!seeMsg) { card.row.messengerSignal = null; card.messenger = null; }
   res.json({
     row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
     result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
     managerChannel: card.managerChannel, durationSec: card.durationSec, mono: card.mono, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
+    messenger: card.messenger, canSeeMessengerSignal: seeMsg,
     typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
     noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline"),
       explain: canWriteNote(auth.roleKey, "explain") },

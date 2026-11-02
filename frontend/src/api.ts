@@ -469,6 +469,8 @@ export interface AiAnalysis {
   next_step: string;
 }
 export interface AiTurn { channel: number; start: number | null; end: number | null; text: string; lang: string | null }
+/** 💬 Розбір рубрики месенджера: `manager` — запропонував менеджер, `client` — попросив клієнт, `none` — переходу не було. */
+export interface AiMessengerT { move: "none" | "manager" | "client"; quote: string; quote_found?: boolean | null }
 export interface AiCallCardResp {
   row: Omit<AiCallRowT, "dealCreatedAt" | "nonTarget">;
   dealUrls: { kommoId: number; url: string }[];
@@ -479,6 +481,9 @@ export interface AiCallCardResp {
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: ({ deadline: string; countUntil: string; basis: string; state: PromiseStateT } | null)[];
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
+  /** 💬 Хто запропонував месенджер — з цитатою (задача 7184); `null` — не розбирали або роль не має права (`canSeeMessengerSignal`). */
+  messenger: AiMessengerT | null;
+  canSeeMessengerSignal: boolean;
   /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
   canEditType: boolean;
