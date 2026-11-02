@@ -405,10 +405,11 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                         <WithExpCell on={oneMonth} plan={t.plan} fact={t.revenue} expected={t.expectedThisMonth} />
                         <td style={{ textAlign: "right" }} title={`Лайфтайм (весь час): ${t.convLifetime.num} / ${t.convLifetime.den}${t.kind === "rnk" ? " (реклама)" : t.kind === "rpk" ? " (лідген)" : ""}`}>{t.kind === "rnk" || t.kind === "rpk" ? fmtPct(t.convLifetime.pct) : "—"}</td>
                         {rep.weekBlocks.map((w) => (
-                          <WeekCell key={w.idx} mode={weekMode} blk={w}
+                          <WeekCell key={w.idx} mode={weekMode}
                             w={t.weeks?.find((x) => x.idx === w.idx)}
                             prev={t.weeks?.find((x) => x.idx === w.idx - 1)}
                             active={openWeekDrill?.teamId === t.teamId && openWeekDrill?.weekIdx === w.idx}
+                            blk={w}
                             onClick={() => setOpenWeekDrill((cur) => cur?.teamId === t.teamId && cur?.weekIdx === w.idx ? null : { teamId: t.teamId, weekIdx: w.idx })} />
                         ))}
                       </tr>
@@ -433,7 +434,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                         expected={rep.teams.reduce((s, t) => s + t.expectedThisMonth, 0)} />
                       <td></td>
                       {rep.deptWeeks.map((w) => (
-                        <WeekCell key={w.idx} mode={weekMode} blk={w} w={w} prev={rep.deptWeeks.find((x) => x.idx === w.idx - 1)} />
+                        <WeekCell key={w.idx} mode={weekMode} w={w} prev={rep.deptWeeks.find((x) => x.idx === w.idx - 1)} blk={w} />
                       ))}
                     </tr>
                   )}
