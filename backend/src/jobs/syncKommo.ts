@@ -1,6 +1,7 @@
 import { dedupeDealContactPairs, type DealContactPair } from "./dealContactPairs.js";
 import { pool } from "../db/pool.js";
 import { splitCompanyCodes } from "../core/companyCode.js";
+import { normalizeTeamName, teamRenameFromKommo } from "../core/teamName.js";
 import {
   extractPhone,
   extractLeadSource,
@@ -65,6 +66,26 @@ async function fetchByIdsBatched<T>(
   return out;
 }
 
+/** Назва команди йде за групою Kommo (`teamRenameFromKommo`); зайнята іншою командою назва — пропуск із записом у лог. */
+async function renameTeamFromKommo(teamId: number, groupId: number, local: string, kommo: string): Promise<void> {
+  const wanted = normalizeTeamName(kommo);
+  const takenByOther = wanted !== "" && wanted !== local && (await pool.query(
+    `SELECT 1 FROM teams WHERE lower(name) = lower($1) AND id <> $2`, [wanted, teamId])).rows.length > 0;
+  const d = teamRenameFromKommo({ groupId, local, kommo, takenByOther });
+  if (d.kind === "collision") {
+    console.warn(`syncKommo: команду ${teamId} не перейменовано на «${d.name}» — цю назву вже має інша команда`);
+    return;
+  }
+  if (d.kind !== "rename") return;
+  try {
+    await pool.query(`UPDATE teams SET name = $1 WHERE id = $2`, [d.name, teamId]);
+    console.log(`syncKommo: команда ${teamId} «${local}» → «${d.name}» (назва з Kommo)`);
+  } catch (e) {
+    if ((e as { code?: string }).code !== "23505") throw e;
+    console.warn(`syncKommo: команду ${teamId} не перейменовано на «${d.name}» — цю назву вже має інша команда`);
+  }
+}
+
 export async function syncManagers(): Promise<number> {
   const users = await fetchUsers();
 
@@ -72,17 +93,18 @@ export async function syncManagers(): Promise<number> {
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
     if (!group || teamIdByGroupId.has(group.id)) continue;
-    // Match by the STABLE Kommo group id first, so a team renamed locally in
-    // the dashboard (e.g. "Тендери" → "Самостійний") keeps its custom name and
-    // the sync never tries to re-insert the old name (which would collide on
-    // the unique kommo_group_id and crash the whole job).
+    // Match by the STABLE Kommo group id first, so the sync never tries to
+    // re-insert an old name (which would collide on the unique kommo_group_id
+    // and crash the whole job). The name itself now follows Kommo (02.11.2026),
+    // except the groups in KEEP_DASHBOARD_TEAM_NAME (e.g. "Тендери" → "Самостійний").
     let teamId: number;
-    const existing = await pool.query<{ id: number }>(
-      `SELECT id FROM teams WHERE kommo_group_id = $1`,
+    const existing = await pool.query<{ id: number; name: string }>(
+      `SELECT id, name FROM teams WHERE kommo_group_id = $1`,
       [group.id]
     );
     if (existing.rows.length) {
       teamId = existing.rows[0].id;
+      await renameTeamFromKommo(teamId, group.id, existing.rows[0].name, group.name);
     } else {
       const result = await pool.query<{ id: number }>(
         `INSERT INTO teams (name, kommo_group_id)
