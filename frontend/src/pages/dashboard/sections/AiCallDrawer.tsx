@@ -20,9 +20,11 @@ const fmtFull = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
   timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
 });
 
-function Chip({ tone, children }: { tone: Tone; children: React.ReactNode }) {
+function Chip({ tone, children, wrap = false }: { tone: Tone; children: React.ReactNode; wrap?: boolean }) {
   const c = TONE_COLOR[tone];
-  return <span style={{ background: c.bg, color: c.fg, borderRadius: 999, padding: "3px 10px", fontSize: 12, whiteSpace: "nowrap" }}>{children}</span>;
+  // `wrap` — для довгого вердикту в рядку розбору: переноситься, а не впирається в край картки.
+  return <span style={{ background: c.bg, color: c.fg, borderRadius: wrap ? 10 : 999, padding: "3px 10px", fontSize: 12,
+    whiteSpace: wrap ? "normal" : "nowrap", display: wrap ? "inline-block" : undefined, lineHeight: wrap ? 1.4 : undefined }}>{children}</span>;
 }
 
 function StateChip({ state }: { state: AiCallState }) {
@@ -74,7 +76,7 @@ export function Analysis({ c }: { c: AiCallCardResp }) {
         <div style={row}>
           <span style={key}>Месенджер</span>
           <span>
-            <Chip tone={MESSENGER_VERDICT_UI[messengerVerdict(c.messenger)].tone}>{MESSENGER_VERDICT_UI[messengerVerdict(c.messenger)].text}</Chip>
+            <Chip wrap tone={MESSENGER_VERDICT_UI[messengerVerdict(c.messenger)].tone}>{MESSENGER_VERDICT_UI[messengerVerdict(c.messenger)].text}</Chip>
             {c.messenger && c.messenger.move !== "none" && <Quote q={{ quote: c.messenger.quote, quote_found: c.messenger.quote_found ?? null }} />}
           </span>
         </div>

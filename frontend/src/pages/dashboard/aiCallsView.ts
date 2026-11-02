@@ -243,11 +243,32 @@ export async function blobErrorBody(data: unknown): Promise<unknown> {
  * Репліка, у якій прозвучала цитата з розбору: перша, чий текст містить цитату (без регістру й зайвих пробілів).
  * −1 — цитати немає або вона не знайдена дослівно (тоді в картці не перемотуємо і не підсвічуємо — не вгадуємо).
  */
-export function quoteTurnIndex(turns: readonly { text: string }[] | null, quote: string): number {
-  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-  const q = norm(quote);
+/**
+ * Де в записі цитата з розбору: індекс репліки, з якої вона ПОЧИНАЄТЬСЯ. Те саме правило, що звірка на сервері
+ * (`quoteInOneChannel`): нормалізація без розділових знаків і пошук по склеєних репліках ОДНОГО каналу — бо модель цитує
+ * фразу, яку розпізнавання розрізало на дві репліки (02.11.2026: «звірено з розшифровкою» було, а «▶ послухати» — ні).
+ */
+const normQuote = (s: string) => s.toLowerCase().replace(/[’'`ʼ]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").replace(/\s+/g, " ").trim();
+export function quoteTurnIndex(turns: readonly { text: string; channel?: number }[] | null, quote: string): number {
+  const q = normQuote(quote);
   if (!turns || q.length < 3) return -1;
-  return turns.findIndex((t) => norm(t.text).includes(q));
+  const byChannel = new Map<number, { idx: number; from: number }[]>();
+  const joined = new Map<number, string>();
+  turns.forEach((t, idx) => {
+    const ch = t.channel ?? 0, prev = joined.get(ch) ?? "";
+    const from = prev ? prev.length + 1 : 0;
+    joined.set(ch, prev ? `${prev} ${normQuote(t.text)}` : normQuote(t.text));
+    byChannel.set(ch, [...(byChannel.get(ch) ?? []), { idx, from }]);
+  });
+  let best = -1;
+  for (const [ch, text] of joined) {
+    const at = text.indexOf(q);
+    if (at < 0) continue;
+    const spans = byChannel.get(ch) ?? [];
+    const start = [...spans].reverse().find((x) => x.from <= at)?.idx ?? -1;
+    if (start >= 0 && (best < 0 || start < best)) best = start;
+  }
+  return best;
 }
 
 // ─── Екран D (08.10.2026): чек-лист і черга розбору ─────────────────────────────────────────────────────────────
