@@ -573,7 +573,7 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
   if (col.key === "rank") return <td style={st} />;
   if (col.key === "name") return <td style={st}>{scopeLabel} · {count}</td>;
   const f = footValue(col.key, rows);
-  // 🎯 Підсумок групи, де жодну людину бот не оцінює, — «не вимірюється», а не «—» (рецензія 17.09.2026).
+  // 🎯 Підсумок групи, де жодної людини не виміряно, — «не вимірюється», а не «—» (рецензія 17.09.2026).
   if (col.key === "firstTouch" && rows.length > 0 && rows.every((m) => m.firstTouch?.state !== "measured")) {
     return <td style={{ ...st, color: "var(--text-muted)", fontWeight: 500 }}>не вимірюється</td>;
   }

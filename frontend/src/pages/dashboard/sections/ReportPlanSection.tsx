@@ -633,18 +633,18 @@ function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPla
         {g.expectPastMonths !== 0 && <div style={{ fontSize: 12, color: AMBER, marginTop: 2 }}>з минулих міс: {fmt(g.expectPastMonths)} ₴</div>}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто · {periodLabel}: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
         {/* 🎯 ТЗ-3 «перший дотик» по команді: відсоток із СУМ (Σ названих ÷ Σ оцінених), не середнє відсотків. */}
-        {/* Стан підсумку — з бекенду: «не вимірюється» (команду бот не слухає) ≠ «оцінок немає». */}
+        {/* Стан підсумку — з бекенду: «не вимірюється» (розбору в періоді не було) ≠ «оцінок немає». */}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
           ціну названо в 1-й дотик: <b>{ftGlance.main}</b>{ftGlance.sub ? ` · ${ftGlance.sub}` : ""}
           {ftOutside > 0 ? ` · ще ${ftOutside} оцінок у людей поза ростером (у відсоток не входять)` : ""}
-          {" "}<InfoHint text={"Оцінки AI-бота перших розмов із рекламними лідами; розмова зараховується тому, хто дзвонив. "
+          {" "}<InfoHint text={"AI-розбір перших розмов із рекламними лідами — ті самі розмови й те саме правило, що плитка «Ціна озвучена» на екрані «Перший дотик · AI»; розмова зараховується тому, хто дзвонив. "
             + "Відсоток — по людях ростеру; «поза ростером» — ті, хто в періоді дзвонив, а зараз завершує роботу чи звільнений. "
-            + `Бот оцінює команд: ${data.firstTouchMeta?.coveredTeams ?? 0}. Не прив'язано до жодного менеджера за період: `
-            + `${(data.firstTouchMeta?.unmapped.analyzed ?? 0) + (data.firstTouchMeta?.unmapped.noRecord ?? 0)}.`} />
+            + "Розбір діє для угод, створених з 20.09.2026. Розмов без менеджера за період: "
+            + `${String((data.firstTouchMeta?.unmapped.analyzed ?? 0) + (data.firstTouchMeta?.unmapped.noRecord ?? 0))}.`} />
         </div>
         {g.firstTouch?.state === "measured" && firstTouchStale(data.firstTouchMeta?.lastAnalyzedAt ?? null, today, data.scope.to) && (
           <div style={{ fontSize: 11, color: AMBER, marginTop: 2 }}>
-            ⚠ бот не присилав оцінок з {data.firstTouchMeta?.lastAnalyzedAt ? ddmm(data.firstTouchMeta.lastAnalyzedAt) : "—"} — число неповне
+            ⚠ AI не розбирав розмов з {data.firstTouchMeta?.lastAnalyzedAt ? ddmm(data.firstTouchMeta.lastAnalyzedAt) : "—"} — число неповне
           </div>
         )}
       </div>
@@ -1021,8 +1021,8 @@ function FirstTouchKpi({ c }: { c: ReportPlanManager["firstTouch"] | undefined }
   const l = firstTouchLabel(c);
   return (
     <span style={{ fontSize: 11.5, color: MUTED, cursor: "help" }}
-      title={"Ціну названо в першій розмові з рекламним лідом: названо ÷ оцінено. Оцінює AI-бот; розмова зараховується тому, хто дзвонив. "
-        + "«Не вимірюється» — команду бот не оцінює. «Без запису» — бот розмови не чув, у відсоток не входить."}>
+      title={"Ціну названо в першій розмові з рекламним лідом: названо ÷ оцінено — так само, як плитка «Ціна озвучена» на екрані «Перший дотик · AI»; розмова зараховується тому, хто дзвонив. "
+        + "«Не вимірюється» — період до 20.09.2026, розбору тоді не було. «Не розібрано» — AI ще не розібрав розмову, у відсоток не входить."}>
       ціну названо <b style={{ color: l.muted ? MUTED : "var(--text)" }}>{l.main}</b>{l.sub ? <span style={{ color: MUTED }}> · {l.sub}</span> : null}
     </span>
   );
