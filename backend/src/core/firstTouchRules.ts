@@ -1,93 +1,52 @@
 /**
  * 🎯 «ПЕРШИЙ ДОТИК» — ЦІНУ НАЗВАНО В ПЕРШІЙ РОЗМОВІ (ТЗ-3 §3.2, 17.09.2026). ЧИСТИЙ МОДУЛЬ.
  *
- * Джерело — оцінка uts-bot (Whisper + LLM) першого вхідного дзвінка по рекламному ліду, що
- * лягає в Google-лист і синкається в `first_touch_analysis` (`jobs/syncFirstTouch.ts`).
+ * Джерело з 02.11.2026 (задача 7237) — AI-розбір розмов екрана «Перший дотик · AI»: лічильники рахує
+ * `core/firstTouch.ts` тим самим правилом, що плитка «Ціна озвучена». До того — лист зовнішнього
+ * uts-bot (`first_touch_analysis`), який замовк 25.09.2026; його в Звіт більше не домішуємо.
  *
- * Рішення власника 17.09.2026, не перевідкривати:
- *  · ДОТИК НАЛЕЖИТЬ ТОМУ, ХТО ДЗВОНИВ (`manager_name` з листа), а не поточному відповідальному
- *    угоди: показник оцінює розмову, а розмову вів той, хто говорив. За 60 днів до 16.09 угоду
- *    потім передали іншому в 12 із 392 оцінок (3 %);
- *  · ЧЕСНІ СТАНИ: менеджер команди, яку бот не оцінює взагалі, — «не вимірюється», а не 0 з 0;
- *    рядок «немає запису» — окремим числом і ПОЗА відсотком (бот пише його як «ціну не названо»,
- *    хоча розмови не чув);
+ * Тут — відбір розмов, стани й суми (чисте: без пулу, тож виконується в `npm test`):
+ *  · ЧЕСНІ СТАНИ: період, у якому розбору не існувало, — «не вимірюється», а не 0 з 0; розмови,
+ *    яких AI ще не розібрав, — окремим числом і ПОЗА відсотком;
+ *  · дотик належить тому, хто дзвонив (менеджер розмови на екрані AI);
  *  · доступ — як у решти Звіту (менеджер бачить картки своєї команди).
- * Рекламного предиката дашборд не додає — це РІШЕННЯ 8 у ТЗ, окремо; бот фільтрує сам.
- *
- * ⚠️ ЗВʼЯЗКА ПО ІМЕНІ, БО ІНШОЇ НЕМАЄ: у листі лише ПІБ. Ключ — прізвище + імʼя в нижньому
- * регістрі без апострофів (у листі «Безпам'ятний» з ', у CRM трапляється ʼ і без апострофа).
- * Заміряно 16.09: 392 з 392 оцінок за 60 днів звʼязались. Що не звʼязалось — не зникає, а
- * їде другим числом «не прив'язано до менеджера».
  */
-
-/** Позначка бота «розмови не чули» — саме так, як її пише `sheets.py`. */
-export const FT_NO_RECORD = "немає запису";
-
-/** Ключ імені для звʼязки: «Прізвище Імʼя», нижній регістр, без апострофів і зайвих пробілів. */
-export function ftNameKey(name: string | null | undefined): string {
-  const words = String(name ?? "").replace(/['ʼ’`]/g, "").trim().toLowerCase().split(/\s+/).filter(Boolean);
-  return words.slice(0, 2).join(" ");
-}
-
-/** Той самий ключ у SQL — один вираз на обидва боки звʼязки. `#475` звіряє його з JS. */
-export const ftNameKeySql = (expr: string): string =>
-  `lower(array_to_string((regexp_split_to_array(regexp_replace(regexp_replace(coalesce(${expr}, ''), '[''ʼ’\`]', '', 'g'), '^\\s+|\\s+$', '', 'g'), '\\s+'))[1:2], ' '))`;
-
-const noRecordSql = (a: string): string => `(lower(btrim(coalesce(${a}.about_transport, ''))) = '${FT_NO_RECORD}')`;
-
-/**
- * Мапа «ключ імені → менеджер»: регулярка рахується ОДИН раз на менеджера, а не на кожну пару
- * «оцінка × менеджер» (так було в першій редакції: 585 мс на 90 днів проти десятків після).
- * Серед однойменних — активний, потім найновіший (дублі користувачів Kommo — борг зони Звіту).
- */
-const managerKeysCte = (): string => `
-    mk AS (
-      SELECT DISTINCT ON (k.key) k.key, k.id, k.team_id
-        FROM (SELECT mm.id, mm.team_id, mm.is_active, ${ftNameKeySql("mm.name")} AS key FROM managers mm) k
-       WHERE k.key <> ''
-       ORDER BY k.key, k.is_active DESC, k.id DESC
-    )`;
-
-/** Оцінки за період, згруповані за менеджером, який ДЗВОНИВ. `manager_id IS NULL` — не звʼязалось. */
-export function firstTouchByCallerSql(from: string, to: string): { sql: string; params: unknown[] } {
-  const sql = `
-    WITH ${managerKeysCte()},
-    f AS (
-      SELECT fta.price_voiced, ${noRecordSql("fta")} AS no_record, mk.id AS manager_id, mk.team_id
-        FROM first_touch_analysis fta
-        LEFT JOIN mk ON mk.key = ${ftNameKeySql("fta.manager_name")}
-       WHERE fta.analyzed_at BETWEEN $1::date AND $2::date
-    )
-    SELECT manager_id, MAX(team_id) AS team_id,
-           COUNT(*) FILTER (WHERE NOT no_record)::int AS analyzed,
-           COUNT(*) FILTER (WHERE NOT no_record AND price_voiced)::int AS voiced,
-           COUNT(*) FILTER (WHERE no_record)::int AS no_record
-      FROM f
-     GROUP BY manager_id`;
-  return { sql, params: [from, to] };
-}
-
-/**
- * Які команди бот оцінює ВЗАГАЛІ (за всю історію таблиці, за поточною командою звʼязаного
- * менеджера) і коли прийшла остання оцінка. Від періоду не залежить свідомо: «бот мовчить цього
- * тижня» і «бот цю команду не слухає» — різні відповіді, і перша не має ставати другою.
- */
-export const firstTouchMetaSql = (): string => `
-  WITH ${managerKeysCte()}
-  SELECT COALESCE(array_agg(DISTINCT mk.team_id) FILTER (WHERE mk.team_id IS NOT NULL), '{}') AS covered_team_ids,
-         to_char(MAX(fta.analyzed_at), 'YYYY-MM-DD') AS last_analyzed_at
-    FROM first_touch_analysis fta
-    LEFT JOIN mk ON mk.key = ${ftNameKeySql("fta.manager_name")}`;
+import { checklist, type ReportRowIn } from "./firstTouchTeamReport.js";
 
 export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
 export type FirstTouchState = "measured" | "not_covered";
 export interface FirstTouchCell extends FirstTouchCounts { state: FirstTouchState }
 
-/** Клітинка менеджера: чесний стан і лічильники. Непокрита команда — лічильники нульові й не показуються. */
-export function firstTouchCell(counts: FirstTouchCounts | undefined, teamId: number | null, coveredTeamIds: ReadonlySet<number>): FirstTouchCell {
-  const covered = teamId != null && coveredTeamIds.has(teamId);
-  // Якщо оцінки є, а команда «не покрита» (людина щойно змінила команду) — рахуємо як виміряне:
-  // ховати наявні оцінки гірше, ніж показати їх у новій команді.
+/**
+ * Розмови екрана AI → лічильники Звіту по менеджеру (задача 7237). Відбір — як плитка «Ціна озвучена»:
+ * вкладка «Звіт» (`inReport`, як `tabRows(…, "report")`) без нецільових (`nonTarget`, як
+ * `DEFAULT_LIST_FILTER`); ціна — `checklist().price`: «так» — названо, «ні» — не названо, «не рахується»
+ * (втрачений лід, «передзвоніть») у знаменник не входить; нерозібрані — `noRecord`, поза відсотком.
+ */
+export type FirstTouchCall = ReportRowIn & { managerId: number | null; teamId: number | null; nonTarget: boolean };
+export function firstTouchCountsFromCalls(calls: readonly FirstTouchCall[]): {
+  byManager: Map<number, FirstTouchCounts>;
+  rows: { managerId: number; teamId: number | null; counts: FirstTouchCounts }[];
+  unmapped: FirstTouchCounts;
+} {
+  const by = new Map<number | null, { teamId: number | null; c: FirstTouchCounts }>();
+  for (const r of calls) {
+    if (!r.inReport || r.nonTarget) continue;
+    const e = by.get(r.managerId) ?? { teamId: r.teamId, c: { analyzed: 0, voiced: 0, noRecord: 0 } };
+    const mark = checklist(r)?.price;
+    if (mark == null) e.c.noRecord++;
+    else if (mark !== "o") { e.c.analyzed++; if (mark === "y") e.c.voiced++; }
+    by.set(r.managerId, e);
+  }
+  const byManager = new Map<number, FirstTouchCounts>();
+  const rows: { managerId: number; teamId: number | null; counts: FirstTouchCounts }[] = [];
+  for (const [id, e] of by) if (id != null) { byManager.set(id, e.c); rows.push({ managerId: id, teamId: e.teamId, counts: e.c }); }
+  return { byManager, rows, unmapped: by.get(null)?.c ?? { analyzed: 0, voiced: 0, noRecord: 0 } };
+}
+
+/** Клітинка менеджера: чесний стан і лічильники. Період без розбору — лічильники нульові й не показуються. */
+export function firstTouchCell(counts: FirstTouchCounts | undefined, covered: boolean): FirstTouchCell {
+  // Оцінки є, а період «не покритий» — не буває за побудовою, але ховати наявні гірше, ніж показати.
   const has = (counts?.analyzed ?? 0) + (counts?.noRecord ?? 0) > 0;
   return {
     state: covered || has ? "measured" : "not_covered",
@@ -95,14 +54,14 @@ export function firstTouchCell(counts: FirstTouchCounts | undefined, teamId: num
   };
 }
 
-/** Відсоток «ціну названо» — від ОЦІНЕНИХ розмов; «немає запису» у знаменник не входить. `null` = нема з чого рахувати. */
+/** Відсоток «ціну названо» — від ОЦІНЕНИХ розмов; нерозібрані у знаменник не входять. `null` = нема з чого рахувати. */
 export const firstTouchPct = (voiced: number, analyzed: number): number | null =>
   analyzed > 0 ? Math.round((voiced / analyzed) * 1000) / 10 : null;
 
 /**
  * 🔴 ОЦІНКИ ЛЮДЕЙ ПОЗА РОСТЕРОМ НЕ ЗНИКАЮТЬ (рецензія 17.09.2026). Ростер Звіту — ті, кому
  * ставиться план; людина в стані «завершує» чи звільнена з нього випадає, але її розмови в
- * періоді були. Звʼязка по імені її знаходить, тож у «не прив'язано» вона не потрапляє — і без
+ * періоді були. Розмова несе її як менеджера, тож у «не прив'язано» вона не потрапляє — і без
  * цього числа її оцінки зникали б з екрана цілком. Рахуємо лише в межах того самого скоупу, що й
  * ростер: команда — за ПОТОЧНОЮ командою людини, менеджер — лише він сам.
  */
@@ -122,7 +81,7 @@ export interface GlanceFirstTouch extends FirstTouchCounts { state: FirstTouchSt
 /**
  * Підсумок команди: Σ клітинок ростеру + стан + окремо «поза ростером». Стан «не вимірюється» —
  * лише коли жодна клітинка не виміряна І поза ростером оцінок немає: інакше підсумок команди
- * РПК казав би «—» і «число неповне», хоча цю команду бот не слухає взагалі.
+ * казав би «—» і «число неповне» за період, у якому розбору не було взагалі.
  */
 export function glanceFirstTouch(cells: FirstTouchCell[], outside: FirstTouchCounts): GlanceFirstTouch {
   const measured = cells.some((c) => c.state === "measured") || outside.analyzed + outside.noRecord > 0;

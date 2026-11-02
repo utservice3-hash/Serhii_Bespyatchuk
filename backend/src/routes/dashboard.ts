@@ -9575,8 +9575,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     getSettings(),
     reportCuts.invoicingJamByManager({ managerId, teamId }),
     reportCuts.expectedNoDateByManager(metrics.EXPECT_ZONE, { managerId, teamId }),
-    // 🎯 ТЗ-3 «перший дотик»: оцінки бота за період, звʼязані з тим, хто ДЗВОНИВ (рішення 17.09.2026).
-    firstTouchReport(from, to),
+    // 🎯 «Перший дотик»: ті самі розмови й те саме правило, що плитка «Ціна озвучена» на екрані AI (задача 7237).
+    getSettings().then((s) => firstTouchReport(from, to, s.adSources)),
   ]);
   const callsM = new Map(callsRows.map((r) => [r.managerId, r]));
   const callDaysM = new Map<number, callNorm.CallDay[]>();
@@ -9849,7 +9849,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // 📞 Норма — з «Планів» (4632, Роман 10.10.2026): чинна на місяць кінця періоду, та сама, що на Статистиках.
       callNorm: callNorm.callNormCell(callDaysM.get(m.id) ?? [], callsNormNow, from, to, kyivToday),
       // 🎯 «Ціну названо в перший дотик»: стан + лічильники; відсоток рахує фронт із лічильників.
-      firstTouch: firstTouchCell(ft.byManager.get(m.id), m.team_id, ft.coveredTeamIds),
+      firstTouch: firstTouchCell(ft.byManager.get(m.id), ft.covered),
       // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.
       expectNoDate: Math.round(noDateM.get(m.id)?.sum ?? 0), expectNoDateDeals: noDateM.get(m.id)?.deals ?? 0,
       // 🧱 Затор на «Виставленні рахунку»: скільки з очікувань стоїть саме тут.
@@ -10033,9 +10033,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     // Окремим масивом, а не серед `managers`: у них немає плану, %, світлофора й темпу,
     // тож змішувати їх у той самий список означало б рахувати статуси по людях, яких немає.
     dismissed,
-    // 🎯 Про ДЖЕРЕЛО «першого дотику», а не про скоуп: скільки оцінок не звʼязалось з менеджером,
-    // коли бот присилав останню, скільки команд він оцінює взагалі. Від ролі не залежить.
-    firstTouchMeta: { unmapped: ft.unmapped, lastAnalyzedAt: ft.lastAnalyzedAt, coveredTeams: ft.coveredTeamIds.size },
+    // 🎯 Про ДЖЕРЕЛО «першого дотику», а не про скоуп: скільки розмов без менеджера, коли AI розібрав
+    // останню, чи розбір узагалі існував у періоді. Від ролі не залежить.
+    firstTouchMeta: { unmapped: ft.unmapped, lastAnalyzedAt: ft.lastAnalyzedAt, covered: ft.covered },
   });
 });
 

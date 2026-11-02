@@ -1561,8 +1561,8 @@ export interface ReportPlan {
    * якому стоїть половина гейтів. Порожній масив — нормальний стан.
    */
   dismissed: ReportPlanDismissed[];
-  /** Про ДЖЕРЕЛО «першого дотику»: не звʼязані з менеджером оцінки, остання оцінка бота, скільки команд він оцінює. */
-  firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; coveredTeams: number };
+  /** Про ДЖЕРЕЛО «першого дотику»: розмови без менеджера, останній AI-розбір, чи розбір існував у періоді (задача 7237). */
+  firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; covered: boolean };
 }
 export interface ReportPlanDismissed {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
