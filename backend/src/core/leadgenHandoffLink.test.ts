@@ -1050,3 +1050,37 @@ test("#1508 ЖИВИЙ SQL: угода зі списку закріплених 
   assert.deepEqual(l80.deals.map((x) => [x.dealId, x.manualOwner]), [[pinned.pz, true]], "🔴 «Які угоди рахуємо» лідгена: немає закріпленої або без позначки");
   assert.deepEqual(l81.deals.map((x) => [x.dealId, x.manualOwner]), [[plain.pz, false]], "🔴 «Які угоди рахуємо» відповідального: закріплена не пішла або чужа позначка");
 });
+
+/**
+ * #1509 — РАХУНОК, ВИДІЛЕНИЙ З УГОДИ МЕНЕДЖЕРА (рішення Юлії й Романа 30.10.2026, угода 62807983 + 62817473). Основна
+ * угода зі списку `HANDOFF_SPLIT_INVOICES` несе бюджет РАЗОМ із виділеним рахунком, стан — свій; така сама пара поза
+ * списком — лише свій бюджет. Рядок списку передач називає виділений рахунок із посиланням.
+ * 🧨 САБОТАЖ: у `handoffDealStates` прибрати `+ extra` з бюджету → червоніє (сума лише основної угоди).
+ */
+test("#1509 ЖИВИЙ SQL: виділений рахунок додає бюджет до основної угоди зі списку, машина одна; поза списком — ні", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money } = await core();
+  const { HANDOFF_SPLIT_INVOICES, handoffDealRow } = await import("./leadgenHandoffRules.js");
+  const pin = HANDOFF_SPLIT_INVOICES.find((x) => x.mainDealId === 62807983);
+  assert.ok(pin && pin.extraDealIds.includes(62817473), "🔴 пару 62807983 + 62817473 прибрали зі списку");
+  const at = utc("2026-03-09T10:00:00");
+  const mk = async (id: number, price: number) => {
+    await client!.query(
+      `INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, created_at_kommo, closed_at_kommo, client_key, client_name)
+       VALUES ($1, 'гейт #1509', 3, $2, 142, $3, $4, $4, NULL, NULL)`, [id, FC[0], price, at]);
+  };
+  await mk(62807983, 760); await mk(62817473, 3_420);
+  const plain = nextId++, plainExtra = nextId++; await mk(plain, 760); await mk(plainExtra, 3_420);
+  const got = await money.handoffDealStates([62807983, plain]);
+  assert.deepEqual([got.get(62807983)?.price, got.get(62807983)?.cls], [4_180, "success"], "🔴 основна угода зі списку: бюджет без виділеного рахунку або змінився стан");
+  assert.equal(got.get(plain)?.price, 760, "🔴 угода поза списком отримала чужий бюджет — загальне правило зламалось");
+  assert.equal(got.has(62817473), false, "🔴 виділений рахунок став окремою угодою передачі — машина порахується двічі");
+  const base = { day: "2026-03-09", lgId: 1, lgTeamId: 1, pzId: 1, at: 0, dealName: "р", dealClient: "к", salesManager: "м",
+    dealReason: null, closedDay: null, planPayDay: null, pzName: "р", pzClient: "к", clientKey: null, linkPrio: 0,
+    cls: "success" as const, price: 4_180, autoDay: null } as unknown as Parameters<typeof handoffDealRow>[0];
+  const deps = { stageName: () => "Успішна угода", qualificationPipelines: [] as number[], leadUrl: (id: number) => `u/${id}` };
+  const row = handoffDealRow({ ...base, dealId: 62807983 } as typeof base, { pipelineId: FC[0], statusId: 142 }, deps);
+  assert.deepEqual(row.split, [{ dealId: 62817473, url: "u/62817473" }], "🔴 рядок не називає виділений рахунок");
+  assert.deepEqual(handoffDealRow({ ...base, dealId: plain } as typeof base, { pipelineId: FC[0], statusId: 142 }, deps).split, [],
+    "🔴 рядок поза списком показує виділений рахунок");
+});

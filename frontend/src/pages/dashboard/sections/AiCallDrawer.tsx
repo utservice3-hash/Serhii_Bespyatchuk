@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, closeAiCallDeal, revertAiCallDeal, sendAiCallFeedback, type AiCallCardResp, type AiQuoted } from "../../../api";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { ChecklistBlock } from "./FirstTouchChecklist";
 import "./hiring.css";
@@ -20,9 +20,11 @@ const fmtFull = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
   timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
 });
 
-function Chip({ tone, children }: { tone: Tone; children: React.ReactNode }) {
+function Chip({ tone, children, wrap = false }: { tone: Tone; children: React.ReactNode; wrap?: boolean }) {
   const c = TONE_COLOR[tone];
-  return <span style={{ background: c.bg, color: c.fg, borderRadius: 999, padding: "3px 10px", fontSize: 12, whiteSpace: "nowrap" }}>{children}</span>;
+  // `wrap` — для довгого вердикту в рядку розбору: переноситься, а не впирається в край картки.
+  return <span style={{ background: c.bg, color: c.fg, borderRadius: wrap ? 10 : 999, padding: "3px 10px", fontSize: 12,
+    whiteSpace: wrap ? "normal" : "nowrap", display: wrap ? "inline-block" : undefined, lineHeight: wrap ? 1.4 : undefined }}>{children}</span>;
 }
 
 function StateChip({ state }: { state: AiCallState }) {
@@ -69,6 +71,16 @@ export function Analysis({ c }: { c: AiCallCardResp }) {
       {r.next_step && <div style={row}><span style={key}>Наступний крок</span><span>{r.next_step}</span></div>}
       <div style={{ borderTop: "1px solid var(--border)", margin: "8px 0" }} />
       <div style={row}><span style={key}>Ціна</span><span>{r.price.discussed ? "обговорили" : "не прозвучала"}<Quote q={r.price} /></span></div>
+      {/* 💬 Задача 7184: окрема перевірка «хто запропонував месенджер» — вердикт і дослівна цитата; лише ролям із правом на сигнал. */}
+      {c.canSeeMessengerSignal && (
+        <div style={row}>
+          <span style={key}>Месенджер</span>
+          <span>
+            <Chip wrap tone={MESSENGER_VERDICT_UI[messengerVerdict(c.messenger)].tone}>{MESSENGER_VERDICT_UI[messengerVerdict(c.messenger)].text}</Chip>
+            {c.messenger && c.messenger.move !== "none" && <Quote q={{ quote: c.messenger.quote, quote_found: c.messenger.quote_found ?? null }} />}
+          </span>
+        </div>
+      )}
       <div style={row}>
         <span style={key}>Заперечення</span>
         {r.objections.length === 0

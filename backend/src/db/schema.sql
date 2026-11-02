@@ -4894,6 +4894,12 @@ ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS price_target_pct I
 -- 💬 Задача 7184 (30.10.2026): сигнал «менеджер сам запропонував месенджер» бачать і тімліди — вмикає адмін після звірки з
 -- людьми. NULL у старих рядках = вимкнено.
 ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS messenger_signal_tl BOOLEAN;
+-- 💬 Рубрика месенджера — лише з 30.10.2026 (рішення Романа 30.10: «зупини чергу»; `MESSENGER_FROM`). Разово прибрати з
+-- черги історію, яку тік поставив до зміни: лише НЕрозібране (queued / failed / capped) по дзвінках до 30.10 — за нього
+-- ще не платили; розібране (`done`) лишається. Повторний прогін нічого не знаходить: нові записи до 30.10 не ставляться.
+DELETE FROM call_analyses a USING call_transcripts t, ringostat_calls rc
+ WHERE a.transcript_id = t.id AND rc.uniqueid = t.uniqueid AND a.rubric_version = 'first-touch-messenger-v1'
+   AND a.status IN ('queued', 'failed', 'capped') AND (rc.calldate AT TIME ZONE 'Europe/Kyiv')::date < DATE '2026-10-30';
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би
@@ -5436,11 +5442,12 @@ UPDATE roles SET screen_access = screen_access || '{"surveys":true}'::jsonb
   WHERE key <> 'candidate' AND NOT (screen_access ? 'surveys');
 
 -- Керувати опитуваннями (створювати, запускати, бачити відповіді) — admin, ceo, opdir, hr (рішення Романа
--- 30.09.2026). Склад фіксований кодом, парою «видати / зняти» ПІСЛЯ синку фінансиста (інакше розтеклось би).
+-- 30.09.2026) + kvp (рішення Романа 30.10.2026: «треба дати можливість створювати опитування… Юля Сергіївна, КВП»;
+-- у ролі КВП один акаунт). Склад фіксований кодом, парою «видати / зняти» ПІСЛЯ синку фінансиста (інакше розтеклось би).
 UPDATE roles SET permissions = permissions || '{"manage_surveys": true}'::jsonb
- WHERE key IN ('admin', 'ceo', 'opdir', 'hr');
+ WHERE key IN ('admin', 'ceo', 'opdir', 'hr', 'kvp');
 UPDATE roles SET permissions = permissions - 'manage_surveys'
- WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr');
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr', 'kvp');
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 💰 ФІНАНСИ, прохід 2а (01.10.2026): «Тиждень і місяць» — аркуш «ФМ» книги «UTS Щотижневі плани».

@@ -59,16 +59,16 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "PATCH /api/org/teams/:id": "manage_teams — КВП і фінансист вкладку орг-структури мають, керувати командами ні (Роман 27.10.2026: «керівництво і HR»)",
   "PUT /api/org/teams/people/:employeeId": "manage_teams — КВП і фінансист вкладку орг-структури мають, керувати командами ні (Роман 27.10.2026: «керівництво і HR»)",
   // 📋 Опитування (30.09.2026): керувати — лише право `manage_surveys` (admin, СЕО, ОД, HR — рішення Романа
-  // 30.09.2026); kvp і фінансист вкладку бачать і відповідають на адресоване, а створювати й запускати не можуть.
-  "POST /api/surveys/parse": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "PUT /api/surveys/:id": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/templates": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/:id/launch": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/:id/close": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/:id/reopen": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/:id/remind": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "DELETE /api/surveys/templates/:id": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
+  // 30.09.2026; + КВП з 30.10.2026); фінансист вкладку бачить і відповідає на адресоване, а створювати й запускати не може.
+  "POST /api/surveys/parse": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "PUT /api/surveys/:id": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/templates": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/:id/launch": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/:id/close": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/:id/reopen": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/:id/remind": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "DELETE /api/surveys/templates/:id": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
   // 🗄 Сейф (Таня 08.10.2026: «сейф — лише адмін та я»): «Оновити зараз» — `view_private_finance` (Адмін, фінансист);
   // СЕО, ОД і КВП адмін-рівня його не мають → 403 по ПРАВУ.
   "POST /api/bank/safe/sync": "view_private_finance — СЕО, ОД і КВП його не мають (Таня: «сейф — лише адмін та я», 08.10.2026)",

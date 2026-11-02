@@ -243,11 +243,32 @@ export async function blobErrorBody(data: unknown): Promise<unknown> {
  * Репліка, у якій прозвучала цитата з розбору: перша, чий текст містить цитату (без регістру й зайвих пробілів).
  * −1 — цитати немає або вона не знайдена дослівно (тоді в картці не перемотуємо і не підсвічуємо — не вгадуємо).
  */
-export function quoteTurnIndex(turns: readonly { text: string }[] | null, quote: string): number {
-  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-  const q = norm(quote);
+/**
+ * Де в записі цитата з розбору: індекс репліки, з якої вона ПОЧИНАЄТЬСЯ. Те саме правило, що звірка на сервері
+ * (`quoteInOneChannel`): нормалізація без розділових знаків і пошук по склеєних репліках ОДНОГО каналу — бо модель цитує
+ * фразу, яку розпізнавання розрізало на дві репліки (02.11.2026: «звірено з розшифровкою» було, а «▶ послухати» — ні).
+ */
+const normQuote = (s: string) => s.toLowerCase().replace(/[’'`ʼ]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").replace(/\s+/g, " ").trim();
+export function quoteTurnIndex(turns: readonly { text: string; channel?: number }[] | null, quote: string): number {
+  const q = normQuote(quote);
   if (!turns || q.length < 3) return -1;
-  return turns.findIndex((t) => norm(t.text).includes(q));
+  const byChannel = new Map<number, { idx: number; from: number }[]>();
+  const joined = new Map<number, string>();
+  turns.forEach((t, idx) => {
+    const ch = t.channel ?? 0, prev = joined.get(ch) ?? "";
+    const from = prev ? prev.length + 1 : 0;
+    joined.set(ch, prev ? `${prev} ${normQuote(t.text)}` : normQuote(t.text));
+    byChannel.set(ch, [...(byChannel.get(ch) ?? []), { idx, from }]);
+  });
+  let best = -1;
+  for (const [ch, text] of joined) {
+    const at = text.indexOf(q);
+    if (at < 0) continue;
+    const spans = byChannel.get(ch) ?? [];
+    const start = [...spans].reverse().find((x) => x.from <= at)?.idx ?? -1;
+    if (start >= 0 && (best < 0 || start < best)) best = start;
+  }
+  return best;
 }
 
 // ─── Екран D (08.10.2026): чек-лист і черга розбору ─────────────────────────────────────────────────────────────
@@ -432,6 +453,8 @@ export interface TileStats {
   objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number };
   /** 🤝 Згода після ціни: серед розмов із ціною й відомим рішенням; `pct` — частка «погодився». Ті самі правила, що фільтри. */
   decision: { agreed: number; thinking: number; declined: number; of: number; pct: number | null };
+  /** 💬 «Сам запропонував месенджер»: `n` — тим самим правилом, що фільтр плитки; `of` — розмови, які рубрика розібрала. */
+  messengerSelf: { n: number; of: number };
 }
 export function tileStats(rows: readonly TileRow[]): TileStats {
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : null);
@@ -446,6 +469,7 @@ export function tileStats(rows: readonly TileRow[]): TileStats {
     lost: rows.filter(TILE_MATCH.lost).length,
     success: { n: rows.filter(TILE_MATCH.success).length, of: rows.filter((r) => r.flags.analysed).length },
     decision: decisionStats(rows),
+    messengerSelf: { n: rows.filter(TILE_MATCH.messengerSelf).length, of: rows.filter((r) => r.messengerSignal != null).length },
   };
 }
 
@@ -570,3 +594,21 @@ export function withoutAiLinkParams(href: string): string {
   for (const k of LINK_PARAMS) u.searchParams.delete(k);
   return u.pathname + u.search + u.hash;
 }
+
+// ─── 💬 Рядок «Месенджер» у картці дзвінка (задача 7184; окрема перевірка з цитатою — Роман 02.11.2026) ──────────────
+// Вердикт — тим самим правилом, що сигнал у списку (`messengerSignal` на сервері): «менеджер сам» лише коли цитату
+// знайдено в розмові. Цитата, якої в розмові немає, — «не підтверджено», а не сигнал. Не розбирали — так і пишемо:
+// порожнеча не може читатись як «не пропонував».
+export type MessengerVerdict = "self" | "unconfirmed" | "client" | "none" | "notAnalysed";
+export function messengerVerdict(m: { move: "none" | "manager" | "client"; quote_found?: boolean | null } | null): MessengerVerdict {
+  if (!m) return "notAnalysed";
+  if (m.move === "manager") return m.quote_found === true ? "self" : "unconfirmed";
+  return m.move;
+}
+export const MESSENGER_VERDICT_UI: Record<MessengerVerdict, { text: string; tone: Tone }> = {
+  self: { text: "Менеджер сам запропонував перейти в месенджер — клієнт не просив", tone: "warn" },
+  unconfirmed: { text: "Модель вважає, що запропонував менеджер, але такої фрази в розмові немає — не підтверджено", tone: "muted" },
+  client: { text: "Клієнт сам попросив месенджер", tone: "ok" },
+  none: { text: "Переходу в месенджер не було", tone: "muted" },
+  notAnalysed: { text: "Не розбиралось: перевірка діє для розмов від 30.10, де звучить месенджер", tone: "muted" },
+};
