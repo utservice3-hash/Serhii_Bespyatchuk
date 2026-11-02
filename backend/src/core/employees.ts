@@ -11,6 +11,7 @@ import { SecretKeyMissing } from "./secretBox.js";
 import { DOC_COUNTS_SQL } from "./employeeDocs.js";
 import { PERSON_TEAM_JOINS } from "./teams.js";
 import { effectiveCategory, isEmpCategory } from "./employeeCategory.js";
+import { levelsByEmployee } from "./employeeLevel.js";
 
 const MAX_ROWS = 3000, MAX_COLS = 120;
 const NAME = `COALESCE(NULLIF(u.full_name, ''), m.name, u.email)`;
@@ -336,7 +337,13 @@ export async function listEmployees(db: Db) {
        ${PERSON_TEAM_JOINS}
       ORDER BY (e.status = 'dismissed'), e.full_name`)).rows;
   // 🗂 Категорія (#2960): ручна перемагає правило за посадою; `category_manual` — щоб екран показав «вручну».
-  return rows.map((r): Record<string, unknown> => ({ ...r, category: effectiveCategory(r.category as string | null, r.position as string | null), category_manual: r.category != null }));
+  // 🎚 Рівень «Старт / Профі» (#2970): лише менеджерам з продажу; без запису — «Старт».
+  const levels = await levelsByEmployee(db);
+  return rows.map((r): Record<string, unknown> => {
+    const category = effectiveCategory(r.category as string | null, r.position as string | null);
+    const lv = category === "manager" ? levels.get(r.id as number) ?? { level: "start", from: null, history: [] } : null;
+    return { ...r, category, category_manual: r.category != null, level: lv?.level ?? null, level_from: lv?.from ?? null, level_history: lv?.history ?? [] };
+  });
 }
 
 export { ImportError };

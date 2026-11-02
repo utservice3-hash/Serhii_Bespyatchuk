@@ -394,7 +394,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
-  "org_units", "org_log", "org_migrations", "dashboard_teams",
+  "org_units", "org_log", "org_migrations", "dashboard_teams", "employee_levels",
   "kommo_declined_forms",
   "prozorro_tenders", "prozorro_leads",
   "zakaz_onec_invoices", "zakaz_onec_pay_plan", "zakaz_onec_events",
@@ -641,6 +641,7 @@ export const MANIFEST_TESTS: string[] = [
   // db/migrate.test.ts
   "#8 міграція проходить на ПОРОЖНІЙ базі повністю",
   "#8b ДЗЕРКАЛО: зламану схему тест ЛОВИТЬ, а не пропускає",
+  "#2973 СХЕМА: кожна рання редакція CHECK вміщає всі значення підсумкової",
   // db/roleDeclarations.test.ts — «міграція пройшла» ≠ «зміна застосувалась»
   "#15 ДЕКЛАРАЦІЯ: усі оголошені ролі існують у БД",
   "#15b 🔴 ВБУДОВАНІ ролі: БД точно == схема (панель їх не редагує)",
@@ -1309,6 +1310,8 @@ export const MANIFEST_TESTS: string[] = [
   "#2960b КАТЕГОРІЇ: ядро = CHECK схеми = дзеркало фронта",
   "#2961 ЖИВИЙ SQL ПЛИННОСТІ: тиждень пн–нд, категорія звужує список, byCategory — по всіх, тиждень без %",
   "#2962 ЖИВИЙ SQL: «Змінити» правка дат з коментарем у журнал; ручна категорія і скидання",
+  "#2970 РІВЕНЬ: без записів — Старт, поточний — останній нескасований, скасований не рахується",
+  "#2971 ЖИВИЙ SQL РІВНЯ: перевести з місяцем і коментарем, двічі — 409, скасувати лишає історію, не менеджеру — ні",
   // core/offboarding.test.ts — звільнення у два кроки + документи людини в HR (21.09.2026)
   "#620 ЖИВИЙ SQL: звільнення у два кроки — «завершує» лишає вхід, «завершити» закриває",
   "#621 ЖИВИЙ SQL: «Повернути» — реєстр, стан менеджера й акаунт до байта; сейф і документи не чіпаються",
