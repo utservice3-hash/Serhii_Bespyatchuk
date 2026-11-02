@@ -6000,7 +6000,7 @@ dashboardRouter.get("/ads", async (req, res) => {
   const to = dateParam(req.query.to);
   const { adSources } = await getSettings();
 
-  const [ga4, leads, sheet] = await Promise.all([
+  const [ga4, leads, sheet, received] = await Promise.all([
     pool.query<{ day: string; campaign: string; channel_group: string | null;
                  sessions: number; conversions: string; cost: string; clicks: number }>(
       `SELECT to_char(day, 'YYYY-MM-DD') AS day, campaign, channel_group,
@@ -6021,10 +6021,13 @@ dashboardRouter.get("/ads", async (req, res) => {
           AND ($2::date IS NULL OR day <= $2::date)`,
       [from, to]
     ),
+    // 💰 «Надійшло цього дня» — поденна пара плитки «Заробили» (ядро, той самий `received` і `adDealSql`).
+    money.adReceivedByDay({ from, to }, adSources),
   ]);
 
   const leadsByDay = new Map(leads.map((l) => [l.day, l]));
   const sheetByDay = new Map(sheet.rows.map((r) => [r.day, Number(r.budget_fact)]));
+  const receivedByDay = new Map(received.map((r) => [r.day, { revenue: r.revenue, deals: r.deals }]));
   const campaigns = ga4.rows.map((r) => ({
     day: r.day,
     campaign: r.campaign,
@@ -6035,10 +6038,10 @@ dashboardRouter.get("/ads", async (req, res) => {
     clicks: Number(r.clicks),
   }));
 
-  // Дні збирає ЧИСТА функція над трьома джерелами (GA4 ∪ ліди ядра ∪ аркуш) —
+  // Дні збирає ЧИСТА функція над чотирма джерелами (GA4 ∪ ліди ядра ∪ аркуш ∪ гроші, що надійшли) —
   // саме тому її можна прогнати фікстурою «GA4 порожній, ліди є» (ворота `#372`).
   // Поля в ній перелічені ЯВНО, без спреду (ворота `#17e2`).
-  const days = mergeAdDays(campaigns, leadsByDay, sheetByDay);
+  const days = mergeAdDays(campaigns, leadsByDay, sheetByDay, receivedByDay);
 
   // 💰 ПЛАН і ДОХІД — обидва з ЄДИНИХ джерел, а не порахованi тут.
   // План: `core/adBudget` (той самий модуль читає КВП — рішення «скрізь один план»).
@@ -6046,7 +6049,8 @@ dashboardRouter.get("/ads", async (req, res) => {
   // два екрани не можуть розійтись. Свій SQL по виручці заборонений (DoD п.1).
   // ⚠️ Дохід — це гроші, ЩО НАДІЙШЛИ в періоді, від реклами будь-якого часу. Це НЕ
   // «скільки принесли ліди цього періоду»: угода з ліда 4 липня оплатиться у серпні.
-  // Когортного доходу в ядрі немає, і вигадувати його тут не можна.
+  // 📅 З 02.11.2026 «скільки принесли ліди дня» є — у днях (`paidMargin`, когорта ядра `conversionAdsByDay`,
+  // ① статус 142), а не тут: плитка лишається грошима, що надійшли, і дорівнює Σ `received` по днях.
   // 🟣 eLogist — ОКРЕМИЙ рядок, не частина реклами UTS (рішення власника 27.10.2026). Ліди —
   // ядро (`metrics.elogistLeadsCreated`), гроші — той самий `receivedByChannel`, канал 'elogist'.
   // Витрат eLogist у нас НЕМАЄ (ні GA4, ні аркуша), тож ні ціни ліда, ні ROMI не віддаємо.

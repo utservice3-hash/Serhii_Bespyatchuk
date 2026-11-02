@@ -109,3 +109,54 @@ test("#392b ЖИВА БД: склад розкриття дня == числу в
     `🔴 ${busiest.day}: стани в розкритті не збігаються з лічильником — те саме число `
     + "рахується двома різними способами");
 });
+
+/**
+ * #3311 — «НАДІЙШЛО ПО ДНЯХ» == ПЛИТЦІ «ЗАРОБИЛИ» (Роман 02.11.2026). Колонка «Надійшло» — поденна розкладка того самого
+ * числа, що стоїть у плитці, тож Σ днів мусить дорівнювати `receivedByChannel(...).ad` гривня в гривню й угода в угоду.
+ * Обидві сторони беруться в одну мить (правило 18). Рівність, а не кількість — істинна й на порожньому вікні.
+ * 🧨 Червоніє, якщо поденна функція піде своїм фільтром (не `adDealSql`), іншим анкером дня чи загубить угоди без менеджера.
+ */
+test("#3311 ЖИВА БД: Σ «надійшло» по днях == плитці «Заробили», гривня й угода", needsBackendEnv(), async (t) => {
+  const { getSettings } = await import("../routes/settings.js");
+  const money = await import("./money.js");
+  const { emptyPeriodSkip } = await import("../testMode.js");
+  const { adSources } = await getSettings();
+  const [days, tile] = await Promise.all([money.adReceivedByDay({ from: FROM, to: TO }, adSources),
+    money.receivedByChannel({ from: FROM, to: TO }, adSources)]);
+  const skip = emptyPeriodSkip("грошей із реклами у вікні заміру", tile.ad.deals, `${FROM}..${TO}`);
+  if (skip) return t.skip(skip);
+  const sum = days.reduce((s, d) => ({ revenue: s.revenue + d.revenue, deals: s.deals + d.deals }), { revenue: 0, deals: 0 });
+  assert.deepEqual([Math.round(sum.revenue * 100), sum.deals], [Math.round(tile.ad.revenue * 100), tile.ad.deals],
+    `🔴 Σ днів ${String(sum.revenue)} ₴ / ${String(sum.deals)} угод ≠ плитці ${String(tile.ad.revenue)} ₴ / ${String(tile.ad.deals)} угод`);
+  const busiest = [...days].sort((a, b) => b.deals - a.deals)[0];
+  const one = await money.receivedByChannel({ from: busiest.day, to: busiest.day }, adSources);
+  assert.deepEqual([busiest.revenue, busiest.deals], [one.ad.revenue, one.ad.deals],
+    `🔴 ${busiest.day}: рядок дня не дорівнює плитці, обраній на цей один день`);
+});
+
+/**
+ * #3312 — «ПРИНЕСЛИ ЛІДИ ДНЯ» == Σ ЦІН «ОПЛАЧЕНО» В РОЗКРИТТІ ДНЯ (правило «розкриття пояснює число»). Обидва рахуються
+ * тим самим `pop` (`dealCohortCte`), тож рівність — за побудовою, і гейт стереже, щоб так і лишилось. Беремо день із
+ * найбільшою кількістю оплачених — там є що звіряти; і дзеркало: угоди «в роботі» й програні в суму НЕ входять.
+ * 🧨 Червоніє, якщо гроші когорти рахувати іншим фільтром (не 142) чи іншою популяцією, ніж розкриття.
+ */
+test("#3312 ЖИВА БД: «принесли ліди дня» == Σ цін угод «Оплачено» в розкритті цього дня", needsBackendEnv(), async (t) => {
+  const { getSettings } = await import("../routes/settings.js");
+  const metrics = await import("./metrics.js");
+  const { emptyPeriodSkip } = await import("../testMode.js");
+  const { adSources } = await getSettings();
+  const days = await metrics.conversionAdsByDay({ from: FROM, to: TO }, adSources);
+  const best = [...days].sort((a, b) => b.paid - a.paid)[0];
+  const skip = emptyPeriodSkip("оплачених угод із платних лідів у вікні заміру", best?.paid ?? 0, `${FROM}..${TO}`);
+  if (skip) return t.skip(skip);
+  const deals = await metrics.adDealsByDay(best.day, adSources);
+  const paidSum = deals.filter((d) => d.state === "paid").reduce((s, d) => s + d.price, 0);
+  assert.equal(Math.round(best.paidMargin * 100), Math.round(paidSum * 100),
+    `🔴 ${best.day}: у колонці ${String(best.paidMargin)} ₴, а Σ «Оплачено» в розкритті ${String(paidSum)} ₴`);
+  // 🪞 Дзеркало: якщо в дні є неоплачені угоди з ненульовою ціною, сума всього дня МУСИТЬ відрізнятись від колонки —
+  // інакше колонка рахує й «в роботі», і програні, а рівність вище збіглася б випадково.
+  const allSum = deals.reduce((s, d) => s + d.price, 0);
+  if (deals.some((d) => d.state !== "paid" && d.price !== 0)) {
+    assert.notEqual(Math.round(best.paidMargin * 100), Math.round(allSum * 100), "🔴 у суму потрапили угоди «в роботі» чи програні");
+  }
+});

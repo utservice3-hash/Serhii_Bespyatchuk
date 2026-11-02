@@ -2526,6 +2526,15 @@ export interface AdsDayCohort {
   inWork: number;
   /** Програні — статус 143. Разом із `inWork` і `paid` дає рівно `entered`. */
   lost: number;
+  /**
+   * 💰 ПРИНЕСЛИ ЛІДИ ЦЬОГО ДНЯ (Роман 02.11.2026): маржа (`deals.price`, зі знаком) угод когорти дня, що вже
+   * ОПЛАЧЕНІ — статус 142, тобто ① («успішно реалізовано», основна метрика). Рахується ТИМ САМИМ `pop`, що й
+   * `paid` і розкриття дня (`adDealsByDay`), тож дорівнює Σ цін угод із чипом «Оплачено» за побудовою.
+   * Чому тут, а не в `money.ts`: когорта (вхід у ADZONE_TAKEN + `paidAdSql` + сегмент `new`) живе в приватному
+   * `dealCohortCte`; копія когорти в іншому файлі розійшлась би з комірками тихо. Анкер — день ВХОДУ ліда, не
+   * день оплати: число за минулі дні росте, поки угоди дозакриваються.
+   */
+  paidMargin: number;
 }
 
 /** Одна угода рекламної когорти — для розкриття дня на екрані «Реклама». */
@@ -2573,14 +2582,15 @@ export async function conversionAdsByDay(s: MetricScope, adSources: string[]): P
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
   const r = await pool.query<{ day: string; entered: string; won: string;
-                              paid: string; lost: string; in_work: string }>(
+                              paid: string; lost: string; in_work: string; paid_margin: string }>(
     `WITH ${dealCohortCte("$3", "$4", scopeWhere)}
      SELECT to_char((pop.entered_at ${KYIV})::date, 'YYYY-MM-DD') AS day,
             COUNT(*)::int AS entered,
             COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won,
             COUNT(*) FILTER (WHERE pop.status_id = 142)::int AS paid,
             COUNT(*) FILTER (WHERE pop.status_id = 143)::int AS lost,
-            COUNT(*) FILTER (WHERE pop.status_id NOT IN (142, 143))::int AS in_work
+            COUNT(*) FILTER (WHERE pop.status_id NOT IN (142, 143))::int AS in_work,
+            COALESCE(SUM(pop.price) FILTER (WHERE pop.status_id = 142), 0) AS paid_margin
        FROM pop
       WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
         AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
@@ -2590,6 +2600,7 @@ export async function conversionAdsByDay(s: MetricScope, adSources: string[]): P
   return r.rows.map((x) => ({
     day: x.day, entered: Number(x.entered), won: Number(x.won),
     paid: Number(x.paid), lost: Number(x.lost), inWork: Number(x.in_work),
+    paidMargin: Number(x.paid_margin),
   }));
 }
 

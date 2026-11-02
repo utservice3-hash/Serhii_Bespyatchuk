@@ -940,6 +940,35 @@ export async function receivedByChannel(s: MoneyScope, adSources: string[]): Pro
 }
 
 /**
+ * 📅 «НАДІЙШЛО ЦЬОГО ДНЯ» З РЕКЛАМИ — поденна пара `receivedByChannel(...).ad` для екрана «Реклама»
+ * (Роман 02.11.2026: «не зрозуміло, скільки зароблено за один день»). ТІ САМІ рядки, той самий фільтр
+ * `adDealSql` і той самий київський анкер, лише `GROUP BY` дня — тож Σ днів == плитці «Заробили» за
+ * побудовою (гейт це стереже одним викликом). Гроші — маржа (`deals.price`), ② як і в плитці: це не
+ * нове місце ②, а розкладка по днях того самого числа, що вже стоїть на екрані.
+ * ⚠️ Гроші цього дня майже не повʼязані з рекламою цього дня (угода закривається тижнями пізніше) —
+ * «окупність дня» показує інша колонка, когорта `conversionAdsByDay(...).paidMargin`.
+ */
+export async function adReceivedByDay(s: MoneyScope, adSources: string[]): Promise<{ day: string; revenue: number; deals: number }[]> {
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`${ANCHOR_DAY} >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`${ANCHOR_DAY} <= $${p.length}`); }
+  p.push(adSources);
+  conds.push(adDealSql(`$${p.length}`));
+  const r = await pool.query<{ day: string; revenue: string; deals: string }>(
+    `SELECT to_char(${ANCHOR_DAY}, 'YYYY-MM-DD') AS day, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
+       FROM (${src}) src
+       JOIN deals d ON d.kommo_id = src.kommo_id
+       JOIN managers m ON m.id = src.manager_id
+      WHERE ${conds.join(" AND ")}
+      GROUP BY 1 ORDER BY 1`,
+    p
+  );
+  return r.rows.map((x) => ({ day: x.day, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+
+/**
  * ЗНІМОК «станом на зараз» — угоди, що ПРЯМО ЗАРАЗ стоять на етапі 8 чи 9. Прогноз-
  * картка, НІКОЛИ не сумується у виручку періоду (підпис «станом на зараз»).
  */

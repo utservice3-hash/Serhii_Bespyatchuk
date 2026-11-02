@@ -22,6 +22,11 @@ import { fetchAds, fetchAdsDeals, saveAdPlan, type AdsReport, type AdsDeal } fro
  *    ПЕРЕТИНАЄТЬСЯ (рахунок виставлено, але угода ще жива) — складати їх не можна.
  *  • «Заробили» — гроші, ЩО НАДІЙШЛИ в періоді, від реклами будь-якого часу. Не
  *    «принесли саме ці ліди»: угода з ліда 4 липня оплатиться у серпні.
+ *  • 📅 ПО ДНЯХ (Роман 02.11.2026: «не зрозуміло, скільки зароблено за один день») — ДВІ колонки, і їх не
+ *    можна зливати: «Принесли ліди дня» — маржа оплачених (142) угод із лідів, узятих ЦЬОГО дня (окупність
+ *    дня реклами; росте, поки угоди в роботі; = Σ «Оплачено» в розкритті); «Надійшло» — маржа, що зайшла
+ *    ЦЬОГО дня від реклами будь-якого часу (Σ днів == плитці «Заробили»). Поруч із витратами дня має сенс
+ *    лише перша — друга про касу, а не про цей день реклами.
  *
  * ⚠️ АТРИБУЦІЇ «цей лід із цієї кампанії» НЕМАЄ і бути не може — мітка `gclid` у CRM
  * порожня в усіх угодах. Тому в розкритті кампанії й ліди стоять ПОРУЧ, двома блоками,
@@ -63,6 +68,12 @@ const dayLabel = (iso: string) => {
   return m ? `${m[3]}.${m[2]}` : iso;
 };
 const WD = ["нд", "пн", "вт", "ср", "чт", "пт", "сб"];
+/** «× до витрат» — у скільки разів маржа більша за витрати; без витрат — нічого не ділимо. */
+const times = (earned: number, cost: number) => (cost > 0 ? `×${(earned / cost).toLocaleString("uk-UA", { maximumFractionDigits: 1 })}` : null);
+const HINT_COHORT = "Принесли ліди цього дня: маржа угод із лідів, узятих у роботу саме цього дня, які вже оплачені "
+  + "(«Оплачено» в розкритті дня). Показує, чи окупилась реклама цього дня. Число за минулі дні ще росте — частина угод у роботі.";
+const HINT_RECEIVED = "Надійшло цього дня: маржа угод із реклами, закритих або оплачених саме цього дня, хоч би коли прийшов лід. "
+  + "Сума днів дорівнює плитці «Заробили». З витратами цього ж дня майже не повʼязана — угоди закриваються тижнями.";
 const weekday = (iso: string) => WD[new Date(`${iso}T00:00:00`).getDay()] ?? "";
 
 const STATE: Record<AdsDeal["state"], { text: string; bg: string; fg: string }> = {
@@ -112,6 +123,8 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
   const totalPaid = data.days.reduce((s, d) => s + d.paid, 0);
   const totalInWork = data.days.reduce((s, d) => s + d.inWork, 0);
   const totalClicks = data.days.reduce((s, d) => s + d.clicks, 0);
+  const totalPaidMargin = data.days.reduce((s, d) => s + d.paidMargin, 0);
+  const totalReceived = data.days.reduce((s, d) => s + d.received, 0);
   const maxCost = Math.max(1, ...data.days.map((d) => d.cost));
   const cpl = totalLeads > 0 ? Math.round(totalCost / totalLeads) : null;
   const wonPct = totalLeads > 0 ? Math.round((totalWon / totalLeads) * 100) : null;
@@ -279,6 +292,13 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
               <div><div style={LAB}>Закрито</div>
                 <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.5px", marginTop: 4,
                               color: "var(--rpt-ok, #1a7f4b)" }}>{openRow.won}</div></div>
+              <div title={HINT_COHORT}><div style={LAB}>Принесли ліди дня ⓘ</div>
+                <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.5px", marginTop: 4,
+                              color: "var(--rpt-ok, #1a7f4b)" }}>{money(openRow.paidMargin)} ₴</div>
+                <div style={{ ...DIM, fontSize: 11.5 }}>{times(openRow.paidMargin, openRow.cost) ?? "без витрат"} до витрат дня</div></div>
+              <div title={HINT_RECEIVED}><div style={LAB}>Надійшло цього дня ⓘ</div>
+                <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.5px", marginTop: 4 }}>{money(openRow.received)} ₴</div>
+                <div style={{ ...DIM, fontSize: 11.5 }}>{openRow.receivedDeals} угод · будь-яких днів</div></div>
             </div>
           </div>
 
@@ -340,7 +360,7 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
       <div style={{ ...CARD, padding: "20px 8px 8px" }}>
         <div style={{ ...LAB, padding: "0 14px 14px" }}>Весь період</div>
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontVariantNumeric: "tabular-nums", minWidth: 760 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontVariantNumeric: "tabular-nums", minWidth: 980 }}>
             <thead>
               <tr>
                 <th style={TH_L}>День</th>
@@ -351,6 +371,8 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
                 <th style={TH}>У роботі</th>
                 <th style={TH}>Закрито</th>
                 <th style={TH}>Оплачено</th>
+                <th style={TH} title={HINT_COHORT}>Принесли ліди дня ⓘ</th>
+                <th style={TH} title={HINT_RECEIVED}>Надійшло ⓘ</th>
               </tr>
             </thead>
             <tbody>
@@ -366,6 +388,11 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
                   <td style={{ ...TD, color: "var(--rpt-warn, #a06a08)" }}>{d.inWork}</td>
                   <td style={TD}>{d.won}</td>
                   <td style={{ ...TD, color: "var(--rpt-ok, #1a7f4b)", fontWeight: 700 }}>{d.paid}</td>
+                  <td style={TD}>
+                    <b style={{ color: d.paidMargin ? "var(--rpt-ok, #1a7f4b)" : undefined }}>{money(d.paidMargin)} ₴</b>
+                    {times(d.paidMargin, d.cost) && <span style={{ ...DIM, fontSize: 11.5 }}> · {times(d.paidMargin, d.cost)}</span>}
+                  </td>
+                  <td style={TD}>{money(d.received)} ₴</td>
                 </tr>
               ))}
               <tr style={{ background: "var(--rpt-soft, #f6f5f3)" }}>
@@ -377,6 +404,11 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
                 <td style={{ ...TD, color: "var(--rpt-warn, #a06a08)" }}><b>{totalInWork}</b></td>
                 <td style={TD}><b>{totalWon}</b></td>
                 <td style={{ ...TD, color: "var(--rpt-ok, #1a7f4b)" }}><b>{totalPaid}</b></td>
+                <td style={TD}>
+                  <b style={{ color: "var(--rpt-ok, #1a7f4b)" }}>{money(totalPaidMargin)} ₴</b>
+                  {times(totalPaidMargin, totalCost) && <span style={{ ...DIM, fontSize: 11.5 }}> · {times(totalPaidMargin, totalCost)}</span>}
+                </td>
+                <td style={TD} title="= плитці «Заробили»"><b>{money(totalReceived)} ₴</b></td>
               </tr>
             </tbody>
           </table>

@@ -1212,6 +1212,11 @@ export interface AdsDay {
   /** Ліди з ЯДРА conversion_ads (не свій SQL) — знаменник платних лідів. */
   leads: number;
   won: number;
+  /** 💰 Принесли ліди ЦЬОГО дня: маржа їхніх оплачених (142) угод = Σ «Оплачено» в розкритті дня. Росте, поки угоди в роботі. */
+  paidMargin: number;
+  /** 💰 Надійшло ЦЬОГО дня з реклами (маржа, ліди будь-якого дня). Σ днів == `AdsReport.revenue` («Заробили»). */
+  received: number;
+  receivedDeals: number;
 }
 export interface AdsCampaign {
   day: string;
