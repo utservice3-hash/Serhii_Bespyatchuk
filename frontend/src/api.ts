@@ -1315,8 +1315,10 @@ export interface KvpAgg { deals: number; revenue: number }
 export interface KvpEngineTeam { plan: number; revenue: number; expected: number; expectedThisMonth: number;
   pct: number | null; forecastPct: number | null; conversion: number | null; entered: number }
 export interface KvpDay { bucket: string; revenue: number; deals: number }
-export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
-export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
+/** 🚚 Тиждень «Відправлені авто» (задача 7185): авто з «Датою загрузки» в тижні і що з ними ЗАРАЗ. paid + wait + lost == deals. */
+export interface KvpShipWeek { deals: number; sum: number; paidDeals: number; paidSum: number; waitDeals: number; waitSum: number; lostDeals: number; lostSum: number }
+export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; ship: KvpShipWeek; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
+export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; ship: KvpShipWeek; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
 /** `new+repeat+undef = created` — партиція НОВИЗНИ. `ad`/`leadgen` — накладка
  *  ДЖЕРЕЛА: підмножини партиції, у `created` НЕ додаються. */
 /**

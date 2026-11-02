@@ -112,6 +112,7 @@ import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as callNorm from "../core/callNorm.js";
 import * as reportCuts from "../core/reportCuts.js";
+import * as shipWeek from "../core/shipWeek.js";
 import { firstTouchReport } from "../core/firstTouch.js";
 import { firstTouchCell, glanceFirstTouch, firstTouchOutsideRoster } from "../core/firstTouchRules.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
@@ -10255,7 +10256,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     expTeamThis, expTeamNext, expTeamPast, mgrDayExp, mgrDayDisp, mgrDayLeads,
     overdue, avgCycle, lost,
     dirSplit, chanSplit, clientRev, transit, dso, aging,
-    successDay, segDay, lostDay, dirConv, createdSplitMgr,
+    successDay, segDay, lostDay, dirConv, createdSplitMgr, shipCohort,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -10289,6 +10290,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     money.successByBucket(mScope, "day"), money.receivedSegByDay(mScope), metrics.lostByDay(scope),
     metrics.conversionAdsByDirection(scope, adSources),
     metrics.createdSplitByManager(scope),
+    // 🚚 Режим «Відправлені авто» (задача 7185): авто за «Датою загрузки» і їхній стан ЗАРАЗ.
+    // Той самий анкер і відбір, що `dispatchedByManagerDay` (режим «Активність»), — гейт #3322.
+    reportCuts.dispatchCohortByManagerDay(from, to, {}),
   ]);
   // Розкол «створено» новий/постійний (3 сигнали B→C→A) по менеджеру → мапа + агрегати.
   const splitByMgr = new Map(createdSplitMgr.map((x) => [x.managerId, x]));
@@ -10306,6 +10310,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // Крок Д (тижневий вигляд) #7: активність per менеджер×день (авто/ліди) для перемикача.
   const mgrDayDispMap = new Map<number, { day: string; deals: number; revenue: number }[]>();
   for (const r of mgrDayDisp) { const a = mgrDayDispMap.get(r.managerId) ?? []; a.push({ day: r.day, deals: r.deals, revenue: r.revenue }); mgrDayDispMap.set(r.managerId, a); }
+  const mgrShipMap = new Map<number, reportCuts.DispatchCohortRow[]>();
+  for (const r of shipCohort) { const a = mgrShipMap.get(r.managerId) ?? []; a.push(r); mgrShipMap.set(r.managerId, a); }
   const mgrDayLeadsMap = new Map<number, { day: string; ad: number; leadgen: number }[]>();
   for (const r of mgrDayLeads) { const a = mgrDayLeadsMap.get(r.managerId) ?? []; a.push({ day: r.day, ad: r.ad, leadgen: r.leadgen }); mgrDayLeadsMap.set(r.managerId, a); }
   const kyivTodayW = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
@@ -10356,8 +10362,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     const autoRevenue = (mgrDayDispMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.revenue, 0); // #3 сума авто (signed)
     const leadsAd = (mgrDayLeadsMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.ad, 0);
     const leadsLeadgen = (mgrDayLeadsMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.leadgen, 0);
+    const ship = shipWeek.shipWeekOf(mgrShipMap.get(mid) ?? [], w.from, w.to);
     const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
-    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
+    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, ship, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
   });
   const expTeamPastMap = new Map(expTeamPast.map((r) => [r.id, r.sum]));
   const expTeamThisMap = new Map(expTeamThis.map((r) => [r.id, r.sum]));
@@ -10498,15 +10505,16 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   }
   // Крок Д owner-review #1: фінвідділ — НЕ sales-юніт → повністю прибрати зі звіту
   // (received=0, тож Σ teams.revenue не зрушиться).
-  type WeekAgg = { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null };
+  type WeekAgg = { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; ship: shipWeek.ShipWeek; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null };
   const teams = [...teamMap.values()].filter((t) => !KVP_FINANCE_TEAM_IDS.has(t.teamId)).map((t) => {
     // Крок Д фінал #2: тижні команди = Σ тижнів менеджерів (per idx). met = teamFact ≥ teamPlan.
     const teamWeeks = weekBlocks.map((w) => {
       const ms = t.managers.map((mm) => ((mm.weeks as WeekAgg[]) ?? []).find((x) => x.idx === w.idx)).filter(Boolean) as WeekAgg[];
       const plan = ms.reduce((a, x) => a + x.plan, 0), fact = ms.reduce((a, x) => a + x.fact, 0), expected = ms.reduce((a, x) => a + x.expected, 0);
       const auto = ms.reduce((a, x) => a + x.auto, 0), autoRevenue = ms.reduce((a, x) => a + x.autoRevenue, 0), leadsAd = ms.reduce((a, x) => a + x.leadsAd, 0), leadsLeadgen = ms.reduce((a, x) => a + x.leadsLeadgen, 0);
+      const ship = ms.reduce((a, x) => shipWeek.addShip(a, x.ship), shipWeek.SHIP_ZERO);
       const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
-      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
+      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, ship, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
     });
     return {
       teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
@@ -10608,6 +10616,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     return {
       idx: w.idx, from: w.from, to: w.to, plan: s("plan"), fact: s("fact"), expected: s("expected"),
       auto: s("auto"), autoRevenue: s("autoRevenue"), leadsAd: s("leadsAd"), leadsLeadgen: s("leadsLeadgen"),
+      ship: ws.reduce((a, x) => shipWeek.addShip(a, x.ship), shipWeek.SHIP_ZERO),
       success: Math.round(successW),
       newRecv: Math.round(segW.reduce((a, r) => a + r.newRev, 0)),
       repeatRecv: Math.round(segW.reduce((a, r) => a + r.repeatRev, 0)),
