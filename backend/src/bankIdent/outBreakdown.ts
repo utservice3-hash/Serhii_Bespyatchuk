@@ -12,8 +12,18 @@
  *   «Змінити» вписане — з причиною; платіж іде у фільтр «Відкориговані», в історію — обидва стани.
  *   Розписано ≠ сумі платежу — стан «не зійшлось»: він у «Чекають», а не в «З номером».
  *
+ *   Рядки трьох видів (Тетяна 03.11, 18:56 — «не лише оплати по айді, а й операційні і зп»):
+ *     «62821719 3000» — витрата по угоді (8–9 цифр, як у Kommo);
+ *     «4445 3000»     — операційний запит (до 7 цифр; номер приймаємо як є — довідника запитів у дашборді немає);
+ *     «зп 20000», «DigitalOcean 453» — категорія текстом (мусить мати хоч одну літеру).
+ *   Хвіст у дужках — примітка до рядка: «4445 3000 (Операційний запит)».
+ *   «Свій переказ» для вихідних — лише на НАШ рахунок (IBAN) або «між власними рахунками»; імʼя власника — ні:
+ *   «Переказ на картку» Беспятчуку — це 73 з 75 вихідних ФОП Моно, і саме їх Тетяна розписує (замір 03.11).
+ *
  * Чисті функції: без БД і мережі — гейти ганяють їх у звичайному `npm test`.
  */
+
+import { isOwnTransfer, type IdentRules, type TxLite } from "./bankIdent.js";
 
 export const VIEW_PERM = "view_bank_out_breakdown";
 export const EDIT_PERM = "edit_bank_out_breakdown";
@@ -25,8 +35,22 @@ export const OUT_FROM = "2026-10-01";
 
 export const MAX_LINES = 50;
 const MAX_TEXT = 4000;
+const MAX_LABEL = 80;
 
-export interface OutLine { deal: number; amount: number }
+export type OutKind = "deal" | "op" | "text";
+/** Рядок розшифровки. `ref` — № угоди / № запиту / назва категорії; `note` — примітка з дужок. */
+export interface OutLine { kind: OutKind; ref: string; amount: number; note?: string }
+
+/** Збережений рядок → рядок. Записи до 03.11 вечора — `{deal, amount}` без виду: це угода. */
+export function normLine(raw: unknown): OutLine {
+  const x = (raw ?? {}) as { kind?: string; ref?: unknown; deal?: unknown; amount?: unknown; note?: unknown };
+  const kind: OutKind = x.kind === "op" || x.kind === "text" ? x.kind : "deal";
+  const ref = String(x.ref ?? x.deal ?? "");
+  return { kind, ref, amount: Number(x.amount), ...(typeof x.note === "string" && x.note ? { note: x.note } : {}) };
+}
+
+/** Вихідний платіж — свій переказ: на наш рахунок (IBAN) або «між власними рахунками». Імʼя власника НЕ рахується. */
+export const isOutOwn = (tx: TxLite, r: Pick<IdentRules, "ownIbans">): boolean => isOwnTransfer(tx, { ownIbans: r.ownIbans, ownNames: [] });
 export type ParseResult = { ok: true; lines: OutLine[] } | { ok: false; error: string };
 
 /** Сума «3 000», «3000,50», «3000.5», «3000 грн», «₴3000» → число з копійками; не сума → null. */
@@ -37,34 +61,56 @@ function parseAmount(s: string): number | null {
   return n > 0 && n < 1e9 ? Math.round(n * 100) / 100 : null;
 }
 
+const SEP = String.raw`\s*(?:[-–—:=\t]\s*)?`;
+const NUM_LINE = new RegExp(String.raw`^(\d{1,9})` + SEP + "(.+)$");
+const TEXT_LINE = new RegExp(String.raw`^(.*?\p{L}.*?)` + SEP + String.raw`(\d[\d\s\u00a0]*(?:[.,]\d{1,2})?\s*(?:грн\.?|uah|₴)?)$`, "iu");
+
+/** Один рядок → рядок розшифровки або null. Номер угоди — 8–9 цифр, запиту — до 7; інакше потрібна літера (категорія). */
+export function parseLine(line: string): OutLine | null {
+  const nm = /^(.*?)\s*\(([^()]{0,120})\)\s*$/.exec(line);
+  const body = (nm ? nm[1] : line).trim();
+  const note = nm ? nm[2].trim() : "";
+  const withNote = (l: OutLine): OutLine => (note ? { ...l, note } : l);
+  const n = NUM_LINE.exec(body);
+  const na = n ? parseAmount(n[2]) : null;
+  if (n && na !== null) return withNote({ kind: n[1].length >= 8 ? "deal" : "op", ref: String(Number(n[1])), amount: na });
+  const t = TEXT_LINE.exec(body);
+  const ta = t ? parseAmount(t[2]) : null;
+  const label = t ? t[1].trim().replace(/\s+/g, " ") : "";
+  if (t && ta !== null && label.length <= MAX_LABEL) return withNote({ kind: "text", ref: label, amount: ta });
+  return null;
+}
+
+const KIND_WORD: Record<OutKind, string> = { deal: "Угода", op: "Операційний запит", text: "Категорія" };
+const keyOf = (l: OutLine) => `${l.kind}:${l.ref.toLowerCase()}`;
+
 /**
- * Вставлений текст → рядки. Рядок = «№ угоди» (8–9 цифр) + сума; роздільник між ними — пробіл, таб, тире, двокрапка
- * чи «;». Порожні рядки пропускаються. Одна угода двічі — помилка (інакше сума подвоїлась би непомітно).
+ * Вставлений текст → рядки (вид див. `parseLine`); роздільник між першою частиною й сумою — пробіл, таб, тире,
+ * двокрапка; рядки — переносом або «;». Порожні пропускаються. Той самий № / категорія двічі — помилка (інакше сума
+ * подвоїлась би непомітно).
  */
 export function parseBreakdown(text: unknown): ParseResult {
-  if (typeof text !== "string" || !text.trim()) return { ok: false, error: "Впишіть хоча б один рядок «№ угоди сума»." };
+  if (typeof text !== "string" || !text.trim()) return { ok: false, error: "Впишіть хоча б один рядок, напр. «62788851 3000»." };
   if (text.length > MAX_TEXT) return { ok: false, error: "Забагато тексту." };
   const raw = text.split(/\r?\n|;/).map((l) => l.trim()).filter(Boolean);
   if (raw.length > MAX_LINES) return { ok: false, error: `Забагато рядків — до ${MAX_LINES}.` };
   const lines: OutLine[] = [];
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   for (const [i, l] of raw.entries()) {
-    const m = /^(\d{8,9})\s*(?:[-–—:=\t]\s*)?(.+)$/.exec(l);
-    const amount = m ? parseAmount(m[2]) : null;
-    if (!m || amount === null) return { ok: false, error: `Рядок ${i + 1} «${l.slice(0, 40)}»: потрібно «№ угоди сума», напр. 62788851 3000.` };
-    const deal = Number(m[1]);
-    if (seen.has(deal)) return { ok: false, error: `Угода ${deal} двічі — обʼєднайте суми в один рядок.` };
-    seen.add(deal);
-    lines.push({ deal, amount });
+    const line = parseLine(l);
+    if (!line) return { ok: false, error: `Рядок ${i + 1} «${l.slice(0, 40)}»: потрібно «№ угоди сума», «№ запиту сума» або «категорія сума», напр. 62788851 3000 · 4445 3000 · зп 20000.` };
+    if (seen.has(keyOf(line))) return { ok: false, error: `${KIND_WORD[line.kind]} «${line.ref}» двічі — обʼєднайте суми в один рядок.` };
+    seen.add(keyOf(line));
+    lines.push(line);
   }
   return { ok: true, lines };
 }
 
 export const sumLines = (lines: OutLine[]) => Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
 
-/** Той самий формат, що вставляють: «№ сума» рядками — для «Скопіювати». */
+/** Той самий формат, що вставляють (і що розбирає `parseBreakdown`) — для «Скопіювати» та «Змінити». */
 export function formatBreakdown(lines: OutLine[]): string {
-  return lines.map((l) => `${l.deal} ${Number.isInteger(l.amount) ? l.amount : l.amount.toFixed(2)}`).join("\n");
+  return lines.map((l) => `${l.ref} ${Number.isInteger(l.amount) ? l.amount : l.amount.toFixed(2)}${l.note ? ` (${l.note})` : ""}`).join("\n");
 }
 
 export type OutStored = "identified" | "unidentified";

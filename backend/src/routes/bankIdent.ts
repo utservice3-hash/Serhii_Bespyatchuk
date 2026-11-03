@@ -32,7 +32,7 @@ import { canSeeTxRow, ourTxSource, publicRow, toLite, type BankTx } from "../ban
 import { jobSkip, type JobSkip } from "../jobs/jobRuns.js";
 import {
   EDIT_PERM as OUT_EDIT_PERM, VIEW_PERM as OUT_VIEW_PERM, OUT_FILTERS, OUT_FROM, checkReason as checkOutReason, formatBreakdown,
-  inFilter, nextAct, outStatus, parseBreakdown, sumLines, type OutFilter, type OutLine,
+  inFilter, isOutOwn, nextAct, outStatus, parseBreakdown, sumLines, type OutFilter, type OutLine,
 } from "../bankIdent/outBreakdown.js";
 import { dealLabels, outCandidateIds, outHistory, outRowForUpdate, outRowsByIds, saveOut } from "../bankIdent/outBreakdownStore.js";
 const OUT_NOT_IN_SCOPE = "Розшифровка — лише для вихідних ФОП Приват, ФОП Моно і картки.";
@@ -341,23 +341,26 @@ async function outScope(req: AuthedRequest): Promise<number[]> {
   return q.rows.map((x) => Number(x.id));
 }
 const isOutTx = (t: BankTx) => String(t.direction) === "out" && engine.accountIds.includes(Number(t.account_id));
-/** Вихідні в межах розшифровки, видимі людині; свої перекази (наш IBAN, власник) розшифровки не потребують. */
+/** Вихідні в межах розшифровки, видимі людині; свої перекази (наш IBAN, «між власними») розшифровки не потребують. */
 async function outCandidates(req: AuthedRequest): Promise<Array<{ t: BankTx; own: boolean }>> {
   const scope = await outScope(req);
   const txs = await visible(req.user!, await bankIdentOptions.txs.byIds(await outCandidateIds(pool, scope, OUT_FROM)));
   const rules = await engine.rules();
   return txs.filter(isOutTx).sort((a, b) => Date.parse(String(b.booked_at)) - Date.parse(String(a.booked_at)))
-    .map((t) => ({ t, own: isOwnTransfer(toLite(t), rules) }));
+    .map((t) => ({ t, own: isOutOwn(toLite(t), rules) }));
 }
 async function outStates(ids: number[], txs: BankTx[], own: Set<number>) {
   const rows = await outRowsByIds(pool, ids);
-  const labels = await dealLabels(pool, [...new Set([...rows.values()].flatMap((x) => x.lines.map((l) => l.deal)))]);
+  const labels = await dealLabels(pool, [...new Set([...rows.values()].flatMap((x) => x.lines.filter((l) => l.kind === "deal").map((l) => Number(l.ref))))]);
   const out: Record<number, unknown> = {};
   for (const t of txs) {
     const id = Number(t.id), row = rows.get(id) ?? null, amount = Math.abs(Number(t.amount));
     out[id] = {
       txId: id, own: own.has(id) && !row, status: own.has(id) && !row ? "own" : outStatus(row, amount), amount,
-      lines: (row?.lines ?? []).map((l) => ({ deal: l.deal, amount: l.amount, name: labels.get(l.deal)?.name ?? null, manager: labels.get(l.deal)?.manager ?? null, known: labels.has(l.deal) })),
+      lines: (row?.lines ?? []).map((l) => {
+        const d = l.kind === "deal" ? labels.get(Number(l.ref)) : undefined;
+        return { ...l, name: d?.name ?? null, manager: d?.manager ?? null, known: l.kind !== "deal" || !!d };
+      }),
       sum: row ? sumLines(row.lines) : 0, text: row ? formatBreakdown(row.lines) : "",
       corrected: !!row?.corrected, by: row?.setByName ?? null, at: row?.setAt ?? null, reason: row?.reason ?? null,
     };
@@ -369,7 +372,7 @@ r.post("/out/state", async (req: AuthedRequest, res) => {
   const ids = parseIds(req.body?.ids);
   const txs = (await visible(req.user!, await bankIdentOptions.txs.byIds(ids))).filter(isOutTx);
   const rules = await engine.rules();
-  const own = new Set(txs.filter((t) => isOwnTransfer(toLite(t), rules)).map((t) => Number(t.id)));
+  const own = new Set(txs.filter((t) => isOutOwn(toLite(t), rules)).map((t) => Number(t.id)));
   res.json({ states: await outStates(txs.map((t) => Number(t.id)), txs, own), canEdit: outCan(req, OUT_EDIT_PERM) });
 });
 r.get("/out/counts", async (req: AuthedRequest, res) => {
