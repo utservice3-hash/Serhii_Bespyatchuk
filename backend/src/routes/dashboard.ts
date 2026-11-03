@@ -76,7 +76,7 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
-import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview, reviewClosure } from "../core/firstTouchTeamReport.js";
+import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview, reviewClosure, canCloseReview, REVIEW_NEEDS_COMMENT_UA } from "../core/firstTouchTeamReport.js";
 import { canSendCallFeedback, callFeedbackBody, CALL_FEEDBACK_MAX } from "../core/firstTouchFeedback.js";
 import { canSeeMessengerSignal } from "../core/firstTouchMessenger.js";
 import { validateFeedback, composeMessage } from "../core/feedbackForm.js";
@@ -11316,12 +11316,13 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
       inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride, transportKind: r.transportKind,
       messengerPromises: r.messengerPromises, messengerSignal: seeMsgSignal ? r.messengerSignal : null,
+      priceForm: r.priceForm, priceFormAnalysed: r.priceFormAnalysed,
       priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
       reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
       // Екран D (08.10.2026): чек-лист і черга розбору — стани від ядра, фронт їх лише складає.
       checklist: checklist(r), checkScore: checklistScore(checklist(r)), reviewReason: reviewReason(r), needsReview: needsReview(r), reviewNote: r.reviewNote,
       // 💬 Задача 7183: коментар менеджера і чим закрито розмову з черги («погоджено» / «тімлідом» / «дійшла до рахунку»).
-      explainNote: r.explainNote, reviewClosure: reviewReason(r) == null ? null : reviewClosure(r),
+      explainNote: r.explainNote, managerCommented: r.managerCommented, reviewClosure: reviewReason(r) == null ? null : reviewClosure(r),
       // ТЗ «фінальні доробки» 08.10.2026: заперечення (окрема рубрика), успіх угоди з Kommo і знаменники плиток — від ядра.
       objection: r.objection, dealOutcome: r.dealOutcome,
       // 🤝 Згода після ціни (13.10.2026) — окрема інформація, у бал не входить; показувати чи ні, вирішує ядро.
@@ -11384,6 +11385,7 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
     managerChannel: card.managerChannel, durationSec: card.durationSec, mono: card.mono, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
     messenger: card.messenger, canSeeMessengerSignal: seeMsg,
+    priceForm: card.priceForm,
     typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
     noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline"),
       explain: canWriteNote(auth.roleKey, "explain") },
@@ -11479,6 +11481,9 @@ dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  // ✍️ Задача 7351 (з 03.11.2026): «Розібрано» — лише після коментаря самого менеджера розмови. Зняти позначку (порожній
+  // текст) можна завжди.
+  if (kind === "review" && text.trim() && !canCloseReview(card.row)) { res.status(409).json({ error: REVIEW_NEEDS_COMMENT_UA }); return; }
   const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
   await setCallNote(pool, uniqueid, kind as NoteKind, text, { userId: auth.userId ?? null, name: who }, new Date());
   res.json({ ok: true });

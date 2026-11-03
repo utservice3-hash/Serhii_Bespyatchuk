@@ -6,6 +6,7 @@ import { OBJECTION_RUBRICS, RUBRIC_OBJECTION_V2, type ClientDecision, type Objec
 import { dealOutcomes, dealsReachedInvoice, outcomeOfCall, type DealOutcome } from "./firstTouchOutcome.js";
 import { INTL_REQUEST_TYPE, RUBRIC_TRANSPORT_V1, transportExclusion, type ExcludedTransport, type TransportResult } from "./firstTouchTransport.js";
 import { RUBRIC_MESSENGER_V1, messengerPromisesOf, messengerSignal, type MessengerResult } from "./firstTouchMessenger.js";
+import { RUBRIC_PRICE_FORM_V1, priceFormOf, type PriceForm, type PriceFormResult } from "./firstTouchPriceForm.js";
 import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, FIRST_TOUCH_SHOWN_RUBRICS, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, RINGOSTAT_POLICY, RECORDING_MAX_BYTES, type AdPredicate } from "./callAiPilot.js";
 import { downloadRecording, type DownloadOutcome } from "./ringostatRecording.js";
@@ -168,6 +169,12 @@ export interface AiCallRow {
   messengerPromises: number;
   /** 💬 Менеджер сам запропонував месенджер (з цитатою); `false` — розібрано, сигналу немає; `null` — не розбирали (задача 7184). */
   messengerSignal: boolean | null;
+  /**
+   * 💵 Як названо ціну (задача 7351): точна / вилка / «від…» — лише з цитатою, що знайшлась; `null` — не визначено.
+   * `priceFormAnalysed` — рубрика розмову розібрала (вона бере лише розмови з 03.11, де ціну назвали).
+   */
+  priceForm: PriceForm | null;
+  priceFormAnalysed: boolean;
   /** Модель не впевнена (< 0.85) — у звіті з позначкою «Перевірити тип». */
   typeCheck: boolean;
   /** Остання ручна позначка тімліда чи адміна, якщо була. */
@@ -181,6 +188,8 @@ export interface AiCallRow {
   reviewNote: CallNote | null;
   /** 💬 «Коментар менеджера» (задача 7183) — пояснення до розмови з черги; `null` — не писав. */
   explainNote: CallNote | null;
+  /** ✍️ Коментар до розмови написав САМ її менеджер (акаунт привʼязаний до менеджера розмови) — лише так тімлід закриває (задача 7351). */
+  managerCommented: boolean;
   /** 🧾 Угода розмови заходила в «Виставлення рахунку» або далі — розмова виходить з черги (задача 7183). */
   reachedInvoice: boolean;
   /** Модель витягла запит клієнта (що й куди везти) — пункт «Запит» чек-листа; `false` і до аналізу. */
@@ -220,8 +229,10 @@ interface RawRow {
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
   rv_text?: string | null; rv_by?: string | null; rv_at?: Date | null;
   ex_text?: string | null; ex_by?: string | null; ex_at?: Date | null;
+  mgr_commented?: boolean | null;
   tr_result?: TransportResult | null; request_type?: string | null;
   ms_result?: MessengerResult | null;
+  pf_result?: PriceFormResult | null;
   obj_result?: ObjectionResult | null;
   dec_result?: ObjectionResult | null;
   first_out_at?: Date | null;
@@ -244,6 +255,10 @@ const IN_TYPES = new Set(["in", "transitin"]);
 const MESSENGER_JOIN = `LEFT JOIN LATERAL (SELECT msx.result AS ms_result FROM call_analyses msx
                   WHERE msx.transcript_id = t.id AND msx.rubric_version = '${RUBRIC_MESSENGER_V1}' AND msx.status = 'done'
                   ORDER BY msx.id DESC LIMIT 1) msn ON true`;
+/** 💵 Готовий розбір «як названо ціну» (задача 7351) — для списку й картки однаково. */
+const PRICE_FORM_JOIN = `LEFT JOIN LATERAL (SELECT pfx.result AS pf_result FROM call_analyses pfx
+                  WHERE pfx.transcript_id = t.id AND pfx.rubric_version = '${RUBRIC_PRICE_FORM_V1}' AND pfx.status = 'done'
+                  ORDER BY pfx.id DESC LIMIT 1) pfm ON true`;
 /** 🚛 Готовий розбір виду перевезення (задача 7183) — для списку й картки однаково (`t` — розшифровка). */
 const TRANSPORT_JOIN = `LEFT JOIN LATERAL (SELECT trx.result AS tr_result FROM call_analyses trx
                   WHERE trx.transcript_id = t.id AND trx.rubric_version = '${RUBRIC_TRANSPORT_V1}' AND trx.status = 'done'
@@ -278,11 +293,14 @@ export function foldRow(r: RawRow): AiCallRow {
     ...tf, inReport: tf.inReport && transportKind == null, transportKind,
     messengerPromises: res ? messengerPromisesOf(res.promises) : 0,
     messengerSignal: state === "done" ? messengerSignal(r.ms_result ?? null) : null,
+    priceForm: state === "done" ? priceFormOf(r.pf_result ?? null) : null,
+    priceFormAnalysed: state === "done" && r.pf_result != null,
     priceNote: r.pn_text ? { text: r.pn_text, byName: r.pn_by ?? null, at: r.pn_at ? new Date(r.pn_at).toISOString() : "" } : null,
     missedNote: r.mn_text ? { text: r.mn_text, byName: r.mn_by ?? null, at: r.mn_at ? new Date(r.mn_at).toISOString() : "" } : null,
     offlineNote: r.on_text ? { text: r.on_text, byName: r.on_by ?? null, at: r.on_at ? new Date(r.on_at).toISOString() : "" } : null,
     reviewNote: r.rv_text ? { text: r.rv_text, byName: r.rv_by ?? null, at: r.rv_at ? new Date(r.rv_at).toISOString() : "" } : null,
     explainNote: r.ex_text ? { text: r.ex_text, byName: r.ex_by ?? null, at: r.ex_at ? new Date(r.ex_at).toISOString() : "" } : null,
+    managerCommented: r.mgr_commented === true,
     reachedInvoice: false,
     hasRequest: (res?.client_request ?? "").trim() !== "",
     objection: state === "done" ? r.obj_result ?? null : null,
@@ -303,6 +321,12 @@ const notesJoin = (alias: string): string => `LEFT JOIN first_touch_notes pn ON 
       LEFT JOIN first_touch_notes onx ON onx.uniqueid = ${alias}.uniqueid AND onx.kind = 'offline'
       LEFT JOIN first_touch_notes rvx ON rvx.uniqueid = ${alias}.uniqueid AND rvx.kind = 'review'
       LEFT JOIN first_touch_notes exn ON exn.uniqueid = ${alias}.uniqueid AND exn.kind = 'explain'`;
+/**
+ * ✍️ Чи написав коментар (`explain` чи `price`) САМ менеджер розмови (задача 7351): акаунт автора привʼязаний до менеджера
+ * дзвінка (`users.manager_id`). Коментар тімліда «за менеджера» не рахується (`alias` — таблиця з `uniqueid` і `manager_id`).
+ */
+const managerCommentedCol = (alias: string): string => `EXISTS (SELECT 1 FROM first_touch_notes mcx JOIN users mcu ON mcu.id = mcx.set_by
+             WHERE mcx.uniqueid = ${alias}.uniqueid AND mcx.kind IN ('explain', 'price') AND mcu.manager_id = ${alias}.manager_id) AS mgr_commented`;
 const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_at, mn.note AS mn_text, mn.set_by_name AS mn_by, mn.set_at AS mn_at, "
   + "onx.note AS on_text, onx.set_by_name AS on_by, onx.set_at AS on_at, rvx.note AS rv_text, rvx.set_by_name AS rv_by, rvx.set_at AS rv_at, "
   + "exn.note AS ex_text, exn.set_by_name AS ex_by, exn.set_at AS ex_at";
@@ -446,9 +470,9 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            ft.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            t.status AS stt_status, t.failure AS stt_failure,
            a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result,
-           rcx.client_phone, d.pipeline_id, d.reject_reason, d.request_type, trn.tr_result, msn.ms_result,
+           rcx.client_phone, d.pipeline_id, d.reject_reason, d.request_type, trn.tr_result, msn.ms_result, pfm.pf_result,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
+           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("ft")},
            (SELECT min(e.calldate) FROM ringostat_calls e WHERE rcx.client_phone IS NOT NULL AND e.client_phone = rcx.client_phone
                AND e.call_type = ANY($15::text[]) AND e.calldate >= ft.created_at) AS first_out_at
       FROM (${q.sql}) ft
@@ -465,6 +489,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
       ${OBJECTION_JOINS}
       ${TRANSPORT_JOIN}
       ${MESSENGER_JOIN}
+      ${PRICE_FORM_JOIN}
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
        AND ${firstTouchExclusionSql("ft", "rcx.client_phone", tun.repeatWindowDays)}
@@ -536,6 +561,8 @@ export interface AiCallCard {
    * права на сигнал отримує `null` — прибирає роут тим самим правилом, що й `row.messengerSignal`.
    */
   messenger: MessengerResult | null;
+  /** 💵 Розбір «як названо ціну» (задача 7351): форма, дослівна цитата й чи знайшлась; `null` — рубрика не розбирала. */
+  priceForm: PriceFormResult | null;
 }
 
 /**
@@ -557,8 +584,8 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            rc.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name, rc.client_phone,
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
-           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result, trn.tr_result, msn.ms_result
+           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("rc")},
+           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result, trn.tr_result, msn.ms_result, pfm.pf_result
       FROM ringostat_calls rc
       ${overrideJoin("rc")}
       ${notesJoin("rc")}
@@ -571,6 +598,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
       ${OBJECTION_JOINS}
       ${TRANSPORT_JOIN}
       ${MESSENGER_JOIN}
+      ${PRICE_FORM_JOIN}
      WHERE rc.uniqueid = $1
        AND ($7::int IS NULL OR rc.manager_id = $7)
        AND ($8::int IS NULL OR m.team_id = $8)
@@ -639,6 +667,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     promiseChecks,
     callsAfter,
     messenger: done ? raw.ms_result ?? null : null,
+    priceForm: done ? raw.pf_result ?? null : null,
     typeHistory: (await db.query<{ is_cargo: boolean; set_by_name: string | null; set_at: Date }>(
       "SELECT is_cargo, set_by_name, set_at FROM call_type_overrides WHERE uniqueid = $1 ORDER BY set_at DESC, id DESC LIMIT 20", [uniqueid]))
       .rows.map((x) => ({ isCargo: x.is_cargo === true, byName: x.set_by_name, at: new Date(x.set_at).toISOString() })),

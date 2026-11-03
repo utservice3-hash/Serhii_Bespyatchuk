@@ -413,6 +413,8 @@ export interface AiCallRowT {
   /** 💬 Задача 7184: обіцянок менеджера в месенджер (не перевірити); сигнал «сам запропонував месенджер» — `null`, якщо не
    *  розбирали або цій ролі ще не показуємо. */
   messengerPromises: number; messengerSignal: boolean | null;
+  /** 💵 Задача 7351: як названо ціну (лише з цитатою, що знайшлась); `priceFormAnalysed` — рубрика розмову розібрала (з 03.11, де ціну назвали). */
+  priceForm: AiPriceFormT | null; priceFormAnalysed: boolean;
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
   priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
   reactionMin?: number | null; reactionOffHours?: boolean;
@@ -421,6 +423,8 @@ export interface AiCallRowT {
   reviewReason: AiReviewReasonT | null; needsReview: boolean; reviewNote: AiNoteT | null;
   /** 💬 Задача 7183: коментар менеджера і чим закрито розмову з черги; `null` — у черзі нічого не було або ще не закрито. */
   explainNote: AiNoteT | null; reviewClosure: AiReviewClosureT | null;
+  /** ✍️ Задача 7351: коментар написав сам менеджер розмови — лише тоді тімлід може закрити її з черги. */
+  managerCommented: boolean;
   objection: AiObjectionT | null; dealOutcome: AiDealOutcomeT | null;
   /** 🤝 Згода після ціни (13.10.2026): лише для розмов з ціною, у бал не входить; `null` — ціни не було чи не розбирали. */
   clientDecision: AiClientDecisionT | null;
@@ -471,6 +475,9 @@ export interface AiAnalysis {
 export interface AiTurn { channel: number; start: number | null; end: number | null; text: string; lang: string | null }
 /** 💬 Розбір рубрики месенджера: `manager` — запропонував менеджер, `client` — попросив клієнт, `none` — переходу не було. */
 export interface AiMessengerT { move: "none" | "manager" | "client"; quote: string; quote_found?: boolean | null }
+/** 💵 Як названо ціну (задача 7351): точна / вилка / «від…»; `none` — модель суми не почула. */
+export type AiPriceFormT = "exact" | "range" | "from";
+export interface AiPriceFormResultT { form: AiPriceFormT | "none"; quote: string; quote_found?: boolean | null }
 export interface AiCallCardResp {
   row: Omit<AiCallRowT, "dealCreatedAt" | "nonTarget">;
   dealUrls: { kommoId: number; url: string }[];
@@ -483,6 +490,8 @@ export interface AiCallCardResp {
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
   /** 💬 Хто запропонував месенджер — з цитатою (задача 7184); `null` — не розбирали або роль не має права (`canSeeMessengerSignal`). */
   messenger: AiMessengerT | null;
+  /** 💵 Розбір «як названо ціну» з цитатою (задача 7351); `null` — рубрика не розбирала. */
+  priceForm: AiPriceFormResultT | null;
   canSeeMessengerSignal: boolean;
   /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
