@@ -3,19 +3,15 @@ import { fetchLinkedinQueue, saveLinkedinQueueDispatcher, saveLinkedinQueueMembe
 import { useToast } from "../../../components/Toasts";
 
 /**
- * 🔗 Редактор черги LinkedIn («Клієнти → LinkedIn» → «Налаштувати чергу»; задача 7361, рішення Юлі 03.11.2026). Порядок —
- * «кожна нова заявка йде наступному за списком». У пулі — менеджери від 1 місяця (зустріч 28.10); кнопка підставляє
- * таких, але список остаточно той, що тут. Сервер гейтить право `manage_linkedin_queue` незалежно від показу.
+ * 🔗 Вкладка «Черга» екрана «Клієнти → LinkedIn» (задача 7361; рішення Юлі 03.11.2026). Порядок кола — «кожна нова
+ * заявка йде наступному за списком». У пулі — менеджери від 1 місяця (зустріч 28.10): кнопка підставляє таких, але
+ * список остаточно той, що тут. Сервер гейтить право `manage_linkedin_queue` незалежно від показу.
  */
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
 const MUTED = "var(--text-muted)";
-export const kyivDt = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
-export const STATE: Record<string, string> = {
-  waiting: "чекає", offered: "запропоновано", taken: "взяли", dispatcher: "відповідальній", gone: "пішла з черги",
-};
-export const MODE: Record<string, string> = {
-  off: "вимкнено", dry: "пробний — бот лише пише в журнал, кому віддав би; у Kommo й Telegram нічого", live: "бойовий",
-};
+const inp = { padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", maxWidth: 360 } as const;
+const dmy = (iso: string | null) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : "невідомо");
+const dark = { background: "#1f2330", color: "#fff", borderColor: "#1f2330" } as const;
 
 export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) {
   const toast = useToast();
@@ -29,86 +25,90 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
   }, [toast]);
   useEffect(() => { void load(); }, [load]);
 
-  if (!data) return <div style={{ color: MUTED }}>Завантаження…</div>;
+  if (!data) return <p className="loading-text">Завантаження…</p>;
   const byId = new Map([...data.members, ...data.candidates].map((p) => [p.managerId, p]));
+  const absent = new Set(data.members.filter((m) => m.absentToday).map((m) => m.managerId));
   const saved = data.members.map((m) => m.managerId);
   const dirty = order.join(",") !== saved.join(",");
   const outside = data.candidates.filter((c) => !order.includes(c.managerId));
+  const suggested = outside.filter((c) => c.suggested);
   const move = (i: number, d: -1 | 1) => setOrder((o) => { const n = [...o]; const j = i + d; if (j < 0 || j >= n.length) return o; [n[i], n[j]] = [n[j], n[i]]; return n; });
   const save = async () => {
     setBusy(true);
-    try { await saveLinkedinQueueMembers(order); toast("Список черги збережено"); await load(); onSaved?.(); }
-    catch (e) { toast(err(e), { error: true }); } finally { setBusy(false); }
+    try { await saveLinkedinQueueMembers(order); toast("Порядок кола збережено"); await load(); onSaved?.(); }
+    catch (e) { toast(err(e), { error: true }); }
+    setBusy(false);
   };
   const setDispatcher = async (v: string) => {
     try { await saveLinkedinQueueDispatcher(v ? Number(v) : null); toast("Відповідальну збережено"); await load(); onSaved?.(); }
     catch (e) { toast(err(e), { error: true }); }
   };
-  const box = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, padding: 14, marginBottom: 14 } as const;
 
   return (
-    <div>
-      <div style={box}>
-        <b>🔗 Черга LinkedIn</b>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
-          Угода на етапі «LinkedIn» (Кваліфікація) йде менеджерам по колу, за цим списком: одночасно лише в одного, 15 хв
-          робочого часу (пн–пт 8:00–18:00) на «Взяти». Хто не взяв — пропускає свою чергу. Двоє підряд не взяли або клієнт
-          уже в іншого менеджера — заявка йде відповідальній. Відпустку, вихідний, лікарняний з «Календаря команди» бот
-          пропускає сам.
-        </div>
-        <div style={{ fontSize: 13, marginTop: 8 }}>Режим: <b>{MODE[data.mode] ?? data.mode}</b>{data.launchedAt && <span style={{ color: MUTED }}> · рахуємо угоди з {kyivDt(data.launchedAt)}</span>}</div>
-        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, marginTop: 8 }}>
-          Відповідальна (дублі й «двоє не взяли»):
-          <select value={data.dispatcherUserId ?? ""} onChange={(e) => void setDispatcher(e.target.value)} aria-label="Відповідальна за чергу">
-            <option value="">— не вибрано —</option>
-            {data.dispatchers.map((u) => <option key={u.userId} value={u.userId}>{u.name}</option>)}
-          </select>
-        </label>
+    <div style={{ display: "grid", gap: 16, marginTop: 16 }}>
+      <div className="chart-card">
+        <h2 className="chart-title">Як працює черга</h2>
+        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, lineHeight: 1.7 }}>
+          <li>Нова угода на етапі «LinkedIn» іде наступному менеджеру за списком нижче — одночасно лише одному.</li>
+          <li>На «Взяти» — 15 хвилин робочого часу (пн–пт 8:00–18:00). Після 18:00 і у вихідні заявка чекає.</li>
+          <li>Не взяв за 15 хвилин — заявка йде наступному, а він пропускає свою чергу.</li>
+          <li>Двоє підряд не взяли або клієнт уже в іншого менеджера — заявка йде відповідальній.</li>
+          <li>Відпустку, вихідний, лікарняний із «Календаря команди» бот пропускає сам.</li>
+        </ul>
       </div>
 
-      <div style={box}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <b>Порядок кола ({order.length})</b>
-          <span style={{ display: "flex", gap: 8 }}>
-            <button disabled={!outside.some((c) => c.suggested)} onClick={() => setOrder((o) => [...o, ...outside.filter((c) => c.suggested).map((c) => c.managerId)])}>
-              + Додати всіх від 1 місяця
-            </button>
-            <button disabled={!dirty || busy} onClick={() => void save()} style={{ fontWeight: 700 }}>Зберегти</button>
-            {dirty && <button disabled={busy} onClick={() => setOrder(saved)}>Скасувати</button>}
-          </span>
+      <div className="chart-card">
+        <h2 className="chart-title">Відповідальна</h2>
+        <div style={{ fontSize: 13, color: MUTED, marginBottom: 8 }}>Кому йдуть дублі клієнтів і заявки, які двоє підряд не взяли.</div>
+        <select style={inp} value={data.dispatcherUserId ?? ""} onChange={(e) => void setDispatcher(e.target.value)} aria-label="Відповідальна за чергу">
+          <option value="">— не вибрано —</option>
+          {data.dispatchers.map((u) => <option key={u.userId} value={u.userId}>{u.name}</option>)}
+        </select>
+      </div>
+
+      <div className="chart-card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <h2 className="chart-title" style={{ margin: 0 }}>Порядок кола · {order.length}</h2>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {suggested.length > 0 && <button type="button" className="hr-btn" onClick={() => setOrder((o) => [...o, ...suggested.map((c) => c.managerId)])}>+ Усі від 1 місяця ({suggested.length})</button>}
+            {dirty && <button type="button" className="hr-btn" disabled={busy} onClick={() => setOrder(saved)}>Скасувати</button>}
+            <button type="button" className="hr-btn" disabled={!dirty || busy} onClick={() => void save()} style={dirty ? dark : undefined}>Зберегти</button>
+          </div>
         </div>
-        {order.length === 0 && <div style={{ color: MUTED, fontSize: 13, marginTop: 8 }}>Список порожній — заявки йдуть відповідальній.</div>}
-        <table className="data-table" style={{ width: "100%", marginTop: 8 }}>
-          <tbody>
-            {order.map((id, i) => {
-              const p = byId.get(id);
-              const absent = data.members.find((m) => m.managerId === id)?.absentToday;
-              return (
-                <tr key={id}>
-                  <td style={{ width: 32, color: MUTED }}>{i + 1}</td>
-                  <td><b>{p?.name ?? `Менеджер #${String(id)}`}</b> <span style={{ color: MUTED, fontSize: 12 }}>{p?.team ?? "без команди"}{absent ? " · сьогодні відсутній — пропуститься" : ""}</span></td>
-                  <td style={{ color: MUTED, fontSize: 12 }}>{p?.hiredAt ? `з ${p.hiredAt.slice(8, 10)}.${p.hiredAt.slice(5, 7)}.${p.hiredAt.slice(0, 4)}` : "дата виходу невідома"}</td>
-                  <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                    <button onClick={() => move(i, -1)} disabled={i === 0} aria-label="Вище">↑</button>
-                    <button onClick={() => move(i, 1)} disabled={i === order.length - 1} aria-label="Нижче">↓</button>
-                    <button onClick={() => setOrder((o) => o.filter((x) => x !== id))} aria-label="Прибрати">✕</button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        {order.length === 0 ? <p className="loading-text">Список порожній — кожна заявка піде відповідальній.</p> : (
+          <table className="data-table">
+            <thead><tr><th style={{ width: 40 }}>№</th><th>Менеджер</th><th>Команда</th><th>Працює з</th><th>Сьогодні</th><th style={{ textAlign: "right" }}>Порядок</th></tr></thead>
+            <tbody>
+              {order.map((id, i) => {
+                const p = byId.get(id);
+                return (
+                  <tr key={id}>
+                    <td style={{ color: MUTED }}>{i + 1}</td>
+                    <td style={{ fontWeight: 600 }}>{p?.name ?? `Менеджер #${String(id)}`}</td>
+                    <td>{p?.team ?? "—"}</td>
+                    <td>{dmy(p?.hiredAt ?? null)}</td>
+                    <td style={{ color: absent.has(id) ? "#b45309" : MUTED }}>{absent.has(id) ? "відсутній — пропуститься" : "у черзі"}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button type="button" className="hr-btn" onClick={() => move(i, -1)} disabled={i === 0} aria-label="Вище">↑</button>{" "}
+                      <button type="button" className="hr-btn" onClick={() => move(i, 1)} disabled={i === order.length - 1} aria-label="Нижче">↓</button>{" "}
+                      <button type="button" className="hr-btn" onClick={() => setOrder((o) => o.filter((x) => x !== id))}>Прибрати</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
         {outside.length > 0 && (
-          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, marginTop: 10 }}>
-            Додати:
-            <select value="" onChange={(e) => { const v = Number(e.target.value); if (v) setOrder((o) => [...o, v]); }} aria-label="Додати менеджера в чергу">
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12, fontSize: 13 }}>
+            <span style={{ color: MUTED }}>Додати в чергу:</span>
+            <select style={inp} value="" onChange={(e) => { const v = Number(e.target.value); if (v) setOrder((o) => [...o, v]); }} aria-label="Додати менеджера в чергу">
               <option value="">— менеджер —</option>
               {outside.map((c) => <option key={c.managerId} value={c.managerId}>{c.name}{c.team ? ` · ${c.team}` : ""}{c.suggested ? "" : c.hiredAt ? " · менше місяця" : " · дата виходу невідома"}</option>)}
             </select>
-          </label>
+          </div>
         )}
       </div>
-
     </div>
   );
 }

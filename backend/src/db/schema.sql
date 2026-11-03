@@ -7487,6 +7487,11 @@ CREATE TABLE IF NOT EXISTS linkedin_queue_items (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_linkedin_queue_items_open ON linkedin_queue_items (state) WHERE state IN ('waiting', 'offered');
+-- ⏸ Кнопка «Зупинити бота» (Роман 03.11.2026): на паузі черга нікому нічого не пропонує й не рахує 15 хв; після запуску
+-- поточні пропозиції отримують свіжі 15 хв (інакше пауза перетворилась би на «проігнорував» без вини менеджера).
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
 -- Журнал — з нього статистика «отримав / взяв / проігнорував / за який час». Пише і пробний режим (mode='dry').
 CREATE TABLE IF NOT EXISTS linkedin_queue_log (
   id         SERIAL PRIMARY KEY,

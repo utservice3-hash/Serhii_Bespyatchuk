@@ -25,7 +25,8 @@ export interface LinkedinStats {
   kpi: { created: number; taken: number; dispatcher: number; dispatcherDup: number; dispatcherNobody: number; avgTakeMin: number | null };
   perManager: QueueStat[];
   items: QueueItemView[];
-  queue: { mode: CloseMode; members: number; nextName: string | null; dispatcherName: string | null; launchedAt: string | null };
+  queue: { mode: CloseMode; members: number; nextName: string | null; dispatcherName: string | null; launchedAt: string | null;
+    paused: boolean; pausedBy: string | null; pausedAt: string | null };
 }
 
 /**
@@ -70,9 +71,11 @@ export async function loadLinkedinStats(db: Db, fromRaw: unknown, toRaw: unknown
     seenAt: new Date(r.seen_at).toISOString(), offeredAt: r.offered_at ? new Date(r.offered_at).toISOString() : null,
     deadlineAt: r.deadline_at ? new Date(r.deadline_at).toISOString() : null, misses: r.misses }));
   // Рядок черги: скільки в колі, хто наступний (те саме правило, що в тіку: після останнього, без відсутніх сьогодні).
-  const st = (await db.query<{ launched_at: Date | null; last_manager_id: number | null; dname: string | null }>(
-    `SELECT s.launched_at, s.last_manager_id, COALESCE(m.name, u.email) AS dname FROM linkedin_queue_settings s
-       LEFT JOIN users u ON u.id = s.dispatcher_user_id LEFT JOIN managers m ON m.id = u.manager_id WHERE s.id`)).rows[0];
+  const st = (await db.query<{ launched_at: Date | null; last_manager_id: number | null; dname: string | null; paused: boolean; pname: string | null; paused_at: Date | null }>(
+    `SELECT s.launched_at, s.last_manager_id, COALESCE(m.name, u.email) AS dname, s.paused, COALESCE(pm.name, pu.email) AS pname, s.paused_at
+       FROM linkedin_queue_settings s
+       LEFT JOIN users u ON u.id = s.dispatcher_user_id LEFT JOIN managers m ON m.id = u.manager_id
+       LEFT JOIN users pu ON pu.id = s.paused_by LEFT JOIN managers pm ON pm.id = pu.manager_id WHERE s.id`)).rows[0];
   const ring = (await db.query<{ id: number; name: string; absent: boolean }>(
     `SELECT m.id, m.name, EXISTS (SELECT 1 FROM team_calendar_absences a WHERE a.manager_id = m.id AND a.status = 'approved'
               AND a.kind IN ('day_off', 'vacation', 'sick') AND $1::date BETWEEN a.start_date AND a.end_date) AS absent
@@ -86,6 +89,7 @@ export async function loadLinkedinStats(db: Db, fromRaw: unknown, toRaw: unknown
       dispatcherNobody: Number(k.disp) - Number(k.dup), avgTakeMin: k.avg_min == null ? null : Number(k.avg_min) },
     perManager, items,
     queue: { mode: closeModeOf(modeRaw), members: ring.length, nextName: ring.find((r) => r.id === nextId)?.name ?? null,
-      dispatcherName: st?.dname ?? null, launchedAt: st?.launched_at ? new Date(st.launched_at).toISOString() : null },
+      dispatcherName: st?.dname ?? null, launchedAt: st?.launched_at ? new Date(st.launched_at).toISOString() : null,
+      paused: st?.paused ?? false, pausedBy: st?.pname ?? null, pausedAt: st?.paused_at ? new Date(st.paused_at).toISOString() : null },
   };
 }

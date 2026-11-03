@@ -157,10 +157,10 @@ test("#3404 джоба: крон кожні 2 хв (непарні хвилин�
 test("#3405 межа: кожен роут черги — право manage_linkedin_queue першим; у матриці; право мають лише адмін і КВП", () => {
   const r = read("backend/src/routes/linkedinQueue.ts");
   const routes = [...r.matchAll(/linkedinQueueRouter\.(get|put|post|delete|patch)\("([^"]+)",\s*([a-zA-Z]+\("[a-z_]+"\))/g)];
-  assert.equal(routes.length, 3, "🔴 роутів черги не три — новий роут без межі або межа не першим middleware");
+  assert.equal(routes.length, 4, "🔴 роутів черги не чотири (список, відповідальна, пауза, екран) — новий роут без межі або межа не першим middleware");
   for (const m of routes) assert.equal(m[3], 'requirePerm("manage_linkedin_queue")', `🔴 ${m[1]} ${m[2]} без права першим`);
   const matrix = read("backend/src/auth/accessMatrix.ts");
-  for (const p of ['method: "GET", path: "/api/linkedin-queue"', 'method: "PUT", path: "/api/linkedin-queue/members"', 'method: "PUT", path: "/api/linkedin-queue/settings"']) {
+  for (const p of ['method: "GET", path: "/api/linkedin-queue"', 'method: "PUT", path: "/api/linkedin-queue/members"', 'method: "PUT", path: "/api/linkedin-queue/settings"', 'method: "PUT", path: "/api/linkedin-queue/pause"']) {
     assert.ok(matrix.includes(p), `🔴 у матриці немає ${p}`);
   }
   const schema = read("backend/src/db/schema.sql");
@@ -207,6 +207,36 @@ test("#3407 вкладка «LinkedIn» у «Клієнтах»: межа — в
   assert.match(read("frontend/src/components/Layout.tsx"), /\{ key: "linkedin", label: "LinkedIn", icon: "🔗" \}/);
   assert.match(read("frontend/src/pages/Dashboard.tsx"), /section === "linkedin" && <LinkedinSection \/>/);
   // Парне твердження «а де воно тепер»: редактор живе у вкладці, з Налаштувань прибрано.
-  assert.match(read("frontend/src/pages/dashboard/sections/LinkedinSection.tsx"), /canEdit && editing && <LinkedinQueueTab /);
+  assert.match(read("frontend/src/pages/dashboard/sections/LinkedinSection.tsx"), /tab === "queue" && canEdit \? <LinkedinQueueTab /);
   assert.doesNotMatch(read("frontend/src/pages/dashboard/sections/SettingsSection.tsx"), /LinkedinQueueTab|Черга LinkedIn/);
+});
+
+test("#3408 «Зупинити бота»: на паузі тік нічого не робить (навіть у Kommo не ходить); після запуску поточні пропозиції — свіжі 15 хв, а не «проігнорував»", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { setQueuePaused } = await import("./linkedinQueue.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`TRUNCATE linkedin_queue_items, linkedin_queue_log, linkedin_queue_members, linkedin_queue_settings`);
+  const m = (await q(`INSERT INTO managers (name, is_active, kommo_user_id) VALUES ('LQ пауза', true, 909090) RETURNING id`)).rows[0].id as number;
+  const uid = (await q(`INSERT INTO users (email, password_hash, role) VALUES ('lq-pause@uts.test', 'x', 'admin') RETURNING id`)).rows[0].id as number;
+  await q(`INSERT INTO linkedin_queue_members (manager_id, position) VALUES ($1, 1)`, [m]);
+  await q(`INSERT INTO deals (kommo_id, name, pipeline_id, status_id, client_key) VALUES (7101, 'LinkedIn 7101', $1, $2, 'k-pause')
+           ON CONFLICT (kommo_id) DO NOTHING`, [LINKEDIN_STAGE.pipelineId, LINKEDIN_STAGE.statusId]);
+  let calls = 0;
+  const stage: StageLead[] = [{ id: 7101, name: "LinkedIn 7101", createdAt: Z("2026-11-04T08:01:00Z"), responsibleUserId: 1 }];
+  const tick = (iso: string) => runLinkedinQueueTick({ db: c.db, mode: "dry", now: () => new Date(iso), stageLeads: async () => { calls++; return stage; }, ownerOf: async () => null });
+  await tick("2026-11-04T08:00:00Z");
+  await tick("2026-11-04T08:02:00Z");
+  assert.equal((await q(`SELECT state FROM linkedin_queue_items WHERE kommo_id = 7101`)).rows[0].state, "offered");
+  await setQueuePaused(c.db, true, uid, new Date("2026-11-04T08:05:00Z"));
+  const before = calls;
+  const r = await tick("2026-11-04T09:00:00Z"); // дедлайн 08:17 давно минув — на паузі це нічого не значить
+  assert.equal(r.paused, true);
+  assert.equal(calls, before, "🔴 на паузі тік усе одно ходить у Kommo");
+  assert.equal((await q(`SELECT COUNT(*)::int AS n FROM linkedin_queue_log WHERE kind = 'ignored'`)).rows[0].n, 0, "🔴 пауза записала менеджеру «проігнорував»");
+  await setQueuePaused(c.db, false, uid, new Date("2026-11-04T09:10:00Z"));
+  const dl = (await q(`SELECT deadline_at FROM linkedin_queue_items WHERE kommo_id = 7101`)).rows[0].deadline_at as Date;
+  assert.equal(new Date(dl).toISOString(), "2026-11-04T09:25:00.000Z", "🔴 після запуску пропозиція не отримала свіжих 15 хв");
+  await tick("2026-11-04T09:12:00Z");
+  assert.equal((await q(`SELECT COUNT(*)::int AS n FROM linkedin_queue_log WHERE kind = 'ignored'`)).rows[0].n, 0, "🔴 одразу після запуску — «проігнорував»");
 });

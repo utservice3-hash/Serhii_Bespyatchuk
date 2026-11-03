@@ -1875,6 +1875,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/linkedin-queue/settings", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/linkedin-queue/pause", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/minus-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/minus-deals/counter", cls: "GET",

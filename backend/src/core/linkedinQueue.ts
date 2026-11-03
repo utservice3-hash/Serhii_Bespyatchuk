@@ -92,7 +92,7 @@ export interface QueueDeps {
 
 export interface QueueReport {
   mode: CloseMode; onStage: number; seen: number; offered: number; ignored: number;
-  dispatcher: number; gone: number; waitingSync: number; offHours: boolean;
+  dispatcher: number; gone: number; waitingSync: number; offHours: boolean; paused: boolean;
 }
 
 interface ItemRow {
@@ -102,7 +102,7 @@ interface ItemRow {
 
 /** Один тік черги. Уся логіка — тут, джоба лише дає пул, Kommo й режим. */
 export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
-  const rep: QueueReport = { mode: d.mode, onStage: 0, seen: 0, offered: 0, ignored: 0, dispatcher: 0, gone: 0, waitingSync: 0, offHours: false };
+  const rep: QueueReport = { mode: d.mode, onStage: 0, seen: 0, offered: 0, ignored: 0, dispatcher: 0, gone: 0, waitingSync: 0, offHours: false, paused: false };
   if (d.mode === "off") return rep;
   const logMode = "dry"; // 2б: «live» з кнопкою; до того бойового режиму немає
   const now = d.now();
@@ -111,8 +111,10 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
   await d.db.query(`INSERT INTO linkedin_queue_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING`);
   // Точка відліку: угоди, що вже були на етапі до запуску, у чергу не йдуть (їх розібрали вручну).
   await d.db.query(`UPDATE linkedin_queue_settings SET launched_at = $1 WHERE id AND launched_at IS NULL`, [now]);
-  const st = (await d.db.query<{ launched_at: Date; last_manager_id: number | null }>(
-    `SELECT launched_at, last_manager_id FROM linkedin_queue_settings WHERE id`)).rows[0];
+  const st = (await d.db.query<{ launched_at: Date; last_manager_id: number | null; paused: boolean }>(
+    `SELECT launched_at, last_manager_id, paused FROM linkedin_queue_settings WHERE id`)).rows[0];
+  // ⏸ Зупинено кнопкою: нічого не читаємо з Kommo, нікому не пропонуємо, 15 хв не спливають (див. `resumeQueue`).
+  if (st.paused) { rep.paused = true; return rep; }
   let cursor = st.last_manager_id;
   const launchedMs = new Date(st.launched_at).getTime();
 
@@ -200,4 +202,18 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
     await offerNext(it);
   }
   return rep;
+}
+
+/**
+ * ⏸ / ▶ «Зупинити бота» (Роман 03.11.2026). Запуск дає поточним пропозиціям свіжі 15 хв робочого часу: пауза — рішення
+ * керівника, а не мовчання менеджера, тож у «проігнорував» вона потрапити не може.
+ */
+export async function setQueuePaused(db: Db, paused: boolean, userId: number, now = new Date()): Promise<void> {
+  await db.query(`INSERT INTO linkedin_queue_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING`);
+  await db.query(`UPDATE linkedin_queue_settings SET paused = $1, paused_by = $2, paused_at = $3, updated_by = $2, updated_at = $3 WHERE id`,
+    [paused, userId, now]);
+  if (!paused) {
+    await db.query(`UPDATE linkedin_queue_items SET deadline_at = $1, updated_at = $2 WHERE state = 'offered'`,
+      [new Date(addWorkMinutes(now.getTime(), OFFER_WORK_MIN)), now]);
+  }
 }
