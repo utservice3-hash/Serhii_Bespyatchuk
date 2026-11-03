@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { formatBreakdown, inFilter, nextAct, outStatus, parseBreakdown, sumLines, type OutRow } from "./outBreakdown.js";
+import { formatBreakdown, inFilter, isOutOwn, nextAct, normLine, outStatus, parseBreakdown, sumLines, type OutLine, type OutRow } from "./outBreakdown.js";
+
+const D = (deal: number, amount: number): OutLine => ({ kind: "deal", ref: String(deal), amount });
 
 /**
  * 💳 «Виписка» — розшифровка вихідних ФОП і картки (задача Тетяни 03.11.2026; хто бачить — Сергій 03.11, варіант «б»).
@@ -19,14 +21,13 @@ test("#3380 РОЗШИФРОВКА ВИХІДНИХ: «№ угоди сума»
   const p = parseBreakdown("62788851 3000\n62793349 8000\n62791843 5000");
   assert.ok(p.ok && sumLines(p.lines) === 16000 && p.lines.length === 3, "🔴 формат Тані не розібрано");
   const v = parseBreakdown(" 62788851 - 3 000 грн ; 62793349: 8000,50\n\n62791843\t5000.5 ");
-  assert.deepEqual(v.ok && v.lines, [{ deal: 62788851, amount: 3000 }, { deal: 62793349, amount: 8000.5 }, { deal: 62791843, amount: 5000.5 }], "🔴 варіанти запису розібрано не так");
+  assert.deepEqual(v.ok && v.lines, [D(62788851, 3000), D(62793349, 8000.5), D(62791843, 5000.5)], "🔴 варіанти запису розібрано не так");
   const bad = parseBreakdown("62788851 3000\nоплата за рейс");
   assert.ok(!bad.ok && /Рядок 2/.test(bad.error), "🔴 сміттєвий рядок пропущено");
   const dup = parseBreakdown("62788851 3000\n62788851 1000");
   assert.ok(!dup.ok && /двічі/.test(dup.error), "🔴 угода двічі пропущена — сума подвоїлась би");
-  assert.ok(!parseBreakdown("123 3000").ok, "🔴 короткий номер прийнято за угоду");
   assert.ok(!parseBreakdown(Array.from({ length: 51 }, (_, i) => `${62700000 + i} 10`).join("\n")).ok, "🔴 понад 50 рядків прийнято");
-  assert.equal(formatBreakdown([{ deal: 62788851, amount: 3000 }, { deal: 62793349, amount: 8000.5 }]), "62788851 3000\n62793349 8000.50", "🔴 «Скопіювати» не в форматі вставки");
+  assert.equal(formatBreakdown([D(62788851, 3000), D(62793349, 8000.5)]), "62788851 3000\n62793349 8000.50", "🔴 «Скопіювати» не в форматі вставки");
 });
 
 /**
@@ -35,7 +36,7 @@ test("#3380 РОЗШИФРОВКА ВИХІДНИХ: «№ угоди сума»
  * 🧨 Червоніє, якщо «не зійшлось» рахувати «з номером» чи пустити зміну без причини.
  */
 test("#3380b РОЗШИФРОВКА ВИХІДНИХ: «не зійшлось» — у «Чекають»; «Змінити» — з причиною і в «Відкориговані»", () => {
-  const row = (amount: number, corrected = false): OutRow => ({ status: "identified", lines: [{ deal: 62788851, amount }], corrected });
+  const row = (amount: number, corrected = false): OutRow => ({ status: "identified", lines: [D(62788851, amount)], corrected });
   assert.equal(outStatus(row(16000), -16000), "ok", "🔴 повна розшифровка — не «з номером»");
   assert.equal(outStatus(row(15999.99), 16000), "mismatch", "🔴 копійка різниці не помічена");
   assert.equal(outStatus(null, 16000), "wait");
@@ -82,7 +83,8 @@ test("#3381 ЖИВИЙ SQL: розшифровка вихідних — прав
       (882, 9102, 'out', 'o882', now() - interval '3 hours', now(), 'ТОВ Перевізник', NULL, 'оплата', -5000, 'UAH', -5000),
       (883, 9101, 'in',  'i883', now() - interval '3 hours', now(), 'Клієнт', NULL, 'оплата', 7000, 'UAH', 7000),
       (884, 9103, 'out', 'o884', now() - interval '3 hours', now(), 'ТОВ Перевізник', NULL, 'оплата', -9000, 'UAH', -9000),
-      (885, 9102, 'out', 'o885', now() - interval '4 hours', now(), 'Свій рахунок', 'UA000000000000000000000009101', 'переказ між власними рахунками', -1000, 'UAH', -1000)`);
+      (885, 9102, 'out', 'o885', now() - interval '4 hours', now(), 'Свій рахунок', 'UA000000000000000000000009101', 'переказ між власними рахунками', -1000, 'UAH', -1000),
+      (886, 9102, 'out', 'o886', now() - interval '5 hours', now(), 'Беспятчук Сергій', NULL, 'Переказ на картку', -20453, 'UAH', -20453)`);
     await pool.query(`INSERT INTO deals (kommo_id, name, price, pipeline_id, status_id) VALUES (62788851, 'Київ – Львів', 7000, 8921932, 142) ON CONFLICT DO NOTHING`).catch(() => undefined);
     await pool.query(`INSERT INTO users (id, email, password_hash, role, role_override, team_id, full_name, is_active) VALUES
       (981, 'm@o', 'x', 'manager', NULL, NULL, 'Менеджер', true),
@@ -106,7 +108,7 @@ test("#3381 ЖИВИЙ SQL: розшифровка вихідних — прав
       assert.equal((await call(X, "POST", "/out/881", { text: "62788851 16000" })).status, 403, `🔴 ${who} вписав розшифровку`);
     }
     const c0 = (await call(T, "GET", "/out/counts")).json.counts;
-    assert.deepEqual([c0.all, c0.wait, c0.ok], [2, 2, 0], `🔴 лічильник до вписування (свій переказ і ТОВ не рахуються): ${JSON.stringify(c0)}`);
+    assert.deepEqual([c0.all, c0.wait, c0.ok], [3, 3, 0], `🔴 лічильник до вписування (свій переказ і ТОВ не рахуються; «Переказ на картку» власнику — рахується): ${JSON.stringify(c0)}`);
     assert.equal((await call(T, "POST", "/out/883", { text: "62788851 7000" })).status, 400, "🔴 розписано вхідний");
     assert.equal((await call(T, "POST", "/out/884", { text: "62788851 9000" })).status, 400, "🔴 розписано вихідний ТОВ");
 
@@ -121,13 +123,56 @@ test("#3381 ЖИВИЙ SQL: розшифровка вихідних — прав
     assert.deepEqual(hist, [["change", "Таня уточнила"], ["set", null]], "🔴 історія не «розписано → змінено»");
 
     assert.equal((await call(T, "POST", "/out/882", { text: "62793349 4000" })).status, 201);
+    const mix = await call(T, "POST", "/out/886", { text: "4445 20000 (Операційний запит)\nDigitalOcean 453" });
+    assert.deepEqual([mix.status, mix.json.state?.status, mix.json.state?.lines?.map((l: { kind: string; known: boolean }) => `${l.kind}:${l.known}`)],
+      [201, "ok", ["op:true", "text:true"]], `🔴 запит + категорія не розписали платіж: ${JSON.stringify(mix.json)}`);
     const c1 = (await call(T, "GET", "/out/counts")).json.counts;
-    assert.deepEqual([c1.ok, c1.wait, c1.corrected], [1, 1, 1], `🔴 «не зійшлось» (4000 з 5000) пішло не в «Чекають»: ${JSON.stringify(c1)}`);
+    assert.deepEqual([c1.ok, c1.wait, c1.corrected], [2, 1, 1], `🔴 «не зійшлось» (4000 з 5000) пішло не в «Чекають»: ${JSON.stringify(c1)}`);
   } finally {
     await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
     await pool.end().catch(() => undefined);
     scratch.dispose();
   }
+});
+
+/**
+ * #3383 — ТРИ ВИДИ РЯДКІВ (Тетяна 03.11, 18:56): 8–9 цифр — угода, до 7 — операційний запит, текст із літерою —
+ * категорія; хвіст у дужках — примітка; сума звіряється так само. Межа по обидва боки: «4445» — НЕ угода,
+ * «62821719» — угода, «DigitalOcean» — категорія, «оплата за рейс» без суми — відмова. Старі записи `{deal}` — угода.
+ * 🧨 Червоніє, якщо повернути «лише № угоди», сплутати запит з угодою чи загубити примітку при «Скопіювати».
+ */
+test("#3383 РОЗШИФРОВКА ВИХІДНИХ: угода · операційний запит · категорія текстом — сума звіряється, примітка в дужках", () => {
+  const p = parseBreakdown("62821719 - 3000 (витрата по угоді)\n4445 - 5 000 (Операційний запит)\nзп Іванов 20000\nDigitalOcean 9.88 USD 453,50");
+  assert.ok(p.ok, `🔴 змішана розшифровка не розібрана: ${!p.ok && p.error}`);
+  assert.deepEqual(p.ok && p.lines, [
+    { kind: "deal", ref: "62821719", amount: 3000, note: "витрата по угоді" },
+    { kind: "op", ref: "4445", amount: 5000, note: "Операційний запит" },
+    { kind: "text", ref: "зп Іванов", amount: 20000 },
+    { kind: "text", ref: "DigitalOcean 9.88 USD", amount: 453.5 },
+  ], "🔴 вид рядка, № чи сума розібрані не так");
+  assert.equal(p.ok && sumLines(p.lines), 28453.5, "🔴 сума змішаної розшифровки");
+  assert.ok(p.ok && parseBreakdown(formatBreakdown(p.lines)).ok && formatBreakdown(p.lines).includes("4445 5000 (Операційний запит)"), "🔴 «Скопіювати» не розбирається назад або губить примітку");
+  assert.ok(!parseBreakdown("оплата за рейс").ok, "🔴 рядок без суми прийнято");
+  const dup = parseBreakdown("зп 100\nЗП 200");
+  assert.ok(!dup.ok && /двічі/.test(dup.error), "🔴 категорія двічі — сума подвоїлась би");
+  assert.ok(parseBreakdown("4445 100\n62804445 100").ok, "🔴 запит і угода з однаковим хвостом сплутані");
+  assert.deepEqual(normLine({ deal: 62788851, amount: 3000 }), D(62788851, 3000), "🔴 старий запис `{deal}` прочитано не як угоду");
+});
+
+/**
+ * #3383b — «СВІЙ ПЕРЕКАЗ» ДЛЯ ВИХІДНИХ — ЛИШЕ НАШ IBAN АБО «МІЖ ВЛАСНИМИ РАХУНКАМИ»: «Переказ на картку» Беспятчуку
+ * (73 з 75 вихідних ФОП Моно, замір 03.11) — розписується. Дзеркало: наш IBAN і «між власними» — свої.
+ * 🧨 Червоніє, якщо повернути правило вхідних (імʼя власника), — тоді на ФОП Моно знову «0» скрізь.
+ */
+test("#3383b РОЗШИФРОВКА ВИХІДНИХ: «Переказ на картку» власнику — розписується; свій — лише наш IBAN чи «між власними»", () => {
+  const r = { ownIbans: new Set(["UA000000000000000000000009101"]) };
+  const tx = (name: string, iban: string | null, purpose: string) => ({ id: 1, accountId: 4, incoming: false, bookedAt: 0, seenAt: null, counterpartyName: name, counterpartyIban: iban, purpose });
+  assert.equal(isOutOwn(tx("Беспятчук Сергій", null, "Переказ на картку"), r), false, "🔴 переказ на картку власнику сховано як «свій»");
+  assert.equal(isOutOwn(tx("ФОП Беспятчук Сергій Степанович", "UA000000000000000000000009101", "Переказ"), r), true, "🔴 переказ на наш рахунок — не «свій»");
+  assert.equal(isOutOwn(tx("Хтось", null, "Переказ між власними рахунками"), r), true, "🔴 «між власними рахунками» — не «свій»");
+  const fe = FRONT("bankIdent/OutBreakdown.tsx");
+  assert.match(fe, /4445 5000/, "🔴 підказка над полем не показує операційний запит");
+  assert.match(fe, /зп 20000/, "🔴 підказка над полем не показує категорію");
 });
 
 /**

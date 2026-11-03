@@ -5,7 +5,7 @@
  */
 import type { Pool, PoolClient } from "pg";
 import type { Person } from "./bankIdent.js";
-import type { OutLine, OutRow, OutStored } from "./outBreakdown.js";
+import { normLine, type OutLine, type OutRow, type OutStored } from "./outBreakdown.js";
 
 export interface OutStoredRow extends OutRow {
   txId: number;
@@ -14,9 +14,9 @@ export interface OutStoredRow extends OutRow {
   reason: string | null;
 }
 
-type Raw = { tx_id: string; status: OutStored; lines: OutLine[]; corrected: boolean; set_by_name: string | null; set_at: Date; reason: string | null };
+type Raw = { tx_id: string; status: OutStored; lines: unknown[]; corrected: boolean; set_by_name: string | null; set_at: Date; reason: string | null };
 const map = (x: Raw): OutStoredRow => ({
-  txId: Number(x.tx_id), status: x.status, lines: (x.lines || []).map((l) => ({ deal: Number(l.deal), amount: Number(l.amount) })),
+  txId: Number(x.tx_id), status: x.status, lines: (x.lines || []).map(normLine),
   corrected: x.corrected, setByName: x.set_by_name, setAt: new Date(x.set_at).toISOString(), reason: x.reason,
 });
 
@@ -76,11 +76,12 @@ export async function outRowForUpdate(c: PoolClient, txId: number): Promise<OutS
 }
 
 export async function outHistory(db: Pool, txId: number) {
-  const r = await db.query<{ id: string; at: Date; actor_name: string | null; act: string; status_before: string | null; lines_before: OutLine[] | null; status_after: string; lines_after: OutLine[]; reason: string | null }>(
+  const r = await db.query<{ id: string; at: Date; actor_name: string | null; act: string; status_before: string | null; lines_before: unknown[] | null; status_after: string; lines_after: unknown[]; reason: string | null }>(
     `SELECT id, at, actor_name, act, status_before, lines_before, status_after, lines_after, reason
        FROM bank_out_breakdown_events WHERE tx_id = $1 ORDER BY at DESC, id DESC LIMIT 100`, [txId]);
   return r.rows.map((x) => ({
     id: Number(x.id), at: new Date(x.at).toISOString(), by: x.actor_name, act: x.act,
-    statusBefore: x.status_before, linesBefore: x.lines_before, statusAfter: x.status_after, linesAfter: x.lines_after, reason: x.reason,
+    statusBefore: x.status_before, linesBefore: x.lines_before ? x.lines_before.map(normLine) : null, statusAfter: x.status_after,
+    linesAfter: (x.lines_after || []).map(normLine), reason: x.reason,
   }));
 }

@@ -8,7 +8,10 @@ export const OUT_VIEW_PERM = "view_bank_out_breakdown";
 export type OutStatus = "wait" | "ok" | "mismatch" | "unidentified" | "own";
 export type OutFilter = "all" | "ok" | "wait" | "unidentified" | "corrected";
 
-export interface OutLineView { deal: number; amount: number; name: string | null; manager: string | null; known: boolean }
+/** Вид рядка: угода (8–9 цифр) · операційний запит (до 7) · категорія текстом. `ref` — №/назва, `note` — примітка з дужок. */
+export type OutKind = "deal" | "op" | "text";
+export interface OutLineRaw { kind: OutKind; ref: string; amount: number; note?: string }
+export interface OutLineView extends OutLineRaw { name: string | null; manager: string | null; known: boolean }
 export interface OutState {
   txId: number; own: boolean; status: OutStatus; amount: number;
   lines: OutLineView[]; sum: number; text: string;
@@ -16,8 +19,8 @@ export interface OutState {
 }
 export interface OutEvent {
   id: number; at: string; by: string | null; act: "set" | "change" | "unidentify";
-  statusBefore: string | null; linesBefore: Array<{ deal: number; amount: number }> | null;
-  statusAfter: string; linesAfter: Array<{ deal: number; amount: number }>; reason: string | null;
+  statusBefore: string | null; linesBefore: OutLineRaw[] | null;
+  statusAfter: string; linesAfter: OutLineRaw[]; reason: string | null;
 }
 
 const q = (company: string | null) => (company ? `?company=${encodeURIComponent(company)}` : "");
