@@ -301,7 +301,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, messengerPromises: 0, messengerSignal: null, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
+    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, messengerPromises: 0, messengerSignal: null, priceForm: null, priceFormAnalysed: false, managerCommented: false, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -1272,7 +1272,7 @@ test("#905 ЗАПЕРЕЧЕННЯ: окрема рубрика, лише нес�
   assert.ok(T.OBJ_BUDGET_MS > 0 && T.OBJ_BUDGET_MS < T.LLM_BUDGET_MS, "🔴 бюджет заперечень поза бюджетом розбору");
   // 4631 (09.10.2026): розбір розмов про борг теж бере ЧАСТКУ того самого бюджету — твердження те саме.
   // 28.10.2026 (7183): поруч відкушено й частку на вид перевезення — так само з бюджету розбору, не понад тік.
-  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?(?: - TRANSPORT_BUDGET_MS)?(?: - MESSENGER_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
+  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?(?: - TRANSPORT_BUDGET_MS)?(?: - MESSENGER_BUDGET_MS)?(?: - PRICE_FORM_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
 });
 
 /**
@@ -1321,7 +1321,7 @@ test("#907 ЦІЛЬ ЦІНИ: 50 % за замовчуванням, 1…100, з 
   const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
   assert.match(schema, /ADD COLUMN IF NOT EXISTS price_target_pct INTEGER\s+CHECK \(price_target_pct IS NULL OR price_target_pct BETWEEN 1 AND 100\);/, "🔴 база не тримає межі цілі");
   const routes = readFileSync(fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
-  assert.match(routes, /const tun = await loadTunables\(pool\);[\s\S]{0,3000}priceTargetPct: tun\.priceTargetPct,/, "🔴 список не віддає ціль");
+  assert.match(routes, /const tun = await loadTunables\(pool\);[\s\S]{0,3500}priceTargetPct: tun\.priceTargetPct,/, "🔴 список не віддає ціль");
   assert.match(routes, /flags: \{ analysed: isAnalysed\(r\), priceable: isPriceable\(r\), agreement: hasAgreement\(r\), lost: isLost\(r\) \},/, "🔴 знаменники плиток не від ядра");
 });
 
@@ -1344,7 +1344,7 @@ test("#909 ЕКРАН D: колонки з «Успіх», черга лише �
   const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
   assert.match(qx, /className=\{`ftd-queue\$\{open \? "" : " is-closed"\}`\}/, "🔴 черга не згортається класом");
   // 28.10.2026 (7183): текст позначки — «Розібрано» або «Погоджено коментар менеджера» (`reviewNoteText`), позначка та сама.
-  assert.match(qx, /putAiCallNote\(cur\.uniqueid, "review", note\.trim\(\) \|\| reviewNoteText\(cur\.explainNote != null \|\| cur\.priceNote != null\)\)/, "🔴 «Опрацьовано · наступна» не ставить «Розібрано»");
+  assert.match(qx, /putAiCallNote\(cur\.uniqueid, "review", note\.trim\(\) \|\| reviewNoteText\(true\)\)/, "🔴 «Опрацьовано · наступна» не ставить «Розібрано»");
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-queue\.is-closed \{ transform: translateY\(-20px\) scale\(\.42, \.12\); opacity: 0;/, "🔴 немає анімації згортання в смугу");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-over, \.ftd-queue, \.ftd-strip, \.ftd-progress > i \{ transition: none; \}/, "🔴 анімацію не вимкнено для «зменшення руху»");
@@ -2026,7 +2026,7 @@ test("#2212 ПРОВОДКА 7183: роут зворотного звʼязку 
   assert.match(SRC("auth/accessMatrix.ts"), /path: "\/api\/dashboard\/ai-calls\/:uniqueid\/feedback", cls: "deny-only",\s*allow: \[\], deny: \["hr", "manager"\]/, "🔴 роуту немає в матриці");
   const drawer = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drawer, /\{c\?\.canFeedback && <FeedbackButton uniqueid=\{c\.row\.uniqueid\} \/>\}/, "🔴 кнопка в картці не за правом сервера");
-  assert.match(drawer, /putAiCallNote\(c\.row\.uniqueid, "review", reviewNoteText\(commented\)\)/, "🔴 погодження в картці — не словами ядра");
+  assert.match(drawer, /putAiCallNote\(c\.row\.uniqueid, "review", reviewNoteText\(true\)\)/, "🔴 погодження в картці — не словами ядра");
   const queue = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
   assert.match(queue, /\{c\.canFeedback && cur && <FeedbackButton uniqueid=\{cur\.uniqueid\} \/>\}/, "🔴 кнопка в черзі не за правом сервера");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
@@ -2352,4 +2352,161 @@ test("#3208 ЦИТАТА → МІСЦЕ В ЗАПИСІ: через дві ре�
   const dr = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(dr, /<Chip wrap tone=\{MESSENGER_VERDICT_UI\[messengerVerdict\(c\.messenger\)\]\.tone\}>/, "🔴 вердикт месенджера знову не переноситься");
   assert.match(dr, /whiteSpace: wrap \? "normal" : "nowrap"/, "🔴 `wrap` у чипі нічого не переносить");
+});
+
+/**
+ * #3360 — ЗАКРИТТЯ З ЧЕРГИ З 03.11 ЛИШЕ ПІСЛЯ КОМЕНТАРЯ МЕНЕДЖЕРА (задача 7351; регламент Юлії, рішення Романа 03.11.2026:
+ * «тільки з сьогодні вводимо, нічого не повертай»). Сервер і кнопки — з викату 03.11; підрахунок — з київської півночі 04.11,
+ * щоб закрите 03.11 до викату не повернулось (заміряно: 5 таких). Позначки ДО межі закривають як і раніше
+ * (зокрема «закрито тімлідом» без коментаря), ПІСЛЯ — лише разом із коментарем САМОГО менеджера розмови. Коментар, який
+ * написав тімлід «за менеджера», не рахується; «Опрацьовано» без коментаря — теж ні. Рахунок і далі виводить сам.
+ * 🧨 Червоніє, якщо повернути «тімлід закриває сам», рахувати будь-який коментар як менеджерський, зсунути межу (повернути
+ * старі закриття в чергу або пустити нове правило заднім числом) чи рахувати межу не за Києвом.
+ */
+test("#3360 ЗАКРИТТЯ ПІСЛЯ КОМЕНТАРЯ МЕНЕДЖЕРА: з 04.11 (Київ) лише з коментарем самого менеджера; старі закриття не повертаються", async () => {
+  const R = await import("./firstTouchTeamReport.js");
+  assert.equal(R.REVIEW_MANAGER_COMMENT_FROM, "2026-11-04", "🔴 межа підрахунку не 04.11 — закрите 03.11 до викату повернулось би в чергу");
+  const base = { uniqueid: "u", calledAt: "2026-11-02T09:00:00Z", managerId: 1, managerName: "М", teamName: "Т", inReport: true, state: "done",
+    priceDiscussed: false, promiseState: null, typeCheck: false, priceNote: null, missedNote: null, hasRequest: true } as const;
+  const before = "2026-11-03T21:59:00Z"; // 23:59 03.11 за Києвом
+  const after = "2026-11-03T22:01:00Z"; // 00:01 04.11 за Києвом
+  assert.equal(R.reviewClosure({ ...base, reviewNote: { text: "Розібрано", at: before } }), "direct", "🔴 старе закриття без коментаря повернулось у чергу");
+  assert.equal(R.needsReview({ ...base, reviewNote: { text: "Розібрано", at: before } }), false);
+  assert.equal(R.reviewClosure({ ...base, reviewNote: { text: "Розібрано", at: after } }), null, "🔴 з 03.11 тімлід закрив сам, без коментаря менеджера");
+  assert.equal(R.needsReview({ ...base, reviewNote: { text: "Розібрано", at: after } }), true);
+  assert.equal(R.reviewClosure({ ...base, reviewNote: { text: "Погоджено", at: after }, explainNote: { text: "написав тімлід" }, managerCommented: false }), null,
+    "🔴 коментар тімліда «за менеджера» закрив розмову");
+  assert.equal(R.reviewClosure({ ...base, reviewNote: { text: "Погоджено", at: after }, explainNote: { text: "передзвонив, ціну скинув" }, managerCommented: true }), "approved",
+    "дзеркало: коментар самого менеджера + позначка тімліда — закрито");
+  assert.equal(R.needsReview({ ...base, reviewNote: { text: "Погоджено", at: after }, managerCommented: true }), false);
+  assert.equal(R.reviewClosure({ ...base, missedNote: { text: "ок", at: after } }), null, "🔴 «Опрацьовано» без коментаря менеджера закрило розмову");
+  assert.equal(R.reviewClosure({ ...base, managerCommented: true }), null, "🔴 коментар менеджера сам вивів з черги — без тімліда");
+  assert.equal(R.reviewClosure({ ...base, reviewNote: { text: "Розібрано", at: after }, reachedInvoice: true }), "invoice", "🔴 рахунок перестав виводити з черги");
+  assert.deepEqual([R.canCloseReview({ managerCommented: true }), R.canCloseReview({ managerCommented: false }), R.canCloseReview({})], [true, false, false],
+    "🔴 кнопка/сервер дозволяють закрити без коментаря менеджера або не дозволяють з ним");
+});
+
+/**
+ * #3361 — ЖИВА СХЕМА: «коментар менеджера» — від акаунта, привʼязаного до менеджера розмови (`users.manager_id`); від акаунта
+ * тімліда (інший менеджер) — ні; список = картка. Форма ціни: кандидати рубрики — лише розмови з названою ціною від 03.11;
+ * рядок і картка беруть форму рубрики, без рубрики — «не розбирали».
+ * 🧨 Червоніє, якщо `managerCommented` рахує будь-якого автора, рубрика ціни бере розмови без ціни чи до 03.11, або список,
+ * картка й рубрика розходяться.
+ */
+test("#3361 ЖИВА СХЕМА: коментар менеджера — лише від його акаунта; форма ціни — лише з ціною й від 03.11; список = картка", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard, setCallNote } = await import("./callAiScreen.js");
+  const T = await import("./callAiTick.js");
+  const P = await import("./firstTouchPriceForm.js");
+  await c.raw.query(`INSERT INTO users(id,email,password_hash,role,manager_id) VALUES (93511,'m3351@x','x','manager',9011),(93512,'tl3351@x','x','team_lead',9021)`);
+  const deal = (id: number, phone: string) => c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+    VALUES ($1,$2,8921932,1,'2026-11-03 10:00:00+02',$3,'ad',9011)`, [id, `D${String(id)}`, phone]);
+  const call = (u: string, phone: string, at = "2026-11-03 10:10:00+02") => c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ($1,$2,'out','ANSWERED',60,65,9011,$3,'https://rec/x')`, [u, at, phone]);
+  const tr = async (u: string, text: string) => (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done',$2::jsonb) RETURNING id`, [u, JSON.stringify([{ channel: 1, start: 0, end: 2, text, lang: "ukr" }])])).rows[0].id;
+  const an = (tid: string, rubric: string, result: unknown) => c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash',$2,'done',$3::jsonb)`, [tid, rubric, JSON.stringify(result)]);
+  const noPrice = { ...RESULT, price: { discussed: false, quote: "", quote_found: null } };
+  for (const [id, u, ph] of [[73511, "pf1", "0507351100"], [73512, "pf2", "0507351200"], [73513, "pf3", "0507351300"]] as const) { await deal(id, ph); await call(u, `38${ph}`); }
+  await deal(73514, "0507351400"); await call("pf4", "380507351400", "2026-11-02 10:10:00+02");
+  const t1 = await tr("pf1", "буде від двадцяти до двадцяти пʼяти тисяч"); await an(t1, "first-touch-v4", RESULT);
+  await an(t1, P.RUBRIC_PRICE_FORM_V1, { form: "range", quote: "від двадцяти до двадцяти пʼяти тисяч", quote_found: true });
+  const t2 = await tr("pf2", "тент двадцять тонн"); await an(t2, "first-touch-v4", noPrice);
+  const t3 = await tr("pf3", "буде тридцять тисяч"); await an(t3, "first-touch-v4", RESULT);
+  const t4 = await tr("pf4", "буде тридцять тисяч"); await an(t4, "first-touch-v4", RESULT);
+  const cand = await T.priceFormCandidates(c.db, P.PRICE_FORM_FROM);
+  assert.deepEqual([...cand].sort(), ["pf1", "pf3"], `🔴 кандидати рубрики ціни не ті (без ціни чи до 03.11 не мають бути): ${cand.join(",")}`);
+  await setCallNote(c.db, "pf1", "explain", "передзвонив, ціну скинув", { userId: 93511, name: "Олена" }, new Date("2026-11-03T09:00:00Z"));
+  await setCallNote(c.db, "pf3", "explain", "написав тімлід", { userId: 93512, name: "Петро" }, new Date("2026-11-03T09:00:00Z"));
+  const rows = (await aiCallsList(c.db, FAKE_AD, "2026-11-03", "2026-11-03", new Date("2026-11-03T15:00:00Z"), {})).rows;
+  const a = rows.find((r) => r.uniqueid === "pf1"), b = rows.find((r) => r.uniqueid === "pf2"), d = rows.find((r) => r.uniqueid === "pf3");
+  assert.ok(a && b && d, "🔴 розмов 03.11 немає в списку — гейту нема що перевіряти");
+  assert.deepEqual([a.managerCommented, d.managerCommented, b.managerCommented], [true, false, false], "🔴 коментар менеджера визначено не за його акаунтом");
+  assert.deepEqual([a.priceForm, a.priceFormAnalysed], ["range", true], "🔴 рядок не бере форму ціни з рубрики");
+  assert.deepEqual([d.priceForm, d.priceFormAnalysed], [null, false], "🔴 розмова без рубрики отримала форму ціни");
+  const ca = await aiCallCard(c.db, "pf1", false, {}), cd = await aiCallCard(c.db, "pf3", false, {});
+  assert.deepEqual([ca?.row.managerCommented, ca?.row.priceForm, cd?.row.managerCommented], [true, "range", false], "🔴 картка розійшлась зі списком");
+  assert.deepEqual(ca?.priceForm, { form: "range", quote: "від двадцяти до двадцяти пʼяти тисяч", quote_found: true }, "🔴 картка не несе форму ціни з цитатою");
+  assert.equal(cd?.priceForm, null, "🔴 картка без рубрики вигадала форму ціни");
+});
+
+/**
+ * #3362 — ПРОВОДКА ЗАКРИТТЯ: сервер відмовляє в «Розібрано» без коментаря менеджера (409, текст ядра) — правило не обходиться
+ * повз кнопку; картка й черга показують кнопку лише за `managerCommented`, інакше — «чекає коментаря менеджера».
+ * 🧨 Червоніє, якщо прибрати перевірку в роуті, повернути кнопку «Розібрано без коментаря» чи показувати її за будь-яким коментарем.
+ */
+test("#3362 ПРОВОДКА ЗАКРИТТЯ: роут відмовляє без коментаря менеджера; кнопки в картці й черзі — лише за managerCommented", () => {
+  const dash = SRC("routes/dashboard.ts");
+  assert.match(dash, /if \(kind === "review" && text\.trim\(\) && !canCloseReview\(card\.row\)\) \{ res\.status\(409\)\.json\(\{ error: REVIEW_NEEDS_COMMENT_UA \}\); return; \}\s*const who =/,
+    "🔴 сервер ставить «Розібрано» без коментаря менеджера (або перевірка після запису)");
+  assert.match(dash, /explainNote: r\.explainNote, managerCommented: r\.managerCommented,/, "🔴 список не віддає фронту, чи писав менеджер");
+  const dr = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.doesNotMatch(dr, /Розібрано без коментаря/, "🔴 у картці повернулась кнопка «Розібрано без коментаря»");
+  assert.match(dr, /\{c\.row\.managerCommented\s*\? <button[^>]*onClick=\{\(\) => void go\(\)\}[\s\S]{0,200}: <span[^>]*>\{WAIT_MANAGER_COMMENT_UA\}<\/span>\}/, "🔴 кнопка в картці не за managerCommented");
+  const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
+  assert.doesNotMatch(qx, /Опрацьовано без коментаря/, "🔴 у черзі повернулась кнопка «без коментаря»");
+  assert.match(qx, /\{cur\?\.managerCommented\s*\? <button[^>]*onClick=\{\(\) => void review\(\)\}/, "🔴 кнопка в черзі не за managerCommented");
+});
+
+/**
+ * #3363 — РУБРИКА «ЯК НАЗВАНО ЦІНУ» (задача 7351, п.6): лише точна / вилка / «від…» / «не назвав»; форма без цитати —
+ * відмова; на екрані — лише зі звіреною цитатою; «не назвав» і незвірене — «не визначено», а не форма. Лише нові розмови
+ * (з 03.11, «тільки з сьогодні»), у тіку — своєю часткою бюджету розбору.
+ * 🧨 Червоніє, якщо прийняти форму без цитати чи поза переліком, показати форму за вигаданою цитатою, розбирати історію або
+ * відʼєднати рубрику від тіку.
+ */
+test("#3363 ФОРМА ЦІНИ: перелік і цитата обовʼязкові; на екрані лише зі звіреною цитатою; лише з 03.11; рубрика в тіку", async () => {
+  const P = await import("./firstTouchPriceForm.js");
+  const T = await import("./callAiTick.js");
+  assert.equal(P.validatePriceForm({ form: "range", quote: "" }).ok, false, "🔴 форму без цитати прийнято");
+  assert.equal(P.validatePriceForm({ form: "approx", quote: "x" }).ok, false, "🔴 форму поза переліком прийнято");
+  const none = P.validatePriceForm({ form: "none", quote: "щось" });
+  assert.ok(none.ok && none.value.quote === "", "🔴 для «не назвав» лишилась цитата");
+  const turns = [{ channel: 1, start: 0, end: 2, text: "Ну це буде від сорока до сорока пʼяти тисяч", lang: "ukr" }, { channel: 0, start: 2, end: 3, text: "Добре", lang: "ukr" }];
+  const ok = P.interpretPriceForm({ text: JSON.stringify({ form: "range", quote: "від сорока до сорока пʼяти тисяч" }), finishReason: "STOP" } as never, turns);
+  assert.ok(ok.ok && ok.result.quote_found === true, "🔴 цитата з розмови не знайшлась");
+  const lie = P.interpretPriceForm({ text: JSON.stringify({ form: "from", quote: "від девʼяноста тисяч" }), finishReason: "STOP" } as never, turns);
+  assert.ok(lie.ok && lie.result.quote_found === false, "🔴 вигадана цитата пройшла як знайдена");
+  assert.equal(P.priceFormOf(ok.ok ? ok.result : null), "range");
+  assert.equal(P.priceFormOf(lie.ok ? lie.result : null), null, "🔴 форма за вигаданою цитатою");
+  assert.equal(P.priceFormOf({ form: "none", quote: "", quote_found: null }), null, "🔴 «не назвав» стало формою");
+  assert.equal(P.priceFormOf(null), null, "дзеркало: не розбирали — невідомо");
+  assert.equal(P.PRICE_FORM_FROM, "2026-11-03", "🔴 рубрика форми ціни розбирає історію (рішення: лише з 03.11)");
+  assert.ok(P.PRICE_FORM_FROM > T.FIRST_TOUCH_RULE.startDate, "дзеркало: старт пізніший за початок вибірки");
+  assert.ok(T.PRICE_FORM_BUDGET_MS > 0 && T.PRICE_FORM_BUDGET_MS + T.MESSENGER_BUDGET_MS + T.TRANSPORT_BUDGET_MS < T.LLM_BUDGET_MS - T.OBJ_BUDGET_MS - T.DEBT_BUDGET_MS,
+    "🔴 бюджет рубрики ціни поза бюджетом розбору");
+  assert.match(SRC("core/callAiTick.ts"), /runObjection\(RUBRIC_PRICE_FORM_V1, PRICE_FORM_KIT, await priceFormCandidates\(env\.db, PRICE_FORM_FROM\), PRICE_FORM_BUDGET_MS, TRANSPORT_MAX_OUTPUT_TOKENS\)/,
+    "🔴 рубрика форми ціни не в тіку");
+});
+
+/**
+ * #3364 — БЛОК «ЯК НАЗВАЛИ ЦІНУ → ЗГОДА»: кожен рядок рахує тим самим правилом, що його фільтр; лише розмови з ціною
+ * (пункт «ціна» = так); «погодився %» — серед відомих рішень; Σ рядків + «не визначено» = розібрані рубрикою. «Від…»
+ * лишається названою ціною: плитка «Ціна озвучена» рахує її як і раніше.
+ * 🧨 Червоніє, якщо рядок і фільтр рахують по-різному, невідоме губиться, «від…» випадає з названої ціни, або згода рахується
+ * серед «не визначено».
+ */
+test("#3364 ФРОНТ ФОРМИ ЦІНИ: рядок = фільтр, Σ + не визначено = розібрані, згода серед відомих, «від…» лишається названою ціною", async () => {
+  const V = await loadView() as unknown as {
+    priceFormStats: (rows: readonly unknown[]) => { lines: { form: string; n: number; decided: number; agreed: number; pct: number | null }[]; analysed: number; unknown: number };
+    tileStats: (rows: readonly unknown[]) => { price: { yes: number; of: number } };
+    TILE_MATCH: Record<string, (r: unknown) => boolean>; PRICE_FORM_UI: Record<string, { tile: string }> };
+  const row = (price: string, form: string | null, analysed: boolean, dec: string | null) => ({ inReport: true, flags: { agreement: false, analysed: true },
+    checklist: { request: "y", price, promise: "o", objection: "o" }, dealOutcome: null, clientDecision: dec ? { value: dec } : null,
+    priceForm: form, priceFormAnalysed: analysed });
+  const rows = [row("y", "exact", true, "agreed"), row("y", "exact", true, "declined"), row("y", "exact", true, "unclear"),
+    row("y", "range", true, "agreed"), row("y", "from", true, "thinking"), row("y", null, true, "agreed"),
+    row("y", null, false, "agreed"), row("n", "from", true, null)];
+  const st = V.priceFormStats(rows);
+  const by = Object.fromEntries(st.lines.map((l) => [l.form, l]));
+  assert.deepEqual([by.exact.n, by.range.n, by.from.n], [3, 1, 1], "🔴 рядки форм рахують розмови без ціни, нерозібрані чи не тієї форми");
+  assert.deepEqual([st.analysed, st.unknown], [6, 1], "🔴 «не визначено» загубилось або в розібрані пішли нерозібрані");
+  assert.deepEqual([by.exact.decided, by.exact.agreed, by.exact.pct], [2, 1, 50], "🔴 згода рахується серед «не визначено»");
+  for (const l of st.lines) assert.equal(rows.filter(V.TILE_MATCH[V.PRICE_FORM_UI[l.form].tile]).length, l.n, `🔴 рядок «${l.form}» і його фільтр рахують по-різному`);
+  assert.equal(V.tileStats(rows).price.yes, 7, "🔴 «від…» чи невизначене випало з названої ціни (рішення Юлі: поки рахуємо)");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /onClick=\{\(\) => pickTile\(k\)\}>\s*<span className="ftd-pf-l">/, "🔴 рядок форми не фільтрує список");
+  const dr = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(dr, /Не розбиралось: форма ціни визначається для розмов від/, "🔴 нерозібрана форма в картці — порожнім місцем, а не словами");
 });

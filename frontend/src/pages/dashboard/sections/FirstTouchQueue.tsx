@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchAiCallCard, fetchAiCallRecording, putAiCallNote, hiringError, type AiCallCardResp, type AiCallRowT } from "../../../api";
-import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel, reviewNoteText } from "../aiCallsView";
+import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel, reviewNoteText, WAIT_MANAGER_COMMENT_UA } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { Analysis, QuoteSeek, FeedbackButton } from "./AiCallDrawer";
 import { ChecklistBlock } from "./FirstTouchChecklist";
@@ -57,8 +57,8 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
   const review = async () => {
     if (!cur) return;
     setBusy(true); setErr(null);
-    // Задача 7183: є коментар менеджера — це погодження; немає — тімлід закрив сам (у черзі видно різницю).
-    try { await putAiCallNote(cur.uniqueid, "review", note.trim() || reviewNoteText(cur.explainNote != null || cur.priceNote != null)); next(); onReviewed(); }
+    // ✍️ Задача 7351 (з 03.11.2026): закрити можна лише після коментаря самого менеджера — це погодження.
+    try { await putAiCallNote(cur.uniqueid, "review", note.trim() || reviewNoteText(true)); next(); onReviewed(); }
     catch (e) { setErr(hiringError(e)); }
     setBusy(false);
   };
@@ -97,7 +97,9 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
                     <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{q.summary ?? "—"}</span>
                     <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       {why && <span className="ftd-chip" style={{ background: tone.bg, color: tone.fg, fontWeight: 600 }}>{why.label}</span>}
-                      {(q.explainNote || q.priceNote) && <span className="ftd-chip" style={{ background: TONE_COLOR.ok.bg, color: TONE_COLOR.ok.fg }}>менеджер пояснив</span>}
+                      {q.managerCommented
+                        ? <span className="ftd-chip" style={{ background: TONE_COLOR.ok.bg, color: TONE_COLOR.ok.fg }}>менеджер пояснив</span>
+                        : <span className="ftd-chip" style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>чекає коментаря менеджера</span>}
                     </span>
                   </button>
                 );
@@ -138,8 +140,9 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
                     placeholder={`Що сказати ${cur?.managerName ?? "менеджеру"} по цій розмові`}
                     style={{ minHeight: 60, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", font: "inherit", resize: "vertical", background: "var(--card-bg)", color: "var(--text)" }} />
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    <button type="button" className="ftd-btn dark" disabled={busy} onClick={() => void review()}>{busy ? "Зберігаю…"
-                      : cur?.explainNote || cur?.priceNote ? "Погодити коментар · наступна ›" : "Опрацьовано без коментаря · наступна ›"}</button>
+                    {cur?.managerCommented
+                      ? <button type="button" className="ftd-btn dark" disabled={busy} onClick={() => void review()}>{busy ? "Зберігаю…" : "Погодити коментар · наступна ›"}</button>
+                      : <span className="ftd-sub" style={{ alignSelf: "center" }}>{WAIT_MANAGER_COMMENT_UA}</span>}
                     {cur?.reviewReason === "noCall" && c.noteRights.offline && (
                       <button type="button" className="ftd-btn" disabled={busy} onClick={() => void offline()}>Передзвонив поза телефонією</button>
                     )}

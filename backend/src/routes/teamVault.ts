@@ -4,7 +4,7 @@ import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { parseKey, SecretKeyMissing } from "../core/secretBox.js";
 import { SecretError, type Db, sendRevealCode, revealSecret, vaultLinkState, createVaultLink, unlinkVault } from "../core/secrets.js";
 import { listTeamPeople, teamPersonVault, assertTeamSecret, resetTeamPassword } from "../core/teamVault.js";
-import { vaultBotConfigured, vaultBotSend, vaultBotUsername } from "../bot/vaultBot.js";
+import { vaultBotConfigured, vaultBotSend, vaultBotUsername, vaultBotUsernameQuick } from "../bot/vaultBot.js";
 
 /**
  * 👥 «НАЙМ → СПІВРОБІТНИКИ» ДЛЯ ТІМЛІДА (29.09.2026): люди своєї команди, їхні паролі й пароль дашборда.
@@ -52,7 +52,7 @@ teamVaultRouter.get("/status", async (req, res) => {
   try {
     const link = await vaultLinkState(db(), me(req));
     res.json({ keyConfigured: key() != null, botConfigured: vaultBotConfigured(),
-      botUsername: vaultBotConfigured() ? await vaultBotUsername() : null, linked: link.linked, linkedAt: link.linkedAt });
+      botUsername: vaultBotConfigured() ? await vaultBotUsernameQuick() : null, linked: link.linked, linkedAt: link.linkedAt });
   } catch (e) { fail(res, e); }
 });
 

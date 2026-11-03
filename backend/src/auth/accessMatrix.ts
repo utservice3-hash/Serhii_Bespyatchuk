@@ -330,6 +330,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/dashboard/data-quality", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 📵 Задача 7359: клієнти без номера замовника / з номером перевізника — та сама межа, що в `/data-quality`.
+  { method: "GET", path: "/api/dashboard/data-quality/carrier-phones", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/deal-note", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/expected-deals", cls: "GET",
@@ -1989,6 +1992,21 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin"], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "POST", path: "/api/bank-ident/:txId/comments", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
+  /* 💳 Розшифровка вихідних ФОП і картки (задача Тетяни 03.11.2026): бачити — view_bank_out_breakdown, писати —
+     edit_bank_out_breakdown; обидва — адмін, фінансист, Бухгалтерія (не в ACCESS_ROLES), тімлід (Сергій 03.11, «б»).
+     Менеджер, СЕО, ОД, КВП — 403 по ПРАВУ (першим оператором, до розбору id). */
+  { method: "POST", path: "/api/bank-ident/out/state", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "manager", "hr"] },
+  { method: "GET", path: "/api/bank-ident/out/counts", cls: "GET",
+    allow: ["admin", "financier", "team_lead"], deny: ["ceo", "opdir", "kvp", "manager", "hr"] },
+  { method: "GET", path: "/api/bank-ident/out/list?status=wait", cls: "GET",
+    allow: ["admin", "financier", "team_lead"], deny: ["ceo", "opdir", "kvp", "manager", "hr"] },
+  { method: "GET", path: "/api/bank-ident/out/:txId/history", cls: "GET",
+    allow: ["admin", "financier", "team_lead"], deny: ["ceo", "opdir", "kvp", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/out/:txId", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "manager", "hr"] },
+  { method: "POST", path: "/api/bank-ident/out/:txId/unidentify", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "manager", "hr"] },
   /* 🏢 ОРГ СТРУКТУРА (задача 7062, 27.10.2026): бачать УСІ ролі, включно з кандидатом (рішення Романа 27.10); свій нік і
      фото — теж усі (лише свій рядок «Найму», id з акаунта — #2703). Режим «Редагувати» — право `edit_org`: admin, HR, БА
      (ТЗ). Керівництво й фінансист вкладку мають, права — ні: 403 по ПРАВУ, тож записані в ADMIN_DENIED_BY_PERM.

@@ -116,6 +116,7 @@ import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
 import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
+import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
@@ -825,6 +826,12 @@ cron.schedule("40 */3 * * *", () => {
   void runJob("collectLardi", () => collectLardi());
 });
 
+// 📵 Довідник номерів перевізників (задача 7359): Lardi-машини + «Перевізник» в історії, мінус номери замовників.
+// Щогодини о :22 — осторонь :20/:25 і :00/:30 `syncKommo`. Під наглядом (`monitoredJobs.ts`), everyMin == крону.
+cron.schedule("22 * * * *", () => {
+  void runJob("rebuildCarrierPhones", () => rebuildCarrierPhones());
+});
+
 // 🏛 Prozorro-ліди (задача #5299): щодня о 06:05 за Києвом — переможці тендерів від 500 тис. ₴. О :05, а не :00 —
 // щоб не збігтися з тіком syncKommo (:00/:30). Прохід ~20 хв; звіт у Telegram наприкінці. Прохід 1 — лише пробний режим.
 cron.schedule("5 6 * * *", () => {
@@ -1048,6 +1055,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],
   ["recomputeStatistics", () => recomputeStatistics()],
   ["recomputeClientKeys", () => recomputeClientKeys()],
+  ["rebuildCarrierPhones", () => rebuildCarrierPhones()],
   ["hiringAccess", () => closeExpiredCandidateAccess()],
   ["reactCycleSweep", () => runReactCycleSweep()],
   ["syncReceivables", () => syncReceivables()],

@@ -182,6 +182,8 @@ export const MANIFEST_FILES: string[] = [
   "bankIdent/bankIdent.test.js",
   "bankIdent/bankIdentFilter.test.js",
   "bankIdent/bankIdentReset.test.js",
+  "bankIdent/outBreakdown.test.js",
+  "bot/vaultBot.test.js",
   "core/rateFeedback.test.js",
   "core/rateAccuracy.test.js",
   "core/roadRoute.test.js",
@@ -244,6 +246,8 @@ export const MANIFEST_FILES: string[] = [
   // 📵 Задача 4373 «автозакриття пропущених», блок 2 (ТЗ Юлії 17.09, рішення Романа 02.10.2026)
   "core/missedAutoclose4373.test.js",
   "core/carrierHistory4373.test.js",
+  // 📵 Задача 7359 (ТЗ Юлії «Контакти клієнтів», етап 1): номери перевізників на екрані клієнтів
+  "routes/carrierPhones7359.test.js",
   "core/clientsBlock2.test.js",
   "core/bankStatementCsv.test.js",
   "core/provisionRules.test.js",
@@ -392,7 +396,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
   "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
-  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations", "bank_ident_settings", "bank_tx_ident", "bank_tx_ident_events", "bank_tx_comments",
+  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "bank_out_breakdown", "bank_out_breakdown_events", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations", "bank_ident_settings", "bank_tx_ident", "bank_tx_ident_events", "bank_tx_comments",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
@@ -1435,6 +1439,11 @@ export const MANIFEST_TESTS: string[] = [
   "#3206 ПЛИТКА МЕСЕНДЖЕРА: число = фільтр, знаменник — лише розібрані рубрикою, плитка лише з правом",
   "#3207 ВЕРДИКТ МЕСЕНДЖЕРА В КАРТЦІ: «сам» лише зі звіреною цитатою; незвірене — «не підтверджено»; не розбирали — словами",
   "#3208 ЦИТАТА → МІСЦЕ В ЗАПИСІ: через дві репліки одного каналу й без розділових знаків — так; через різні канали — ні",
+  "#3360 ЗАКРИТТЯ ПІСЛЯ КОМЕНТАРЯ МЕНЕДЖЕРА: з 04.11 (Київ) лише з коментарем самого менеджера; старі закриття не повертаються",
+  "#3361 ЖИВА СХЕМА: коментар менеджера — лише від його акаунта; форма ціни — лише з ціною й від 03.11; список = картка",
+  "#3362 ПРОВОДКА ЗАКРИТТЯ: роут відмовляє без коментаря менеджера; кнопки в картці й черзі — лише за managerCommented",
+  "#3363 ФОРМА ЦІНИ: перелік і цитата обовʼязкові; на екрані лише зі звіреною цитатою; лише з 03.11; рубрика в тіку",
+  "#3364 ФРОНТ ФОРМИ ЦІНИ: рядок = фільтр, Σ + не визначено = розібрані, згода серед відомих, «від…» лишається названою ціною",
   "#911 ЗГОРТАННЯ І СКЕЛЕТ: шеврон з aria, плавна висота класом, без руху при «зменшенні руху», скелет замість тексту",
   "#912 МІСЯЦЬ І ПЛАВНІ ЧИСЛА: за замовчуванням поточний місяць, плитки перетікають, без руху — одразу",
   "#913 ПЕРІОД ПЕРЕТІКАЄ: новий період лишає старі цифри приглушеними, поки не прийдуть нові",
@@ -1645,6 +1654,13 @@ export const MANIFEST_TESTS: string[] = [
   "#846b НІЧНИЙ ПРОХІД ПІД НАГЛЯДОМ: щодоби за Києвом, нагляд чекає 1440 хв, є стартовий прогін",
   "#848 ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ЦИКЛУ: кнопки з `allowed`, строк і стан — із сервера; пул — за `leadgenPool.canSee`",
   "#848b МІСТОК «ЩЕ N У РЕАКТИВАЦІЇ» == ЛІЧИЛЬНИК ВКЛАДКИ: одне число на екрані, а не стан поруч із рахунком",
+  // routes/carrierPhones7359.test.ts — задача 7359: номери перевізників на екрані клієнтів (рішення Романа 03.11.2026)
+  "#3590 ДОВІДНИК ПЕРЕВІЗНИКІВ: Lardi-машини й «Перевізник» — так; вантажі Lardi й інша причина — ні; угода замовника — виняток, воронки перевізника — ні",
+  "#3591 РОЗМОВИ НА НОМЕР ПЕРЕВІЗНИКА НЕ РАХУЮТЬСЯ: дзвінки місяця без них; номер замовника й невідомий номер — рахуються",
+  "#3592 СТАН НОМЕРІВ КЛІЄНТА: немає номера · лише перевізники · є перевізник · усе гаразд; фізособа — за ключем; «взяти» блокує лише «лише перевізники»",
+  "#3593 «ВЗЯТИ В РОБОТУ»: лише номери перевізників → 409 і нічого не закріплено; є номер замовника → закріплено",
+  "#3594 «ЯКІСТЬ ДАНИХ» · НОМЕРИ: клієнти екрана без номера замовника — у списку з командою; тімлід бачить лише свою команду, адмін — обидві",
+  "#3595 «ЯКІСТЬ ДАНИХ» · РОЗКЛАД: команда → менеджер → клієнти; кожен клієнт рівно раз; без команди — «Поза командами»; без номера замовника — першими",
   // core/carrierHistory4373.test.ts — задача 4373, блок 1: «Перевізник» за історією CRM, без Lardi
   "#1302 ІСТОРІЯ CRM: «Перевізник» у минулому → так; угода замовника в «Успіх» чи в роботі → ні; воронки перевізника й етап фільтра — не виняток",
   "#1302b СИГНАЛ: на номер перевізника задачу не ставимо (слід у журналі — раз), відкриту закриваємо; клієнту — ставимо",
@@ -3015,6 +3031,14 @@ export const MANIFEST_TESTS: string[] = [
   "#2915 ФРОНТ «ВИПИСКИ»: правила = бекенд байт у байт, один чанк, CSS на змінних дашборда, вставки й бейдж на місці",
   "#2916 ФІЛЬТР № РАХУНКУ ЗА ВИБРАНИМ РАХУНКОМ: /list і /counts з company — лише ця компанія, без неї — усі, бейдж загальний",
   "#2917 СКИНУТИ № РАХУНКУ: фінансист з причиною → знову «Чекає №» → вписують правильний; після строку й без права — ні",
+  // «Найм»: статус сейфа не чекає Telegram (03.11.2026).
+  "#3390 СТАТУС СЕЙФА НЕ ЧЕКАЄ TELEGRAM: імʼя бота — з межею часу, обидва статуси; запит до Telegram — з тайм-аутом",
+  "#3390b «НАЙМ»: «скоро» лише коли сервер відмовив (401/403), а не при тайм-ауті чи збої",
+  // «Виписка»: розшифровка вихідних ФОП і картки (задача Тетяни 03.11.2026).
+  "#3380 РОЗШИФРОВКА ВИХІДНИХ: «№ угоди сума» рядками розбирається; дубль і сміття — відмова з номером рядка",
+  "#3380b РОЗШИФРОВКА ВИХІДНИХ: «не зійшлось» — у «Чекають»; «Змінити» — з причиною і в «Відкориговані»",
+  "#3381 ЖИВИЙ SQL: розшифровка вихідних — права «б», вписати → змінити з причиною → «Відкориговані», історія, межі",
+  "#3382 ФРОНТ «Виписки»: розшифровка вихідних — лише з правом і на «Вихідних», змінені підсвічено, «Скопіювати»",
   // cargo/cargo.test.ts — Конфігуратор вантажу в авто, пакет Сергія (12.10.2026).
   "#1610 РУШІЙ = МАКЕТ: 40 еталонних сценаріїв і 60 випадкових — розкладка, «не влізло», «ще влізе», вага",
   "#1611 РУШІЙ: кейси Сергія, види вантажів, ручне пересування, арки, інваріанти на 80 сценаріях",

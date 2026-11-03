@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, closeAiCallDeal, revertAiCallDeal, sendAiCallFeedback, type AiCallCardResp, type AiQuoted } from "../../../api";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, WAIT_MANAGER_COMMENT_UA, PRICE_FORM_UI, PRICE_FORM_FROM_UA, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { ChecklistBlock } from "./FirstTouchChecklist";
 import "./hiring.css";
@@ -53,6 +53,14 @@ function Quote({ q }: { q: AiQuoted }) {
 const row: React.CSSProperties = { display: "grid", gridTemplateColumns: "140px minmax(0, 1fr)", gap: 12, padding: "5px 0", fontSize: 13.5, lineHeight: 1.45 };
 const key: React.CSSProperties = { fontSize: 12.5, color: "var(--text-muted)", fontWeight: 600 };
 
+/** Рядок «Як названо ціну»: форма з цитатою, що знайшлась; інакше — чому не визначено. */
+function priceFormLine(p: AiCallCardResp["priceForm"]): React.ReactNode {
+  if (!p) return <Chip wrap tone="muted">Не розбиралось: форма ціни визначається для розмов від {PRICE_FORM_FROM_UA}</Chip>;
+  if (p.form === "none") return <Chip wrap tone="muted">Не визначено: AI не почув суми</Chip>;
+  if (p.quote_found !== true) return <Chip wrap tone="muted">Не визначено: AI каже «{PRICE_FORM_UI[p.form].label.toLowerCase()}», але такої фрази в розмові немає</Chip>;
+  return <Chip wrap tone={p.form === "from" ? "warn" : "muted"}>{PRICE_FORM_UI[p.form].label}</Chip>;
+}
+
 export function Analysis({ c }: { c: AiCallCardResp }) {
   const r = c.result;
   if (!r) {
@@ -71,6 +79,15 @@ export function Analysis({ c }: { c: AiCallCardResp }) {
       {r.next_step && <div style={row}><span style={key}>Наступний крок</span><span>{r.next_step}</span></div>}
       <div style={{ borderTop: "1px solid var(--border)", margin: "8px 0" }} />
       <div style={row}><span style={key}>Ціна</span><span>{r.price.discussed ? "обговорили" : "не прозвучала"}<Quote q={r.price} /></span></div>
+      {/* 💵 Задача 7351: як названо ціну — лише з цитатою, що знайшлась; «не визначено» пишемо словами, а не лишаємо порожнім. */}
+      {r.price.discussed && (
+        <div style={row}>
+          <span style={key}>Як названо ціну</span>
+          <span>{priceFormLine(c.priceForm)}
+            {c.priceForm && c.priceForm.form !== "none" && <Quote q={{ quote: c.priceForm.quote, quote_found: c.priceForm.quote_found ?? null }} />}
+          </span>
+        </div>
+      )}
       {/* 💬 Задача 7184: окрема перевірка «хто запропонував месенджер» — вердикт і дослівна цитата; лише ролям із правом на сигнал. */}
       {c.canSeeMessengerSignal && (
         <div style={row}>
@@ -295,18 +312,18 @@ function ReviewBar({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
   if (rn) return <div style={{ fontSize: 12.5, color: "var(--ok, #166534)", marginTop: 6 }}>{closure} · {rn.byName ?? "—"} · {fmtFull(rn.at)}{rn.text !== "Розібрано" && rn.text !== reviewNoteText(true) ? ` · «${rn.text}»` : ""}</div>;
   if (c.reviewClosure === "invoice") return <div style={{ fontSize: 12.5, color: "var(--ok, #166534)", marginTop: 6 }}>Вийшла з черги: {CLOSURE_UI.invoice.hint.toLowerCase()}</div>;
   if (!c.needsReview || !c.canReview) return null;
-  // Рішення Романа 28.10.2026 (п.1 «б»): є коментар менеджера — тімлід його погоджує; немає — може закрити сам.
-  const commented = c.row.explainNote != null || c.row.priceNote != null;
+  // ✍️ Задача 7351 (з 03.11.2026): тімлід погоджує лише коментар САМОГО менеджера розмови; без нього кнопки немає.
   const go = async () => {
     setBusy(true); setMsg(null);
-    try { await putAiCallNote(c.row.uniqueid, "review", reviewNoteText(commented)); onDone(); } catch (e) { setMsg(hiringError(e)); }
+    try { await putAiCallNote(c.row.uniqueid, "review", reviewNoteText(true)); onDone(); } catch (e) { setMsg(hiringError(e)); }
     setBusy(false);
   };
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
-      <button type="button" className="hr-btn" disabled={busy} onClick={() => void go()}
-        title={commented ? "Менеджер пояснив — погодити й вивести з черги" : "Закрити без коментаря менеджера — у черзі буде видно «закрито тімлідом»"}>
-        {busy ? "Зберігаю…" : commented ? "Погодити коментар" : "Розібрано без коментаря"}</button>
+      {c.row.managerCommented
+        ? <button type="button" className="hr-btn" disabled={busy} onClick={() => void go()} title="Менеджер пояснив — погодити й вивести з черги">
+          {busy ? "Зберігаю…" : "Погодити коментар"}</button>
+        : <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{WAIT_MANAGER_COMMENT_UA}</span>}
       {c.reviewReason && <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>у черзі розбору: {REVIEW_REASON_UI[c.reviewReason].label.toLowerCase()}</span>}
       {msg && <span style={{ fontSize: 12.5, color: "var(--danger)" }}>{msg}</span>}
     </div>

@@ -284,7 +284,8 @@ test("#2915 ФРОНТ «ВИПИСКИ»: правила = бекенд бай�
   assert.match(sec, /<IdentLine state=\{ident\.state\} api=\{bankIdentApi\}/, "🔴 рядок «№ рахунку» не вставлено під платежем");
   assert.match(sec, /<OutComments txId=\{r\.id\} summary=\{oc\.summary\}/, "🔴 коментарі до вихідних не вставлено");
   assert.match(sec, /\{mode === "in" && <IdentFilter counts=\{identCounts\} value=\{identF\} onChange=\{setIdentF\} \/>\}/, "🔴 фільтр «Чекають №» не поруч із «Валюта»");
-  assert.match(sec, /alignItems: ident \|\| oc \? "flex-start" : "center"/, "🔴 рядок із блоком № не притиснуто до верху — дата зʼїде");
+  // + `out` — блок розшифровки вихідних (03.11.2026): той самий «блок під платежем», та сама вимога
+  assert.match(sec, /alignItems: ident \|\| oc \|\| out \? "flex-start" : "center"/, "🔴 рядок із блоком № не притиснуто до верху — дата зʼїде");
   const lay = FRONT("components/Layout.tsx");
   assert.match(lay, /: item\.key === "bank" \? bankIdentCount : 0;/, "🔴 бейдж «чекають №» біля «Виписка» не підключено");
   assert.match(FRONT("bankIdent/dashboard.ts"), /if \(token\) headers\.set\("Authorization", `Bearer \$\{token\}`\);/, "🔴 клієнт пакета без нашого токена");
