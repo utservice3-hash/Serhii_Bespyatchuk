@@ -13,7 +13,7 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
   CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes, DECISION_UI,
-  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS, CLOSURE_UI,
+  TILE_MATCH, tileStats, priceFormStats, PRICE_FORM_UI, PRICE_FORM_FROM_UA, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS, CLOSURE_UI,
   TRANSPORT_LABEL, type ExcludedFilterT,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
   DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams } from "../aiCallsView";
@@ -200,6 +200,7 @@ export function AiCallsSection() {
 
   // Плитки (ТЗ 08.10.2026): число і список після кліку — одне правило `TILE_MATCH`; стани й знаменники — від сервера.
   const ts = tileStats(rows);
+  const pf = priceFormStats(rows);
   const split = priceSuccessSplit(rows);
   const target = d.priceTargetPct;
   const lost = rows.filter(TILE_MATCH.lost);
@@ -278,7 +279,7 @@ export function AiCallsSection() {
             {kpi("noCall", "Обіцяли — дзвінка в телефонії немає", <AnimatedNumber value={ts.noCall.n} />,
               `${ts.noCall.of ? `${String(Math.round((ts.noCall.n / ts.noCall.of) * 100))}% від ` : "з "}${String(ts.noCall.of)} обіцянок`,
               "Менеджер пообіцяв передзвонити, а в телефонії його дзвінка немає. Ringostat не бачить особистого мобільного й месенджерів — тому «в телефонії».")}
-            {kpi("noPrice", "Ціна озвучена", <AnimatedNumber value={ts.price.pct} suffix="%" />, `${String(ts.price.yes)} з ${String(ts.price.of)} · ціль ${String(target)}%`,
+            {kpi("noPrice", "Ціна озвучена", <AnimatedNumber value={ts.price.pct} suffix="%" />, `${String(ts.price.yes)} з ${String(ts.price.of)} · ціль ${String(target)}%${pf.analysed ? ` · «від…» ${String(pf.lines.find((l) => l.form === "from")?.n ?? 0)}` : ""}`,
               "Серед розібраних, крім втрачених лідів. Клік — розмови, де ціну НЕ назвали. Ціль змінює адмін у «Налаштуваннях».", goodBad(ts.price.pct == null ? null : ts.price.pct >= target))}
             {kpi("objNotHandled", "Заперечення опрацьовано", <AnimatedNumber value={ts.objection.pct} suffix="%" />, ts.objection.of ? `${String(ts.objection.handled)} з ${String(ts.objection.of)} заперечень` : "розбираються для розмов від 09.10",
               "Клієнт сказав «дорого», «подумаю», «порівняю» — і менеджер зʼясував причину, аргументував, запропонував альтернативу чи домовився про крок. Клік — неопрацьовані.")}
@@ -291,6 +292,30 @@ export function AiCallsSection() {
             {d.canSeeMessengerSignal && kpi("messengerSelf", "Сам запропонував месенджер", <AnimatedNumber value={ts.messengerSelf.n} />,
               ts.messengerSelf.of ? `з ${String(ts.messengerSelf.of)} розібраних · ${String(Math.round((ts.messengerSelf.n / ts.messengerSelf.of) * 100))}%` : "розбирається для розмов від 30.10",
               "Менеджер сам запропонував перейти у Viber / Telegram / WhatsApp, клієнт про це не просив. Лише з дослівною цитатою, знайденою в розмові. Розбираються розмови від 30.10, де звучить месенджер. Клік — ці розмови; у картці — цитата.")}
+          </section>
+
+          {/* 💵 Задача 7351: як названо ціну і чи погодився клієнт — кожен рядок фільтрує список тим самим правилом (TILE_MATCH). */}
+          <section aria-label="Як назвали ціну" className="ftd-card ftd-card-pad">
+            <div className="ftd-card-h">
+              <h2>Як назвали ціну → згода клієнта</h2>
+              <span>{pf.analysed
+                ? `розмови з ціною від ${PRICE_FORM_FROM_UA}: ${String(pf.analysed)}${pf.unknown ? ` · форму не визначено: ${String(pf.unknown)}` : ""} · «від…» поки рахується названою ціною`
+                : `форма ціни визначається для розмов від ${PRICE_FORM_FROM_UA}, де ціну назвали; за цей період таких ще немає`}</span>
+            </div>
+            {pf.analysed > 0 && (
+              <div className="ftd-pf">
+                {pf.lines.map((l) => {
+                  const k = PRICE_FORM_UI[l.form].tile;
+                  return (
+                    <button key={l.form} type="button" className={`ftd-pf-row${preset === k ? " on" : ""}`} aria-pressed={preset === k} onClick={() => pickTile(k)}>
+                      <span className="ftd-pf-l">{PRICE_FORM_UI[l.form].label}<InfoHint text={PRICE_FORM_UI[l.form].hint} /></span>
+                      <span className="ftd-pf-n"><b>{l.n}</b> розмов</span>
+                      <span className="ftd-pf-n">{l.pct == null ? "згода — ще не відома" : <>погодився <b>{l.pct}%</b> <span className="ftd-sub">· {l.agreed} з {l.decided}</span></>}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </section>
 
           <section aria-label="Менеджери за чек-листом" className="ftd-card ftd-card-pad">
@@ -371,7 +396,8 @@ export function AiCallsSection() {
                 <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
               )}
               {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["thinking", "Думає"], ["declined", "Відмовив"], ["agreedLost", "Погодився, а в Kommo втрачено"],
-                ["messenger", "Обіцяв у месенджер"], ...(d.canSeeMessengerSignal ? [["messengerSelf", "Сам запропонував месенджер"] as const] : [])] as const).map(([k, label]) => (
+                ["messenger", "Обіцяв у месенджер"], ...(d.canSeeMessengerSignal ? [["messengerSelf", "Сам запропонував месенджер"] as const] : []),
+                ["priceExact", "Ціна: точна"], ["priceRange", "Ціна: вилка"], ["priceFrom", "Ціна: «від…»"]] as const).map(([k, label]) => (
                 <button key={k} type="button" className={`ftd-pill${preset === k ? " on" : ""}`} aria-pressed={preset === k}
                   onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{scoped.filter(TILE_MATCH[k]).length}</b></button>
               ))}
