@@ -16,6 +16,9 @@ import {
 } from "../../../bankIdent/client/bankIdent";
 import type { CommentSummary, IdentState } from "../../../bankIdent/shared/bankIdent";
 import { bankIdentApi, bankIdentApiFor, BANK_IDENT_COUNT_EVENT } from "../../../bankIdent/dashboard";
+// 💳 Розшифровка вихідних ФОП і картки (задача Тетяни 03.11.2026): «№ угоди — сума» під платежем, фільтр, «Відкориговані».
+import { OutFilterBar, OutLine, OUT_CORRECTED_COLOR } from "../../../bankIdent/OutBreakdown";
+import { outApi, OUT_VIEW_PERM, type OutFilter, type OutState } from "../../../bankIdent/outBreakdownApi";
 
 const RED = "#c8102e", MUTED = "var(--text-muted)";
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
@@ -51,7 +54,8 @@ function AccBadge({ company }: { company: string }) {
 // (UAH-екв. лише для валютних); рядок2 приглушено — рахунок-бейдж · підстава (ellipsis + title).
 interface RowIdent { state: IdentState; clock: Clock; holidays: string[]; onChange: (s: IdentState) => void }
 interface RowComments { summary: CommentSummary; onChange: (s: CommentSummary) => void }
-function TxRow({ r, mode, ident, oc }: { r: BankTx; mode: "in" | "out"; ident?: RowIdent; oc?: RowComments }) {
+interface RowOut { state: OutState; canEdit: boolean; onChange: (s: OutState) => void }
+function TxRow({ r, mode, ident, oc, out }: { r: BankTx; mode: "in" | "out"; ident?: RowIdent; oc?: RowComments; out?: RowOut }) {
   const inMode = mode === "in";
   const color = inMode ? "#16a34a" : "#dc2626";
   const sign = inMode ? "" : "−";
@@ -61,11 +65,12 @@ function TxRow({ r, mode, ident, oc }: { r: BankTx; mode: "in" | "out"; ident?: 
   return (
     <div style={{
       // рядок із блоком «№ рахунку» / коментарями — до верху, інакше дата зʼїде до середини (ТЗ «Стиль», п.6)
-      display: "flex", alignItems: ident || oc ? "flex-start" : "center", gap: 12, padding: "10px 4px",
+      display: "flex", alignItems: ident || oc || out ? "flex-start" : "center", gap: 12, padding: "10px 4px",
       borderBottom: "1px solid var(--border)",
       background: r.hidden ? "rgba(217,119,6,0.07)" : r.unmatched_account ? "rgba(220,38,38,0.05)" : undefined,
       // «горить» (лишилось < 12 роб. год) — тією самою лівою смугою, а не новим фоном (п.5)
-      borderLeft: r.unmatched_account ? "3px solid #dc2626" : `3px solid ${ident ? identAccent(ident.state, ident.clock(), new Set(ident.holidays)) : "transparent"}`,
+      // розшифровку змінювали — фіолетова смуга, як чип «Відкориговані» (Таня: «підсвічувати це»)
+      borderLeft: r.unmatched_account ? "3px solid #dc2626" : out?.state.corrected ? `3px solid ${OUT_CORRECTED_COLOR}` : `3px solid ${ident ? identAccent(ident.state, ident.clock(), new Set(ident.holidays)) : "transparent"}`,
     }}>
       <div style={{ width: 50, flexShrink: 0, textAlign: "center", lineHeight: 1.15 }}>
         <div style={{ fontSize: 13, fontWeight: 700 }}>{p(d.getDate())}.{p(d.getMonth() + 1)}</div>
@@ -89,6 +94,7 @@ function TxRow({ r, mode, ident, oc }: { r: BankTx; mode: "in" | "out"; ident?: 
         </div>
         {ident && <IdentLine state={ident.state} api={bankIdentApi} clock={ident.clock} holidays={ident.holidays} onChange={ident.onChange} />}
         {oc && <OutComments txId={r.id} summary={oc.summary} api={bankIdentApi} onChange={oc.onChange} />}
+        {out && <OutLine state={out.state} canEdit={out.canEdit} onChange={out.onChange} />}
       </div>
     </div>
   );
@@ -163,6 +169,43 @@ export default function BankSection() {
     window.dispatchEvent(new Event(BANK_IDENT_COUNT_EVENT)); // бейдж у меню — одразу, не чекаючи хвилини
   }, [ident.setState, reloadIdentCounts]); // eslint-disable-line react-hooks/exhaustive-deps
   const oc = useOutComments(mode === "out" ? rows.map((r) => r.id) : [], bankIdentApi);
+
+  // 💳 Розшифровка вихідних ФОП і картки — лише з правом (фінанси й тімліди; сервер однаково перевіряє).
+  const canSeeOut = perms.includes(OUT_VIEW_PERM) && mode === "out";
+  const [outF, setOutF] = useState<OutFilter>("all");
+  const [outCounts, setOutCounts] = useState<Record<OutFilter, number> | null>(null);
+  const [outStates, setOutStates] = useState<Record<number, OutState>>({});
+  const [outCanEdit, setOutCanEdit] = useState(false);
+  const [outList, setOutList] = useState<{ key: string; rows: BankTx[]; total: number } | null>(null);
+  const outKey = canSeeOut && outF !== "all" ? `${outF}|${companyFilter ?? ""}` : null;
+  const reloadOutCounts = useCallback(() => {
+    if (!canSeeOut) return;
+    outApi.counts(companyFilter).then((d) => setOutCounts(d.counts)).catch(() => setOutCounts(null));
+  }, [canSeeOut, companyFilter]);
+  useEffect(() => { reloadOutCounts(); }, [reloadOutCounts]);
+  const outIdsKey = canSeeOut && outF === "all" ? rows.map((r) => r.id).join(",") : "";
+  useEffect(() => {
+    if (!outIdsKey) return;
+    let alive = true;
+    outApi.state(outIdsKey.split(",").map(Number).slice(0, 500)).then((d) => {
+      if (!alive) return;
+      setOutStates((prev) => ({ ...prev, ...d.states })); setOutCanEdit(d.canEdit);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [outIdsKey]);
+  useEffect(() => {
+    if (!outKey) return;
+    let alive = true;
+    outApi.list(outF as Exclude<OutFilter, "all">, companyFilter).then((d) => {
+      if (!alive) return;
+      setOutList({ key: outKey, rows: d.rows as BankTx[], total: d.total });
+      setOutStates((prev) => ({ ...prev, ...d.states })); setOutCanEdit(d.canEdit);
+    }).catch(() => { if (alive) setOutList({ key: outKey, rows: [], total: 0 }); });
+    return () => { alive = false; };
+  }, [outKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const outListRows = outList && outList.key === outKey ? outList.rows : null;
+  const onOutChange = useCallback((s: OutState) => { setOutStates((p) => ({ ...p, [s.txId]: s })); reloadOutCounts(); }, [reloadOutCounts]);
+  const outFor = (r: BankTx) => (canSeeOut && outStates[r.id] ? { state: outStates[r.id], canEdit: outCanEdit, onChange: onOutChange } : undefined);
 
   // Перша сторінка (скидання): підсумки за період + перша порція історії.
   const loadFirst = useCallback(() => {
@@ -314,10 +357,18 @@ export default function BankSection() {
           <select value={companyFilter ?? ""} onChange={(e) => setCompanyFilter(e.target.value || null)} style={inp}><option value="">Компанія: усі</option>{companies.map((c) => <option key={c.company} value={c.company}>{c.label}</option>)}</select>
           <select value={ccy} onChange={(e) => setCcy(e.target.value)} style={inp}><option value="">Валюта: усі</option>{currencies.map((c) => <option key={c} value={c}>{c}</option>)}</select>
           {mode === "in" && <IdentFilter counts={identCounts} value={identF} onChange={setIdentF} />}
+          {canSeeOut && <OutFilterBar counts={outCounts} value={outF} onChange={setOutF} />}
         </div>
         {mode === "in" && <IdentRuleBar kind="in" />}
         {mode === "out" && oc.enabled && <IdentRuleBar kind="out" />}
-        {identOn ? (identRows === null ? <p className="loading-text">Завантаження…</p> : identRows.length === 0 ? <p className="loading-text">Немає платежів із таким станом.</p> : (
+        {outKey ? (outListRows === null ? <p className="loading-text">Завантаження…</p> : outListRows.length === 0 ? <p className="loading-text">Немає платежів із таким станом.</p> : (
+          <div>
+            {outListRows.map((r) => <TxRow key={r.id} r={r} mode="out" out={outFor(r)} />)}
+            <div style={{ textAlign: "center", padding: "14px 0 2px", color: MUTED, fontSize: 12.5 }}>
+              {(outList?.total ?? 0) > outListRows.length ? `Показано ${outListRows.length} з ${outList?.total} — найновіші` : `Усього ${outListRows.length}`}
+            </div>
+          </div>
+        )) : identOn ? (identRows === null ? <p className="loading-text">Завантаження…</p> : identRows.length === 0 ? <p className="loading-text">Немає платежів із таким станом.</p> : (
           <div>
             {identRows.map((r) => <TxRow key={r.id} r={r} mode="in"
               ident={ident.states[r.id] ? { state: ident.states[r.id], clock: ident.clock, holidays: ident.holidays, onChange: onIdentChange } : undefined} />)}
@@ -329,11 +380,12 @@ export default function BankSection() {
           <div>
             {rows.map((r) => <TxRow key={r.id} r={r} mode={mode}
               ident={mode === "in" && ident.states[r.id] ? { state: ident.states[r.id], clock: ident.clock, holidays: ident.holidays, onChange: onIdentChange } : undefined}
-              oc={mode === "out" && oc.enabled && oc.summaries[r.id] ? { summary: oc.summaries[r.id], onChange: (s) => oc.setSummary(r.id, s) } : undefined} />)}
+              oc={mode === "out" && oc.enabled && oc.summaries[r.id] ? { summary: oc.summaries[r.id], onChange: (s) => oc.setSummary(r.id, s) } : undefined}
+              out={mode === "out" ? outFor(r) : undefined} />)}
           </div>
         )}
         {/* сентинель infinite-scroll + індикатор довантаження / кінець історії */}
-        {!identOn && !loading && rows.length > 0 && (
+        {!identOn && !outKey && !loading && rows.length > 0 && (
           <div ref={sentinelRef} style={{ textAlign: "center", padding: "14px 0 2px", color: MUTED, fontSize: 12.5 }}>
             {loadingMore ? "Завантаження ще…" : hasMore ? "Гортай нижче — довантажиться ще" : `Кінець історії · показано ${rows.length} транзакцій`}
           </div>

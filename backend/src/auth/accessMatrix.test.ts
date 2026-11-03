@@ -45,6 +45,9 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/bank-ident/:txId/not-client": "mark_bank_not_client — лише Бухгалтерія й адмін (ТЗ Сергія 27.10)",
   "POST /api/bank-ident/comments/summary": "bank_out_comments — лише Бухгалтерія й адмін; іншим коментарів не видно взагалі (ТЗ Сергія 27.10)",
   "POST /api/bank-ident/:txId/comments": "bank_out_comments — лише Бухгалтерія й адмін (ТЗ Сергія 27.10)",
+  "POST /api/bank-ident/out/state": "view_bank_out_breakdown — фінанси й тімліди (Сергій 03.11, варіант «б»); СЕО/ОД/КВП права не мають",
+  "POST /api/bank-ident/out/:txId": "edit_bank_out_breakdown — адмін, фінансист, Бухгалтерія, тімлід (задача Тетяни 03.11)",
+  "POST /api/bank-ident/out/:txId/unidentify": "edit_bank_out_breakdown — адмін, фінансист, Бухгалтерія, тімлід (задача Тетяни 03.11)",
   // 🚚 Конфігуратор вантажу (12.10.2026): довідник змінює лише право `manage_cargo` (admin, СЕО, ОД).
   "PUT /api/cargo/reference/vehicles": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",
   "PUT /api/cargo/reference/pallets": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",

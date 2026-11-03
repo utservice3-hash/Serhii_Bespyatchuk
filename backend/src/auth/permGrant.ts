@@ -59,6 +59,9 @@ export const PERMISSION_CATALOG = [
   "tag_bank_invoice", "fix_bank_invoice", "mark_bank_not_client", "bank_out_comments",
   /** 💳 «↺ Скинути №» — вписаний помилково номер знімається, платіж знову «Чекає №» (погодив Сергій 28.10) — фінансист. */
   "reset_bank_invoice",
+  /** 💳 Розшифровка вихідних ФОП і картки (задача Тетяни 03.11.2026): бачити — фінанси й тімліди (Сергій, варіант «б»);
+   *  вписувати й «Змінити» — адмін, фінансист, Бухгалтерія, тімліди. */
+  "view_bank_out_breakdown", "edit_bank_out_breakdown",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",

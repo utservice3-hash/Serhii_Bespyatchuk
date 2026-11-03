@@ -181,6 +181,7 @@ export const MANIFEST_FILES: string[] = [
   "bankIdent/bankIdent.test.js",
   "bankIdent/bankIdentFilter.test.js",
   "bankIdent/bankIdentReset.test.js",
+  "bankIdent/outBreakdown.test.js",
   "core/rateFeedback.test.js",
   "core/rateAccuracy.test.js",
   "core/roadRoute.test.js",
@@ -391,7 +392,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
   "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
-  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations", "bank_ident_settings", "bank_tx_ident", "bank_tx_ident_events", "bank_tx_comments",
+  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "bank_out_breakdown", "bank_out_breakdown_events", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations", "bank_ident_settings", "bank_tx_ident", "bank_tx_ident_events", "bank_tx_comments",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
@@ -3014,6 +3015,11 @@ export const MANIFEST_TESTS: string[] = [
   "#2915 ФРОНТ «ВИПИСКИ»: правила = бекенд байт у байт, один чанк, CSS на змінних дашборда, вставки й бейдж на місці",
   "#2916 ФІЛЬТР № РАХУНКУ ЗА ВИБРАНИМ РАХУНКОМ: /list і /counts з company — лише ця компанія, без неї — усі, бейдж загальний",
   "#2917 СКИНУТИ № РАХУНКУ: фінансист з причиною → знову «Чекає №» → вписують правильний; після строку й без права — ні",
+  // «Виписка»: розшифровка вихідних ФОП і картки (задача Тетяни 03.11.2026).
+  "#3360 РОЗШИФРОВКА ВИХІДНИХ: «№ угоди сума» рядками розбирається; дубль і сміття — відмова з номером рядка",
+  "#3360b РОЗШИФРОВКА ВИХІДНИХ: «не зійшлось» — у «Чекають»; «Змінити» — з причиною і в «Відкориговані»",
+  "#3361 ЖИВИЙ SQL: розшифровка вихідних — права «б», вписати → змінити з причиною → «Відкориговані», історія, межі",
+  "#3362 ФРОНТ «Виписки»: розшифровка вихідних — лише з правом і на «Вихідних», змінені підсвічено, «Скопіювати»",
   // cargo/cargo.test.ts — Конфігуратор вантажу в авто, пакет Сергія (12.10.2026).
   "#1610 РУШІЙ = МАКЕТ: 40 еталонних сценаріїв і 60 випадкових — розкладка, «не влізло», «ще влізе», вага",
   "#1611 РУШІЙ: кейси Сергія, види вантажів, ручне пересування, арки, інваріанти на 80 сценаріях",

@@ -7239,6 +7239,46 @@ ALTER TABLE bank_tx_ident_events ADD CONSTRAINT bank_tx_ident_events_act_check
 UPDATE roles SET permissions = permissions || '{"reset_bank_invoice": true}'::jsonb WHERE key IN ('admin', 'financier');
 UPDATE roles SET permissions = permissions - 'reset_bank_invoice' WHERE key NOT IN ('admin', 'financier');
 
+-- 💳 «Виписка»: РОЗШИФРОВКА ВИХІДНИХ ФОП І КАРТКИ (задача Тетяни 03.11.2026; хто бачить — Сергій 03.11, варіант «б»).
+-- До вихідного платежу ФОП Приват / ФОП Моно / картки вписують, за які угоди він пішов перевізнику: [{deal, amount}].
+-- Правила — `bankIdent/outBreakdown.ts`; історія — кожна дія окремим рядком (і «Відкориговані» звідси перевіряються).
+CREATE TABLE IF NOT EXISTS bank_out_breakdown (
+  tx_id        bigint PRIMARY KEY,                -- bank_transactions.id
+  account_id   bigint NOT NULL,
+  booked_at    timestamptz NOT NULL,
+  status       text NOT NULL CHECK (status IN ('identified', 'unidentified')),
+  lines        jsonb NOT NULL DEFAULT '[]'::jsonb, -- [{deal, amount}]; для 'unidentified' — порожньо
+  corrected    boolean NOT NULL DEFAULT false,    -- «Змінити» хоч раз — фільтр «Відкориговані»
+  set_by       text,
+  set_by_name  text,
+  set_role     text,
+  set_at       timestamptz NOT NULL DEFAULT now(),
+  reason       text CHECK (reason IS NULL OR char_length(reason) <= 300)
+);
+CREATE TABLE IF NOT EXISTS bank_out_breakdown_events (
+  id            bigserial PRIMARY KEY,
+  tx_id         bigint NOT NULL,
+  at            timestamptz NOT NULL DEFAULT now(),
+  actor_id      text,
+  actor_name    text,
+  actor_role    text,
+  act           text NOT NULL CHECK (act IN ('set', 'change', 'unidentify')),
+  status_before text,
+  lines_before  jsonb,
+  status_after  text NOT NULL,
+  lines_after   jsonb NOT NULL,
+  reason        text
+);
+CREATE INDEX IF NOT EXISTS bank_out_breakdown_events_tx_idx ON bank_out_breakdown_events (tx_id, at, id);
+REVOKE ALL ON bank_out_breakdown, bank_out_breakdown_events FROM ai_readonly;
+-- Права парою «видати / зняти», тут у кінці — синки вище копіюють права адміна на СЕО/ОД/КВП/фінансиста.
+--   view_bank_out_breakdown — бачити розшифровку, фільтр і рядок стану: адмін (Таня), фінансист, Бухгалтерія, тімліди;
+--   edit_bank_out_breakdown — вписувати й «Змінити»: ті самі (Таня просила себе, бухгалтера і Яцика; права — ролі).
+UPDATE roles SET permissions = permissions || '{"view_bank_out_breakdown": true}'::jsonb WHERE key IN ('admin', 'financier', '____________', 'team_lead');
+UPDATE roles SET permissions = permissions - 'view_bank_out_breakdown' WHERE key NOT IN ('admin', 'financier', '____________', 'team_lead');
+UPDATE roles SET permissions = permissions || '{"edit_bank_out_breakdown": true}'::jsonb WHERE key IN ('admin', 'financier', '____________', 'team_lead');
+UPDATE roles SET permissions = permissions - 'edit_bank_out_breakdown' WHERE key NOT IN ('admin', 'financier', '____________', 'team_lead');
+
 -- 💱 ВАЛЮТНА ДЕБІТОРКА В РОЗДІЛІ «ДЕБІТОРКА» (задача 7136; Сергій на TOP Weekly 26.10.2026: «виведи цю дебіторку окремо в
 -- лист дебіторки … валюта»; Роман 28.10: «роби як пропонуєш»). Курс НБУ, з яким синк порахував гривню, памʼятається поруч зі
 -- станом — щоб ≈ грн по рахунку на екрані збігалась із підсумком у «Фінансах», а не рахувалась за іншим курсом.
