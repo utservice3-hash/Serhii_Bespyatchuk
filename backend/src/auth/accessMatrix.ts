@@ -330,6 +330,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/dashboard/data-quality", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 📵 Задача 7359: клієнти без номера замовника / з номером перевізника — та сама межа, що в `/data-quality`.
+  { method: "GET", path: "/api/dashboard/data-quality/carrier-phones", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/deal-note", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/expected-deals", cls: "GET",

@@ -7451,3 +7451,19 @@ CREATE TABLE IF NOT EXISTS employee_levels (
 CREATE INDEX IF NOT EXISTS idx_employee_levels_emp ON employee_levels (employee_id) WHERE cancelled_at IS NULL;
 -- Персональні дані про умови роботи — не для моделі.
 REVOKE ALL ON employee_levels FROM ai_readonly;
+
+-- 📵 ДОВІДНИК НОМЕРІВ ПЕРЕВІЗНИКІВ (задача 7359, ТЗ Юлії «Контакти клієнтів», етап 1). Останні 9 цифр номера з
+-- машин Lardi (`side='lorry'`) або з угод, закритих як «Перевізник», МІНУС номери з угодою замовника («Успіх» чи в
+-- роботі; рішення Романа 03.11.2026). Похідна таблиця: повністю перебудовується з `lardi_offers` і `deals` джобою
+-- `rebuildCarrierPhones` (щогодини + старт), визначення — `core/carrierPhones.ts`. Читачі: розмови на екрані клієнтів,
+-- «Якість даних», «Взяти в роботу» в нічийних. Порожня таблиця = нічого не виключено (поведінка до задачі).
+-- ⚠️ revert коду таблицю не прибирає, але без коду її ніхто не читає. Відкат даних: DROP TABLE carrier_phones.
+CREATE TABLE IF NOT EXISTS carrier_phones (
+  p9            TEXT PRIMARY KEY CHECK (p9 ~ '^[0-9]{9}$'),
+  via_lardi     BOOLEAN NOT NULL,
+  via_history   BOOLEAN NOT NULL,
+  history_deal  BIGINT,
+  lardi_company TEXT,
+  rebuilt_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (via_lardi OR via_history)
+);

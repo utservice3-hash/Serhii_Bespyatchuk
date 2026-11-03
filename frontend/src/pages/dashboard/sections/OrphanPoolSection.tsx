@@ -188,7 +188,9 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
                       <td style={{ textAlign: "right" }}>{c.revenue12 ? money(c.revenue12) + " ₴" : "—"}</td>
                       <td style={{ textAlign: "right" }}><b>{money(c.revenueAll)} ₴</b></td>
                       <td style={{ textAlign: "right" }}>
-                        {data.access === "self"
+                        {c.onlyCarrierPhones
+                          ? <button className="orph-take" disabled title={CARRIER_ONLY_HINT}>лише номери перевізників</button>
+                          : data.access === "self"
                           ? (claiming === c.clientKey ? <span className="orph-dim">…</span>
                             : <button className="orph-take" disabled={auth?.managerId == null}
                                 onClick={() => auth?.managerId != null && claim(c, auth.managerId)}>Взяти собі</button>)
@@ -224,6 +226,10 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
     </div>
   );
 }
+
+/** 📵 Задача 7359: той самий текст, що віддає сервер у `/claim` (`CLAIM_BLOCKED_ERROR`), — тут підказкою. */
+const CARRIER_ONLY_HINT = "У клієнта лише номери перевізників (Lardi або закривали як «Перевізник») — взяти в роботу не можна. "
+  + "Спершу додайте в Kommo номер замовника.";
 
 /** `<>` не можна з ключем у мапі — потрібен саме Fragment із key. */
 function Fragmented({ children }: { children: React.ReactNode }) { return <>{children}</>; }
