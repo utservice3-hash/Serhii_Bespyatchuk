@@ -135,6 +135,8 @@ function CarrierPhonesBlock() {
         в «Успіх» перевізником не вважається. Розмови на номери перевізників на екрані клієнтів не рахуються.
         {" "}Довідник: {d.dictionary.phones.toLocaleString("uk-UA")} номерів
         {d.dictionary.rebuiltAt ? `, оновлено ${d.dictionary.rebuiltAt}` : " — ще не зібрано (перевізників поки не виключено)"}.
+        {" "}Номери беремо з контактів угод і з картки компанії в Kommo.
+        {d.companiesUnread > 0 && <b style={{ color: "#b45309" }}> Картку компанії ще не прочитано в {d.companiesUnread} клієнтів — «немає номера» для них може бути неточним.</b>}
       </p>
       {groups.map((t) => (
         <div key={t.teamKey} style={{ borderTop: "1px solid var(--border)", padding: "6px 0" }}>
@@ -152,10 +154,11 @@ function CarrierPhonesBlock() {
                       <td style={{ textAlign: "left", width: 260, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={it.clientName}>{it.clientName}</td>
                       <td style={{ textAlign: "left", whiteSpace: "nowrap", color: lacksClientPhone(it.verdict) ? "#dc2626" : "#d97706", fontSize: 12 }}>{VERDICT_LABEL[it.verdict]}</td>
                       <td style={{ textAlign: "left", fontSize: 12 }}>
-                        {it.phones.length === 0 ? <span style={{ color: "var(--text-muted)" }}>у контактах угод номерів немає</span>
+                        {it.phones.length === 0 ? <span style={{ color: "var(--text-muted)" }}>ні в контактах угод, ні в картці компанії номерів немає</span>
                           : it.phones.map((p) => (
                             <span key={p.phone} style={{ display: "inline-block", marginRight: 10, color: p.carrier ? "#b45309" : "var(--text-muted)" }}>
                               {p.phone}
+                              {p.source === "company" && <span style={{ color: "var(--text-muted)" }}> (картка компанії)</span>}
                               {p.carrier?.lardi && <span title={p.carrier.lardiCompany ?? undefined}> · Lardi{p.carrier.lardiCompany ? ` (${p.carrier.lardiCompany})` : ""}</span>}
                               {p.carrier?.history && (p.carrier.historyUrl
                                 ? <> · <a href={p.carrier.historyUrl} target="_blank" rel="noreferrer" style={{ color: "#c5141c" }}>«Перевізник» ↗</a></>

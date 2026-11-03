@@ -7467,3 +7467,9 @@ CREATE TABLE IF NOT EXISTS carrier_phones (
   rebuilt_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (via_lardi OR via_history)
 );
+
+-- ☎️ ТЕЛЕФОНИ З КАРТКИ КОМПАНІЇ (задача 7359, 03.11.2026): у частини клієнтів у Kommo немає контактів, телефон лише в полі
+-- «Телефон» компанії. Нормалізовані (`utils/phone.ts`). NULL = ще не прочитано (до дозаповнення) — НЕ «телефонів немає»;
+-- '{}' = прочитано, телефонів немає. Пише `syncKommo` (той самий знімок компаній) і разове `backfillCompanyPhones`.
+-- Відкат даних: ALTER TABLE kommo_companies DROP COLUMN phones.
+ALTER TABLE kommo_companies ADD COLUMN IF NOT EXISTS phones TEXT[];

@@ -5975,7 +5975,11 @@ dashboardRouter.get("/data-quality/carrier-phones", async (req, res) => {
       `SELECT COUNT(*) AS n, to_char(max(rebuilt_at) AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD HH24:MI') AS rebuilt_at FROM carrier_phones`),
   ]);
   const roster = listRes.rows.filter((c) => inClientsScreen(factsFor(seg, c.client_key)));
-  const phones = await carrierPhones.clientPhones(pool, roster.map((c) => c.client_key));
+  const rosterKeys = roster.map((c) => c.client_key);
+  const [phones, unreadRes] = await Promise.all([
+    carrierPhones.clientPhones(pool, rosterKeys),
+    pool.query<{ n: number }>(carrierPhones.CLIENTS_WITH_UNREAD_COMPANY_SQL, [rosterKeys]),
+  ]);
   const counts = { clients: roster.length, no_phone: 0, only_carrier: 0, has_carrier: 0 };
   const items = [];
   for (const c of roster) {
@@ -5988,7 +5992,7 @@ dashboardRouter.get("/data-quality/carrier-phones", async (req, res) => {
       managerId: c.manager_id, managerName: c.manager_name, teamId: c.team_id, teamName: c.team_name,
       verdict,
       phones: list.map((p) => ({
-        phone: p.phone,
+        phone: p.phone, source: p.source,
         carrier: p.carrier && {
           lardi: p.carrier.lardi, history: p.carrier.history, historyDeal: p.carrier.historyDeal, lardiCompany: p.carrier.lardiCompany,
           historyUrl: p.carrier.historyDeal == null ? null : kommoLeadUrl(p.carrier.historyDeal),
@@ -5999,6 +6003,8 @@ dashboardRouter.get("/data-quality/carrier-phones", async (req, res) => {
   res.json({
     counts,
     dictionary: { phones: Number(dictRes.rows[0]?.n ?? 0), rebuiltAt: dictRes.rows[0]?.rebuilt_at ?? null },
+    // ☎️ Клієнти, чию картку компанії ще не прочитано з Kommo: «немає номера» для них може бути неправдою.
+    companiesUnread: Number(unreadRes.rows[0]?.n ?? 0),
     items,
   });
 });

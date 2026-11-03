@@ -978,11 +978,13 @@ export type CarrierPhoneVerdict = "no_phone" | "only_carrier" | "has_carrier";
 export interface CarrierPhoneItem {
   clientKey: string; clientName: string; managerId: number; managerName: string;
   teamId: number | null; teamName: string | null; verdict: CarrierPhoneVerdict;
-  phones: { phone: string; carrier: { lardi: boolean; history: boolean; historyDeal: number | null; historyUrl: string | null; lardiCompany: string | null } | null }[];
+  phones: { phone: string; source: "contact" | "company"; carrier: { lardi: boolean; history: boolean; historyDeal: number | null; historyUrl: string | null; lardiCompany: string | null } | null }[];
 }
 export interface CarrierPhoneQuality {
   counts: { clients: number; no_phone: number; only_carrier: number; has_carrier: number };
   dictionary: { phones: number; rebuiltAt: string | null };
+  /** ☎️ Клієнтів, чию картку компанії ще не прочитано з Kommo (телефон компанії невідомий). */
+  companiesUnread: number;
   items: CarrierPhoneItem[];
 }
 export async function fetchCarrierPhoneQuality(): Promise<CarrierPhoneQuality> {

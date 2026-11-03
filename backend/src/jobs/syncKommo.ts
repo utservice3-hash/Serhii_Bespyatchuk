@@ -1,6 +1,6 @@
 import { dedupeDealContactPairs, type DealContactPair } from "./dealContactPairs.js";
 import { pool } from "../db/pool.js";
-import { splitCompanyCodes } from "../core/companyCode.js";
+import { splitCompanyCodes, companyPhones } from "../core/companyCode.js";
 import { normalizeTeamName, teamRenameFromKommo } from "../core/teamName.js";
 import {
   extractPhone,
@@ -655,16 +655,20 @@ async function upsertCompanies(deals: KommoDeal[], companies: KommoCompany[]): P
     const codes = uniq.map((c) => splitCompanyCodes(
       companyFieldValue(c, COMPANY_FIELD_EDRPOU), companyFieldValue(c, COMPANY_FIELD_IPN)));
     await pool.query(
-      `INSERT INTO kommo_companies (company_id, name, edrpou_raw, edrpou, ipn_raw, ipn, updated_at)
-       SELECT * FROM (SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::text[]) AS nm,
-                             UNNEST($3::text[]) AS er, UNNEST($4::text[]) AS e,
-                             UNNEST($5::text[]) AS ir, UNNEST($6::text[]) AS i, now() AS u) v
+      `INSERT INTO kommo_companies (company_id, name, edrpou_raw, edrpou, ipn_raw, ipn, updated_at, phones)
+       SELECT v.id, v.nm, v.er, v.e, v.ir, v.i, v.u, ARRAY(SELECT jsonb_array_elements_text(v.ph))
+         FROM (SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::text[]) AS nm,
+                      UNNEST($3::text[]) AS er, UNNEST($4::text[]) AS e,
+                      UNNEST($5::text[]) AS ir, UNNEST($6::text[]) AS i, now() AS u,
+                      UNNEST($7::jsonb[]) AS ph) v
        ON CONFLICT (company_id) DO UPDATE SET
          name = EXCLUDED.name, edrpou_raw = EXCLUDED.edrpou_raw, edrpou = EXCLUDED.edrpou,
-         ipn_raw = EXCLUDED.ipn_raw, ipn = EXCLUDED.ipn, updated_at = now()`,
+         ipn_raw = EXCLUDED.ipn_raw, ipn = EXCLUDED.ipn, phones = EXCLUDED.phones, updated_at = now()`,
       [uniq.map((c) => c.id), uniq.map((c) => c.name ?? null),
        uniq.map((c) => companyFieldValue(c, COMPANY_FIELD_EDRPOU)), codes.map((c) => c.edrpou),
-       uniq.map((c) => companyFieldValue(c, COMPANY_FIELD_IPN)), codes.map((c) => c.ipn)]);
+       uniq.map((c) => companyFieldValue(c, COMPANY_FIELD_IPN)), codes.map((c) => c.ipn),
+       // ☎️ Телефони з картки компанії (задача 7359) — з того самого знімка, нуль додаткових запитів.
+       uniq.map((c) => JSON.stringify(companyPhones(c.custom_fields_values)))]);
   }
 
   const seen = new Set<string>();

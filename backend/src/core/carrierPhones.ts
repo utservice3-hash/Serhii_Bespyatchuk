@@ -93,27 +93,36 @@ export const carrierCallSql = (a: string): string =>
   `EXISTS (SELECT 1 FROM carrier_phones cpx WHERE cpx.p9 = right(${a}.client_phone, 9))`;
 
 /**
- * Номери клієнтів: телефони контактів їхніх угод + сам ключ, якщо це телефон (фізособа). `$1` — масив ключів.
- * По рядку на (клієнт, номер), з позначкою довідника.
+ * Номери клієнтів: телефони контактів їхніх угод + телефони з КАРТКИ КОМПАНІЇ їхніх угод + сам ключ, якщо це телефон
+ * (фізособа). `$1` — масив ключів. По рядку на (клієнт, номер), з позначкою довідника й звідки номер.
+ * ☎️ Картка компанії — з 03.11.2026: у частини клієнтів у Kommo немає контактів, телефон лише в полі «Телефон»
+ * компанії, і без нього «немає жодного номера» було неправдою дашборду. Номер і в контакті, і в компанії — `contact`.
  */
 export const CLIENT_PHONES_SQL = `
   WITH ph AS (
-    SELECT d.client_key, cp.phone FROM deals d
+    SELECT d.client_key, cp.phone, 'contact'::text AS src FROM deals d
       JOIN deal_contacts dc ON dc.deal_kommo_id = d.kommo_id JOIN contact_phones cp ON cp.contact_id = dc.contact_id
      WHERE d.client_key = ANY($1)
     UNION
-    SELECT k, k FROM unnest($1::text[]) k WHERE k ~ '^[0-9]{9,15}$')
-  SELECT ph.client_key, ph.phone, c.via_lardi, c.via_history, c.history_deal::text AS history_deal, c.lardi_company
-    FROM ph LEFT JOIN carrier_phones c ON c.p9 = right(ph.phone, 9)
-   ORDER BY ph.client_key, ph.phone`;
+    SELECT d.client_key, unnest(kc.phones), 'company' FROM deals d
+      JOIN deal_companies dco ON dco.deal_kommo_id = d.kommo_id JOIN kommo_companies kc ON kc.company_id = dco.company_id
+     WHERE d.client_key = ANY($1)
+    UNION
+    SELECT k, k, 'contact' FROM unnest($1::text[]) k WHERE k ~ '^[0-9]{9,15}$'),
+  one AS (SELECT DISTINCT ON (client_key, phone) client_key, phone, src FROM ph ORDER BY client_key, phone, src DESC)
+  SELECT one.client_key, one.phone, one.src, c.via_lardi, c.via_history, c.history_deal::text AS history_deal, c.lardi_company
+    FROM one LEFT JOIN carrier_phones c ON c.p9 = right(one.phone, 9)
+   ORDER BY one.client_key, one.phone`;
 
-export interface ClientPhone { phone: string; carrier: CarrierPhoneSource | null }
+/** Звідки номер: контакт угоди (або ключ фізособи) чи картка компанії. */
+export type PhoneSource = "contact" | "company";
+export interface ClientPhone { phone: string; source: PhoneSource; carrier: CarrierPhoneSource | null }
 
 /** Номери клієнтів пакетом. Клієнт без жодного номера в мапу не потрапляє — `verdictOf([])` = `no_phone`. */
 export async function clientPhones(db: Db, keys: readonly string[]): Promise<Map<string, ClientPhone[]>> {
   const out = new Map<string, ClientPhone[]>();
   if (keys.length === 0) return out;
-  const r = await db.query<{ client_key: string; phone: string; via_lardi: boolean | null; via_history: boolean | null;
+  const r = await db.query<{ client_key: string; phone: string; src: PhoneSource; via_lardi: boolean | null; via_history: boolean | null;
     history_deal: string | null; lardi_company: string | null }>(CLIENT_PHONES_SQL, [keys]);
   for (const x of r.rows) {
     const carrier = x.via_lardi == null ? null : {
@@ -121,7 +130,7 @@ export async function clientPhones(db: Db, keys: readonly string[]): Promise<Map
       historyDeal: x.history_deal == null ? null : Number(x.history_deal), lardiCompany: x.lardi_company,
     };
     const list = out.get(x.client_key) ?? [];
-    list.push({ phone: x.phone, carrier });
+    list.push({ phone: x.phone, source: x.src, carrier });
     out.set(x.client_key, list);
   }
   return out;
@@ -149,3 +158,12 @@ export const claimBlocked = (v: PhoneVerdict): boolean => v === "only_carrier";
 export const CLAIM_BLOCKED_ERROR =
   "У клієнта лише номери перевізників (Lardi або закривали як «Перевізник») — взяти в роботу не можна. "
   + "Спершу додайте в Kommo номер замовника.";
+
+/**
+ * Скільки клієнтів зі списку мають компанію, чий телефон ще НЕ ПРОЧИТАНО з Kommo (`phones IS NULL`). Ненуль = «немає
+ * номера» для них може бути неправдою, і екран мусить це сказати (невідоме — словами, а не порожнім місцем).
+ */
+export const CLIENTS_WITH_UNREAD_COMPANY_SQL = `
+  SELECT COUNT(DISTINCT d.client_key)::int AS n FROM deals d
+    JOIN deal_companies dco ON dco.deal_kommo_id = d.kommo_id JOIN kommo_companies kc ON kc.company_id = dco.company_id
+   WHERE d.client_key = ANY($1) AND kc.phones IS NULL`;
