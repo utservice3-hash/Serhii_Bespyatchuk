@@ -47,7 +47,8 @@ export function limitCellHtml(c: DebtorLimitCell | null | undefined, canEdit: bo
   const sum = !none && c!.limit !== null
     ? `<b class="cp-num">${nf(c!.limit)} ₴</b> <i${c!.status === 'over' ? ' class="cp-lco"' : ''}>${c!.status === 'over' ? 'переліміт' : 'у межах'}</i>` : no;
   const pen = (k: 'days' | 'sum', t: string) => (canEdit ? `<button type="button" class="cp-pen" data-lc="${k}" aria-label="${t}" title="${t}">${PEN}</button>` : '');
-  const susp = !none && c!.suspended ? '<button type="button" class="cp-lcs" data-lc="open" title="Нова справа в суді — рішення за Сергієм у «Лімітах клієнтів»">призупинено — нова справа</button>' : '';
+  const why = c?.why || 'нова справа в суді';
+  const susp = !none && c!.suspended ? `<button type="button" class="cp-lcs" data-lc="open" title="Призупинено: ${why} — рішення за Сергієм у «Лімітах клієнтів»">призупинено — ${why}</button>` : '';
   const ask = !canEdit && c?.canRequest ? `<button type="button" class="cp-lnk cp-lcq" data-lc="ask">${none ? 'Запросити ліміт' : 'Запросити зміну'}</button>` : '';
   return `<div class="cp-lc${canEdit ? ' cp-lce' : ''}">`
     + `<div class="cp-lcr"><span class="cp-lck">дні</span><span class="cp-lcv">${days}</span>${pen('days', none ? 'Задати ліміт' : 'Змінити узгоджену відстрочку')}</div>`

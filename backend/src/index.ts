@@ -108,7 +108,7 @@ import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { callAiJob } from "./jobs/callAiJob.js";
 import { carrierCallJob } from "./jobs/carrierCallJob.js";
 import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
-import { clientLimitsMirror, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON } from "./jobs/counterpartyJobs.js";
+import { clientLimitsMirror, clientLimitsReset, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON } from "./jobs/counterpartyJobs.js";
 import { minusDealsRouter } from "./routes/minusRegistry.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
 import { zakaz1cRouter } from "./routes/zakaz1c.js";
@@ -799,6 +799,11 @@ cron.schedule("7,17,27,37,47,57 * * * *", () => {
 cron.schedule("3,13,23,33,43,53 * * * *", () => {
   void runJob("clientLimitsMirror", () => clientLimitsMirror());
 });
+// 🧹 Скидання лімітів за неактивністю (Роман 03.11.2026): 3 міс. без угод і без боргу → новий запит. Лише наша БД.
+// 06:30 за Києвом — після нічних синків і до робочого дня. Під наглядом (`monitoredJobs.ts`), everyMin == крону.
+cron.schedule("30 6 * * *", () => {
+  void runJob("clientLimitsReset", () => clientLimitsReset());
+}, { timezone: "Europe/Kyiv" });
 // 🔍 Планова перевірка клієнтів з лімітом і суди боржникам (ТЗ §7) — ВИТРАЧАЮТЬ ТРАНЗАКЦІЇ YouScore, тож у розкладі лише з
 // `CP_BACKGROUND_CHECKS=1` (див. `jobs/counterpartyJobs.ts`). 06:15 за Києвом щодня; суди самі чекають 1-го числа.
 if (CP_BACKGROUND_ON()) {
