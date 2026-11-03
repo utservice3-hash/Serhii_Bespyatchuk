@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDialogs } from "../../../components/Dialogs";
+import LinkedinQueueTab from "./LinkedinQueueTab";
+import { getAuthPayload } from "../../../auth";
 import { useToast } from "../../../components/Toasts";
 import {
   fetchSettings, saveSettings, type AppSettings,
@@ -87,7 +89,7 @@ const SCOPES: { key: "own" | "team" | "company"; label: string; sub: string }[] 
   { key: "team", label: "Команда", sub: "своя команда" },
   { key: "company", label: "Компанія", sub: "усі відділи" },
 ];
-const SUBTABS = ["Загальні", "Користувачі", "Команди", "Ролі та доступи", "Архів", "Журнал змін"] as const;
+const SUBTABS = ["Загальні", "Користувачі", "Команди", "Ролі та доступи", "Черга LinkedIn", "Архів", "Журнал змін"] as const;
 type Sub = (typeof SUBTABS)[number];
 
 const RED = "#c8102e";
@@ -104,6 +106,8 @@ export default function SettingsSection({ role, roleKey, teams, syncStatus, sync
 }) {
   const [sub, setSub] = useState<Sub>("Користувачі");
   const isAdminUx = role === "admin"; // лише UX-підказка; сервер гейтить 403 незалежно
+  // 🔗 Черга LinkedIn (задача 7361) — лише з правом `manage_linkedin_queue` (Юля, адмін); сервер гейтить те саме.
+  const canLinkedinQueue = (getAuthPayload()?.perms ?? []).includes("manage_linkedin_queue");
 
   return (
     <div>
@@ -116,12 +120,12 @@ export default function SettingsSection({ role, roleKey, teams, syncStatus, sync
       </p>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "14px 0 18px" }}>
-        {SUBTABS.map((s) => (
+        {SUBTABS.filter((s) => s !== "Черга LinkedIn" || canLinkedinQueue).map((s) => (
           <button key={s} onClick={() => setSub(s)}
             style={{ fontSize: 14, fontWeight: 700, padding: "9px 15px", borderRadius: 11, cursor: "pointer",
               border: sub === s ? "1px solid #1f2330" : "1px solid var(--border)",
               background: sub === s ? "#1f2330" : "var(--card-bg)", color: sub === s ? "#fff" : "var(--text)" }}>
-            {s === "Загальні" ? "⚙️ " : s === "Користувачі" ? "👥 " : s === "Ролі та доступи" ? "🛡 " : s === "Команди" ? "🧭 " : s === "Архів" ? "🗄 " : "📜 "}{s}
+            {s === "Загальні" ? "⚙️ " : s === "Користувачі" ? "👥 " : s === "Ролі та доступи" ? "🛡 " : s === "Команди" ? "🧭 " : s === "Черга LinkedIn" ? "🔗 " : s === "Архів" ? "🗄 " : "📜 "}{s}
           </button>
         ))}
       </div>
@@ -134,6 +138,7 @@ export default function SettingsSection({ role, roleKey, teams, syncStatus, sync
       {sub === "Команди" && <TeamsTab isAdminUx={isAdminUx} />}
       {sub === "Команди" && <OrgTeamsBlock />}
       {sub === "Ролі та доступи" && <RolesTab />}
+      {sub === "Черга LinkedIn" && canLinkedinQueue && <LinkedinQueueTab />}
       {sub === "Архів" && <ArchiveTab />}
       {sub === "Журнал змін" && <AuditTab />}
     </div>

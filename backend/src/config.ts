@@ -87,6 +87,9 @@ export const config = {
   // GA4 (вище), таблиця не публікується. id не секрет — це адреса книги, доступ дає лише «Поділитися».
   /** 💸 Файл на оплату перевізникам (13.10.2026): таблиця Романа, сервісний акаунт — редактор. Порожньо — лише стан прогону. */
   paymentsSheet: { spreadsheetId: process.env.PAYMENTS_SHEET_ID ?? "" },
+  // 🔗 Черга LinkedIn (задача 7361, `core/linkedinQueue.ts`): порожньо — пробний режим (лише журнал «кому віддав би»,
+  // у Kommo й Telegram нічого); "off" — вимкнено; "live" — бойовий (прохід 2б, бот «UTS Заявки», токен LEADS_BOT_TOKEN).
+  linkedinQueue: { mode: process.env.LINKEDIN_QUEUE ?? "", leadsBotToken: process.env.LEADS_BOT_TOKEN ?? "" },
   /** 🧪 «UTS Утверждение оплат», вкладка «На оплату» (20.10.2026): лише ЧИТАННЯ для тестової вкладки «План/факт · авто». */
   approvalsSheet: {
     spreadsheetId: process.env.APPROVALS_SHEET_ID ?? "1Fts2Nk5PmryljE_dAy0nM0SvIN6XyhbfgvtiadLQnZI",

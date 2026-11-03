@@ -66,7 +66,7 @@ export interface DealTake {
 }
 
 /** Київські складові моменту (день тижня 0=Нд, година, хвилина, дата). */
-function kyivParts(ms: number): { y: number; mo: number; d: number; dow: number; h: number; mi: number } {
+export function kyivParts(ms: number): { y: number; mo: number; d: number; dow: number; h: number; mi: number } {
   const f = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false,

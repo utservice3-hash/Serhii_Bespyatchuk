@@ -1865,6 +1865,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/prozorro/settings", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🔗 Черга LinkedIn (задача 7361): список кола веде Юля (КВП) і адмін — право `manage_linkedin_queue`, перший middleware.
+  { method: "GET", path: "/api/linkedin-queue", cls: "GET",
+    allow: ["admin", "kvp"], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/linkedin-queue/members", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/linkedin-queue/settings", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/minus-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/minus-deals/counter", cls: "GET",

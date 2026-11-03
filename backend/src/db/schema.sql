@@ -7451,3 +7451,55 @@ CREATE TABLE IF NOT EXISTS employee_levels (
 CREATE INDEX IF NOT EXISTS idx_employee_levels_emp ON employee_levels (employee_id) WHERE cancelled_at IS NULL;
 -- Персональні дані про умови роботи — не для моделі.
 REVOKE ALL ON employee_levels FROM ai_readonly;
+
+-- 🔗 ЧЕРГА LINKEDIN (задача 7361; рішення Юлі 03.11.2026). Угода на етапі «LinkedIn» (Кваліфікація, 113486296)
+-- іде менеджерам по колу: одночасно лише в одного, 15 хв робочого часу (пн–пт 8–18 за Києвом), хто не взяв —
+-- пропускає чергу; двоє підряд не взяли або клієнт уже в іншого менеджера — відповідальній (Даша).
+-- Порядок кола — список, який веде Юля в Налаштуваннях (`manage_linkedin_queue`). Логіка — `core/linkedinQueue.ts`.
+CREATE TABLE IF NOT EXISTS linkedin_queue_members (
+  manager_id INTEGER PRIMARY KEY REFERENCES managers(id),
+  position   INTEGER NOT NULL,
+  added_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  added_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Один рядок: кому віддаємо спірне, де зупинилось коло, з якої миті угоди йдуть у чергу (старіші — ні).
+CREATE TABLE IF NOT EXISTS linkedin_queue_settings (
+  id                 BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  dispatcher_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  last_manager_id    INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  launched_at        TIMESTAMPTZ,
+  updated_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS linkedin_queue_items (
+  kommo_id          BIGINT PRIMARY KEY,
+  deal_name         TEXT,
+  created_at_kommo  TIMESTAMPTZ,
+  seen_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  seen_responsible  BIGINT,
+  state             TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting', 'offered', 'taken', 'dispatcher', 'gone')),
+  manager_id        INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  offered_ids       INTEGER[] NOT NULL DEFAULT '{}',
+  offered_at        TIMESTAMPTZ,
+  deadline_at       TIMESTAMPTZ,
+  misses            INTEGER NOT NULL DEFAULT 0,
+  reason            TEXT,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_linkedin_queue_items_open ON linkedin_queue_items (state) WHERE state IN ('waiting', 'offered');
+-- Журнал — з нього статистика «отримав / взяв / проігнорував / за який час». Пише і пробний режим (mode='dry').
+CREATE TABLE IF NOT EXISTS linkedin_queue_log (
+  id         SERIAL PRIMARY KEY,
+  kommo_id   BIGINT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('seen', 'offer', 'ignored', 'taken', 'dispatcher', 'gone')),
+  manager_id INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  note       TEXT,
+  mode       TEXT NOT NULL CHECK (mode IN ('dry', 'live')),
+  at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_linkedin_queue_log_deal ON linkedin_queue_log (kommo_id, at);
+-- Право вести список черги: Юля (kvp) і адмін («Зроби список у налаштуваннях, щоб я могла його міняти без тебе»).
+UPDATE roles SET permissions = permissions || '{"manage_linkedin_queue": true}'::jsonb
+ WHERE key IN ('admin', 'kvp');
+UPDATE roles SET permissions = permissions - 'manage_linkedin_queue'
+ WHERE key NOT IN ('admin', 'kvp');
