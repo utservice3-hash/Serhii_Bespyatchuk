@@ -64,6 +64,8 @@ export const NAV_GROUPS = [
       // 🏛 «Тендери Prozorro» (#5299, 23.10.2026): статистика й налаштування тендерних лідів. Без поля `roles`: видимість —
       // `screen_access` (сид у schema.sql: admin, ceo, opdir, kvp); налаштування всередині — лише адмін, вирішує сервер.
       { key: "prozorro", label: "Тендери Prozorro", icon: "🏛" },
+      // 🔗 «LinkedIn» (задача 7361): статистика черги LinkedIn. Видимість — `screen_access` (сид: admin, ceo, opdir, kvp).
+      { key: "linkedin", label: "LinkedIn", icon: "🔗" },
     ],
   },
   {

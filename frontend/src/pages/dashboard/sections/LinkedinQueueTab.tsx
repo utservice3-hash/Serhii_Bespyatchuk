@@ -3,21 +3,21 @@ import { fetchLinkedinQueue, saveLinkedinQueueDispatcher, saveLinkedinQueueMembe
 import { useToast } from "../../../components/Toasts";
 
 /**
- * 🔗 «Налаштування → Черга LinkedIn» (задача 7361; рішення Юлі 03.11.2026). Список кола веде Юля сама: порядок —
+ * 🔗 Редактор черги LinkedIn («Клієнти → LinkedIn» → «Налаштувати чергу»; задача 7361, рішення Юлі 03.11.2026). Порядок —
  * «кожна нова заявка йде наступному за списком». У пулі — менеджери від 1 місяця (зустріч 28.10); кнопка підставляє
  * таких, але список остаточно той, що тут. Сервер гейтить право `manage_linkedin_queue` незалежно від показу.
  */
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
 const MUTED = "var(--text-muted)";
-const kyivDt = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
-const STATE: Record<string, string> = {
+export const kyivDt = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+export const STATE: Record<string, string> = {
   waiting: "чекає", offered: "запропоновано", taken: "взяли", dispatcher: "відповідальній", gone: "пішла з черги",
 };
-const MODE: Record<string, string> = {
+export const MODE: Record<string, string> = {
   off: "вимкнено", dry: "пробний — бот лише пише в журнал, кому віддав би; у Kommo й Telegram нічого", live: "бойовий",
 };
 
-export default function LinkedinQueueTab() {
+export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) {
   const toast = useToast();
   const [data, setData] = useState<LinkedinQueueScreen | null>(null);
   const [order, setOrder] = useState<number[]>([]);
@@ -37,11 +37,11 @@ export default function LinkedinQueueTab() {
   const move = (i: number, d: -1 | 1) => setOrder((o) => { const n = [...o]; const j = i + d; if (j < 0 || j >= n.length) return o; [n[i], n[j]] = [n[j], n[i]]; return n; });
   const save = async () => {
     setBusy(true);
-    try { await saveLinkedinQueueMembers(order); toast("Список черги збережено"); await load(); }
+    try { await saveLinkedinQueueMembers(order); toast("Список черги збережено"); await load(); onSaved?.(); }
     catch (e) { toast(err(e), { error: true }); } finally { setBusy(false); }
   };
   const setDispatcher = async (v: string) => {
-    try { await saveLinkedinQueueDispatcher(v ? Number(v) : null); toast("Відповідальну збережено"); await load(); }
+    try { await saveLinkedinQueueDispatcher(v ? Number(v) : null); toast("Відповідальну збережено"); await load(); onSaved?.(); }
     catch (e) { toast(err(e), { error: true }); }
   };
   const box = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, padding: 14, marginBottom: 14 } as const;
@@ -109,33 +109,6 @@ export default function LinkedinQueueTab() {
         )}
       </div>
 
-      <div style={box}>
-        <b>По менеджерах</b>
-        {data.stats.length === 0 ? <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>Ще жодної пропозиції.</div> : (
-          <table className="data-table" style={{ width: "100%", marginTop: 8 }}>
-            <thead><tr><th>Менеджер</th><th style={{ textAlign: "right" }}>Отримав</th><th style={{ textAlign: "right" }}>Взяв</th><th style={{ textAlign: "right" }}>Проігнорував</th><th style={{ textAlign: "right" }}>Взяв за, хв</th></tr></thead>
-            <tbody>{data.stats.map((s) => (
-              <tr key={s.managerId}><td>{s.name}</td><td style={{ textAlign: "right" }}>{s.received}</td><td style={{ textAlign: "right" }}>{s.taken}</td>
-                <td style={{ textAlign: "right" }}>{s.ignored}</td><td style={{ textAlign: "right" }}>{s.avgTakeMin ?? "—"}</td></tr>
-            ))}</tbody>
-          </table>
-        )}
-        {data.mode !== "live" && <div style={{ color: MUTED, fontSize: 12, marginTop: 6 }}>У пробному режимі кнопки «Взяти» ще немає, тож «взяв» — нуль, а кожна пропозиція спливає через 15 хв.</div>}
-      </div>
-
-      <div style={box}>
-        <b>Останні заявки</b>
-        {data.items.length === 0 ? <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>Нових угод на етапі «LinkedIn» з моменту запуску ще не було.</div> : (
-          <table className="data-table" style={{ width: "100%", marginTop: 8 }}>
-            <thead><tr><th>Угода</th><th>Стан</th><th>Менеджер</th><th>Побачили</th><th>До</th><th>Причина</th></tr></thead>
-            <tbody>{data.items.map((it) => (
-              <tr key={it.kommoId}><td>{it.dealName ?? `#${String(it.kommoId)}`}</td><td>{STATE[it.state] ?? it.state}{it.misses ? ` · не взяли ${String(it.misses)}` : ""}</td>
-                <td>{it.managerName ?? "—"}</td><td>{kyivDt(it.seenAt)}</td><td>{it.state === "offered" ? kyivDt(it.deadlineAt) : "—"}</td>
-                <td style={{ color: MUTED, fontSize: 12 }}>{it.reason ?? ""}</td></tr>
-            ))}</tbody>
-          </table>
-        )}
-      </div>
     </div>
   );
 }

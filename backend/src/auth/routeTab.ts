@@ -168,6 +168,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/counterparty"), tabs: ["registries"] },
     { test: pre("/api/client-limits"), tabs: ["receivables"] },
     { test: pre("/api/prozorro"), tabs: ["prozorro"] }, // #5299 «Тендери Prozorro»
+    { test: pre("/api/linkedin"), tabs: ["linkedin"] }, // 🔗 «LinkedIn» — статистика черги (задача 7361); /api/linkedin-queue — інший роут (право)
     { test: pre("/api/documents"), tabs: ["documents"] },
     { test: pre("/api/one-on-ones"), tabs: ["oneonone"] },
     { test: pre("/api/duty"), tabs: ["duty"] },

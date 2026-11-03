@@ -80,6 +80,7 @@ import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection"
 import RegistriesPage from "../minusRegistry/client/RegistriesPage";
 import { regTabsFor } from "../minusRegistry/client/regTabs";
 import { ProzorroSection } from "./dashboard/sections/ProzorroSection";
+import { LinkedinSection } from "./dashboard/sections/LinkedinSection";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
 import { RatesAndCargoSection } from "./dashboard/sections/RatesAndCargoSection";
@@ -1182,6 +1183,7 @@ export function Dashboard() {
       {section === "registries" && <RegistriesPage tabs={regTabsFor(auth?.roleKey ?? auth?.role)} onNavigate={(_t, url) => navigate(url)} />}
       {/* 🏛 «Тендери Prozorro» (#5299): статичний імпорт — гейт #225; доступ вирішує сервер (вкладка prozorro). */}
       {section === "prozorro" && <ProzorroSection roleKey={auth?.roleKey ?? null} />}
+      {section === "linkedin" && <LinkedinSection />}
 
       {section === "ba" && (
         /**

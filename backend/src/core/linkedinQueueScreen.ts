@@ -5,7 +5,7 @@ import { SERVICE_KOMMO_USER_IDS } from "./orphanClients.js";
 import { workedMonth } from "./linkedinQueue.js";
 
 /**
- * 🔗 «Налаштування → Черга LinkedIn» (задача 7361): список кола, відповідальна за спірне, журнал і статистика.
+ * 🔗 «Клієнти → LinkedIn» (задача 7361): статистика черги за період і редактор кола («Налаштувати чергу»).
  * Юля: «Зроби список у налаштуваннях, щоб я могла його міняти без тебе»; «у дашборді покажи по кожному менеджеру:
  * скільки заявок отримав, скільки взяв, скільки проігнорував і за який час узяв».
  */
@@ -16,15 +16,9 @@ export class QueueScreenError extends Error {
 
 export interface QueueMember { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean }
 export interface QueueCandidate { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }
-export interface QueueStat { managerId: number; name: string; received: number; taken: number; ignored: number; avgTakeMin: number | null }
-export interface QueueItemView {
-  kommoId: number; dealName: string | null; state: string; managerName: string | null; reason: string | null;
-  seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number;
-}
 export interface QueueScreen {
   mode: CloseMode; launchedAt: string | null; dispatcherUserId: number | null;
   members: QueueMember[]; candidates: QueueCandidate[]; dispatchers: { userId: number; name: string }[];
-  items: QueueItemView[]; stats: QueueStat[];
 }
 
 const kyivToday = (now: Date) => now.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
@@ -54,31 +48,9 @@ export async function loadQueueScreen(db: Db, modeRaw: string, now = new Date())
   const dispatchers = (await db.query<{ id: number; name: string }>(
     `SELECT u.id, COALESCE(m.name, u.email) AS name FROM users u LEFT JOIN managers m ON m.id = u.manager_id
       WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate' ORDER BY 2`)).rows.map((r) => ({ userId: r.id, name: r.name }));
-  const items = (await db.query<{ kommo_id: string; deal_name: string | null; state: string; mname: string | null; reason: string | null;
-    seen_at: Date; offered_at: Date | null; deadline_at: Date | null; misses: number }>(
-    `SELECT i.kommo_id::text, i.deal_name, i.state, m.name AS mname, i.reason, i.seen_at, i.offered_at, i.deadline_at, i.misses
-       FROM linkedin_queue_items i LEFT JOIN managers m ON m.id = i.manager_id
-      ORDER BY i.seen_at DESC LIMIT 50`)).rows.map((r) => ({
-    kommoId: Number(r.kommo_id), dealName: r.deal_name, state: r.state, managerName: r.mname, reason: r.reason,
-    seenAt: new Date(r.seen_at).toISOString(), offeredAt: r.offered_at ? new Date(r.offered_at).toISOString() : null,
-    deadlineAt: r.deadline_at ? new Date(r.deadline_at).toISOString() : null, misses: r.misses }));
-  // «Отримав» = пропозиції, «проігнорував» = сплило 15 хв, «взяв» і час — від пропозиції до «Взяти» (журнал, 2б).
-  const stats = (await db.query<{ manager_id: number; name: string; received: string; taken: string; ignored: string; avg_min: string | null }>(
-    `WITH o AS (SELECT kommo_id, manager_id, at FROM linkedin_queue_log WHERE kind = 'offer'),
-          tk AS (SELECT t.manager_id, EXTRACT(EPOCH FROM (t.at - (SELECT MAX(o.at) FROM o WHERE o.kommo_id = t.kommo_id
-                                                          AND o.manager_id = t.manager_id AND o.at <= t.at))) / 60 AS mins
-                   FROM linkedin_queue_log t WHERE t.kind = 'taken')
-     SELECT m.id AS manager_id, m.name,
-            (SELECT COUNT(*) FROM o WHERE o.manager_id = m.id) AS received,
-            (SELECT COUNT(*) FROM tk WHERE tk.manager_id = m.id) AS taken,
-            (SELECT COUNT(*) FROM linkedin_queue_log l WHERE l.kind = 'ignored' AND l.manager_id = m.id) AS ignored,
-            (SELECT ROUND(AVG(tk.mins)::numeric, 1) FROM tk WHERE tk.manager_id = m.id) AS avg_min
-       FROM managers m WHERE m.id IN (SELECT manager_id FROM o)
-      ORDER BY 3 DESC, 2`)).rows.map((r) => ({ managerId: r.manager_id, name: r.name, received: Number(r.received), taken: Number(r.taken),
-    ignored: Number(r.ignored), avgTakeMin: r.avg_min == null ? null : Number(r.avg_min) }));
   return {
     mode: closeModeOf(modeRaw), launchedAt: st?.launched_at ? new Date(st.launched_at).toISOString() : null,
-    dispatcherUserId: st?.dispatcher_user_id ?? null, members, candidates, dispatchers, items, stats,
+    dispatcherUserId: st?.dispatcher_user_id ?? null, members, candidates, dispatchers,
   };
 }
 

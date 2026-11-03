@@ -167,3 +167,46 @@ test("#3405 межа: кожен роут черги — право manage_linke
   assert.match(schema, /SET permissions = permissions \|\| '\{"manage_linkedin_queue": true\}'::jsonb\s+WHERE key IN \('admin', 'kvp'\);/);
   assert.match(schema, /SET permissions = permissions - 'manage_linkedin_queue'\s+WHERE key NOT IN \('admin', 'kvp'\);/);
 });
+
+test("#3406 статистика за період — з журналу: отримав / проігнорував по менеджерах, дублі окремо від «ніхто не взяв», межі дат включно", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  // Стан лишив #3403 (той самий файл, тести йдуть по черзі): 04.11 — 4 нові угоди. А: 7001 (сплило 08:17) і 7002
+  // (сплило 08:36, помічено тіком 08:41) — отримав 2, проігнорував 2. В: 7001 (сплило 08:33) і 7002 (08:41, пішла з черги
+  // поза ботом до дедлайну) — отримав 2, проігнорував 1. Відповідальній — 7001 («двоє не взяли») і 7003 (дубль).
+  const n = (await c.raw.query(`SELECT COUNT(*)::int AS n FROM linkedin_queue_log WHERE kind = 'offer'`)).rows[0].n as number;
+  if (n === 0) { t.skip("журнал порожній — #3403 не відпрацював, рахувати нема з чого"); return; }
+  const { loadLinkedinStats } = await import("./linkedinStats.js");
+  const s = await loadLinkedinStats(c.db, "2026-11-04", "2026-11-04", "", new Date("2026-11-05T08:00:00Z"));
+  assert.equal(s.kpi.created, 4);
+  assert.equal(s.kpi.dispatcher, 2);
+  assert.equal(s.kpi.dispatcherDup, 1, "🔴 дубль клієнта не відрізнено від «ніхто не взяв»");
+  assert.equal(s.kpi.dispatcherNobody, 1);
+  const by = new Map(s.perManager.map((m) => [m.name, m]));
+  assert.deepEqual([by.get("LQ Аа")?.received, by.get("LQ Аа")?.ignored], [2, 2], "🔴 А: отримав / проігнорував");
+  assert.deepEqual([by.get("LQ Вв")?.received, by.get("LQ Вв")?.ignored], [2, 1], "🔴 В: отримав / проігнорував");
+  assert.equal(by.has("LQ Бб"), false, "🔴 Б був у відпустці, а в статистиці значиться як той, кому пропонували");
+  // По той бік межі дат: наступний день — порожньо.
+  const next = await loadLinkedinStats(c.db, "2026-11-05", "2026-11-05", "", new Date("2026-11-05T08:00:00Z"));
+  assert.deepEqual([next.kpi.created, next.perManager.length], [0, 0], "🔴 події 04.11 потрапили в 05.11");
+  // Рядок черги: коло стоїть на В (остання пропозиція 08:41), далі по колу А; Б ще у відпустці.
+  assert.equal(s.queue.nextName, "LQ Аа");
+  await assert.rejects(loadLinkedinStats(c.db, "2026-11-05", "2026-11-04", ""), /Початок періоду пізніше/);
+});
+
+test("#3407 вкладка «LinkedIn» у «Клієнтах»: межа — вкладка linkedin (керівництво й КВП, без фінансиста); редактор черги — там, а не в Налаштуваннях", () => {
+  const rt = read("backend/src/auth/routeTab.ts");
+  assert.match(rt, /\{ test: pre\("\/api\/linkedin"\), tabs: \["linkedin"\] \}/, "🔴 /api/linkedin не привʼязано до вкладки");
+  const schema = read("backend/src/db/schema.sql");
+  assert.match(schema, /'\{"linkedin":true\}'::jsonb\s+WHERE key IN \('admin', 'ceo', 'opdir', 'kvp'\)/);
+  const grant = schema.indexOf(`'{"linkedin":true}'`), drop = schema.indexOf("screen_access - 'linkedin'");
+  const sync = schema.lastIndexOf("financier");
+  assert.ok(drop > grant && drop > 0, "🔴 фінансисту не знято вкладку LinkedIn після сиду");
+  assert.ok(schema.slice(drop - 40, drop + 60).includes("financier") && sync > 0);
+  assert.ok(read("backend/src/auth/accessMatrix.ts").includes('{ method: "GET", path: "/api/linkedin/stats", cls: "GET",\n    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] }'));
+  assert.match(read("frontend/src/components/Layout.tsx"), /\{ key: "linkedin", label: "LinkedIn", icon: "🔗" \}/);
+  assert.match(read("frontend/src/pages/Dashboard.tsx"), /section === "linkedin" && <LinkedinSection \/>/);
+  // Парне твердження «а де воно тепер»: редактор живе у вкладці, з Налаштувань прибрано.
+  assert.match(read("frontend/src/pages/dashboard/sections/LinkedinSection.tsx"), /canEdit && editing && <LinkedinQueueTab /);
+  assert.doesNotMatch(read("frontend/src/pages/dashboard/sections/SettingsSection.tsx"), /LinkedinQueueTab|Черга LinkedIn/);
+});

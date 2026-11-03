@@ -25,6 +25,8 @@ export const LINKEDIN_STAGE = { pipelineId: 8921928, statusId: 113486296 } as co
 export const OFFER_WORK_MIN = 15;
 /** Скільки менеджерів підряд можуть не взяти, перш ніж заявка йде відповідальній. */
 export const MAX_MISSES = 2;
+/** Початок причини «клієнт уже в іншого менеджера» — за ним статистика відрізняє дублі від «ніхто не взяв». */
+export const DUP_REASON_PREFIX = "клієнт уже в ";
 
 const DAY_MS = 86_400_000;
 
@@ -194,7 +196,7 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
       continue;
     }
     const owner = await d.ownerOf(key);
-    if (owner) { await close(it, "dispatcher", "dispatcher", `клієнт уже в ${owner.managerName ?? `менеджера #${String(owner.managerId)}`}`); continue; }
+    if (owner) { await close(it, "dispatcher", "dispatcher", `${DUP_REASON_PREFIX}${owner.managerName ?? `менеджера #${String(owner.managerId)}`}`); continue; }
     await offerNext(it);
   }
   return rep;

@@ -7503,3 +7503,12 @@ UPDATE roles SET permissions = permissions || '{"manage_linkedin_queue": true}':
  WHERE key IN ('admin', 'kvp');
 UPDATE roles SET permissions = permissions - 'manage_linkedin_queue'
  WHERE key NOT IN ('admin', 'kvp');
+-- Екран «LinkedIn» (група «Клієнти», задача 7361): статистика черги — керівництво й КВП, як «Тендери Prozorro» (Роман
+-- 03.11.2026: «так як пропонуєш»). Разово, ключ потім веде адмін. Фінансисту — ні: синк «financier = екрани адміна»
+-- вище скопіював би йому кожен новий екран адміна (той самий механізм, що з Prozorro, #2812), тож знімаємо ПІСЛЯ нього.
+UPDATE roles SET screen_access = screen_access || '{"linkedin":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp') AND NOT (screen_access ? 'linkedin');
+UPDATE roles SET screen_access = screen_access || '{"linkedin":false}'::jsonb
+  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp') AND NOT (screen_access ? 'linkedin');
+UPDATE roles SET screen_access = screen_access - 'linkedin'
+ WHERE key = 'financier';
