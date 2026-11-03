@@ -22,8 +22,16 @@
 import type { Db } from "./finance.js";
 import { parseSafeCsv, manualBalances, type SafeRow } from "./bankManual.js";
 
-/** Колонки вкладки «Сейф» на своїх місцях (замір 12.10.2026). Порожня назва — колонка без шапки, вміст не читаємо. */
-export const SAFE_HEADER = ["Дата", "Сумма", "Валюта", "Текущий курс", "Сумма в грн", "На що", "Кому (ID)", "Категория", "", "Фінансист"] as const;
+/**
+ * Колонки вкладки «Сейф» на своїх місцях (замір 12.10.2026): для кожної — допустимі назви, першою поточна. 02.11.2026
+ * шапку таблиці переклали українською («Сумма» → «Сума», «Текущий курс» → «Курс», «Сумма в грн» → «Сума в грн»,
+ * «Категория» → «Категорія») — синк мовчав добу; Роман 03.11: «підлаштуватися під нове». Стара назва лишається
+ * допустимою, щоб відкат перекладу не зупинив синк знову. Порожній список — колонка без шапки, вміст не читаємо.
+ */
+export const SAFE_HEADER: readonly (readonly string[])[] = [
+  ["Дата"], ["Сума", "Сумма"], ["Валюта"], ["Курс", "Текущий курс"], ["Сума в грн", "Сумма в грн"],
+  ["На що"], ["Кому (ID)"], ["Категорія", "Категория"], [], ["Фінансист"],
+];
 /** Звідки синк дзеркалить таблицю: раніше — історія 2024–2025 у дашборд не переноситься (рішення 05.10). */
 export const SAFE_FROM = "2026-01-01";
 /** Позначка рядка, що зник із таблиці (повертається сам, щойно рядок зʼявиться знову). */
@@ -41,13 +49,13 @@ export interface SafeSheet {
   sheetBalances: Record<string, number>;
 }
 
-/** Значення вкладки → рядки Сейфу. Шапка — рівно `SAFE_HEADER` на своїх місцях, інакше відмова «структура». */
+/** Значення вкладки → рядки Сейфу. Шапка — одна з назв `SAFE_HEADER` на кожному місці, інакше відмова «структура». */
 export function parseSafeSheet(values: readonly (readonly string[])[], from: string = SAFE_FROM): SafeSheet {
   const rows = values.map((r) => r.map((x) => String(x ?? "")));
   const head = rows.findIndex((r) => (r[0] ?? "").trim() === "Дата");
   if (head < 0) throw new SafeSheetError("structure", "у вкладці «Сейф» немає рядка шапки, що починається з «Дата»");
   const got = SAFE_HEADER.map((_, i) => (rows[head][i] ?? "").trim());
-  const bad = SAFE_HEADER.map((want, i) => (want && got[i] !== want ? `колонка ${i + 1}: чекали «${want}», є «${got[i]}»` : null)).filter(Boolean);
+  const bad = SAFE_HEADER.map((want, i) => (want.length && !want.includes(got[i]) ? `колонка ${i + 1}: чекали ${want.map((w) => `«${w}»`).join(" або ")}, є «${got[i]}»` : null)).filter(Boolean);
   if (bad.length) throw new SafeSheetError("structure", `змінилась шапка таблиці — ${bad.join("; ")}`);
   const sheetBalances: Record<string, number> = {};
   for (const r of rows.slice(0, head)) {
