@@ -227,3 +227,41 @@ test("#3595 «ЯКІСТЬ ДАНИХ» · РОЗКЛАД: команда → м
   assert.deepEqual(g[0].managers.find((m) => m.managerId === 1)?.items.map((x) => x.clientKey), ["б", "а"],
     "🔴 «без номера замовника» не першим — найгірше ховається під «є номер перевізника»");
 });
+
+test("#3596 ТЕЛЕФОНИ КАРТКИ КОМПАНІЇ: усі значення поля «Телефон», нормалізовані й без дублів; сміття й інші поля — ні", async () => {
+  const { companyPhones } = await import("../core/companyCode.js");
+  assert.deepEqual(companyPhones([
+    { field_code: "PHONE", values: [{ value: "+38 (067) 359-60-01" }, { value: "0673596001" }, { value: "067 359 60 02" }, { value: "—" }] },
+    { field_code: "EMAIL", values: [{ value: "380673596003" }] },
+  ]), ["380673596001", "380673596002"], "🔴 телефон картки компанії загубився, задвоївся, або номером став e-mail чи сміття");
+  assert.deepEqual(companyPhones(null), [], "компанія без полів — порожньо, а не падіння");
+  assert.deepEqual(companyPhones([{ field_code: "PHONE", values: [] }]), []);
+});
+
+test("#3597 НОМЕР З КАРТКИ КОМПАНІЇ — НОМЕР КЛІЄНТА: «немає номера» зникає, контакт-перевізник + телефон компанії — не «лише перевізники»; чужа компанія не підтягується", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const CAR = "380673597001", CO = "380673597002", OTHER = "380673597003";
+  await lardi(c, 35971, "lorry", CAR);
+  await deal(c, 35971, "Угода", 8921932, 143, { key: "компанія3597" }); await contact(c, 35971, 35971, CAR);
+  await deal(c, 35972, "Угода", 8921932, 143, { key: "лишекомпанія3597" });
+  await deal(c, 35973, "Угода", 8921932, 143, { key: "чужий3597" });
+  await c.query("INSERT INTO kommo_companies (company_id, name) VALUES (35971,'А'),(35972,'Б'),(35973,'В'),(35974,'Г')");
+  await c.query("INSERT INTO deal_companies (deal_kommo_id, company_id) VALUES (35971,35971),(35972,35972),(35973,35973),(35972,35974)");
+  // Телефони пише ТОЙ САМИЙ запит, що й дозаповнення (пачкою, JSON-масивами); `35974` лишається непрочитаною.
+  const { COMPANY_PHONES_UPDATE_SQL } = await import("../jobs/backfillCompanyPhones.js");
+  const w = await c.query(COMPANY_PHONES_UPDATE_SQL, [[35971, 35972, 35973], [JSON.stringify([CO]), JSON.stringify([CO]), JSON.stringify([OTHER])]]);
+  assert.equal(w.rowCount, 3, "дозаповнення не записало телефони пачки");
+  const again = await c.query(COMPANY_PHONES_UPDATE_SQL, [[35971], [JSON.stringify(["380673597099"])]]);
+  assert.equal(again.rowCount, 0, "🔴 повторне дозаповнення переписало вже прочитаний телефон — бере лише NULL");
+  await rebuild(c);
+  const { clientPhones, verdictOf, claimBlocked, CLIENTS_WITH_UNREAD_COMPANY_SQL } = await import("../core/carrierPhones.js");
+  const m = await clientPhones(c, ["компанія3597", "лишекомпанія3597"]);
+  assert.equal(verdictOf(m.get("лишекомпанія3597") ?? []), "ok", "🔴 у клієнта телефон лише в картці компанії — а «немає жодного номера»");
+  assert.equal(m.get("лишекомпанія3597")?.[0]?.source, "company", "джерело «картка компанії» не дійшло до рядка");
+  const mixed = verdictOf(m.get("компанія3597") ?? []);
+  assert.equal(mixed, "has_carrier", "🔴 контакт-перевізник + телефон компанії читається як «лише перевізники»");
+  assert.equal(claimBlocked(mixed), false, "🔴 «Взяти в роботу» заблоковано, хоча в картці компанії є номер замовника");
+  assert.ok(!(m.get("компанія3597") ?? []).some((p) => p.phone === OTHER), "🔴 підтягнувся телефон ЧУЖОЇ компанії");
+  const unread = await c.query<{ n: number }>(CLIENTS_WITH_UNREAD_COMPANY_SQL, [["компанія3597", "лишекомпанія3597"]]);
+  assert.equal(unread.rows[0].n, 1, "🔴 клієнт із непрочитаною карткою компанії не названий — «немає номера» виглядало б певним");
+});

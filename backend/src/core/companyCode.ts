@@ -1,3 +1,5 @@
+import { normalizePhone } from "../utils/phone.js";
+
 /**
  * 🏢 КОД ПІДПРИЄМСТВА (ЄДРПОУ / ІПН) — ЧИСТЕ ПРАВИЛО НОРМАЛІЗАЦІЇ.
  *
@@ -71,6 +73,25 @@ export function splitCompanyCodes(
     // Перше знайдене значення виграє: другий такий самий клас — або дубль, або
     // помилка вводу, і мовчки перезаписувати його на «останнє» ми не хочемо.
     if (out[kind] == null) out[kind] = code;
+  }
+  return out;
+}
+
+/**
+ * ☎️ ТЕЛЕФОНИ З КАРТКИ КОМПАНІЇ Kommo (задача 7359, 03.11.2026). У частини клієнтів у Kommo немає жодного контакту —
+ * телефон записаний лише в полі «Телефон» самої компанії (заміряно 03.11: ВЕТПРОМЕД, ІНТЕЛВЕЖА, ЄВРОФЕСТ — 0 контактів,
+ * 1 телефон у картці). Синк читав з картки лише коди, тож «немає жодного номера» в «Якості даних» було неправдою дашборду.
+ * Усі значення поля `PHONE`, нормалізовані тим самим `normalizePhone`, що й телефони контактів; сміття (не телефон) — геть;
+ * дублі — геть. Порядок — як у Kommo.
+ */
+export function companyPhones(fields: readonly { field_code?: string | null; values?: { value?: unknown }[] }[] | null | undefined): string[] {
+  const out: string[] = [];
+  for (const f of fields ?? []) {
+    if (f.field_code !== "PHONE") continue;
+    for (const v of f.values ?? []) {
+      const n = normalizePhone(v?.value == null ? null : String(v.value));
+      if (n && !out.includes(n)) out.push(n);
+    }
   }
   return out;
 }
