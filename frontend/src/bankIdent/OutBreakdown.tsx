@@ -1,11 +1,11 @@
 /**
  * 💳 «Виписка» — розшифровка вихідних ФОП і картки (задача Тетяни 03.11.2026). Під платежем — рядок стану; клік —
- * блок «Угоди в платежі»: рядки «№ угоди — сума» з назвою угоди й менеджером, «Розписано X з Y», «Скопіювати»,
+ * блок «Розшифровка платежу»: рядки «№ угоди / № операційного запиту / категорія — сума» (угода — з назвою й менеджером), «Розписано X з Y», «Скопіювати»,
  * «Змінити» (з причиною → «Відкориговані»), історія. Правила рахує сервер (`backend/src/bankIdent/outBreakdown.ts`);
  * тут лише показ і живий підрахунок суми під час введення (підказка, не рішення).
  */
 import { useEffect, useState } from "react";
-import { outApi, outErr, type OutEvent, type OutFilter, type OutState } from "./outBreakdownApi";
+import { outApi, outErr, type OutEvent, type OutFilter, type OutLineView, type OutState } from "./outBreakdownApi";
 
 const MUTED = "var(--text-muted)";
 export const OUT_CORRECTED_COLOR = "#7c3aed";
@@ -13,16 +13,23 @@ const fmt = (n: number) => {
   const [i, d] = Math.abs(n).toFixed(2).split(".");
   return i.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + (d === "00" ? "" : "," + d) + " ₴";
 };
-/** Підказка під полем: скільки рядків і яка сума розпізнались (сервер однаково перевірить усе). */
+const amountOf = (s: string) => {
+  const t = s.replace(/(грн\.?|uah|₴)/gi, "").replace(/[\s\u00a0]/g, "").replace(",", ".");
+  return /^\d+(\.\d{1,2})?$/.test(t) && Number(t) > 0 ? Number(t) : NaN;
+};
+/** Підказка під полем: скільки рядків і яка сума розпізнались. Ті самі три види, що на сервері (`parseLine`); рішення — за сервером. */
 function liveSum(text: string): { lines: number; sum: number; bad: number } {
   let lines = 0, sum = 0, bad = 0;
   for (const raw of text.split(/\r?\n|;/).map((l) => l.trim()).filter(Boolean)) {
-    const m = /^(\d{8,9})\s*(?:[-–—:=\t]\s*)?(.+)$/.exec(raw);
-    const a = m ? Number(m[2].replace(/(грн\.?|uah|₴)/gi, "").replace(/[\s ]/g, "").replace(",", ".")) : NaN;
-    if (m && Number.isFinite(a) && a > 0) { lines++; sum += a; } else bad++;
+    const body = raw.replace(/\s*\([^()]{0,120}\)\s*$/, "").trim();
+    const n = /^(\d{1,9})\s*(?:[-–—:=\t]\s*)?(.+)$/.exec(body);
+    const t = /^(.*?\p{L}.*?)\s*(?:[-–—:=\t]\s*)?(\d[\d\s\u00a0]*(?:[.,]\d{1,2})?\s*(?:грн\.?|uah|₴)?)$/iu.exec(body);
+    const a = n && Number.isFinite(amountOf(n[2])) ? amountOf(n[2]) : t ? amountOf(t[2]) : NaN;
+    if (Number.isFinite(a)) { lines++; sum += a; } else bad++;
   }
   return { lines, sum: Math.round(sum * 100) / 100, bad };
 }
+const KIND_TAG: Record<OutLineView["kind"], string> = { deal: "угода", op: "опер. запит", text: "категорія" };
 
 const FILTERS: Array<[OutFilter, string]> = [["all", "Усі"], ["ok", "З номером"], ["wait", "Чекають"], ["unidentified", "Неідентифіковані"], ["corrected", "Відкориговані"]];
 
@@ -50,7 +57,7 @@ function summaryOf(s: OutState): { icon: string; text: string; color: string } {
   if (s.status === "own") return { icon: "↔", text: "свій переказ — розшифровка не потрібна", color: MUTED };
   if (s.status === "wait") return { icon: "🧾", text: "Чекає розшифровки", color: "#b45309" };
   if (s.status === "unidentified") return { icon: "❓", text: `Неідентифікований${s.reason ? ` · ${s.reason}` : ""}`, color: "#dc2626" };
-  const n = s.lines.length, word = n === 1 ? "угода" : n < 5 ? "угоди" : "угод";
+  const n = s.lines.length, word = n === 1 ? "рядок" : n < 5 ? "рядки" : "рядків";
   if (s.status === "mismatch") {
     const diff = Math.round((s.amount - s.sum) * 100) / 100;
     return { icon: "⚠", text: `${n} ${word} · розписано ${fmt(s.sum)} з ${fmt(s.amount)} — ${diff > 0 ? `бракує ${fmt(diff)}` : `зайве ${fmt(-diff)}`}`, color: "#dc2626" };
@@ -100,9 +107,15 @@ export function OutLine({ state, canEdit, onChange }: { state: OutState; canEdit
             <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }}>
               <tbody>
                 {state.lines.map((l) => (
-                  <tr key={l.deal} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td style={{ padding: "4px 6px 4px 0", fontFamily: "var(--mono, monospace)", whiteSpace: "nowrap" }}>{l.deal}</td>
-                    <td style={{ padding: "4px 6px", color: l.known ? "inherit" : "#b45309" }}>{l.known ? (l.name || "без назви") : "угоди немає в базі дашборда — перевірте №"}{l.manager ? <span style={{ color: MUTED }}> · {l.manager}</span> : null}</td>
+                  <tr key={`${l.kind}:${l.ref}`} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={{ padding: "4px 6px 4px 0", fontFamily: l.kind === "text" ? "inherit" : "var(--mono, monospace)", whiteSpace: "nowrap" }}>
+                      {l.ref} <span style={{ fontFamily: "inherit", fontSize: 10.5, color: MUTED }}>{KIND_TAG[l.kind]}</span>
+                    </td>
+                    <td style={{ padding: "4px 6px", color: l.known ? "inherit" : "#b45309" }}>
+                      {l.kind !== "deal" ? null : l.known ? (l.name || "без назви") : "угоди немає в базі дашборда — перевірте №"}
+                      {l.manager ? <span style={{ color: MUTED }}> · {l.manager}</span> : null}
+                      {l.note ? <span style={{ color: MUTED }}>{l.kind === "deal" ? " · " : ""}{l.note}</span> : null}
+                    </td>
                     <td style={{ padding: "4px 0", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(l.amount)}</td>
                   </tr>
                 ))}
@@ -122,9 +135,9 @@ export function OutLine({ state, canEdit, onChange }: { state: OutState; canEdit
             <div>
               {!unid && (
                 <>
-                  <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Угоди в платежі — рядками «№ угоди сума», напр. 62788851 3000</label>
+                  <label style={{ display: "block", fontSize: 12, color: MUTED, marginBottom: 4 }}>Рядками «№ угоди сума» (62788851 3000), «№ операційного запиту сума» (4445 5000) або «категорія сума» (зп 20000); у дужках — примітка</label>
                   <textarea value={text} onChange={(e) => setText(e.target.value)} rows={Math.min(10, Math.max(3, text.split("\n").length + 1))}
-                    placeholder={"62788851 3000\n62793349 8000"} style={{ width: "100%", boxSizing: "border-box", fontFamily: "var(--mono, monospace)", fontSize: 13, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg, #fff)", color: "inherit" }} />
+                    placeholder={"62788851 3000\n4445 5000 (Операційний запит)\nзп 20000"} style={{ width: "100%", boxSizing: "border-box", fontFamily: "var(--mono, monospace)", fontSize: 13, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg, #fff)", color: "inherit" }} />
                   <div style={{ fontSize: 12, marginTop: 3, color: Math.abs(live.sum - state.amount) < 0.005 && !live.bad ? "#16a34a" : "#b45309" }}>
                     Розписано {fmt(live.sum)} з {fmt(state.amount)} · рядків {live.lines}{live.bad ? ` · не розпізнано ${live.bad}` : ""}
                   </div>
@@ -146,7 +159,7 @@ export function OutLine({ state, canEdit, onChange }: { state: OutState; canEdit
               {hist.length === 0 ? "Історії ще немає." : hist.map((h) => (
                 <div key={h.id} style={{ padding: "3px 0", borderTop: "1px dashed var(--border)" }}>
                   {new Date(h.at).toLocaleString("uk-UA", { dateStyle: "short", timeStyle: "short" })} · {h.by ?? "—"} · {h.act === "set" ? "розписано" : h.act === "change" ? "змінено" : "неідентифікований"}
-                  {h.linesAfter.length ? ` · ${h.linesAfter.map((l) => `${l.deal} ${l.amount}`).join(", ")}` : ""}{h.reason ? ` · причина: ${h.reason}` : ""}
+                  {h.linesAfter.length ? ` · ${h.linesAfter.map((l) => `${l.ref} ${l.amount}`).join(", ")}` : ""}{h.reason ? ` · причина: ${h.reason}` : ""}
                 </div>
               ))}
             </div>
