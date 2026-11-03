@@ -139,7 +139,7 @@ dutyRouter.post("/", async (req, res) => {
   // Тімлід — лише своя РНК-команда (як було). Адмін — будь-яка команда (РНК і РПК): RNK-гейт
   // до адміна НЕ застосовуємо (рішення власника — адмін може призначити чергового і в РПК).
   if (auth.role === "team_lead") {
-    if (!mgr.rows[0].is_rnk) return res.status(400).json({ error: "У чергуванні беруть участь лише команди відділу нових клієнтів" });
+    if (!mgr.rows[0].is_rnk) return res.status(400).json({ error: "У чергуванні беруть участь лише рекламні команди" });
     if (teamId !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
   }
   const r = await pool.query<{ id: number }>(

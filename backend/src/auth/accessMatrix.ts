@@ -848,6 +848,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/orphan-clients/claim", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  // 🚫 «Закрити» в «Нічийних» (задача 7187) — той самий допуск, що «Взяти в роботу»: менеджер без прапорця — 403.
+  { method: "POST", path: "/api/dashboard/orphan-clients/close", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/client-seasonal", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/reactivation-task", cls: "deny-only",

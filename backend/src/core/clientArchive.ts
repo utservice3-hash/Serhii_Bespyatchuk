@@ -28,6 +28,16 @@ export const ARCHIVE_REASONS = CLOSE_REASONS;
 export const ARCHIVE_REASON_KEYS = CLOSE_REASON_KEYS;
 
 /**
+ * Запис «в архів» — ОДИН текст на ручну «🗄 в архів» і на «Закрити» в «Нічийних» (задача 7187):
+ * $1 ключ клієнта, $2 причина, $3 хто. Повторне закриття оновлює причину й дату.
+ */
+export const ARCHIVE_UPSERT_SQL = `INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason, archived_by, updated_by, updated_at)
+     VALUES ($1, now(), $2, $3, $3, now())
+     ON CONFLICT (client_key) DO UPDATE
+       SET archived_at = now(), archive_reason = EXCLUDED.archive_reason,
+           archived_by = EXCLUDED.archived_by, updated_by = EXCLUDED.updated_by, updated_at = now()`;
+
+/**
  * Чиста функція правила. `archivedAt` — коли поклали в архів; `lastPaidAt` —
  * остання оплата клієнта (будь-яка, з `deals`).
  *

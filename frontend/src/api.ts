@@ -1212,6 +1212,11 @@ export interface AdsDay {
   /** Ліди з ЯДРА conversion_ads (не свій SQL) — знаменник платних лідів. */
   leads: number;
   won: number;
+  /** 💰 Принесли ліди ЦЬОГО дня: маржа їхніх оплачених (142) угод = Σ «Оплачено» в розкритті дня. Росте, поки угоди в роботі. */
+  paidMargin: number;
+  /** 💰 Надійшло ЦЬОГО дня з реклами (маржа, ліди будь-якого дня). Σ днів == `AdsReport.revenue` («Заробили»). */
+  received: number;
+  receivedDeals: number;
 }
 export interface AdsCampaign {
   day: string;
@@ -1310,8 +1315,10 @@ export interface KvpAgg { deals: number; revenue: number }
 export interface KvpEngineTeam { plan: number; revenue: number; expected: number; expectedThisMonth: number;
   pct: number | null; forecastPct: number | null; conversion: number | null; entered: number }
 export interface KvpDay { bucket: string; revenue: number; deals: number }
-export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
-export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
+/** 🚚 Тиждень «Відправлені авто» (задача 7185): авто з «Датою загрузки» в тижні і що з ними ЗАРАЗ. paid + wait + lost == deals. */
+export interface KvpShipWeek { deals: number; sum: number; paidDeals: number; paidSum: number; waitDeals: number; waitSum: number; lostDeals: number; lostSum: number }
+export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; ship: KvpShipWeek; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
+export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; ship: KvpShipWeek; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
 /** `new+repeat+undef = created` — партиція НОВИЗНИ. `ad`/`leadgen` — накладка
  *  ДЖЕРЕЛА: підмножини партиції, у `created` НЕ додаються. */
 /**
@@ -1559,8 +1566,8 @@ export interface ReportPlan {
    * якому стоїть половина гейтів. Порожній масив — нормальний стан.
    */
   dismissed: ReportPlanDismissed[];
-  /** Про ДЖЕРЕЛО «першого дотику»: не звʼязані з менеджером оцінки, остання оцінка бота, скільки команд він оцінює. */
-  firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; coveredTeams: number };
+  /** Про ДЖЕРЕЛО «першого дотику»: розмови без менеджера, останній AI-розбір, чи розбір існував у періоді (задача 7237). */
+  firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; covered: boolean };
 }
 export interface ReportPlanDismissed {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
@@ -5121,6 +5128,8 @@ export interface OrphanPool {
   tiles: { clients: number; money12: number; regulars: number; vip: number; claimedThisMonth: number; totalAllTime: number; legal: number };
   /** «self» — менеджер із прапорцем «Нічийні клієнти»: бачить пул, бере клієнта лише собі. */
   access: "full" | "self";
+  /** Причини кнопки «Закрити» (задача 7187), з підписами зі спільного словника. */
+  closeReasons: { key: string; label: string }[];
   groups: OrphanGroup[];
 }
 export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {
@@ -5130,6 +5139,10 @@ export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {
 /** 409 = клієнта вже взяли; текст помилки називає, хто саме. */
 export async function claimOrphanClient(clientKey: string, managerId: number): Promise<void> {
   await api.post("/dashboard/orphan-clients/claim", { clientKey, managerId });
+}
+/** «Закрити» нічийного клієнта (задача 7187): в архів з причиною; 409 = його вже взяли або закрили. */
+export async function closeOrphanClient(clientKey: string, reason: string, comment: string): Promise<void> {
+  await api.post("/dashboard/orphan-clients/close", { clientKey, reason, comment });
 }
 
 /**

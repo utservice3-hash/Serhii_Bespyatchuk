@@ -117,18 +117,25 @@ export const GA4_NOT_CONFIGURED =
 
 export type AdCampaignRow = { day: string; cost: number; clicks: number; sessions: number };
 /** Стани когорти дня. `won` перетинається з `inWork` — див. AdsDayCohort у ядрі. */
-export type AdLeadsRow = { entered: number; won: number; paid: number; lost: number; inWork: number };
+export type AdLeadsRow = { entered: number; won: number; paid: number; lost: number; inWork: number; paidMargin: number };
+/** «Надійшло цього дня» з реклами — `money.adReceivedByDay`. */
+export type AdReceivedRow = { revenue: number; deals: number };
 export type AdDay = {
   day: string; cost: number; clicks: number; sessions: number;
   sheetCost: number | null; leads: number; won: number;
   /** Оплачено (142) · програно (143) · у роботі (ні те, ні те) — разом дають `leads`. */
   paid: number; lost: number; inWork: number;
+  /** 💰 Принесли ліди ЦЬОГО дня: маржа їхніх оплачених (142) угод — Σ «Оплачено» в розкритті дня. Росте, поки угоди в роботі. */
+  paidMargin: number;
+  /** 💰 Надійшло ЦЬОГО дня з реклами (маржа, ліди будь-якого дня) — Σ днів == плитці «Заробили». */
+  received: number; receivedDeals: number;
 };
 
 export function mergeAdDays(
   campaigns: readonly AdCampaignRow[],
   leadsByDay: ReadonlyMap<string, AdLeadsRow>,
   sheetByDay: ReadonlyMap<string, number>,
+  receivedByDay: ReadonlyMap<string, AdReceivedRow> = new Map(),
 ): AdDay[] {
   const ga4 = new Map<string, { cost: number; clicks: number; sessions: number }>();
   for (const c of campaigns) {
@@ -137,7 +144,9 @@ export function mergeAdDays(
     ga4.set(c.day, e);
   }
   // День вважається таким, що БУВ, якщо про нього знає хоч одне джерело.
-  const all = new Set<string>([...ga4.keys(), ...leadsByDay.keys(), ...sheetByDay.keys()]);
+  // Гроші теж: день, коли лише НАДІЙШЛИ кошти (без витрат і лідів), інакше зник би з таблиці разом із грошима,
+  // і Σ колонки «Надійшло» розійшлась би з плиткою «Заробили».
+  const all = new Set<string>([...ga4.keys(), ...leadsByDay.keys(), ...sheetByDay.keys(), ...receivedByDay.keys()]);
   return [...all].sort((a, b) => a.localeCompare(b)).map((day) => {
     const g = ga4.get(day);
     return {
@@ -151,6 +160,9 @@ export function mergeAdDays(
       paid: leadsByDay.get(day)?.paid ?? 0,
       lost: leadsByDay.get(day)?.lost ?? 0,
       inWork: leadsByDay.get(day)?.inWork ?? 0,
+      paidMargin: leadsByDay.get(day)?.paidMargin ?? 0,
+      received: receivedByDay.get(day)?.revenue ?? 0,
+      receivedDeals: receivedByDay.get(day)?.deals ?? 0,
     };
   });
 }

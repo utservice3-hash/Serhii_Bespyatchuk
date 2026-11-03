@@ -709,7 +709,8 @@ DO $$ BEGIN
     -- ПРОХОДИТЬ. Без явного `IS NOT NULL` архівація без причини тихо вставлялась би —
     -- тобто CHECK стояв би для вигляду. Той самий клас, що `traf_type = 'cpc'` при NULL.
     CHECK (archived_at IS NULL OR (archive_reason IS NOT NULL AND archive_reason IN
-           ('price','competitor','own_transport','seasonality','closed_down','carrier','one_off','other')));
+           ('price','competitor','own_transport','seasonality','closed_down','carrier','one_off',
+            'not_interested','not_relevant','duplicate','other')));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- 🔁 ПЕРЕНЕСЕННЯ СТАРИХ `hidden` В АРХІВ. Разова, з умовою на ще не перенесені —

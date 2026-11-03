@@ -63,7 +63,7 @@ import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS,
-         archiveListSql, carrierCandidatesSql } from "../core/clientArchive.js";
+         archiveListSql, carrierCandidatesSql, ARCHIVE_UPSERT_SQL } from "../core/clientArchive.js";
 import { clientsListSql } from "../core/clientPlansList.js";
 import { logClientAdmin, clientAdminLog } from "../core/clientAdminLog.js";
 import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
@@ -107,11 +107,12 @@ import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFor
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
-import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL, orphanPoolAccess, orphanRowOrder, type OrphanPoolAccess } from "../core/orphanClients.js";
+import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL, ORPHAN_CLOSE_REASON_KEYS, orphanPoolAccess, orphanRowOrder, type OrphanPoolAccess } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as callNorm from "../core/callNorm.js";
 import * as reportCuts from "../core/reportCuts.js";
+import * as shipWeek from "../core/shipWeek.js";
 import { firstTouchReport } from "../core/firstTouch.js";
 import { firstTouchCell, glanceFirstTouch, firstTouchOutsideRoster } from "../core/firstTouchRules.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
@@ -3817,13 +3818,7 @@ dashboardRouter.post("/client-archive", async (req, res) => {
   const reason = String(req.body?.reason ?? "").trim();
   if (!ARCHIVE_REASON_KEYS.includes(reason))
     return res.status(400).json({ error: `Причина обовʼязкова: ${ARCHIVE_REASON_KEYS.join(", ")}` });
-  await pool.query(
-    `INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason, archived_by, updated_by, updated_at)
-     VALUES ($1, now(), $2, $3, $3, now())
-     ON CONFLICT (client_key) DO UPDATE
-       SET archived_at = now(), archive_reason = EXCLUDED.archive_reason,
-           archived_by = EXCLUDED.archived_by, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, reason, req.auth!.userId]);
+  await pool.query(ARCHIVE_UPSERT_SQL, [clientKey, reason, req.auth!.userId]);
   await logClientAdmin("archive", clientKey, req.auth!.userId, { reason });
   res.json({ ok: true, archived: true });
 });
@@ -6000,7 +5995,7 @@ dashboardRouter.get("/ads", async (req, res) => {
   const to = dateParam(req.query.to);
   const { adSources } = await getSettings();
 
-  const [ga4, leads, sheet] = await Promise.all([
+  const [ga4, leads, sheet, received] = await Promise.all([
     pool.query<{ day: string; campaign: string; channel_group: string | null;
                  sessions: number; conversions: string; cost: string; clicks: number }>(
       `SELECT to_char(day, 'YYYY-MM-DD') AS day, campaign, channel_group,
@@ -6021,10 +6016,13 @@ dashboardRouter.get("/ads", async (req, res) => {
           AND ($2::date IS NULL OR day <= $2::date)`,
       [from, to]
     ),
+    // 💰 «Надійшло цього дня» — поденна пара плитки «Заробили» (ядро, той самий `received` і `adDealSql`).
+    money.adReceivedByDay({ from, to }, adSources),
   ]);
 
   const leadsByDay = new Map(leads.map((l) => [l.day, l]));
   const sheetByDay = new Map(sheet.rows.map((r) => [r.day, Number(r.budget_fact)]));
+  const receivedByDay = new Map(received.map((r) => [r.day, { revenue: r.revenue, deals: r.deals }]));
   const campaigns = ga4.rows.map((r) => ({
     day: r.day,
     campaign: r.campaign,
@@ -6035,10 +6033,10 @@ dashboardRouter.get("/ads", async (req, res) => {
     clicks: Number(r.clicks),
   }));
 
-  // Дні збирає ЧИСТА функція над трьома джерелами (GA4 ∪ ліди ядра ∪ аркуш) —
+  // Дні збирає ЧИСТА функція над чотирма джерелами (GA4 ∪ ліди ядра ∪ аркуш ∪ гроші, що надійшли) —
   // саме тому її можна прогнати фікстурою «GA4 порожній, ліди є» (ворота `#372`).
   // Поля в ній перелічені ЯВНО, без спреду (ворота `#17e2`).
-  const days = mergeAdDays(campaigns, leadsByDay, sheetByDay);
+  const days = mergeAdDays(campaigns, leadsByDay, sheetByDay, receivedByDay);
 
   // 💰 ПЛАН і ДОХІД — обидва з ЄДИНИХ джерел, а не порахованi тут.
   // План: `core/adBudget` (той самий модуль читає КВП — рішення «скрізь один план»).
@@ -6046,7 +6044,8 @@ dashboardRouter.get("/ads", async (req, res) => {
   // два екрани не можуть розійтись. Свій SQL по виручці заборонений (DoD п.1).
   // ⚠️ Дохід — це гроші, ЩО НАДІЙШЛИ в періоді, від реклами будь-якого часу. Це НЕ
   // «скільки принесли ліди цього періоду»: угода з ліда 4 липня оплатиться у серпні.
-  // Когортного доходу в ядрі немає, і вигадувати його тут не можна.
+  // 📅 З 02.11.2026 «скільки принесли ліди дня» є — у днях (`paidMargin`, когорта ядра `conversionAdsByDay`,
+  // ① статус 142), а не тут: плитка лишається грошима, що надійшли, і дорівнює Σ `received` по днях.
   // 🟣 eLogist — ОКРЕМИЙ рядок, не частина реклами UTS (рішення власника 27.10.2026). Ліди —
   // ядро (`metrics.elogistLeadsCreated`), гроші — той самий `receivedByChannel`, канал 'elogist'.
   // Витрат eLogist у нас НЕМАЄ (ні GA4, ні аркуша), тож ні ціни ліда, ні ROMI не віддаємо.
@@ -7907,6 +7906,8 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
     scope: all ? "all" : `${ORPHAN_DEFAULT_MONTHS}m`,
     // «self» — менеджер із прапорцем: бачить пул, але закріпити може лише за собою.
     access,
+    // 🚫 Причини кнопки «Закрити» (задача 7187) — підписи зі спільного словника, а не з фронту.
+    closeReasons: reactivationRules.CLOSE_REASONS.filter((r) => ORPHAN_CLOSE_REASON_KEYS.includes(r.key)),
     // Плитки — з тієї самої вибірки, не окремим запитом.
     tiles: {
       clients: rows.length,
@@ -7958,6 +7959,30 @@ dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
     return res.status(409).json({ error: `Клієнта вже взяв ${who.rows[0]?.name ?? "інший менеджер"}` });
   }
   res.json({ ok: true, clientKey, managerId });
+});
+
+/**
+ * 🚫 «Закрити» в «Нічийних» (задача 7187): перевізник / не цікаво / не актуально / дубль → архів з причиною,
+ * датою й автором, і клієнт зникає з пулу. Допуск — той самий, що «Взяти в роботу» (менеджер із прапорцем
+ * «Нічийні», тімлід, КВП/ОД/адмін). Закрити можна лише клієнта, який ЗАРАЗ у пулі: інакше менеджер із
+ * прапорцем архівував би будь-кого за ключем. Коментар (якщо є) лягає в коментарі клієнта.
+ */
+dashboardRouter.post("/orphan-clients/close", async (req, res) => {
+  const auth = req.auth!;
+  const access = await poolAccessOf(auth);
+  if (access === "none") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const reason = String(req.body?.reason ?? "").trim();
+  const comment = String(req.body?.comment ?? "").trim().slice(0, 2000);
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!ORPHAN_CLOSE_REASON_KEYS.includes(reason))
+    return res.status(400).json({ error: `Причина обовʼязкова: ${ORPHAN_CLOSE_REASON_KEYS.join(", ")}` });
+  const inPool = (await metrics.orphanClients(600)).some((c) => c.clientKey === clientKey);
+  if (!inPool) return res.status(409).json({ error: "Клієнта вже немає в нічийних — його взяли або закрили" });
+  await pool.query(ARCHIVE_UPSERT_SQL, [clientKey, reason, auth.userId]);
+  if (comment) await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`, [clientKey, auth.userId, comment]);
+  await logClientAdmin("archive", clientKey, auth.userId, { reason, from: "orphan", ...(comment ? { comment } : {}) });
+  res.json({ ok: true, clientKey, reason });
 });
 
 dashboardRouter.get("/reactivation-list", async (req, res) => {
@@ -9554,8 +9579,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     getSettings(),
     reportCuts.invoicingJamByManager({ managerId, teamId }),
     reportCuts.expectedNoDateByManager(metrics.EXPECT_ZONE, { managerId, teamId }),
-    // 🎯 ТЗ-3 «перший дотик»: оцінки бота за період, звʼязані з тим, хто ДЗВОНИВ (рішення 17.09.2026).
-    firstTouchReport(from, to),
+    // 🎯 «Перший дотик»: ті самі розмови й те саме правило, що плитка «Ціна озвучена» на екрані AI (задача 7237).
+    getSettings().then((s) => firstTouchReport(from, to, s.adSources)),
   ]);
   const callsM = new Map(callsRows.map((r) => [r.managerId, r]));
   const callDaysM = new Map<number, callNorm.CallDay[]>();
@@ -9828,7 +9853,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // 📞 Норма — з «Планів» (4632, Роман 10.10.2026): чинна на місяць кінця періоду, та сама, що на Статистиках.
       callNorm: callNorm.callNormCell(callDaysM.get(m.id) ?? [], callsNormNow, from, to, kyivToday),
       // 🎯 «Ціну названо в перший дотик»: стан + лічильники; відсоток рахує фронт із лічильників.
-      firstTouch: firstTouchCell(ft.byManager.get(m.id), m.team_id, ft.coveredTeamIds),
+      firstTouch: firstTouchCell(ft.byManager.get(m.id), ft.covered),
       // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.
       expectNoDate: Math.round(noDateM.get(m.id)?.sum ?? 0), expectNoDateDeals: noDateM.get(m.id)?.deals ?? 0,
       // 🧱 Затор на «Виставленні рахунку»: скільки з очікувань стоїть саме тут.
@@ -10012,9 +10037,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     // Окремим масивом, а не серед `managers`: у них немає плану, %, світлофора й темпу,
     // тож змішувати їх у той самий список означало б рахувати статуси по людях, яких немає.
     dismissed,
-    // 🎯 Про ДЖЕРЕЛО «першого дотику», а не про скоуп: скільки оцінок не звʼязалось з менеджером,
-    // коли бот присилав останню, скільки команд він оцінює взагалі. Від ролі не залежить.
-    firstTouchMeta: { unmapped: ft.unmapped, lastAnalyzedAt: ft.lastAnalyzedAt, coveredTeams: ft.coveredTeamIds.size },
+    // 🎯 Про ДЖЕРЕЛО «першого дотику», а не про скоуп: скільки розмов без менеджера, коли AI розібрав
+    // останню, чи розбір узагалі існував у періоді. Від ролі не залежить.
+    firstTouchMeta: { unmapped: ft.unmapped, lastAnalyzedAt: ft.lastAnalyzedAt, covered: ft.covered },
   });
 });
 
@@ -10251,7 +10276,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     expTeamThis, expTeamNext, expTeamPast, mgrDayExp, mgrDayDisp, mgrDayLeads,
     overdue, avgCycle, lost,
     dirSplit, chanSplit, clientRev, transit, dso, aging,
-    successDay, segDay, lostDay, dirConv, createdSplitMgr,
+    successDay, segDay, lostDay, dirConv, createdSplitMgr, shipCohort,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -10285,6 +10310,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     money.successByBucket(mScope, "day"), money.receivedSegByDay(mScope), metrics.lostByDay(scope),
     metrics.conversionAdsByDirection(scope, adSources),
     metrics.createdSplitByManager(scope),
+    // 🚚 Режим «Відправлені авто» (задача 7185): авто за «Датою загрузки» і їхній стан ЗАРАЗ.
+    // Той самий анкер і відбір, що `dispatchedByManagerDay` (режим «Активність»), — гейт #3322.
+    reportCuts.dispatchCohortByManagerDay(from, to, {}),
   ]);
   // Розкол «створено» новий/постійний (3 сигнали B→C→A) по менеджеру → мапа + агрегати.
   const splitByMgr = new Map(createdSplitMgr.map((x) => [x.managerId, x]));
@@ -10302,6 +10330,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // Крок Д (тижневий вигляд) #7: активність per менеджер×день (авто/ліди) для перемикача.
   const mgrDayDispMap = new Map<number, { day: string; deals: number; revenue: number }[]>();
   for (const r of mgrDayDisp) { const a = mgrDayDispMap.get(r.managerId) ?? []; a.push({ day: r.day, deals: r.deals, revenue: r.revenue }); mgrDayDispMap.set(r.managerId, a); }
+  const mgrShipMap = new Map<number, reportCuts.DispatchCohortRow[]>();
+  for (const r of shipCohort) { const a = mgrShipMap.get(r.managerId) ?? []; a.push(r); mgrShipMap.set(r.managerId, a); }
   const mgrDayLeadsMap = new Map<number, { day: string; ad: number; leadgen: number }[]>();
   for (const r of mgrDayLeads) { const a = mgrDayLeadsMap.get(r.managerId) ?? []; a.push({ day: r.day, ad: r.ad, leadgen: r.leadgen }); mgrDayLeadsMap.set(r.managerId, a); }
   const kyivTodayW = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
@@ -10352,8 +10382,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     const autoRevenue = (mgrDayDispMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.revenue, 0); // #3 сума авто (signed)
     const leadsAd = (mgrDayLeadsMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.ad, 0);
     const leadsLeadgen = (mgrDayLeadsMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.leadgen, 0);
+    const ship = shipWeek.shipWeekOf(mgrShipMap.get(mid) ?? [], w.from, w.to);
     const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
-    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
+    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, ship, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
   });
   const expTeamPastMap = new Map(expTeamPast.map((r) => [r.id, r.sum]));
   const expTeamThisMap = new Map(expTeamThis.map((r) => [r.id, r.sum]));
@@ -10494,15 +10525,16 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   }
   // Крок Д owner-review #1: фінвідділ — НЕ sales-юніт → повністю прибрати зі звіту
   // (received=0, тож Σ teams.revenue не зрушиться).
-  type WeekAgg = { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null };
+  type WeekAgg = { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; ship: shipWeek.ShipWeek; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null };
   const teams = [...teamMap.values()].filter((t) => !KVP_FINANCE_TEAM_IDS.has(t.teamId)).map((t) => {
     // Крок Д фінал #2: тижні команди = Σ тижнів менеджерів (per idx). met = teamFact ≥ teamPlan.
     const teamWeeks = weekBlocks.map((w) => {
       const ms = t.managers.map((mm) => ((mm.weeks as WeekAgg[]) ?? []).find((x) => x.idx === w.idx)).filter(Boolean) as WeekAgg[];
       const plan = ms.reduce((a, x) => a + x.plan, 0), fact = ms.reduce((a, x) => a + x.fact, 0), expected = ms.reduce((a, x) => a + x.expected, 0);
       const auto = ms.reduce((a, x) => a + x.auto, 0), autoRevenue = ms.reduce((a, x) => a + x.autoRevenue, 0), leadsAd = ms.reduce((a, x) => a + x.leadsAd, 0), leadsLeadgen = ms.reduce((a, x) => a + x.leadsLeadgen, 0);
+      const ship = ms.reduce((a, x) => shipWeek.addShip(a, x.ship), shipWeek.SHIP_ZERO);
       const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
-      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
+      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, ship, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
     });
     return {
       teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
@@ -10604,6 +10636,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     return {
       idx: w.idx, from: w.from, to: w.to, plan: s("plan"), fact: s("fact"), expected: s("expected"),
       auto: s("auto"), autoRevenue: s("autoRevenue"), leadsAd: s("leadsAd"), leadsLeadgen: s("leadsLeadgen"),
+      ship: ws.reduce((a, x) => shipWeek.addShip(a, x.ship), shipWeek.SHIP_ZERO),
       success: Math.round(successW),
       newRecv: Math.round(segW.reduce((a, r) => a + r.newRev, 0)),
       repeatRecv: Math.round(segW.reduce((a, r) => a + r.repeatRev, 0)),

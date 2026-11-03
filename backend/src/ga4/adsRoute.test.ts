@@ -48,7 +48,7 @@ test("#371 ПОРОЖНЯ ДАТА — це «не задано», а не зн�
 });
 
 test("#372 GA4 ПОРОЖНІЙ, А ЛІДИ Є — день усе одно в таблиці, і «0 лідів» не друкується", () => {
-  const leads = new Map([["2026-09-01", { entered: 17, won: 3, paid: 2, lost: 4, inWork: 11 }]]);
+  const leads = new Map([["2026-09-01", { entered: 17, won: 3, paid: 2, lost: 4, inWork: 11, paidMargin: 9000 }]]);
   const sheet = new Map([["2026-09-02", 4200]]);
 
   // GA4 не підключено: кампаній нема ЗОВСІМ — саме той стан, що був на проді.
@@ -69,7 +69,7 @@ test("#372b 🪞 ІНВАРІАНТ ГРУПУВАННЯ ЖИВИЙ, і роут
     { day: "2026-09-01", cost: 200.25, clicks: 20, sessions: 60 },
     { day: "2026-09-03", cost: 50, clicks: 5, sessions: 15 },
   ];
-  const days = mergeAdDays(campaigns, new Map([["2026-09-02", { entered: 4, won: 1, paid: 1, lost: 0, inWork: 3 }]]), new Map());
+  const days = mergeAdDays(campaigns, new Map([["2026-09-02", { entered: 4, won: 1, paid: 1, lost: 0, inWork: 3, paidMargin: 2500 }]]), new Map());
   const sumDays = days.reduce((s, d) => s + d.cost, 0);
   const sumCampaigns = campaigns.reduce((s, c) => s + c.cost, 0);
   assert.equal(Math.round(sumDays * 100), Math.round(sumCampaigns * 100),
@@ -80,6 +80,25 @@ test("#372b 🪞 ІНВАРІАНТ ГРУПУВАННЯ ЖИВИЙ, і роут
   const src = readFileSync(ROUTE_SRC, "utf8");
   assert.match(src, /const from = dateParam\(req\.query\.from\)/,
     "🔴 роут /ads більше не нормалізує дату через dateParam — порожній рядок знову дійде до ('')::date");
-  assert.match(src, /const days = mergeAdDays\(campaigns, leadsByDay, sheetByDay\)/,
+  assert.match(src, /const days = mergeAdDays\(campaigns, leadsByDay, sheetByDay, receivedByDay\)/,
     "🔴 роут /ads більше не кличе mergeAdDays — дні знову будуються з самого GA4, і ліди зникають разом із днем");
+});
+
+/**
+ * #3310 — ГРОШІ ПО ДНЯХ НЕ ГУБЛЯТЬСЯ (Роман 02.11.2026: «скільки зароблено за один день»): день, коли лише НАДІЙШЛИ
+ * кошти (без витрат і лідів), лишається в таблиці; «надійшло» і «принесли ліди дня» доходять до свого дня; Σ «надійшло»
+ * по днях == Σ на вході — тобто колонка не розійдеться з плиткою «Заробили».
+ * 🧨 Червоніє, якщо загубити день «лише гроші» з обʼєднання чи не перенести поле в день.
+ */
+test("#3310 ГРОШІ ПО ДНЯХ: день «лише гроші» в таблиці, поля в своєму дні, Σ «надійшло» без втрат", () => {
+  const leads = new Map([["2026-10-12", { entered: 14, won: 5, paid: 3, lost: 2, inWork: 9, paidMargin: 27850 }]]);
+  const received = new Map([["2026-10-12", { revenue: 3500, deals: 2 }], ["2026-10-25", { revenue: 45130, deals: 11 }]]);
+  const days = mergeAdDays([{ day: "2026-10-12", cost: 5079, clicks: 40, sessions: 90 }], leads, new Map(), received);
+  assert.deepEqual(days.map((d) => d.day), ["2026-10-12", "2026-10-25"], "🔴 день, коли лише надійшли гроші, зник із таблиці");
+  const d12 = days[0], d25 = days[1];
+  assert.deepEqual([d12.paidMargin, d12.received, d12.receivedDeals], [27850, 3500, 2], "🔴 гроші не дійшли до свого дня");
+  assert.deepEqual([d25.cost, d25.leads, d25.paidMargin, d25.received, d25.receivedDeals], [0, 0, 0, 45130, 11],
+    "🔴 день «лише гроші»: витрат і лідів немає, а гроші є — і саме так він мусить читатись");
+  assert.equal(days.reduce((s, d) => s + d.received, 0), 48630, "🔴 Σ «надійшло» по днях ≠ Σ на вході — колонка розійдеться з плиткою");
+  assert.deepEqual(mergeAdDays([], new Map(), new Map()).length, 0, "дзеркало: без жодного джерела днів немає (гроші за замовчуванням порожні)");
 });

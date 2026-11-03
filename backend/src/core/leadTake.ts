@@ -3,7 +3,7 @@ import { QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 import { FC_PIPELINES, successForSources } from "./money.js";
 import { RNK_TEAM_IDS, NON_COMMERCIAL_TEAM_IDS } from "./metrics.js";
 /** Група «решта комерційних команд» у таблиці часу опрацювання (30.10.2026: без «РПК» у підписах, задача 7371). */
-const REPEAT_GROUP = "Постійні клієнти";
+const REPEAT_GROUP = "Повний цикл";
 import { teamAtSql } from "./teamAt.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import { elogistMarkSql } from "./elogist.js";

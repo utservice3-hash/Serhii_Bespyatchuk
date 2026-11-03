@@ -802,6 +802,11 @@ button {
 .orph-take { background: var(--text); color: var(--card-bg); border: none; border-radius: var(--r-lg);
   padding: 7px 14px; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
 .orph-pick { font-size: 12.5px; padding: 6px 10px; }
+.orph-close { background: none; border: 1px solid var(--border); color: var(--text-muted); border-radius: var(--r-lg);
+  padding: 6px 12px; font-size: 12.5px; margin-left: 6px; cursor: pointer; white-space: nowrap; }
+.orph-closeform { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 8px 4px; font-size: 13px; }
+.orph-closeform label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.orph-closecomment { flex: 1 1 220px; min-width: 0; padding: 6px 10px; font-size: 13px; }
 .orph-more { text-align: center; color: var(--info); font-size: 13px; font-weight: 600; cursor: pointer; padding: 12px; }
 .orph-foot { font-size: 12px; color: var(--text-muted); margin: 12px 2px 0; }
 
