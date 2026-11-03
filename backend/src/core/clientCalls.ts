@@ -14,7 +14,11 @@
  *
  * 🟢 РОЗМОВА vs СПРОБА: `billsec > 0` — розмова, решта — недодзвін (рішення власника 04.08.2026);
  * показуються обидва числа, не сумою.
+ *
+ * 📵 Дзвінки на номери ПЕРЕВІЗНИКІВ не рахуються взагалі — ні розмовою, ні спробою (задача 7359,
+ * `core/carrierPhones.ts`).
  */
+import { notCarrierCallSql } from "./carrierPhones.js";
 
 export interface CallsMonth {
   month: string;
@@ -28,7 +32,7 @@ export const CALLS_BY_MONTH_SQL = `
          COUNT(*)::int AS calls,
          COUNT(*) FILTER (WHERE billsec > 0)::int AS talks
     FROM ringostat_calls
-   WHERE client_key = ANY($1)
+   WHERE client_key = ANY($1) AND ${notCarrierCallSql("ringostat_calls")}
      -- Діапазон за КИЇВСЬКИМ часом, а не to_char(...) = $2: так працює індекс (client_key, calldate).
      -- Заміряно 28.09.2026 на 1 187 клієнтах: to_char — 1 126 мс. Межі стереже #814c.
      AND calldate >= (($2 || '-01')::date::timestamp AT TIME ZONE 'Europe/Kyiv')

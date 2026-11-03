@@ -3,6 +3,7 @@ import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { UPLOAD_DIR } from "./uploads.js";
 import { lastContactOf, contactFileVerdict, canDeleteContact, CONTACT_CHANNEL_KEYS } from "../core/clientContacts.js";
+import * as carrierPhones from "../core/carrierPhones.js";
 import { stepState, stepVerdict, phoneState } from "../core/clientNextStep.js";
 import { isReturned, RETURN_GAP_DAYS } from "../core/reactivationFilters.js";
 import { mergeNoteComment } from "../core/receivableNoteMerge.js";
@@ -61,7 +62,7 @@ import { missedPeriod, missedScopeFor, ownerlessInScope, dealInWindowLateral, NO
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
-import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
+import { loadClientSegments, factsFor, keepInReactivation, inClientsScreen } from "../core/clientSegments.js";
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS,
          archiveListSql, carrierCandidatesSql, ARCHIVE_UPSERT_SQL } from "../core/clientArchive.js";
 import { clientsListSql } from "../core/clientPlansList.js";
@@ -5949,6 +5950,60 @@ dashboardRouter.get("/data-quality", async (req, res) => {
 });
 
 /**
+ * 📵 «ЯКІСТЬ ДАНИХ» · КЛІЄНТИ БЕЗ НОМЕРА ЗАМОВНИКА АБО З НОМЕРОМ ПЕРЕВІЗНИКА (задача 7359, ТЗ Юлії, етап 1, крок 1).
+ *
+ * Хто в списку — клієнти екрана «Клієнти та реактивація» (рішення Романа 03.11.2026, «2 перших»): той самий
+ * `clientsListSql` і той самий предикат `inClientsScreen`, що й екран, а не своє правило. Номери — телефони
+ * контактів угод клієнта (+ сам ключ фізособи), стан — `carrierPhones.verdictOf`, той самий, що в «Взяти в роботу».
+ * Межа — та сама, що в `/data-quality`: тімлід бачить свою команду, решта адмін-рівня — усіх.
+ * Разом зі списком — скільки номерів у довіднику і коли його перебудовано: порожній довідник означав би
+ * «перевізників не шукали», а не «їх немає».
+ */
+dashboardRouter.get("/data-quality/carrier-phones", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) {
+    return res.status(403).json({ error: "Доступ лише для тімліда/адміна" });
+  }
+  const params: unknown[] = [metrics.GENERIC_CLIENT_KEYS];
+  let cond = "";
+  if (auth.role === "team_lead") { params.push(auth.teamId ?? -1); cond = `AND b.team_id = $${params.length}`; }
+  const [seg, listRes, dictRes] = await Promise.all([
+    loadClientSegments(),
+    pool.query<{ client_key: string; name: string | null; manager_id: number; manager_name: string;
+      team_id: number | null; team_name: string | null }>(clientsListSql(cond), params),
+    pool.query<{ n: string; rebuilt_at: string | null }>(
+      `SELECT COUNT(*) AS n, to_char(max(rebuilt_at) AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD HH24:MI') AS rebuilt_at FROM carrier_phones`),
+  ]);
+  const roster = listRes.rows.filter((c) => inClientsScreen(factsFor(seg, c.client_key)));
+  const phones = await carrierPhones.clientPhones(pool, roster.map((c) => c.client_key));
+  const counts = { clients: roster.length, no_phone: 0, only_carrier: 0, has_carrier: 0 };
+  const items = [];
+  for (const c of roster) {
+    const list = phones.get(c.client_key) ?? [];
+    const verdict = carrierPhones.verdictOf(list);
+    if (verdict === "ok") continue;
+    counts[verdict]++;
+    items.push({
+      clientKey: c.client_key, clientName: c.name ?? c.client_key,
+      managerId: c.manager_id, managerName: c.manager_name, teamId: c.team_id, teamName: c.team_name,
+      verdict,
+      phones: list.map((p) => ({
+        phone: p.phone,
+        carrier: p.carrier && {
+          lardi: p.carrier.lardi, history: p.carrier.history, historyDeal: p.carrier.historyDeal, lardiCompany: p.carrier.lardiCompany,
+          historyUrl: p.carrier.historyDeal == null ? null : kommoLeadUrl(p.carrier.historyDeal),
+        },
+      })),
+    });
+  }
+  res.json({
+    counts,
+    dictionary: { phones: Number(dictRes.rows[0]?.n ?? 0), rebuiltAt: dictRes.rows[0]?.rebuilt_at ?? null },
+    items,
+  });
+});
+
+/**
  * Lead quality for the КВП report — target vs non-target leads created in the
  * period (Kyiv dates, both ends inclusive):
  *   target      = full-cycle pipeline 8921932 (a real transport deal was opened)
@@ -7706,7 +7761,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
     pool.query<{ at: string; manager: string | null; billsec: string; call_type: string }>(
       `SELECT rc.calldate AS at, m.name AS manager, rc.billsec, rc.call_type
          FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
-        WHERE rc.client_key = $1 AND rc.billsec > 0 ORDER BY rc.calldate DESC LIMIT 1`, [clientKey]),
+        WHERE rc.client_key = $1 AND rc.billsec > 0 AND ${carrierPhones.notCarrierCallSql("rc")} ORDER BY rc.calldate DESC LIMIT 1`, [clientKey]),
     pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`),
   ]);
   const cardToday = cardTodayRes.rows[0].d;
@@ -7745,8 +7800,13 @@ dashboardRouter.get("/client-card", async (req, res) => {
     `SELECT rc.uniqueid, to_char(rc.calldate AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD HH24:MI') AS calldate, rc.call_type, rc.billsec, rc.disposition, rc.recording,
             COALESCE(m.name, rc.employee_fio) AS manager
        FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
-      WHERE rc.client_key = $1 AND rc.billsec > 0
+      WHERE rc.client_key = $1 AND rc.billsec > 0 AND ${carrierPhones.notCarrierCallSql("rc")}
       ORDER BY rc.calldate DESC LIMIT ${CALLS_LIMIT}`, [clientKey]);
+  /* 📵 Розмови на номери ПЕРЕВІЗНИКІВ (задача 7359) у перелік не входять — але їх кількість названа, інакше
+     зниклий дзвінок читався б як «не дзвонили». */
+  const carrierTalksRes = await pool.query<{ n: string }>(
+    `SELECT COUNT(*) AS n FROM ringostat_calls rc WHERE rc.client_key = $1 AND rc.billsec > 0 AND ${carrierPhones.carrierCallSql("rc")}`,
+    [clientKey]);
 
   /* 🗒 Журнал керівницьких дій — окремою стрічкою, бо стан їх НЕ памʼятає:
      повернення з архіву занулює і причину, і того, хто архівував. */
@@ -7792,6 +7852,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
      * бекфіл поглибить історію, а підпис і далі казатиме «з вересня 2025».
      */
     callsSince: sinceRes.rows[0]?.since ?? null,
+    carrierTalks: Number(carrierTalksRes.rows[0]?.n ?? 0),
     adminLog,
     deals: dealsRes.rows.map((d) => ({
       kommoId: Number(d.kommo_id),
@@ -7902,6 +7963,12 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
   const list = [...groups.values()].sort((a, b) => b.sumAll - a.sumAll);
   // 🏢 У групі спершу «юр/ФОП», потім «фіз» (05.10.2026), усередині виду — за сумою, як було.
   for (const g of list) g.clients.sort(orphanRowOrder);
+  // 📵 Задача 7359: клієнт, у якого ВСІ номери перевізницькі, у роботу не береться — кнопку фронт гасить за
+  // цим прапорцем, а сервер однаково перевіряє в `/claim` (той самий `verdictOf`).
+  const orphanPhones = await carrierPhones.clientPhones(pool, rows.map((r) => r.clientKey));
+  const onlyCarrier = new Set(rows.map((r) => r.clientKey)
+    .filter((k) => carrierPhones.claimBlocked(carrierPhones.verdictOf(orphanPhones.get(k) ?? []))));
+  for (const g of list) for (const c of g.clients) Object.assign(c, { onlyCarrierPhones: onlyCarrier.has(c.clientKey) });
   res.json({
     scope: all ? "all" : `${ORPHAN_DEFAULT_MONTHS}m`,
     // «self» — менеджер із прапорцем: бачить пул, але закріпити може лише за собою.
@@ -7942,6 +8009,11 @@ dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
   if (auth.role === "team_lead") {
     const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
     if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Виконавець має бути з вашої команди" });
+  }
+  // 📵 Задача 7359: усі номери клієнта — перевізницькі → у роботу не береться (ТЗ Юлії, етап 1, крок 3).
+  const claimPhones = (await carrierPhones.clientPhones(pool, [clientKey])).get(clientKey) ?? [];
+  if (carrierPhones.claimBlocked(carrierPhones.verdictOf(claimPhones))) {
+    return res.status(409).json({ error: carrierPhones.CLAIM_BLOCKED_ERROR });
   }
   // Атомарно: закріплюємо лише якщо ще НЕ закріплений. Нуль рядків = хтось устиг раніше.
   const up = await pool.query(

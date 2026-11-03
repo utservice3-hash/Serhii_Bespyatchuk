@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { fetchDataQuality, type DataQualityCheck, type Reconciliation } from "../../../api";
+import { fetchDataQuality, fetchCarrierPhoneQuality, type DataQualityCheck, type Reconciliation, type CarrierPhoneQuality, type CarrierPhoneItem } from "../../../api";
+import { groupCarrierItems, lacksClientPhone } from "../carrierPhoneGroups";
 
 const HINT: Record<string, string> = {
   noManager: "Угоди повного циклу без відповідального. Випадають з усіх per-manager звітів.",
@@ -51,6 +52,7 @@ export function DataQualitySection() {
           </div>
         </div>
       )}
+      <CarrierPhonesBlock />
       {err && <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>}
       {!data && !err && <p className="loading-text">Перевірка…</p>}
       {data && (
@@ -94,5 +96,81 @@ export function DataQualitySection() {
         </>
       )}
     </>
+  );
+}
+
+const VERDICT_LABEL: Record<CarrierPhoneItem["verdict"], string> = {
+  no_phone: "немає жодного номера",
+  only_carrier: "лише номери перевізників",
+  has_carrier: "є номер перевізника",
+};
+
+/**
+ * 📵 Задача 7359 (ТЗ Юлії «Контакти клієнтів», етап 1): клієнти екрана «Клієнти та реактивація» без номера
+ * замовника або з номером перевізника — по командах і менеджерах, щоб кожен виправив свої картки в Kommo.
+ * Перевізник = номер з машин Lardi або номер, який закривали як «Перевізник»; номер з угодою замовника — ні.
+ */
+function CarrierPhonesBlock() {
+  const [d, setD] = useState<CarrierPhoneQuality | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [openTeams, setOpenTeams] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    fetchCarrierPhoneQuality().then(setD).catch(() => setErr("Не вдалося завантажити номери клієнтів."));
+  }, []);
+  if (err) return <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>;
+  if (!d) return <p className="loading-text">Номери клієнтів…</p>;
+  const groups = groupCarrierItems(d.items);
+  const lacks = d.counts.no_phone + d.counts.only_carrier;
+  // Одна команда (тімлід бачить лише свою) — розгорнута одразу.
+  const isOpen = (k: string) => openTeams[k] ?? groups.length === 1;
+  return (
+    <div className="chart-card" style={{ marginBottom: 16, borderLeft: `4px solid ${d.items.length > 0 ? "#d97706" : "#16a34a"}` }}>
+      <h2 className="chart-title" style={{ marginBottom: 4 }}>
+        📵 Номери клієнтів · {d.items.length > 0 ? <span style={{ color: "#d97706" }}>{d.items.length} з {d.counts.clients}</span> : <span style={{ color: "#16a34a" }}>усе гаразд ✓</span>}
+      </h2>
+      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 10px", maxWidth: 820 }}>
+        Клієнти екрана «Клієнти та реактивація»: <b>без номера замовника — {lacks}</b> (немає номера {d.counts.no_phone}, лише
+        номери перевізників {d.counts.only_carrier}) · <b>є номер перевізника — {d.counts.has_carrier}</b>.
+        Перевізник — номер із машин Lardi або номер, який закривали як «Перевізник»; номер з угодою замовника в роботі чи
+        в «Успіх» перевізником не вважається. Розмови на номери перевізників на екрані клієнтів не рахуються.
+        {" "}Довідник: {d.dictionary.phones.toLocaleString("uk-UA")} номерів
+        {d.dictionary.rebuiltAt ? `, оновлено ${d.dictionary.rebuiltAt}` : " — ще не зібрано (перевізників поки не виключено)"}.
+      </p>
+      {groups.map((t) => (
+        <div key={t.teamKey} style={{ borderTop: "1px solid var(--border)", padding: "6px 0" }}>
+          <button type="button" onClick={() => setOpenTeams((o) => ({ ...o, [t.teamKey]: !isOpen(t.teamKey) }))}
+            style={{ border: "none", background: "transparent", cursor: "pointer", fontWeight: 700, fontSize: 13, padding: 0, color: "var(--text)" }}>
+            {isOpen(t.teamKey) ? "▾" : "▸"} {t.teamName} · {t.total}
+          </button>
+          {isOpen(t.teamKey) && t.managers.map((m) => (
+            <div key={m.managerId} style={{ margin: "6px 0 4px 16px" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{m.managerName} · {m.items.length}</div>
+              <table className="data-table compact" style={{ minWidth: 560 }}>
+                <tbody>
+                  {m.items.map((it) => (
+                    <tr key={it.clientKey}>
+                      <td style={{ textAlign: "left", width: 260, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={it.clientName}>{it.clientName}</td>
+                      <td style={{ textAlign: "left", whiteSpace: "nowrap", color: lacksClientPhone(it.verdict) ? "#dc2626" : "#d97706", fontSize: 12 }}>{VERDICT_LABEL[it.verdict]}</td>
+                      <td style={{ textAlign: "left", fontSize: 12 }}>
+                        {it.phones.length === 0 ? <span style={{ color: "var(--text-muted)" }}>у контактах угод номерів немає</span>
+                          : it.phones.map((p) => (
+                            <span key={p.phone} style={{ display: "inline-block", marginRight: 10, color: p.carrier ? "#b45309" : "var(--text-muted)" }}>
+                              {p.phone}
+                              {p.carrier?.lardi && <span title={p.carrier.lardiCompany ?? undefined}> · Lardi{p.carrier.lardiCompany ? ` (${p.carrier.lardiCompany})` : ""}</span>}
+                              {p.carrier?.history && (p.carrier.historyUrl
+                                ? <> · <a href={p.carrier.historyUrl} target="_blank" rel="noreferrer" style={{ color: "#c5141c" }}>«Перевізник» ↗</a></>
+                                : " · «Перевізник»")}
+                            </span>
+                          ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
