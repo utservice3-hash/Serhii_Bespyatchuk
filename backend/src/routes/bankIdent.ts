@@ -359,7 +359,7 @@ async function outStates(ids: number[], txs: BankTx[], own: Set<number>) {
       txId: id, own: own.has(id) && !row, status: own.has(id) && !row ? "own" : outStatus(row, amount), amount,
       lines: (row?.lines ?? []).map((l) => {
         const d = l.kind === "deal" ? labels.get(Number(l.ref)) : undefined;
-        return { ...l, name: d?.name ?? null, manager: d?.manager ?? null, known: l.kind !== "deal" || !!d };
+        return { kind: l.kind, ref: l.ref, amount: l.amount, note: l.note, name: d?.name ?? null, manager: d?.manager ?? null, known: l.kind !== "deal" || !!d };
       }),
       sum: row ? sumLines(row.lines) : 0, text: row ? formatBreakdown(row.lines) : "",
       corrected: !!row?.corrected, by: row?.setByName ?? null, at: row?.setAt ?? null, reason: row?.reason ?? null,
