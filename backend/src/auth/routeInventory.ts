@@ -65,6 +65,7 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/constructor", module: "../routes/constructor.js", export: "constructorRouter" },
   { mount: "/api/surveys", module: "../routes/surveys.js", export: "surveysRouter" },
   { mount: "/api/minus-deals", module: "../routes/minusRegistry.js", export: "minusDealsRouter" },
+  { mount: "/api/linkedin-queue", module: "../routes/linkedinQueue.js", export: "linkedinQueueRouter" },
   { mount: "/api/counterparty", module: "../routes/counterparty.js", export: "counterpartyRouter" },
   { mount: "/api/client-limits", module: "../routes/counterparty.js", export: "clientLimitsRouter" },
   { mount: "/api/zakaz1c", module: "../routes/zakaz1c.js", export: "zakaz1cRouter" },
