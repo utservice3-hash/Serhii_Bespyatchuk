@@ -12,6 +12,7 @@
  *    дебіторка», плитки, фільтр «Прострочені», синк і звіти. Дні — ЕФЕКТИВНІ від дати рахунку: «від оригіналів» = дні + 10
  *    (`lag.orig`, рахунку дату оригіналів дебіторка не знає), «від вивантаження» / «від рахунку» = дні (рахунок ≈ вивантаження).
  *    Знятий ліміт (запит повернуто / відхилено після призупинення) — прибирається з дебіторки («не узгоджено»).
+ *    Призупинений (нова справа в суді, змінився власник / директор) — теж, доки Сергій не переузгодить (з 03.11.2026).
  *    Боржник без рядка в «Лімітах» — не чіпаємо (його ліміт, якщо є, лишається як був).
  */
 import type { Pool, PoolClient } from "pg";
@@ -82,17 +83,29 @@ export function effectiveDays(days: number | null, from: From): number | null {
   return days + (from === "orig" ? DEFAULT_LAG.orig : from === "inv" ? DEFAULT_LAG.inv : DEFAULT_LAG.od);
 }
 
-interface LimitForMirror { id: string; debtorKey: string | null; active: boolean; limit: number | null; days: number | null; from: From; members: Array<{ code: string }> }
+interface LimitForMirror {
+  id: string; debtorKey: string | null; active: boolean; limit: number | null; days: number | null; from: From; members: Array<{ code: string }>;
+  /** Призупинений (нова справа в суді, змінився власник / директор): позначка на ліміті або запит повернуто «На погодження». */
+  suspended?: boolean;
+}
 
-/** Знімок дзеркала: який ліміт дебіторки має стояти в кожного боржника, що має рядок у «Лімітах клієнтів». */
+/**
+ * Знімок дзеркала: який ліміт дебіторки має стояти в кожного боржника, що має рядок у «Лімітах клієнтів».
+ * 🛑 Призупинений ліміт = знятий, і він сильніший за все (рішення Романа 03.11.2026): поки Сергій не переузгодив, оплата
+ * перевізнику до оплати клієнта не йде «у межах ліміту». До цього дзеркало позначки не бачило, і «призупинено» було лише
+ * написом на екрані. Активний сильніший лише за ЗНЯТИЙ — не за призупинений.
+ */
 export function mirrorPlan(limits: LimitForMirror[], debtors: Array<{ key: string; codes: string[] }>):
   Map<string, { days: number | null; amount: number | null } | null> {
   const plan = new Map<string, { days: number | null; amount: number | null } | null>();
+  const held = new Set<string>();
   for (const l of limits) {
     const keys = new Set<string>();
     if (l.debtorKey) keys.add(l.debtorKey);
     for (const d of debtors) if (matches({ debtorKey: l.debtorKey, members: l.members.map((m) => ({ code: m.code, name: "" })) }, d)) keys.add(d.key);
     for (const k of keys) {
+      if (l.active && l.suspended) { plan.set(k, null); held.add(k); continue; }
+      if (held.has(k)) continue;
       if (!l.active) { if (!plan.has(k)) plan.set(k, null); continue; }      // активний ліміт сильніший за знятий
       plan.set(k, { days: effectiveDays(l.days, l.from), amount: l.limit });
     }
@@ -101,13 +114,14 @@ export function mirrorPlan(limits: LimitForMirror[], debtors: Array<{ key: strin
 }
 
 export async function mirrorToReceivables(pool: Pool, debts: DebtSource): Promise<{ set: number; cleared: number }> {
-  const lim = await pool.query<{ id: string; debtor_key: string | null; active: boolean; limit_sum: string | null; days: number | null; count_from: From; codes: string[] | null }>(
+  const lim = await pool.query<{ id: string; debtor_key: string | null; active: boolean; suspended: boolean; limit_sum: string | null; days: number | null; count_from: From; codes: string[] | null }>(
     `SELECT l.id::text, l.debtor_key, l.active, l.limit_sum::numeric AS limit_sum, l.days, l.count_from,
+            (l.flag IS NOT NULL OR (r.status = 'pending' AND r.flag IS NOT NULL)) AS suspended,
             (SELECT array_agg(m.code) FROM client_limit_members m WHERE m.limit_id = l.id) AS codes
-       FROM client_limits l`);
+       FROM client_limits l LEFT JOIN cp_requests r ON r.id = l.request_id`);
   const { list } = await debts.debtors();
-  const plan = mirrorPlan(lim.rows.map((r) => ({ id: r.id, debtorKey: r.debtor_key, active: r.active, limit: r.limit_sum == null ? null : Number(r.limit_sum),
-    days: r.days, from: r.count_from, members: (r.codes ?? []).map((code) => ({ code })) })), list);
+  const plan = mirrorPlan(lim.rows.map((r) => ({ id: r.id, debtorKey: r.debtor_key, active: r.active, suspended: r.suspended === true,
+    limit: r.limit_sum == null ? null : Number(r.limit_sum), days: r.days, from: r.count_from, members: (r.codes ?? []).map((code) => ({ code })) })), list);
   let set = 0, cleared = 0;
   const c: PoolClient = await pool.connect();
   try {
