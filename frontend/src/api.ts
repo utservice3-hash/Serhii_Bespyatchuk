@@ -973,6 +973,25 @@ export async function fetchDataQuality(): Promise<{ checks: DataQualityCheck[]; 
   return data;
 }
 
+/** 📵 Задача 7359: клієнти екрана «Клієнти та реактивація» без номера замовника або з номером перевізника. */
+export type CarrierPhoneVerdict = "no_phone" | "only_carrier" | "has_carrier";
+export interface CarrierPhoneItem {
+  clientKey: string; clientName: string; managerId: number; managerName: string;
+  teamId: number | null; teamName: string | null; verdict: CarrierPhoneVerdict;
+  phones: { phone: string; source: "contact" | "company"; carrier: { lardi: boolean; history: boolean; historyDeal: number | null; historyUrl: string | null; lardiCompany: string | null } | null }[];
+}
+export interface CarrierPhoneQuality {
+  counts: { clients: number; no_phone: number; only_carrier: number; has_carrier: number };
+  dictionary: { phones: number; rebuiltAt: string | null };
+  /** ☎️ Клієнтів, чию картку компанії ще не прочитано з Kommo (телефон компанії невідомий). */
+  companiesUnread: number;
+  items: CarrierPhoneItem[];
+}
+export async function fetchCarrierPhoneQuality(): Promise<CarrierPhoneQuality> {
+  const { data } = await api.get<CarrierPhoneQuality>("/dashboard/data-quality/carrier-phones");
+  return data;
+}
+
 export interface LeadQuality {
   /**
    * 🔴 УНІКАЛЬНІ КЛІЄНТИ в періоді (рішення власника 04.08.2026): один клієнт =
@@ -4921,6 +4940,8 @@ export interface ClientCard {
   callsShown?: number;
   callsLimit?: number;
   callsSince?: string | null;
+  /** 📵 Розмови на номери перевізників (задача 7359) — у перелік не входять, лише число. */
+  carrierTalks?: number;
   /** 🗒 Журнал керівницьких дій: архів, повернення з архіву, зміна відповідального. */
   adminLog?: { at: string; action: string; actor: string | null; details: Record<string, unknown> }[];
   clientKey: string; clientName: string; managerName: string | null; teamName: string | null;
@@ -5127,6 +5148,8 @@ export interface OrphanClientRow {
   kind: "legal" | "person"; kindWhy: "cashless" | "code" | "name" | "none";
   /** ☎️ До 3 телефонів з контактів Kommo, основний першим. */
   phones: string[];
+  /** 📵 Задача 7359: усі номери клієнта — перевізницькі (Lardi або «Перевізник»): «Взяти в роботу» неактивна. */
+  onlyCarrierPhones?: boolean;
 }
 export interface OrphanGroup {
   managerId: number; manager: string; reason: string; reasonLabel: string;

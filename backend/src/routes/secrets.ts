@@ -19,7 +19,7 @@ import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { promoteToPro, cancelLastLevel } from "../core/employeeLevel.js";
 import { churnReport, linkKommo, listExits, createExit, updateExit, setExitDeleted, ChurnError } from "../core/churn.js";
-import { vaultBotConfigured, vaultBotSend, vaultBotUsername } from "../bot/vaultBot.js";
+import { vaultBotConfigured, vaultBotSend, vaultBotUsername, vaultBotUsernameQuick } from "../bot/vaultBot.js";
 
 /**
  * 🔐 СЕЙФ ДОСТУПІВ СПІВРОБІТНИКІВ (18.09.2026).
@@ -69,7 +69,7 @@ secretsRouter.get("/status", async (req, res) => {
   try {
     const link = await vaultLinkState(pool as unknown as Db, me(req));
     res.json({ keyConfigured: key() != null, botConfigured: vaultBotConfigured(),
-      botUsername: vaultBotConfigured() ? await vaultBotUsername() : null, linked: link.linked, linkedAt: link.linkedAt });
+      botUsername: vaultBotConfigured() ? await vaultBotUsernameQuick() : null, linked: link.linked, linkedAt: link.linkedAt });
   } catch (e) { fail(res, e); }
 });
 

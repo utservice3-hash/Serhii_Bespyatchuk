@@ -1,7 +1,9 @@
 /**
  * Що робити зі свіжими даними YouControl по клієнту з лімітом (планова перевірка, щомісячні суди, ручна перевірка):
  *   нова справа за перевезення, клієнт — відповідач → призупинення (req — погодження в запиті; debt / set — сам ліміт);
- *   інші зміни (власники, директор, виконавчі, «особлива увага» в експрес-аналізі, стан у ЄДР) → позначка «зміни в YouControl»
+ *   змінились ЛЮДИ — власник / бенефіціар / директор (Роман 03.11.2026, `limitRules.peopleChange`) → призупинення до
+ *   переузгодження Сергієм, так само як через суд (req — запит «На погодження»; debt / set — позначка на ліміті);
+ *   інші зміни (частки, виконавчі, «особлива увага» в експрес-аналізі, стан у ЄДР) → позначка «зміни в YouControl»
  *   на 30 днів, без призупинення.
  * «Нова» справа = її ще не бачили (cl_court_seen) і немає в попередній перевірці; для юрособи без бази — лише ті, що надійшли після дати ліміту.
  */
@@ -11,6 +13,7 @@ import { changesSince, type CheckSubject, type CourtCase, type CpCheck } from '.
 import { dt, nf } from '../shared/cpFormat.js';
 import { addEvent, getCheck, getRequest, tx } from './cpStore.js';
 import { addLimitEvent, limitsByMember, markCourtsSeen } from './limitsStore.js';
+import { peopleChange } from '../limitRules.js';
 
 const caseLine = (c: CourtCase) => `${c.no}, клієнт — відповідач${c.sum ? `, ${nf(c.sum)} грн` : ''}${c.next ? `, засідання ${dt(c.next)}` : ''}`;
 export function flagText(cases: CourtCase[], member: { code: string; name: string } | null, source = 'Щомісячна перевірка') {
@@ -72,6 +75,32 @@ export async function flagLimit(pool: Pool, l: ClientLimit, code: string, cases:
 }
 
 /**
+ * Призупинити через зміну людей (власник / бенефіціар / директор). req — запит знову «На погодження» з позначкою kind 'people'
+ * (рішення за Сергієм у запиті); debt / set — позначка на ліміті («Лишити ліміт» / «Змінити ліміт»). Уже призупинений — не чіпаємо.
+ */
+export async function suspendForPeople(pool: Pool, l: ClientLimit, code: string, what: string, now: Date, checkId: string): Promise<boolean> {
+  if (l.suspended) return false;
+  const member = l.members.length > 1 ? l.members.find(m => m.code === code) || null : null;
+  const text = `Змінились люди після погодження${member ? ` (юрособа ${member.name}, ${member.code})` : ''}: ${what}.`;
+  const fl = { at: now.toISOString(), what: text, kind: 'people' as const };
+  if (l.src === 'req' && l.requestId) {
+    const rid = l.requestId;
+    return tx(pool, async db => {
+      const cur = (await db.query('SELECT status FROM cp_requests WHERE id = $1 FOR UPDATE', [rid])).rows[0];
+      if (!cur || cur.status !== 'approved') return false;
+      await db.query("UPDATE cp_requests SET status = 'pending', flag = $2, check_id = $3, updated_at = now() WHERE id = $1", [rid, JSON.stringify(fl), checkId]);
+      await addEvent(db, rid, 'suspended', null, text);
+      return true;
+    });
+  }
+  return tx(pool, async db => {
+    const u = await db.query('UPDATE client_limits SET flag = $2, updated_at = now() WHERE id = $1 AND active AND flag IS NULL', [l.id, JSON.stringify(fl)]);
+    if (u.rowCount) await addLimitEvent(db, l.id, 'limSuspended', null, text);
+    return !!u.rowCount;
+  });
+}
+
+/**
  * Свіжа перевірка (не щомісячна) клієнта з лімітом: нові справи → призупинення; інші зміни → позначка; запис в історії ліміту.
  * prev — попередня завершена перевірка цього коду (до цієї). planned — чи це планова (для підпису в історії).
  */
@@ -91,7 +120,9 @@ export async function afterCheck(pool: Pool, c: CpCheck, prev: CpCheck | null, n
   const source = c.src === 'planned' ? 'Планова перевірка' : 'Перевірка YouControl';
   let flagged = 0;
   for (const l of limits) {
+    const ppl = peopleChange(prev?.subj || null, subj, l.at);
     if (fresh.length && await flagLimit(pool, l, c.code, fresh, now, { checkId: c.id, source })) flagged++;
+    else if (ppl && await suspendForPeople(pool, l, c.code, ppl, now, c.id)) flagged++;
     else if (l.src === 'req' && l.requestId) await pool.query("UPDATE cp_requests SET check_id = $2 WHERE id = $1 AND status = 'approved'", [l.requestId, c.id]);
     if (changes.length) await pool.query('UPDATE client_limits SET notice = $2, updated_at = now() WHERE id = $1', [l.id, JSON.stringify({ at: now.toISOString(), what: changes.join('; ') })]);
     if (c.src === 'planned' || changes.length || fresh.length) {

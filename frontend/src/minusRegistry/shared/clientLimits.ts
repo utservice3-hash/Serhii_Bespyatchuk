@@ -25,10 +25,10 @@ export const LIMIT_EVENT_LABEL: Record<LimitEventType, string> = {
   changeRequested: 'Запит на зміну умов',
   changeRejected: 'Зміну умов відхилено — діють попередні',
   limitChanged: 'Ліміт змінено',
-  suspended: 'Погодження призупинено — нова справа',
+  suspended: 'Погодження призупинено',
   migrated: 'Перенесено з дебіторки',
   limitSet: 'Ліміт задано',
-  limSuspended: 'Ліміт призупинено — нова справа в суді',
+  limSuspended: 'Ліміт призупинено',
   kept: 'Ліміт лишено після перевірки судів',
   ended: 'Ліміт знято',
   planned: 'Перевірка YouControl',
@@ -56,7 +56,7 @@ export interface ClientLimit {
   managerName: string;
   at: string;                  // коли погоджено / перенесено / задано
   note: string;                // debt — звідки ліміт («діяв на рахунках з березня 2025»)
-  flag: Flag | null;           // нова справа в суді: req — з запиту, debt / set — з самого ліміту
+  flag: Flag | null;           // нова справа в суді / змінився власник: req — з запиту, debt / set — з самого ліміту
   suspended: boolean;          // req — погодження призупинено; debt / set — є flag
   change: ChangeReq | null;    // req — запит менеджера на зміну умов
   /** Планова перевірка знайшла зміни (новий власник / директор, нові виконавчі, «особлива увага» в експрес-аналізі) — 30 днів. Не призупиняє. */
@@ -64,7 +64,19 @@ export interface ClientLimit {
   /** Остання перевірка YouControl основної юрособи (для «Перевірити» / «Відкрити» в панелі). */
   lastCheck: { id: string; at: string } | null;
   hist: LimitEvent[];
+  /** Угоди клієнта в CRM (Роман 03.11.2026): matched=false — клієнта не зіставлено з CRM, ліміт за неактивністю не скидається. */
+  crm?: { matched: boolean; lastDealAt: string | null };
 }
+/** Ліміт, скинутий через 3 місяці без угод (Роман 03.11.2026): потрібен новий запит; старі умови — підказкою. */
+export interface ResetLimit {
+  id: string; name: string; kind: string; members: Member[];
+  limit: number | null; days: number | null; from: From;
+  managerId: string; managerName: string;
+  at: string;                  // коли скинуто
+  lastDealAt: string | null;   // остання угода клієнта (крім програних)
+}
+/** Чому призупинено — коротко, для рядка й комірки дебіторки. */
+export const suspendWhy = (f: Pick<Flag, 'kind'> | null | undefined) => (f?.kind === 'people' ? 'змінився власник / директор' : 'нова справа в суді');
 /** Борг з дебіторки. odDays — найбільша прострочка в днях, odSum — прострочена сума. */
 export interface DebtInfo { debt: number; odDays: number; odSum: number }
 export interface LimitRow extends ClientLimit, DebtInfo { over: boolean; use: number; alert: boolean }
@@ -142,12 +154,13 @@ export function withDebt(l: ClientLimit, d: DebtInfo | null): LimitRow {
   return { ...l, debt, odDays, odSum, over, use, alert: over || odDays > 0 || l.suspended };
 }
 
-export type LimFilter = 'all' | 'over' | 'od' | 'court' | 'notice' | 'none' | 'debt';
+export type LimFilter = 'all' | 'over' | 'od' | 'court' | 'people' | 'notice' | 'none' | 'debt' | 'reset';
 export const LFILTERS: Array<[LimFilter, string]> = [
-  ['all', 'Усі'], ['over', 'Перевищено ліміт'], ['od', 'Прострочено'], ['court', 'Нова справа в суді'], ['notice', 'Зміни в YouControl'], ['none', 'Ліміт не узгоджено'], ['debt', 'Перенесені з дебіторки'],
+  ['all', 'Усі'], ['over', 'Перевищено ліміт'], ['od', 'Прострочено'], ['court', 'Нова справа в суді'], ['people', 'Змінився власник / директор'], ['notice', 'Зміни в YouControl'], ['none', 'Ліміт не узгоджено'],
+  ['debt', 'Перенесені з дебіторки'], ['reset', 'Скинуто: 3 міс. без угод'],
 ];
 export const limIn = (x: AnyRow, k: LimFilter) => k === 'all' || (k === 'none' && isNoLimit(x))
-  || (!isNoLimit(x) && ((k === 'over' && x.over) || (k === 'od' && x.odDays > 0) || (k === 'court' && x.suspended) || (k === 'notice' && !!x.notice) || (k === 'debt' && x.src === 'debt')));
+  || (!isNoLimit(x) && ((k === 'over' && x.over) || (k === 'od' && x.odDays > 0) || (k === 'court' && x.suspended && x.flag?.kind !== 'people') || (k === 'people' && x.suspended && x.flag?.kind === 'people') || (k === 'notice' && !!x.notice) || (k === 'debt' && x.src === 'debt')));
 /**
  * Групування вкладки (Сергій 28.10: «групувати клієнтів по різних параметрах, сума, к-сть днів»). Точних значень забагато
  * (заміряно 28.10: 21 різна сума й 15 різних строків на 37 лімітів), тож — діапазони; межа входить у нижчу групу
@@ -188,6 +201,7 @@ export function shortName(name: string): string {
   return name;
 }
 
+/** 'reset' — окремий список (скинуті ліміти не є рядками реєстру), тож жоден рядок під нього не потрапляє. */
 /** Порядок: те, що потребує уваги, — угорі; далі боржники без ліміту; далі решта. */
 export const rowRank = (x: AnyRow) => (isNoLimit(x) ? 1 : x.alert ? 0 : 2);
 export const useTone = (u: number) => (u > 100 ? 'bad' : u >= 80 ? 'warn' : '');
@@ -248,6 +262,8 @@ export function parseLimitInput(b: unknown): LimitInput | { error: string } {
 export interface DebtorLimitCell {
   limitId: string | null; limit: number | null; days: number | null; from: From | null;
   status: 'ok' | 'over' | 'none'; suspended: boolean; use: number;
+  /** Чому призупинено (лише коли suspended). */
+  why?: string;
   /** Менеджер ліміту (у боржника без ліміту — «Відповідальний» з дебіторки). */
   managerId: string | null;
   /** Ставить сервер для того, хто дивиться: свій клієнт менеджера / тім-ліда → «Запросити зміну» («Запросити ліміт»). */
@@ -255,7 +271,8 @@ export interface DebtorLimitCell {
 }
 export function debtorCell(row: LimitRow | null, d?: Pick<Debtor, 'managerId'> | null): DebtorLimitCell {
   if (!row) return { limitId: null, limit: null, days: null, from: null, status: 'none', suspended: false, use: 0, managerId: d?.managerId ?? null };
-  return { limitId: row.id, limit: row.limit, days: row.days, from: row.from, status: row.over ? 'over' : 'ok', suspended: row.suspended, use: row.use, managerId: row.managerId };
+  return { limitId: row.id, limit: row.limit, days: row.days, from: row.from, status: row.over ? 'over' : 'ok', suspended: row.suspended, use: row.use, managerId: row.managerId,
+    ...(row.suspended ? { why: suspendWhy(row.flag) } : {}) };
 }
 /** Комірки для користувача: Сергій міняє олівцями (canEdit у відповіді), менеджер / тім-лід свого клієнта — «Запросити зміну», решта — лише бачить. */
 export function cellsFor(u: CpUser, cells: Record<string, DebtorLimitCell>): Record<string, DebtorLimitCell> {

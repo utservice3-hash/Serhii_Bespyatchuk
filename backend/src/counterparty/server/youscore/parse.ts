@@ -166,7 +166,7 @@ export function parseOwnership(usr: any, history: any, counts: OwnerCounts, reg:
       .map((f: any) => ({ name: niceName(s(f.name)), capital: numOrNull(f.capital) })),
   }));
   const [fPrev, fLast] = lastChange<{ at: string | null; founders: Array<{ name: string; capital: number | null }> }>(snaps);
-  let ownersAt: string | null = null, ownersWhat = '';
+  let ownersAt: string | null = null, ownersWhat = '', peopleAt: string | null = null;
   if (fPrev && fLast) {
     const a = new Map(fPrev.founders.map(f => [f.name.toLowerCase(), f])), b = new Map(fLast.founders.map(f => [f.name.toLowerCase(), f]));
     const out = [...a.values()].filter(f => !b.has(f.name.toLowerCase())).map(f => `вийшов ${f.name}`);
@@ -177,8 +177,9 @@ export function parseOwnership(usr: any, history: any, counts: OwnerCounts, reg:
     const share = [...b.values()].filter(f => a.has(f.name.toLowerCase()) && a.get(f.name.toLowerCase())!.capital !== f.capital).map(f => `змінено частку ${f.name}`);
     const all3 = [...out, ...inn, ...share];
     if (all3.length) { ownersAt = fLast.at; ownersWhat = all3.join(', '); }
+    if (out.length || inn.length) peopleAt = fLast.at;
   }
-  return { capital, owners, bens, benNote, director, ownersAt, ownersWhat, dirAt, dirWhat };
+  return { capital, owners, bens, benNote, director, ownersAt, ownersWhat, dirAt, dirWhat, peopleAt };
 }
 
 /**

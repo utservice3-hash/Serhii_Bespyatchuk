@@ -3,6 +3,7 @@ import { debts, runner, youscore } from "../counterparty/mount.js";
 import { migrateLegacyLimits, mirrorToReceivables } from "../counterparty/legacyLimits.js";
 import { runPlannedChecks } from "../counterparty/server/plannedChecks.js";
 import { runCourtMonitor } from "../counterparty/server/courtMonitor.js";
+import { resetInactiveLimits } from "../counterparty/limitRulesDb.js";
 import { createRunGuard } from "./runGuard.js";
 
 /**
@@ -24,6 +25,18 @@ export function clientLimitsMirror() {
     const mig = await migrateLegacyLimits(pool);
     const mir = await mirrorToReceivables(pool, debts);
     if (mig.inserted || mir.set || mir.cleared) console.log(`[client-limits] перенесено ${mig.inserted}, дзеркало: оновлено ${mir.set}, знято ${mir.cleared}`);
+  });
+}
+
+/**
+ * clientLimitsReset — щодня 06:30 за Києвом (Роман 03.11.2026): ліміт клієнта, у якого 3 місяці немає угод і немає боргу,
+ * скидається — потрібен новий запит. Лише наша БД, транзакцій YouScore не витрачає, тож від CP_BACKGROUND_CHECKS не залежить.
+ */
+const resetGuard = createRunGuard("clientLimitsReset", 30 * 60_000);
+export function clientLimitsReset() {
+  return resetGuard(async () => {
+    const r = await resetInactiveLimits(pool, debts);
+    if (r.reset.length) console.log(`[client-limits] скинуто за неактивністю: ${r.reset.length} із ${r.checked} (id ${r.reset.join(", ")})`);
   });
 }
 

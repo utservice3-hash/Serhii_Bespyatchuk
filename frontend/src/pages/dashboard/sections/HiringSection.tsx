@@ -25,6 +25,9 @@ import "./hiring.css";
  */
 type Tab = "sched" | "base" | "vac" | "train" | "daily" | "acc" | "tpl" | PlannedTab;
 
+/** Сервер відмовив у доступі (а не впав чи не встиг): 401/403. */
+const denied = (e: unknown) => { const st = (e as { response?: { status?: number } })?.response?.status; return st === 401 || st === 403; };
+
 export function HiringSection() {
   const [meta, setMeta] = useState<HiringMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -41,10 +44,12 @@ export function HiringSection() {
   // 🔐 «Доступи» бачить лише той, кому сервер відповідає (право `view_employee_secrets`). Не з токена:
   // право могли видати після входу, а сервер однаково гейтить кожен запит.
   const [canSecrets, setCanSecrets] = useState(false);
-  useEffect(() => { fetchSecretsStatus().then(() => setCanSecrets(true)).catch(() => setCanSecrets(false)); }, []);
+  // «скоро» — лише коли сервер СПРАВДІ відмовив (401/403). Тайм-аут чи збій ≠ «немає права» (03.11.2026: зависле
+  // `getMe` Telegram валило три вкладки в заглушку всім, у кого право є); дані вкладок однаково гейтить сервер.
+  useEffect(() => { fetchSecretsStatus().then(() => setCanSecrets(true)).catch((e) => setCanSecrets(!denied(e))); }, []);
   // 👥 Тімлід (29.09.2026): «Співробітники» — люди й паролі СВОЄЇ команди (право `view_team_secrets`, межа — сервер).
   const [canTeam, setCanTeam] = useState(false);
-  useEffect(() => { fetchTeamVaultStatus().then(() => setCanTeam(true)).catch(() => setCanTeam(false)); }, []);
+  useEffect(() => { fetchTeamVaultStatus().then(() => setCanTeam(true)).catch((e) => setCanTeam(!denied(e))); }, []);
 
   // 🔔 Спільне повідомлення дашборда (`components/Toasts.tsx`) — раніше тут жила своя копія.
   const toast: Toast = useToast();

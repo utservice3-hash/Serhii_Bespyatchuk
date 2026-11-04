@@ -7534,3 +7534,25 @@ UPDATE roles SET screen_access = screen_access || '{"linkedin":false}'::jsonb
   WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp') AND NOT (screen_access ? 'linkedin');
 UPDATE roles SET screen_access = screen_access - 'linkedin'
  WHERE key = 'financier';
+
+-- 📵 ДОВІДНИК НОМЕРІВ ПЕРЕВІЗНИКІВ (задача 7359, ТЗ Юлії «Контакти клієнтів», етап 1). Останні 9 цифр номера з
+-- машин Lardi (`side='lorry'`) або з угод, закритих як «Перевізник», МІНУС номери з угодою замовника («Успіх» чи в
+-- роботі; рішення Романа 03.11.2026). Похідна таблиця: повністю перебудовується з `lardi_offers` і `deals` джобою
+-- `rebuildCarrierPhones` (щогодини + старт), визначення — `core/carrierPhones.ts`. Читачі: розмови на екрані клієнтів,
+-- «Якість даних», «Взяти в роботу» в нічийних. Порожня таблиця = нічого не виключено (поведінка до задачі).
+-- ⚠️ revert коду таблицю не прибирає, але без коду її ніхто не читає. Відкат даних: DROP TABLE carrier_phones.
+CREATE TABLE IF NOT EXISTS carrier_phones (
+  p9            TEXT PRIMARY KEY CHECK (p9 ~ '^[0-9]{9}$'),
+  via_lardi     BOOLEAN NOT NULL,
+  via_history   BOOLEAN NOT NULL,
+  history_deal  BIGINT,
+  lardi_company TEXT,
+  rebuilt_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (via_lardi OR via_history)
+);
+
+-- ☎️ ТЕЛЕФОНИ З КАРТКИ КОМПАНІЇ (задача 7359, 03.11.2026): у частини клієнтів у Kommo немає контактів, телефон лише в полі
+-- «Телефон» компанії. Нормалізовані (`utils/phone.ts`). NULL = ще не прочитано (до дозаповнення) — НЕ «телефонів немає»;
+-- '{}' = прочитано, телефонів немає. Пише `syncKommo` (той самий знімок компаній) і разове `backfillCompanyPhones`.
+-- Відкат даних: ALTER TABLE kommo_companies DROP COLUMN phones.
+ALTER TABLE kommo_companies ADD COLUMN IF NOT EXISTS phones TEXT[];

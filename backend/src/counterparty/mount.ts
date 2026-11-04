@@ -24,6 +24,7 @@ import { dirFileStore } from "./server/fileStore.js";
 import { cachedDebtSource } from "./server/debtSource.js";
 import { receivablesDebtSource } from "./debtSourceDb.js";
 import { clientDirectoryDb } from "./clientDirectoryDb.js";
+import { crmOfLimits, listResetLimits } from "./limitRulesDb.js";
 import { mirrorToReceivables } from "./legacyLimits.js";
 import type { CpRole } from "./shared/counterparty.js";
 import { cpApproverIds, cpRoleOf, youScoreFromOurEnv } from "./roles.js";
@@ -86,6 +87,7 @@ export function buildCounterpartyRouter(): Router {
 export function buildClientLimitsRouter(): Router {
   const r = gate(RECEIVABLES_TAB);
   r.use(mirrorAfterWrites());
-  r.use(clientLimitsRouter(pool, { debts, clients: clientDirectoryDb(pool), roleOf, teamOf }));
+  r.use(clientLimitsRouter(pool, { debts, clients: clientDirectoryDb(pool), roleOf, teamOf,
+    crm: (limits, list) => crmOfLimits(pool, limits, list), resets: () => listResetLimits(pool) }));
   return r;
 }
