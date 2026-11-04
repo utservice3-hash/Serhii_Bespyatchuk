@@ -5894,13 +5894,22 @@ export interface NominationWeek {
   marginFlagPct: number;
   /** 📷 Фото людей тижня: id менеджера Kommo → фото співробітника (немає в мапі — ініціали). */
   photos: Record<string, PhotoRef>;
+  /** 🏆 Топ-3 на весь комерційний відділ (04.11.2026) — лише керівництву, інакше `null`. */
+  companyTop: Record<string, NominationTopRow[]> | null;
+  /** Тексти тижня для презентації (фокус наступного тижня). */
+  texts: Partial<Record<"focus", { text: string; by: string | null; at: string }>>;
+  /** Фото команди на титулі (версія = id запису) — лише керівництву. */
+  teamPhoto: { v: number } | null;
 }
+export interface NominationTopRow { place: number; managerId: number; teamId: number; value: number; manual: boolean }
 export interface NominationDef { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct"; rule: string; notCounted: string; noCrm?: boolean }
 export interface RnkConvRow {
   managerId: number; name: string; teamId: number; taken: number; won: number; pct: number | null;
   /** «Всього» за фільтром Kommo, разом із «Не цільовими» (лише число системи). */
   total: number;
   crm: { taken: number; won: number }; own: { by: string | null; at: string } | null; onSlide: boolean; canEditRow: boolean;
+  /** Відсоток тієї ж людини минулого тижня — для ▲/▼; `null` — лідів не було. */
+  prevPct: number | null;
 }
 export interface RnkConvView {
   rows: RnkConvRow[]; comment: { text: string; by: string | null; at: string } | null; canComment: boolean;
@@ -5957,6 +5966,23 @@ export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
       .then((r) => URL.createObjectURL(r.data as Blob))
       .catch(() => { photoUrls.delete(k); return null; });
     photoUrls.set(k, u);
+  }
+  return u;
+}
+
+/** 🎞 Тексти тижня й фото команди для нової презентації (04.11.2026) — лише керівництво. */
+export const saveWeekText = async (p: { weekFrom: string; kind: "focus"; text: string }) =>
+  (await api.post<{ texts: NominationWeek["texts"] }>("/nominations/texts", p)).data.texts;
+export const uploadTeamPhoto = async (dataBase64: string) =>
+  (await api.post<{ teamPhoto: { v: number } }>("/nominations/team-photo", { dataBase64 })).data.teamPhoto;
+const teamPhotoUrls = new Map<number, Promise<string | null>>();
+export function teamPhotoUrl(v: number): Promise<string | null> {
+  let u = teamPhotoUrls.get(v);
+  if (!u) {
+    u = api.get("/nominations/team-photo", { responseType: "blob", params: { v } })
+      .then((r) => URL.createObjectURL(r.data as Blob))
+      .catch(() => { teamPhotoUrls.delete(v); return null; });
+    teamPhotoUrls.set(v, u);
   }
   return u;
 }

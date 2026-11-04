@@ -131,7 +131,8 @@ test("#666 ДИМ: лідогенератори (живі, дані тімлід
     assert.ok(rows13.length > 0 && rows13.every((r: any) => r.teamId === 13 && r.canEditRow === true), "🔴 тімлід РНК бачить чужі рядки конверсії");
     assert.equal(rows13.some((r: any) => r.managerId === 150), false, "🔴 тімлід РНК бачить рядок другої команди РНК");
     assert.equal((await call("POST", "/rnk-conv", { who: "lead", body: { weekFrom: WEEK, action: "set", managerId: 150, taken: 5, won: 1 } })).status, 403, "🔴 тімлід РНК правит чужу команду РНК");
-    assert.equal((await call("GET", "/week", { who: "rpk", query: q })).body.rnkConv, null, "🔴 тімлід РПК бачить конверсію РНК");
+    // З 04.11.2026 конверсія — на весь відділ (#3463): тімлід РПК бачить лише рядки своєї команди, а не РНК.
+    assert.ok(((await call("GET", "/week", { who: "rpk", query: q })).body.rnkConv.rows as { teamId: number }[]).every((r) => r.teamId === 5), "🔴 тімлід РПК бачить конверсію чужої команди");
     const conv = (who: string, body: object) => call("POST", "/rnk-conv", { who, body: { weekFrom: WEEK, ...body } });
     assert.equal((await conv("rpk", { action: "set", managerId: 101, taken: 24, won: 4, onSlide: true })).status, 403, "🔴 тімлід РПК правит конверсію РНК");
     assert.equal((await conv("lead", { action: "comment", comment: "x" })).status, 403, "🔴 коментар пише не керівництво");

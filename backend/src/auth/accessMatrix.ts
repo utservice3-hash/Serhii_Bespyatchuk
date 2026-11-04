@@ -513,6 +513,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
   /* 🔒 «Зафіксувати остаточно» (29.09.2026) — лише керівництво: тімлід проходить tab-гейт, але обробник дає 403. */
   { method: "POST", path: "/api/nominations/lock", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead"] },
+  /* 🎞 Нова презентація (04.11.2026): тексти тижня й фото команди — лише керівництво; тімлід проходить tab-гейт, обробник дає 403. */
+  { method: "POST", path: "/api/nominations/texts", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
+  { method: "GET", path: "/api/nominations/team-photo", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
+  { method: "POST", path: "/api/nominations/team-photo", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
   /* 📷 Фото співробітників (22.09.2026). Саме фото — будь-кому залогіненому (0 → 400/404, але не 403);
      список і запис — право сейфу `view_employee_secrets`: admin, ceo, opdir, kvp, hr. Запис — deny-only. */
   /* Кандидат (з 27.10.2026 — бачить, орг-структура): проба матриці ходить від НЕАКТИВНОГО кандидата, і її раніше

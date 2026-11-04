@@ -4068,6 +4068,30 @@ DROP TRIGGER IF EXISTS trg_nomination_week_locks_immutable ON nomination_week_lo
 CREATE TRIGGER trg_nomination_week_locks_immutable BEFORE UPDATE OR DELETE ON nomination_week_locks
   FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
 
+-- 🎞 НОВА ПРЕЗЕНТАЦІЯ ЗА МАКЕТОМ ДАШІ (04.11.2026). Тексти тижня («Фокус наступного тижня») і фото команди на титулі.
+-- Обидві — лише дописування: діє останній запис; історія лишається. ⚠️ revert коду таблиць і файлів фото не прибирає.
+CREATE TABLE IF NOT EXISTS nomination_week_texts (
+  id          BIGSERIAL PRIMARY KEY,
+  week_from   DATE NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('focus')),
+  text        TEXT NOT NULL CHECK (length(text) <= 400),
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_nomination_week_texts_week ON nomination_week_texts(week_from, kind, id);
+DROP TRIGGER IF EXISTS trg_nomination_week_texts_immutable ON nomination_week_texts;
+CREATE TRIGGER trg_nomination_week_texts_immutable BEFORE UPDATE OR DELETE ON nomination_week_texts
+  FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
+CREATE TABLE IF NOT EXISTS nomination_team_photos (
+  id          SERIAL PRIMARY KEY,
+  file        TEXT NOT NULL CHECK (file ~ '^photo-[0-9a-f-]+\.(jpg|png|webp)$'),
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+DROP TRIGGER IF EXISTS trg_nomination_team_photos_immutable ON nomination_team_photos;
+CREATE TRIGGER trg_nomination_team_photos_immutable BEFORE UPDATE OR DELETE ON nomination_team_photos
+  FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
+
 -- Вкладка «Номінації тижня»: керівництво (admin, ceo, opdir, kvp) і тімліди. Менеджерам — дошка в
 -- проході 3. ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
 UPDATE roles SET screen_access = screen_access || '{"nominations":true}'::jsonb

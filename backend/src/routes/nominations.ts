@@ -2,11 +2,14 @@ import { Router, type Request, type Response } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { isAdminScope } from "../auth/rbac.js";
-import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, rnkConvWeek, LEADGEN_TEAM_ID, type WeekView } from "../core/nominations.js";
+import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, nominationRoster, weekTexts, LEADGEN_TEAM_ID, type WeekView } from "../core/nominations.js";
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
+import path from "node:path";
+import { checkPhoto, photoDir, photoStoredName } from "../core/peopleRules.js";
 import type { TeamWeek } from "../core/nominationRules.js";
 import { managerPhotos, employeePhotos } from "../core/people.js";
-import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateConvEdit, validateManualSlide, isEditOpen, HIDDEN_ON_SCREEN, NOMINATIONS, LEADGEN_NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
-import { RNK_TEAM_IDS } from "../core/metrics.js";
+import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateConvEdit, validateManualSlide, validateWeekText, companyTop, isEditOpen, HIDDEN_ON_SCREEN, NOMINATIONS, LEADGEN_NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
 
 /**
  * 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026). Дві межі, як у найму:
@@ -52,8 +55,8 @@ async function withRights(view: WeekView, v: Viewer) {
   // керівництво (усю) і тімлід команди РНК (лише свою команду). Решті — `null`, а не порожньо.
   const admin = v.role === "admin";
   const leadgen = view.leadgen && (admin || v.teamId === LEADGEN_TEAM_ID) ? withCells(view.leadgen) : null;
-  const rnkLead = v.teamId != null && (RNK_TEAM_IDS as readonly number[]).includes(v.teamId);
-  const rnkConv = view.rnkConv && (admin || rnkLead) ? {
+  // З 04.11.2026 конверсія — на весь відділ: тімлід будь-якої команди бачить і править рядки своєї команди.
+  const rnkConv = view.rnkConv && (admin || (v.teamId != null && view.teams.some((t) => t.teamId === v.teamId))) ? {
     comment: view.rnkConv.comment,
     // «Поза списком джерел» — число по ВСЬОМУ відділу, тож тімліду його не віддаємо (скоуп звужує відповідь).
     outside: admin ? view.rnkConv.outside ?? 0 : null,
@@ -69,6 +72,10 @@ async function withRights(view: WeekView, v: Viewer) {
     depts: view.depts.filter((d) => !HIDDEN_ON_SCREEN.includes(d.nomination)),
     teams: view.teams.map(withCells),
     leadgen, rnkConv,
+    // 🏆 Топ-3 на весь відділ — лише керівництву (презентація — їхня): рахується над УСІМА командами тижня.
+    companyTop: admin ? Object.fromEntries(NOMINATIONS.filter((n) => !HIDDEN_ON_SCREEN.includes(n.key)).map((n) => [n.key, companyTop(view.teams, n.key)])) : null,
+    texts: await weekTexts(view.weekFrom),
+    teamPhoto: admin ? await teamPhotoRef() : null,
   };
 }
 /** Команда рядка рішення: звичайна команда заліку або рейтинг лідогенераторів. */
@@ -178,10 +185,10 @@ nominationsRouter.post("/rnk-conv", safe(async (req: Request, res: Response) => 
   if (b.action === "comment") {
     if (v.role !== "admin") return res.status(403).json({ error: "Коментар до статистики відділу пише керівництво" });
   } else {
-    // Лише таблиця конверсії цього тижня — без перерахунку всіх номінацій (ревʼю 22.09).
-    const conv = await rnkConvWeek(b.weekFrom, weekOf(b.weekFrom).to);
-    const row = conv.rows.find((r) => r.managerId === b.managerId);
-    if (!row) return res.status(404).json({ error: "Цього менеджера немає в статистиці рекламних команд за тиждень" });
+    // Людина без лідів у таблиці не показується, але правити її можна: межу дає ростер відділу тижня, а не видимі рядки
+    // (04.11.2026 — таблиця на весь відділ, нулі сховано).
+    const row = (await nominationRoster(null, b.weekFrom)).map((r) => ({ managerId: r.id, teamId: r.teamId })).find((r) => r.managerId === b.managerId);
+    if (!row) return res.status(404).json({ error: "Цього менеджера немає в комерційному відділі за тиждень" });
     if (v.role !== "admin" && row.teamId !== v.teamId) return res.status(403).json({ error: "тімлід править лише свою команду" });
   }
   await pool.query(
@@ -203,6 +210,52 @@ nominationsRouter.post("/lock", safe(async (req: Request, res: Response) => {
   if (!fz) return res.status(409).json({ error: "Тиждень ще не зафіксовано — спершу знімок (вт 15:00)" });
   await pool.query(`INSERT INTO nomination_week_locks (week_from, user_id) VALUES ($1, $2) ON CONFLICT (week_from) DO NOTHING`, [weekFrom, req.auth!.userId]);
   res.json(await withRights(await nominationWeek(weekFrom, v.teamId), v));
+}));
+
+/**
+ * 🎞 ТЕКСТИ ТИЖНЯ ДЛЯ ПРЕЗЕНТАЦІЇ (04.11.2026, макет Даші): «Фокус наступного тижня». Лише керівництво — це підготовка
+ * зустрічі. Лише дописування; порожній текст = прибрати (на слайді тоді підказка, а не порожнеча).
+ */
+nominationsRouter.post("/texts", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v || v.role !== "admin") return res.status(403).json({ error: "Тексти презентації пише керівництво" });
+  const p = validateWeekText(req.body);
+  if (!p.ok) return res.status(400).json({ error: p.error });
+  await pool.query(`INSERT INTO nomination_week_texts (week_from, kind, text, user_id) VALUES ($1,$2,$3,$4)`, [p.value.weekFrom, p.value.kind, p.value.text, req.auth!.userId]);
+  res.json({ texts: await weekTexts(p.value.weekFrom) });
+}));
+
+/**
+ * 📷 ФОТО КОМАНДИ НА ТИТУЛІ (04.11.2026). Одне на всі тижні: Даша завантажує, коли хоче змінити. Файл — у корені теки
+ * документів з префіксом `photo-` (як фото співробітників, під нічним бекапом); у таблиці — лише дописування.
+ */
+async function teamPhotoRef(): Promise<{ v: number } | null> {
+  const r = (await pool.query<{ id: number }>(`SELECT id FROM nomination_team_photos ORDER BY id DESC LIMIT 1`)).rows[0];
+  return r ? { v: r.id } : null;
+}
+nominationsRouter.get("/team-photo", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v || v.role !== "admin") return res.status(403).json({ error: "Фото команди — для керівництва" });
+  const r = (await pool.query<{ file: string }>(`SELECT file FROM nomination_team_photos ORDER BY id DESC LIMIT 1`)).rows[0];
+  if (!r) return res.status(404).json({ error: "Фото команди ще не завантажено" });
+  res.sendFile(path.join(photoDir(), path.basename(r.file)), { headers: { "Cache-Control": "private, max-age=86400" } }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: "Файл фото на диску не знайдено" });
+  });
+}));
+nominationsRouter.post("/team-photo", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v || v.role !== "admin") return res.status(403).json({ error: "Фото команди завантажує керівництво" });
+  const raw = req.body?.dataBase64;
+  const buf = typeof raw === "string" && raw ? Buffer.from(raw.includes(",") ? raw.split(",")[1] : raw, "base64") : null;
+  const chk = checkPhoto(buf);
+  if (!chk.ok) return res.status(400).json({ error: chk.error });
+  const stored = photoStoredName(randomUUID(), chk.mime);
+  await mkdir(photoDir(), { recursive: true });
+  await writeFile(path.join(photoDir(), stored), buf!);
+  try {
+    await pool.query(`INSERT INTO nomination_team_photos (file, user_id) VALUES ($1, $2)`, [stored, req.auth!.userId]);
+  } catch (e) { await unlink(path.join(photoDir(), stored)).catch(() => undefined); throw e; }
+  res.status(201).json({ teamPhoto: await teamPhotoRef() });
 }));
 
 /**
