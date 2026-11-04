@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { createPortal } from "react-dom";
 import {
   fetchReportPlan, fetchPresentationExtras, teamPhotoUrl,
   type NominationWeek, type NominationKey, type NominationTopRow, type ReportPlan, type PresentationExtras,
@@ -122,7 +123,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       if (ev.length) out.push({ key: "events", node: (
         <div className="ps-slide2">
           {head("КОМАНДА", "ПОДІЇ ТИЖНЯ", 2)}
-          <div className={`ps-evs${ev.length > 3 ? " many" : ""}`}>
+          <div className={`ps-evs n${Math.min(ev.length, 6)}`}>
             {ev.slice(0, 6).map((e) => (
               <div className={`ps-ev ${e.tone}`} key={e.k}>
                 {empAva(e.id, e.name, "ps-evava")}
@@ -162,7 +163,10 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
     // 4–5 · Топ-3 на весь відділ
     const topCol = (k: NominationKey, title: string) => {
       const rows: NominationTopRow[] = week.companyTop?.[k] ?? [];
-      const shown = rows.slice(0, 5);
+      // Три рядки на слайд (ревʼю 04.11.2026: при нічиї рядки вилазили за край слайда). Хто ділить місце з третім рядком —
+      // підписом знизу, а не мовчки зникає.
+      const shown = rows.slice(0, 3);
+      const tied = rows.slice(3).filter((r) => shown.length === 3 && r.place === shown[2].place);
       return (
         <div className="ps-tcol">
           <div className="ps-tcol-h">{title}</div>
@@ -174,7 +178,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
                 <div className={`ps-tval${r.place === 1 ? " first" : ""}`}>{valueText(k, r.value)}{r.manual ? <span className="ps-manual">✎</span> : null}</div></div>
             </div>
           ))}
-          {rows.length > shown.length ? <div className="ps-more">ще {rows.length - shown.length} з тим самим результатом</div> : null}
+          {tied.length ? <div className="ps-more">з тим самим результатом: {tied.map((r) => short(name(r.managerId))).join(", ")}</div> : null}
         </div>
       );
     };
@@ -202,7 +206,9 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
         const m = Math.max(...ok.map((x) => val(x)!), -Infinity);
         return ok.filter((x) => val(x) === m);
       };
-      const proryv = best(weekRep.managers.filter((m) => m.plan > 0), (m) => m.pct);
+      // Люди на адаптації (перший місяць) у «Прорив» не йдуть: план тижня новачка крихітний (ревʼю 04.11.2026, «2664%»).
+      const adapting = new Set(extras.adaptingManagerIds ?? []);
+      const proryv = best(weekRep.managers.filter((m) => m.plan > 0 && !adapting.has(m.managerId)), (m) => m.pct);
       const clients = best(extras.newClients.rows, (r) => r.first);
       const sniper = best((week.rnkConv?.rows ?? []).filter((r) => r.onSlide), (r) => r.pct);
       const rookie = best(extras.rookies, (r) => r.cars);
@@ -275,7 +281,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       const trend = (now: number | null, prev: number | null) => {
         if (now == null || prev == null) return <span className="ps-tr none">—</span>;
         const d = Math.round(now - prev);
-        return d > 0 ? <span className="ps-tr up">▲ {d}</span> : d < 0 ? <span className="ps-tr down">▼ {-d}</span> : <span className="ps-tr none">=</span>;
+        return d > 0 ? <span className="ps-tr up">▲ {d} п.п.</span> : d < 0 ? <span className="ps-tr down">▼ {-d} п.п.</span> : <span className="ps-tr none">=</span>;
       };
       out.push({ key: "conv", node: (
         <div className="ps-slide2 dark">
@@ -316,6 +322,19 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
 
   const n = slides.length;
   const go = (k: number) => setI(Math.max(0, Math.min(n - 1, k)));
+  /**
+   * 📄 ЗАВАНТАЖИТИ PDF (04.11.2026). Усі слайди стосом у корені сторінки (портал), по сторінці 1280×720 на слайд, і системне
+   * вікно друку — там «Зберегти як PDF». Без бібліотек: текст лишається текстом, кольори — через print-color-adjust.
+   */
+  const [printing, setPrinting] = useState(false);
+  useEffect(() => {
+    if (!printing) return;
+    const done = () => setPrinting(false);
+    addEventListener("afterprint", done);
+    // Дати браузеру намалювати стос (і шрифти) перед друком.
+    const t = setTimeout(() => window.print(), 400);
+    return () => { clearTimeout(t); removeEventListener("afterprint", done); };
+  }, [printing]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -353,12 +372,14 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
         <button onClick={() => go(i - 1)} aria-label="попередній слайд" disabled={i === 0}>←</button>
         <span>{Math.min(i + 1, n)} / {n}</span>
         <button onClick={() => go(i + 1)} aria-label="наступний слайд" disabled={i >= n - 1}>→</button>
+        <button onClick={() => setPrinting(true)} disabled={printing}>{printing ? "Готую PDF…" : "Завантажити PDF"}</button>
         <button onClick={full}>На весь екран</button>
         <button onClick={onClose}>Закрити</button>
       </div>
       <div className="ps-viewport" ref={viewport} onClick={(e) => { if (e.target === viewport.current) go(i + 1); }}>
         <div className="ps-stage" style={{ transform: `translate(-50%, -50%) scale(${scale})` }}>{cur?.node}</div>
       </div>
+      {printing ? createPortal(<div className="ps-print-root">{slides.map((sl) => <div className="ps-print-page" key={sl.key}>{sl.node}</div>)}</div>, document.body) : null}
     </div>
   );
 }
