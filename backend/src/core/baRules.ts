@@ -138,6 +138,14 @@ export const TTN_STATUS_ID = 142;
 export const TTN_PAYMENT_FIELD_ID = 2097629;
 export const TTN_PAYMENT_TYPES = ["Безнал с НДС", "Безнал без НДС"] as const;
 export const TTN_PAYMENT_ENUM_IDS = [6342295, 6342297] as const;
+/**
+ * 📄 ТТН «ЗА ДОКУМЕНТАМИ» (Даша, рішення Романа 04.11.2026). Угода без файла в полі «ТТН» теж має ТТН, коли зійшлось усе
+ * три: розхід безнал — з ПДВ або без, у будь-якому з «Расход 1–5» (`deal_fin_fields.out_vat` / `out_novat`); «Оплачено
+ * из 1с» (`deal_fin_fields.paid1c`); «Оригиналы получено» (`deals.originals_received`, поле Kommo 2097501).
+ * Прихід безнал уже стоїть у фільтрі угод. Одне визначення на всі запити (`f` — `deal_fin_fields`, `d` — `deals`).
+ */
+export const TTN_BY_DOCS_SQL = `(d.originals_received IS TRUE AND f.paid1c IS TRUE AND (f.out_vat <> 0 OR f.out_novat <> 0))`;
+
 /** Норма відповідності (рішення Романа 29.09.2026 за відповіддю Даші: «мінімум 70%»). */
 export const TTN_NORM_PCT = 70;
 

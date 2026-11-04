@@ -6,14 +6,16 @@
  *  • «угоди» = фільтр Даші в Kommo (правила й константи — `baRules.ts`), з дзеркала CRM;
  *  • «прикріплено» = серед ТИХ САМИХ угод ті, де в полі «ТТН» (2097291) є файл (`deals.ttn_files`,
  *    пише `syncKommo`); NULL — «не синхронізовано», окремим числом, НЕ як 0;
- *  • «наявні» = прикріплено − позначені Дашею «маршрут не збігся» (звірка документа — людина);
+ *  • «наявні» = прикріплено − позначені Дашею «маршрут не збігся» (звірка документа — людина)
+ *    + «за документами» (04.11.2026): без файла ТТН, але розхід безнал, «Оплачено из 1с» і «Оригиналы получено»
+ *    (правило — `TTN_BY_DOCS_SQL`). Угода з файлом рахується лише як прикріплена, двічі — ніколи;
  *  • % = наявні ÷ угоди, норма 70%; без угод — «—», а не 0%.
  *  • «Зафіксувати місяць» — знімок трьох чисел (CRM потім зміниться, а перевірка стосувалась тих).
  * Дати — за Києвом, включно з обома кінцями (правило проєкту). Звіряє з фільтром Даші й Kommo #-гейти.
  */
 import { BaError, type Db } from "./baClaims.js";
 import {
-  TTN_PIPELINE_ID, TTN_STATUS_ID, TTN_PAYMENT_TYPES, isYm, monthBounds, shiftYm, ttnPct, kommoTtnFilterUrl,
+  TTN_PIPELINE_ID, TTN_STATUS_ID, TTN_PAYMENT_TYPES, TTN_BY_DOCS_SQL, isYm, monthBounds, shiftYm, ttnPct, kommoTtnFilterUrl,
 } from "./baRules.js";
 
 /** Угоди, де потрібна ТТН, — ОДНЕ визначення для всіх запитів нижче (`d` — псевдонім `deals`). */
@@ -21,23 +23,29 @@ const TTN_DEALS_WHERE = `d.pipeline_id = $1 AND d.status_id = $2 AND d.payment_t
   AND d.manager_id IS NOT NULL
   AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $4::date AND $5::date`;
 const ttnParams = (from: string, to: string) => [TTN_PIPELINE_ID, TTN_STATUS_ID, [...TTN_PAYMENT_TYPES], from, to];
+/** Без файла ТТН (0) — кандидат «за документами»; NULL — синк угоди ще не бачив, це «не синхронізовано». */
+const NO_FILE = `d.ttn_files = 0`;
+/** Не синхронізовано: кількість файлів невідома, або файла немає, а «Оригиналы получено» ще не прочитано. */
+const UNSYNCED = `(d.ttn_files IS NULL OR (${NO_FILE} AND d.originals_received IS NULL))`;
 
-export interface TtnCounts { needed: number; attached: number; mismatched: number; unsynced: number; present: number }
-const counts = (r: { needed: number; attached: number; mismatched: number; unsynced: number }): TtnCounts =>
-  ({ needed: r.needed, attached: r.attached, mismatched: r.mismatched, unsynced: r.unsynced, present: r.attached - r.mismatched });
+export interface TtnCounts { needed: number; attached: number; mismatched: number; byDocs: number; unsynced: number; present: number }
+const counts = (r: { needed: number; attached: number; mismatched: number; by_docs: number; unsynced: number }): TtnCounts =>
+  ({ needed: r.needed, attached: r.attached, mismatched: r.mismatched, byDocs: r.by_docs, unsynced: r.unsynced, present: r.attached - r.mismatched + r.by_docs });
 
 /**
  * Три числа по менеджерах за період (місяць або кілька місяців — тоді з розбивкою по місяцях).
  * «Не збігся» рахується лише серед прикріплених: позначка на угоді без ТТН нічого не віднімає.
  */
 async function ttnCountsBy(db: Db, from: string, to: string) {
-  const r = await db.query<{ manager_id: number; ym: string; needed: number; attached: number; mismatched: number; unsynced: number }>(
+  const r = await db.query<{ manager_id: number; ym: string; needed: number; attached: number; mismatched: number; by_docs: number; unsynced: number }>(
     `SELECT d.manager_id, to_char((d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv'), 'YYYY-MM') AS ym,
             count(*)::int AS needed,
             count(*) FILTER (WHERE d.ttn_files > 0)::int AS attached,
             count(*) FILTER (WHERE d.ttn_files > 0 AND m.kommo_id IS NOT NULL)::int AS mismatched,
-            count(*) FILTER (WHERE d.ttn_files IS NULL)::int AS unsynced
+            count(*) FILTER (WHERE ${NO_FILE} AND ${TTN_BY_DOCS_SQL})::int AS by_docs,
+            count(*) FILTER (WHERE ${UNSYNCED})::int AS unsynced
        FROM deals d LEFT JOIN ba_ttn_route_mismatch m ON m.kommo_id = d.kommo_id
+       LEFT JOIN deal_fin_fields f ON f.kommo_id = d.kommo_id
       WHERE ${TTN_DEALS_WHERE}
       GROUP BY 1, 2`, ttnParams(from, to));
   return r.rows;
@@ -50,7 +58,7 @@ export async function ttnDealsByManager(db: Db, ym: string): Promise<Map<number,
 }
 
 interface SavedRow {
-  manager_id: number; deals_needed: number; ttn_present: number; ttn_attached: number | null; route_mismatch: number | null;
+  manager_id: number; deals_needed: number; ttn_present: number; ttn_attached: number | null; route_mismatch: number | null; ttn_by_docs: number | null;
   note: string | null; checked_at: string; checked_by_name: string | null;
 }
 
@@ -64,7 +72,7 @@ export async function ttnMonth(db: Db, ym: string, kommoBase: string) {
   const all = await ttnCountsBy(db, monthBounds(firstYm).from, monthBounds(ym).to);
   const live = new Map(all.filter((x) => x.ym === ym).map((x) => [x.manager_id, counts(x)]));
   const saved = (await db.query<SavedRow>(
-    `SELECT c.manager_id, c.deals_needed, c.ttn_present, c.ttn_attached, c.route_mismatch, c.note,
+    `SELECT c.manager_id, c.deals_needed, c.ttn_present, c.ttn_attached, c.route_mismatch, c.ttn_by_docs, c.note,
             to_char(c.checked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS checked_at,
             COALESCE(NULLIF(btrim(u.full_name), ''), split_part(u.email, '@', 1)) AS checked_by_name
        FROM ba_ttn_checks c LEFT JOIN users u ON u.id = c.checked_by
@@ -75,7 +83,7 @@ export async function ttnMonth(db: Db, ym: string, kommoBase: string) {
         `SELECT id, name, kommo_user_id, is_active FROM managers WHERE id = ANY($1::int[])`, [[...ids]])).rows
     : [];
   const months = Array.from({ length: 6 }, (_, i) => shiftYm(ym, i - 5));
-  const zero: TtnCounts = { needed: 0, attached: 0, mismatched: 0, unsynced: 0, present: 0 };
+  const zero: TtnCounts = { needed: 0, attached: 0, mismatched: 0, byDocs: 0, unsynced: 0, present: 0 };
   const rows = mgrs.map((m) => {
     const now = live.get(m.id) ?? zero;
     const s = saved.find((x) => x.manager_id === m.id) ?? null;
@@ -84,12 +92,12 @@ export async function ttnMonth(db: Db, ym: string, kommoBase: string) {
       live: { ...now, pct: ttnPct(now.present, now.needed) },
       kommoUrl: m.kommo_user_id ? kommoTtnFilterUrl(kommoBase, m.kommo_user_id, ym) : null,
       saved: s && {
-        dealsNeeded: s.deals_needed, ttnAttached: s.ttn_attached, routeMismatch: s.route_mismatch, ttnPresent: s.ttn_present,
+        dealsNeeded: s.deals_needed, ttnAttached: s.ttn_attached, routeMismatch: s.route_mismatch, ttnByDocs: s.ttn_by_docs, ttnPresent: s.ttn_present,
         note: s.note ?? "", pct: ttnPct(s.ttn_present, s.deals_needed), checkedAt: s.checked_at, checkedBy: s.checked_by_name,
       },
       history: months.map((mm) => {
         const h = all.find((x) => x.manager_id === m.id && x.ym === mm);
-        return { month: mm, pct: h ? ttnPct(h.attached - h.mismatched, h.needed) : null };
+        return { month: mm, pct: h ? ttnPct(counts(h).present, h.needed) : null };
       }),
     };
   }).sort((a, b) => a.name.localeCompare(b.name, "uk"));
@@ -100,16 +108,22 @@ export async function ttnMonth(db: Db, ym: string, kommoBase: string) {
 export async function ttnDealsOf(db: Db, ym: string, managerId: number, kommoBase: string) {
   if (!isYm(ym)) throw new BaError(400, "Місяць у форматі РРРР-ММ");
   const { from, to } = monthBounds(ym);
-  const r = await db.query<{ kommo_id: string; name: string | null; client_name: string | null; closed_on: string; ttn_files: number | null; note: string | null; marked: boolean }>(
+  const r = await db.query<{ kommo_id: string; name: string | null; client_name: string | null; closed_on: string; ttn_files: number | null; note: string | null; marked: boolean;
+    by_docs: boolean; originals: boolean | null; paid: boolean; out_beznal: boolean }>(
     `SELECT d.kommo_id, d.name, d.client_name, to_char((d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv'), 'YYYY-MM-DD') AS closed_on,
-            d.ttn_files, m.note, (m.kommo_id IS NOT NULL) AS marked
+            d.ttn_files, m.note, (m.kommo_id IS NOT NULL) AS marked,
+            (${NO_FILE} AND ${TTN_BY_DOCS_SQL}) IS TRUE AS by_docs, d.originals_received AS originals,
+            (f.paid1c IS TRUE) AS paid, (f.out_vat <> 0 OR f.out_novat <> 0) IS TRUE AS out_beznal
        FROM deals d LEFT JOIN ba_ttn_route_mismatch m ON m.kommo_id = d.kommo_id
+       LEFT JOIN deal_fin_fields f ON f.kommo_id = d.kommo_id
       WHERE ${TTN_DEALS_WHERE} AND d.manager_id = $6
-      ORDER BY (d.ttn_files > 0) NULLS FIRST, d.closed_at_kommo DESC`, [...ttnParams(from, to), managerId]);
+      ORDER BY (d.ttn_files > 0 OR (${NO_FILE} AND ${TTN_BY_DOCS_SQL})) IS TRUE, d.closed_at_kommo DESC`, [...ttnParams(from, to), managerId]);
   const base = kommoBase.replace(/\/+$/, "").replace(/\/api(\/v4)?$/, "");
   return r.rows.map((x) => ({
     kommoId: Number(x.kommo_id), name: x.name ?? "", client: x.client_name ?? "", closedOn: x.closed_on,
     ttnFiles: x.ttn_files, mismatch: x.marked ? { note: x.note ?? "" } : null,
+    // Чому зараховано без файла — або чого бракує: три умови «за документами» окремо, щоб було видно, що саме не так.
+    byDocs: x.by_docs, docs: { outBeznal: x.out_beznal, paid1c: x.paid, originals: x.originals },
     url: `${base}/leads/detail/${x.kommo_id}`,
   }));
 }
@@ -142,10 +156,11 @@ export async function saveTtnCheck(db: Db, actor: number, ym: string, managerId:
   if (c.unsynced > 0) throw new BaError(409, `Ще не синхронізовано ТТН у ${c.unsynced} угод(и) — зачекайте синку або запустіть дотягування`);
   const note = typeof body?.note === "string" ? body.note.trim().slice(0, 2000) || null : null;
   await db.query(
-    `INSERT INTO ba_ttn_checks (month, manager_id, deals_needed, ttn_attached, route_mismatch, ttn_present, note, checked_by)
-     VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO ba_ttn_checks (month, manager_id, deals_needed, ttn_attached, route_mismatch, ttn_by_docs, ttn_present, note, checked_by)
+     VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (month, manager_id) DO UPDATE
        SET deals_needed = EXCLUDED.deals_needed, ttn_attached = EXCLUDED.ttn_attached, route_mismatch = EXCLUDED.route_mismatch,
-           ttn_present = EXCLUDED.ttn_present, note = EXCLUDED.note, checked_by = EXCLUDED.checked_by, checked_at = now()`,
-    [`${ym}-01`, managerId, c.needed, c.attached, c.mismatched, c.present, note, actor]);
+           ttn_by_docs = EXCLUDED.ttn_by_docs, ttn_present = EXCLUDED.ttn_present, note = EXCLUDED.note, checked_by = EXCLUDED.checked_by,
+           checked_at = now()`,
+    [`${ym}-01`, managerId, c.needed, c.attached, c.mismatched, c.byDocs, c.present, note, actor]);
 }
