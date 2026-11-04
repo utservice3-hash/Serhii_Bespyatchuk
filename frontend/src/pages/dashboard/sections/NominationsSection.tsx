@@ -3,7 +3,7 @@ import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import {
   fetchNominationWeek, reviewNomination, confirmNominationsBulk, fetchDayItems, saveRnkConv,
-  saveWeekText, uploadTeamPhoto, teamPhotoUrl,
+  saveWeekText, uploadTeamPhoto, teamPhotoUrl, fetchPresentationExtras, saveNewPosition, type PresentationExtras,
   type NominationWeek, type NominationTeam, type NominationCell, type NominationKey,
   type DayItems, type NominationDef, type RnkConvView,
   lockNominationWeek,
@@ -689,9 +689,19 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
  */
 function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: (d: NominationWeek) => void }) {
   const [focus, setFocus] = useState(week.texts?.focus?.text ?? "");
-  const [busy, setBusy] = useState<"focus" | "photo" | null>(null);
+  const [busy, setBusy] = useState<"focus" | "photo" | "pos" | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
+  // «Нова посада» (прохід 2): співробітник + посада; решту подій тижня система бере з «Найму» сама.
+  const [extras, setExtras] = useState<PresentationExtras | null>(null);
+  const [posEmp, setPosEmp] = useState<string>("");
+  const [posText, setPosText] = useState("");
+  useEffect(() => { setExtras(null); fetchPresentationExtras(week.weekFrom).then(setExtras).catch((e) => setErr(errorOf(e))); }, [week.weekFrom]);
+  const savePos = async (employeeId: number, text: string) => {
+    setBusy("pos"); setErr(null);
+    try { const x = await saveNewPosition({ weekFrom: week.weekFrom, employeeId, text }); if (x) setExtras(x); setPosEmp(""); setPosText(""); }
+    catch (e) { setErr(errorOf(e)); } finally { setBusy(null); }
+  };
   useEffect(() => { setFocus(week.texts?.focus?.text ?? ""); }, [week.weekFrom, week.texts?.focus?.text]);
   useEffect(() => {
     let alive = true;
@@ -716,13 +726,30 @@ function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: 
   return (
     <div className="nm-card">
       <div className="nm-card-h"><b>Підготовка презентації</b>
-        <span className="nm-muted">Події тижня, пульс плану, топ-3, лідогенерацію й конверсію система збирає сама. Тут — те, що вносите ви.</span></div>
+        <span className="nm-muted">Пульс плану, топ-3, відзнаки, лідогенерацію й конверсію система збирає сама. Тут — те, що вносите ви.</span></div>
       {err ? <div className="nm-banner"><span className="nm-err">{err}</span></div> : null}
       <div className="nm-prep">
         <div className="nm-prep-photo">
           {photo ? <img src={photo} alt="Фото команди" /> : <div className="nm-muted">Фото команди ще не завантажено — на титулі буде заглушка.</div>}
           <label className="nm-btn">{busy === "photo" ? "Завантажую…" : photo ? "Замінити фото команди" : "Завантажити фото команди"}
             <input type="file" accept="image/jpeg,image/png,image/webp" hidden disabled={busy != null} onChange={(e) => pickPhoto(e.target.files?.[0])} /></label>
+        </div>
+        <div className="nm-field"><span>Події тижня: дні народження й новачків (14 днів від прийому) система бере з «Найму». Нову посаду — вкажіть тут:</span>
+          {extras ? <div className="nm-muted">
+            {[...extras.birthdays.map((x) => `🎂 ${x.name}`), ...extras.newcomers.map((x) => `👋 ${x.name}`)].join(" · ") || "Днів народження й новачків цього тижня немає."}
+          </div> : null}
+          {extras?.newPositions.map((x) => (
+            <div className="nm-btns" key={x.employeeId}><span>⭐ <b>{x.name}</b> — {x.position}</span>
+              <button className="nm-btn" disabled={busy != null} onClick={() => void savePos(x.employeeId, "")}>Прибрати</button></div>
+          ))}
+          <div className="nm-btns">
+            <select className="nm-inp" value={posEmp} onChange={(e) => setPosEmp(e.target.value)} aria-label="Співробітник з новою посадою">
+              <option value="">Співробітник…</option>
+              {(extras?.employees ?? []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+            <input className="nm-inp" value={posText} maxLength={120} onChange={(e) => setPosText(e.target.value)} placeholder="Нова посада, напр. «Тімлід РНК»" />
+            <button className="nm-btn p" disabled={busy != null || !posEmp || !posText.trim()} onClick={() => void savePos(Number(posEmp), posText.trim())}>{busy === "pos" ? "Зберігаю…" : "Додати"}</button>
+          </div>
         </div>
         <label className="nm-field"><span>Фокус наступного тижня (одна ціль — іде на останній слайд)</span>
           <textarea className="nm-inp" value={focus} maxLength={400} onChange={(e) => setFocus(e.target.value)} placeholder="Напр.: 10 нових клієнтів або 80% плану до 11.11" /></label>

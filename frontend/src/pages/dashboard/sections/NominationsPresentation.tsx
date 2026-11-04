@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
-  fetchReportPlan, teamPhotoUrl,
-  type NominationWeek, type NominationKey, type NominationTopRow, type ReportPlan,
+  fetchReportPlan, fetchPresentationExtras, teamPhotoUrl,
+  type NominationWeek, type NominationKey, type NominationTopRow, type ReportPlan, type PresentationExtras,
 } from "../../../api";
 import { EmployeePhoto } from "./EmployeePhotos";
 import { formatAmountFull } from "../format";
@@ -10,13 +10,15 @@ import "./presentation.css";
 /**
  * 🎞 ПРЕЗЕНТАЦІЯ ЩОТИЖНЕВОЇ ЗУСТРІЧІ — МАКЕТ ДАШІ (04.11.2026, «Щотижнева зустріч UTS — новий дизайн»).
  * Повністю замінює попередню (рішення Романа: «потрібно повністю новий макет»). Один комерційний відділ — без
- * поділу на РПК/РНК. Прохід 1: титул, пульс плану, гроші й обсяг тижня (топ-3), лідогенерація, лідерборд конверсії,
- * фокус. «Події тижня» й «Особливі відзнаки» — прохід 2.
+ * поділу на РПК/РНК: титул, події тижня, пульс плану, гроші й обсяг тижня (топ-3), особливі відзнаки, лідогенерація,
+ * лідерборд конверсії, фокус.
  *
  * ЗВІДКИ ЧИСЛА — лише з тих самих ендпоінтів, що й екрани, без власної арифметики по грошах:
  *  · «Пульс плану» — верх Звіту за весь поточний місяць (`glance`: факт, план, очікуємо за план. датою);
  *  · топ-3 — `companyTop` сервера (рейтинги всіх команд тижня, з правками тімлідів);
- *  · лідогенерація, конверсія, тексти — `/nominations/week`.
+ *  · лідогенерація, конверсія, тексти — `/nominations/week`;
+ *  · події тижня, новачки, нові клієнти — `/nominations/presentation-extras` (ядро сервера);
+ *  · «Прорив тижня» — колонка «Виконано %» Звіту за номінований тиждень (`pct`), без власного розрахунку.
  */
 
 const MONTHS = ["січень", "лютий", "березень", "квітень", "травень", "червень", "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"];
@@ -43,6 +45,8 @@ const FONTS = "https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&
 
 export function NominationsPresentation({ week, onClose }: { week: NominationWeek; onClose: () => void }) {
   const [month, setMonth] = useState<ReportPlan | null>(null);
+  const [weekRep, setWeekRep] = useState<ReportPlan | null>(null);
+  const [extras, setExtras] = useState<PresentationExtras | null>(null);
   const [teamPhoto, setTeamPhoto] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [i, setI] = useState(0);
@@ -62,6 +66,11 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
     fetchReportPlan({ from: mStart, to: monthEnd(today) }).then(setMonth)
       .catch(() => setErr("Не вдалося завантажити пульс плану — спробуйте ще раз"));
   }, [mStart, today]);
+  useEffect(() => {
+    Promise.all([fetchReportPlan({ from: week.weekFrom, to: week.weekTo }), fetchPresentationExtras(week.weekFrom)])
+      .then(([r, x]) => { setWeekRep(r); setExtras(x); })
+      .catch(() => setErr("Не вдалося завантажити події тижня й відзнаки — спробуйте ще раз"));
+  }, [week.weekFrom, week.weekTo]);
   useEffect(() => {
     let alive = true;
     if (week.teamPhoto) void teamPhotoUrl(week.teamPhoto.v).then((u) => { if (alive) setTeamPhoto(u); });
@@ -98,6 +107,37 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
         {mark}
       </div>
     ) });
+
+    // 2 · Події тижня — з «Найму» (ДР, 14 днів від прийому) і «Нова посада» від Даші. Немає подій — слайда немає.
+    const empAva = (id: number, name0: string, cls: string) => <EmployeePhoto key={id} photo={extras?.photos?.[String(id)]} name={name0} className={cls} />;
+    if (extras) {
+      const ev = [
+        ...extras.birthdays.map((b) => ({ k: `b${b.employeeId}`, id: b.employeeId, name: b.name, tone: "red", tag: "ДЕНЬ НАРОДЖЕННЯ",
+          text: `${b.date.slice(8, 10)}.${b.date.slice(5, 7)} • Бажаємо енергії та нових рекордів!` })),
+        ...extras.newcomers.map((x) => ({ k: `n${x.employeeId}`, id: x.employeeId, name: x.name, tone: "dark", tag: "НОВИЙ У КОМАНДІ",
+          text: x.cars ? `Уже ${x.cars} ${plural(x.cars, "поставлене авто", "поставлені авто", "поставлених авто")} на адаптації` : "Вітаємо в команді!" })),
+        ...extras.newPositions.map((x) => ({ k: `p${x.employeeId}`, id: x.employeeId, name: x.name, tone: "gold", tag: "НОВА ПОСАДА",
+          text: `${x.position} • Пишаємося твоїм розвитком!` })),
+      ];
+      if (ev.length) out.push({ key: "events", node: (
+        <div className="ps-slide2">
+          {head("КОМАНДА", "ПОДІЇ ТИЖНЯ", 2)}
+          <div className={`ps-evs${ev.length > 3 ? " many" : ""}`}>
+            {ev.slice(0, 6).map((e) => (
+              <div className={`ps-ev ${e.tone}`} key={e.k}>
+                {empAva(e.id, e.name, "ps-evava")}
+                <div className="ps-evtag">{e.tag}</div>
+                <div className="ps-evname">{short(e.name)}</div>
+                <div className="ps-evtext">{e.text}</div>
+              </div>
+            ))}
+          </div>
+          {ev.length > 6 ? <div className="ps-more">ще {ev.length - 6} — поза слайдом</div> : null}
+          {foot()}
+          {mark}
+        </div>
+      ) });
+    }
 
     // 3 · Пульс плану — верх Звіту за поточний місяць
     if (month) {
@@ -154,6 +194,46 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
         {mark}
       </div>
     ) });
+
+    // 6 · Особливі відзнаки — по одному переможцю (нічия — усі імена, фото першого)
+    if (extras && weekRep) {
+      const best = <T,>(xs: T[], val: (x: T) => number | null): T[] => {
+        const ok = xs.filter((x) => (val(x) ?? 0) > 0);
+        const m = Math.max(...ok.map((x) => val(x)!), -Infinity);
+        return ok.filter((x) => val(x) === m);
+      };
+      const proryv = best(weekRep.managers.filter((m) => m.plan > 0), (m) => m.pct);
+      const clients = best(extras.newClients.rows, (r) => r.first);
+      const sniper = best((week.rnkConv?.rows ?? []).filter((r) => r.onSlide), (r) => r.pct);
+      const rookie = best(extras.rookies, (r) => r.cars);
+      const award = (icon: string, title: string, sub: string, names: string[], photo: ReactElement | null, value: string | null) => (
+        <div className="ps-aw">
+          <div className="ps-aw-i">{icon}</div>
+          <div className="ps-aw-t">{title}</div>
+          <div className="ps-aw-s">{sub}</div>
+          <div className="ps-aw-ph">{photo ?? <div className="ps-aw-none" />}</div>
+          <div className="ps-aw-n">{names.length ? names.map(short).join(", ") : "немає претендентів"}</div>
+          {value ? <div className="ps-aw-v">{value}</div> : null}
+        </div>
+      );
+      out.push({ key: "awards", node: (
+        <div className="ps-slide2 warm">
+          {head("НОВІ НОМІНАЦІЇ", "ОСОБЛИВІ ВІДЗНАКИ", 3)}
+          <div className="ps-aws">
+            {award("⚡", "ПРОРИВ ТИЖНЯ", "Найвище виконання свого тижневого плану", proryv.map((m) => m.name),
+              proryv[0] ? ava(proryv[0].managerId, "ps-awava", proryv[0].name) : null, proryv[0] ? `${Math.round(proryv[0].pct!)}% плану` : null)}
+            {award("☆", "НОВИЙ КЛІЄНТ", "Найбільше перших перевезень з новими", clients.map((r) => name(r.managerId)),
+              clients[0] ? ava(clients[0].managerId, "ps-awava") : null, clients[0] ? `${clients[0].first} ${plural(clients[0].first, "клієнт", "клієнти", "клієнтів")}` : null)}
+            {award("⌕", "СНАЙПЕР", "Найкраща конверсія ліда в успіх", sniper.map((r) => r.name),
+              sniper[0] ? ava(sniper[0].managerId, "ps-awava", sniper[0].name) : null, sniper[0] ? `${pctText(sniper[0].pct)} конверсія` : null)}
+            {award("🎓", "НОВАЧОК ТИЖНЯ", "Найкращий старт на адаптації", rookie.map((r) => r.name),
+              rookie[0] ? empAva(rookie[0].employeeId, rookie[0].name, "ps-awava") : null, rookie[0] ? `${rookie[0].cars} авто` : null)}
+          </div>
+          {foot("по одному переможцю, щоб не затягувати")}
+          {mark}
+        </div>
+      ) });
+    }
 
     // 7 · Лідогенерація
     if (week.leadgen) {
@@ -232,7 +312,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       </div>
     ) });
     return out;
-  }, [week, month, teamPhoto, draft, meeting, name, today]);
+  }, [week, month, weekRep, extras, teamPhoto, draft, meeting, name, today]);
 
   const n = slides.length;
   const go = (k: number) => setI(Math.max(0, Math.min(n - 1, k)));

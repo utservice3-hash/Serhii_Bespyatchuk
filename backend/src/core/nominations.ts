@@ -173,7 +173,7 @@ export async function weekTexts(weekFrom: string): Promise<NonNullable<WeekView[
   const rows = (await pool.query<{ kind: WeekTextKind; text: string; by_name: string | null; created_at: Date }>(
     `SELECT DISTINCT ON (t.kind) t.kind, t.text, COALESCE(u.full_name, u.email) AS by_name, t.created_at
        FROM nomination_week_texts t LEFT JOIN users u ON u.id = t.user_id
-      WHERE t.week_from = $1 ORDER BY t.kind, t.id DESC`, [weekFrom])).rows;
+      WHERE t.week_from = $1 AND t.kind = 'focus' ORDER BY t.kind, t.id DESC`, [weekFrom])).rows;
   return Object.fromEntries(rows.filter((r) => r.text.trim()).map((r) => [r.kind, { text: r.text, by: r.by_name, at: r.created_at.toISOString() }]));
 }
 

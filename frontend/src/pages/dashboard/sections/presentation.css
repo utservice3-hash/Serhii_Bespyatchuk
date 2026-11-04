@@ -115,3 +115,32 @@
 .ps-focus-bye { position: absolute; left: 86px; bottom: 82px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 32px; }
 .ps-focus-s1 { position: absolute; left: 1030px; top: -20px; width: 78px; height: 780px; background: #A30E25; transform: rotate(5deg); }
 .ps-focus-s2 { position: absolute; left: 1170px; top: -20px; width: 28px; height: 780px; background: #17181C; transform: rotate(5deg); }
+
+/* ── 2 · події тижня ── */
+.ps-evs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+.ps-ev { background: #FCFBF9; border-radius: 22px; min-height: 428px; display: flex; flex-direction: column; align-items: center; padding: 34px 26px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.ps-evava { width: 166px !important; height: 166px !important; border-radius: 50%; border: 5px solid #C8102E; object-fit: cover; font-size: 40px; }
+.ps-ev.dark .ps-evava { border-color: #17181C; }
+.ps-ev.gold .ps-evava { border-color: #D9A441; }
+.ps-evtag { margin-top: -18px; border-radius: 999px; padding: 6px 16px; font-weight: 700; font-size: 16px; letter-spacing: .1em; background: #C8102E; color: #fff; z-index: 1; }
+.ps-ev.dark .ps-evtag { background: #17181C; }
+.ps-ev.gold .ps-evtag { background: #D9A441; color: #17181C; }
+.ps-evname { margin-top: 18px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 600; font-size: 32px; }
+.ps-evtext { margin-top: 10px; font-size: 19px; color: #5A5A60; max-width: 300px; }
+.ps-evs.many .ps-ev { min-height: 228px; padding: 18px; }
+.ps-evs.many .ps-evava { width: 92px !important; height: 92px !important; font-size: 26px; }
+.ps-evs.many .ps-evname { font-size: 24px; margin-top: 10px; }
+.ps-evs.many .ps-evtext { font-size: 15px; }
+
+/* ── 6 · особливі відзнаки ── */
+.ps-slide2.warm { background: #EDE9E3; }
+.ps-aws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; }
+.ps-aw { background: #FCFBF9; border-radius: 20px; border-top: 6px solid #C8102E; min-height: 432px; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 26px 18px; }
+.ps-aw-i { color: #C8102E; font-size: 30px; line-height: 1; }
+.ps-aw-t { margin-top: 12px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 28px; }
+.ps-aw-s { margin-top: 6px; color: #6B6B70; font-size: 16px; min-height: 42px; }
+.ps-aw-ph { margin-top: 16px; }
+.ps-awava { width: 110px !important; height: 110px !important; border-radius: 50%; border: 4px solid #C8102E; object-fit: cover; font-size: 30px; }
+.ps-aw-none { width: 110px; height: 110px; border-radius: 50%; border: 4px dashed #D8D3CB; }
+.ps-aw-n { margin-top: 22px; font-size: 20px; font-weight: 600; }
+.ps-aw-v { margin-top: 12px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 600; font-size: 28px; color: #C8102E; }

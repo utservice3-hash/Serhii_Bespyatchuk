@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { checkPhoto, photoDir, photoStoredName } from "../core/peopleRules.js";
+import { presentationExtras } from "../core/nominationPeople.js";
 import type { TeamWeek } from "../core/nominationRules.js";
 import { managerPhotos, employeePhotos } from "../core/people.js";
 import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateConvEdit, validateManualSlide, validateWeekText, companyTop, isEditOpen, HIDDEN_ON_SCREEN, NOMINATIONS, LEADGEN_NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
@@ -221,8 +222,24 @@ nominationsRouter.post("/texts", safe(async (req: Request, res: Response) => {
   if (!v || v.role !== "admin") return res.status(403).json({ error: "Тексти презентації пише керівництво" });
   const p = validateWeekText(req.body);
   if (!p.ok) return res.status(400).json({ error: p.error });
-  await pool.query(`INSERT INTO nomination_week_texts (week_from, kind, text, user_id) VALUES ($1,$2,$3,$4)`, [p.value.weekFrom, p.value.kind, p.value.text, req.auth!.userId]);
-  res.json({ texts: await weekTexts(p.value.weekFrom) });
+  if (p.value.employeeId != null && !(await pool.query(`SELECT 1 FROM employees WHERE id = $1`, [p.value.employeeId])).rowCount) {
+    return res.status(404).json({ error: "Такого співробітника немає в «Наймі»" });
+  }
+  await pool.query(`INSERT INTO nomination_week_texts (week_from, kind, text, employee_id, user_id) VALUES ($1,$2,$3,$4,$5)`,
+    [p.value.weekFrom, p.value.kind, p.value.text, p.value.employeeId, req.auth!.userId]);
+  res.json({ texts: await weekTexts(p.value.weekFrom), extras: p.value.kind === "new_position" ? await presentationExtras(p.value.weekFrom) : undefined });
+}));
+
+/**
+ * 👥 ЛЮДИ ТИЖНЯ ДЛЯ ПРЕЗЕНТАЦІЇ (прохід 2, 04.11.2026): «Події тижня» (ДР, новий у команді, нова посада) і дані для
+ * «Особливих відзнак» (новачки на адаптації, перші успішні угоди з клієнтами). Лише керівництво — це підготовка зустрічі.
+ */
+nominationsRouter.get("/presentation-extras", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v || v.role !== "admin") return res.status(403).json({ error: "Дані презентації — для керівництва" });
+  const q = typeof req.query.weekFrom === "string" ? req.query.weekFrom : "";
+  const weekFrom = /^\d{4}-\d{2}-\d{2}$/.test(q) ? weekOf(q).from : lastWeek(new Date()).from;
+  res.json(await presentationExtras(weekFrom));
 }));
 
 /**

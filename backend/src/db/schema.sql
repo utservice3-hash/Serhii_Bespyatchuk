@@ -4073,10 +4073,13 @@ CREATE TRIGGER trg_nomination_week_locks_immutable BEFORE UPDATE OR DELETE ON no
 CREATE TABLE IF NOT EXISTS nomination_week_texts (
   id          BIGSERIAL PRIMARY KEY,
   week_from   DATE NOT NULL,
-  kind        TEXT NOT NULL CHECK (kind IN ('focus')),
+  kind        TEXT NOT NULL CHECK (kind IN ('focus','new_position')),
   text        TEXT NOT NULL CHECK (length(text) <= 400),
+  -- «Нова посада» (прохід 2) — про конкретного співробітника; фокус — ні. Порожній текст = прибрати.
+  employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
   user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((kind = 'focus' AND employee_id IS NULL) OR (kind = 'new_position' AND employee_id IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS ix_nomination_week_texts_week ON nomination_week_texts(week_from, kind, id);
 DROP TRIGGER IF EXISTS trg_nomination_week_texts_immutable ON nomination_week_texts;

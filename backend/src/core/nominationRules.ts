@@ -374,16 +374,24 @@ export interface WeekView {
   /** Тексти тижня для презентації (фокус наступного тижня) — останній запис кожного виду. */
   texts?: Partial<Record<WeekTextKind, { text: string; by: string | null; at: string }>>;
 }
-/** Види текстів тижня (04.11.2026). Висновок до конверсії живе окремо — коментар таблиці конверсії. */
-export const WEEK_TEXT_KINDS = ["focus"] as const;
+/**
+ * Види текстів тижня (04.11.2026): `focus` — «Фокус наступного тижня»; `new_position` — «Нова посада» на слайді «Події
+ * тижня» (про співробітника, текст — посада; порожній — прибрати). Висновок до конверсії — коментар таблиці конверсії.
+ */
+export const WEEK_TEXT_KINDS = ["focus", "new_position"] as const;
 export type WeekTextKind = (typeof WEEK_TEXT_KINDS)[number];
-export function validateWeekText(body: unknown): { ok: true; value: { weekFrom: string; kind: WeekTextKind; text: string } } | { ok: false; error: string } {
+export function validateWeekText(body: unknown):
+  { ok: true; value: { weekFrom: string; kind: WeekTextKind; text: string; employeeId: number | null } } | { ok: false; error: string } {
   const b = (body ?? {}) as Record<string, unknown>;
   const weekFrom = typeof b.weekFrom === "string" ? b.weekFrom : "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(weekFrom) || weekOf(weekFrom).from !== weekFrom) return { ok: false, error: "weekFrom — понеділок тижня (YYYY-MM-DD)" };
   if (!(WEEK_TEXT_KINDS as readonly string[]).includes(String(b.kind))) return { ok: false, error: "невідомий вид тексту" };
+  const kind = b.kind as WeekTextKind;
   const text = typeof b.text === "string" ? b.text.trim().slice(0, 400) : "";
-  return { ok: true, value: { weekFrom, kind: b.kind as WeekTextKind, text } };
+  if (kind === "focus") return { ok: true, value: { weekFrom, kind, text, employeeId: null } };
+  const id = Number(b.employeeId);
+  if (!Number.isInteger(id) || id <= 0 || id > 2_147_483_647) return { ok: false, error: "«Нова посада» — оберіть співробітника" };
+  return { ok: true, value: { weekFrom, kind, text, employeeId: id } };
 }
 
 /* ───────────────────────── статистика відділу РНК · конверсія (22.09.2026) ───────────────────────── */

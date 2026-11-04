@@ -5973,6 +5973,22 @@ export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
 /** 🎞 Тексти тижня й фото команди для нової презентації (04.11.2026) — лише керівництво. */
 export const saveWeekText = async (p: { weekFrom: string; kind: "focus"; text: string }) =>
   (await api.post<{ texts: NominationWeek["texts"] }>("/nominations/texts", p)).data.texts;
+/** «Нова посада» (прохід 2): посада співробітника на слайді «Події тижня»; порожній текст — прибрати. */
+export const saveNewPosition = async (p: { weekFrom: string; employeeId: number; text: string }) =>
+  (await api.post<{ extras: PresentationExtras }>("/nominations/texts", { ...p, kind: "new_position" })).data.extras;
+/** 👥 Люди тижня для презентації (прохід 2): події тижня й дані відзнак. Фото — за id СПІВРОБІТНИКА. */
+export interface PresentationExtras {
+  weekFrom: string; weekTo: string;
+  birthdays: { employeeId: number; name: string; date: string }[];
+  newcomers: { employeeId: number; name: string; day: string; managerId: number | null; cars: number | null }[];
+  newPositions: { employeeId: number; name: string; position: string; by: string | null; at: string }[];
+  rookies: { employeeId: number; name: string; managerId: number; hiredAt: string; cars: number }[];
+  newClients: { rows: { managerId: number; first: number }[]; unknown: number };
+  employees: { id: number; name: string }[];
+  photos: Record<string, PhotoRef>;
+}
+export const fetchPresentationExtras = async (weekFrom: string) =>
+  (await api.get<PresentationExtras>("/nominations/presentation-extras", { params: { weekFrom } })).data;
 export const uploadTeamPhoto = async (dataBase64: string) =>
   (await api.post<{ teamPhoto: { v: number } }>("/nominations/team-photo", { dataBase64 })).data.teamPhoto;
 const teamPhotoUrls = new Map<number, Promise<string | null>>();
