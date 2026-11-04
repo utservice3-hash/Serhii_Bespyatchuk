@@ -34,6 +34,22 @@ const ADMIN_LEVEL_ROLES = new Set(["admin", "ceo", "opdir", "kvp", "financier"])
  * інакше це знову «непробована роль у deny», з якої й почався інцидент.
  */
 const ADMIN_DENIED_BY_PERM: Record<string, string> = {
+  // 💰 «Зарплата» (ТЗ §2): дії — лише з правом-ключем payroll_* (фінансист, ОД; рішення по незгоді — лише ОД); адмін сум не бачить.
+  "PATCH /api/payroll/records/:month/:userId": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/records/:month/:userId/extras": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/records/:month/:userId/resolve": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/statement/mark-paid": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/advances/:id/pay": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/advances/:id/reject": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/employees/:userId/leave": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/employees": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "PATCH /api/payroll/employees/:userId": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/archive/import": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/settings": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/departments": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/teams": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/offer-tasks/:id/done": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "PUT /api/notifications/rules/:type": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/ba/utb": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
   "PATCH /api/ba/utb/:id": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
   "POST /api/ba/utb/:id/files": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",

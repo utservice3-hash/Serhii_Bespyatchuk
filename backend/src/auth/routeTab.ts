@@ -168,6 +168,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/counterparty"), tabs: ["registries"] },
     { test: pre("/api/client-limits"), tabs: ["receivables"] },
     { test: pre("/api/prozorro"), tabs: ["prozorro"] }, // #5299 «Тендери Prozorro»
+    // 💰 «Зарплата» (пакет Сергія 03.11.2026): вкладка — перша межа; права-ключі ТЗ §2 і «лише свої» — у кожному обробнику.
+    { test: pre("/api/payroll"), tabs: ["payroll"] },
     { test: pre("/api/documents"), tabs: ["documents"] },
     { test: pre("/api/one-on-ones"), tabs: ["oneonone"] },
     { test: pre("/api/duty"), tabs: ["duty"] },

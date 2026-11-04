@@ -7552,3 +7552,347 @@ CREATE TABLE IF NOT EXISTS first_touch_auto_tasks (
   UNIQUE (kind, item_key)
 );
 REVOKE ALL ON first_touch_auto_tasks FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 «ЗАРПЛАТА» (пакет Сергія 03.11.2026: ТЗ «Зарплата UTS — система, кабінет «Моя зарплата», центр сповіщень»;
+--  Роман 04.11.2026: «роби всі етапи і викочуй»). Схема пакета (db/001_payroll.sql) перенесена в public з префіксом
+--  `payroll_` — щоб діяли наявні межі (test_readonly лише SELECT, ai_readonly закрито нижче). Користувач — users.id.
+--  Угоди, плани, дзвінки, ТТН НЕ копіюються — читаються з ядра в момент розрахунку (`payroll/state.ts`); суми рахує
+--  рушій пакета (`payroll/engine/zarplata-engine.mjs`, байт у байт). Гроші — numeric(12,2), місяць — date першого числа.
+--  ⚠️ revert коду таблиць не прибирає; без коду їх ніхто не читає. Відкат даних — DROP TABLE payroll_* / notify_* / notifications.
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS payroll_settings_versions (
+  id          BIGSERIAL PRIMARY KEY,
+  valid_from  DATE NOT NULL UNIQUE CHECK (valid_from = date_trunc('month', valid_from)::date),
+  settings    JSONB NOT NULL,
+  reason      TEXT NOT NULL CHECK (length(btrim(reason)) > 0),
+  changed_by  INTEGER REFERENCES users(id),
+  changed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS payroll_departments (
+  code     TEXT PRIMARY KEY CHECK (code ~ '^[a-z0-9_]{1,30}$'),
+  name     TEXT NOT NULL,
+  is_sales BOOLEAN NOT NULL
+);
+-- Команди продажу в зарплаті — посилання на команду Kommo (`teams.id`); офер — за командою (ls = команда Лілії Шаврової).
+CREATE TABLE IF NOT EXISTS payroll_teams (
+  code       TEXT PRIMARY KEY CHECK (code ~ '^[a-z0-9_]{1,30}$'),
+  name       TEXT NOT NULL,
+  dept_code  TEXT NOT NULL REFERENCES payroll_departments(code),
+  offer_code TEXT NOT NULL DEFAULT 'std',
+  kommo_team_id INTEGER REFERENCES teams(id)
+);
+CREATE TABLE IF NOT EXISTS payroll_employees (
+  user_id         INTEGER PRIMARY KEY REFERENCES users(id),
+  role            TEXT NOT NULL CHECK (role IN ('manager', 'lead', 'staff')),
+  title           TEXT NOT NULL,
+  dept_code       TEXT NOT NULL REFERENCES payroll_departments(code),
+  team_code       TEXT REFERENCES payroll_teams(code),
+  leads_team_code TEXT REFERENCES payroll_teams(code),
+  offer_code      TEXT,
+  start_date      DATE NOT NULL,
+  birthday_md     CHAR(5) CHECK (birthday_md ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'),
+  is_finance      BOOLEAN NOT NULL DEFAULT false,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (role <> 'lead' OR leads_team_code IS NOT NULL),
+  CHECK (role <> 'manager' OR team_code IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_employees_one_lead ON payroll_employees (leads_team_code) WHERE role = 'lead';
+CREATE TABLE IF NOT EXISTS payroll_terms (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  valid_from DATE NOT NULL CHECK (valid_from = date_trunc('month', valid_from)::date),
+  level      TEXT CHECK (level IN ('start', 'profi')),
+  rate       NUMERIC(12,2) CHECK (rate >= 0),
+  pct_base   TEXT CHECK (pct_base IN ('company')),
+  pct_value  NUMERIC(5,2) CHECK (pct_value > 0 AND pct_value <= 100),
+  pct_clear  BOOLEAN NOT NULL DEFAULT false,
+  auto       BOOLEAN NOT NULL DEFAULT false,
+  reason     TEXT NOT NULL CHECK (length(btrim(reason)) > 0),
+  changed_by INTEGER REFERENCES users(id),
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (level IS NOT NULL OR rate IS NOT NULL OR pct_base IS NOT NULL OR pct_clear)
+);
+CREATE INDEX IF NOT EXISTS payroll_terms_user ON payroll_terms (user_id, valid_from);
+CREATE TABLE IF NOT EXISTS payroll_official (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  valid_from DATE NOT NULL CHECK (valid_from = date_trunc('month', valid_from)::date),
+  amount     NUMERIC(12,2) NOT NULL CHECK (amount >= 0),
+  deduct     BOOLEAN NOT NULL,
+  note       TEXT,
+  changed_by INTEGER REFERENCES users(id),
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS payroll_leaves (
+  user_id    INTEGER PRIMARY KEY REFERENCES payroll_employees(user_id),
+  leave_date DATE NOT NULL,
+  leave_type TEXT NOT NULL CHECK (leave_type IN ('own', 'ownNow', 'probation', 'company', 'gross')),
+  reason     TEXT NOT NULL CHECK (length(btrim(reason)) > 0),
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Карти: номер — лише зашифровано (AES-256-GCM у Node, ключ PAYROLL_CARD_KEY лише в .env); хеш — від номера з тим самим ключем.
+CREATE TABLE IF NOT EXISTS payroll_cards (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  number_enc  BYTEA NOT NULL,
+  last4       CHAR(4) NOT NULL CHECK (last4 ~ '^[0-9]{4}$'),
+  number_hash TEXT NOT NULL,
+  holder      TEXT NOT NULL CHECK (length(btrim(holder)) > 0),
+  created_by  INTEGER NOT NULL REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  archived_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_cards_uniq ON payroll_cards (user_id, number_hash) WHERE archived_at IS NULL;
+CREATE TABLE IF NOT EXISTS payroll_months (
+  month     DATE PRIMARY KEY CHECK (month = date_trunc('month', month)::date),
+  status    TEXT NOT NULL CHECK (status IN ('live', 'closed')),
+  closed_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS payroll_records (
+  id            BIGSERIAL PRIMARY KEY,
+  month         DATE NOT NULL REFERENCES payroll_months(month),
+  user_id       INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  status        TEXT NOT NULL DEFAULT 'review' CHECK (status IN ('review', 'verified', 'disputed', 'agreed', 'submitted', 'paid')),
+  auto_snapshot JSONB NOT NULL,
+  overrides     JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(overrides) = 'object'),
+  notes         JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(notes) = 'object'),
+  verified_at   TIMESTAMPTZ, verified_by INTEGER REFERENCES users(id),
+  agreed_at     TIMESTAMPTZ,
+  dispute_text  TEXT, dispute_at TIMESTAMPTZ,
+  reply         TEXT,
+  paid_at       TIMESTAMPTZ, paid_by INTEGER REFERENCES users(id),
+  paid_snapshot JSONB,
+  UNIQUE (month, user_id),
+  CHECK (status <> 'paid' OR (paid_at IS NOT NULL AND paid_snapshot IS NOT NULL))
+);
+CREATE TABLE IF NOT EXISTS payroll_record_extras (
+  id         BIGSERIAL PRIMARY KEY,
+  record_id  BIGINT NOT NULL REFERENCES payroll_records(id),
+  kind       TEXT NOT NULL CHECK (kind IN ('prem', 'corrP', 'ded', 'corrM', 'tax')),
+  amount     NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  note       TEXT NOT NULL CHECK (length(btrim(note)) > 0),
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ, deleted_by INTEGER REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS payroll_payout_forms (
+  id           BIGSERIAL PRIMARY KEY,
+  record_id    BIGINT NOT NULL UNIQUE REFERENCES payroll_records(id),
+  cash         NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (cash >= 0),
+  submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  submitted_by INTEGER NOT NULL REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS payroll_payout_lines (
+  id          BIGSERIAL PRIMARY KEY,
+  form_id     BIGINT NOT NULL REFERENCES payroll_payout_forms(id),
+  card_id     BIGINT NOT NULL REFERENCES payroll_cards(id),
+  amount      NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  paid_amount NUMERIC(12,2),
+  UNIQUE (form_id, card_id)
+);
+CREATE TABLE IF NOT EXISTS payroll_advances (
+  id               BIGSERIAL PRIMARY KEY,
+  month            DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  user_id          INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  amount           NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  cash             NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (cash >= 0),
+  limit_at_request NUMERIC(12,2) NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'paid', 'rejected', 'cancelled')),
+  requested_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  paid_at          TIMESTAMPTZ, paid_by INTEGER REFERENCES users(id),
+  rejected_at      TIMESTAMPTZ, rejected_by INTEGER REFERENCES users(id), reason TEXT,
+  cancelled_at     TIMESTAMPTZ,
+  CHECK (amount <= limit_at_request),
+  CHECK (status <> 'rejected' OR (reason IS NOT NULL AND length(btrim(reason)) > 0)),
+  CHECK (status <> 'paid' OR paid_at IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_advances_one_active ON payroll_advances (month, user_id) WHERE status IN ('requested', 'paid');
+CREATE TABLE IF NOT EXISTS payroll_advance_lines (
+  id         BIGSERIAL PRIMARY KEY,
+  advance_id BIGINT NOT NULL REFERENCES payroll_advances(id),
+  card_id    BIGINT NOT NULL REFERENCES payroll_cards(id),
+  amount     NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  UNIQUE (advance_id, card_id)
+);
+-- 📄 КОЛИ ТТН ЗʼЯВИЛАСЬ (ТЗ §3 «потрібна дата появи ТТН»): у ядрі лише кількість файлів (`deals.ttn_files`). Джоба
+-- `payrollTtnSeen` (кожні 15 хв) пише перший момент, коли в угоди «Успішно реалізовано» ttn_files > 0. Угоди з ТТН на
+-- момент запуску отримують час першого прогону (до запуску виплат за правилом не було — різниці немає).
+CREATE TABLE IF NOT EXISTS payroll_ttn_seen (
+  deal_id BIGINT PRIMARY KEY,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS payroll_ttn_legacy (
+  user_id  INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  month    DATE NOT NULL,
+  total    INTEGER NOT NULL CHECK (total > 0),
+  done     INTEGER NOT NULL CHECK (done >= 0 AND done <= total),
+  held     BOOLEAN NOT NULL,
+  fixed_at TIMESTAMPTZ, fixed_n INTEGER,
+  PRIMARY KEY (user_id, month)
+);
+CREATE TABLE IF NOT EXISTS payroll_archive (
+  user_id     INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  month       DATE NOT NULL,
+  level       TEXT CHECK (level IN ('start', 'profi')),
+  margin      NUMERIC(12,2) NOT NULL DEFAULT 0,
+  fund        NUMERIC(12,2) NOT NULL,
+  source      TEXT NOT NULL DEFAULT 'excel',
+  imported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  imported_by INTEGER REFERENCES users(id),
+  PRIMARY KEY (user_id, month)
+);
+CREATE TABLE IF NOT EXISTS payroll_offer_docs (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  offer_title TEXT NOT NULL,
+  level       TEXT CHECK (level IN ('start', 'profi')),
+  valid_from  DATE NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  signed_at   TIMESTAMPTZ, signed_by INTEGER REFERENCES users(id),
+  void_at     TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS payroll_clearances (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL UNIQUE REFERENCES payroll_leaves(user_id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by  INTEGER NOT NULL REFERENCES users(id),
+  shots_at    TIMESTAMPTZ,
+  shots_n     INTEGER CHECK (shots_n >= 0)
+);
+CREATE TABLE IF NOT EXISTS payroll_clearance_signatures (
+  clearance_id BIGINT NOT NULL REFERENCES payroll_clearances(id),
+  item_key     TEXT NOT NULL CHECK (item_key IN ('clients', 'crm', 'notify', 'reconcile', 'trucks', 'chats', 'tech', 'exit', 'pay')),
+  signed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  signed_by    INTEGER NOT NULL REFERENCES users(id),
+  signer_name  TEXT NOT NULL,
+  data         JSONB NOT NULL,
+  PRIMARY KEY (clearance_id, item_key)
+);
+-- Скріншоти повідомлень клієнтам (п. 3 обхідного листа) — менеджер надсилає з кабінету, бачить тім-лід і фінансисти.
+CREATE TABLE IF NOT EXISTS payroll_clearance_files (
+  id           BIGSERIAL PRIMARY KEY,
+  clearance_id BIGINT NOT NULL REFERENCES payroll_clearances(id),
+  data_url     TEXT NOT NULL CHECK (data_url ~ '^data:image/(png|jpe?g|webp);base64,' AND length(data_url) <= 3000000),
+  uploaded_by  INTEGER NOT NULL REFERENCES users(id),
+  uploaded_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS payroll_clearance_drafts (
+  clearance_id BIGINT NOT NULL REFERENCES payroll_clearances(id),
+  item_key     TEXT NOT NULL,
+  data         JSONB NOT NULL,
+  updated_by   INTEGER NOT NULL REFERENCES users(id),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (clearance_id, item_key)
+);
+CREATE TABLE IF NOT EXISTS payroll_history (
+  id           BIGSERIAL PRIMARY KEY,
+  at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  by_user      INTEGER REFERENCES users(id),
+  by_label     TEXT NOT NULL,
+  subject_user INTEGER,
+  what         TEXT NOT NULL,
+  note         TEXT,
+  internal     BOOLEAN NOT NULL DEFAULT false,
+  ref          JSONB
+);
+CREATE INDEX IF NOT EXISTS payroll_history_subject ON payroll_history (subject_user, at DESC);
+
+-- 🔔 ЦЕНТР СПОВІЩЕНЬ — СПІЛЬНИЙ ДЛЯ ДАШБОРДА (ТЗ §6; «Зарплата» — перший модуль). Одна подія → одне сповіщення → кілька
+-- адресатів (прочитано — окремо в кожного). «Потрібна дія» закривається сама: дія ставить done_at за action_key.
+CREATE TABLE IF NOT EXISTS notify_rules (
+  type       TEXT PRIMARY KEY,
+  module     TEXT NOT NULL,
+  act        BOOLEAN NOT NULL,
+  event      TEXT NOT NULL,
+  recipients TEXT NOT NULL,
+  channels   TEXT[] NOT NULL DEFAULT ARRAY['dashboard'] CHECK (channels <@ ARRAY['dashboard', 'telegram', 'email']),
+  enabled    BOOLEAN NOT NULL DEFAULT true
+);
+CREATE TABLE IF NOT EXISTS notifications (
+  id           BIGSERIAL PRIMARY KEY,
+  type         TEXT NOT NULL REFERENCES notify_rules(type),
+  subject_user INTEGER,
+  title        TEXT NOT NULL,
+  body         TEXT NOT NULL,
+  link         JSONB,
+  act          BOOLEAN NOT NULL,
+  cta          TEXT,
+  action_key   TEXT,
+  done_rule    JSONB,
+  done_at      TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (act OR done_at IS NULL)
+);
+CREATE INDEX IF NOT EXISTS notifications_action ON notifications (action_key) WHERE done_at IS NULL;
+CREATE TABLE IF NOT EXISTS notification_recipients (
+  notification_id  BIGINT NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+  user_id          INTEGER NOT NULL REFERENCES users(id),
+  read_at          TIMESTAMPTZ,
+  telegram_sent_at TIMESTAMPTZ,
+  email_sent_at    TIMESTAMPTZ,
+  PRIMARY KEY (notification_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS notification_recipients_unread ON notification_recipients (user_id) WHERE read_at IS NULL;
+INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
+ ('clr.sign', 'Обхідний лист', true,  'Звільнення — створено обхідний лист; усі пункти підписано', 'тім-лід, бізнес-асистент, бухгалтерія, HR — кожному свої пункти; ОД — останній: «Розрахунок та видача ЗП»'),
+ ('clr.info', 'Обхідний лист', false, 'Обхідний лист створено; кожен підпис; скріншоти від менеджера', 'працівник — його дії; фінансисти й ОД — до відома; тім-лід — скріншоти'),
+ ('clr.done', 'Обхідний лист', false, 'Підписано всіма; розрахунок погоджено ОД', 'фінансисти, працівник'),
+ ('month',    'Зарплата',      true,  'Місяць закрито', 'фінансисти — перевірити до 6-го'),
+ ('ver.ready','Зарплата',      true,  'Розрахунковий лист перевірено', 'працівник — погодити або написати, з чим не згоден'),
+ ('ver.disp', 'Зарплата',      true,  'Працівник не погоджується', 'фінансисти; не домовились — вирішує ОД'),
+ ('form',     'Зарплата',      true,  'Форма на виплату подана', 'фінансисти — у відомість, виплата до 8-го'),
+ ('paid',     'Зарплата',      false, 'Виплачено', 'працівник'),
+ ('adv.req',  'Аванс',         true,  'Заявка на аванс', 'фінансисти'),
+ ('adv.res',  'Аванс',         false, 'Аванс виплачено або відхилено', 'працівник'),
+ ('ttn.hold', 'ТТН',           true,  'ТТН менше 70 % — утримано 3 000 ₴', 'менеджер; бізнес-асистент — до відома'),
+ ('ttn.fix',  'ТТН',           false, 'ТТН закрито — утримання знято', 'менеджер'),
+ ('bday',     'Дні народження',false, 'Місяць дня народження', 'іменинник; фінансисти — до відома'),
+ ('lvl',      'Рівень',        false, 'Перехід на «Профі», новий офер', 'менеджер; фінансисти — до відома'),
+ ('offer',    'Документи',     true,  'Новий офер — перепідписати', 'рекрутер — задача')
+ON CONFLICT (type) DO NOTHING;
+
+-- Довідники за замовчуванням (ТЗ §12 «Запуск»): відділ продажу й відділи, що не продають; команди — з команд Kommo
+-- (офер команди Лілії Шаврової — за групою Kommo 691208). Лише якщо ще немає — правки фінансиста не перетираються.
+INSERT INTO payroll_departments (code, name, is_sales) VALUES
+ ('sales', 'Відділ продажу', true), ('log', 'Логістика', false), ('ops', 'Операційний відділ', false),
+ ('hr', 'HR', false), ('fin', 'Фінанси й бухгалтерія', false), ('ba', 'Бізнес-асистент', false), ('mgmt', 'Керівництво', false)
+ON CONFLICT (code) DO NOTHING;
+INSERT INTO payroll_teams (code, name, dept_code, offer_code, kommo_team_id)
+SELECT 't' || t.id, t.name, 'sales', CASE WHEN t.kommo_group_id = 691208 THEN 'ls' ELSE 'std' END, t.id
+  FROM teams t
+ WHERE NOT EXISTS (SELECT 1 FROM payroll_teams p WHERE p.kommo_team_id = t.id)
+   AND EXISTS (SELECT 1 FROM managers m WHERE m.team_id = t.id AND m.is_active)
+ON CONFLICT (code) DO NOTHING;
+
+-- 🔒 Зарплати, карти, обхідні листи й сповіщення — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON payroll_settings_versions, payroll_departments, payroll_teams, payroll_employees, payroll_terms, payroll_official,
+  payroll_leaves, payroll_cards, payroll_months, payroll_records, payroll_record_extras, payroll_payout_forms, payroll_payout_lines,
+  payroll_advances, payroll_advance_lines, payroll_ttn_seen, payroll_ttn_legacy, payroll_archive, payroll_offer_docs,
+  payroll_clearances, payroll_clearance_signatures, payroll_clearance_drafts, payroll_clearance_files, payroll_history,
+  notify_rules, notifications, notification_recipients FROM ai_readonly;
+
+-- 🗝 Вкладка «Зарплата» — кожному, крім кандидата (кабінет є в кожного, хто є в payroll_employees; решта бачить порожній стан).
+UPDATE roles SET screen_access = screen_access || '{"payroll":true}'::jsonb
+ WHERE key <> 'candidate' AND NOT (screen_access ? 'payroll');
+UPDATE roles SET screen_access = screen_access || '{"payroll":false}'::jsonb
+ WHERE key = 'candidate' AND NOT (screen_access ? 'payroll');
+-- Права «Зарплати» (ТЗ §2): фінансист — financier; бухгалтерія — ____________; бізнес-асистент — business_assistant.
+-- `admin` сум не бачить (ТЗ §2 ❓ — рішення власника; до нього — лише технічне: правила сповіщень). Разово й парно.
+UPDATE roles SET permissions = permissions || '{"payroll_view_all":true}'::jsonb WHERE key IN ('financier', 'opdir', 'ceo');
+UPDATE roles SET permissions = permissions - 'payroll_view_all' WHERE key NOT IN ('financier', 'opdir', 'ceo');
+UPDATE roles SET permissions = permissions || '{"payroll_edit":true}'::jsonb WHERE key IN ('financier', 'opdir');
+UPDATE roles SET permissions = permissions - 'payroll_edit' WHERE key NOT IN ('financier', 'opdir');
+UPDATE roles SET permissions = permissions || '{"payroll_settings":true}'::jsonb WHERE key IN ('financier', 'opdir');
+UPDATE roles SET permissions = permissions - 'payroll_settings' WHERE key NOT IN ('financier', 'opdir');
+UPDATE roles SET permissions = permissions || '{"payroll_final_word":true}'::jsonb WHERE key IN ('opdir');
+UPDATE roles SET permissions = permissions - 'payroll_final_word' WHERE key NOT IN ('opdir');
+UPDATE roles SET permissions = permissions || '{"payroll_export_cards":true}'::jsonb WHERE key IN ('financier', 'opdir');
+UPDATE roles SET permissions = permissions - 'payroll_export_cards' WHERE key NOT IN ('financier', 'opdir');
+UPDATE roles SET permissions = permissions || '{"payroll_clearance":true}'::jsonb WHERE key IN ('____________', 'business_assistant');
+UPDATE roles SET permissions = permissions - 'payroll_clearance' WHERE key NOT IN ('____________', 'business_assistant');
+UPDATE roles SET permissions = permissions || '{"payroll_offer_tasks":true}'::jsonb WHERE key IN ('hr');
+UPDATE roles SET permissions = permissions - 'payroll_offer_tasks' WHERE key NOT IN ('hr');
+UPDATE roles SET permissions = permissions || '{"notify_rules":true}'::jsonb WHERE key IN ('opdir', 'admin');
+UPDATE roles SET permissions = permissions - 'notify_rules' WHERE key NOT IN ('opdir', 'admin');
