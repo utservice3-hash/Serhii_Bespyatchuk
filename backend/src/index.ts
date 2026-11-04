@@ -106,6 +106,7 @@ import { syncWorkua } from "./jobs/syncWorkua.js";
 import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { callAiJob } from "./jobs/callAiJob.js";
+import { firstTouchAutoTasks } from "./jobs/firstTouchAutoTasks.js";
 import { carrierCallJob } from "./jobs/carrierCallJob.js";
 import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
 import { clientLimitsMirror, clientLimitsReset, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON } from "./jobs/counterpartyJobs.js";
@@ -775,6 +776,13 @@ cron.schedule("35 * * * *", () => {
 // назовні нуль запитів. Під наглядом (`monitoredJobs.ts`), everyMin == крону — тримає гейт.
 cron.schedule("5,15,25,35,45,55 * * * *", () => {
   void runJob("callAiJob", () => callAiJob());
+});
+
+// 📋 АВТОЗАДАЧІ «ПЕРШОГО ДОТИКУ» (задача 7238, ТЗ Юлі 28.10.2026): «погодився, а в Kommo втрачено» → задача тімліду,
+// «аналіз не вдався» → задача Роману (закривається сама). Раз на 30 хв о :12/:42 — не на :00/:30 із syncKommo і не на
+// хвилинах callAiJob. Лише наша БД. Під наглядом (`monitoredJobs.ts`), everyMin == крону — тримає `#3723`.
+cron.schedule("12,42 * * * *", () => {
+  void runJob("firstTouchAutoTasks", () => firstTouchAutoTasks());
 });
 
 // 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ (ТЗ 29.09.2026, рішення Романа: «зразу після фільтра», не щогодини).

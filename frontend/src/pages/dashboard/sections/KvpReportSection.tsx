@@ -7,6 +7,7 @@ import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 import { LeadgenRegularsCard } from "./LeadgenRegularsCard";
 import { KvpFirstTouchBlock } from "./KvpFirstTouchBlock";
+import { ReviewByTeamBlock } from "./ReviewByTeamBlock";
 import { weekCloseStatus, closeNote, withExpected, CLOSE_LABEL, type CloseKind } from "../kvpCoreRules";
 import { VacationMark } from "../VacationMark";
 
@@ -447,6 +448,8 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
 
           {/* ── 🎧 ПЕРШИЙ ДОТИК (задача 5314): одразу під «де ми зараз», як у макеті «Звіт КВП - ядро». ── */}
           {canSeeFirstTouch && <KvpFirstTouchBlock from={rep.scope.from} to={rep.scope.to} />}
+          {/* 📋 Задача 7238: розбір перших розмов по командах — той самий блок, що на екрані AI; тиждень — кінця періоду Звіту. */}
+          {canSeeFirstTouch && <div style={{ marginBottom: 16 }}><ReviewByTeamBlock variant="kvp" anchor={rep.scope.to} /></div>}
 
           {/* ▸ ДЕТАЛЬНИЙ ЗВІТ — усе, що було до ядра; згорнуте за замовчуванням. */}
           <div className="chart-card" style={{ marginBottom: 16 }}>

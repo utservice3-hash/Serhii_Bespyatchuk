@@ -4,6 +4,7 @@ import { fetchAiCalls, fetchAiCallsMeta, type AiCallsResp, type AiCallsMetaResp 
 import { AiCallDrawer, FeedbackButton } from "./AiCallDrawer";
 import { FirstTouchQueue } from "./FirstTouchQueue";
 import { FirstTouchPriceChart } from "./FirstTouchPriceChart";
+import { ReviewByTeamBlock } from "./ReviewByTeamBlock";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
@@ -274,6 +275,8 @@ export function AiCallsSection() {
               <button type="button" className="ftd-go" disabled={queue.length === 0} onClick={() => openQueue()}>{reviewedN > 0 ? "Продовжити розбір ›" : "Почати розбір ›"}</button>
             </section>
           )}
+          {/* 📋 Задача 7238: розбір по командах за день і тиждень — тим, хто розбирає (тімлід, КВП, адмін). */}
+          {d.canReview && <ReviewByTeamBlock variant="ftd" refresh={reload} />}
 
           <section aria-label="Головні числа" className={`ftd-kpis${d.canSeeMessengerSignal ? " is-6" : ""}`}>
             {kpi("noCall", "Обіцяли — дзвінка в телефонії немає", <AnimatedNumber value={ts.noCall.n} />,

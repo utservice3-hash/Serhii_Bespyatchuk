@@ -7500,3 +7500,19 @@ CREATE TABLE IF NOT EXISTS carrier_phones (
 -- '{}' = прочитано, телефонів немає. Пише `syncKommo` (той самий знімок компаній) і разове `backfillCompanyPhones`.
 -- Відкат даних: ALTER TABLE kommo_companies DROP COLUMN phones.
 ALTER TABLE kommo_companies ADD COLUMN IF NOT EXISTS phones TEXT[];
+
+-- 📋 АВТОЗАДАЧІ «ПЕРШОГО ДОТИКУ» (задача 7238, ТЗ Юлі 28.10.2026; рішення Романа 04.11.2026; `core/firstTouchAutoTasks.ts`).
+-- Рядок на (вид, ключ): `agreed_lost` — угода «погодився, а в Kommo втрачено» (задача тімліду); `analysis_failed` — розмова,
+-- де AI-аналіз не вдався (задача Роману, закривається сама). Унікальний ключ — у БД: задача й рядок пишуться одним
+-- оператором, дубль відкочує обидва. Видалена задача лишає рядок (task_id = NULL) — повторно не ставиться.
+-- ⚠️ revert коду таблицю не прибирає; поставлені задачі лишаються звичайними задачами в Задачнику.
+CREATE TABLE IF NOT EXISTS first_touch_auto_tasks (
+  id        BIGSERIAL PRIMARY KEY,
+  kind      TEXT NOT NULL CHECK (kind IN ('agreed_lost', 'analysis_failed')),
+  item_key  TEXT NOT NULL,
+  task_id   INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  opened_at TIMESTAMPTZ NOT NULL,
+  closed_at TIMESTAMPTZ,
+  UNIQUE (kind, item_key)
+);
+REVOKE ALL ON first_touch_auto_tasks FROM ai_readonly;

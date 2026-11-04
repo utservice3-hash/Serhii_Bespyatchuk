@@ -412,6 +412,47 @@ export function queueRows<T extends { needsReview: boolean; reviewReason: Review
     .sort((a, b) => REASON_ORDER[a.reviewReason!] - REASON_ORDER[b.reviewReason!] || b.calledAt.localeCompare(a.calledAt));
 }
 
+// ─── 📋 Розбір по командах (задача 7238, ТЗ Юлі 28.10.2026, задача 1 п.1; рішення Романа 04.11.2026) ─────────────────
+/**
+ * «Треба розібрати» — розмови з причиною розбору (`reviewReason`, та сама, що ставить їх у чергу); «розібрано» — позначка
+ * тімліда («Розібрано» / «Опрацьовано», з 04.11 — лише після коментаря менеджера, правило 7351); «дійшла до рахунку» —
+ * окремо: з черги вона виходить сама, але це не розбір; «лишилось» — ще в черзі. Тож треба = розібрано + рахунок + лишилось.
+ * Відсоток — розібрано серед тих, що тімлід мав розібрати (без «дійшла до рахунку»).
+ * День — за датою РОЗМОВИ (Київ), тиждень пн–нд. Екран вантажить угоди за датою СТВОРЕННЯ, а розмова буває пізніше
+ * (замір 04.11: 14% жовтневих — інший день, 4 з 2024 — понад 14 днів), тому вікно запиту — на `REVIEW_FETCH_BACK_DAYS` раніше.
+ */
+export interface ReviewCount { due: number; reviewed: number; invoice: number; left: number }
+export interface ReviewTeamLine { teamId: number | null; teamName: string; days: ReviewCount[]; week: ReviewCount; pct: number | null }
+export interface ReviewByTeam { days: string[]; teams: ReviewTeamLine[]; total: ReviewTeamLine }
+type ReviewTeamRow = { inReport: boolean; teamId: number | null; teamName?: string | null; calledAt: string;
+  reviewReason: ReviewReasonT | null; reviewClosure: ReviewClosureT | null };
+export const REVIEW_FETCH_BACK_DAYS = 14;
+export const kyivDayOf = (iso: string): string => new Date(iso).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+/** Вікно запиту для тижня з понеділка `monday`: угоди, створені до 14 днів раніше, — їхні розмови теж можуть впасти в тиждень. */
+export function reviewWeekWindow(monday: string): { from: string; to: string } {
+  return { from: addDays(monday, -REVIEW_FETCH_BACK_DAYS), to: addDays(monday, 6) };
+}
+const zeroCount = (): ReviewCount => ({ due: 0, reviewed: 0, invoice: 0, left: 0 });
+export const reviewPct = (c: ReviewCount): number | null => (c.reviewed + c.left ? Math.round((c.reviewed / (c.reviewed + c.left)) * 100) : null);
+export function reviewByTeam(rows: readonly ReviewTeamRow[], monday: string): ReviewByTeam {
+  const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+  const line = (teamId: number | null, teamName: string): ReviewTeamLine => ({ teamId, teamName, days: days.map(zeroCount), week: zeroCount(), pct: null });
+  const byTeam = new Map<number | null, ReviewTeamLine>();
+  const total = line(null, "Разом");
+  for (const r of rows) {
+    if (!r.inReport || r.reviewReason == null) continue;
+    const i = days.indexOf(kyivDayOf(r.calledAt));
+    if (i < 0) continue;
+    const t = byTeam.get(r.teamId) ?? line(r.teamId, r.teamId == null ? "Без команди" : r.teamName ?? `Команда #${String(r.teamId)}`);
+    byTeam.set(r.teamId, t);
+    const k: keyof ReviewCount = r.reviewClosure === "invoice" ? "invoice" : r.reviewClosure ? "reviewed" : "left";
+    for (const c of [t.days[i], t.week, total.days[i], total.week]) { c.due++; c[k]++; }
+  }
+  const teams = [...byTeam.values()].sort((a, b) => (a.teamId == null ? 1 : b.teamId == null ? -1 : a.teamName.localeCompare(b.teamName, "uk")));
+  for (const t of [...teams, total]) t.pct = reviewPct(t.week);
+  return { days, teams, total };
+}
+
 /** Медіана хвилин (реакція по втрачених) — `null`, якщо даних немає. */
 export function medianMin(xs: readonly (number | null | undefined)[]): number | null {
   const v = xs.filter((x): x is number => typeof x === "number").sort((a, b) => a - b);

@@ -2510,3 +2510,161 @@ test("#3364 ФРОНТ ФОРМИ ЦІНИ: рядок = фільтр, Σ + не
   const dr = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(dr, /Не розбиралось: форма ціни визначається для розмов від/, "🔴 нерозібрана форма в картці — порожнім місцем, а не словами");
 });
+
+/**
+ * #3720 — РОЗБІР ПО КОМАНДАХ (задача 7238, ТЗ Юлі 28.10, задача 1 п.1; рішення Романа 04.11.2026): у кожній клітинці
+ * треба = розібрано + дійшло до рахунку + лишилось; тиждень = Σ днів, «Разом» = Σ команд; день — за датою РОЗМОВИ, не
+ * угоди; виключені й без причини розбору не рахуються; «до рахунку» не входить ні в розібрані, ні у відсоток;
+ * «лишилось» за тиждень = черга розбору тих самих розмов (одне правило з чергою).
+ * 🧨 Червоніє, якщо «дійшла до рахунку» зарахувати розібраною, день брати з дати угоди або загубити розмову без команди.
+ */
+test("#3720 РОЗБІР ПО КОМАНДАХ: треба = розібрано + рахунок + лишилось; день за датою розмови; «Разом» = Σ; лишилось = черга", async () => {
+  type C = { due: number; reviewed: number; invoice: number; left: number };
+  type L = { teamId: number | null; teamName: string; days: C[]; week: C; pct: number | null };
+  const V = await loadView() as unknown as {
+    reviewByTeam: (rows: readonly unknown[], monday: string) => { days: string[]; teams: L[]; total: L };
+    reviewWeekWindow: (monday: string) => { from: string; to: string };
+    queueRows: <T>(rows: readonly T[]) => T[] };
+  const row = (teamId: number | null, calledAt: string, reason: string | null, closure: string | null, inReport = true, dealCreatedAt = calledAt) => ({
+    inReport, teamId, teamName: teamId == null ? null : `Команда ${String(teamId)}`, calledAt, dealCreatedAt, reviewReason: reason, reviewClosure: closure,
+    needsReview: reason != null && closure == null });
+  const MON = "2026-11-02";
+  const rows = [
+    row(1, "2026-11-02T08:00:00Z", "noPrice", "approved"), row(1, "2026-11-02T09:00:00Z", "lost", "direct"),
+    row(1, "2026-11-02T10:00:00Z", "noCall", "invoice"), row(1, "2026-11-03T10:00:00Z", "noPrice", null),
+    // Угода створена в суботу минулого тижня, розмова — у вівторок: рахується вівторком (за датою розмови).
+    row(2, "2026-11-03T07:00:00Z", "noPrice", null, true, "2026-10-31T10:00:00Z"),
+    // 23:30 за Києвом неділі 08.11 = 21:30Z — ще цей тиждень; 00:30 понеділка 09.11 за Києвом = 22:30Z 08.11 — вже ні.
+    row(2, "2026-11-08T21:30:00Z", "late", "approved"), row(2, "2026-11-08T22:30:00Z", "late", null),
+    row(null, "2026-11-04T10:00:00Z", "noPrice", null),
+    row(1, "2026-11-04T10:00:00Z", "noPrice", null, false), row(1, "2026-11-04T11:00:00Z", null, null),
+    row(1, "2026-10-30T10:00:00Z", "noPrice", null),
+  ];
+  const r = V.reviewByTeam(rows, MON);
+  assert.deepEqual(r.days, ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"]);
+  const t1 = r.teams.find((t) => t.teamId === 1)!, t2 = r.teams.find((t) => t.teamId === 2)!, tn = r.teams.find((t) => t.teamId == null)!;
+  assert.deepEqual(t1.week, { due: 4, reviewed: 2, invoice: 1, left: 1 }, "🔴 команда 1: «до рахунку» пішла в розібрані чи виключені/без причини порахувались");
+  assert.equal(t1.pct, 67, "🔴 відсоток рахує «до рахунку» (має бути 2 з 3, не 2 з 4 чи 3 з 4)");
+  assert.deepEqual(t2.days[1], { due: 1, reviewed: 0, invoice: 0, left: 1 }, "🔴 день узято з дати угоди, а не розмови");
+  assert.deepEqual(t2.days[6], { due: 1, reviewed: 1, invoice: 0, left: 0 }, "🔴 межа доби не за Києвом");
+  assert.equal(t2.week.due, 2, "🔴 розмова понеділка наступного тижня (за Києвом) потрапила в цей");
+  assert.equal(tn?.teamName, "Без команди", "🔴 розмова без команди загубилась або без підпису");
+  assert.equal(r.teams.at(-1)?.teamId, null, "🔴 «Без команди» не в кінці");
+  for (const l of [...r.teams, r.total]) {
+    for (const c of [...l.days, l.week]) assert.equal(c.due, c.reviewed + c.invoice + c.left, `🔴 ${l.teamName}: треба ≠ розібрано + рахунок + лишилось`);
+    for (const k of ["due", "reviewed", "invoice", "left"] as const) assert.equal(l.days.reduce((s, c) => s + c[k], 0), l.week[k], `🔴 ${l.teamName}: тиждень ≠ Σ днів (${k})`);
+  }
+  for (const k of ["due", "reviewed", "invoice", "left"] as const) assert.equal(r.teams.reduce((s, t) => s + t.week[k], 0), r.total.week[k], `🔴 «Разом» ≠ Σ команд (${k})`);
+  const inWeek = rows.filter((x) => x.inReport && new Date(x.calledAt).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" }) >= MON
+    && new Date(x.calledAt).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" }) <= "2026-11-08");
+  assert.equal(r.total.week.left, V.queueRows(inWeek).length, "🔴 «лишилось» і черга розбору рахують різним правилом");
+  assert.deepEqual(V.reviewWeekWindow(MON), { from: "2026-10-19", to: "2026-11-08" }, "🔴 вікно запиту не захоплює угоди, створені до тижня розмови");
+});
+
+/**
+ * #3721 — ПРОВОДКА БЛОКУ: «Розбір по командах» стоїть на екрані «Перший дотик · AI» (тим, хто розбирає — `canReview`,
+ * перечитується після розбору) і у Звіті КВП (тим, у кого є вкладка AI); блок вантажить тиждень своїм вікном і рахує
+ * `reviewByTeam`. 🧨 Червоніє, якщо блок відʼєднати від одного з екранів чи від спільного правила.
+ */
+test("#3721 ПРОВОДКА БЛОКУ: екран AI (canReview, перечитується) і Звіт КВП; запит — вікно тижня, числа — reviewByTeam", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /\{d\.canReview && <ReviewByTeamBlock variant="ftd" refresh=\{reload\} \/>\}/, "🔴 блоку немає на екрані AI або він не перечитується після розбору");
+  const kvp = readFileSync(FE("pages/dashboard/sections/KvpReportSection.tsx"), "utf8");
+  assert.match(kvp, /\{canSeeFirstTouch && <div[^>]*><ReviewByTeamBlock variant="kvp" anchor=\{rep\.scope\.to\} \/><\/div>\}/, "🔴 блоку немає у Звіті КВП");
+  const blk = readFileSync(FE("pages/dashboard/sections/ReviewByTeamBlock.tsx"), "utf8");
+  assert.match(blk, /fetchAiCalls\(reviewWeekWindow\(monday\)\)/, "🔴 блок вантажить не вікно тижня");
+  assert.match(blk, /reviewByTeam\(d\.data\.rows, monday\)/, "🔴 блок рахує не спільним правилом");
+});
+
+/**
+ * #3722 — ПЛАН АВТОЗАДАЧ (задача 7238, пп.2–3): «погодився, а втрачено» — задача тімліду команди на КОЖНУ угоду, текст ТЗ,
+ * високий пріоритет, наступний робочий день; без тімліда — нікому, але названо; «погодився», а угода відкрита, чи «відмовив»
+ * і втрачено, чи виключена розмова — без задачі. «Аналіз не вдався» — Роману з причиною; позначено «не запит» — без задачі й
+ * закривається; вдалий розбір — закривається; повторний аналіз у черзі — ще ні.
+ * 🧨 Червоніє, якщо задача піде не тому тімліду, по розмові замість угоди, у вихідний, або закриється до розвʼязання.
+ */
+test("#3722 ПЛАН АВТОЗАДАЧ: угода → тімлід команди, дедлайн — робочий день; збій аналізу → Роман, закриття лише по розвʼязанню", async () => {
+  const A = await import("./firstTouchAutoTasks.js");
+  const base = { calledAt: "2026-11-06T09:00:00Z", managerName: "Менеджер", failure: null, inReport: true, typeOverride: null,
+    decision: null, dealOutcome: null, state: "done", teamName: "Команда 1" };
+  const agreed = { value: "agreed", quote: "добре, беремо", quoteFound: true };
+  const rows = [
+    { ...base, uniqueid: "a", kommoIds: [101, 102], teamId: 1, decision: agreed, dealOutcome: { state: "lost", lossReason: "Дорого" } },
+    { ...base, uniqueid: "a2", kommoIds: [102], teamId: 1, decision: agreed, dealOutcome: { state: "lost", lossReason: null } },
+    { ...base, uniqueid: "b", kommoIds: [201], teamId: 2, decision: agreed, dealOutcome: { state: "lost", lossReason: null } },
+    { ...base, uniqueid: "c", kommoIds: [301], teamId: 1, decision: agreed, dealOutcome: { state: "open", lossReason: null } },
+    { ...base, uniqueid: "d", kommoIds: [401], teamId: 1, decision: { value: "declined", quote: "", quoteFound: null }, dealOutcome: { state: "lost", lossReason: null } },
+    { ...base, uniqueid: "e", kommoIds: [501], teamId: 1, inReport: false, decision: agreed, dealOutcome: { state: "lost", lossReason: null } },
+    { ...base, uniqueid: "f", kommoIds: [601], teamId: 1, state: "llm_failed", failure: "відповідь моделі не за схемою" },
+    { ...base, uniqueid: "g", kommoIds: [701], teamId: 1, state: "llm_failed", typeOverride: { isCargo: false } },
+    { ...base, uniqueid: "h", kommoIds: [801], teamId: 1, state: "llm_pending" },
+  ];
+  // 06.11.2026 — пʼятниця: наступний робочий день — понеділок 09.11.
+  const p = A.planAutoTasks(rows, new Map([[1, 77]]), new Date("2026-11-06T10:00:00Z"), (id) => `https://kommo/leads/${String(id)}`);
+  const lost = p.items.filter((i) => i.kind === "agreed_lost");
+  assert.deepEqual(lost.map((i) => i.key), ["101", "102"], "🔴 задача не на кожну угоду, дубль угоди з двох розмов чи зайві (відкрита / відмовив / виключена)");
+  for (const i of lost) {
+    assert.equal(i.assigneeUserId, 77, "🔴 задача не тімліду команди розмови");
+    assert.equal(i.title, `Перевірити, чому закрили угоду № ${i.key}`, "🔴 заголовок не за ТЗ");
+    assert.equal(i.priority, "high", "🔴 пріоритет не високий");
+    assert.equal(i.deadline, "2026-11-09", "🔴 дедлайн не наступний робочий день");
+  }
+  assert.match(lost[0].description, /Причина відмови в CRM: Дорого[\s\S]*Слова клієнта: «добре, беремо»[\s\S]*kommo\/leads\/101[\s\S]*ai-calls\?call=a/, "🔴 в описі немає причини, слів клієнта чи посилання на розмову");
+  assert.deepEqual(p.noLead, ["201"], "🔴 угода команди без тімліда загубилась мовчки");
+  const failed = p.items.filter((i) => i.kind === "analysis_failed");
+  assert.deepEqual(failed.map((i) => [i.key, i.assigneeUserId]), [["f", A.ROMAN_USER_ID]], "🔴 збій аналізу не Роману, або задача на вже позначену «не запит»");
+  assert.match(failed[0].description, /Аналіз не вдався: відповідь моделі не за схемою/, "🔴 у задачі немає причини збою");
+  assert.ok(p.resolved.has("g") && p.resolved.has("a"), "🔴 позначена «не запит» чи розібрана розмова не вважається розвʼязаною");
+  assert.ok(!p.resolved.has("h") && !p.resolved.has("f"), "🔴 задача закрилась би, поки повторний аналіз у черзі чи збій ще стоїть");
+});
+
+/**
+ * #3723 — ДЖОБА В РОЗКЛАДІ І ПІД НАГЛЯДОМ: раз на 30 хв (:12/:42), нагляд чекає 30 хв; рядки — того самого `aiCallsList`, що
+ * екран, без скоупу ролі, з `AUTO_TASKS_FROM` (Роман 04.11: «роби всі»); рішення клієнта — `clientDecision` ядра.
+ * 🧨 Червоніє, якщо джобу прибрати з крону чи нагляду, розійтись частотою або взяти рядки не з екрана.
+ */
+test("#3723 ДЖОБА АВТОЗАДАЧ: крон 12,42 = нагляд 30 хв; рядки екрана без скоупу; рішення клієнта — ядром; з 01.09", async () => {
+  const idx = SRC("index.ts");
+  const call = idx.indexOf('runJob("firstTouchAutoTasks", () => firstTouchAutoTasks())');
+  assert.ok(call > 0, "🔴 джоби немає в розкладі");
+  assert.equal([...idx.slice(0, call).matchAll(/cron\.schedule\("([^"]+)"/g)].pop()?.[1], "12,42 * * * *", "🔴 крон джоби не той");
+  const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
+  assert.equal(MONITORED_JOBS.find((j) => j.name === "firstTouchAutoTasks")?.everyMin, 30, "🔴 джоба не під наглядом або нагляд чекає не 30 хв");
+  const job = SRC("jobs/firstTouchAutoTasks.ts");
+  assert.match(job, /aiCallsList\(pool, \{ predicate: adDealSql, adSources \}, from, today, now, \{\}\)/, "🔴 рядки не з екрана або зі скоупом");
+  assert.match(job, /decision: clientDecision\(r\)/, "🔴 рішення клієнта рахується не ядром");
+  const A = await import("./firstTouchAutoTasks.js");
+  assert.equal(A.AUTO_TASKS_FROM, "2026-09-01", "🔴 «роби всі» (Роман 04.11) звужено");
+});
+
+/**
+ * #3724 — ЖУРНАЛ АВТОЗАДАЧ НА СПРАВЖНІЙ СХЕМІ: перший прохід ставить задачі (тімліду — його акаунт, високий пріоритет),
+ * другий — нуль нових; дубль ключа відкочує й задачу (один оператор); розвʼязаний збій закриває задачу з причиною й журналом
+ * статусів; видалена задача повторно не ставиться.
+ * 🧨 Червоніє, якщо зламати ключ журналу (дубль задач), закриття чи «видалив — значить не потрібна».
+ */
+test("#3724 ЖУРНАЛ АВТОЗАДАЧ: повторний прохід — 0 нових; дубль відкочує задачу; збій закривається з причиною; видалена не повертається", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const A = await import("./firstTouchAutoTasks.js");
+  await c.raw.query(`INSERT INTO users(id,email,password_hash,role) VALUES (93720,'tl7238@x','x','team_lead'),(${String(A.ROMAN_USER_ID)},'drv7238@x','x','admin') ON CONFLICT (id) DO NOTHING`);
+  const now = new Date("2026-11-04T10:00:00Z");
+  const it = (kind: "agreed_lost" | "analysis_failed", key: string, user: number) => ({ kind, key, assigneeUserId: user, title: `t-${key}`,
+    description: "d", deadline: "2026-11-05", priority: kind === "agreed_lost" ? "high" as const : "medium" as const, department: "Команда" });
+  const plan = { items: [it("agreed_lost", "7238001", 93720), it("agreed_lost", "7238002", 93720), it("analysis_failed", "u7238", A.ROMAN_USER_ID)], noLead: [], resolved: new Set<string>() };
+  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 3, known: 0, closed: 0, noLead: 0 });
+  const tasks = (await c.raw.query(`SELECT t.id, t.assignee_user_id, t.priority, t.status FROM first_touch_auto_tasks j JOIN tasks t ON t.id = j.task_id
+                                     WHERE j.item_key IN ('7238001','7238002','u7238') ORDER BY j.item_key`)).rows;
+  assert.deepEqual(tasks.map((x) => [x.assignee_user_id, x.priority]), [[93720, "high"], [93720, "high"], [A.ROMAN_USER_ID, "medium"]], "🔴 задачі не тим або не з тим пріоритетом");
+  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 0, known: 3, closed: 0, noLead: 0 }, "🔴 повторний прохід поставив дублі");
+  const before = Number((await c.raw.query("SELECT count(*) FROM tasks")).rows[0].count);
+  await assert.rejects(c.raw.query(`WITH x AS (INSERT INTO tasks (title, status, task_type) VALUES ('dup','not_started','simple') RETURNING id)
+    INSERT INTO first_touch_auto_tasks (kind, item_key, task_id, opened_at) SELECT 'agreed_lost', '7238001', id, now() FROM x`), /duplicate key/, "🔴 ключ журналу не унікальний у БД");
+  assert.equal(Number((await c.raw.query("SELECT count(*) FROM tasks")).rows[0].count), before, "🔴 дубль ключа лишив задачу без журналу");
+  const res = await A.syncFirstTouchAutoTasks(c.db, { items: [], noLead: [], resolved: new Set(["u7238", "7238001"]) }, now);
+  assert.equal(res.closed, 1, "🔴 розвʼязаний збій не закрився (або закрилась задача тімліда)");
+  const f = (await c.raw.query(`SELECT t.status, t.close_reason, j.closed_at, (SELECT count(*) FROM task_status_log l WHERE l.task_id = t.id AND l.to_status = 'done') AS logged
+                                  FROM first_touch_auto_tasks j JOIN tasks t ON t.id = j.task_id WHERE j.item_key = 'u7238'`)).rows[0];
+  assert.deepEqual([f.status, f.close_reason, f.closed_at != null, Number(f.logged)], ["done", A.FAILED_DONE_REASON, true, 1], "🔴 закриття без причини чи без журналу статусів");
+  await c.raw.query(`DELETE FROM tasks WHERE id = (SELECT task_id FROM first_touch_auto_tasks WHERE item_key = '7238002')`);
+  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 0, known: 3, closed: 0, noLead: 0 }, "🔴 видалену задачу поставлено знову");
+});
