@@ -1084,3 +1084,24 @@ test("#1509 ЖИВИЙ SQL: виділений рахунок додає бюд�
   assert.deepEqual(handoffDealRow({ ...base, dealId: plain } as typeof base, { pipelineId: FC[0], statusId: 142 }, deps).split, [],
     "🔴 рядок поза списком показує виділений рахунок");
 });
+
+/**
+ * #3730d — ЖИВИЙ SQL: стан угоди передачі несе «Дату загрузки» КИЇВСЬКИМ днем (задача 7363). Загрузка 22:30 UTC
+ * 01.03 — це вже 02.03 за Києвом; угода без дати — `null`, а не порожній рядок.
+ * 🧨 САБОТАЖ: у `handoffDealStates` прибрати `AT TIME ZONE 'Europe/Kyiv'` з `load_day` → червоніє (01.03 замість 02.03).
+ */
+test("#3730d ЖИВИЙ SQL: стан угоди передачі несе «Дату загрузки» київським днем; без дати — null", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money } = await core();
+  const mk = async (load: Date | null) => {
+    const id = nextId++;
+    await client!.query(
+      `INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, load_at, created_at_kommo, client_key, client_name)
+       VALUES ($1, 'гейт #3730d', 3, $2, 100274340, 1000, $3, $4, NULL, NULL)`, [id, FC[0], load, utc("2026-02-20T10:00:00")]);
+    return id;
+  };
+  const late = await mk(utc("2026-03-01T22:30:00")), none = await mk(null);
+  const got = await money.handoffDealStates([late, none]);
+  assert.equal(got.get(late)?.loadDay, "2026-03-02", "🔴 дата загрузки не за Києвом (22:30 UTC 01.03 = 02.03)");
+  assert.equal(got.get(none)?.loadDay, null, "🔴 угода без дати загрузки отримала дату");
+});

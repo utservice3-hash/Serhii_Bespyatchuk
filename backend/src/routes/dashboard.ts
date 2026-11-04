@@ -519,6 +519,10 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     handoffMoney: {
       totals: handoffMoneyWire(hm.totals),
       byPerson: hm.byPerson.map((p) => personMoneyWire(p.managerId, p.money)),
+      // 🚚 Машини звітного тижня (задача 7363) — явними полями, не спредом (`#17e2`).
+      week: { from: hm.week.from, to: hm.week.to,
+        totals: { machines: hm.week.totals.machines, machinesNoMoney: hm.week.totals.machinesNoMoney },
+        byPerson: hm.week.byPerson.map((p) => ({ managerId: p.managerId, machines: p.machines, machinesNoMoney: p.machinesNoMoney })) },
     },
   };
   /**
