@@ -1,0 +1,94 @@
+{
+  "absences": [
+    {
+      "id": 51,
+      "dashboardUserId": 8,
+      "email": "first@uts.ua",
+      "kind": "vacation",
+      "status": "approved",
+      "from": "2026-09-28",
+      "until": "2026-10-02",
+      "hours": null,
+      "active": true
+    },
+    {
+      "id": 52,
+      "dashboardUserId": 9,
+      "email": "second@uts.ua",
+      "kind": "sick",
+      "status": "approved",
+      "from": "2026-10-05",
+      "until": "2026-10-07",
+      "hours": null,
+      "active": true
+    },
+    {
+      "id": 53,
+      "dashboardUserId": 8,
+      "email": "first@uts.ua",
+      "kind": "day_off",
+      "status": "approved",
+      "from": "2026-10-09",
+      "until": "2026-10-09",
+      "hours": null,
+      "active": true
+    },
+    {
+      "id": 54,
+      "dashboardUserId": 9,
+      "email": "second@uts.ua",
+      "kind": "short_day",
+      "status": "pending",
+      "from": "2026-10-14",
+      "until": "2026-10-14",
+      "hours": 3,
+      "active": true
+    },
+    {
+      "id": 56,
+      "dashboardUserId": 10,
+      "email": "gone@uts.ua",
+      "kind": "vacation",
+      "status": "approved",
+      "from": "2026-10-20",
+      "until": "2026-10-24",
+      "hours": null,
+      "active": false
+    }
+  ],
+  "duty": [
+    {
+      "id": 77,
+      "dashboardUserId": 8,
+      "email": "first@uts.ua",
+      "date": "2026-10-03",
+      "shift": "day",
+      "until": null,
+      "active": true
+    },
+    {
+      "id": 78,
+      "dashboardUserId": 9,
+      "email": "second@uts.ua",
+      "date": "2026-10-06",
+      "shift": "evening",
+      "until": "21:00",
+      "active": true
+    },
+    {
+      "id": 79,
+      "dashboardUserId": 10,
+      "email": "gone@uts.ua",
+      "date": "2026-10-11",
+      "shift": "weekend",
+      "until": null,
+      "active": false
+    }
+  ],
+  "holidays": [
+    {
+      "date": "2026-10-14",
+      "name": "День захисників і захисниць"
+    }
+  ]
+}
