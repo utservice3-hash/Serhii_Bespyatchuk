@@ -41,6 +41,16 @@ export interface RouteExemption {
  * `docs/SCOPE_ONLY_ROUTES.md`, яку розсуджує власник ОДНИМ рішенням.
  */
 export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
+  { method: "GET", path: "/api/notifications", permanent: true,
+    why: "Центр сповіщень дашборда (ТЗ «Зарплата» §6) — дзвіночок для КОЖНОГО залогіненого, включно з кандидатом; вкладки немає за побудовою. Межа — requireAuth і «лише свої»: усі запити фільтруються notification_recipients.user_id = id із сесії." },
+  { method: "GET", path: "/api/notifications/badge", permanent: true,
+    why: "Центр сповіщень дашборда (ТЗ «Зарплата» §6) — дзвіночок для КОЖНОГО залогіненого, включно з кандидатом; вкладки немає за побудовою. Межа — requireAuth і «лише свої»: усі запити фільтруються notification_recipients.user_id = id із сесії." },
+  { method: "POST", path: "/api/notifications/read", permanent: true,
+    why: "Центр сповіщень дашборда (ТЗ «Зарплата» §6) — дзвіночок для КОЖНОГО залогіненого, включно з кандидатом; вкладки немає за побудовою. Межа — requireAuth і «лише свої»: усі запити фільтруються notification_recipients.user_id = id із сесії." },
+  { method: "GET", path: "/api/notifications/rules", permanent: true,
+    why: "Правила центру сповіщень (подія → канали): право `notify_rules` (ОД, адмін) перевіряє обробник; вкладки в дзвіночка немає." },
+  { method: "PUT", path: "/api/notifications/rules/:type", permanent: true,
+    why: "Зміна каналів сповіщень: право `notify_rules` (ОД, адмін) перевіряє обробник; вкладки в дзвіночка немає." },
   { method: "GET", path: "/api/people/photo/:employeeId", permanent: true,
     why: "Фото співробітника — на слайдах зустрічі, у номінаціях і (далі) на дошці пошани для всієї команди. Лише "
        + "залогіненим (requireAuth), крім ролі «Кандидат» — їй 403 в самому обробнику; файл береться за імʼям із "

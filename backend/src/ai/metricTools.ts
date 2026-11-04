@@ -94,6 +94,12 @@ export const FORBIDDEN_TABLES = [
   "zakaz_onec_invoices", "zakaz_onec_pay_plan", "zakaz_onec_events",
   // 🧮 Відгуки на розрахунок ставки (27.10.2026): коментарі людей вільним текстом. REVOKE у схемі. Тримає #2774.
   "rate_feedback",
+  // 💰 «Зарплата» і центр сповіщень (04.11.2026): суми ЗП, шифри карт, обхідні листи, сповіщення людям. REVOKE у схемі.
+  "payroll_settings_versions", "payroll_departments", "payroll_teams", "payroll_employees", "payroll_terms", "payroll_official",
+  "payroll_leaves", "payroll_cards", "payroll_months", "payroll_records", "payroll_record_extras", "payroll_payout_forms", "payroll_payout_lines",
+  "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
+  "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
+  "notify_rules", "notifications", "notification_recipients",
 ];
 
 /**

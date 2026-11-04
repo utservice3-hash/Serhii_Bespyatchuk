@@ -1,0 +1,196 @@
+/* 💰 Кабінет «Моя зарплата» — доповнення до payroll.css (класи `zc-`). Кольори — лише змінні дашборда й `.zp`.
+   Телефон: вкладки знизу; комп’ютер (≥1000px): дві колонки (zp-grid--2). */
+.zc { display: grid; gap: 16px; min-width: 0; }
+.zc-col { display: grid; gap: 16px; align-content: start; min-width: 0; }
+.zc-sub { margin-left: 10px; font-size: 12.5px; font-weight: 500; color: var(--text-muted); }
+.zc-p { margin: 0 0 10px; font-size: 14px; }
+.zc-mid { font-size: 26px; font-weight: 700; }
+.zc-ok { color: #6ee7a8; }
+.zc-flash { outline: 2px solid var(--brand); outline-offset: 2px; transition: outline-color .4s; }
+.zc-block--warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); background: color-mix(in srgb, var(--warn) 4%, var(--card-bg)); }
+.zc-block--gift { border-color: color-mix(in srgb, var(--zp-gift) 35%, var(--border)); background: color-mix(in srgb, var(--zp-gift) 5%, var(--card-bg)); }
+.zc-block .zp-note + .zp-row, .zc-block .zp-note + .zp-note, .zc-block .zp-row + .zp-hint { margin-top: 10px; }
+.zc-block > .zp-hint, .zc-block > p.zp-note { margin: 10px 0 0; }
+
+/* телефон: вкладки кабінету — знизу */
+@media (max-width: 700px) {
+  .zc { padding-bottom: 70px; }
+  .zc-tabs { position: fixed; z-index: 50; left: 0; right: 0; bottom: 0; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); background: var(--card-bg); border-top: 1px solid var(--border); }
+  .zc-tabs .zp-tabs { flex-wrap: nowrap; justify-content: space-between; }
+  .zc-tabs .zp-tab { flex: 1; justify-content: center; padding: 8px 6px; font-size: 13px; }
+}
+
+/* сегментний перемикач */
+.zc-seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--zp-soft); gap: 2px; }
+.zc-seg button { padding: 5px 11px; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.zc-seg button[aria-pressed="true"] { background: var(--card-bg); color: var(--text); box-shadow: var(--shadow); }
+.zc-seg button:disabled { opacity: .45; cursor: not-allowed; }
+.zc-mini-select { width: auto; padding: 4px 8px; font-size: 13px; }
+
+/* асфальт: позначки днів */
+.zc-ticks { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 6px; }
+.zc-ticks i { width: 9px; height: 9px; border-radius: 50%; background: var(--zp-on-a2); }
+.zc-ticks i.is-today { background: var(--zp-lane); }
+.zc-ticks i.is-left { opacity: .25; }
+
+/* офер команди Лілії */
+.zc-ls { display: grid; gap: 10px; padding: 16px 20px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--zp-ls) 40%, var(--border)); background: color-mix(in srgb, var(--zp-ls) 6%, var(--card-bg)); }
+.zc-ls__h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.zc-ls__h b { font-size: 16px; color: var(--zp-ls); }
+.zc-ls__g { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); align-items: center; }
+@media (min-width: 800px) { .zc-ls__g { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); } }
+.zc-ls__lv { display: grid; gap: 2px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); }
+.zc-ls__lv.is-on { border-color: var(--zp-ls); box-shadow: 0 0 0 1px var(--zp-ls); }
+.zc-ls__lv small { color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.zc-ls__lv span { color: var(--text-muted); font-size: 12.5px; }
+.zc-ls__arr { text-align: center; font-size: 12px; color: var(--zp-ls); font-weight: 600; }
+.zc-ls__arr::after { content: " →"; }
+
+/* що зробити */
+.zc-imp--gain { color: var(--ok); } .zc-imp--risk { color: var(--warn); } .zc-imp--info { color: var(--info); } .zc-imp--done { color: var(--text-muted); }
+.zp-todo .zp-row { margin-top: 6px; }
+@media (max-width: 520px) { .zp-todo { grid-template-columns: minmax(0, 1fr); } }
+
+/* з чого складається */
+.zc-legend { list-style: none; margin: 0; padding: 0; display: grid; }
+.zc-legend li { display: flex; align-items: flex-start; gap: 4px; padding: 8px 0; border-top: 1px solid var(--border); }
+.zc-legend li:first-child { border-top: 0; }
+.zc-legend .zp-dot { margin-top: 6px; }
+.zc-legend small { display: block; color: var(--text-muted); font-size: 12.5px; }
+.zc-legend b { white-space: nowrap; }
+.zc-total { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding-top: 10px; margin-top: 6px; border-top: 2px solid var(--border); font-weight: 650; }
+.zc-total b { font-size: 20px; }
+
+/* угоди, команда */
+.zc-deals, .zc-team, .zc-hist, .zc-cards, .zc-clr__list, .zc-reg__list { list-style: none; margin: 0; padding: 0; }
+.zc-deals li { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 4px 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.zc-deals li:first-child { border-top: 0; }
+.zc-deals li.is-off { opacity: .7; }
+.zc-deals__d { color: var(--text-muted); font-size: 13px; }
+.zc-deals__cl { font-weight: 500; }
+.zc-deals__cl small { display: block; font-size: 12px; }
+.zc-deals__ch { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 6px; }
+.zc-team li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.zc-team li:first-child { border-top: 0; }
+.zc-team .zp-bar { grid-column: 1 / 3; margin: 2px 0 0; }
+.zc-team small { color: var(--text-muted); font-size: 12.5px; }
+.zc-team__nm small { margin-left: 6px; }
+
+/* день народження */
+.zc-bday { display: flex; gap: 14px; align-items: center; }
+.zc-bday__d { flex: none; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 16px; background: var(--zp-gift); color: #fff; font-weight: 750; font-size: 18px; }
+
+/* розрахунковий лист */
+.zc-stepper { list-style: none; margin: 0 0 6px; padding: 0; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 6px; }
+.zc-stepper li { display: grid; gap: 2px; padding-top: 8px; border-top: 3px solid var(--border); font-size: 12.5px; color: var(--text-muted); }
+.zc-stepper li b { font-weight: 600; }
+.zc-stepper li.is-done { border-top-color: var(--ok); color: var(--text); }
+.zc-stepper li.is-now { border-top-color: var(--warn); color: var(--text); }
+@media (max-width: 700px) { .zc-stepper li:not(.is-now) b, .zc-stepper li:not(.is-now) span { display: none; } }
+.zc-stepcap { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
+.zc-sliph { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; margin-bottom: 4px; font-weight: 650; }
+.zc-sliph small { color: var(--text-muted); font-weight: 500; }
+.zc-slip { list-style: none; margin: 0; padding: 0; }
+.zc-slip li { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
+.zc-slip li:first-child { border-top: 0; }
+.zc-slip li b { white-space: nowrap; }
+.zc-slip li > span { min-width: 0; }
+.zc-was { display: block; font-size: 12px; color: var(--warn); }
+.zc-slip__tt { font-weight: 700; border-top: 2px solid var(--border) !important; }
+.zc-slip--pay { margin-top: 6px; }
+.zc-topay { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 10px 0 12px; padding: 12px 14px; border-radius: 12px; background: var(--zp-soft); }
+.zc-topay span { font-weight: 650; }
+.zc-topay small { display: block; font-size: 12px; color: var(--text-muted); font-weight: 500; }
+.zc-topay b { font-size: 22px; font-weight: 750; }
+.zc-form { display: grid; gap: 10px; margin-top: 10px; }
+
+/* форма «куди виплатити» */
+.zc-pl { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+.zc-pl__line { display: grid; grid-template-columns: minmax(0, 1fr) 130px 32px; gap: 8px; align-items: end; }
+.zc-pl__new { grid-column: 1 / 4; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); padding: 10px; border-radius: 10px; background: var(--zp-soft); }
+@media (min-width: 700px) { .zc-pl__new { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.zc-pl__x { align-self: end; height: 36px; }
+.zc-pl__cash { max-width: 220px; }
+.zc-pl__sum { font-size: 13.5px; color: var(--text-muted); }
+.zc-pl__sum.is-ok { color: var(--ok); } .zc-pl__sum.is-bad { color: var(--danger); }
+
+/* аванс */
+.zc-adv { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* найближчі дати */
+.zc-tl { list-style: none; margin: 0; padding: 0; display: grid; }
+.zc-tl li { display: grid; grid-template-columns: 76px 14px minmax(0, 1fr); gap: 10px; align-items: start; padding: 8px 0; }
+.zc-tl__d { color: var(--text-muted); font-size: 13px; padding-top: 1px; }
+.zc-tl__dot { width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; border: 2px solid var(--border-strong); }
+.zc-tl li.is-now .zc-tl__dot { background: var(--warn); border-color: var(--warn); }
+.zc-tl li.is-next .zc-tl__dot { border-color: var(--info); }
+.zc-tl li.is-next b { color: var(--info); }
+.zc-tl small { display: block; color: var(--text-muted); font-size: 12.5px; }
+
+/* виплати по місяцях */
+.zc-bars { display: flex; align-items: flex-end; gap: 10px; height: 150px; margin-bottom: 10px; }
+.zc-bars > div { flex: 1; display: grid; justify-items: center; align-content: end; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.zc-bars i { display: block; width: 100%; max-width: 40px; border-radius: 6px 6px 2px 2px; background: var(--border-strong); }
+.zc-bars .is-cur i { background: var(--warn); }
+.zc-bars b { color: var(--text); font-size: 12px; }
+.zc-hist li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); }
+.zc-hist li:first-child { border-top: 0; }
+.zc-hist li small { grid-column: 1 / 4; color: var(--text-muted); font-size: 12.5px; }
+.zc-hist li > span small { grid-column: auto; display: block; }
+.zc-hist__m { font-weight: 600; }
+
+/* карти */
+.zc-cards { display: grid; gap: 8px; margin-bottom: 10px; }
+.zc-card { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; }
+.zc-card__plate { width: 40px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, var(--text-muted), var(--text)); opacity: .85; }
+.zc-card__no { font-weight: 650; display: block; }
+.zc-card small { color: var(--text-muted); font-size: 12.5px; }
+
+/* обхідний лист */
+.zc-clr { display: grid; gap: 8px; margin-top: 10px; }
+.zc-clr__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.zc-clr__list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13.5px; }
+.zc-clr__list li:first-child { border-top: 0; }
+.zc-clr__list li span { color: var(--text-muted); font-size: 12.5px; grid-column: 1; }
+.zc-clr__list li em { grid-column: 2; grid-row: 1 / 3; align-self: center; font-style: normal; font-size: 12.5px; color: var(--warn); white-space: nowrap; }
+.zc-clr__list li.is-ok em { color: var(--ok); }
+.zc-clr__list li.is-ok b::before { content: "✓ "; color: var(--ok); }
+
+/* ціль */
+.zc-goal-in { display: grid; gap: 6px; margin-bottom: 14px; }
+.zc-goal-tgt { display: flex; align-items: center; gap: 8px; }
+.zc-goal-tgt input { font-size: 26px; font-weight: 700; max-width: 240px; }
+.zc-goal-tgt span { font-size: 22px; font-weight: 700; color: var(--text-muted); }
+.zc-goal-in input[type="range"] { width: 100%; accent-color: var(--brand); }
+.zc-goal-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); }
+.zc-goal-fields { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); margin-bottom: 12px; }
+@media (min-width: 700px) { .zc-goal-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.zc-reg { display: grid; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+.zc-reg__h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.zc-reg__list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.zc-reg__list li:first-child { border-top: 0; }
+.zc-reg__list li > .zp-hint { grid-column: 1; }
+.zc-reg__ex { grid-column: 2; grid-row: 1 / 3; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); }
+.zc-reg__ex input { width: 100px; }
+.zc-flow { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 12px; }
+@media (min-width: 700px) { .zc-flow { grid-template-columns: repeat(4, minmax(0, 1fr)); } .zc-flow--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.zc-flow > div { display: grid; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--zp-soft); }
+.zc-flow b { font-size: 20px; font-weight: 750; }
+.zc-flow small { color: var(--text-muted); font-size: 12px; }
+.zc-flow__hot { background: color-mix(in srgb, var(--brand) 10%, var(--card-bg)) !important; }
+.zc-tips { margin-top: 12px; }
+.zc-tips ul { margin: 6px 0 0; padding-left: 18px; font-size: 13.5px; display: grid; gap: 4px; }
+
+/* умови */
+.zc-terms { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); margin-bottom: 12px; }
+@media (min-width: 700px) { .zc-terms { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.zc-terms > div { display: grid; gap: 2px; padding: 12px; border-radius: 12px; background: var(--zp-soft); }
+.zc-terms small { color: var(--text-muted); font-size: 12px; }
+.zc-terms b { font-size: 17px; }
+.zc-calcline { display: grid; gap: 2px; margin: 0; padding: 12px; border-radius: 12px; border: 1px dashed var(--border); }
+.zc-cmp th[scope="row"] { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); font-weight: 600; border-bottom: 1px solid var(--border); }
+.zc-cmp .zc-you { color: var(--zp-ls); font-weight: 600; }
+.zc-cmp tr.is-same td { color: var(--text-muted); font-weight: 400; }
+.zc-rules { margin: 0; display: grid; gap: 10px; }
+.zc-rules dt { font-weight: 650; }
+.zc-rules dd { margin: 2px 0 0; color: var(--text-muted); font-size: 13.5px; }

@@ -48,6 +48,7 @@ export const MANIFEST_FILES: string[] = [
   "counterparty/counterparty.test.js",
   "counterparty/addClient.test.js",
   "counterparty/limitRules.test.js",
+  "payroll/payroll.test.js",
   "core/kvpShip.test.js",
   "zakaz1c/zakaz1c.test.js",
   "core/clientPlansList.test.js",
@@ -411,6 +412,12 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "prozorro_tenders", "prozorro_leads",
   "zakaz_onec_invoices", "zakaz_onec_pay_plan", "zakaz_onec_events",
   "rate_feedback",
+  // 💰 «Зарплата» і центр сповіщень (04.11.2026). REVOKE у схемі.
+  "payroll_settings_versions", "payroll_departments", "payroll_teams", "payroll_employees", "payroll_terms", "payroll_official",
+  "payroll_leaves", "payroll_cards", "payroll_months", "payroll_records", "payroll_record_extras", "payroll_payout_forms", "payroll_payout_lines",
+  "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
+  "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
+  "notify_rules", "notifications", "notification_recipients",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -3243,6 +3250,12 @@ export const MANIFEST_TESTS: string[] = [
   "#3373b 🪞 СКИДАННЯ НАСКРІЗНО: 3 міс. без угод → новий запит; борг, свіжа угода, незіставлений — лишаються",
   "#3374 ЖИВА БД: кандидати на скидання за функцією == незалежний SQL; діючі ліміти є і зіставлені",
   "#3375 ПРОВОДКА СКИДАННЯ: щодня за Києвом, поза перемикачем перевірок, під наглядом із частотою крону",
+  // payroll/payroll.test.ts — «Зарплата» (пакет 03.11.2026, Роман 04.11 «роби всі етапи і викочуй»).
+  "#2600 РУШІЙ ЗАРПЛАТИ: 63 тести пакета (40 золотих звірок з макетом + 23 правила) — байт у байт у нас",
+  "#2601 КАРТИ: шифр у БД, Лун, стабільний хеш, без ключа — відмова з поясненням",
+  "#2603 ПРАВА «ЗАРПЛАТИ» (ТЗ §2): ключі в каталозі, видача ролям парна, адмін сум не бачить, кандидату вкладки немає",
+  "#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, закриття, перевірка, незгода й ОД, форма, відомість, виплата, аванс, обхідний лист, сповіщення",
+  "#2604 ФРОНТ «ЗАРПЛАТИ»: пункт меню, розділ, дзвіночок у шапці, вкладки за правами з сервера, один чанк, посилання сповіщень",
   // core/kvpShip.test.ts — Звіт КВП, режим «🚚 Відправлені авто» (задача 7185, макет затверджено 02.11).
   "#3320 тиждень «Відправлених авто»: оплачено + чекаємо + без оплати == відправлено, межі тижня включно",
   "#3321 🪞 когорта «Відправлених»: без оплати = лише 143 всередині «чекає», оплачено = 142 і етап оплати, день за Києвом",
