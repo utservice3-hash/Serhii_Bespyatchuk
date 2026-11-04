@@ -2651,11 +2651,11 @@ test("#3724 ЖУРНАЛ АВТОЗАДАЧ: повторний прохід —
   const it = (kind: "agreed_lost" | "analysis_failed", key: string, user: number) => ({ kind, key, assigneeUserId: user, title: `t-${key}`,
     description: "d", deadline: "2026-11-05", priority: kind === "agreed_lost" ? "high" as const : "medium" as const, department: "Команда" });
   const plan = { items: [it("agreed_lost", "7238001", 93720), it("agreed_lost", "7238002", 93720), it("analysis_failed", "u7238", A.ROMAN_USER_ID)], noLead: [], resolved: new Set<string>() };
-  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 3, known: 0, closed: 0, noLead: 0 });
+  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 3, known: 0, closed: 0, noLead: 0, filled: 0 });
   const tasks = (await c.raw.query(`SELECT t.id, t.assignee_user_id, t.priority, t.status FROM first_touch_auto_tasks j JOIN tasks t ON t.id = j.task_id
                                      WHERE j.item_key IN ('7238001','7238002','u7238') ORDER BY j.item_key`)).rows;
   assert.deepEqual(tasks.map((x) => [x.assignee_user_id, x.priority]), [[93720, "high"], [93720, "high"], [A.ROMAN_USER_ID, "medium"]], "🔴 задачі не тим або не з тим пріоритетом");
-  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 0, known: 3, closed: 0, noLead: 0 }, "🔴 повторний прохід поставив дублі");
+  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 0, known: 3, closed: 0, noLead: 0, filled: 0 }, "🔴 повторний прохід поставив дублі");
   const before = Number((await c.raw.query("SELECT count(*) FROM tasks")).rows[0].count);
   await assert.rejects(c.raw.query(`WITH x AS (INSERT INTO tasks (title, status, task_type) VALUES ('dup','not_started','simple') RETURNING id)
     INSERT INTO first_touch_auto_tasks (kind, item_key, task_id, opened_at) SELECT 'agreed_lost', '7238001', id, now() FROM x`), /duplicate key/, "🔴 ключ журналу не унікальний у БД");
@@ -2666,5 +2666,32 @@ test("#3724 ЖУРНАЛ АВТОЗАДАЧ: повторний прохід —
                                   FROM first_touch_auto_tasks j JOIN tasks t ON t.id = j.task_id WHERE j.item_key = 'u7238'`)).rows[0];
   assert.deepEqual([f.status, f.close_reason, f.closed_at != null, Number(f.logged)], ["done", A.FAILED_DONE_REASON, true, 1], "🔴 закриття без причини чи без журналу статусів");
   await c.raw.query(`DELETE FROM tasks WHERE id = (SELECT task_id FROM first_touch_auto_tasks WHERE item_key = '7238002')`);
-  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 0, known: 3, closed: 0, noLead: 0 }, "🔴 видалену задачу поставлено знову");
+  assert.deepEqual(await A.syncFirstTouchAutoTasks(c.db, plan, now), { created: 0, known: 3, closed: 0, noLead: 0, filled: 0 }, "🔴 видалену задачу поставлено знову");
+});
+
+/**
+ * #3725 — ТЕКСТ ЗАДАЧІ В «КОРОТКОМУ КОМЕНТАРІ» (Роман 04.11.2026: «додай як текст, щоб я міг скопіювати й перейти»): картка
+ * Задачника показує `comments`, а `description` — ні. Нова задача несе текст у коментарі; поставленим до правки коментар
+ * дописується з опису — лише порожній, написане людиною не чіпається; повторний прохід нічого не дописує.
+ * 🧨 Червоніє, якщо текст піде лише в опис (у картці порожньо) або дописування затре коментар людини.
+ */
+test("#3725 ТЕКСТ У КОРОТКОМУ КОМЕНТАРІ: нова задача — у коментарі; старим — лише порожній коментар, людський не затирається", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const A = await import("./firstTouchAutoTasks.js");
+  await c.raw.query(`INSERT INTO users(id,email,password_hash,role) VALUES (${String(A.ROMAN_USER_ID)},'drv7238@x','x','admin') ON CONFLICT (id) DO NOTHING`);
+  const now = new Date("2026-11-04T14:00:00Z");
+  const old = async (key: string, comments: string | null) => (await c.raw.query(`
+    WITH x AS (INSERT INTO tasks (title, description, comments, status, task_type) VALUES ('old', 'опис з посиланням https://dashboard.uts.ua/ai-calls?call=x', $2, 'not_started', 'simple') RETURNING id)
+    INSERT INTO first_touch_auto_tasks (kind, item_key, task_id, opened_at) SELECT 'analysis_failed', $1, id, now() FROM x RETURNING task_id`, [key, comments])).rows[0].task_id as number;
+  const empty = await old("u3725a", null), human = await old("u3725b", "моя примітка");
+  const plan = { items: [{ kind: "analysis_failed" as const, key: "u3725c", assigneeUserId: A.ROMAN_USER_ID, title: "new", description: "Розмова: https://dashboard.uts.ua/ai-calls?call=c",
+    deadline: "2026-11-05", priority: "medium" as const, department: "Перший дотик" }], noLead: [], resolved: new Set<string>() };
+  const s = await A.syncFirstTouchAutoTasks(c.db, plan, now);
+  assert.equal(s.filled, 1, "🔴 дописано не рівно одну стару задачу з порожнім коментарем");
+  const get = async (id: number) => (await c.raw.query("SELECT comments FROM tasks WHERE id = $1", [id])).rows[0].comments as string | null;
+  assert.match(await get(empty) ?? "", /ai-calls\?call=x/, "🔴 старій задачі коментар не дописано — у картці порожньо");
+  assert.equal(await get(human), "моя примітка", "🔴 дописування затерло коментар людини");
+  const fresh = (await c.raw.query("SELECT t.comments FROM first_touch_auto_tasks j JOIN tasks t ON t.id = j.task_id WHERE j.item_key = 'u3725c'")).rows[0].comments;
+  assert.equal(fresh, plan.items[0].description, "🔴 нова задача несе текст лише в описі — у картці його не видно");
+  assert.equal((await A.syncFirstTouchAutoTasks(c.db, plan, now)).filled, 0, "🔴 повторний прохід дописує знову");
 });

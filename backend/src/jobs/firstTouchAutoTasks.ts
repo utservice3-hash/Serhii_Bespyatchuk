@@ -31,7 +31,7 @@ export async function firstTouchAutoTasks(): Promise<(AutoTaskStats & { rows: nu
     const plan = planAutoTasks(src, await teamLeadUsers(pool), now, kommoLeadUrl);
     const s = await syncFirstTouchAutoTasks(pool, plan, now);
     console.log(`firstTouchAutoTasks: розмов ${String(rows.length)}${truncated ? " (обрізано!)" : ""} · поставлено ${String(s.created)} · `
-      + `уже були ${String(s.known)} · закрито ${String(s.closed)}${s.noLead ? ` · без тімліда ${String(s.noLead)}: ${plan.noLead.join(", ")}` : ""}`);
+      + `уже були ${String(s.known)} · закрито ${String(s.closed)}${s.filled ? ` · коментар дописано ${String(s.filled)}` : ""}${s.noLead ? ` · без тімліда ${String(s.noLead)}: ${plan.noLead.join(", ")}` : ""}`);
     return { ...s, rows: rows.length, truncated };
   });
 }
