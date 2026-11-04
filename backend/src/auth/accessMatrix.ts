@@ -1714,6 +1714,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/plan-hints/add", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🧾 Розпис плану (задача 7832, 04.11.2026): бачать ті, хто бачить «План/факт»; запис — deny-only (проба писала б у прод).
+  { method: "GET", path: "/api/finance/plan-parts/prev?itemId=1&m=2026-11", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/finance/plan-parts", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/fx-unpaid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   // 🏁 «Результат місяця» (23.10.2026): перегляд — як «Тиждень і місяць»; рішення по угоді — deny-only (проба писала б у прод).

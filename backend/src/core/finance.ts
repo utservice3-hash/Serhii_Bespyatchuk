@@ -159,11 +159,40 @@ export interface FinItemRow {
   plan: number | null; fact: number | null; note: string | null; state: RowState; dataMonths: number;
   /** Рядків таблиці оплат у факті (лише коли факт — з таблиці). */
   factRows?: number;
+  /** Розпис плану (задача 7832): з чого складається сума — і чи сходиться він із планом. */
+  parts: PlanPart[]; partsState: PartsState; partsLeft: number | null;
 }
 export interface FinGroupRow { id: number; name: string; items: FinItemRow[] }
 export interface FinRespRow { id: number; name: string; groups: FinGroupRow[] }
 
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
+
+/**
+ * 🧾 РОЗПИС ПЛАНУ (задача 7832; TOP Weekly 02.11.2026, демо затвердила Тетяна 04.11): рядки «сума + за що» до плану статті.
+ * Сума плану від розпису НЕ змінюється — він лише пояснює її. Стан для екрана: `none` — розпису немає; `ok` — Σ = плану;
+ * `under` — не розписано `left`; `over` — розпис більший на −`left`; `noplan` — розпис є, а плану немає.
+ */
+export interface PlanPart { amount: number; note: string }
+export type PartsState = "none" | "ok" | "under" | "over" | "noplan";
+export const PLAN_PARTS_MAX = 30;
+export function partsStateOf(plan: number | null, parts: readonly PlanPart[]): { sum: number; left: number | null; state: PartsState } {
+  const sum = Math.round(parts.reduce((s, x) => s + x.amount, 0) * 100) / 100;
+  if (!parts.length) return { sum, left: plan, state: "none" };
+  if (plan == null) return { sum, left: null, state: "noplan" };
+  const left = Math.round((plan - sum) * 100) / 100;
+  return { sum, left, state: left === 0 ? "ok" : left > 0 ? "under" : "over" };
+}
+async function partsOf(db: Db, month: string, itemId?: number): Promise<Map<number, PlanPart[]>> {
+  const r = await db.query(`SELECT item_id, amount::text AS amount, note FROM fin_plan_parts
+     WHERE month = $1::date ${itemId == null ? "" : "AND item_id = $2"} ORDER BY item_id, pos`, itemId == null ? [month] : [month, itemId]);
+  const out = new Map<number, PlanPart[]>();
+  for (const x of r.rows) {
+    const l = out.get(x.item_id) ?? [];
+    l.push({ amount: Number(x.amount), note: x.note });
+    out.set(x.item_id, l);
+  }
+  return out;
+}
 
 /** Дерево на місяць: усі невидалені статті (вимкнені — з `active: false`), підсумок, погодження. */
 export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date()) {
@@ -183,6 +212,7 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
   // З жовтня 2026 факт — із таблиці оплат (якщо її хоч раз прочитано); рядки без жодної оплати — «не внесено» (null), а не нуль.
   const autoRaw = factIsAuto(month) ? await autoFactMonth(db, month) : null;
   const auto = autoRaw?.state.syncedAt ? autoRaw : null;
+  const partsBy = await partsOf(db, month);
   const tree: FinRespRow[] = [];
   const all: FinItemRow[] = [];
   for (const x of r.rows) {
@@ -194,8 +224,10 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
     if (x.item_id == null) continue;
     const pot = auto?.byItem.get(x.item_id);
     const plan = num(x.plan), fact = auto ? (pot ? pot.sum : null) : num(x.fact);
+    const parts = partsBy.get(x.item_id) ?? [], ps = partsStateOf(plan, parts);
     const it: FinItemRow = { id: x.item_id, name: x.item_name, section: x.section ?? null, offFrom: x.off_from, active: isActiveIn(x.off_from, month),
-      plan, fact, note: x.note ?? null, state: rowState(plan, fact), dataMonths: x.data_months, ...(auto ? { factRows: pot?.rows ?? 0 } : {}) };
+      plan, fact, note: x.note ?? null, state: rowState(plan, fact), dataMonths: x.data_months, ...(auto ? { factRows: pot?.rows ?? 0 } : {}),
+      parts, partsState: ps.state, partsLeft: ps.left };
     grp.items.push(it); all.push(it);
   }
   const ap = await db.query(`
@@ -526,6 +558,51 @@ export async function setNote(db: Db, actor: number, itemId: number, monthArg: u
     ON CONFLICT (item_id, month) DO UPDATE SET note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`, [itemId, month, next, actor]);
   await log(db, actor, "item", itemId, next ? `Коментар ${month.slice(5, 7)}.${month.slice(0, 4)}: «${next.slice(0, 120)}»` : `Коментар ${month.slice(5, 7)}.${month.slice(0, 4)} прибрано`,
     { month, field: "note" });
+}
+
+/**
+ * Розпис плану статті в місяці — ЦІЛИМ СПИСКОМ (вікно шле всі рядки разом; порожній список — розпис прибрано). Сума плану
+ * не змінюється. Повністю порожній рядок відкидається; рядок із текстом без суми, сума ≤ 0 чи не число — 400 і нічого не
+ * записано. Погоджений місяць — 409 (другий рубіж — тригер `fin_plan_parts_lock`). Кожна зміна — у журнал статті.
+ */
+export async function savePlanParts(db: Db, actor: number, itemId: number, monthArg: unknown, listArg: unknown): Promise<{ changed: boolean; parts: PlanPart[] }> {
+  const month = parseMonth(monthArg);
+  if (!Number.isInteger(itemId) || itemId <= 0) throw new FinError(400, "Некоректна стаття");
+  if (!Array.isArray(listArg)) throw new FinError(400, "Розпис — це список рядків");
+  if (listArg.length > PLAN_PARTS_MAX) throw new FinError(400, `У розписі не більше ${PLAN_PARTS_MAX} рядків`);
+  const parts: PlanPart[] = [];
+  listArg.forEach((x: any, i: number) => {
+    const note = typeof x?.note === "string" ? x.note.trim().slice(0, 300) : "";
+    let amount: number | null;
+    try { amount = parseAmount(x?.amount); } catch { throw new FinError(400, `Рядок ${i + 1}: сума — не число. Нічого не збережено.`); }
+    if (amount == null && !note) return;
+    if (amount == null || amount <= 0) throw new FinError(400, `Рядок ${i + 1}: вкажіть суму, більшу за нуль. Нічого не збережено.`);
+    parts.push({ amount, note });
+  });
+  const it = await db.query(`SELECT name, off_from::text AS off_from, deleted_at FROM fin_items WHERE id = $1 FOR UPDATE`, [itemId]);
+  const row: any = it.rows[0];
+  if (!row || row.deleted_at) throw new FinError(404, "Статтю не знайдено — нічого не збережено");
+  if (!isActiveIn(row.off_from, month)) throw new FinError(409, `Стаття «${row.name}» вимкнена в цьому місяці — нічого не збережено`);
+  if (await isApproved(db, month)) throw new FinError(409, `${PLAN_LOCKED(month)} Розпис теж замкнений — нічого не збережено.`);
+  const was = (await partsOf(db, month, itemId)).get(itemId) ?? [];
+  if (JSON.stringify(was) === JSON.stringify(parts)) return { changed: false, parts };
+  await db.query(`DELETE FROM fin_plan_parts WHERE item_id = $1 AND month = $2::date`, [itemId, month]);
+  for (const [i, x] of parts.entries())
+    await db.query(`INSERT INTO fin_plan_parts (item_id, month, pos, amount, note, updated_by) VALUES ($1, $2::date, $3, $4, $5, $6)`,
+      [itemId, month, i + 1, x.amount, x.note, actor]);
+  const mm = `${month.slice(5, 7)}.${month.slice(0, 4)}`;
+  const sum = partsStateOf(null, parts).sum;
+  await log(db, actor, "item", itemId, parts.length
+    ? `Розпис плану ${mm}: ${parts.length} рядк. на ${fmtUah(sum)} — ${parts.map((x) => `${fmtUah(x.amount)}${x.note ? ` ${x.note}` : ""}`).join("; ").slice(0, 400)}`
+    : `Розпис плану ${mm} прибрано`, { month });
+  return { changed: true, parts };
+}
+
+/** Розпис тієї самої статті за попередній місяць — для «Взяти розпис з минулого місяця» (вікно лише підставляє рядки). */
+export async function prevPlanParts(db: Db, itemId: number, monthArg: unknown): Promise<{ month: string; parts: PlanPart[] }> {
+  const prev = addMonths(parseMonth(monthArg), -1);
+  if (!Number.isInteger(itemId) || itemId <= 0) throw new FinError(400, "Некоректна стаття");
+  return { month: prev, parts: (await partsOf(db, prev, itemId)).get(itemId) ?? [] };
 }
 
 /**
