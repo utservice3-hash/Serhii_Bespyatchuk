@@ -194,16 +194,16 @@ test("#3406 статистика за період — з журналу: отр
   await assert.rejects(loadLinkedinStats(c.db, "2026-11-05", "2026-11-04", ""), /Початок періоду пізніше/);
 });
 
-test("#3407 вкладка «LinkedIn» у «Клієнтах»: межа — вкладка linkedin (керівництво й КВП, без фінансиста); редактор черги — там, а не в Налаштуваннях", () => {
+test("#3407 вкладка «LinkedIn» у «Клієнтах»: межа — вкладка linkedin (керівництво, КВП, тімліди, менеджери; без фінансиста); редактор черги — там, а не в Налаштуваннях", () => {
   const rt = read("backend/src/auth/routeTab.ts");
   assert.match(rt, /\{ test: pre\("\/api\/linkedin"\), tabs: \["linkedin"\] \}/, "🔴 /api/linkedin не привʼязано до вкладки");
   const schema = read("backend/src/db/schema.sql");
-  assert.match(schema, /'\{"linkedin":true\}'::jsonb\s+WHERE key IN \('admin', 'ceo', 'opdir', 'kvp'\)/);
+  assert.match(schema, /'\{"linkedin":true\}'::jsonb\s+WHERE key IN \('admin', 'ceo', 'opdir', 'kvp', 'team_lead', 'manager'\)/);
   const grant = schema.indexOf(`'{"linkedin":true}'`), drop = schema.indexOf("screen_access - 'linkedin'");
   const sync = schema.lastIndexOf("financier");
   assert.ok(drop > grant && drop > 0, "🔴 фінансисту не знято вкладку LinkedIn після сиду");
   assert.ok(schema.slice(drop - 40, drop + 60).includes("financier") && sync > 0);
-  assert.ok(read("backend/src/auth/accessMatrix.ts").includes('{ method: "GET", path: "/api/linkedin/stats", cls: "GET",\n    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] }'));
+  assert.ok(read("backend/src/auth/accessMatrix.ts").includes('{ method: "GET", path: "/api/linkedin/stats", cls: "GET",\n    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["financier", "hr"] }'));
   assert.match(read("frontend/src/components/Layout.tsx"), /\{ key: "linkedin", label: "LinkedIn", icon: "🔗" \}/);
   assert.match(read("frontend/src/pages/Dashboard.tsx"), /section === "linkedin" && <LinkedinSection \/>/);
   // Парне твердження «а де воно тепер»: редактор живе у вкладці, з Налаштувань прибрано.
@@ -377,4 +377,65 @@ test("#3413 бот «UTS Заявки»: вебхук — секрет Telegram 
     assert.ok(matrix.includes(`{ method: "${m}", path: "${p}", cls: "deny-only",`), `🔴 ${m} ${p} не в матриці`);
   }
   assert.match(read("backend/src/index.ts"), /\["leadsBotEnsureWebhook", \(\) => leadsBotEnsureWebhook\(\)\]/, "🔴 вебхук бота заявок не реєструється на старті");
+});
+
+test("#3414 статистика за роллю: менеджер — лише свої рядки й заявки, тімлід — своя команда, керівництво — усі; «Даші» й черга — лише керівництву", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { linkedinScope, loadLinkedinStats } = await import("./linkedinStats.js");
+  assert.deepEqual(linkedinScope({ role: "manager", managerId: 7, teamId: 5 }), { kind: "own", managerId: 7 });
+  assert.deepEqual(linkedinScope({ role: "team_lead", managerId: 3, teamId: 5 }), { kind: "team", teamId: 5 });
+  assert.deepEqual(linkedinScope({ role: "admin", managerId: null, teamId: null }), { kind: "all" });
+  assert.deepEqual(linkedinScope({ role: "manager", managerId: null, teamId: null }), { kind: "own", managerId: -1 }, "🔴 менеджер без привʼязки побачив би всіх");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`TRUNCATE linkedin_queue_items, linkedin_queue_log, linkedin_queue_members, linkedin_queue_settings`);
+  await q(`DELETE FROM managers WHERE kommo_user_id BETWEEN 920000 AND 920002`);
+  const t1 = (await q(`INSERT INTO teams (name) VALUES ('LQ команда 1') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`)).rows[0].id as number;
+  const t2 = (await q(`INSERT INTO teams (name) VALUES ('LQ команда 2') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`)).rows[0].id as number;
+  const mk = async (n: string, team: number, k: number) => (await q(`INSERT INTO managers (name, is_active, kommo_user_id, team_id) VALUES ($1, true, $2, $3) RETURNING id`, [n, k, team])).rows[0].id as number;
+  const A = await mk("Скоуп А", t1, 920000), B = await mk("Скоуп Б", t1, 920001), C = await mk("Скоуп В", t2, 920002);
+  const at = "2026-11-04T09:00:00Z";
+  for (const [id, who] of [[7301, A], [7302, B], [7303, C]] as const) {
+    await q(`INSERT INTO linkedin_queue_items (kommo_id, deal_name, seen_at, state, manager_id, offered_ids) VALUES ($1, $2, $3, 'offered', $4, ARRAY[$4]::int[])`, [id, `Угода ${String(id)}`, at, who]);
+    await q(`INSERT INTO linkedin_queue_log (kommo_id, kind, manager_id, mode, at) VALUES ($1, 'seen', NULL, 'live', $2), ($1, 'offer', $3, 'live', $2)`, [id, at, who]);
+  }
+  await q(`INSERT INTO linkedin_queue_log (kommo_id, kind, note, mode, at) VALUES (7399, 'dispatcher', 'клієнт уже в когось', 'live', $1)`, [at]);
+  const day = ["2026-11-04", "2026-11-04", "", new Date(at)] as const;
+  const own = await loadLinkedinStats(c.db, ...day, { kind: "own", managerId: A });
+  assert.deepEqual(own.perManager.map((m) => m.name), ["Скоуп А"], "🔴 менеджер бачить чужі рядки");
+  assert.deepEqual(own.items.map((i) => i.kommoId), [7301], "🔴 менеджер бачить чужі заявки");
+  assert.deepEqual([own.kpi.created, own.kpi.dispatcher, own.queue.nextName, own.scope], [1, null, null, "own"]);
+  const team = await loadLinkedinStats(c.db, ...day, { kind: "team", teamId: t1 });
+  assert.deepEqual(team.perManager.map((m) => m.name).sort(), ["Скоуп А", "Скоуп Б"], "🔴 тімлід бачить людей з іншої команди");
+  assert.deepEqual(team.items.map((i) => i.kommoId).sort(), [7301, 7302]);
+  const all = await loadLinkedinStats(c.db, ...day, { kind: "all" });
+  assert.deepEqual(all.perManager.map((m) => m.name).sort(), ["Скоуп А", "Скоуп Б", "Скоуп В"], "🔴 керівництво бачить не всіх");
+  assert.deepEqual([all.kpi.created, all.kpi.dispatcher], [3, 1]);
+  const empty = await loadLinkedinStats(c.db, ...day, { kind: "own", managerId: -1 });
+  assert.deepEqual([empty.perManager.length, empty.items.length, empty.kpi.created], [0, 0, 0], "🔴 порожній скоуп показав дані");
+  assert.ok(C > 0);
+});
+
+test("#3415 «Підключіть бот заявок»: менеджер і тімлід зі стажем від 1 місяця — так; менше місяця чи невідома дата — ні (хіба вже в колі); інші ролі — ні", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { leadsBotStatus } = await import("./leadsBotLink.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`DELETE FROM users WHERE email LIKE 'elig-%@uts.test'`);
+  await q(`DELETE FROM employees WHERE import_key LIKE 'Стаж %'`);
+  const now = new Date("2026-11-04T09:00:00Z");
+  const person = async (tag: string, role: string, hired: string | null, inQueue = false) => {
+    const m = (await q(`INSERT INTO managers (name, is_active) VALUES ($1, true) RETURNING id`, [`Стаж ${tag}`])).rows[0].id as number;
+    const u = (await q(`INSERT INTO users (email, password_hash, role, role_override, manager_id) VALUES ($1, 'x', 'manager', $2, $3) RETURNING id`,
+      [`elig-${tag}@uts.test`, role === "manager" ? null : role, m])).rows[0].id as number;
+    if (hired) await q(`INSERT INTO employees (full_name, import_key, status, hired_at, manager_id) VALUES ($1, $1, 'active', $2, $3)`, [`Стаж ${tag}`, hired, m]);
+    if (inQueue) await q(`INSERT INTO linkedin_queue_members (manager_id, position) VALUES ($1, 99)`, [m]);
+    return (await leadsBotStatus(c.db, u, now)).eligible;
+  };
+  assert.equal(await person("m-old", "manager", "2026-10-04"), true, "🔴 менеджер зі стажем місяць не бачить плашки");
+  assert.equal(await person("tl-old", "team_lead", "2026-01-10"), true, "🔴 тімлід зі стажем не бачить плашки");
+  assert.equal(await person("m-new", "manager", "2026-10-20"), false, "🔴 менеджер без місяця стажу бачить плашку");
+  assert.equal(await person("m-unk", "manager", null), false, "🔴 невідома дата виходу = стаж є");
+  assert.equal(await person("m-q", "manager", null, true), true, "🔴 Юля внесла в коло, а плашки немає — заявки не дійдуть");
+  assert.equal(await person("hr", "hr", "2025-01-01"), false, "🔴 HR бачить плашку бота заявок");
 });

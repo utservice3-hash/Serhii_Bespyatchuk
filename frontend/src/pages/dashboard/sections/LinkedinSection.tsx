@@ -70,7 +70,9 @@ export function LinkedinSection() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>LinkedIn</h1>
-          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>Заявки з етапу «LinkedIn» у Кваліфікації — менеджерам по колу</div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{data?.scope === "own" ? "Моя статистика: заявки з LinkedIn, які бот мені пропонував"
+            : data?.scope === "team" ? "Статистика моєї команди: заявки з LinkedIn, які бот пропонував її менеджерам"
+            : "Заявки з етапу «LinkedIn» у Кваліфікації — менеджерам по колу"}</div>
         </div>
         <div className="cl-tabs">
           <button type="button" className="cl-tab" aria-pressed={tab === "stats"} onClick={() => setTab("stats")}>Статистика</button>
@@ -78,7 +80,7 @@ export function LinkedinSection() {
         </div>
       </div>
       {error && <p className="loading-text" style={{ color: RED }}>{error}</p>}
-      {data && <BotStatus q={data.queue} canEdit={canEdit} busy={busy} onToggle={() => void togglePause()} />}
+      {data && data.scope === "all" && <BotStatus q={data.queue} canEdit={canEdit} busy={busy} onToggle={() => void togglePause()} />}
       {tab === "queue" && canEdit ? <LinkedinQueueTab onSaved={() => void load()} /> : (
         <>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", margin: "14px 0" }}>
@@ -132,12 +134,12 @@ function StatsTab({ s }: { s: LinkedinStats }) {
   return (
     <>
       <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}>
-        <div className="kpi-card"><span className="kpi-label">Заявок створено</span><span className="kpi-value">{k.created}</span>
-          <span style={{ fontSize: 11, color: MUTED }}>нові угоди на етапі «LinkedIn»</span></div>
+        <div className="kpi-card"><span className="kpi-label">{s.scope === "all" ? "Заявок створено" : "Заявок отримано"}</span><span className="kpi-value">{k.created}</span>
+          <span style={{ fontSize: 11, color: MUTED }}>{s.scope === "all" ? "нові угоди на етапі «LinkedIn»" : s.scope === "own" ? "бот пропонував мені" : "бот пропонував команді"}</span></div>
         <div className="kpi-card"><span className="kpi-label">Взяли через бота</span><span className="kpi-value">{k.taken}</span>
           <span style={{ fontSize: 11, color: MUTED }}>{k.created ? `${String(Math.round((k.taken / k.created) * 100))}% заявок` : "—"}</span></div>
-        <div className="kpi-card" style={k.dispatcher ? { borderLeft: `4px solid ${RED}` } : undefined}><span className="kpi-label">Пішли Даші</span><span className="kpi-value">{k.dispatcher}</span>
-          <span style={{ fontSize: 11, color: MUTED }}>{k.dispatcherDup} дублі · {k.dispatcherNobody} ніхто не взяв</span></div>
+        {k.dispatcher != null && <div className="kpi-card" style={k.dispatcher ? { borderLeft: `4px solid ${RED}` } : undefined}><span className="kpi-label">Пішли Даші</span><span className="kpi-value">{k.dispatcher}</span>
+          <span style={{ fontSize: 11, color: MUTED }}>{k.dispatcherDup} дублі · {k.dispatcherNobody} ніхто не взяв</span></div>}
         <div className="kpi-card"><span className="kpi-label">Сер. час взяття</span><span className="kpi-value">{k.avgTakeMin == null ? "—" : `${String(k.avgTakeMin)} хв`}</span>
           <span style={{ fontSize: 11, color: MUTED }}>від пропозиції до «Взяти»</span></div>
         <div className="kpi-card" title="Машини рахуються з каналу LinkedIn: потрібне джерело «LinkedIn» у Kommo і прохід «канал LinkedIn»"><span className="kpi-label">Машин поїхало</span><span className="kpi-value">—</span>
@@ -145,7 +147,7 @@ function StatsTab({ s }: { s: LinkedinStats }) {
       </div>
 
       <div className="chart-card" style={{ marginTop: 16 }}>
-        <h2 className="chart-title">По менеджерах</h2>
+        <h2 className="chart-title">{s.scope === "own" ? "Мої показники" : "По менеджерах"}</h2>
         {s.perManager.length === 0 ? <p className="loading-text">За період бот нікому не пропонував заявок.</p> : (
           <table className="data-table">
             <thead><tr><th>Менеджер</th><th style={{ textAlign: "right" }}>Отримав</th><th style={{ textAlign: "right" }}>Взяв</th>

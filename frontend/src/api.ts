@@ -6623,8 +6623,8 @@ export interface LinkedinQueueScreen {
   candidates: { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }[];
 }
 export interface LinkedinStats {
-  from: string; to: string;
-  kpi: { created: number; taken: number; dispatcher: number; dispatcherDup: number; dispatcherNobody: number; avgTakeMin: number | null };
+  from: string; to: string; scope: "all" | "team" | "own";
+  kpi: { created: number; taken: number; dispatcher: number | null; dispatcherDup: number | null; dispatcherNobody: number | null; avgTakeMin: number | null };
   perManager: { managerId: number; name: string; received: number; taken: number; ignored: number; avgTakeMin: number | null }[];
   items: { kommoId: number; dealName: string | null; state: string; managerName: string | null; reason: string | null;
     seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number }[];
@@ -6636,5 +6636,5 @@ export const fetchLinkedinQueue = async () => (await api.get<LinkedinQueueScreen
 export const saveLinkedinQueueMembers = async (managerIds: number[]) => (await api.put<{ ok: boolean }>("/linkedin-queue/members", { managerIds })).data;
 export const setLinkedinQueuePaused = async (paused: boolean) => (await api.put<{ ok: boolean; paused: boolean }>("/linkedin-queue/pause", { paused })).data;
 // 🤖 Бот «UTS Заявки» (черга LinkedIn): підключення власного акаунта.
-export const fetchLeadsBotMe = async () => (await api.get<{ configured: boolean; linked: boolean; inQueue: boolean; botUsername: string | null }>("/leads-bot/me")).data;
+export const fetchLeadsBotMe = async () => (await api.get<{ configured: boolean; linked: boolean; inQueue: boolean; eligible: boolean; botUsername: string | null }>("/leads-bot/me")).data;
 export const createLeadsBotLink = async () => (await api.post<{ url: string; code: string; botUsername: string; expiresInSec: number }>("/leads-bot/link")).data;

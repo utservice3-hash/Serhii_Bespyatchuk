@@ -1877,9 +1877,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/prozorro/settings", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
-  // 🔗 «Клієнти → LinkedIn» (задача 7361): статистика черги — вкладка `linkedin`, як «Тендери Prozorro» (Роман 03.11.2026).
+  // 🔗 «Клієнти → LinkedIn» (задача 7361): вкладка `linkedin`; менеджер — лише себе, тімлід — команду, керівництво — усіх (Роман 04.11.2026).
   { method: "GET", path: "/api/linkedin/stats", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["financier", "hr"] },
   // 🔗 Черга LinkedIn (задача 7361): список кола веде Юля (КВП) і адмін — право `manage_linkedin_queue`, перший middleware.
   { method: "GET", path: "/api/linkedin-queue", cls: "GET",
     allow: ["admin", "kvp"], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },

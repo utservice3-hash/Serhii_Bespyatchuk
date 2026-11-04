@@ -11,7 +11,7 @@ import { pool } from "../db/pool.js";
 import { kommoWrite } from "../kommo/client.js";
 import { kommoLeadUrl } from "../core/kommoLinks.js";
 import { LINK_TOKEN_TTL_MS } from "../core/signCode.js";
-import { createLeadsLinkCode, linkLeadsChat } from "../core/leadsBotLink.js";
+import { createLeadsLinkCode, leadsBotStatus, linkLeadsChat } from "../core/leadsBotLink.js";
 import { expiredText, takeOffer, takenText, TAKE_PREFIX } from "../core/linkedinQueue.js";
 import { leadsBotAnswer, leadsBotConfigured, leadsBotEdit, leadsBotSend, leadsBotUsername, leadsWebhookSecret } from "../bot/leadsBot.js";
 import type { Db } from "../core/adCallFacts.js";
@@ -61,14 +61,11 @@ leadsBotRouter.post("/webhook", async (req, res) => {
   } catch (e) { console.error("leads-webhook:", (e as Error).message); }
 });
 
-/** Чи підключено бота й чи я в черзі — для плашки «Підключіть бот заявок». */
+/** Для плашки «Підключіть бот заявок»: чи підключено і чи людині це потрібно (менеджер / тімлід від 1 місяця або вже в колі). */
 leadsBotRouter.get("/me", requireAuth, async (req, res) => {
-  const r = (await pool.query<{ linked: boolean; in_queue: boolean }>(
-    `SELECT u.leads_bot_chat_id IS NOT NULL AS linked,
-            EXISTS (SELECT 1 FROM linkedin_queue_members q WHERE q.manager_id = u.manager_id) AS in_queue
-       FROM users u WHERE u.id = $1`, [req.auth!.userId])).rows[0];
+  const s = await leadsBotStatus(db, req.auth!.userId);
   const configured = leadsBotConfigured();
-  res.json({ configured, linked: r?.linked ?? false, inQueue: r?.in_queue ?? false, botUsername: configured ? await leadsBotUsername() : null });
+  res.json({ configured, ...s, botUsername: configured ? await leadsBotUsername() : null });
 });
 
 leadsBotRouter.post("/link", requireAuth, async (req, res) => {
