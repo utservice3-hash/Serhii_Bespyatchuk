@@ -5984,6 +5984,8 @@ export interface PresentationExtras {
   newPositions: { employeeId: number; name: string; position: string; by: string | null; at: string }[];
   rookies: { employeeId: number; name: string; managerId: number; hiredAt: string; cars: number }[];
   newClients: { rows: { managerId: number; first: number }[]; unknown: number };
+  /** Менеджери на адаптації (перший місяць від прийому) — у «Прорив тижня» не беруть участі. */
+  adaptingManagerIds: number[];
   employees: { id: number; name: string }[];
   photos: Record<string, PhotoRef>;
 }
