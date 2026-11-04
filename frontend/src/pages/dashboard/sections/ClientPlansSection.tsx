@@ -616,7 +616,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         </Card>
         <Card title="без роботи" value={String(cs.noWork)} tone={cs.noWork ? "bad" : undefined} on={card === "noWork"}
           onClick={() => setCard(toggleCard(card, "noWork"))}
-          sub={`${data.compare.noWorkDays} днів без угоди з рахунком і без оплати: ${cs.noWorkOnly} · без задачі: ${cs.noTaskOnly}`} />
+          sub={`${data.compare.noWorkDays} днів без угоди з рахунком і без оплати · окремо без задачі: ${cs.noTaskOnly}`} />
         <Card title="задача прострочена" value={String(cs.overdue)} tone={cs.overdue ? "warn" : undefined} on={card === "overdue"}
           onClick={() => setCard(toggleCard(card, "overdue"))} sub="дата задачі чи наступного кроку минула, а її не закрили" />
       </div>
