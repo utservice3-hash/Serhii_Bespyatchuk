@@ -6,6 +6,7 @@ import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, nominationRoste
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { checkPhoto, photoDir, photoStoredName } from "../core/peopleRules.js";
 import { presentationExtras } from "../core/nominationPeople.js";
 import type { TeamWeek } from "../core/nominationRules.js";
@@ -240,6 +241,19 @@ nominationsRouter.get("/presentation-extras", safe(async (req: Request, res: Res
   const q = typeof req.query.weekFrom === "string" ? req.query.weekFrom : "";
   const weekFrom = /^\d{4}-\d{2}-\d{2}$/.test(q) ? weekOf(q).from : lastWeek(new Date()).from;
   res.json(await presentationExtras(weekFrom));
+}));
+
+/**
+ * 📥 ШАБЛОН PPTX (04.11.2026): файл Даші «UTS_щотижнева_зустріч.pptx» (`backend/assets/presentation-template.pptx`).
+ * Браузер підставляє в нього модель слайдів і фото й віддає редагований PPTX. Лише керівництво — як і сама презентація.
+ */
+const PPTX_TEMPLATE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "presentation-template.pptx");
+nominationsRouter.get("/pptx-template", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v || v.role !== "admin") return res.status(403).json({ error: "Шаблон презентації — для керівництва" });
+  res.sendFile(PPTX_TEMPLATE, { headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "Cache-Control": "private, max-age=3600" } }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: "Шаблон презентації на сервері не знайдено" });
+  });
 }));
 
 /**

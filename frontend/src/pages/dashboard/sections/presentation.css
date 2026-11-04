@@ -7,6 +7,10 @@
 .ps-bar .sp { flex: 1; }
 .ps-bar button { border: 1px solid #3a3d44; background: #1c1e23; color: #e7e8ea; border-radius: 8px; padding: 5px 12px; font: inherit; cursor: pointer; }
 .ps-bar button:focus-visible { outline: 2px solid #C8102E; outline-offset: 2px; }
+.ps-bar button:disabled { opacity: .45; cursor: default; }
+.ps-prog { display: inline-flex; align-items: center; gap: 8px; color: #e7e8ea; }
+.ps-prog-bar { width: 120px; height: 6px; border-radius: 999px; background: #2a2d33; overflow: hidden; }
+.ps-prog-bar span { display: block; height: 100%; background: #C8102E; transition: width .25s; }
 .ps-draft { background: #fef3c7; color: #8a5a00; border-radius: 999px; padding: 2px 10px; font-weight: 700; }
 .ps-viewport { flex: 1; position: relative; overflow: hidden; }
 .ps-stage { position: absolute; left: 50%; top: 50%; width: 1280px; height: 720px; transform-origin: center center; }
