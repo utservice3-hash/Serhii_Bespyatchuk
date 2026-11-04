@@ -14,7 +14,7 @@ export class QueueScreenError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-export interface QueueMember { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean }
+export interface QueueMember { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean; botLinked: boolean }
 export interface QueueCandidate { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }
 export interface QueueScreen {
   mode: CloseMode; launchedAt: string | null;
@@ -27,11 +27,12 @@ export async function loadQueueScreen(db: Db, modeRaw: string, now = new Date())
   const today = kyivToday(now);
   const st = (await db.query<{ launched_at: Date | null }>(`SELECT launched_at FROM linkedin_queue_settings WHERE id`)).rows[0];
   // Активні менеджери продажу з Kommo-акаунтом (без службових і некомерційних команд) — з датою виходу з картки.
-  const people = (await db.query<{ id: number; name: string; team: string | null; team_id: number | null; hired_at: string | null; pos: number | null; absent: boolean }>(
+  const people = (await db.query<{ id: number; name: string; team: string | null; team_id: number | null; hired_at: string | null; pos: number | null; absent: boolean; bot: boolean }>(
     `SELECT m.id, m.name, t.name AS team, m.team_id, e.hired_at::text AS hired_at, q.position AS pos,
             EXISTS (SELECT 1 FROM team_calendar_absences a
                      WHERE a.manager_id = m.id AND a.status = 'approved' AND a.kind IN ('day_off', 'vacation', 'sick')
-                       AND $1::date BETWEEN a.start_date AND a.end_date) AS absent
+                       AND $1::date BETWEEN a.start_date AND a.end_date) AS absent,
+            EXISTS (SELECT 1 FROM users u WHERE u.manager_id = m.id AND u.is_active AND u.leads_bot_chat_id IS NOT NULL) AS bot
        FROM managers m
        LEFT JOIN teams t ON t.id = m.team_id
        LEFT JOIN employees e ON e.manager_id = m.id
@@ -40,7 +41,7 @@ export async function loadQueueScreen(db: Db, modeRaw: string, now = new Date())
       ORDER BY q.position NULLS LAST, m.name`, [today, [...SERVICE_KOMMO_USER_IDS]])).rows;
   const nonCom = new Set<number>(NON_COMMERCIAL_TEAM_IDS);
   const members = people.filter((p) => p.pos != null)
-    .map((p) => ({ managerId: p.id, name: p.name, team: p.team, hiredAt: p.hired_at, position: p.pos!, absentToday: p.absent }));
+    .map((p) => ({ managerId: p.id, name: p.name, team: p.team, hiredAt: p.hired_at, position: p.pos!, absentToday: p.absent, botLinked: p.bot }));
   const candidates = people.filter((p) => p.pos == null)
     .map((p) => ({ managerId: p.id, name: p.name, team: p.team, hiredAt: p.hired_at,
       suggested: workedMonth(p.hired_at, today) && (p.team_id == null || !nonCom.has(p.team_id)) }));

@@ -1,6 +1,8 @@
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { fetchLeadsOnStage } from "../kommo/client.js";
+import { fetchLeadsOnStage, kommoGet } from "../kommo/client.js";
+import { kommoLeadUrl } from "../core/kommoLinks.js";
+import { leadsBotConfigured, leadsBotEdit, leadsBotSend } from "../bot/leadsBot.js";
 import { closeModeOf } from "../core/carrierClose.js";
 import { clientOwnersFor } from "../core/clientOwner.js";
 import { kyivMonth } from "../core/finance.js";
@@ -19,6 +21,21 @@ export async function linkedinQueueJob(): Promise<QueueReport | GuardSkip> {
     const r = await runLinkedinQueueTick({
       db: pool,
       mode: closeModeOf(config.linkedinQueue.mode),
+      // Бойовий режим — лише з токеном бота; без нього «live» поводиться як пробний (лише журнал).
+      live: leadsBotConfigured() ? {
+        send: (chat, html, buttons) => leadsBotSend(chat, html, buttons),
+        edit: (chat, msgId, html) => leadsBotEdit(chat, msgId, html),
+        leadUrl: (id) => kommoLeadUrl(id),
+        leadCard: async (id) => {
+          const lead = await kommoGet<{ _embedded?: { contacts?: { id: number; is_main?: boolean }[] } }>(`/api/v4/leads/${String(id)}?with=contacts`);
+          const cs = lead._embedded?.contacts ?? [];
+          const cid = (cs.find((c) => c.is_main) ?? cs[0])?.id;
+          if (!cid) return { contact: null, phone: null };
+          const c = await kommoGet<{ name?: string; custom_fields_values?: { field_code?: string; values?: { value?: string }[] }[] | null }>(`/api/v4/contacts/${String(cid)}`);
+          const phone = c.custom_fields_values?.find((f) => f.field_code === "PHONE")?.values?.[0]?.value ?? null;
+          return { contact: c.name ?? null, phone };
+        },
+      } : undefined,
       now: () => new Date(),
       stageLeads: async () => (await fetchLeadsOnStage(LINKEDIN_STAGE.pipelineId, LINKEDIN_STAGE.statusId))
         .map((l) => ({ id: l.id, name: l.name, createdAt: l.created_at * 1000, responsibleUserId: l.responsible_user_id ?? null })),

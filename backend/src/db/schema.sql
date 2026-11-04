@@ -7487,6 +7487,23 @@ CREATE TABLE IF NOT EXISTS linkedin_queue_items (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_linkedin_queue_items_open ON linkedin_queue_items (state) WHERE state IN ('waiting', 'offered');
+-- Повідомлення з кнопкою «Взяти» в того, кому зараз запропоновано, — щоб погасити кнопку, коли заявка йде далі.
+ALTER TABLE linkedin_queue_items ADD COLUMN IF NOT EXISTS offer_chat_id BIGINT;
+ALTER TABLE linkedin_queue_items ADD COLUMN IF NOT EXISTS offer_message_id BIGINT;
+-- 🤖 Бот «UTS Заявки» (прохід 2б): свій чат на користувача, окремо від бота підпису (`telegram_chat_id`) — інший бот,
+-- інша розмова. Менеджеру без підключеного бота черга нічого не дає (Роман 04.11.2026: «йому нічого не даємо»).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS leads_bot_chat_id BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS leads_bot_linked_at TIMESTAMPTZ;
+-- Одноразові коди підключення (6 цифр, 10 хв), як у бота підпису, але своя таблиця: тамтешній CHECK знає лише свої цілі.
+CREATE TABLE IF NOT EXISTS leads_bot_link_codes (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code       TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_leads_bot_link_codes_live ON leads_bot_link_codes (code) WHERE used_at IS NULL;
 -- ⏸ Кнопка «Зупинити бота» (Роман 03.11.2026): на паузі черга нікому нічого не пропонує й не рахує 15 хв; після запуску
 -- поточні пропозиції отримують свіжі 15 хв (інакше пауза перетворилась би на «проігнорував» без вини менеджера).
 ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT false;

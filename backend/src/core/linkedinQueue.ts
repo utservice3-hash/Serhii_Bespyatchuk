@@ -18,7 +18,9 @@ import { isWorkTime, kyivAt, kyivParts, WORK_END_HOUR, WORK_START_HOUR } from ".
  *  • У пул не «профі», а менеджери від 1 місяця (зустріч 28.10); сам список веде Юля в Налаштуваннях.
  *
  * Режими — як у «чергового» (5972): `dry` лише пише журнал («кому віддав би») і нічого не міняє в Kommo й не
- * надсилає; `live` — прохід 2б (кнопка «Взяти» в боті). До нього `live` поводиться як `dry`.
+ * надсилає; `live` — бот «UTS Заявки» шле менеджеру повідомлення з кнопкою «Взяти», кнопка гасне, коли заявка йде
+ * далі; натиск — `takeOffer` (відповідальний у Kommo). Менеджеру без підключеного бота в бойовому режимі нічого не
+ * даємо — коло його пропускає (Роман 04.11.2026). `live` без Telegram-залежностей поводиться як `dry`.
  */
 
 export const LINKEDIN_STAGE = { pipelineId: 8921928, statusId: 113486296 } as const;
@@ -81,7 +83,38 @@ export function workedMonth(hiredAt: string | null, today: string): boolean {
 export interface StageLead { id: number; name: string; createdAt: number; responsibleUserId: number | null }
 export interface QueueOwner { managerId: number; managerName: string | null }
 
+export type QueueButton = { text: string; callback_data: string };
+/** Бойовий режим: Telegram і дані для повідомлення. Немає — бойовий поводиться як пробний (лише журнал). */
+export interface QueueLive {
+  send: (chatId: string, html: string, buttons: QueueButton[]) => Promise<number | null>;
+  edit: (chatId: string, messageId: number, html: string) => Promise<boolean>;
+  /** Контакт і телефон із Kommo — лише для тексту повідомлення; збій не зупиняє пропозицію. */
+  leadCard: (kommoId: number) => Promise<{ contact: string | null; phone: string | null }>;
+  leadUrl: (kommoId: number) => string;
+}
+
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const hhmm = (ms: number) => new Date(ms).toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" });
+const ddmm = (ms: number) => new Date(ms).toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit" });
+export const TAKE_PREFIX = "lq:take:";
+
+/** Текст пропозиції менеджеру (HTML). «До» — з датою, якщо 15 хв переходять на інший день (17:55 → 08:10). */
+export function offerText(p: { dealName: string | null; contact: string | null; phone: string | null; url: string; deadlineMs: number; nowMs: number }): string {
+  const sameDay = ddmm(p.deadlineMs) === ddmm(p.nowMs);
+  return [
+    "🔗 <b>Заявка з LinkedIn</b>",
+    `<b>${esc(p.dealName ?? "без назви")}</b>`,
+    [p.contact ? `👤 ${esc(p.contact)}` : null, p.phone ? `📞 ${esc(p.phone)}` : null].filter(Boolean).join(" · ") || null,
+    `⏱ Взяти до <b>${sameDay ? "" : `${ddmm(p.deadlineMs)} `}${hhmm(p.deadlineMs)}</b> — потім заявка піде наступному`,
+    `<a href="${p.url}">Відкрити в Kommo</a>`,
+  ].filter(Boolean).join("\n");
+}
+export const expiredText = (dealName: string | null) => `⏱ Час минув — заявку «${esc(dealName ?? "без назви")}» передано далі.`;
+export const goneText = (dealName: string | null) => `Заявку «${esc(dealName ?? "без назви")}» уже розподілено.`;
+export const takenText = (dealName: string | null, url: string) => `✅ Ви взяли заявку «${esc(dealName ?? "без назви")}».\n<a href="${url}">Відкрити в Kommo</a> — подзвоніть сьогодні, ціну — в першій розмові.`;
+
 export interface QueueDeps {
+  live?: QueueLive;
   db: Db;
   mode: CloseMode;
   now: () => Date;
@@ -99,13 +132,15 @@ export interface QueueReport {
 interface ItemRow {
   kommo_id: string; state: "waiting" | "offered"; manager_id: number | null; offered_ids: number[];
   deadline_at: Date | null; misses: number; seen_responsible: string | null;
+  deal_name: string | null; offer_chat_id: string | null; offer_message_id: string | null;
 }
 
 /** Один тік черги. Уся логіка — тут, джоба лише дає пул, Kommo й режим. */
 export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
   const rep: QueueReport = { mode: d.mode, onStage: 0, seen: 0, offered: 0, ignored: 0, dispatcher: 0, gone: 0, waitingSync: 0, offHours: false, paused: false };
   if (d.mode === "off") return rep;
-  const logMode = "dry"; // 2б: «live» з кнопкою; до того бойового режиму немає
+  const live = d.mode === "live" && d.live ? d.live : null;
+  const logMode = live ? "live" : "dry";
   const now = d.now();
   const nowMs = now.getTime();
 
@@ -136,7 +171,8 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
   }
 
   const items = (await d.db.query<ItemRow>(
-    `SELECT kommo_id::text, state, manager_id, offered_ids, deadline_at, misses, seen_responsible::text
+    `SELECT kommo_id::text, state, manager_id, offered_ids, deadline_at, misses, seen_responsible::text,
+            deal_name, offer_chat_id::text, offer_message_id::text
        FROM linkedin_queue_items WHERE state IN ('waiting', 'offered') ORDER BY seen_at, kommo_id`)).rows;
   if (!items.length) return rep;
 
@@ -150,8 +186,20 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
     `SELECT DISTINCT manager_id FROM team_calendar_absences
       WHERE status = 'approved' AND kind IN ('day_off', 'vacation', 'sick') AND $1::date BETWEEN start_date AND end_date`,
     [today])).rows.map((r) => r.manager_id));
+  // Бойовий режим: лише менеджери з підключеним ботом (без нього — «нічого не даємо»).
+  const chatOf = new Map(live ? (await d.db.query<{ manager_id: number; chat: string }>(
+    `SELECT u.manager_id, u.leads_bot_chat_id::text AS chat FROM users u
+      WHERE u.is_active AND u.leads_bot_chat_id IS NOT NULL AND u.manager_id = ANY($1::int[])`, [order])).rows.map((r) => [r.manager_id, r.chat]) : []);
 
+  /** Погасити кнопку в того, кому пропонували, — заявка пішла далі або з черги. */
+  const retire = async (it: ItemRow, html: string) => {
+    if (!live || !it.offer_chat_id || !it.offer_message_id) return;
+    await live.edit(it.offer_chat_id, Number(it.offer_message_id), html).catch(() => false);
+    await d.db.query(`UPDATE linkedin_queue_items SET offer_chat_id = NULL, offer_message_id = NULL WHERE kommo_id = $1`, [it.kommo_id]);
+    it.offer_chat_id = null; it.offer_message_id = null;
+  };
   const close = async (it: ItemRow, state: "dispatcher" | "gone", kind: "dispatcher" | "gone", reason: string) => {
+    await retire(it, state === "gone" ? goneText(it.deal_name) : expiredText(it.deal_name));
     await d.db.query(`UPDATE linkedin_queue_items SET state = $2, reason = $3, deadline_at = NULL, updated_at = $4 WHERE kommo_id = $1`,
       [it.kommo_id, state, reason, now]);
     await log(it.kommo_id, kind, null, reason);
@@ -159,7 +207,7 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
   };
   const offerNext = async (it: ItemRow) => {
     const tried = new Set(it.offered_ids);
-    const pick = nextInRing(order, cursor, (id) => !absent.has(id) && !tried.has(id));
+    const pick = nextInRing(order, cursor, (id) => !absent.has(id) && !tried.has(id) && (!live || chatOf.has(id)));
     if (pick == null) { await close(it, "dispatcher", "dispatcher", "у черзі немає доступного менеджера"); return; }
     const deadline = new Date(addWorkMinutes(nowMs, OFFER_WORK_MIN));
     await d.db.query(
@@ -168,7 +216,19 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
       [it.kommo_id, pick, now, deadline]);
     cursor = pick;
     await d.db.query(`UPDATE linkedin_queue_settings SET last_manager_id = $1 WHERE id`, [pick]);
-    await log(it.kommo_id, "offer", pick, null);
+    let note: string | null = null;
+    if (live) {
+      const chat = chatOf.get(pick)!;
+      const card = await live.leadCard(Number(it.kommo_id)).catch(() => ({ contact: null, phone: null }));
+      const msgId = await live.send(chat, offerText({ dealName: it.deal_name, ...card, url: live.leadUrl(Number(it.kommo_id)), deadlineMs: deadline.getTime(), nowMs }),
+        [{ text: "✅ Взяти", callback_data: `${TAKE_PREFIX}${it.kommo_id}` }]).catch(() => null);
+      if (msgId == null) note = "не вдалося надіслати в Telegram";
+      else {
+        await d.db.query(`UPDATE linkedin_queue_items SET offer_chat_id = $2, offer_message_id = $3 WHERE kommo_id = $1`, [it.kommo_id, chat, msgId]);
+        it.offer_chat_id = chat; it.offer_message_id = String(msgId);
+      }
+    }
+    await log(it.kommo_id, "offer", pick, note);
     rep.offered++;
   };
 
@@ -183,6 +243,7 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
       if (!it.deadline_at || new Date(it.deadline_at).getTime() > nowMs) continue;
       await log(it.kommo_id, "ignored", it.manager_id, null);
       rep.ignored++;
+      await retire(it, expiredText(it.deal_name));
       const misses = it.misses + 1;
       await d.db.query(`UPDATE linkedin_queue_items SET misses = $2, updated_at = $3 WHERE kommo_id = $1`, [it.kommo_id, misses, now]);
       if (misses >= MAX_MISSES) { await close(it, "dispatcher", "dispatcher", `${String(MAX_MISSES)} менеджери підряд не взяли`); continue; }
@@ -217,4 +278,41 @@ export async function setQueuePaused(db: Db, paused: boolean, userId: number, no
     await db.query(`UPDATE linkedin_queue_items SET deadline_at = $1, updated_at = $2 WHERE state = 'offered'`,
       [new Date(addWorkMinutes(now.getTime(), OFFER_WORK_MIN)), now]);
   }
+}
+
+export type TakeResult =
+  | { ok: true; dealName: string | null }
+  | { ok: false; why: "not_linked" | "not_yours" | "expired" | "kommo_failed" };
+
+/**
+ * ✅ «Взяти» з бота. Спершу АТОМАРНО забираємо заявку собі (лише якщо вона зараз запропонована саме цьому менеджеру
+ * і 15 хв ще не минули — або бот на паузі, тоді час заморожено), потім міняємо відповідального в Kommo. Kommo не
+ * прийняв — повертаємо пропозицію, як була: краще «спробуйте ще раз», ніж угода, взята в дашборді й нічия в CRM.
+ */
+export async function takeOffer(db: Db, p: { kommoId: number; chatId: number | string; now: Date;
+  assign: (kommoId: number, kommoUserId: number, managerName: string) => Promise<void> }): Promise<TakeResult> {
+  const me = (await db.query<{ manager_id: number; kommo_user_id: string | null; name: string }>(
+    `SELECT m.id AS manager_id, m.kommo_user_id::text, m.name FROM users u JOIN managers m ON m.id = u.manager_id
+      WHERE u.leads_bot_chat_id = $1 AND u.is_active AND m.is_active`, [String(p.chatId)])).rows[0];
+  if (!me?.kommo_user_id) return { ok: false, why: "not_linked" };
+  const claimed = (await db.query<{ deal_name: string | null }>(
+    `UPDATE linkedin_queue_items SET state = 'taken', updated_at = $3
+      WHERE kommo_id = $1 AND state = 'offered' AND manager_id = $2
+        AND (deadline_at > $3 OR (SELECT paused FROM linkedin_queue_settings WHERE id))
+      RETURNING deal_name`, [p.kommoId, me.manager_id, p.now])).rows[0];
+  if (!claimed) {
+    const cur = (await db.query<{ state: string; manager_id: number | null }>(
+      `SELECT state, manager_id FROM linkedin_queue_items WHERE kommo_id = $1`, [p.kommoId])).rows[0];
+    return { ok: false, why: cur?.state === "offered" && cur.manager_id === me.manager_id ? "expired" : "not_yours" };
+  }
+  try { await p.assign(p.kommoId, Number(me.kommo_user_id), me.name); }
+  catch (e) {
+    await db.query(`UPDATE linkedin_queue_items SET state = 'offered', updated_at = $2 WHERE kommo_id = $1 AND state = 'taken'`, [p.kommoId, p.now]);
+    console.error("linkedinQueue take: Kommo не прийняв:", (e as Error).message);
+    return { ok: false, why: "kommo_failed" };
+  }
+  await db.query(`UPDATE linkedin_queue_items SET deadline_at = NULL, offer_chat_id = NULL, offer_message_id = NULL WHERE kommo_id = $1`, [p.kommoId]);
+  await db.query(`INSERT INTO linkedin_queue_log (kommo_id, kind, manager_id, note, mode, at) VALUES ($1, 'taken', $2, NULL, 'live', $3)`,
+    [p.kommoId, me.manager_id, p.now]);
+  return { ok: true, dealName: claimed.deal_name };
 }

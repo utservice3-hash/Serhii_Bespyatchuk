@@ -240,3 +240,141 @@ test("#3408 «Зупинити бота»: на паузі тік нічого �
   await tick("2026-11-04T09:12:00Z");
   assert.equal((await q(`SELECT COUNT(*)::int AS n FROM linkedin_queue_log WHERE kind = 'ignored'`)).rows[0].n, 0, "🔴 одразу після запуску — «проігнорував»");
 });
+
+test("#3409 повідомлення менеджеру: назва, контакт, «взяти до» (з датою, якщо 15 хв переходять на інший день), посилання; HTML екранується", async () => {
+  const { offerText } = await import("./linkedinQueue.js");
+  const same = offerText({ dealName: "LinkedIn №30 <ТОВ & Ко>", contact: "Іван", phone: "+380671112233", url: "https://k/leads/detail/1",
+    deadlineMs: Z("2026-11-04T08:15:00Z"), nowMs: Z("2026-11-04T08:00:00Z") });
+  assert.match(same, /LinkedIn №30 &lt;ТОВ &amp; Ко&gt;/, "🔴 назва угоди не екранована — Telegram відкине HTML");
+  assert.match(same, /👤 Іван · 📞 \+380671112233/);
+  assert.match(same, /Взяти до <b>10:15<\/b>/);
+  assert.match(same, /<a href="https:\/\/k\/leads\/detail\/1">/);
+  const next = offerText({ dealName: null, contact: null, phone: null, url: "u", deadlineMs: Z("2026-11-05T06:10:00Z"), nowMs: Z("2026-11-04T15:55:00Z") });
+  assert.match(next, /Взяти до <b>05\.11 08:10<\/b>/, "🔴 дедлайн наступного дня без дати — менеджер подумає, що вже пізно");
+  assert.doesNotMatch(next, /👤|📞/, "🔴 порожні контакт і телефон дали порожній рядок");
+});
+
+async function liveSeed(c: { raw: import("pg").Client }) {
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`TRUNCATE linkedin_queue_items, linkedin_queue_log, linkedin_queue_members, linkedin_queue_settings`);
+  // Повторюване: кожен гейт сіє свіжий склад (той самий кластер на весь файл).
+  await q(`DELETE FROM users WHERE email LIKE 'live-%@uts.test'`);
+  await q(`DELETE FROM managers WHERE kommo_user_id BETWEEN 910000 AND 910002`);
+  const ids: number[] = [];
+  for (const [i, n] of ["ЛА", "ЛБ", "ЛВ"].entries()) {
+    const m = (await q(`INSERT INTO managers (name, is_active, kommo_user_id) VALUES ($1, true, $2) RETURNING id`, [`Live ${n}`, 910000 + i])).rows[0].id as number;
+    await q(`INSERT INTO linkedin_queue_members (manager_id, position) VALUES ($1, $2)`, [m, i + 1]);
+    ids.push(m);
+  }
+  // ЛА і ЛВ підключили бота, ЛБ — ні (йому «нічого не даємо»).
+  for (const [i, m] of ids.entries()) {
+    await q(`INSERT INTO users (email, password_hash, role, manager_id, leads_bot_chat_id) VALUES ($1, 'x', 'manager', $2, $3)`,
+      [`live-${String(m)}@uts.test`, m, i === 1 ? null : 5000 + i]);
+  }
+  await q(`INSERT INTO deals (kommo_id, name, pipeline_id, status_id, client_key) VALUES (7201, 'LinkedIn 7201', $1, $2, 'k-live')
+           ON CONFLICT (kommo_id) DO UPDATE SET client_key = 'k-live'`, [LINKEDIN_STAGE.pipelineId, LINKEDIN_STAGE.statusId]);
+  return { ids, q };
+}
+
+test("#3410 бойовий режим: заявка лише тому, хто підключив бота; повідомлення з «Взяти»; 15 хв минули — кнопка гасне, заявка наступному з ботом", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { ids: [A, , C], q } = await liveSeed(c);
+  const sent: { chat: string; html: string; data: string }[] = [], edited: { chat: string; id: number; html: string }[] = [];
+  let msg = 100;
+  const live = {
+    send: async (chat: string, html: string, b: { text: string; callback_data: string }[]) => { sent.push({ chat, html, data: b[0]?.callback_data }); return ++msg; },
+    edit: async (chat: string, id: number, html: string) => { edited.push({ chat, id, html }); return true; },
+    leadCard: async () => ({ contact: "Олена", phone: "+380500000000" }),
+    leadUrl: (id: number) => `https://k/leads/detail/${String(id)}`,
+  };
+  const stage: StageLead[] = [{ id: 7201, name: "LinkedIn 7201", createdAt: Z("2026-11-04T08:01:00Z"), responsibleUserId: 1 }];
+  const tick = (iso: string) => runLinkedinQueueTick({ db: c.db, mode: "live", live, now: () => new Date(iso), stageLeads: async () => stage, ownerOf: async () => null });
+  await tick("2026-11-04T08:00:00Z");
+  await tick("2026-11-04T08:02:00Z");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chat, "5000", "🔴 перша заявка пішла не першому з ботом");
+  assert.equal(sent[0].data, "lq:take:7201", "🔴 кнопка «Взяти» без id угоди — натиск нічого не знайде");
+  assert.match(sent[0].html, /Олена · 📞 \+380500000000/);
+  await tick("2026-11-04T08:17:00Z");
+  assert.deepEqual(edited.map((e) => [e.chat, e.id]), [["5000", 101]], "🔴 у того, хто не взяв, кнопка не погасла");
+  assert.match(edited[0].html, /Час минув/);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].chat, "5002", "🔴 заявка пішла менеджеру без бота (ЛБ) замість наступного з ботом (ЛВ)");
+  const it = (await q(`SELECT manager_id, offer_chat_id::text, offer_message_id::text FROM linkedin_queue_items WHERE kommo_id = 7201`)).rows[0];
+  assert.deepEqual([it.manager_id, it.offer_chat_id, it.offer_message_id], [C, "5002", "102"]);
+  assert.deepEqual((await q(`SELECT DISTINCT mode FROM linkedin_queue_log`)).rows.map((r) => r.mode), ["live"]);
+  // Ніхто з ботом більше недоступний (ЛВ проігнорує, ЛА вже пробували) → «двоє не взяли» → Даші; кнопка в ЛВ гасне.
+  await tick("2026-11-04T08:33:00Z");
+  assert.equal((await q(`SELECT state FROM linkedin_queue_items WHERE kommo_id = 7201`)).rows[0].state, "dispatcher");
+  assert.equal(edited.at(-1)?.chat, "5002");
+  assert.ok(A > 0);
+});
+
+test("#3411 «Взяти»: лише той, кому запропоновано, і поки 15 хв не минули; Kommo не прийняв — пропозиція лишається; повторний натиск нічого не міняє", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { ids: [A, , C], q } = await liveSeed(c);
+  const { takeOffer } = await import("./linkedinQueue.js");
+  await q(`INSERT INTO linkedin_queue_items (kommo_id, deal_name, state, manager_id, offered_ids, offered_at, deadline_at)
+           VALUES (7201, 'LinkedIn 7201', 'offered', $1, ARRAY[$1]::int[], '2026-11-04T08:02:00Z', '2026-11-04T08:17:00Z')`, [A]);
+  const assigned: [number, number][] = [];
+  const ok = (id: number, uid: number) => { assigned.push([id, uid]); return Promise.resolve(); };
+  // Чужий (ЛВ) тисне — не його заявка.
+  assert.deepEqual(await takeOffer(c.db, { kommoId: 7201, chatId: 5002, now: new Date("2026-11-04T08:05:00Z"), assign: ok }), { ok: false, why: "not_yours" });
+  // Незнайомий чат.
+  assert.deepEqual(await takeOffer(c.db, { kommoId: 7201, chatId: 99999, now: new Date("2026-11-04T08:05:00Z"), assign: ok }), { ok: false, why: "not_linked" });
+  // Kommo впав — заявка лишається запропонованою А.
+  const r1 = await takeOffer(c.db, { kommoId: 7201, chatId: 5000, now: new Date("2026-11-04T08:05:00Z"), assign: () => Promise.reject(new Error("502")) });
+  assert.deepEqual(r1, { ok: false, why: "kommo_failed" });
+  assert.equal((await q(`SELECT state FROM linkedin_queue_items WHERE kommo_id = 7201`)).rows[0].state, "offered", "🔴 Kommo не прийняв, а заявка в дашборді вже «взята»");
+  // Після дедлайну — «час минув».
+  assert.deepEqual(await takeOffer(c.db, { kommoId: 7201, chatId: 5000, now: new Date("2026-11-04T08:18:00Z"), assign: ok }), { ok: false, why: "expired" });
+  // Вчасно — взяв; Kommo отримав відповідального А; у журналі «taken».
+  const r2 = await takeOffer(c.db, { kommoId: 7201, chatId: 5000, now: new Date("2026-11-04T08:10:00Z"), assign: ok });
+  assert.deepEqual(r2, { ok: true, dealName: "LinkedIn 7201" });
+  assert.deepEqual(assigned, [[7201, 910000]], "🔴 у Kommo відповідальним поставлено не того менеджера");
+  assert.equal((await q(`SELECT COUNT(*)::int AS n FROM linkedin_queue_log WHERE kind = 'taken' AND manager_id = $1`, [A])).rows[0].n, 1);
+  // Повторний натиск (подвійний клік) — нічого.
+  assert.deepEqual(await takeOffer(c.db, { kommoId: 7201, chatId: 5000, now: new Date("2026-11-04T08:11:00Z"), assign: ok }), { ok: false, why: "not_yours" });
+  assert.equal(assigned.length, 1, "🔴 подвійний клік вдруге писав у Kommo");
+  assert.ok(C > 0);
+});
+
+test("#3412 підключення бота: код із дашборда привʼязує чат; код одноразовий і живе 10 хв; один Telegram — один акаунт", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { createLeadsLinkCode, linkLeadsChat } = await import("./leadsBotLink.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  const u1 = (await q(`INSERT INTO users (email, password_hash, role) VALUES ('link1@uts.test', 'x', 'manager') RETURNING id`)).rows[0].id as number;
+  const u2 = (await q(`INSERT INTO users (email, password_hash, role) VALUES ('link2@uts.test', 'x', 'manager') RETURNING id`)).rows[0].id as number;
+  const t0 = new Date("2026-11-04T08:00:00Z");
+  const code = await createLeadsLinkCode(c.db, u1, t0);
+  assert.match(code, /^\d{6}$/);
+  assert.match(await linkLeadsChat(c.db, `/start ${code}`, 777, new Date("2026-11-04T08:05:00Z")), /Готово/);
+  assert.equal((await q(`SELECT leads_bot_chat_id::text AS c FROM users WHERE id = $1`, [u1])).rows[0].c, "777");
+  assert.match(await linkLeadsChat(c.db, code, 778, new Date("2026-11-04T08:06:00Z")), /не знайдено/, "🔴 код спрацював удруге");
+  const old = await createLeadsLinkCode(c.db, u2, t0);
+  assert.match(await linkLeadsChat(c.db, old, 777, new Date("2026-11-04T08:11:00Z")), /не знайдено/, "🔴 код живе довше 10 хв");
+  const fresh = await createLeadsLinkCode(c.db, u2, new Date("2026-11-04T08:12:00Z"));
+  await linkLeadsChat(c.db, fresh, 777, new Date("2026-11-04T08:13:00Z"));
+  const rows = (await q(`SELECT id, leads_bot_chat_id::text AS c FROM users WHERE id = ANY($1::int[]) ORDER BY id`, [[u1, u2]])).rows;
+  assert.deepEqual(rows.map((r) => r.c), [null, "777"], "🔴 один Telegram привʼязаний до двох акаунтів — «Взяти» не знатиме, чия заявка");
+  assert.match(await linkLeadsChat(c.db, "привіт", 777, t0), /код із 6 цифр/);
+});
+
+test("#3413 бот «UTS Заявки»: вебхук — секрет Telegram першим рядком; кнопка = TAKE_PREFIX; callback у allowed_updates; межі в реєстрі й матриці; старт реєструє вебхук", () => {
+  const route = read("backend/src/routes/leadsBot.ts");
+  const wh = route.slice(route.indexOf('leadsBotRouter.post("/webhook"'));
+  assert.match(wh, /^leadsBotRouter\.post\("\/webhook", async \(req, res\) => \{\s*const secret = leadsWebhookSecret\(\);\s*if \(!secret \|\| req\.header\("X-Telegram-Bot-Api-Secret-Token"\) !== secret\) return res\.status\(401\)/,
+    "🔴 вебхук бота діє раніше, ніж перевірив секрет Telegram");
+  assert.match(route, /cq\.data\?\.startsWith\(TAKE_PREFIX\)/, "🔴 кнопку читають не тим префіксом, яким її шле черга");
+  for (const p of ['leadsBotRouter.get("/me", requireAuth', 'leadsBotRouter.post("/link", requireAuth', 'leadsBotRouter.post("/unlink", requireAuth']) assert.ok(route.includes(p), `🔴 ${p} без requireAuth`);
+  assert.match(read("backend/src/bot/leadsBot.ts"), /allowed_updates: \["message", "callback_query"\]/, "🔴 Telegram не надсилатиме натиск «Взяти»");
+  const gates = read("backend/src/auth/gates.ts"), matrix = read("backend/src/auth/accessMatrix.ts");
+  for (const [m, p] of [["POST", "/api/leads-bot/webhook"], ["GET", "/api/leads-bot/me"], ["POST", "/api/leads-bot/link"], ["POST", "/api/leads-bot/unlink"]]) {
+    assert.ok(gates.includes(`{ method: "${m}", path: "${p}", permanent: true,`), `🔴 ${m} ${p} не в реєстрі виключень меж`);
+    assert.ok(matrix.includes(`{ method: "${m}", path: "${p}", cls: "deny-only",`), `🔴 ${m} ${p} не в матриці`);
+  }
+  assert.match(read("backend/src/index.ts"), /\["leadsBotEnsureWebhook", \(\) => leadsBotEnsureWebhook\(\)\]/, "🔴 вебхук бота заявок не реєструється на старті");
+});

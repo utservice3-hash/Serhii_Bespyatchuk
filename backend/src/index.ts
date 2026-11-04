@@ -113,6 +113,8 @@ import { clientLimitsMirror, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON }
 import { minusDealsRouter } from "./routes/minusRegistry.js";
 import { linkedinQueueRouter } from "./routes/linkedinQueue.js";
 import { linkedinRouter } from "./routes/linkedin.js";
+import { leadsBotRouter } from "./routes/leadsBot.js";
+import { leadsBotEnsureWebhook } from "./bot/leadsBot.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
 import { zakaz1cRouter } from "./routes/zakaz1c.js";
 import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
@@ -207,6 +209,7 @@ app.use("/api/surveys", surveysRouter); // 📋 Опитування коман�
 app.use("/api/prozorro", prozorroRouter); // 🏛 «Тендери Prozorro» (#5299): статистика + налаштування, межа — вкладка prozorro
 app.use("/api/minus-deals", minusDealsRouter); // 📒 Реєстр мінусових угод — пакет Сергія (20.10.2026), пункт меню «Реєстри»
 app.use("/api/linkedin-queue", linkedinQueueRouter); // 🔗 Черга LinkedIn — список кола й журнал (задача 7361, Налаштування)
+app.use("/api/leads-bot", leadsBotRouter); // 🤖 бот «UTS Заявки» — вебхук (секрет Telegram) і підключення власного акаунта
 app.use("/api/linkedin", linkedinRouter); // 🔗 «Клієнти → LinkedIn» — статистика черги (вкладка linkedin)
 app.use("/api/counterparty", counterpartyRouter); // 🤝 Узгодження й перевірка контрагента — пакет Сергія (23.10.2026), «Реєстри та узгодження»
 app.use("/api/client-limits", clientLimitsRouter); // 💳 Ліміти клієнтів — той самий пакет, вкладка «Дебіторської заборгованості»
@@ -1048,6 +1051,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["catchUpAiChat", () => catchUpAiChat()],
   ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
   ["vaultBotEnsureWebhook", () => vaultBotEnsureWebhook()],
+  ["leadsBotEnsureWebhook", () => leadsBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
   ["freezeNominations", () => runFreezeNominations()],
   ["docText", () => runDocText()],

@@ -28,6 +28,8 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
   if (!data) return <p className="loading-text">Завантаження…</p>;
   const byId = new Map([...data.members, ...data.candidates].map((p) => [p.managerId, p]));
   const absent = new Set(data.members.filter((m) => m.absentToday).map((m) => m.managerId));
+  const bot = new Set(data.members.filter((m) => m.botLinked).map((m) => m.managerId));
+  const noBot = order.filter((id) => !bot.has(id)).length;
   const saved = data.members.map((m) => m.managerId);
   const dirty = order.join(",") !== saved.join(",");
   const outside = data.candidates.filter((c) => !order.includes(c.managerId));
@@ -50,13 +52,14 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
           <li>Не взяв за 15 хвилин — заявка йде наступному, а він пропускає свою чергу.</li>
           <li>Двоє підряд не взяли або клієнт уже в іншого менеджера — заявка лишається на «Операційному директорі», її призначає Даша.</li>
           <li>Відпустку, вихідний, лікарняний із «Календаря команди» бот пропускає сам.</li>
+          <li>Менеджер без підключеного бота заявок не отримує — коло його пропускає. Підключити: плашка вгорі дашборда в нього самого.</li>
         </ul>
       </div>
 
 
       <div className="chart-card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-          <h2 className="chart-title" style={{ margin: 0 }}>Порядок кола · {order.length}</h2>
+          <h2 className="chart-title" style={{ margin: 0 }}>Порядок кола · {order.length}{noBot > 0 && <span style={{ fontSize: 12, fontWeight: 400, color: "#b3261e" }}> · без бота {noBot}</span>}</h2>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {suggested.length > 0 && <button type="button" className="hr-btn" onClick={() => setOrder((o) => [...o, ...suggested.map((c) => c.managerId)])}>+ Усі від 1 місяця ({suggested.length})</button>}
             {dirty && <button type="button" className="hr-btn" disabled={busy} onClick={() => setOrder(saved)}>Скасувати</button>}
@@ -65,7 +68,7 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
         </div>
         {order.length === 0 ? <p className="loading-text">Список порожній — кожна заявка лишиться на «Операційному директорі» для Даші.</p> : (
           <table className="data-table">
-            <thead><tr><th style={{ width: 40 }}>№</th><th>Менеджер</th><th>Команда</th><th>Працює з</th><th>Сьогодні</th><th style={{ textAlign: "right" }}>Порядок</th></tr></thead>
+            <thead><tr><th style={{ width: 40 }}>№</th><th>Менеджер</th><th>Команда</th><th>Працює з</th><th>Бот</th><th>Сьогодні</th><th style={{ textAlign: "right" }}>Порядок</th></tr></thead>
             <tbody>
               {order.map((id, i) => {
                 const p = byId.get(id);
@@ -75,6 +78,7 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
                     <td style={{ fontWeight: 600 }}>{p?.name ?? `Менеджер #${String(id)}`}</td>
                     <td>{p?.team ?? "—"}</td>
                     <td>{dmy(p?.hiredAt ?? null)}</td>
+                    <td style={{ color: bot.has(id) ? "#16a34a" : "#b3261e" }}>{bot.has(id) ? "підключено" : "не підключено — пропуститься"}</td>
                     <td style={{ color: absent.has(id) ? "#b45309" : MUTED }}>{absent.has(id) ? "відсутній — пропуститься" : "у черзі"}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <button type="button" className="hr-btn" onClick={() => move(i, -1)} disabled={i === 0} aria-label="Вище">↑</button>{" "}
