@@ -521,9 +521,11 @@ test("#3461 лідерборд: типова галочка від 20 цільо
  * почнуть ходити в сторонній ендпоінт.
  */
 test("#3462 презентація: пульс — верх Звіту за місяць, топ-3 — із сервера, без чужих ендпоінтів і ручних шаблонів", () => {
-  const src = readFileSync(fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/NominationsPresentation.tsx", import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
+  // З 04.11.2026 що на якому слайді — у моделі (`presentationModel.ts`, одна на екран і PPTX): читаємо обидва файли.
+  const fe = (f: string) => readFileSync(fileURLToPath(new URL(`../../../frontend/src/pages/dashboard/${f}`, import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
+  const src = fe("sections/NominationsPresentation.tsx") + "\n" + fe("presentationModel.ts");
   assert.match(src, /fetchReportPlan\(\{ from: mStart, to: monthEnd\(today\) \}\)/, "🔴 «Пульс плану» більше не з верху Звіту за поточний місяць");
-  assert.match(src, /month\.glance/, "🔴 «Пульс плану» не читає `glance` Звіту");
+  assert.match(src, /month\??\.glance/, "🔴 «Пульс плану» не читає `glance` Звіту");
   assert.match(src, /week\.companyTop\?\.\[k\]/, "🔴 топ-3 більше не з `companyTop` сервера");
   assert.doesNotMatch(src, /\.ranking\b/, "🔴 презентація сама збирає топ із рейтингів команд — має брати `companyTop`");
   assert.doesNotMatch(src, /\/api\/dashboard\/(?!report-plan)|api\.get\(/, "🔴 презентація ходить у сторонній ендпоінт");

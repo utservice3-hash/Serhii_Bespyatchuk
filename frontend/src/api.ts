@@ -5991,6 +5991,9 @@ export interface PresentationExtras {
 }
 export const fetchPresentationExtras = async (weekFrom: string) =>
   (await api.get<PresentationExtras>("/nominations/presentation-extras", { params: { weekFrom } })).data;
+/** Шаблон PPTX Даші (04.11.2026) — заповнюється в браузері (`pptxTemplate.ts`), лише керівництво. */
+export const fetchPptxTemplate = async () =>
+  new Uint8Array((await api.get<ArrayBuffer>("/nominations/pptx-template", { responseType: "arraybuffer" })).data);
 export const uploadTeamPhoto = async (dataBase64: string) =>
   (await api.post<{ teamPhoto: { v: number } }>("/nominations/team-photo", { dataBase64 })).data.teamPhoto;
 const teamPhotoUrls = new Map<number, Promise<string | null>>();
