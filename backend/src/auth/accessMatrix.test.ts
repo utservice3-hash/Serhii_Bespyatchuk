@@ -82,7 +82,6 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/finance/payments/run": "view_private_finance — СЕО, ОД і КВП його не мають: у файлі на оплату номери карток і ПІБ отримувачів (16.10.2026)",
   // 🔗 Черга LinkedIn (задача 7361, Юля 03.11.2026: «щоб я могла його міняти без тебе»): список кола — КВП і адмін.
   "PUT /api/linkedin-queue/members": "manage_linkedin_queue — лише адмін і КВП (Юля веде список черги LinkedIn); СЕО, ОД, фінансист його не мають",
-  "PUT /api/linkedin-queue/settings": "manage_linkedin_queue — лише адмін і КВП (відповідальна за чергу LinkedIn); СЕО, ОД, фінансист його не мають",
   "PUT /api/linkedin-queue/pause": "manage_linkedin_queue — лише адмін і КВП («Зупинити бота» черги LinkedIn); СЕО, ОД, фінансист його не мають",
   "POST /api/finance/payments/mark": "view_private_finance — СЕО, ОД і КВП його не мають: «Погоджено» переносить запит у файл на оплату з номерами карток (Роман 26.10.2026: погоджують Тетяна й адмін)",
   "POST /api/finance/approval": "погодження плану — поіменний список fin_plan_approvers (06.10.2026), роль його не дає: kvp і фінансист розділ бачать, а погодити план не можуть",

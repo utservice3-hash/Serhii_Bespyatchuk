@@ -7454,7 +7454,7 @@ REVOKE ALL ON employee_levels FROM ai_readonly;
 
 -- 🔗 ЧЕРГА LINKEDIN (задача 7361; рішення Юлі 03.11.2026). Угода на етапі «LinkedIn» (Кваліфікація, 113486296)
 -- іде менеджерам по колу: одночасно лише в одного, 15 хв робочого часу (пн–пт 8–18 за Києвом), хто не взяв —
--- пропускає чергу; двоє підряд не взяли або клієнт уже в іншого менеджера — відповідальній (Даша).
+-- пропускає чергу; двоє підряд не взяли або клієнт уже в іншого менеджера — лишається на «Операційному директорі», Даші.
 -- Порядок кола — список, який веде Юля в Налаштуваннях (`manage_linkedin_queue`). Логіка — `core/linkedinQueue.ts`.
 CREATE TABLE IF NOT EXISTS linkedin_queue_members (
   manager_id INTEGER PRIMARY KEY REFERENCES managers(id),
@@ -7462,10 +7462,10 @@ CREATE TABLE IF NOT EXISTS linkedin_queue_members (
   added_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
   added_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- Один рядок: кому віддаємо спірне, де зупинилось коло, з якої миті угоди йдуть у чергу (старіші — ні).
+-- Один рядок: де зупинилось коло, з якої миті угоди йдуть у чергу (старіші — ні). «Спірне — Даші» = угода лишається
+-- на службовому «Операційному директорі», Даша розподіляє вручну (Юля 04.11.2026) — окремого акаунта під це немає.
 CREATE TABLE IF NOT EXISTS linkedin_queue_settings (
   id                 BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
-  dispatcher_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   last_manager_id    INTEGER REFERENCES managers(id) ON DELETE SET NULL,
   launched_at        TIMESTAMPTZ,
   updated_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,

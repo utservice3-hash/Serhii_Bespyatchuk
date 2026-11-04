@@ -6595,10 +6595,9 @@ export const setEmployeeTeam = async (employeeId: number, team: string | null) =
 
 // 🔗 Черга LinkedIn (задача 7361): «Клієнти → LinkedIn» — статистика за період і редактор кола («Налаштувати чергу»).
 export interface LinkedinQueueScreen {
-  mode: "off" | "dry" | "live"; launchedAt: string | null; dispatcherUserId: number | null;
+  mode: "off" | "dry" | "live"; launchedAt: string | null;
   members: { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean }[];
   candidates: { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }[];
-  dispatchers: { userId: number; name: string }[];
 }
 export interface LinkedinStats {
   from: string; to: string;
@@ -6606,12 +6605,10 @@ export interface LinkedinStats {
   perManager: { managerId: number; name: string; received: number; taken: number; ignored: number; avgTakeMin: number | null }[];
   items: { kommoId: number; dealName: string | null; state: string; managerName: string | null; reason: string | null;
     seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number }[];
-  queue: { mode: "off" | "dry" | "live"; members: number; nextName: string | null; dispatcherName: string | null; launchedAt: string | null;
+  queue: { mode: "off" | "dry" | "live"; members: number; nextName: string | null; launchedAt: string | null;
     paused: boolean; pausedBy: string | null; pausedAt: string | null };
 }
 export const fetchLinkedinStats = async (from: string, to: string) => (await api.get<LinkedinStats>("/linkedin/stats", { params: { from, to } })).data;
 export const fetchLinkedinQueue = async () => (await api.get<LinkedinQueueScreen>("/linkedin-queue")).data;
 export const saveLinkedinQueueMembers = async (managerIds: number[]) => (await api.put<{ ok: boolean }>("/linkedin-queue/members", { managerIds })).data;
 export const setLinkedinQueuePaused = async (paused: boolean) => (await api.put<{ ok: boolean; paused: boolean }>("/linkedin-queue/pause", { paused })).data;
-export const saveLinkedinQueueDispatcher = async (dispatcherUserId: number | null) =>
-  (await api.put<{ ok: boolean }>("/linkedin-queue/settings", { dispatcherUserId })).data;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchLinkedinQueue, saveLinkedinQueueDispatcher, saveLinkedinQueueMembers, type LinkedinQueueScreen } from "../../../api";
+import { fetchLinkedinQueue, saveLinkedinQueueMembers, type LinkedinQueueScreen } from "../../../api";
 import { useToast } from "../../../components/Toasts";
 
 /**
@@ -39,10 +39,6 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
     catch (e) { toast(err(e), { error: true }); }
     setBusy(false);
   };
-  const setDispatcher = async (v: string) => {
-    try { await saveLinkedinQueueDispatcher(v ? Number(v) : null); toast("Відповідальну збережено"); await load(); onSaved?.(); }
-    catch (e) { toast(err(e), { error: true }); }
-  };
 
   return (
     <div style={{ display: "grid", gap: 16, marginTop: 16 }}>
@@ -52,19 +48,11 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
           <li>Нова угода на етапі «LinkedIn» іде наступному менеджеру за списком нижче — одночасно лише одному.</li>
           <li>На «Взяти» — 15 хвилин робочого часу (пн–пт 8:00–18:00). Після 18:00 і у вихідні заявка чекає.</li>
           <li>Не взяв за 15 хвилин — заявка йде наступному, а він пропускає свою чергу.</li>
-          <li>Двоє підряд не взяли або клієнт уже в іншого менеджера — заявка йде відповідальній.</li>
+          <li>Двоє підряд не взяли або клієнт уже в іншого менеджера — заявка лишається на «Операційному директорі», її призначає Даша.</li>
           <li>Відпустку, вихідний, лікарняний із «Календаря команди» бот пропускає сам.</li>
         </ul>
       </div>
 
-      <div className="chart-card">
-        <h2 className="chart-title">Відповідальна</h2>
-        <div style={{ fontSize: 13, color: MUTED, marginBottom: 8 }}>Кому йдуть дублі клієнтів і заявки, які двоє підряд не взяли.</div>
-        <select style={inp} value={data.dispatcherUserId ?? ""} onChange={(e) => void setDispatcher(e.target.value)} aria-label="Відповідальна за чергу">
-          <option value="">— не вибрано —</option>
-          {data.dispatchers.map((u) => <option key={u.userId} value={u.userId}>{u.name}</option>)}
-        </select>
-      </div>
 
       <div className="chart-card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
@@ -75,7 +63,7 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
             <button type="button" className="hr-btn" disabled={!dirty || busy} onClick={() => void save()} style={dirty ? dark : undefined}>Зберегти</button>
           </div>
         </div>
-        {order.length === 0 ? <p className="loading-text">Список порожній — кожна заявка піде відповідальній.</p> : (
+        {order.length === 0 ? <p className="loading-text">Список порожній — кожна заявка лишиться на «Операційному директорі» для Даші.</p> : (
           <table className="data-table">
             <thead><tr><th style={{ width: 40 }}>№</th><th>Менеджер</th><th>Команда</th><th>Працює з</th><th>Сьогодні</th><th style={{ textAlign: "right" }}>Порядок</th></tr></thead>
             <tbody>

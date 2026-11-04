@@ -112,7 +112,7 @@ function BotStatus({ q, canEdit, busy, onToggle }: { q: LinkedinStats["queue"]; 
         <div style={{ fontWeight: 700, color: tone }}>{head}</div>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{line}</div>
         <div style={{ fontSize: 13, marginTop: 6 }}>
-          У колі <b>{q.members}</b> · наступний — <b>{q.nextName ?? "нікого"}</b> · відповідальна — <b>{q.dispatcherName ?? "не вибрана"}</b>
+          У колі <b>{q.members}</b> · наступний — <b>{q.nextName ?? "нікого"}</b>
           {q.launchedAt && <span style={{ color: MUTED }}> · рахуємо з {fmtAt(q.launchedAt)}</span>}
         </div>
       </div>

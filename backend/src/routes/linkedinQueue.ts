@@ -1,12 +1,12 @@
 /**
- * 🔗 «Налаштування → Черга LinkedIn» (задача 7361). Межа — право `manage_linkedin_queue` (Юля й адмін) першим
- * middleware кожного роута. У Kommo нічого не пише: список, відповідальна й журнал — лише в дашборді.
+ * 🔗 «Клієнти → LinkedIn» → «Черга» (задача 7361). Межа — право `manage_linkedin_queue` (Юля й адмін) першим
+ * middleware кожного роута. У Kommo нічого не пише: список кола й пауза — лише в дашборді.
  */
 import { Router, type Response } from "express";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { loadQueueScreen, saveQueueDispatcher, saveQueueMembers } from "../core/linkedinQueueScreen.js";
+import { loadQueueScreen, saveQueueMembers } from "../core/linkedinQueueScreen.js";
 import { setQueuePaused } from "../core/linkedinQueue.js";
 
 export const linkedinQueueRouter = Router();
@@ -27,11 +27,6 @@ linkedinQueueRouter.put("/members", requirePerm("manage_linkedin_queue"), async 
   try { await saveQueueMembers(c, (req.body as { managerIds?: unknown })?.managerIds, req.auth!.userId); res.json({ ok: true }); }
   catch (e) { fail(res, e); }
   finally { c.release(); }
-});
-
-linkedinQueueRouter.put("/settings", requirePerm("manage_linkedin_queue"), async (req, res) => {
-  try { await saveQueueDispatcher(pool, (req.body as { dispatcherUserId?: unknown })?.dispatcherUserId, req.auth!.userId); res.json({ ok: true }); }
-  catch (e) { fail(res, e); }
 });
 
 // ⏸ «Зупинити бота» / ▶ «Запустити» (Роман 03.11.2026).

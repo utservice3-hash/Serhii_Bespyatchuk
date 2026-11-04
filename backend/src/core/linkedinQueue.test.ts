@@ -157,10 +157,10 @@ test("#3404 джоба: крон кожні 2 хв (непарні хвилин�
 test("#3405 межа: кожен роут черги — право manage_linkedin_queue першим; у матриці; право мають лише адмін і КВП", () => {
   const r = read("backend/src/routes/linkedinQueue.ts");
   const routes = [...r.matchAll(/linkedinQueueRouter\.(get|put|post|delete|patch)\("([^"]+)",\s*([a-zA-Z]+\("[a-z_]+"\))/g)];
-  assert.equal(routes.length, 4, "🔴 роутів черги не чотири (список, відповідальна, пауза, екран) — новий роут без межі або межа не першим middleware");
+  assert.equal(routes.length, 3, "🔴 роутів черги не три (екран, список, пауза) — новий роут без межі або межа не першим middleware");
   for (const m of routes) assert.equal(m[3], 'requirePerm("manage_linkedin_queue")', `🔴 ${m[1]} ${m[2]} без права першим`);
   const matrix = read("backend/src/auth/accessMatrix.ts");
-  for (const p of ['method: "GET", path: "/api/linkedin-queue"', 'method: "PUT", path: "/api/linkedin-queue/members"', 'method: "PUT", path: "/api/linkedin-queue/settings"', 'method: "PUT", path: "/api/linkedin-queue/pause"']) {
+  for (const p of ['method: "GET", path: "/api/linkedin-queue"', 'method: "PUT", path: "/api/linkedin-queue/members"', 'method: "PUT", path: "/api/linkedin-queue/pause"']) {
     assert.ok(matrix.includes(p), `🔴 у матриці немає ${p}`);
   }
   const schema = read("backend/src/db/schema.sql");

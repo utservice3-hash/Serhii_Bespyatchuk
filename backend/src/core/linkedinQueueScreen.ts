@@ -5,7 +5,7 @@ import { SERVICE_KOMMO_USER_IDS } from "./orphanClients.js";
 import { workedMonth } from "./linkedinQueue.js";
 
 /**
- * 🔗 «Клієнти → LinkedIn» (задача 7361): статистика черги за період і редактор кола («Налаштувати чергу»).
+ * 🔗 «Клієнти → LinkedIn» → «Черга» (задача 7361): редактор кола.
  * Юля: «Зроби список у налаштуваннях, щоб я могла його міняти без тебе»; «у дашборді покажи по кожному менеджеру:
  * скільки заявок отримав, скільки взяв, скільки проігнорував і за який час узяв».
  */
@@ -17,16 +17,15 @@ export class QueueScreenError extends Error {
 export interface QueueMember { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean }
 export interface QueueCandidate { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }
 export interface QueueScreen {
-  mode: CloseMode; launchedAt: string | null; dispatcherUserId: number | null;
-  members: QueueMember[]; candidates: QueueCandidate[]; dispatchers: { userId: number; name: string }[];
+  mode: CloseMode; launchedAt: string | null;
+  members: QueueMember[]; candidates: QueueCandidate[];
 }
 
 const kyivToday = (now: Date) => now.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
 
 export async function loadQueueScreen(db: Db, modeRaw: string, now = new Date()): Promise<QueueScreen> {
   const today = kyivToday(now);
-  const st = (await db.query<{ launched_at: Date | null; dispatcher_user_id: number | null }>(
-    `SELECT launched_at, dispatcher_user_id FROM linkedin_queue_settings WHERE id`)).rows[0];
+  const st = (await db.query<{ launched_at: Date | null }>(`SELECT launched_at FROM linkedin_queue_settings WHERE id`)).rows[0];
   // Активні менеджери продажу з Kommo-акаунтом (без службових і некомерційних команд) — з датою виходу з картки.
   const people = (await db.query<{ id: number; name: string; team: string | null; team_id: number | null; hired_at: string | null; pos: number | null; absent: boolean }>(
     `SELECT m.id, m.name, t.name AS team, m.team_id, e.hired_at::text AS hired_at, q.position AS pos,
@@ -45,12 +44,9 @@ export async function loadQueueScreen(db: Db, modeRaw: string, now = new Date())
   const candidates = people.filter((p) => p.pos == null)
     .map((p) => ({ managerId: p.id, name: p.name, team: p.team, hiredAt: p.hired_at,
       suggested: workedMonth(p.hired_at, today) && (p.team_id == null || !nonCom.has(p.team_id)) }));
-  const dispatchers = (await db.query<{ id: number; name: string }>(
-    `SELECT u.id, COALESCE(m.name, u.email) AS name FROM users u LEFT JOIN managers m ON m.id = u.manager_id
-      WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate' ORDER BY 2`)).rows.map((r) => ({ userId: r.id, name: r.name }));
   return {
     mode: closeModeOf(modeRaw), launchedAt: st?.launched_at ? new Date(st.launched_at).toISOString() : null,
-    dispatcherUserId: st?.dispatcher_user_id ?? null, members, candidates, dispatchers,
+    members, candidates,
   };
 }
 
@@ -74,15 +70,4 @@ export async function saveQueueMembers(db: Db, managerIds: unknown, userId: numb
     }
     await db.query("COMMIT");
   } catch (e) { await db.query("ROLLBACK"); throw e; }
-}
-
-/** Кому йдуть дублі й «двоє підряд не взяли» (Даша). `null` — нікому (тоді лише журнал). */
-export async function saveQueueDispatcher(db: Db, dispatcherUserId: unknown, userId: number): Promise<void> {
-  const v = dispatcherUserId == null || dispatcherUserId === "" ? null : Number(dispatcherUserId);
-  if (v != null && (!Number.isInteger(v) || v <= 0)) throw new QueueScreenError(400, "Некоректний користувач");
-  if (v != null && !(await db.query(`SELECT 1 FROM users WHERE id = $1 AND is_active`, [v])).rows.length) {
-    throw new QueueScreenError(400, "Користувача не знайдено або він вимкнений");
-  }
-  await db.query(`INSERT INTO linkedin_queue_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING`);
-  await db.query(`UPDATE linkedin_queue_settings SET dispatcher_user_id = $1, updated_by = $2, updated_at = now() WHERE id`, [v, userId]);
 }
