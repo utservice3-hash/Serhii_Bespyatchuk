@@ -21,7 +21,6 @@ import type { PayrollState } from "./engine/zarplata-engine.mjs";
 
 type Db = Pool | PoolClient;
 const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
-const ym = (d: Date | string | null): string | null => (d == null ? null : (typeof d === "string" ? d : d.toISOString()).slice(0, 7));
 
 export const NAME_SQL = `COALESCE(m.name, e2.full_name, u.full_name, u.email)`;
 export const NAME_JOIN = `LEFT JOIN managers m ON m.id = u.manager_id
@@ -87,11 +86,12 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   // ---------- налаштування, місяці ----------
   const setQ = await db.query<{ settings: Record<string, unknown> }>(
     `SELECT settings FROM payroll_settings_versions WHERE valid_from <= $1::date ORDER BY valid_from DESC LIMIT 1`, [monthStart(live)]);
-  const monthsQ = await db.query<{ month: Date; status: string; open: boolean }>(
-    `SELECT pm.month, pm.status, EXISTS (SELECT 1 FROM payroll_records r WHERE r.month = pm.month AND r.status <> 'paid') AS open
+  // місяць — рядком із SQL: pg віддає DATE як локальну північ, і toISOString() у Києві зсуває його на місяць назад
+  const monthsQ = await db.query<{ mk: string; status: string; open: boolean }>(
+    `SELECT to_char(pm.month, 'YYYY-MM') AS mk, pm.status, EXISTS (SELECT 1 FROM payroll_records r WHERE r.month = pm.month AND r.status <> 'paid') AS open
        FROM payroll_months pm WHERE pm.status = 'closed' ORDER BY pm.month DESC LIMIT 3`);
-  const closedRow = monthsQ.rows.find((r) => ym(r.month)! >= prevMonth(live) || r.open);
-  const closedMonth = closedRow ? ym(closedRow.month) : null;
+  const closedRow = monthsQ.rows.find((r) => r.mk >= prevMonth(live) || r.open);
+  const closedMonth = closedRow ? closedRow.mk : null;
 
   // ---------- люди, умови, офіційна ЗП, звільнення ----------
   const empQ = await db.query<{

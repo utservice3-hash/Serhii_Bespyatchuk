@@ -800,14 +800,14 @@ export async function employeesView(db: Db) {
   const people = (e.zp.employees as Array<Record<string, unknown>>).map((p) => ({ userId: p.id, name: p.name, title: p.title, role: p.role, dept: p.dept, team: p.team, leadsTeam: p.leadsTeam,
     offer: e.zp.offerCode(p), level: e.zp.levelOf(p, live), levelChange: e.zp.levelChangeAfter(p, live), rate: e.zp.rateOf(p, live), pctRule: e.zp.pctRuleOf(p, live),
     official: e.zp.officialOf(p, live), startDate: p.startDate, birthday: p.birthday, isFinance: p.isFinance, leave: p.leave, simple: e.zp.isSimple(p), terms: p.terms }));
-  const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: Date | null; birth: string | null; position: string | null; team_id: number | null; level: string | null }>(
-    `SELECT u.id, ${NAME_SQL} AS name, COALESCE(u.role_override, u.role) AS role, e.hired_at, to_char(e.birth_date, 'MM-DD') AS birth, e.position, m.team_id,
+  const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: string | null; birth: string | null; position: string | null; team_id: number | null; level: string | null }>(
+    `SELECT u.id, ${NAME_SQL} AS name, COALESCE(u.role_override, u.role) AS role, to_char(e.hired_at, 'YYYY-MM-DD') AS hired_at, to_char(e.birth_date, 'MM-DD') AS birth, e.position, m.team_id,
             (SELECT el.level FROM employee_levels el WHERE el.employee_id = e.id ORDER BY el.from_month DESC LIMIT 1) AS level
        FROM users u ${NAME_JOIN} LEFT JOIN LATERAL (SELECT * FROM employees x WHERE x.user_id = u.id ORDER BY x.id DESC LIMIT 1) e ON true
       WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate' AND NOT EXISTS (SELECT 1 FROM payroll_employees pe WHERE pe.user_id = u.id)
       ORDER BY 2`)).rows;
   const teams = (await db.query<{ code: string; kommo_team_id: number | null }>(`SELECT code, kommo_team_id FROM payroll_teams`)).rows;
-  return { month: live, people, candidates: candidates.map((c) => ({ userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at ? new Date(c.hired_at).toISOString().slice(0, 10) : null, birthday: c.birth,
+  return { month: live, people, candidates: candidates.map((c) => ({ userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at, birthday: c.birth,
     title: c.position, team: teams.find((t) => t.kommo_team_id === c.team_id)?.code ?? null, level: c.level === "pro" ? "profi" : c.level === "start" ? "start" : null,
     role: c.role === "team_lead" ? "lead" : c.role === "manager" ? "manager" : "staff" })) };
 }
@@ -903,10 +903,10 @@ export async function offerTasks(db: Db) {
   return (e.state.tasks as Array<Record<string, unknown>>).filter((t) => !t.voidAt).map((t) => ({ ...t, name: N[t.empId as string] ?? "" }));
 }
 export async function offerTaskDone(pool: Pool, v: Viewer, id: number) {
-  const r = (await pool.query<{ user_id: number; level: string; from: Date }>(`UPDATE payroll_offer_docs SET signed_at = now(), signed_by = $2 WHERE id = $1 AND signed_at IS NULL AND void_at IS NULL RETURNING user_id, level, valid_from AS from`, [id, v.userId])).rows[0];
+  const r = (await pool.query<{ user_id: number; level: string; from: string }>(`UPDATE payroll_offer_docs SET signed_at = now(), signed_by = $2 WHERE id = $1 AND signed_at IS NULL AND void_at IS NULL RETURNING user_id, level, to_char(valid_from, 'YYYY-MM-DD') AS from`, [id, v.userId])).rows[0];
   if (!r) fail(409, "Задачу вже закрито.");
   await history(pool, v.userId, r.user_id, "Новий офер підписано", null, { offer: id });
-  await after(pool, (e) => e.nt.build.offerSigned(String(r.user_id), { level: r.level, from: new Date(r.from).toISOString().slice(0, 10) }, kyivNow()));
+  await after(pool, (e) => e.nt.build.offerSigned(String(r.user_id), { level: r.level, from: r.from }, kyivNow()));
   return { ok: true };
 }
 
