@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 
@@ -24,10 +25,23 @@ test("#2600 РУШІЙ ЗАРПЛАТИ: 63 тести пакета (40 золо
   const pass = Number(/^# pass (\d+)/m.exec(r.stdout)?.[1] ?? -1), fail = Number(/^# fail (\d+)/m.exec(r.stdout)?.[1] ?? -1);
   assert.equal(fail, 0, `🔴 тести рушія впали:\n${r.stdout.split("\n").filter((l) => /^not ok|✖/.test(l)).join("\n")}`);
   assert.equal(pass, 63, `🔴 тестів рушія ${pass}, а не 63 — файл загубив кейси або не зібрався в dist`);
-  // рушій не правили: бекенд читає саме файл пакета (контрольні рядки)
-  const eng = SRC("payroll/engine/zarplata-engine.mjs");
-  assert.match(eng, /export const DEFAULT_SETTINGS = Object\.freeze\(\{/);
-  assert.match(eng, /kpi: \{ normCalls: 45, missDaysAllowed: 2, waiveFrom: 50000, ladder: \[\[12, 3000\], \[15, 5000\], \[20, 8000\], \[25, 10000\], \[30, 12000\]\] \}/);
+  // 🔒 «байт у байт» — хешем, а не словами: фікстура пакета несе СВОЇ налаштування, тож правку дефолтів рушія (утримання ТТН,
+  // драбина KPI) його тести не бачать (заміряно саботажем: hold 3000 → 2000 лишав їх зеленими). Змінити рушій — свідомо, як lock-файл:
+  // новий хеш сюди + запис чому. Хеші — файлів архіву «UTS_Zarplata_dlya_Romana_03.11.zip».
+  const PKG: Record<string, string> = {
+    "zarplata-engine.mjs": "eafed8b8900df21bfbbece22aaa6cf53425e16321ecb933e8775e2f0c2ec63bb",
+    "notify.mjs": "413661dcd19936ff1a084b95133bdeb3561569a9f99504971b5f3ab74d699223",
+    "format.mjs": "c22786b4978d87e582b076e6712eb1986b1d9f0ed61aa32de875eca3e6b6d7d2",
+    "test/golden.test.mjs": "c18e2fbcd0e4f61da8c6a631d04377521981450b39f4bcf714717ac1d7128ef2",
+    "test/rules.test.mjs": "1b153325de8ad5849aab7cdec38a8dc902ca497b20c41595367b814f6188fdbd",
+    "test/fixtures/maket-v6.json": "532ddf5bd02a73613b01e549861e3fa23cfc80912058ed916ee7bf58cf96bf4a",
+  };
+  for (const [f, want] of Object.entries(PKG)) {
+    for (const where of ["src", "dist"]) {
+      const got = createHash("sha256").update(readFileSync(path.join(import.meta.dirname, "..", "..", where, "payroll", "engine", f))).digest("hex");
+      assert.equal(got, want, `🔴 ${where}/payroll/engine/${f} не той, що в пакеті`);
+    }
+  }
 });
 
 test("#2601 КАРТИ: шифр у БД, Лун, стабільний хеш, без ключа — відмова з поясненням", async () => {
