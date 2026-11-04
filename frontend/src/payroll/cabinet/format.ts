@@ -65,3 +65,12 @@ export function limitRule(L: Obj | null | undefined): string {
   const basis = L.basis === "margin" ? "маржі «Успішно реалізовано»" : L.basis === "teamMargin" ? "маржі команди" : "ставки";
   return `${L.pct} % від ${basis} ${money(L.base)}`;
 }
+
+/** Хто й коли запланував зміну рівня (`me.levelChangeInfo`): «ваш вибір, 04.11» / «рішення керівництва — Сергій, 04.11» / «автоматично». */
+export function levelWho(info: Obj | null | undefined): string {
+  if (!info) return "";
+  if (info.auto) return "автоматично";
+  const at = info.at ? dd(String(info.at)) : "";
+  if (info.reason === "вибір менеджера") return `ваш вибір${at ? `, ${at}` : ""}`;
+  return `рішення керівництва${info.by ? ` — ${info.by}` : ""}${at ? `, ${at}` : ""}`;
+}

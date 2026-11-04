@@ -162,8 +162,9 @@ function NotifyRules() {
                       <div className="zp-row" style={{ gap: 10 }}>
                         <span className="zp-hint">дашборд</span>
                         <label className="zp-check"><input type="checkbox" checked={ch.includes("telegram")} onChange={(e) => toggle("telegram", e.target.checked)} />Telegram</label>
-                        <label className="zp-check" title="email — ще не підключено: позначка збережеться, листи підуть, коли зʼявиться канал"><input type="checkbox" checked={ch.includes("email")} onChange={(e) => toggle("email", e.target.checked)} />email</label>
+                        <label className="zp-check" title={r.emailReady ? "лист на пошту з акаунта дашборда" : "email не налаштовано — позначка збережеться, листи підуть, коли на сервері зʼявиться SMTP_URL"}><input type="checkbox" checked={ch.includes("email")} onChange={(e) => toggle("email", e.target.checked)} />email</label>
                       </div>
+                      {!r.emailReady && ch.includes("email") && <div className="zp-hint zp-tone--warn">email не налаштовано — потрібен SMTP_URL у .env сервера; до того листи не підуть</div>}
                     </td>
                     <td><input type="checkbox" checked={!!r.enabled} onChange={(e) => void upd(r.type, { enabled: e.target.checked })} aria-label={`Увімкнено: ${r.event}`} /></td>
                   </tr>

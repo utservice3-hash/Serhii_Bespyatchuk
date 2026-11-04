@@ -8,11 +8,20 @@ import { useMemo, useState } from "react";
 import { errText, payrollApi, type Obj } from "../api";
 import { Card, Empty, money, monthTitle, nextMonth, pct } from "../ui";
 import { useToast } from "../../components/Toasts";
-import { Field, LEVEL_NAMES, Modal, OFFER_NAMES, ROLE_NAMES, Seg, bday, ddy } from "./common";
+import { Field, LEVEL_NAMES, Modal, OFFER_NAMES, ROLE_NAMES, Seg, bday, ddy, kyivToday } from "./common";
 
 const toNum = (s: string): number | null => { const t = s.replace(/\s/g, "").replace(",", "."); if (!t) return null; const n = Number(t); return Number.isFinite(n) ? n : NaN; };
 /** «ДД.ММ» ↔ «ММ-ДД» (сервер зберігає ММ-ДД). */
 const bdayIn = (s: string): string | null => { const m = /^(\d{1,2})\.(\d{1,2})$/.exec(s.trim()); return m ? `${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : s.trim() ? "bad" : null; };
+
+/** Документ оферу (`offerDoc` сервера): підписано / чекає підпису (червоне, коли строк минув) / «—», коли документа немає. */
+function OfferDocCell({ d }: { d: Obj | null | undefined }) {
+  if (!d) return <span className="zp-hint">—</span>;
+  const dm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+  if (d.signedAt) return <><span className="zp-tone--ok">підписано {dm(String(d.signedAt))}</span><div className="zp-hint">{d.title}</div></>;
+  const over = !!d.due && kyivToday() > String(d.due);
+  return <><span className={over ? "zp-tone--danger" : "zp-tone--warn"}>{over ? "прострочено · " : ""}чекає підпису{d.due ? ` до ${dm(String(d.due))}` : ""}</span><div className="zp-hint">{d.title}{d.from ? ` · з ${ddy(String(d.from))}` : ""}</div></>;
+}
 
 function LevelTag({ level }: { level: string | null }) {
   if (!level) return <>—</>;
@@ -187,7 +196,7 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged }: { emp
         {people.length ? (
           <div className="zp-table-wrap">
             <table className="zp-table">
-              <thead><tr><th>Працівник</th><th>Рівень</th><th className="r">Ставка</th><th>Відсоток</th><th>Офіційна ЗП</th><th>ДН</th><th>Працює з</th></tr></thead>
+              <thead><tr><th>Працівник</th><th>Рівень</th><th className="r">Ставка</th><th>Відсоток</th><th>Офіційна ЗП</th><th>Офер</th><th>ДН</th><th>Працює з</th></tr></thead>
               <tbody>
                 {people.map((p) => (
                   <tr key={p.userId} className={canEdit ? "is-click" : ""} tabIndex={canEdit ? 0 : -1} onClick={() => canEdit && setEdit(p)} onKeyDown={(e) => { if (canEdit && e.key === "Enter") setEdit(p); }}>
@@ -199,6 +208,7 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged }: { emp
                     <td className="r">{p.role === "manager" ? (p.level === "start" ? money(p.offer === "ls" ? S.offers?.ls?.startRate : S.start?.rate) : "—") : money(p.rate)}</td>
                     <td>{p.role === "manager" ? "за рівнем" : p.role === "lead" ? `${S.lead?.pctLow} / ${S.lead?.pctHigh} % маржі команди` : p.pctRule ? `${pct(p.pctRule.value, 1)} маржі компанії` : "—"}</td>
                     <td>{p.official ? <><b>{money(p.official.amount)}</b><div className="zp-hint">{p.official.deduct ? "вираховується з загальної" : "окремо, не вираховується"}</div></> : <span className="zp-hint">немає</span>}</td>
+                    <td><OfferDocCell d={p.offerDoc as Obj | null} /></td>
                     <td>{bday(p.birthday)}</td>
                     <td>{ddy(p.startDate)}{p.leave && <div className="zp-tone--danger zp-hint">звільнення {ddy(p.leave.date)}</div>}</td>
                   </tr>

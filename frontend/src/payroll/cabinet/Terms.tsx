@@ -8,7 +8,7 @@ import { errText, payrollApi, type Obj } from "../api";
 import { Pill, money, nextMonth, prevMonth } from "../ui";
 import { useToast } from "../../components/Toasts";
 import { Block } from "./Block";
-import { dd, ddy, levelName, monthGen, monthLow, nf, pc } from "./format";
+import { dd, ddy, levelName, levelWho, monthGen, monthLow, nf, pc } from "./format";
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthName = (mk: string) => MONTHS[+mk.slice(5, 7) - 1] ?? mk;
@@ -132,7 +132,7 @@ function LevelBlock({ me, onChanged }: { me: Obj; onChanged: () => Promise<void>
   else if (ln && ln.from > mk) {
     body = (
       <>
-        <p className="zp-note zp-note--ok"><b>З 1 {monthGen(ln.from)} — {levelName(ln.level)}.</b> Цього місяця діє «Старт».</p>
+        <p className="zp-note zp-note--ok"><b>З 1 {monthGen(ln.from)} — {levelName(ln.level)}.</b> Цього місяця діє «Старт».{me.levelChangeInfo ? <> Рішення: {levelWho(me.levelChangeInfo as Obj)}.</> : null}</p>
         {doc && <p className={`zp-note ${doc.signedAt ? "zp-note--ok" : "zp-note--warn"}`}>{doc.signedAt ? <b>Новий офер «Профі» підписано {dd(doc.signedAt)}.</b> : <><b>Новий офер «Профі» — у ваших документах.</b> Рекрутер зв’яжеться для підпису.</>}</p>}
       </>
     );
@@ -180,14 +180,32 @@ function RulesBlock({ me }: { me: Obj }) {
 function BdaysBlock({ me }: { me: Obj }) {
   const c = me.live?.calc as Obj | undefined;
   const bl = ((c?.birthdays ?? []) as Obj[]).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  if (!bl.length) return null;
+  // усі іменинники місяця (імена й дати — без чужих сум); «без збору» — стаж до року
+  const all = (me.birthdaysMonth ?? []) as Obj[];
+  if (!bl.length && !all.length) return null;
+  const mine = new Set(bl.filter((b) => b.kind === "give").map((b) => String(b.who?.id ?? b.who)));
   return (
-    <Block title={`Дні народження · ${monthLow(me.live.month)}`} sub="у розрахунку автоматично">
-      <ul className="zc-hist">
-        {bl.map((b, i) => b.kind === "gift"
-          ? <li key={i}><span>Ваш день народження · {dd(b.date)}</span><b className="zp-num zp-tone--ok">{money(b.amount, { sign: true })}</b></li>
-          : <li key={i}><span>{b.who?.name ?? "Колега"} · {dd(b.date)}</span><b className="zp-num">{money(b.amount)}</b></li>)}
-      </ul>
+    <Block title={`Дні народження · ${monthLow(me.live?.month ?? me.liveMonth)}`} sub="у розрахунку автоматично">
+      {all.length > 0 && (
+        <ul className="zc-hist">
+          {all.map((b) => (
+            <li key={b.id} className={b.me ? "zc-bday-me" : ""}>
+              <span>{b.me ? <b>Ваш день народження</b> : b.name} · {dd(b.date)}</span>
+              {b.young ? <Pill>без збору · стаж до року</Pill> : b.me ? <Pill tone="ok">збір колег</Pill> : mine.has(String(b.id)) ? <Pill tone="muted">−{nf(me.settings?.birthday?.each ?? 0)} ₴ з вас</Pill> : <span className="zp-hint">—</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {bl.length > 0 && (
+        <>
+          <div className="zp-k" style={{ marginTop: all.length ? 10 : 0 }}>У вашому розрахунку</div>
+          <ul className="zc-hist">
+            {bl.map((b, i) => b.kind === "gift"
+              ? <li key={i}><span>Ваш день народження · {dd(b.date)}</span><b className="zp-num zp-tone--ok">{money(b.amount, { sign: true })}</b></li>
+              : <li key={i}><span>{b.who?.name ?? "Колега"} · {dd(b.date)}</span><b className="zp-num">{money(b.amount)}</b></li>)}
+          </ul>
+        </>
+      )}
     </Block>
   );
 }

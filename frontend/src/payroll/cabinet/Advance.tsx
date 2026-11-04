@@ -9,6 +9,7 @@ import { useToast } from "../../components/Toasts";
 import { Block } from "./Block";
 import { ADV_STATUS, dt, monthGen, monthLow, payHow, limitRule } from "./format";
 import { PayLines } from "./PayLines";
+import { useAdvanceRemind } from "./remind";
 import { draftBody, draftTotal, initDraft, type PayDraft } from "./payDraft";
 import { monthTitle } from "../ui";
 
@@ -18,6 +19,7 @@ export function AdvanceBlock({ me, onChanged }: { me: Obj; onChanged: () => Prom
   const [draft, setDraft] = useState<PayDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [askCancel, setAskCancel] = useState(false);
+  const rm = useAdvanceRemind(me, onChanged);
   if (!lv) return null;
   const mk = lv.month as string;
   const A = lv.advance as Obj, L = A.limit as Obj | null, req = A.request as Obj | null;
@@ -61,7 +63,12 @@ export function AdvanceBlock({ me, onChanged }: { me: Obj; onChanged: () => Prom
             </div>
             {A.open
               ? <button type="button" className="zp-btn zp-btn--dark" disabled={!(L?.amount > 0)} onClick={() => setDraft(initDraft(cards, L?.amount ?? 0, me.employee?.name ?? ""))}>Подати заявку на аванс</button>
-              : <span className="zp-hint">заявки — з {A.fromDay} {monthGen(mk)}</span>}
+              : (
+                <span className="zp-row">
+                  <span className="zp-hint">заявки — з {A.fromDay} {monthGen(mk)}</span>
+                  <button type="button" className={`zp-btn zp-btn--sm ${rm.on ? "" : "zp-btn--dark"}`} disabled={rm.busy} onClick={() => void rm.toggle()}>{rm.label}</button>
+                </span>
+              )}
           </div>
         )}
         {!draft && <p className="zp-hint">На одну чи кілька карт, частину можна готівкою. Аванс вирахуємо із ЗП за {monthLow(mk)} при закритті місяця.</p>}
