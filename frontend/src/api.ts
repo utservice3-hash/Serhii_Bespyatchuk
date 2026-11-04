@@ -187,9 +187,13 @@ export interface LeadgenHandoffMoney {
   earned: LeadgenMoneyCell;
   /** «Очікування» за правилом Ярослава: авто поїхало В ПЕРІОДІ, зараз «Оплата отримана» / зона «Очікуємо». */
   pending: LeadgenMoneyCell;
-  /** «Машин» — як колонка «Кількість поставлених машин» таблиць лідгенів: `earned.n + pending.n` (рахує бекенд). */
+  /** «Машин» — за «Датою загрузки» угоди менеджера в періоді, як «Відправлені авто» КВП (задача 7363; рахує бекенд). */
   machines: number;
+  /** З них — гроші ще не зайшли (угода не «Оплата отримана» й не «Успішна»). */
+  machinesNoMoney: number;
 }
+/** 🚚 Машини звітного тижня (Пн–Нд) — окремо від періоду (задача 7363). */
+export interface LeadgenWeekCars { machines: number; machinesNoMoney: number }
 /** Стан угоди менеджера з передачі — ЗАРАЗ. `none` — угоди менеджера не знайшлося; `same` — ця передача
  *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо); `regular` — угода постійного клієнта. */
 export type LeadgenDealClass = "success" | "paid" | "expect" | "work" | "lost" | "none" | "same" | "regular";
@@ -206,6 +210,8 @@ export interface LeadgenHandoffDeal {
   carried?: boolean;
   /** Угода менеджера мінусова (поле «Мінусова угода»): машина рахується, сума лідгену — 0 (07.10.2026). */
   minus?: boolean;
+  /** «Дата загрузки» угоди менеджера: є — машина за правилом КВП (задача 7363). */
+  loadDay?: string | null;
   /** Рахунки, виділені з угоди менеджера: їхній бюджет уже в `price`, машина одна (30.10.2026). */
   split?: { dealId: number; url: string }[];
 }
@@ -253,7 +259,8 @@ export interface LeadgenStatsResp {
   grain?: LeadgenGrain;
   buckets?: LeadgenBucket[];
   bucketsByPerson?: LeadgenPersonBucket[];
-  handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[] };
+  handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[];
+    week?: { from: string; to: string; totals: LeadgenWeekCars; byPerson: (LeadgenWeekCars & { managerId: number })[] } };
   /** Гроші з передач по тих самих одиницях, що `buckets` (лише з `grain`); Σ одиниць == `handoffMoney`. */
   handoffMoneyBuckets?: (LeadgenHandoffMoney & { bucket: string })[];
   handoffMoneyBucketsByPerson?: (LeadgenHandoffMoney & { bucket: string; managerId: number })[];
@@ -5991,6 +5998,9 @@ export interface PresentationExtras {
 }
 export const fetchPresentationExtras = async (weekFrom: string) =>
   (await api.get<PresentationExtras>("/nominations/presentation-extras", { params: { weekFrom } })).data;
+/** Шаблон PPTX Даші (04.11.2026) — заповнюється в браузері (`pptxTemplate.ts`), лише керівництво. */
+export const fetchPptxTemplate = async () =>
+  new Uint8Array((await api.get<ArrayBuffer>("/nominations/pptx-template", { responseType: "arraybuffer" })).data);
 export const uploadTeamPhoto = async (dataBase64: string) =>
   (await api.post<{ teamPhoto: { v: number } }>("/nominations/team-photo", { dataBase64 })).data.teamPhoto;
 const teamPhotoUrls = new Map<number, Promise<string | null>>();

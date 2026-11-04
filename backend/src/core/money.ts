@@ -1349,8 +1349,10 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
   const ids = [...new Set(dealIds)];
   if (!ids.length) return out;
   const r = await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; price: string | null;
-    is_minus: boolean | null; closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null }>(
+    is_minus: boolean | null; closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null;
+    load_day: string | null }>(
     `SELECT d.kommo_id, d.pipeline_id, d.status_id, d.price, d.is_minus,
+            to_char(d.load_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS load_day,
             (d.closed_at_kommo IS NOT NULL) AS closed,
             NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off,
             to_char(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS closed_day,
@@ -1396,7 +1398,7 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
       pipelineId, statusId,
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
       price: Math.round(Number(x.price ?? 0)) + extra, minus: x.is_minus === true,
-      closedDay: x.closed_day, autoDay: x.auto_day,
+      closedDay: x.closed_day, autoDay: x.auto_day, loadDay: x.load_day,
       pendDays: (pend.get(Number(x.kommo_id)) ?? []).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
     });
   }

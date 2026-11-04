@@ -112,6 +112,9 @@ import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
 import { clientLimitsMirror, clientLimitsReset, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON } from "./jobs/counterpartyJobs.js";
 import { minusDealsRouter } from "./routes/minusRegistry.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
+import { payrollRouter } from "./routes/payroll.js";
+import { notificationsRouter } from "./routes/notifications.js";
+import { payrollMonthClose, payrollTtnTick, payrollBirthdays } from "./jobs/payrollJobs.js";
 import { zakaz1cRouter } from "./routes/zakaz1c.js";
 import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
 import { prozorroRouter } from "./routes/prozorro.js";
@@ -207,6 +210,8 @@ app.use("/api/prozorro", prozorroRouter); // 🏛 «Тендери Prozorro» (#
 app.use("/api/minus-deals", minusDealsRouter); // 📒 Реєстр мінусових угод — пакет Сергія (20.10.2026), пункт меню «Реєстри»
 app.use("/api/counterparty", counterpartyRouter); // 🤝 Узгодження й перевірка контрагента — пакет Сергія (23.10.2026), «Реєстри та узгодження»
 app.use("/api/client-limits", clientLimitsRouter); // 💳 Ліміти клієнтів — той самий пакет, вкладка «Дебіторської заборгованості»
+app.use("/api/payroll", payrollRouter); // 💰 «Зарплата» — пакет Сергія 03.11.2026: система, кабінет «Моя зарплата»
+app.use("/api/notifications", notificationsRouter); // 🔔 Центр сповіщень дашборда (ТЗ «Зарплата» §6) — лише свої
 app.use("/api/zakaz1c", zakaz1cRouter); // 🧾 «ТЕСТ ЗАКАЗ 1С» — рахунок у 1С з вкладки угоди Kommo; межа — підпис Kommo, не сесія (zakaz1c/)
 app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор вантажу — пакет Сергія (12.10.2026), вкладка «Калькулятора ставок та вантажу»
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
@@ -813,6 +818,13 @@ cron.schedule("3,13,23,33,43,53 * * * *", () => {
 cron.schedule("30 6 * * *", () => {
   void runJob("clientLimitsReset", () => clientLimitsReset());
 }, { timezone: "Europe/Kyiv" });
+// 💰 «Зарплата» (ТЗ §5.6). Закриття попереднього місяця — 1-го о 04:45 за Києвом: ТЗ каже 00:05, але сам же радить
+// зсунути «після синхронізації ядра» — нічна звірка Kommo йде о 04:00, тож угоди останнього дня вже на місці.
+cron.schedule("45 4 1 * *", () => { void runJob("payrollMonthClose", () => payrollMonthClose()); }, { timezone: "Europe/Kyiv" });
+// ТТН: коли зʼявилась по угоді (у ядрі лише кількість файлів) + сповіщення «утримання знято». Кожні 15 хв.
+cron.schedule("7,22,37,52 * * * *", () => { void runJob("payrollTtnTick", () => payrollTtnTick()); });
+// Дні народження місяця — іменинникам і фінансистам, 1-го о 08:00 за Києвом.
+cron.schedule("0 8 1 * *", () => { void runJob("payrollBirthdays", () => payrollBirthdays()); }, { timezone: "Europe/Kyiv" });
 // 🔍 Планова перевірка клієнтів з лімітом і суди боржникам (ТЗ §7) — ВИТРАЧАЮТЬ ТРАНЗАКЦІЇ YouScore, тож у розкладі лише з
 // `CP_BACKGROUND_CHECKS=1` (див. `jobs/counterpartyJobs.ts`). 06:15 за Києвом щодня; суди самі чекають 1-го числа.
 if (CP_BACKGROUND_ON()) {
