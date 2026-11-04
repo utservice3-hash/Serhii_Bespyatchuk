@@ -747,7 +747,7 @@ function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: 
               <option value="">Співробітник…</option>
               {(extras?.employees ?? []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
             </select>
-            <input className="nm-inp" value={posText} maxLength={120} onChange={(e) => setPosText(e.target.value)} placeholder="Нова посада, напр. «Тімлід РНК»" />
+            <input className="nm-inp" value={posText} maxLength={120} onChange={(e) => setPosText(e.target.value)} placeholder="Нова посада, напр. «Тімлід команди»" />
             <button className="nm-btn p" disabled={busy != null || !posEmp || !posText.trim()} onClick={() => void savePos(Number(posEmp), posText.trim())}>{busy === "pos" ? "Зберігаю…" : "Додати"}</button>
           </div>
         </div>
