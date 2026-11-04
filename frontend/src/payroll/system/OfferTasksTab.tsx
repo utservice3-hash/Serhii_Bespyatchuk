@@ -1,7 +1,7 @@
 /**
  * 💰 «Задачі» рекрутера (ТЗ §7.1, макет p08b-tasks.js): «Перепідписати офер» — створюються автоматично, коли змінюється рівень
  * менеджера (рішення керівництва або вибір «Профі» самим менеджером). Закриває HR (`payroll_offer_tasks`) або ОД.
- * Строк — до 5-го числа місяця, з якого діє новий офер (так його ставить сервер).
+ * Строк і причина — із сервера (`due`, `why`); якщо строку немає — 5-те число місяця, з якого діє новий офер.
  */
 import { useState } from "react";
 import type { PayrollCtx } from "../PayrollSection";
@@ -33,13 +33,13 @@ export default function OfferTasksTab({ ctx }: { ctx: PayrollCtx }) {
         {open.length ? (
           <div className="zps-tasks">
             {open.map((t) => {
-              const due = t.from ? `${String(t.from).slice(0, 7)}-05` : null, over = !!due && today > due;
+              const due = t.due ? String(t.due).slice(0, 10) : t.from ? `${String(t.from).slice(0, 7)}-05` : null, over = !!due && today > due;
               return (
                 <div className="zps-task" key={t.id}>
                   <div className="zp-row"><b className="zp-grow">Перепідписати офер</b>{due && <Pill tone={over ? "danger" : "warn"}>{over ? "прострочено · " : ""}строк до {ddy(due)}</Pill>}</div>
                   <div><b>{t.name || `#${t.empId}`}</b></div>
                   <div className="zp-row"><span>{t.title}</span><span className="zp-muted">діє з {ddy(t.from)}</span></div>
-                  <div className="zp-hint">Створено автоматично {dt(t.createdAt)}. Новий офер — у документах працівника (очікує підпису).</div>
+                  <div className="zp-hint">Створено автоматично {dt(t.createdAt)}{t.why ? ` · ${t.why}` : ""}. Новий офер — у документах працівника (очікує підпису).</div>
                   <div className="zp-row">
                     {confirm === t.id ? (
                       <>
