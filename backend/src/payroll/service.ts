@@ -107,6 +107,10 @@ async function cardsOf(db: Db, userId: number) {
   return (await db.query<{ id: string; last4: string; holder: string }>(`SELECT id::text, last4, holder FROM payroll_cards WHERE user_id = $1 AND archived_at IS NULL ORDER BY id`, [userId]))
     .rows.map((c) => ({ id: Number(c.id), last4: c.last4, holder: c.holder }));
 }
+function ttnOut(e: Engine, p: Record<string, unknown>, mk: string) {
+  const t = e.zp.ttnStats(p, mk);
+  return { ...t, missing: t.missing.map((d: { id: string; date: string; client: string; margin: number }) => ({ id: d.id, date: d.date, client: d.client, margin: d.margin })) };
+}
 function clearanceOut(e: Engine, empId: string, viewerId: string | null) {
   const p = e.zp.person(empId); if (!p || !p.leave) return null;
   const st = e.zp.clearanceState(empId); if (!st) return null;
@@ -149,7 +153,7 @@ export async function cabinet(db: Db, v: Viewer) {
       rate: e.zp.rateOf(p, live), pctRule: e.zp.pctRuleOf(p, live), startRate: e.zp.startRateOf(p), hasKpi: e.zp.hasKpi(p), clientSources: p.role === "manager" ? { start: e.zp.clientSources(p, "start"), profi: e.zp.clientSources(p, "profi") } : null,
       leave: p.leave ?? null, isFinance: !!p.isFinance, official: e.zp.officialOf(p, live), lead: p.role === "manager" ? (e.zp.leadOf(p)?.name ?? null) : null },
     live: employed ? {
-      month: live, calc: calcOut(e, calc), ttn: p.role === "manager" ? { ...e.zp.ttnStats(p, live), missing: e.zp.ttnStats(p, live).missing.map((d: { id: string; date: string; client: string; margin: number }) => ({ id: d.id, date: d.date, client: d.client, margin: d.margin })) } : null,
+      month: live, calc: calcOut(e, calc), ttn: p.role === "manager" ? ttnOut(e, p, live) : null,
       ttnPrev: e.zp.ttnPrev(p, live),
       advance: { open: e.zp.advanceWindowOpen(live), fromDay: S.advance.fromDay, limit: L ? { amount: L.amount, byRule: L.byRule, cap: L.cap, capped: L.capped, basis: L.basis, pct: L.pct, base: L.base } : null,
         request: adv ? { ...adv, status: e.zp.advanceStatus(adv) } : null },
@@ -319,7 +323,7 @@ export async function chooseProfi(pool: Pool, v: Viewer) {
     if (e.zp.levelOf(p, live) === "profi") fail(409, "Ви вже на «Профі».");
     if (e.zp.levelChangeAfter(p, live)) fail(409, "Зміну рівня з наступного місяця вже заплановано.");
     await setLevel(c, v.userId, "profi", nm, "вибір менеджера", v.userId, false);
-    const d = await c.query<{ id: string }>(`INSERT INTO payroll_offer_docs (user_id, offer_title, level, valid_from) VALUES ($1, $2, 'profi', $3::date) RETURNING id::text`, [v.userId, OFFER_TITLES.profi, monthStart(nm)]);
+    const d = await c.query<{ id: string }>(`INSERT INTO payroll_offer_docs (user_id, offer_title, level, valid_from, why) VALUES ($1, $2, 'profi', $3::date, 'вибір менеджера') RETURNING id::text`, [v.userId, OFFER_TITLES.profi, monthStart(nm)]);
     await history(c, v.userId, v.userId, `Рівень: «Профі» з ${nm}`, "вибір менеджера");
     task = { id: Number(d.rows[0].id), level: "profi", from: monthStart(nm), due: `${nm}-05`, why: "вибір менеджера", created: kyivNow() };
   });
@@ -385,7 +389,9 @@ export async function recordView(db: Db, v: Viewer, mk: string, uid: number) {
     level: e.zp.levelOf(p, mk), offerName: e.zp.offerOf(p).name, unsignedOffer, ...(r ?? { month: mk, status: null }), extras, autoSnapshot: snap,
     live: e.zp.isLive(mk) ? calcOut(e, e.zp.calc(id, mk), { withMembersPay: true }) : null,
     canEdit: can(v, "payroll_edit") && String(v.userId) !== id && (!p.isFinance || can(v, "payroll_final_word")),
-    canResolve: can(v, "payroll_final_word"), history: await historyOf(db, uid, true) };
+    canResolve: can(v, "payroll_final_word"), history: await historyOf(db, uid, true),
+    // ТТН за цей місяць — тим самим правилом рушія, що й у кабінеті (не перераховувати на фронті)
+    ttn: p.role === "manager" ? ttnOut(e, p, mk) : null };
 }
 async function historyOf(db: Db, uid: number | null, internal: boolean) {
   return (await db.query<{ id: string; at: Date; by_label: string; what: string; note: string | null; internal: boolean }>(
@@ -633,7 +639,14 @@ export async function clearanceView(db: Db, v: Viewer, uid: number) {
   const drafts = (await db.query<{ item_key: string; data: unknown }>(`SELECT d.item_key, d.data FROM payroll_clearance_drafts d JOIN payroll_clearances c ON c.id = d.clearance_id WHERE c.user_id = $1`, [uid])).rows;
   const shots = (await db.query<{ id: string; data_url: string; uploaded_at: Date }>(`SELECT f.id::text, f.data_url, f.uploaded_at FROM payroll_clearance_files f JOIN payroll_clearances c ON c.id = f.clearance_id WHERE c.user_id = $1 ORDER BY f.id`, [uid])).rows;
   const canSeeShots = String(v.userId) === id || e.zp.clearanceResponsible(id, "lead")?.id === String(v.userId) || can(v, "payroll_view_all");
-  return { ...out, drafts: Object.fromEntries(drafts.map((d) => [d.item_key, d.data])), shotsFiles: canSeeShots ? shots.map((s) => ({ id: Number(s.id), url: s.data_url, at: s.uploaded_at.toISOString() })) : [], history: await historyOf(db, uid, false) };
+  // п. 9 «Розрахунок та видача ЗП»: ОД погоджує суму — показуємо її тим, хто бачить зарплати (працівнику — у кабінеті)
+  let finalPay: Record<string, unknown> | null = null;
+  if (can(v, "payroll_view_all") || can(v, "payroll_final_word")) {
+    const mk = String(out.leave.date).slice(0, 7), rec = e.zp.record(id, mk);
+    if (rec) { const f = e.zp.settlement(id, mk); finalPay = { month: mk, status: rec.status, estimate: false, total: f.total, pay: f.pay }; }
+    else if (e.zp.isLive(mk)) { const c = e.zp.calc(id, mk) as Record<string, unknown>; finalPay = { month: mk, status: null, estimate: true, total: c.now, pay: null }; }
+  }
+  return { ...out, finalPay, drafts: Object.fromEntries(drafts.map((d) => [d.item_key, d.data])), shotsFiles: canSeeShots ? shots.map((s) => ({ id: Number(s.id), url: s.data_url, at: s.uploaded_at.toISOString() })) : [], history: await historyOf(db, uid, false) };
 }
 export async function draftClearance(pool: Pool, v: Viewer, uid: number, key: string, data: unknown) {
   const e = await engine(pool); const id = String(uid);
@@ -869,7 +882,7 @@ export async function updateEmployee(pool: Pool, v: Viewer, uid: number, body: R
       await history(c, v.userId, uid, `Умови з ${fromMk}:${lvl ? ` рівень ${lvl === "profi" ? "«Профі»" : "«Старт»"}` : ""}${rate != null ? ` ставка ${rate}` : ""}${pct != null ? ` ${pct} % маржі компанії` : pctIn === null ? " без відсотка" : ""}`, reason);
       if (lvl && p.role === "manager" && e.zp.offerCode(p) === "std" && lvl !== e.zp.levelOf(p, fromMk)) {
         await c.query(`UPDATE payroll_offer_docs SET void_at = now() WHERE user_id = $1 AND signed_at IS NULL AND void_at IS NULL`, [uid]);
-        const d = await c.query<{ id: string }>(`INSERT INTO payroll_offer_docs (user_id, offer_title, level, valid_from) VALUES ($1,$2,$3,$4::date) RETURNING id::text`, [uid, OFFER_TITLES[lvl], lvl, monthStart(fromMk)]);
+        const d = await c.query<{ id: string }>(`INSERT INTO payroll_offer_docs (user_id, offer_title, level, valid_from, why) VALUES ($1,$2,$3,$4::date,'рішення керівництва') RETURNING id::text`, [uid, OFFER_TITLES[lvl], lvl, monthStart(fromMk)]);
         task = { id: Number(d.rows[0].id), level: lvl, from: monthStart(fromMk), due: `${fromMk}-05`, why: "рішення керівництва", created: kyivNow() };
       }
     }

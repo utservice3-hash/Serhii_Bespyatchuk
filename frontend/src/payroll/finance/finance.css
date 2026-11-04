@@ -1,0 +1,65 @@
+/* 💰 Фінансові вкладки «Зарплати»: черга й вікно перевірки, таблиці нарахувань / авансів / відомості. Префікс `zf-`,
+   кольори — змінні дашборда (темна тема — сама), базові класи — `zp-*` із payroll.css. */
+.zf-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.zf-lbl { margin: 18px 0 8px; }
+.zf-lbl:first-child { margin-top: 0; }
+
+/* ---------- перевірка: черга зліва, вікно справа ---------- */
+.zf-vpage { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 1100px) { .zf-vpage { grid-template-columns: 320px minmax(0, 1fr); } }
+.zf-queue { padding: 8px; max-height: calc(100vh - 160px); overflow: auto; position: sticky; top: 12px; }
+@media (max-width: 1099px) { .zf-queue { position: static; max-height: 360px; } }
+.zf-queue .zp-queue__item { width: 100%; }
+.zf-qrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
+.zf-qrow + .zf-qrow { margin-top: 3px; }
+.zf-qamt { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.zf-win { padding: 0; overflow: hidden; }
+.zf-win__head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; padding: 16px 20px 14px; border-bottom: 1px solid var(--border); }
+.zf-win__name { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.zf-win__name h2 { font-size: 20px; font-weight: 700; }
+.zf-win__body { display: grid; gap: 20px; padding: 16px 20px 20px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1300px) { .zf-win__body { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); } }
+
+.zf-ovr { display: grid; grid-template-columns: minmax(0, 1fr) 96px 130px; gap: 6px 12px; align-items: center; }
+.zf-ovr__h { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.zf-ovr__h--r { text-align: right; }
+.zf-ovr__name { font-weight: 600; }
+.zf-ovr__name small { display: block; font-weight: 400; color: var(--text-muted); font-size: 12px; }
+.zf-ovr__auto { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.zf-ovr__note { grid-column: 1 / -1; margin-bottom: 6px; }
+@media (max-width: 560px) { .zf-ovr { grid-template-columns: minmax(0, 1fr) 110px; } .zf-ovr__auto, .zf-ovr__h--auto { display: none; } }
+
+.zf-box { border: 1px solid var(--border); border-radius: 12px; padding: 4px 14px; }
+.zf-box .zp-line { padding: 8px 0; }
+.zf-exrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13.5px; }
+.zf-exrow:first-child { border-top: 0; }
+.zf-exadd { display: grid; gap: 8px; grid-template-columns: 150px 130px minmax(0, 1fr) auto; align-items: end; }
+@media (max-width: 760px) { .zf-exadd { grid-template-columns: 1fr 1fr; } }
+.zf-sum { padding: 12px 14px; border-radius: 12px; background: var(--ok-bg); color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent); font-size: 14px; display: grid; gap: 2px; }
+.zf-sum b { font-weight: 700; }
+.zf-sum--neg { background: var(--danger-bg); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+.zf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.zf-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-size: 13px; font-weight: 600; }
+
+.zf-preview { border: 1.5px dashed var(--border); border-radius: 14px; padding: 14px; background: color-mix(in srgb, var(--text) 3%, var(--card-bg)); display: grid; gap: 8px; }
+.zf-preview__sum { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.zf-preview .zf-box { background: var(--card-bg); }
+
+.zf-deals { width: 100%; border-collapse: collapse; font-size: 13px; }
+.zf-deals td { padding: 7px 6px; border-top: 1px solid var(--border); vertical-align: top; }
+.zf-deals tr:first-child td { border-top: 0; }
+.zf-deals .r { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.zf-deals .id { color: var(--text-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.zf-details > summary { cursor: pointer; font-weight: 650; margin: 4px 0 8px; }
+
+/* ---------- таблиці ---------- */
+.zf-table td.zf-who b { display: block; }
+.zf-table tr.is-sel td { background: color-mix(in srgb, var(--info) 7%, transparent); }
+.zf-cards { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; white-space: nowrap; }
+.zf-cols { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.zf-cols label { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; cursor: pointer; }
+.zf-filter .zp-tab { gap: 6px; }
+.zf-filter .zp-tab .zp-muted { font-weight: 500; }
+.zf-reject { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; margin-top: 8px; }
+@media (max-width: 640px) { .zf-reject { grid-template-columns: 1fr; } }

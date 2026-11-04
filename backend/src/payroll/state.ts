@@ -251,9 +251,11 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       };
   }
   // ---------- задачі рекрутеру «перепідписати офер» ----------
-  const tasks = (await db.query<{ id: string; user_id: number; offer_title: string; level: string | null; valid_from: Date; created_at: Date; signed_at: Date | null; void_at: Date | null }>(
-    `SELECT id::text, user_id, offer_title, level, valid_from, created_at, signed_at, void_at FROM payroll_offer_docs ORDER BY id`)).rows
-    .map((t) => ({ id: Number(t.id), empId: String(t.user_id), title: t.offer_title, level: t.level, from: dateOnly(t.valid_from), createdAt: kyivIso(t.created_at), signedAt: kyivIso(t.signed_at), doneAt: kyivIso(t.signed_at), voidAt: kyivIso(t.void_at) }));
+  const tasks = (await db.query<{ id: string; user_id: number; offer_title: string; level: string | null; valid_from: Date; why: string | null; created_at: Date; signed_at: Date | null; void_at: Date | null }>(
+    `SELECT id::text, user_id, offer_title, level, valid_from, why, created_at, signed_at, void_at FROM payroll_offer_docs ORDER BY id`)).rows
+    .map((t) => { const from = dateOnly(t.valid_from);
+      // строк підпису — 5-те число місяця, з якого діє офер (як у задачі, що створює service)
+      return { id: Number(t.id), empId: String(t.user_id), title: t.offer_title, level: t.level, from, due: `${from.slice(0, 7)}-05`, why: t.why, createdAt: kyivIso(t.created_at), signedAt: kyivIso(t.signed_at), doneAt: kyivIso(t.signed_at), voidAt: kyivIso(t.void_at) }; });
 
   const settings = { ...(setQ.rows[0]?.settings ?? {}) } as Record<string, unknown>;
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };

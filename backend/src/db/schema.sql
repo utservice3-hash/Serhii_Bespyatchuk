@@ -7753,6 +7753,7 @@ CREATE TABLE IF NOT EXISTS payroll_offer_docs (
   signed_at   TIMESTAMPTZ, signed_by INTEGER REFERENCES users(id),
   void_at     TIMESTAMPTZ
 );
+ALTER TABLE payroll_offer_docs ADD COLUMN IF NOT EXISTS why TEXT;   -- чому переписуємо офер: «вибір менеджера» або «рішення керівництва»
 CREATE TABLE IF NOT EXISTS payroll_clearances (
   id          BIGSERIAL PRIMARY KEY,
   user_id     INTEGER NOT NULL UNIQUE REFERENCES payroll_leaves(user_id),
