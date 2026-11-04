@@ -6172,7 +6172,11 @@ export interface FinItem {
   plan: number | null; fact: number | null; note: string | null; state: FinRowState; dataMonths: number;
   /** Рядків таблиці оплат у факті — лише коли факт місяця з таблиці. */
   factRows?: number;
+  /** 🧾 Розпис плану (задача 7832): з чого складається сума; стан — чи сходиться він із планом. */
+  parts: FinPlanPart[]; partsState: FinPartsState; partsLeft: number | null;
 }
+export interface FinPlanPart { amount: number; note: string }
+export type FinPartsState = "none" | "ok" | "under" | "over" | "noplan";
 export interface FinGroup { id: number; name: string; items: FinItem[] }
 export interface FinResp { id: number; name: string; groups: FinGroup[] }
 export interface FinMonth {
@@ -6319,6 +6323,10 @@ export const setFinItemSections = async (items: { id: number; section: FinSectio
   (await api.put<{ previous: { id: number; section: FinSection | null }[] }>("/finance/item-sections", { items })).data;
 export const setFinItemOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/items/${id}/off`, { off })).data;
 export const saveFinValues = async (month: string, cells: FinCell[]) => (await api.put<{ changed: number }>("/finance/values", { month, cells })).data;
+export const saveFinPlanParts = async (itemId: number, month: string, parts: { amount: string; note: string }[]) =>
+  (await api.put<{ changed: boolean; parts: FinPlanPart[] }>("/finance/plan-parts", { itemId, month, parts })).data;
+export const fetchPrevFinPlanParts = async (itemId: number, m: string) =>
+  (await api.get<{ month: string; parts: FinPlanPart[] }>("/finance/plan-parts/prev", { params: { itemId, m } })).data;
 export const saveFinNote = async (itemId: number, month: string, text: string) => { await api.put("/finance/notes", { itemId, month, text }); };
 export const setFinApproval = async (month: string) => { await api.post("/finance/approval", { month, approved: true }); };
 /** 📜 Реєстр змін: записи про місяць (цифри, коментарі, погодження) + зміни статей за цей місяць; нові згори. */

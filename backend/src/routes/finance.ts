@@ -6,7 +6,7 @@ import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import {
   FinError, type Db, loadMonth, itemCard, createResp, renameResp, deleteResp, createGroup, updateGroup, deleteGroup,
   createItem, updateItem, setItemOff, deleteItem, restore, saveValues, setNote, setApproval, setItemSections,
-  isPlanApprover, listLog,
+  isPlanApprover, listLog, savePlanParts, prevPlanParts,
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
@@ -231,6 +231,16 @@ financeRouter.put("/notes", async (req, res) => {
     await tx((db) => setNote(db, req.auth!.userId, itemId, req.body?.month, req.body?.text));
     res.json({ ok: true });
   } catch (e) { fail(res, e); }
+});
+// 🧾 Розпис плану (задача 7832): з чого складається сума плану статті. Запис — те саме право, що й план; список — цілком.
+financeRouter.put("/plan-parts", async (req, res) => {
+  try {
+    canEdit(req);
+    res.json(await tx((db) => savePlanParts(db, req.auth!.userId, Number(req.body?.itemId), req.body?.month, req.body?.parts)));
+  } catch (e) { fail(res, e); }
+});
+financeRouter.get("/plan-parts/prev", async (req, res) => {
+  try { onlyFinance(req); res.json(await prevPlanParts(pool as unknown as Db, Number(req.query.itemId), req.query.m)); } catch (e) { fail(res, e); }
 });
 financeRouter.post("/approval", async (req, res) => {
   try {

@@ -45,3 +45,26 @@ export function planFromPrevious(
   }
   return out;
 }
+
+/**
+ * 🧾 Підсумок вікна «Розпис плану» (задача 7832) — по чернетках рядків, як їх набрали: «1 234,5». Порожній рядок не
+ * рахується; рядок із текстом без суми чи з сумою ≤ 0 — `bad` (сервер однаково відмовить). Стан — як на сервері
+ * (`partsStateOf`): `ok` — Σ = плану, `under` — не розписано `left`, `over` — розпис більший на −`left`.
+ */
+export function partsDraftSum(plan: number | null, rows: readonly { amount: string; note: string }[]):
+  { sum: number; left: number | null; bad: number[]; state: "none" | "ok" | "under" | "over" | "noplan" } {
+  let sum = 0, filled = 0;
+  const bad: number[] = [];
+  rows.forEach((r, i) => {
+    const t = r.amount.replace(/[\s ]/g, "").replace(",", ".");
+    if (!t) { if (r.note.trim()) bad.push(i); return; }
+    const n = Number(t);
+    if (!Number.isFinite(n) || n <= 0) { bad.push(i); return; }
+    sum += n; filled++;
+  });
+  sum = Math.round(sum * 100) / 100;
+  if (!filled) return { sum, left: plan, bad, state: "none" };
+  if (plan == null) return { sum, left: null, bad, state: "noplan" };
+  const left = Math.round((plan - sum) * 100) / 100;
+  return { sum, left, bad, state: left === 0 ? "ok" : left > 0 ? "under" : "over" };
+}

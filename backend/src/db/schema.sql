@@ -7143,6 +7143,42 @@ CREATE TABLE IF NOT EXISTS fin_recurring_planned (
   PRIMARY KEY (recurring_id, month)
 );
 REVOKE ALL ON fin_recurring_planned FROM ai_readonly;
+-- 🧾 РОЗПИС ПЛАНУ (задача 7832; TOP Weekly 02.11.2026 — Сергій: «суму плану розбити на частини, з чого вона складається»;
+-- демо затвердила Тетяна 04.11): рядки «сума + за що» до плану статті в місяці (`core/finance.ts` → `savePlanParts`).
+-- Сума плану (`fin_values.plan`) від розпису НЕ змінюється — розпис лише пояснює її, а розбіжність показує екран. У
+-- погодженому місяці розпис замкнений тим самим правилом, що й план: тригер нижче тримає й скрипти. Таблиця нова й
+-- порожня; відкат даних (код їх не прибирає): DROP TABLE fin_plan_parts; DROP FUNCTION fin_plan_parts_lock().
+CREATE TABLE IF NOT EXISTS fin_plan_parts (
+  id          SERIAL PRIMARY KEY,
+  item_id     INTEGER NOT NULL REFERENCES fin_items(id),
+  month       DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  pos         INTEGER NOT NULL,
+  amount      NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+  note        TEXT NOT NULL DEFAULT '',
+  updated_by  INTEGER REFERENCES users(id),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (item_id, month, pos)
+);
+REVOKE ALL ON fin_plan_parts FROM ai_readonly;
+CREATE OR REPLACE FUNCTION fin_plan_parts_lock() RETURNS trigger LANGUAGE plpgsql AS $fpp$
+DECLARE
+  hit date;
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') AND EXISTS (SELECT 1 FROM fin_plan_approvals a WHERE a.month = OLD.month) THEN hit := OLD.month; END IF;
+  IF hit IS NULL AND TG_OP IN ('INSERT', 'UPDATE') AND EXISTS (SELECT 1 FROM fin_plan_approvals a WHERE a.month = NEW.month) THEN hit := NEW.month; END IF;
+  IF hit IS NOT NULL THEN
+    RAISE EXCEPTION 'fin_plan_locked: план %.% погоджено — розпис змінити не можна', to_char(hit, 'MM'), to_char(hit, 'YYYY')
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $fpp$;
+DROP TRIGGER IF EXISTS fin_plan_parts_lock ON fin_plan_parts;
+CREATE TRIGGER fin_plan_parts_lock BEFORE INSERT OR UPDATE OR DELETE ON fin_plan_parts
+  FOR EACH ROW EXECUTE FUNCTION fin_plan_parts_lock();
+DROP TRIGGER IF EXISTS fin_plan_parts_truncate_lock ON fin_plan_parts;
+CREATE TRIGGER fin_plan_parts_truncate_lock BEFORE TRUNCATE ON fin_plan_parts
+  FOR EACH STATEMENT EXECUTE FUNCTION fin_approval_lock();
 -- 🧮 КАЛЬКУЛЯТОР СТАВКИ: ВІДГУК «НАСКІЛЬКИ ДОПОМІГ» (Роман 27.10.2026; `core/rateFeedback.ts`). `calc` — що калькулятор
 -- ПОКАЗАВ (зонна карта: ставка клієнту, перевізнику, маржа, зона) у мить розрахунку: відгук порівнюється саме з ним, а
 -- не з перерахунком за сьогоднішніми тарифами. Старі розрахунки — без `calc`. Відгук — один на розрахунок, лише на свій.

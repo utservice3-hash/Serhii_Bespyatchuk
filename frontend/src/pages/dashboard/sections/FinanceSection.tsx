@@ -6,9 +6,10 @@ import {
   fetchFinMonth, fetchFinItem, createFin, updateFin, deleteFin, restoreFin, setFinItemOff, saveFinValues, saveFinNote,
   setFinApproval, finErrorData, hiringError, setFinItemSections, FIN_SECTIONS, fetchFinLog, type FinLogRow,
   fetchBankAccounts, type BankAccount, syncFinApprovals, fetchPlanHints, addHintToPlan, type PlanHint,
+  saveFinPlanParts, fetchPrevFinPlanParts, type FinPlanPart,
   type FinMonth, type FinSection, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
-import { rowVisible, asInput, planFromPrevious } from "./financeView";
+import { rowVisible, asInput, planFromPrevious, partsDraftSum } from "./financeView";
 import { FinanceWeekTab } from "./FinanceWeekTab";
 import { FinancePaymentsTab } from "./FinancePaymentsTab";
 import { FinanceCalendarTab } from "./FinanceCalendarTab";
@@ -61,6 +62,109 @@ function PlanHints({ hints, canAdd, onAdd }: { hints: PlanHint[] | undefined; ca
       ))}
     </div>
   );
+}
+
+// ── 🧾 Розпис плану (задача 7832; TOP Weekly 02.11.2026, демо затвердила Тетяна 04.11) ──────────────────────────
+// З чого складається сума плану статті: рядки «сума + за що». Сума плану від розпису НЕ змінюється; розбіжність лише
+// підсвічується. Погоджений місяць — лише перегляд (сервер і БД однаково відмовлять).
+const asAmount = (v: number) => asInput(v);
+/** Рядки розпису під назвою статті. */
+function PlanPartsLines({ parts }: { parts: FinPlanPart[] }) {
+  if (!parts.length) return null;
+  return (
+    <ul className="fin-parts">
+      {parts.map((x, i) => <li key={i}><b>{money(x.amount)}</b><span>{x.note || "—"}</span></li>)}
+    </ul>
+  );
+}
+/** Позначка біля плану: «розписати» / «✓ розписано» / «⚠ не розписано N» / «🔒 розпис». */
+function PlanPartsChip({ it, locked, canEdit, onOpen }: { it: FinItem; locked: boolean; canEdit: boolean; onOpen: () => void }) {
+  const n = it.parts.length;
+  const open = (e: { stopPropagation: () => void }) => { e.stopPropagation(); onOpen(); };
+  if (!n) return canEdit && !locked && it.plan != null ? <button type="button" className="fin-pchip" onClick={open}>▾ розписати</button> : null;
+  if (locked) return <button type="button" className="fin-pchip lock" onClick={open}>🔒 розпис · {n}</button>;
+  if (it.partsState === "ok") return <button type="button" className="fin-pchip ok" onClick={open}>✓ розписано · {n}</button>;
+  if (it.partsState === "under") return <button type="button" className="fin-pchip wn" onClick={open}>⚠ не розписано {money(it.partsLeft)}</button>;
+  if (it.partsState === "over") return <button type="button" className="fin-pchip dg" onClick={open}>⚠ розпис більший на {money(-(it.partsLeft ?? 0))}</button>;
+  return <button type="button" className="fin-pchip wn" onClick={open}>⚠ розпис без плану</button>;
+}
+function PlanPartsModal({ it, month, locked, canEdit, onClose, onSaved }: {
+  it: FinItem; month: string; locked: boolean; canEdit: boolean; onClose: () => void; onSaved: (msg: string) => void;
+}) {
+  const ro = locked || !canEdit;
+  const [rows, setRows] = useState<{ amount: string; note: string }[]>(() =>
+    it.parts.length ? it.parts.map((x) => ({ amount: asAmount(x.amount), note: x.note })) : [{ amount: "", note: "" }]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEscape(onClose);
+  const st = partsDraftSum(it.plan, rows);
+  const set = (i: number, k: "amount" | "note", v: string) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+  const prevLabel = monthLabel(addMonths(month, -1)).toLowerCase();
+  const takePrev = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const p = await fetchPrevFinPlanParts(it.id, month.slice(0, 7));
+      if (!p.parts.length) setErr(`За ${prevLabel} розпису цієї статті немає`);
+      else setRows(p.parts.map((x) => ({ amount: asAmount(x.amount), note: x.note })));
+    } catch (e) { setErr(hiringError(e)); } finally { setBusy(false); }
+  };
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await saveFinPlanParts(it.id, month.slice(0, 7), rows);
+      onSaved(!r.changed ? "Змін немає" : r.parts.length ? `Розпис «${it.name}» збережено` : `Розпис «${it.name}» прибрано`);
+    } catch (e) { setErr(hiringError(e)); setBusy(false); }
+  };
+  const sumLine = st.state === "none" ? null
+    : st.state === "ok" ? <div className="fin-psum ok">✓ Розписано {money(st.sum)} з {money(it.plan)} — збігається з планом</div>
+    : st.state === "under" ? <div className="fin-psum wn">Розписано {money(st.sum)} з {money(it.plan)} · лишилось <b>{money(st.left)}</b></div>
+    : st.state === "over" ? <div className="fin-psum dg">Розпис більший за план на <b>{money(-(st.left ?? 0))}</b></div>
+    : <div className="fin-psum wn">Розписано {money(st.sum)}, а плану в статті немає</div>;
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label={`Розпис плану: ${it.name}`} style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
+          <h3 style={{ margin: 0, fontSize: 16 }}>Розпис плану · {it.name}</h3>
+          {locked ? <span className="hr-pill ok">🔒 затверджено</span> : <span className="hr-muted" style={{ fontSize: 12.5 }}>{monthLabel(month).toLowerCase()}</span>}
+        </div>
+        <p className="hr-muted" style={{ fontSize: 12.5, margin: "4px 0 12px" }}>
+          План статті — <b>{money(it.plan)} ₴</b>. {ro
+            ? locked ? "План затверджено — розпис змінити не може ніхто, як і саму суму." : "Змінювати розпис ваша роль не може."
+            : "Розпишіть, з чого складається сума, — так, щоб зрозумів і той, хто не в контексті."}
+        </p>
+        {ro ? (
+          it.parts.length ? <PlanPartsLines parts={it.parts} /> : <p className="hr-muted">Розпису немає.</p>
+        ) : (<>
+          <div className="fin-prow hr-muted" style={{ fontSize: 11.5, marginBottom: 4 }}><span>Сума, ₴</span><span>За що (кому, що входить)</span><span /></div>
+          {rows.map((x, i) => (
+            <div className="fin-prow" key={i}>
+              <input className={`fin-cell ${st.bad.includes(i) ? "bad" : ""}`} inputMode="decimal" placeholder="0" aria-label={`Сума, рядок ${i + 1}`}
+                value={x.amount} autoFocus={i === rows.length - 1 && !x.amount} onChange={(e) => set(i, "amount", e.target.value)} />
+              <input className="hr-inp" placeholder="напр. Андрій — оренда сервера 1С" aria-label={`За що, рядок ${i + 1}`} maxLength={300}
+                value={x.note} onChange={(e) => set(i, "note", e.target.value)} />
+              <button type="button" className="fin-px" title="Прибрати рядок" onClick={() => setRows((r) => (r.length > 1 ? r.filter((_, j) => j !== i) : [{ amount: "", note: "" }]))}>×</button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            <button type="button" className="fin-link" onClick={() => setRows((r) => [...r, { amount: "", note: "" }])}>+ рядок</button>
+            {st.state === "under" && !st.bad.length && st.left != null && (
+              <button type="button" className="fin-link" onClick={() => setRows((r) => {
+                const empty = r.findIndex((x) => !x.amount.trim() && !x.note.trim());
+                const row = { amount: asAmount(st.left!), note: "" };
+                return empty >= 0 ? r.map((x, j) => (j === empty ? row : x)) : [...r, row];
+              })}>+ залишок {money(st.left)} одним рядком</button>)}
+            <button type="button" className="fin-link" disabled={busy} onClick={() => void takePrev()}>↺ взяти розпис за {prevLabel}</button>
+          </div>
+          {sumLine}
+        </>)}
+        {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)", margin: "10px 0 0" }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
+          {!ro && <span className="hr-muted" style={{ fontSize: 12, flex: 1 }}>Сума плану від розпису не змінюється.</span>}
+          <button type="button" className="hr-btn" onClick={onClose}>{ro ? "Закрити" : "Скасувати"}</button>
+          {!ro && <button type="button" className="hr-btn p" disabled={busy || st.bad.length > 0} onClick={() => void save()}>Зберегти</button>}
+        </div>
+      </div>
+    </div>, document.body);
 }
 
 // ── Діалог: поля + кнопки. Кнопка повертає false — діалог лишається відкритим. ────────
@@ -365,6 +469,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const [busy, setBusy] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [partsFor, setPartsFor] = useState<number | null>(null);
   // 📅 Підказки «Календаря оплат» (Тетяна #6369, 27.10.2026): що за графіком припадає на місяць — біля статті.
   const [hints, setHints] = useState<Map<number, PlanHint[]>>(new Map());
   const [hintsNonce, setHintsNonce] = useState(0);
@@ -453,10 +558,16 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const im = data.imported;
   const imDiff = im && ((im.filePlan != null && Math.abs(im.filePlan - im.rowsPlan) >= 0.01) || (im.fileFact != null && Math.abs(im.fileFact - im.rowsFact) >= 0.01));
   const visible = (it: FinItem) => rowVisible(it, { month, currentMonth: data.currentMonth, edit, onlyOver, showEmpty });
+  const allItems = data.tree.flatMap((r) => r.groups.flatMap((g) => g.items));
+  const partsItem = partsFor == null ? null : allItems.find((i) => i.id === partsFor) ?? null;
+  const withPlan = allItems.filter((i) => i.active && i.plan != null);
+  const partsDone = withPlan.filter((i) => i.partsState === "ok").length;
   let shown = 0;
   return (
     <div className="hr-card">
       {logOpen && <LogModal month={month} onClose={() => setLogOpen(false)} />}
+      {partsItem && <PlanPartsModal it={partsItem} month={month} locked={planLocked} canEdit={data.canEdit} onClose={() => setPartsFor(null)}
+        onSaved={(msg) => { setPartsFor(null); reload(); toast(msg); }} />}
       <div className="hd">
         <div className="hr-daynav" style={{ marginBottom: 0 }}>
           <button className="hr-btn xs" onClick={leave(() => setMonth(addMonths(month, -1)))} aria-label="Попередній місяць">‹</button>
@@ -481,7 +592,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
         </div>
       </div>
       <div className="hr-tiles">
-        <div className="hr-tile"><div className="lb">План · {monthShort(month)}</div><div className="vl">{money(t.plan)} ₴</div><div className="sb">статей: {t.items}</div></div>
+        <div className="hr-tile"><div className="lb">План · {monthShort(month)}</div><div className="vl">{money(t.plan)} ₴</div><div className="sb">статей: {t.items} · розписано {partsDone} з {withPlan.length}</div></div>
         <div className="hr-tile"><div className="lb">Факт</div><div className="vl">{future ? "—" : `${money(t.fact)} ₴`}</div>
           <div className="sb">{future ? "місяць не почався" : current ? "місяць триває" : "місяць закрито"}{t.plan && !future ? ` · ${Math.round(t.fact / t.plan * 100)}% плану` : ""}</div></div>
         <div className="hr-tile"><div className="lb">{left >= 0 ? "Лишилось" : "Понад план"}</div>
@@ -549,8 +660,9 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
                         return (
                           <tr key={it.id} className={`it ${it.state === "over" || it.state === "noplan" ? "over" : ""} ${sel === it.id ? "sel" : ""}`} tabIndex={0}
                             onClick={() => setSel(it.id)} onKeyDown={(e) => { if (e.key === "Enter" && !(e.target as HTMLElement).closest("input")) setSel(it.id); }}>
-                            <td className="ind2">{it.name}<PlanHints hints={hints.get(it.id)} canAdd={canAdd} onAdd={(h) => void addHint(h, it)} /></td>
-                            <td className="num">{edit ? cell("plan") : it.plan == null ? <span className="hr-muted">не задано</span> : money(it.plan)}</td>
+                            <td className="ind2">{it.name}{!edit && <PlanPartsLines parts={it.parts} />}<PlanHints hints={hints.get(it.id)} canAdd={canAdd} onAdd={(h) => void addHint(h, it)} /></td>
+                            <td className="num">{edit ? cell("plan") : <span className="fin-pplan">{it.plan == null ? <span className="hr-muted">не задано</span> : money(it.plan)}
+                              <PlanPartsChip it={it} locked={planLocked} canEdit={data.canEdit} onOpen={() => setPartsFor(it.id)} /></span>}</td>
                             <td className="num">{edit ? cell("fact") : money(it.fact)}</td>
                             <td className="num">{it.state === "noplan" ? <span className="fin-bad">−{money(it.fact)}</span>
                               : it.plan == null || it.fact == null ? "—" : <span className={d < 0 ? "fin-bad" : "fin-good"}>{d > 0 ? "+" : d < 0 ? "−" : ""}{money(Math.abs(d))}</span>}</td>

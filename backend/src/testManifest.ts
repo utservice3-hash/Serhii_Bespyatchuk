@@ -67,6 +67,7 @@ export const MANIFEST_FILES: string[] = [
   "core/unpaidInvoices.test.js",
   "core/paymentMarks.test.js",
   "core/finRecurring.test.js",
+  "core/finPlanParts.test.js",
   "core/receivablesFxSql.test.js",
   "core/dealFinFields.test.js",
   "core/taskVisibility.test.js",
@@ -399,7 +400,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "fin_plan_parts", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "bank_out_breakdown", "bank_out_breakdown_events", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations", "bank_ident_settings", "bank_tx_ident", "bank_tx_ident_events", "bank_tx_comments",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
@@ -2582,6 +2583,11 @@ export const MANIFEST_TESTS: string[] = [
   "#1292e МЕЖА: шість роутів календаря під view_private_finance, підказки — межа «Фінансів», форма — стаття й місяць, кнопка лише з правом",
   "#1295 ПІВ РОКУ Й ОДНОРАЗОВА: +6 міс. від якоря, одноразова — одна дата, закрита — не планується, оплата лишається",
   "#1295b ЖИВИЙ SQL: одноразова закривається оплатою й відкривається скасуванням, пів року — +6 міс., чужий період — 400",
+  // core/finPlanParts.test.ts — розпис плану (задача 7832, 04.11.2026).
+  "#3620 СТАН РОЗПИСУ: ok / under / over / none / noplan однаково на сервері й у вікні, копійки й «1 234,5»",
+  "#3620b ЖИВИЙ SQL: розпис — цілим списком, план той самий, помилка — нічого не записано, журнал є, минулий місяць віддається",
+  "#3620c ЖИВИЙ SQL: погоджений місяць — розпис 409 у ядрі й fin_plan_locked у БД, старий розпис цілий, сусідній місяць пишеться",
+  "#3620d МЕЖА РОЗПИСУ: запис — canEdit першим, читання — onlyFinance, обидва роути в матриці, «розписати» лише з правом",
   // core/receivablesFxSql.test.ts — валютна дебіторка всередині основної (Сергій 28.10.2026).
   "#1294 РАХУНКИ → РЯДКИ: гривня пропускається, ключ — як у 361, ≈ ₴ за курсом синку, без курсу — null, без назви — пропуск",
   "#1294b ЖИВИЙ SQL: валютний клієнт — відповідальний, ліміти, списання у валюті; Σ гривні та сама",
