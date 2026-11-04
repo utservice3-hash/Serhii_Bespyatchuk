@@ -15,7 +15,7 @@ const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 const HINT = "«Треба» — розмови з позначкою в колонці «Розбір» (немає дзвінка, без ціни, втрачений лід, запізнився). "
   + "«Розібрано» — тімлід поставив «Розібрано» чи «Опрацьовано» (з 04.11 — лише після коментаря менеджера). "
   + "«До рахунку» — угода дійшла до «Виставлення рахунку» сама, розбирати не треба; у відсоток не входить. "
-  + "«Лишилось» — ще в черзі. День — за датою розмови. У клітинці дня: розібрано / треба (без «до рахунку»).";
+  + "«Лишилось» — ще в черзі. День — за датою розмови. У клітинці дня: розібрано / треба (без «до рахунку»); «рах. N» — усі розмови дня дійшли до рахунку.";
 
 /** `anchor` — день, чий тиждень показати першим (Звіт КВП — кінець свого періоду; майбутнє — сьогодні). `refresh` — після розбору
  * на екрані: перечитує тиждень на місці, без «Завантаження…». */
@@ -44,7 +44,7 @@ export function ReviewByTeamBlock({ variant, anchor, refresh = 0 }: { variant: "
   );
   const head = (
     <div className="ftd-card-h">
-      <h2 className={kvp ? "chart-title" : undefined} style={kvp ? { margin: 0 } : undefined}>📋 Розбір по командах<InfoHint text={HINT} /></h2>
+      <h2 className={kvp ? "chart-title" : undefined} style={kvp ? { margin: 0 } : undefined}>📋 Розбір по командах <InfoHint text={HINT} /></h2>
       {nav}
     </div>
   );
@@ -62,7 +62,7 @@ export function ReviewByTeamBlock({ variant, anchor, refresh = 0 }: { variant: "
     return (
       <td key={day} title={tip} style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
         color: !c.due ? "var(--text-muted)" : c.left ? "var(--danger, #b91c1c)" : "var(--ok, #166534)" }}>
-        {c.due ? `${String(c.reviewed)} / ${String(of)}` : "—"}
+        {!c.due ? "—" : of ? `${String(c.reviewed)} / ${String(of)}` : `рах. ${String(c.invoice)}`}
       </td>
     );
   };
