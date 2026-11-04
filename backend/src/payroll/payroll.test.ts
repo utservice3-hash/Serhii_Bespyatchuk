@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -14,8 +14,11 @@ import { skipReason } from "../db/scratchDb.js";
  *          (свою — ні; без коментаря — ні) → незгода → рішення ОД → згода → форма (не сходиться — ні) → відомість →
  *          виплата → аванс → звільнення й обхідний лист → сповіщення («потрібна дія» закривається сама).
  * #2603 — права-ключі ТЗ §2 у схемі: хто що отримує; адмін сум не бачить; кандидату вкладки немає.
+ * #2604 — фронт: пункт меню без зашитих ролей, розділ рендериться, дзвіночок у шапці, вкладки — за правами з сервера,
+ *          один чанк (#225), без alert/confirm/prompt; посилання сповіщень рушія ведуть на наявні вкладки.
  */
 const SRC = (p: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", p), "utf8");
+const FRONT = (p: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", p), "utf8");
 
 test("#2600 РУШІЙ ЗАРПЛАТИ: 63 тести пакета (40 золотих звірок з макетом + 23 правила) — байт у байт у нас", () => {
   const dir = path.join(import.meta.dirname, "engine");
@@ -282,3 +285,29 @@ test("#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, за
     scratch.dispose();
   }
 });
+
+test("#2604 ФРОНТ «ЗАРПЛАТИ»: пункт меню, розділ, дзвіночок у шапці, вкладки за правами з сервера, один чанк, посилання сповіщень", () => {
+  const layout = FRONT("components/Layout.tsx"), dash = FRONT("pages/Dashboard.tsx"), sec = FRONT("payroll/PayrollSection.tsx"), bell = FRONT("components/NotificationBell.tsx");
+  assert.match(layout, /\{ key: "payroll", label: "Зарплата", icon: "💰" \},/, "🔴 пункту «Зарплата» немає або в ньому зашиті ролі — видимість має вирішувати screen_access");
+  assert.match(dash, /\{section === "payroll" && <PayrollSection \/>\}/, "🔴 розділ «Зарплата» не рендериться");
+  assert.match(layout, /<NotificationBell onGo=/, "🔴 дзвіночка сповіщень немає в шапці");
+  // права для вкладок — з відповіді сервера (у JWT вони старі до перелогіну)
+  assert.match(sec, /me\?\.perms as string\[\]/, "🔴 вкладки беруться не з /payroll/me → perms");
+  assert.ok(!/getAuthPayload\(\)\?\.perms/.test(sec), "🔴 вкладки «Зарплати» читають права з токена");
+  // один чанк і жодних системних діалогів — у всій папці розділу й у дзвіночку
+  const dir = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "payroll");
+  const files = (readdirSync(dir, { recursive: true }) as string[]).filter((f) => /\.tsx?$/.test(f));
+  assert.ok(files.length >= 13, `🔴 файлів розділу ${files.length} — перелік загубив екрани`);
+  for (const f of [...files.map((x) => `payroll/${x}`), "components/NotificationBell.tsx"]) {
+    const code = FRONT(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+    assert.ok(!/\blazy\(|\bimport\(/.test(code), `🔴 ${f}: lazy/import() — другий чанк (#225)`);
+    assert.ok(!/\b(window\.)?(alert|confirm|prompt)\(/.test(code), `🔴 ${f}: системний діалог замість тосту (#1498)`);
+    assert.ok(!/TODO-STUB/.test(FRONT(f)), `🔴 ${f}: заглушка екрана поїхала в прод`);
+  }
+  // кожне `go: { tab: '…' }` рушія сповіщень має вкладку в дзвіночку
+  const tabs = new Set([...SRC("payroll/engine/notify.mjs").matchAll(/tab: '([a-z]+)'/g)].map((m) => m[1]));
+  const map = /const ZP_TABS: Record<string, string> = \{([^}]+)\}/.exec(bell)?.[1] ?? "";
+  for (const t of tabs) assert.match(map, new RegExp(`\\b${t}: "`), `🔴 сповіщення з go.tab='${t}' ведуть у нікуди`);
+  assert.ok(tabs.size >= 7, `🔴 вкладок у сповіщеннях ${tabs.size} — регулярка нічого не знайшла`);
+});
+
