@@ -38,9 +38,9 @@ const KY = "AT TIME ZONE 'Europe/Kyiv'";
  * що обмежує плечі за часом. Вона мусить брати ЦІЛІ київські доби (з хвилиною запасу з обох боків): черга двох
  * чергових рахується від початку доби, а дзвінок на межі доби — один, а не два.
  *
- * `call_units`: `uniqueid` (перше плече), `calldate` (старт), `client_phone`, `client_key`, `disposition`
- * (`ANSWERED`, якщо говорили; інакше `NO ANSWER` / `BUSY` / вердикт першого плеча), `answered`, `legs`,
- * `manager_id` (відповідальний за правилом вище).
+ * `call_units`: `uniqueid` (перше плече), `calldate` (старт), `client_phone`, `client_key`, `answered` (у якомусь плечі
+ * була розмова — ЄДИНЕ місце, що це вирішує; читачі відкидають `answered`), `disposition` (`NO ANSWER` / `BUSY`, якщо
+ * таке плече є, інакше вердикт першого плеча), `legs`, `manager_id` (відповідальний за правилом вище).
  *
  * ⚠️ Плече без номера клієнта — окремий дзвінок: `PARTITION BY` вважає NULL-и одним кошиком і склеїв би чужих людей.
  */
@@ -63,8 +63,7 @@ export function callUnitsCte(legsWhere: string): string {
              (array_agg(uniqueid ORDER BY calldate, uniqueid))[1] AS uniqueid,
              MIN(calldate) AS calldate, MAX(client_phone) AS client_phone, MAX(client_key) AS client_key,
              bool_or(billsec > 0) AS answered, COUNT(*)::int AS legs,
-             CASE WHEN bool_or(billsec > 0) THEN 'ANSWERED'
-                  WHEN bool_or(disposition = '${MISSED_DISPOSITIONS[0]}') THEN '${MISSED_DISPOSITIONS[0]}'
+             CASE WHEN bool_or(disposition = '${MISSED_DISPOSITIONS[0]}') THEN '${MISSED_DISPOSITIONS[0]}'
                   WHEN bool_or(disposition = '${MISSED_DISPOSITIONS[1]}') THEN '${MISSED_DISPOSITIONS[1]}'
                   ELSE (array_agg(disposition ORDER BY calldate, uniqueid))[1] END AS disposition,
              COALESCE(array_agg(manager_id ORDER BY calldate, uniqueid) FILTER (WHERE manager_id IS NOT NULL), '{}') AS mids
