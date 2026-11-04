@@ -96,6 +96,8 @@ function recordOut(e: Engine, empId: string, mk: string, forEmployee: boolean) {
     dispute: r.dispute ?? null, form: r.form ? { cash: r.form.cash, at: r.form.at, cards: r.form.cards.map((c: Record<string, unknown>) => ({ cardId: c.cardId, last4: String(c.no).slice(-4), holder: c.who, amount: c.amount })) } : null,
     payout: e.zp.payoutLines(empId, mk),
     settlement: r.status === "review" && forEmployee ? null : settlementOut(e, f, forEmployee),
+    // премії / утримання рядками — вид і сума зі знаком; коментар фінансиста внутрішній і сюди не йде
+    extraLines: r.status === "review" && forEmployee ? [] : ((r.extras ?? []) as Array<{ kind: string; amount: number }>).map((x) => ({ kind: x.kind, label: EXTRA_KINDS[x.kind]?.[0] ?? x.kind, amount: x.amount * (EXTRA_KINDS[x.kind]?.[1] ?? 1) })),
     isFinal: e.zp.isFinal(empId, mk),
   };
   if (forEmployee) return base;
