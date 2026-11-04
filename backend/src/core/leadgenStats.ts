@@ -7,7 +7,7 @@ import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery,
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
-  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, leadgenPeriod, LINK_BEFORE_SEC, LINK_AFTER_SEC, LINK_NOTE_AFTER_SEC,
+  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, leadgenPeriod, reportWeekPeriod, LINK_BEFORE_SEC, LINK_AFTER_SEC, LINK_NOTE_AFTER_SEC,
   type HandoffScope, type LeadgenHandoffMoney, type HandoffLinkInfo, type LeadgenHandoffDeal, type HandoffRowDeps,
   type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket, stageDealFlags, type StageDealFlags,
 } from "./leadgenHandoffRules.js";
@@ -344,7 +344,10 @@ export interface LeadgenHandoffMoneyResult {
   deals: LeadgenHandoffDeal[];
   /** Гроші по днях/тижнях періоду — лише коли просили `grain`; Σ одиниць == `totals` (`#1092`). */
   buckets: TrendMoneyBucket[] | null;
+  /** 🚚 Машини ЗВІТНОГО тижня (Пн–Нд, `reportWeekPeriod`) — окремо від періоду, як у КВП (задача 7363). */
+  week: { from: string; to: string; totals: WeekCars; byPerson: ({ managerId: number } & WeekCars)[] };
 }
+export interface WeekCars { machines: number; machinesNoMoney: number }
 
 /**
  * 💰 ГРОШІ З ПЕРЕДАЧ ЗА ПЕРІОД — ЄДИНА ФУНКЦІЯ для числа в рядку лідгена (`/leadgen-stats`
@@ -367,7 +370,13 @@ export async function leadgenHandoffMoney(
   const view = handoffView(links, states, scope, history, inP);
   const deals = view.rows.map((h) =>
     handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));
-  return { totals: view.totals, byPerson: view.byPerson, deals, buckets: grain ? handoffMoneyBuckets(view.rows, grain, inP) : null };
+  // Тиждень — той самий `handoffView` над тим самим доменом, лише з межами тижня: «та сама угода» й постійні — як у періоді.
+  const wk = reportWeekPeriod(to, kyivToday());
+  const wv = handoffView(links, states, scope, history, wk);
+  const cars = (m: LeadgenHandoffMoney): WeekCars => ({ machines: m.machines, machinesNoMoney: m.machinesNoMoney });
+  const week = { from: wk.start as string, to: wk.end as string, totals: cars(wv.totals),
+    byPerson: wv.byPerson.map((p) => ({ managerId: p.managerId, ...cars(p.money) })) };
+  return { totals: view.totals, byPerson: view.byPerson, deals, buckets: grain ? handoffMoneyBuckets(view.rows, grain, inP) : null, week };
 }
 
 /** Найраніша київська дата подій чотирьох стадій — глибина памʼяті журналу (`null` — подій немає). */

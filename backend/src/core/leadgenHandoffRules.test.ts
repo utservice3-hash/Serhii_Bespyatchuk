@@ -9,7 +9,7 @@ import {
   type StageBucketRow, type CallBucketRow, type HandoffLinkInfo, type HandoffRowDeps, type LeadgenDealClass, type HandoffEntry, type DealState, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
-import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, dayInRange, pendingIn, leadgenPeriod, stageDealFlags, type ClientSuccess } from "./leadgenHandoffRules.js";
+import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, dayInRange, pendingIn, leadgenPeriod, stageDealFlags, reportWeekPeriod, type ClientSuccess } from "./leadgenHandoffRules.js";
 
 /**
  * #670…#674, #680 — ГРОШІ З ПЕРЕДАНИХ ЛІДІВ: чисті правила (рішення власника 22.09.2026).
@@ -191,7 +191,7 @@ test("#672b 🪞 ДЗЕРКАЛО: скоуп тімліда відсікає ч
   assert.equal(dept.totals.success.sum + dept.totals.paid.sum, 34_000);
   // Форма відповіді — явними полями: жодного зайвого ключа не поїде назовні.
   assert.deepEqual(Object.keys(personMoneyWire(8, team2.totals)).sort(),
-    ["earned", "expect", "handoffs", "lost", "machines", "managerId", "paid", "pending", "regular", "sameDeal", "success", "unlinked", "waiting", "work"]);
+    ["earned", "expect", "handoffs", "lost", "machines", "machinesNoMoney", "managerId", "paid", "pending", "regular", "sameDeal", "success", "unlinked", "waiting", "work"]);
 });
 
 /**
@@ -414,7 +414,7 @@ test("#684 РЯДОК СПИСКУ ПЕРЕДАЧ: префікс Кваліфі
   assert.equal(blank.client, "Продзвін-клієнт");
   assert.equal(blank.closedDay, "2026-09-05");
   // Форма — явними полями, рівно ті, що читає екран.
-  assert.deepEqual(Object.keys(lost).sort(), ["autoDay", "carried", "client", "closedDay", "cls", "day", "dealId", "inPeriod", "lgId", "minus", "planPayDay", "price",
+  assert.deepEqual(Object.keys(lost).sort(), ["autoDay", "carried", "client", "closedDay", "cls", "day", "dealId", "inPeriod", "lgId", "loadDay", "minus", "planPayDay", "price",
     "pzId", "reason", "route", "salesManager", "split", "stage", "url"]);
 });
 
@@ -643,7 +643,6 @@ test("#1501 ОЧІКУВАННЯ: місяць — станом на кінец�
   assert.deepEqual([w0907.totals.pending.n, w0907.totals.pending.sum], [1, 4_000],
     "🔴 тиждень 07.09: не лише «авто 10.09, на 13.09 чекала» — перенесене з серпня просочилось або нове зникло");
   assert.deepEqual([w0907.totals.earned.n, w0907.totals.earned.sum], [2, 96_000], "🔴 тиждень 07.09: авто й успіх в одному тижні — не в «Успішних»");
-  assert.equal(w0907.totals.machines, 3, "🔴 тиждень 07.09: машин ≠ успішні тижня + нові в очікуванні");
   const oct1to7 = view("2026-10-01", "2026-10-07");
   assert.deepEqual([oct1to7.totals.pending.n, oct1to7.totals.pending.sum], [1, 8_000],
     "🔴 01–07.10 (не цілий місяць): не лише «авто 02.10» — перенесене з серпня просочилось");
@@ -674,30 +673,6 @@ test("#1501b ПЕРІОД ГРОШЕЙ: місяць — лише з 1-го до
 });
 
 /**
- * #1258 — «МАШИН» = «УСПІШНІ» + «ОЧІКУВАННЯ» ПЕРІОДУ, ЯК І БУЛО (рішення власника 02.10.2026: «залиш як є»), тепер
- * над «Очікуванням» станом на кінець періоду — тож перенесена машина рахується й у місяці, де вона ще чекала. Σ людей ==
- * відділ. Наступник `#1096` (знятий: «Σ тижнів == період» більше не правда — очікування тижнів це знімки).
- * 🧨 САБОТАЖ: у `withAnchored` `machines: a.earned.n + a.pending.n` → `a.earned.n` → червоніє.
- */
-test("#1258 МАШИН = успішні + очікування періоду (станом на кінець): відділ і люди — одне число", () => {
-  const E = (pz: number, day: string, deal: number, lg: number): HandoffEntry =>
-    ({ pzId: pz, lgId: lg, lgTeamId: 1, at: Date.parse(day + "T09:00:00Z") + pz, day, dealId: deal });
-  const S = (cls: DealState["cls"], closedDay: string | null, autoDay: string | null, pend: [string, boolean][] = []): DealState =>
-    ({ cls, price: 1000, closedDay, autoDay, pendDays: pend.map(([day, pending]) => ({ day, pending })) });
-  const states = new Map<number, DealState>([
-    [9601, S("success", "2026-09-10", "2026-09-02", [["2026-09-02", true], ["2026-09-10", false]])],
-    [9602, S("expect", null, "2026-08-30", [["2026-08-30", true]])],      // перенесена з серпня
-    [9603, S("expect", null, null)],                                      // авто не поїхало
-  ]);
-  const v = handoffView([E(1, "2026-08-20", 9601, 7), E(2, "2026-08-15", 9602, 8), E(3, "2026-09-12", 9603, 8)],
-    states, { teamId: null, managerId: null }, new Map(), dayInRange("2026-09-01", "2026-09-30"));
-  assert.equal(v.totals.machines, 2, "🔴 машин вересня не 2 (успіх 9601 + перенесена 9602)");
-  assert.equal(v.totals.machines, v.totals.earned.n + v.totals.pending.n);
-  assert.equal(v.byPerson.reduce((a, p) => a + p.money.machines, 0), v.totals.machines, "🔴 Σ людей ≠ відділ");
-  assert.equal(personMoneyWire(8, v.totals).machines, 2, "🔴 машини не доїхали у відповідь");
-});
-
-/**
  * #1500 — МІНУСОВА УГОДА В ГРОШАХ ЛІДГЕНА (рішення власника 07.10.2026). Угода з полем «Мінусова угода»
  * лишається машиною (успіх / очікування), але її сума лідгену — 0: мінус — розщеплення перевезення в продажах,
  * плюсова половина з передачею не повʼязана (62630491 Крупник: −4 948 + окрема +7 188). Фікстура по обидва
@@ -708,7 +683,7 @@ test("#1500 МІНУСОВА УГОДА: лідгену — машина і 0 �
   const E = (pz: number, deal: number): HandoffEntry =>
     ({ pzId: pz, lgId: 7, lgTeamId: 1, at: Date.parse("2026-09-10T09:00:00Z") + pz, day: "2026-09-10", dealId: deal });
   const S = (cls: DealState["cls"], price: number, minus: boolean): DealState =>
-    ({ cls, price, minus, closedDay: cls === "success" ? "2026-09-20" : null, autoDay: "2026-09-15",
+    ({ cls, price, minus, closedDay: cls === "success" ? "2026-09-20" : null, autoDay: "2026-09-15", loadDay: "2026-09-15",
       pendDays: [{ day: "2026-09-15", pending: cls !== "success" }, ...(cls === "success" ? [{ day: "2026-09-20", pending: false }] : [])] });
   const states = new Map<number, DealState>([
     [9601, S("expect", 2_448, false)],   // плюсова в очікуванні
@@ -751,4 +726,73 @@ test("#1506b ПОЗНАЧКИ: «без Взято», «Взято й ОПР з�
     "🔴 ОПР-підігрів отримав позначку Продзвону");
   assert.deepEqual(stageDealFlags([E(1, 10, 900_000), E(1, 11, 1000_000)], 900_000_000, opr * 1000, true, ids), { noTaken: false, fastSec: null, fromReact: false },
     "🔴 звичайний шлях отримав позначку");
+});
+
+/**
+ * #3730 — МАШИНИ ЛІДГЕНА ЗА «ДАТОЮ ЗАГРУЗКИ», ЯК «ВІДПРАВЛЕНІ АВТО» КВП (задача 7363, рішення Романа 04.11.2026). Машина —
+ * угода з передачі, у якої «Дата загрузки» в періоді (кінець — не пізніше сьогодні), БУДЬ-ЯКОГО етапу: «Виставлення рахунку»
+ * (раніше за «Авто працює» — до 04.11 не рахувалась), втрачена після загрузки — теж. Без дати, поза періодом, у майбутньому,
+ * постійний клієнт — ні. «Гроші ще не зайшли» — машини, що зараз не «Оплата отримана» й не «Успішна». Σ людей == відділ.
+ * Наступник `#1258` («машин = успішні + очікування»), знятого цим рішенням.
+ * 🧨 САБОТАЖ: в `isMachineIn` прибрати `inP(r.loadDay)` (лише «дата є») → червоніє (машина поза періодом і майбутня).
+ */
+test("#3730 МАШИНИ — за «Датою загрузки» в періоді, будь-який етап; без дати, поза періодом, майбутні й постійні — ні", () => {
+  const E = (pz: number, deal: number, lg = 7, ck: string | null = null): HandoffEntry =>
+    ({ pzId: pz, lgId: lg, lgTeamId: 1, at: Date.parse("2026-10-20T09:00:00Z") + pz, day: "2026-10-20", dealId: deal, clientKey: ck });
+  const S = (cls: DealState["cls"], loadDay: string | null, closedDay: string | null = null): DealState =>
+    ({ cls, price: 1_000, closedDay, autoDay: null, loadDay, pendDays: [] });
+  const states = new Map<number, DealState>([
+    [9701, S("expect", "2026-10-27")],               // «Виставлення рахунку», авто загружене — машина, грошей ще немає
+    [9702, S("expect", null)],                       // дати загрузки немає — не машина
+    [9703, S("expect", "2026-09-28")],               // загрузка до періоду — не машина цього періоду
+    [9704, S("lost", "2026-10-28", "2026-10-30")],   // втрачена після загрузки — машина без грошей
+    [9705, S("success", "2026-10-21", "2026-10-29")],// успішна — машина з грошима
+    [9706, S("paid", "2026-10-22")],                 // оплата отримана — машина з грошима
+    [9707, S("expect", "2026-10-23")],               // постійний клієнт — не машина лідгена
+    [9708, S("expect", "2026-11-03")],               // загрузка після «сьогодні» (02.11) — ще не машина
+  ]);
+  const regular = new Map([["постійний", [{ at: Date.parse("2026-07-01"), day: "2026-07-01" }, { at: Date.parse("2026-09-01"), day: "2026-09-01" }]]]);
+  const domain = [E(1, 9701), E(2, 9702), E(3, 9703), E(4, 9704, 8), E(5, 9705, 8), E(6, 9706), E(7, 9707, 7, "постійний"), E(8, 9708)];
+  const v = handoffView(domain, states, { teamId: null, managerId: null }, regular, leadgenPeriod("2026-10-01", "2026-11-30", "2026-11-02"));
+  assert.deepEqual([v.totals.machines, v.totals.machinesNoMoney], [4, 2],
+    "🔴 машин не 4 (рахунок 9701, втрачена 9704, успішна 9705, оплачена 9706) або «гроші ще не зайшли» не 2 (9701, 9704)");
+  assert.deepEqual(v.byPerson.map((p) => [p.managerId, p.money.machines, p.money.machinesNoMoney]), [[7, 2, 1], [8, 2, 1]], "🔴 розклад по людях");
+  assert.equal(v.byPerson.reduce((a, p) => a + p.money.machines, 0), v.totals.machines, "🔴 Σ людей ≠ відділ");
+  assert.equal(v.rows.find((r) => r.dealId === 9701)?.loadDay, "2026-10-27", "🔴 рядок списку не несе дату загрузки");
+  assert.equal(personMoneyWire(7, v.byPerson[0].money).machinesNoMoney, 1, "🔴 «гроші ще не зайшли» не доїхали у відповідь");
+});
+
+/**
+ * #3730b — МАШИНИ ПО ТИЖНЯХ: машина — у тижні своєї «Дати загрузки», Σ тижнів == періоду (дата одна); машина й успіх
+ * в одному тижні не двоять «Успішні».
+ * 🧨 САБОТАЖ: у `handoffMoneyBuckets` прибрати `put(money, k(r.loadDay …), r)` → червоніє (тиждень загрузки без машини).
+ */
+test("#3730b МАШИНИ ПО ТИЖНЯХ: у тижні загрузки, Σ тижнів == період, успіх того ж тижня не двоїться", () => {
+  const E = (pz: number, deal: number): HandoffEntry =>
+    ({ pzId: pz, lgId: 7, lgTeamId: 1, at: Date.parse("2026-10-05T09:00:00Z") + pz, day: "2026-10-05", dealId: deal });
+  const states = new Map<number, DealState>([
+    [9711, { cls: "expect", price: 1_000, closedDay: null, autoDay: null, loadDay: "2026-10-14", pendDays: [] }],
+    [9712, { cls: "success", price: 2_000, closedDay: "2026-10-22", autoDay: "2026-10-20", loadDay: "2026-10-20",
+      pendDays: [{ day: "2026-10-20", pending: true }, { day: "2026-10-22", pending: false }] }],
+  ]);
+  const P = leadgenPeriod("2026-10-01", "2026-10-31", "2026-11-02");
+  const v = handoffView([E(1, 9711), E(2, 9712)], states, { teamId: null, managerId: null }, new Map(), P);
+  const weeks = handoffMoneyBuckets(v.rows, "week", P);
+  const w = (b: string) => weeks.find((x) => x.bucket === b)?.totals;
+  assert.deepEqual([w("2026-10-12")?.machines, w("2026-10-19")?.machines], [1, 1], "🔴 машина не в тижні своєї загрузки");
+  assert.equal(weeks.reduce((a, b) => a + b.totals.machines, 0), v.totals.machines, "🔴 Σ тижнів машин ≠ періоду");
+  assert.deepEqual([w("2026-10-19")?.earned.n, w("2026-10-19")?.earned.sum], [1, 2_000], "🔴 машина й успіх одного тижня задвоїли «Успішні»");
+});
+
+/**
+ * #3730c — ЗВІТНИЙ ТИЖДЕНЬ (задача 7363): Пн–Нд, як у КВП, — тиждень кінця періоду або сьогоднішній, якщо період ще йде;
+ * кінець обрізано сьогодні; початком періоду НЕ обрізається.
+ * 🧨 САБОТАЖ: у `reportWeekPeriod` `to < today ? to : today` → `to` → червоніє (тиждень майбутнього кінця місяця).
+ */
+test("#3730c ЗВІТНИЙ ТИЖДЕНЬ: Пн–Нд кінця періоду або сьогодні; кінець — не пізніше сьогодні; початком періоду не ріжеться", () => {
+  const r = (to: string, today: string) => { const p = reportWeekPeriod(to, today); return [p.start, p.end]; };
+  assert.deepEqual(r("2026-11-30", "2026-11-04"), ["2026-11-02", "2026-11-04"], "🔴 поточний місяць: не тиждень сьогодні, обрізаний сьогодні");
+  assert.deepEqual(r("2026-10-31", "2026-11-04"), ["2026-10-26", "2026-11-01"], "🔴 минулий місяць: не тиждень його кінця (Пн 26.10 – Нд 01.11)");
+  assert.deepEqual(r("2026-11-08", "2026-11-09"), ["2026-11-02", "2026-11-08"], "🔴 неділя як кінець — не той тиждень");
+  assert.deepEqual(r("2026-11-02", "2026-11-09"), ["2026-11-02", "2026-11-08"], "🔴 понеділок як кінець — не той тиждень");
 });
