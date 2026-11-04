@@ -15,6 +15,10 @@ import { nextWorkingDay } from "./callAiPromise.js";
  *
  * Посилання на угоду (`dealUrl`) передає джоба (`kommoLinks` тягне `config`, а ядро мусить імпортуватись без БД — гейти).
  *
+ * 📝 Текст задачі — у «Короткий коментар» (`comments`): картка Задачника показує саме його, а `description` не виводить
+ * узагалі (Роман 04.11.2026: «додай як текст, щоб я міг скопіювати й перейти»). Опис дублюється в `description`. Задачам,
+ * поставленим до цієї правки, коментар дописується з опису — лише порожній, написане людьми не чіпається.
+ *
  * Журнал `first_touch_auto_tasks` — рядок на (вид, ключ): угода для ①, розмова для ②. Унікальний ключ у БД, а не
  * перевірка в коді: задача й рядок журналу йдуть ОДНИМ оператором, тож дубль упирається в індекс і відкочує обидва.
  */
@@ -114,11 +118,11 @@ export async function teamLeadUsers(db: Db): Promise<Map<number, number>> {
      ORDER BY u.team_id, u.id`)).rows.map((x) => [Number(x.team_id), Number(x.user_id)]));
 }
 
-export interface AutoTaskStats { created: number; known: number; closed: number; noLead: number }
+export interface AutoTaskStats { created: number; known: number; closed: number; noLead: number; filled: number }
 
 export async function syncFirstTouchAutoTasks(db: Db, plan: AutoTaskPlan, now: Date): Promise<AutoTaskStats> {
   const at = now.toISOString();
-  const stats: AutoTaskStats = { created: 0, known: 0, closed: 0, noLead: plan.noLead.length };
+  const stats: AutoTaskStats = { created: 0, known: 0, closed: 0, noLead: plan.noLead.length, filled: 0 };
   const journal = (await db.query<{ id: string; kind: AutoTaskKind; item_key: string; task_id: number | null; closed_at: Date | null; status: string | null }>(`
     SELECT j.id, j.kind, j.item_key, j.task_id, j.closed_at, t.status
       FROM first_touch_auto_tasks j LEFT JOIN tasks t ON t.id = j.task_id`)).rows;
@@ -127,13 +131,18 @@ export async function syncFirstTouchAutoTasks(db: Db, plan: AutoTaskPlan, now: D
     if (known.has(`${it.kind}:${it.key}`)) { stats.known++; continue; }
     await db.query(`
       WITH x AS (
-        INSERT INTO tasks (title, description, status, deadline, assignee_user_id, priority, department, task_type, created_at, updated_at)
-        VALUES ($1, $2, 'not_started', $3::date, $4, $5, $6, 'simple', $7, $7) RETURNING id)
+        INSERT INTO tasks (title, description, comments, status, deadline, assignee_user_id, priority, department, task_type, created_at, updated_at)
+        VALUES ($1, $2, $2, 'not_started', $3::date, $4, $5, $6, 'simple', $7, $7) RETURNING id)
       INSERT INTO first_touch_auto_tasks (kind, item_key, task_id, opened_at) SELECT $8, $9, id, $7 FROM x`,
       [it.title, it.description, it.deadline, it.assigneeUserId, it.priority, it.department, at, it.kind, it.key]);
     known.add(`${it.kind}:${it.key}`);
     stats.created++;
   }
+  // Поставлені до 04.11 16:00 (текст лише в `description`, картка його не показувала) — коментар з опису, лише порожній.
+  stats.filled = (await db.query(`
+    UPDATE tasks t SET comments = t.description, updated_at = $1
+      FROM first_touch_auto_tasks j
+     WHERE j.task_id = t.id AND t.comments IS NULL AND t.description IS NOT NULL`, [at])).rowCount ?? 0;
   for (const j of journal) {
     if (j.kind !== "analysis_failed" || j.closed_at != null || !plan.resolved.has(j.item_key)) continue;
     if (j.task_id != null && j.status !== "done") {
