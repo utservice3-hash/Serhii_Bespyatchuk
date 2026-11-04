@@ -50,6 +50,7 @@ payrollRouter.post("/me/records/:month/agree", h(null, (req, _r, v) => P.agree(p
 payrollRouter.post("/me/records/:month/dispute", h(null, (req, _r, v) => P.dispute(pool, v, mk(req), body(req).text)));
 payrollRouter.post("/me/records/:month/payout-form", h(null, (req, _r, v) => P.submitForm(pool, v, mk(req), body(req))));
 payrollRouter.post("/me/advances", h(null, async (req, res, v) => { const r = await P.requestAdvance(pool, v, body(req)); res.status(201); return r; }));
+payrollRouter.post("/me/advance-remind", h(null, (_q, _r, v) => P.toggleAdvanceReminder(pool, v)));
 payrollRouter.post("/me/advances/:id/cancel", h(null, (req, _r, v) => P.cancelAdvance(pool, v, intP(req.params.id))));
 payrollRouter.get("/me/cards", h(null, (_q, _r, v) => P.myCards(pool, v)));
 payrollRouter.post("/me/cards", h(null, async (req, res, v) => { const r = await P.addCard(pool, v, body(req)); res.status(201); return r; }));

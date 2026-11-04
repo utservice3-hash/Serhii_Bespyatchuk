@@ -119,13 +119,13 @@ test("#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, за
     await c.query(`INSERT INTO payroll_teams (code, name, dept_code, offer_code, kommo_team_id) VALUES ('t1', 'Нові клієнти', 'sales', 'std', 1) ON CONFLICT DO NOTHING`);
 
     const { kyivNow } = await import("./state.js");
-    const { prevMonth } = await import("./engine/zarplata-engine.mjs");
+    const { prevMonth, nextMonth } = await import("./engine/zarplata-engine.mjs");
     const live = kyivNow().slice(0, 7), pm = prevMonth(live);
     // угоди «Успішно реалізовано»: Марина — у минулому місяці 2 (маржа 30 000), у поточному 1 (5 000)
-    await c.query(`INSERT INTO deals (kommo_id, name, status_id, pipeline_id, manager_id, price, client_name, closed_at_kommo, ttn_files) VALUES
-      (900001, 'Київ – Львів', 142, 8921932, 10, 18000, 'ТОВ «Альфа»', ($1 || '-05 12:00')::timestamp AT TIME ZONE 'Europe/Kyiv', 1),
-      (900002, 'Київ – Одеса', 142, 8921932, 10, 12000, 'ТОВ «Бета»', ($1 || '-10 12:00')::timestamp AT TIME ZONE 'Europe/Kyiv', 0),
-      (900003, 'Дніпро – Київ', 142, 8921932, 10, 5000, 'ТОВ «Альфа»', ($2 || '-01 09:00')::timestamp AT TIME ZONE 'Europe/Kyiv', 0)`, [pm, live]);
+    await c.query(`INSERT INTO deals (kommo_id, name, status_id, pipeline_id, manager_id, price, client_name, client_key, closed_at_kommo, ttn_files) VALUES
+      (900001, 'Київ – Львів', 142, 8921932, 10, 18000, 'ТОВ «Альфа»', 'альфа', ($1 || '-05 12:00')::timestamp AT TIME ZONE 'Europe/Kyiv', 1),
+      (900002, 'Київ – Одеса', 142, 8921932, 10, 12000, 'ТОВ «Бета»', 'бета', ($1 || '-10 12:00')::timestamp AT TIME ZONE 'Europe/Kyiv', 0),
+      (900003, 'Дніпро – Київ', 142, 8921932, 10, 5000, 'ТОВ «Альфа»', 'альфа', ($2 || '-01 09:00')::timestamp AT TIME ZONE 'Europe/Kyiv', 0)`, [pm, live]);
     await c.query(`INSERT INTO plans (manager_id, plan_date, metric, planned_value) VALUES (10, $1::date, 'payment_amount', 40000)`, [`${pm}-01`]);
 
     await import("../lib/asyncRoutes.js");
@@ -239,9 +239,22 @@ test("#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, за
     const paidRec = await c.query(`SELECT status, paid_snapshot FROM payroll_records WHERE user_id = 3`);
     assert.equal(paidRec.rows[0].status, "paid"); assert.equal(Math.round(paidRec.rows[0].paid_snapshot.pay), due);
 
+    // ---------- «Нагадати» про аванс: до відкриття — записується; відкрилось — джоба шле сповіщення adv.open ----------
+    const winOpen = (await call("mar", "GET", "/payroll/me")).j.live.advance.open;
+    const rem = await call("mar", "POST", "/payroll/me/advance-remind");
+    if (winOpen) assert.equal(rem.s, 409, "нагадування, коли заявки вже відкрито");
+    else { assert.equal(rem.s, 200, JSON.stringify(rem.j)); assert.equal(rem.j.on, true); assert.equal((await call("mar", "GET", "/payroll/me")).j.advanceRemind, true); }
+    assert.equal(await S.remindersTick(pool), 0, "🔴 нагадування пішло до відкриття заявок");
+
     // ---------- аванс ----------
     await c.query(`INSERT INTO payroll_settings_versions (valid_from, settings, reason) VALUES ($1::date, '{"advance":{"fromDay":1}}', 'тест: аванс з 1-го')`, [`${live}-01`]);
     S.invalidate();
+    if (!winOpen) {
+      assert.equal(await S.remindersTick(pool), 1, "🔴 заявки відкрито, а нагадування не пішло");
+      assert.equal(await S.remindersTick(pool), 0, "🔴 нагадування пішло двічі");
+      const n = await c.query(`SELECT n.title FROM notifications n JOIN notification_recipients r ON r.notification_id = n.id WHERE n.type = 'adv.open' AND r.user_id = 3`);
+      assert.equal(n.rowCount, 1); assert.equal(n.rows[0].title, "Заявки на аванс відкрито");
+    }
     me = await call("mar", "GET", "/payroll/me");
     const lim = me.j.live.advance.limit.amount;
     assert.ok(me.j.live.advance.open && lim > 0, `ліміт авансу ${JSON.stringify(me.j.live.advance)}`);
@@ -269,6 +282,28 @@ test("#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, за
     r = await call("acc", "GET", "/payroll/clearances");
     assert.equal(r.j.length, 1, "бухгалтерія не бачить обхідного листа");
     assert.equal((await call("nat", "GET", "/payroll/clearances")).j.length, 0, "🔴 КВП бачить чужий обхідний лист");
+    // п. 1 «клієнти»: передача — тим самим механізмом, що екран «Клієнти» (закріплення + історія, з 1-го наступного місяця)
+    assert.equal((await call("iry", "POST", "/payroll/clearances/3/items/clients/sign", { data: { "ТОВ «Альфа»": "4" } })).s, 409, "підпис п. 1, коли не всім клієнтам призначено");
+    r = await call("iry", "POST", "/payroll/clearances/3/items/clients/sign", { data: { "ТОВ «Альфа»": "4", "ТОВ «Бета»": "4" } });
+    assert.equal(r.s, 200, JSON.stringify(r.j));
+    const pins = await c.query(`SELECT client_key, pinned_manager_id, to_char(pinned_from_month, 'YYYY-MM') AS mk FROM loyalty_overrides ORDER BY client_key`);
+    assert.deepEqual(pins.rows.map((x) => [x.client_key, x.pinned_manager_id, x.mk]), [["альфа", 11, nextMonth(live)], ["бета", 11, nextMonth(live)]], "🔴 клієнти не передані новому відповідальному");
+    const hist = await c.query(`SELECT client_key, to_manager_id, kind FROM client_manager_history ORDER BY client_key`);
+    assert.deepEqual(hist.rows.map((x) => [x.client_key, x.to_manager_id, x.kind]), [["альфа", 11, "transfer"], ["бета", 11, "transfer"]], "🔴 передача без історії");
+    // п. 9: ОД бачить суму фінального розрахунку; КВП — ні (немає права бачити зарплати)
+    const odSheet = await call("od", "GET", "/payroll/clearances/3");
+    assert.ok(odSheet.j.finalPay && odSheet.j.finalPay.month === live, `ОД не бачить суми п. 9: ${JSON.stringify(odSheet.j.finalPay)}`);
+    assert.equal((await call("ba", "GET", "/payroll/clearances/3")).j.finalPay, null, "🔴 бізнес-асистент бачить суму ЗП у п. 9");
+
+    // ---------- прогноз / аналітика / люди: нові поля ----------
+    const fc = await call("od", "GET", `/payroll/forecast?month=${live}`);
+    assert.equal(fc.j.closedPay.month, pm); assert.equal(fc.j.closedPay.byStatus.paid.n, 1, JSON.stringify(fc.j.closedPay));
+    assert.ok(Array.isArray(fc.j.disputes));
+    const an = await call("od", "GET", `/payroll/analytics?month=${pm}`);
+    const t1 = an.j.teams.find((t: { k: string }) => t.k === "t1");
+    assert.ok(t1 && t1.people.some((x: { id: string; pay: number }) => x.id === "3" && x.pay > 0), `люди в аналітиці без суми: ${JSON.stringify(t1?.people)}`);
+    assert.ok(an.j.rowSeries.teams.t1?.length >= 1, "немає тренду рядка команди");
+    assert.equal(t1.lead, "Ірина Савчук");
 
     // ---------- сповіщення: лише свої, прочитано ----------
     const mine = await call("ba", "GET", "/notifications");
@@ -309,5 +344,20 @@ test("#2604 ФРОНТ «ЗАРПЛАТИ»: пункт меню, розділ, 
   const map = /const ZP_TABS: Record<string, string> = \{([^}]+)\}/.exec(bell)?.[1] ?? "";
   for (const t of tabs) assert.match(map, new RegExp(`\\b${t}: "`), `🔴 сповіщення з go.tab='${t}' ведуть у нікуди`);
   assert.ok(tabs.size >= 7, `🔴 вкладок у сповіщеннях ${tabs.size} — регулярка нічого не знайшла`);
+});
+
+test("#2605 EMAIL-КАНАЛ СПОВІЩЕНЬ: без SMTP_URL вимкнено; лист — UTF-8 base64, тема encoded-word, відправник з імені", async () => {
+  const M = await import("./mailer.js");
+  assert.equal(M.mailConfig({}), null, "🔴 без SMTP_URL канал вважається налаштованим");
+  assert.equal(M.mailConfig({ SMTP_URL: "smtp://u:p@h:587" }), null, "🔴 прийнято порт без TLS — пароль пішов би відкрито");
+  const cfg = M.mailConfig({ SMTP_URL: "smtps://bot%40uts.ua:p%40ss@smtp.example.com:465", SMTP_FROM: "UTS Dashboard <noreply@uts.ua>" })!;
+  assert.deepEqual(cfg, { host: "smtp.example.com", port: 465, user: "bot@uts.ua", pass: "p@ss", from: "UTS Dashboard <noreply@uts.ua>" });
+  const msg = M.buildMessage(cfg.from, "a@b.ua", "Заявки на аванс відкрито", "Можна взяти до 5 010 ₴.\n.\nкрапка", new Date("2026-11-25T07:00:00Z"));
+  const [head, body] = msg.split("\r\n\r\n");
+  assert.match(head, /^From: =\?UTF-8\?B\?[A-Za-z0-9+/=]+\?= <noreply@uts\.ua>$/m);
+  assert.match(head, /^Subject: =\?UTF-8\?B\?[A-Za-z0-9+/=]+\?=$/m);
+  assert.equal(Buffer.from(/Subject: =\?UTF-8\?B\?(.+)\?=/.exec(head)![1], "base64").toString("utf8"), "Заявки на аванс відкрито");
+  assert.equal(Buffer.from(body.replace(/\r\n/g, ""), "base64").toString("utf8"), "Можна взяти до 5 010 ₴.\n.\nкрапка");
+  assert.ok(body.split("\r\n").every((l) => l.length <= 76 && !l.startsWith(".")), "🔴 рядок тіла довший за 76 або з крапки — SMTP обріже лист");
 });
 

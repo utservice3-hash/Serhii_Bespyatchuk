@@ -8,6 +8,7 @@
  * Тексти — простий текст; фронт екранує при виведенні (React).
  */
 import type { Pool, PoolClient } from "pg";
+import { mailConfig, mailReady, sendMail } from "./mailer.js";
 
 type Db = Pool | PoolClient;
 export interface EngineNotification { type: string; at?: string | null; to: string[]; act: boolean; cta?: string; title: string; text: string; go?: unknown; done?: unknown; empId?: string }
@@ -34,6 +35,7 @@ export async function emitAll(db: Db, list: EngineNotification[], opts: { telegr
     await db.query(`INSERT INTO notification_recipients (notification_id, user_id)
                     SELECT $1, u.id FROM users u WHERE u.id = ANY($2::int[]) ON CONFLICT DO NOTHING`, [id, to]);
     if (opts.telegram !== false && rule.channels.includes("telegram")) void sendTelegram(db, id, to, `${n.title}\n${n.text}`);
+    if (opts.telegram !== false && rule.channels.includes("email")) void sendEmail(db, id, to, n.title, n.text);
   }
   return ids;
 }
@@ -44,6 +46,20 @@ async function sendTelegram(db: Db, id: number, to: number[], text: string): Pro
     const users = (await db.query<{ id: number; chat: string }>(`SELECT id, telegram_chat_id::text AS chat FROM users WHERE id = ANY($1::int[]) AND telegram_chat_id IS NOT NULL`, [to])).rows;
     for (const u of users) if (await signBotSend(u.chat, text)) await db.query(`UPDATE notification_recipients SET telegram_sent_at = now() WHERE notification_id = $1 AND user_id = $2`, [id, u.id]);
   } catch (e) { console.error("[notify] telegram:", (e as Error).message); }
+}
+
+/** Лист кожному адресатові з поштою в акаунті. Без `SMTP_URL` — нічого (канал у налаштуваннях позначено «не налаштовано»). */
+async function sendEmail(db: Db, id: number, to: number[], title: string, text: string): Promise<void> {
+  const cfg = mailConfig(); if (!cfg) return;
+  try {
+    const users = (await db.query<{ id: number; email: string }>(`SELECT id, email FROM users WHERE id = ANY($1::int[]) AND is_active AND email LIKE '%@%'`, [to])).rows;
+    for (const u of users) {
+      try {
+        await sendMail(cfg, u.email, title, `${text}\n\n— UTS Dashboard: https://dashboard.uts.ua`);
+        await db.query(`UPDATE notification_recipients SET email_sent_at = now() WHERE notification_id = $1 AND user_id = $2`, [id, u.id]);
+      } catch (e) { console.error("[notify] email:", (e as Error).message); }
+    }
+  } catch (e) { console.error("[notify] email:", (e as Error).message); }
 }
 
 /** Автозакриття «потрібна дія»: правило рушія на свіжому знімку. doneAt — notifier.notificationDoneAt. */
@@ -85,7 +101,9 @@ export async function markRead(db: Db, userId: number, ids: number[] | null): Pr
   else if (ids.length) await db.query(`UPDATE notification_recipients SET read_at = now() WHERE user_id = $1 AND notification_id = ANY($2::bigint[]) AND read_at IS NULL`, [userId, ids]);
 }
 export async function listRules(db: Db) {
-  return (await db.query(`SELECT type, module, act, event, recipients, channels, enabled FROM notify_rules ORDER BY module, type`)).rows;
+  // emailReady — чи налаштовано SMTP: галочка «email» без нього нічого не надсилає, і екран має це казати
+  const emailReady = mailReady();
+  return (await db.query(`SELECT type, module, act, event, recipients, channels, enabled FROM notify_rules ORDER BY module, type`)).rows.map((r) => ({ ...r, emailReady }));
 }
 export async function setRule(db: Db, type: string, channels: string[] | undefined, enabled: boolean | undefined): Promise<boolean> {
   const ok = ["dashboard", "telegram", "email"];
