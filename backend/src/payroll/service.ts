@@ -127,8 +127,9 @@ function clearanceOut(e: Engine, empId: string, viewerId: string | null) {
 
 export async function cabinet(db: Db, v: Viewer) {
   const e = await engine(db); const id = String(v.userId); const p = e.zp.person(id);
-  if (!p) return { enrolled: false };
+  const perms = [...v.perms];   // які вкладки показати — фронт не чекає перелогіну (у JWT права старі)
   const live = e.zp.liveMonth, closed = e.zp.closedMonth;
+  if (!p) return { enrolled: false, perms, liveMonth: live, closedMonth: closed };
   const employed = e.zp.employedIn(p, live);
   const calc = employed ? e.zp.calc(p, live) : null;
   const adv = e.zp.advanceOf(id, live);
@@ -142,7 +143,7 @@ export async function cabinet(db: Db, v: Viewer) {
   const offers = (e.state.tasks as Array<Record<string, unknown>>).filter((t) => t.empId === id).map((t) => ({ title: t.title, level: t.level, from: t.from, createdAt: t.createdAt, signedAt: t.signedAt, voidAt: t.voidAt }));
   const S = e.zp.settings;
   return {
-    enrolled: true, simple: e.zp.isSimple(p), now: e.zp.now, today: e.zp.today, settings: { verifyByDay: S.verifyByDay, payByDay: S.payByDay, advance: S.advance, ttn: S.ttn, kpi: S.kpi, start: S.start, profi: S.profi, lead: S.lead, birthday: S.birthday, payMode: S.payMode },
+    enrolled: true, perms, liveMonth: live, closedMonth: closed, simple: e.zp.isSimple(p), now: e.zp.now, today: e.zp.today, settings: { verifyByDay: S.verifyByDay, payByDay: S.payByDay, advance: S.advance, ttn: S.ttn, kpi: S.kpi, start: S.start, profi: S.profi, lead: S.lead, birthday: S.birthday, payMode: S.payMode },
     employee: { id, name: p.name, title: p.title, role: p.role, dept: p.dept, deptName: e.state.departments[p.dept]?.name ?? p.dept, team: p.team, teamName: p.team ? e.state.teams[p.team]?.name ?? p.team : null,
       offer: e.zp.offerCode(p), offerName: e.zp.offerOf(p).name, offerInfo: e.zp.offerOf(p), level: e.zp.levelOf(p, live), levelChange: e.zp.levelChangeAfter(p, live), startDate: p.startDate,
       rate: e.zp.rateOf(p, live), pctRule: e.zp.pctRuleOf(p, live), startRate: e.zp.startRateOf(p), hasKpi: e.zp.hasKpi(p), clientSources: p.role === "manager" ? { start: e.zp.clientSources(p, "start"), profi: e.zp.clientSources(p, "profi") } : null,
