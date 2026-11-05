@@ -949,6 +949,18 @@ export async function receivedByChannel(s: MoneyScope, adSources: string[]): Pro
  * «окупність дня» показує інша колонка, когорта `conversionAdsByDay(...).paidMargin`.
  */
 export async function adReceivedByDay(s: MoneyScope, adSources: string[]): Promise<{ day: string; revenue: number; deals: number }[]> {
+  const q = adReceivedFrom(s, adSources);
+  const r = await pool.query<{ day: string; revenue: string; deals: string }>(
+    `SELECT to_char(${ANCHOR_DAY}, 'YYYY-MM-DD') AS day, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
+       ${q.from}
+      GROUP BY 1 ORDER BY 1`,
+    q.p
+  );
+  return r.rows.map((x) => ({ day: x.day, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+
+/** Спільна вибірка «надійшло з реклами» — і для поденних сум, і для складу дня; розійтись їм нема де (гейт `#3313`). */
+function adReceivedFrom(s: MoneyScope, adSources: string[]): { from: string; p: unknown[] } {
   const p: unknown[] = [];
   const src = sourceSql("received", p);
   const conds: string[] = [];
@@ -956,16 +968,49 @@ export async function adReceivedByDay(s: MoneyScope, adSources: string[]): Promi
   if (s.to) { p.push(s.to); conds.push(`${ANCHOR_DAY} <= $${p.length}`); }
   p.push(adSources);
   conds.push(adDealSql(`$${p.length}`));
-  const r = await pool.query<{ day: string; revenue: string; deals: string }>(
-    `SELECT to_char(${ANCHOR_DAY}, 'YYYY-MM-DD') AS day, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
-       FROM (${src}) src
+  return {
+    from: `FROM (${src}) src
        JOIN deals d ON d.kommo_id = src.kommo_id
        JOIN managers m ON m.id = src.manager_id
-      WHERE ${conds.join(" AND ")}
-      GROUP BY 1 ORDER BY 1`,
-    p
+      WHERE ${conds.join(" AND ")}`,
+    p,
+  };
+}
+
+export interface AdReceivedDeal {
+  kommoId: number;
+  name: string;
+  price: number;
+  /** Коли прийшов лід (створення угоди, Київ) — видно, що гроші дня йдуть від заявок інших днів. */
+  leadDay: string;
+  /** success — закрита «Успішно» (142); paid — «Оплата отримана», ще не закрита. */
+  state: "success" | "paid";
+  manager: string | null;
+}
+
+/**
+ * 🧾 ЗА ЯКІ УГОДИ «НАДІЙШЛО ЦЬОГО ДНЯ» (Роман 05.11.2026: «гроші які надійшли — кнопка, яка показує, за які угоди»).
+ * Та сама вибірка, що й колонка (`adReceivedFrom`), лише без GROUP BY — тож Σ цін складу == числу в колонці.
+ */
+export async function adReceivedDeals(day: string, adSources: string[]): Promise<AdReceivedDeal[]> {
+  const q = adReceivedFrom({ from: day, to: day }, adSources);
+  const r = await pool.query<{ kommo_id: string; name: string | null; price: string | null; lead_day: string;
+                               status_id: string; manager: string | null }>(
+    `SELECT src.kommo_id, d.name, src.price, d.status_id, m.name AS manager,
+            to_char((d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date, 'YYYY-MM-DD') AS lead_day
+       ${q.from}
+      ORDER BY src.price DESC NULLS LAST, src.kommo_id`,
+    q.p
   );
-  return r.rows.map((x) => ({ day: x.day, revenue: Number(x.revenue), deals: Number(x.deals) }));
+  return r.rows.map((x) => ({
+    kommoId: Number(x.kommo_id),
+    // Порожня назва — це «не знаємо», а не «немає»: підписуємо словами (правило зони фронту).
+    name: x.name?.trim() || "без назви в CRM",
+    price: Number(x.price ?? 0),
+    leadDay: x.lead_day,
+    state: Number(x.status_id) === 142 ? "success" : "paid",
+    manager: x.manager,
+  }));
 }
 
 /**
