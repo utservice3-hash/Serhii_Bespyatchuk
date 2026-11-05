@@ -56,7 +56,11 @@ export default function AnalyticsTab({ ctx }: { ctx: PayrollCtx }) {
     if (!x) return null;
     const pv = hasPrev ? prevPct(key) : null, d = pv !== null && x.pct != null ? x.pct - pv : null;
     const resLabel = key.startsWith("t:") ? "маржа команди" : "маржа компанії";
-    const ps = (x.people ?? []) as Array<{ id: string; name: string }>;
+    const ps = (x.people ?? []) as Array<{ id: string; name: string; pay: number | null; margin: number | null }>;
+    // тренд рядка — частка ЗП / результат тієї самої команди чи відділу по місяцях (компанія — загальна лінія)
+    const [kind, k] = key.split(":");
+    const rs = key === "all" ? null : ((kind === "t" ? A.rowSeries?.teams : A.rowSeries?.depts)?.[k] ?? []) as Array<{ month: string; pct: number | null }>;
+    const trend = key === "all" ? series.map((s) => (s.pct ?? null) as number | null) : months.map((m) => rs?.find((z) => z.month === m)?.pct ?? null);
     return [
       <tr key={key} className={cls}>
         <td><b>{name}</b>{sub && <span className="zp-hint"> · {sub}</span>}</td>
@@ -65,10 +69,16 @@ export default function AnalyticsTab({ ctx }: { ctx: PayrollCtx }) {
         <td className="r">{money(x.res ?? A.comp)} <span className="zp-hint">{resLabel}</span></td>
         <td className="r"><div className="zps-anbar"><b>{x.pct == null ? "—" : pct(x.pct, 1)}</b><i style={{ width: `${Math.min(100, ((x.pct ?? 0) / 70) * 100).toFixed(1)}%` }} /></div></td>
         <td className={`r ${d === null ? "" : d > 0.05 ? "zp-tone--warn" : d < -0.05 ? "zp-tone--ok" : "zp-tone--muted"}`}>{d === null ? "—" : ppt(d)}</td>
-        <td>{key === "all" ? <Spark vals={series.map((s) => (s.pct ?? null) as number | null)} /> : null}</td>
+        <td><Spark vals={trend} /></td>
       </tr>,
       ...(people && key !== "all" && key !== "d:sales" ? ps.map((p) => (
-        <tr key={`${key}-${p.id}`} className="zps-an-person"><td colSpan={7}>{p.name || `#${p.id}`}</td></tr>
+        <tr key={`${key}-${p.id}`} className="zps-an-person">
+          <td>{p.name || `#${p.id}`}</td><td />
+          <td className="r">{money(p.pay)}</td>
+          <td className="r">{p.margin ? <>{money(p.margin)} <span className="zp-hint">маржа</span></> : <span className="zp-hint">ставка — без маржі</span>}</td>
+          <td className="r">{p.margin && p.pay != null ? <span className="zp-hint">{pct((p.pay / p.margin) * 100, 1)}</span> : null}</td>
+          <td colSpan={2} />
+        </tr>
       )) : []),
     ];
   };
@@ -102,7 +112,7 @@ export default function AnalyticsTab({ ctx }: { ctx: PayrollCtx }) {
               <thead><tr><th>Відділ / команда</th><th className="r">Людей</th><th className="r">Фонд ЗП</th><th className="r">Результат</th><th className="r">ЗП до результату</th><th className="r">До попер. місяця</th><th>{months.length > 1 ? `Тренд · ${short(months[0])}–${short(months[months.length - 1])}` : "Тренд"}</th></tr></thead>
               <tbody>
                 {row("d:sales", sales, "Відділ продажу", "менеджери й тім-ліди", "zps-an-grp")}
-                {(A.teams as Obj[]).map((t) => row(`t:${t.k}`, t, t.name ?? t.k, "команда", "zps-an-tm"))}
+                {(A.teams as Obj[]).map((t) => row(`t:${t.k}`, t, t.name ?? t.k, t.lead ? `команда · тім-лід ${t.lead}` : "команда · тім-ліда в зарплаті немає", "zps-an-tm"))}
                 {(A.depts as Obj[]).filter((d) => !d.sales).map((d) => row(`d:${d.k}`, d, d.name ?? d.k, "не продає — ставка"))}
               </tbody>
               <tfoot>{row("all", A.all, "Компанія разом", "")}</tfoot>
@@ -113,7 +123,7 @@ export default function AnalyticsTab({ ctx }: { ctx: PayrollCtx }) {
         <div className="zp-hint">
           Результат: для команди — маржа її менеджерів («Успішно реалізовано»; у закритому місяці — перевірена фінансистом), для відділу продажу
           й відділів, що не продають, — маржа компанії. Фонд ЗП — нараховано (ставка, %, бонуси, дні народження) + офіційна ЗП, що виплачується
-          окремо; податки не враховано. Тренд — частка компанії по місяцях.
+          окремо; податки не враховано. Тренд — частка рядка по місяцях (той самий розрахунок, що й у колонці «ЗП до результату»).
         </div>
       </div>
     </Card>

@@ -5,9 +5,12 @@
  * сповіщення рушія → автозакриття виконаних «потрібна дія». Кеш знімка для читання — 60 с, скидається кожною дією.
  */
 import type { Pool, PoolClient } from "pg";
+import { writeClientPin } from "../core/clientTransfer.js";
+import { effectiveFromFor } from "../core/effectiveManager.js";
+import { kyivToday } from "../core/dates.js";
 import { createPayroll, nextStatus, nextMonth, prevMonth, lastDay, CLEARANCE_ITEMS, CLEARANCE_ROLES, LEAVE_TYPES, EXTRA_KINDS, DEFAULT_SETTINGS, type Payroll, type PayrollState } from "./engine/zarplata-engine.mjs";
 import { createNotifier, OFFER_TITLES } from "./engine/notify.mjs";
-import { loadState, kyivNow, monthStart, NAME_SQL, NAME_JOIN } from "./state.js";
+import { loadState, kyivNow, kyivIso, monthStart, NAME_SQL, NAME_JOIN } from "./state.js";
 import { emitAll, closeDone, type EngineNotification } from "./notifyCenter.js";
 import { encryptCard, decryptCard, validateCard, cardHash, cardsAvailable, CardKeyMissing } from "./cards.js";
 
@@ -131,6 +134,14 @@ function clearanceOut(e: Engine, empId: string, viewerId: string | null) {
   };
 }
 
+/** Хто й коли запланував зміну рівня (для «З 1 грудня — „Профі"» у кабінеті): вибір менеджера, рішення керівництва чи автоматично. */
+async function levelChangeInfoOf(db: Db, uid: number, live: string) {
+  const r = (await db.query<{ mk: string; level: string; reason: string; auto: boolean; at: Date; by: string | null }>(
+    `SELECT to_char(t.valid_from, 'YYYY-MM') AS mk, t.level, t.reason, t.auto, t.changed_at AS at, ${NAME_SQL} AS by
+       FROM payroll_terms t LEFT JOIN users u ON u.id = t.changed_by ${NAME_JOIN}
+      WHERE t.user_id = $1 AND t.level IS NOT NULL AND t.valid_from > $2::date ORDER BY t.changed_at DESC LIMIT 1`, [uid, monthStart(live)])).rows[0];
+  return r ? { from: r.mk, level: r.level, reason: r.reason, auto: r.auto, at: kyivIso(r.at), by: r.auto ? null : r.by } : null;
+}
 export async function cabinet(db: Db, v: Viewer) {
   const e = await engine(db); const id = String(v.userId); const p = e.zp.person(id);
   const perms = [...v.perms];   // які вкладки показати — фронт не чекає перелогіну (у JWT права старі)
@@ -164,6 +175,11 @@ export async function cabinet(db: Db, v: Viewer) {
     closed: closed ? recordOut(e, id, closed, true) : null,
     clearance: clearanceOut(e, id, id),
     cards: await cardsOf(db, v.userId), cardsAvailable: cardsAvailable(), payouts: paidMonths, advances, offers,
+    levelChangeInfo: await levelChangeInfoOf(db, v.userId, live),
+    // дні народження місяця — лише імена й дати (суми чужих ЗП тут немає); «без збору» — стаж до року
+    birthdaysMonth: (e.zp.employees as Array<Record<string, unknown>>).map((x) => ({ x, g: e.zp.birthdayGift(x, live) as { date: string; young: boolean } | null }))
+      .filter((r) => r.g).map((r) => ({ id: r.x.id, name: r.x.name, date: r.g!.date, young: r.g!.young, me: r.x.id === id })).sort((a, b) => a.date.localeCompare(b.date)),
+    advanceRemind: (await db.query(`SELECT 1 FROM payroll_reminders WHERE user_id = $1 AND month = $2::date AND kind = 'advance' AND sent_at IS NULL`, [v.userId, monthStart(live)])).rowCount! > 0,
   };
 }
 export async function myDeals(db: Db, v: Viewer, mk: string) {
@@ -284,6 +300,31 @@ export async function requestAdvance(pool: Pool, v: Viewer, body: Record<string,
   });
   await after(pool, (e) => e.nt.build.advanceRequested(id, mk));
   return { ok: true };
+}
+/** «Нагадати» в кабінеті: сповіщення в день, коли відкриються заявки на аванс (джоба `payrollReminders`). Повторне — скасовує. */
+export async function toggleAdvanceReminder(pool: Pool, v: Viewer) {
+  const e = await engine(pool); const p = e.zp.person(String(v.userId));
+  if (!p) fail(403, "Вас немає в зарплаті — зверніться до фінансиста.");
+  const mk = e.zp.liveMonth;
+  if (e.zp.advanceWindowOpen(mk)) fail(409, "Заявки на аванс уже відкрито — можна подавати.");
+  const del = await pool.query(`DELETE FROM payroll_reminders WHERE user_id = $1 AND month = $2::date AND kind = 'advance' AND sent_at IS NULL`, [v.userId, monthStart(mk)]);
+  if (del.rowCount) return { on: false };
+  await pool.query(`INSERT INTO payroll_reminders (user_id, month, kind) VALUES ($1, $2::date, 'advance') ON CONFLICT DO NOTHING`, [v.userId, monthStart(mk)]);
+  return { on: true, day: e.zp.settings.advance.fromDay };
+}
+/** Джоба: відкрились заявки на аванс → сповіщення тим, хто просив нагадати (тип adv.open; канали — з правил). */
+export async function remindersTick(pool: Pool): Promise<number> {
+  const e = await engine(pool, { fresh: true }); const mk = e.zp.liveMonth;
+  if (!e.zp.advanceWindowOpen(mk)) return 0;
+  const due = (await pool.query<{ id: string; user_id: number }>(`SELECT id::text, user_id FROM payroll_reminders WHERE kind = 'advance' AND month = $1::date AND sent_at IS NULL`, [monthStart(mk)])).rows;
+  if (!due.length) return 0;
+  const N = nameMap(e);
+  await emitAll(pool, due.filter((r) => N[String(r.user_id)] !== undefined).map((r) => {
+    const L = e.zp.advanceLimit(String(r.user_id), mk) as { amount: number };
+    return { type: "adv.open", to: [String(r.user_id)], act: false, title: "Заявки на аванс відкрито", text: `Можна взяти до ${uahTxt(L.amount)} — подайте заявку в кабінеті «Моя зарплата».`, go: { tab: "cab", mz: { tab: "pay", focus: "#adv" } }, empId: String(r.user_id) };
+  }));
+  await pool.query(`UPDATE payroll_reminders SET sent_at = now() WHERE id = ANY($1::bigint[])`, [due.map((r) => Number(r.id))]);
+  return due.length;
 }
 export async function cancelAdvance(pool: Pool, v: Viewer, advId: number) {
   const r = await pool.query(`UPDATE payroll_advances SET status = 'cancelled', cancelled_at = now() WHERE id = $1 AND user_id = $2 AND status = 'requested'`, [advId, v.userId]);
@@ -659,7 +700,7 @@ export async function draftClearance(pool: Pool, v: Viewer, uid: number, key: st
   return { ok: true };
 }
 export async function signClearance(pool: Pool, v: Viewer, uid: number, key: string, data: unknown) {
-  const id = String(uid); let n = 0, reassigned = 0;
+  const id = String(uid); let n = 0; let reassigned = { pinned: 0, receivables: 0 };
   await tx(pool, async (c) => {
     const e = await engine(c, { fresh: true });
     const x = CLEARANCE_ITEMS.find((i) => i.k === key); if (!x) fail(404, "Такого пункту немає.");
@@ -672,7 +713,7 @@ export async function signClearance(pool: Pool, v: Viewer, uid: number, key: str
     await c.query(`INSERT INTO payroll_clearance_signatures (clearance_id, item_key, signed_by, signer_name, data) VALUES ($1,$2,$3,$4,$5)`, [Number(cl.id), key, v.userId, resp.name, JSON.stringify(data ?? null)]);
     if (key === "clients" && data && typeof data === "object") reassigned = await reassignClients(c, uid, data as Record<string, string>, v.userId, e.zp.person(id).name);
     n = Object.keys((st.clearance as { signatures: Record<string, unknown> }).signatures).filter((k) => k !== "pay").length + (x!.final ? 0 : 1);
-    await history(c, v.userId, uid, `Обхідний лист — підписано п. ${CLEARANCE_ITEMS.indexOf(x!) + 1}: ${x!.t}`, key === "clients" ? `переприв’язано в дебіторці: ${reassigned}` : null);
+    await history(c, v.userId, uid, `Обхідний лист — підписано п. ${CLEARANCE_ITEMS.indexOf(x!) + 1}: ${x!.t}`, key === "clients" ? `клієнтів передано з 1-го наступного місяця: ${reassigned.pinned}; у дебіторці — одразу: ${reassigned.receivables}` : null);
   });
   const now = kyivNow();
   await after(pool, (e) => {
@@ -688,21 +729,34 @@ export async function signClearance(pool: Pool, v: Viewer, uid: number, key: str
   return clearanceView(pool, v, uid);
 }
 /** П. 1: «новий відповідальний скрізь у дашборді» — дебіторка (ручне призначення відповідального за клієнтом). */
-async function reassignClients(c: PoolClient, uid: number, map: Record<string, string>, by: number, who: string): Promise<number> {
-  let n = 0;
+/**
+ * Обхідний лист, п. 1: «скрізь у дашборді в цих клієнтів новий відповідальний» (бланк компанії). Тим самим механізмом,
+ * що й передача клієнта на екрані «Клієнти» (`writeClientPin`: закріплення + історія, вид `transfer` — з 1-го числа
+ * наступного місяця, правило власника: план і факт поточного місяця не рухаються), плюс відповідальний у дебіторці —
+ * одразу (борг збирає вже новий). Ключ клієнта — з угод того, хто звільняється, за назвою з пункту.
+ */
+async function reassignClients(c: PoolClient, uid: number, map: Record<string, string>, by: number, who: string): Promise<{ pinned: number; receivables: number }> {
+  const leaver = (await c.query<{ manager_id: number | null }>(`SELECT manager_id FROM users WHERE id = $1`, [uid])).rows[0]?.manager_id ?? null;
+  const effectiveFrom = effectiveFromFor("transfer", kyivToday());
+  const reason = `Обхідний лист: ${who} звільняється — новий відповідальний`;
+  let pinned = 0, recv = 0;
   for (const [client, heir] of Object.entries(map)) {
     const m = (await c.query<{ manager_id: number | null }>(`SELECT manager_id FROM users WHERE id = $1`, [Number(heir)])).rows[0];
     if (!m?.manager_id) continue;
-    const keys = (await c.query<{ client_key: string }>(`SELECT DISTINCT client_key FROM receivables WHERE lower(btrim(client_name)) = lower(btrim($1))`, [client])).rows;
+    const keys = (await c.query<{ client_key: string }>(
+      `SELECT DISTINCT client_key FROM deals WHERE client_key IS NOT NULL AND ($2::int IS NULL OR manager_id = $2)
+          AND (lower(btrim(client_name)) = lower(btrim($1)) OR (client_name IS NULL AND lower(btrim(name)) = lower(btrim($1))))
+       UNION SELECT DISTINCT client_key FROM receivables WHERE lower(btrim(client_name)) = lower(btrim($1))`, [client, leaver])).rows;
     for (const k of keys) {
-      await c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note, set_by) VALUES ($1,$2,$3,$4)
+      await writeClientPin(c, { clientKey: k.client_key, toManagerId: m.manager_id, reason, kind: "transfer", effectiveFrom, userId: by });
+      pinned++;
+      const r = await c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note, set_by) SELECT $1,$2,$3,$4 WHERE EXISTS (SELECT 1 FROM receivables WHERE client_key = $1)
                      ON CONFLICT (client_key) DO UPDATE SET manager_id = EXCLUDED.manager_id, note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_at = now()`,
-        [k.client_key, m.manager_id, `Обхідний лист: ${who} звільняється — новий відповідальний`, by]);
-      n++;
+        [k.client_key, m.manager_id, reason, by]);
+      recv += r.rowCount ?? 0;
     }
   }
-  void uid;
-  return n;
+  return { pinned, receivables: recv };
 }
 export async function clearancePrintHtml(db: Db, v: Viewer, uid: number): Promise<string> {
   const c = await clearanceView(db, v, uid);
@@ -727,15 +781,52 @@ export async function forecastView(db: Db, mk: string) {
     risks: f.risks.map((x: Record<string, unknown>) => ({ ...x, name: N[x.empId as string], kpi: undefined, state: undefined, ttn: x.ttn ? { total: (x.ttn as Record<string, number>).total, done: (x.ttn as Record<string, number>).done, pct: (x.ttn as Record<string, number>).pct } : undefined,
       calls: x.kpi ? { normDays: (x.kpi as Record<string, number>).normDays, need: (x.kpi as Record<string, number>).need, left: (x.kpi as Record<string, number>).left } : undefined,
       clearance: x.state ? { done: (x.state as Record<string, number>).done, total: (x.state as Record<string, number>).total } : undefined })),
-    teams: f.teams.map((t: Record<string, unknown>) => ({ ...t, name: e.state.teams[t.team as string]?.name ?? t.team })), dates: { advanceFrom: e.zp.settings.advance.fromDay, payBy: e.zp.settings.payByDay } };
+    teams: f.teams.map((t: Record<string, unknown>) => ({ ...t, name: e.state.teams[t.team as string]?.name ?? t.team })), dates: { advanceFrom: e.zp.settings.advance.fromDay, payBy: e.zp.settings.payByDay },
+    closedPay: closedPayOf(e), disputes: disputesOf(e) };
+}
+/** Виплата закритого місяця для календаря готівки: скільки людей і грошей у кожному стані (до виплати — після авансу). */
+function closedPayOf(e: Engine) {
+  const mk = e.zp.closedMonth; if (!mk) return null;
+  const recs = (e.state.records as Record<string, Record<string, Record<string, unknown>>>)[mk] ?? {};
+  const by: Record<string, { n: number; pay: number }> = {};
+  let total = 0, blocked = 0;
+  for (const [empId, r] of Object.entries(recs)) {
+    const f = e.zp.settlement(empId, mk); const st = String(r.status);
+    (by[st] ??= { n: 0, pay: 0 }); by[st].n++; by[st].pay += Number(f.pay) || 0; total += Number(f.pay) || 0;
+    if (e.zp.payBlocked(empId, mk) || e.zp.payNeedsOd(empId, mk)) blocked++;
+  }
+  return { month: mk, total, byStatus: by, blocked, payBy: `${nextMonth(mk)}-${String(e.zp.settings.payByDay).padStart(2, "0")}` };
+}
+/** Незгоди закритого місяця — ризик для виплати: чекають відповіді фінансиста або рішення ОД. */
+function disputesOf(e: Engine) {
+  const mk = e.zp.closedMonth; if (!mk) return [];
+  const N = nameMap(e);
+  const recs = (e.state.records as Record<string, Record<string, Record<string, unknown>>>)[mk] ?? {};
+  return Object.entries(recs).filter(([, r]) => r.status === "disputed").map(([empId, r]) => {
+    const d = (r.dispute ?? {}) as Record<string, unknown>;
+    return { empId, name: N[empId] ?? "", month: mk, text: d.text ?? null, at: d.at ?? null, pay: Number(e.zp.settlement(empId, mk).pay) || 0 };
+  }).sort((a, b) => b.pay - a.pay);
 }
 export async function analyticsView(db: Db, mk: string, plan: boolean) {
   const e = await engine(db); const N = nameMap(e);
   const months = e.zp.analyticsMonths();
   const series = months.map((m: string) => { const s = e.zp.deptStats(m, m === e.zp.liveMonth ? plan : false); return { month: m, pct: s.all.pct, pay: s.all.pay, comp: s.comp }; });
   const cur = e.zp.deptStats(mk, mk === e.zp.liveMonth ? plan : false), prev = e.zp.deptStats(prevMonth(mk), false);
-  const withNames = (xs: Array<Record<string, unknown>>) => xs.map((x) => ({ ...x, people: (x.people as string[]).map((id) => ({ id, name: N[id] })) }));
-  return { ...cur, teams: withNames(cur.teams), depts: withNames(cur.depts), prev: { all: prev.all, teams: prev.teams.map((t: Record<string, unknown>) => ({ k: t.k, pct: t.pct })), depts: prev.depts.map((t: Record<string, unknown>) => ({ k: t.k, pct: t.pct })) }, series };
+  const usePlan = mk === e.zp.liveMonth ? plan : false;
+  const withNames = (xs: Array<Record<string, unknown>>): Array<Record<string, unknown>> => xs.map((x) => ({ ...x, people: (x.people as string[]).map((id) => {
+    const po = e.zp.payOfMonth(id, mk, usePlan) as { pay: number; margin: number } | null;
+    return { id, name: N[id], pay: po?.pay ?? null, margin: po?.margin ?? null };
+  }).sort((a, b) => (b.pay ?? 0) - (a.pay ?? 0)) }));
+  // частка ЗП / результат по кожному рядку за ті самі місяці, що й загальна лінія (тренд рядка)
+  const rowSeries: { teams: Record<string, Array<{ month: string; pct: number | null }>>; depts: Record<string, Array<{ month: string; pct: number | null }>> } = { teams: {}, depts: {} };
+  for (const m of months) {
+    const st = e.zp.deptStats(m, m === e.zp.liveMonth ? plan : false);
+    for (const t of st.teams as Array<{ k: string; pct: number | null }>) (rowSeries.teams[t.k] ??= []).push({ month: m, pct: t.pct });
+    for (const t of st.depts as Array<{ k: string; pct: number | null }>) (rowSeries.depts[t.k] ??= []).push({ month: m, pct: t.pct });
+  }
+  const leads = Object.fromEntries((e.zp.employees as Array<Record<string, unknown>>).filter((p) => p.role === "lead" && p.leadsTeam).map((p) => [p.leadsTeam as string, N[p.id as string] ?? ""]));
+  return { ...cur, teams: withNames(cur.teams).map((t) => ({ ...t, lead: leads[t.k as string] ?? null })), depts: withNames(cur.depts),
+    prev: { all: prev.all, teams: prev.teams.map((t: Record<string, unknown>) => ({ k: t.k, pct: t.pct })), depts: prev.depts.map((t: Record<string, unknown>) => ({ k: t.k, pct: t.pct })) }, series, rowSeries };
 }
 export async function archiveView(db: Db, uid: number | null) {
   const e = await engine(db); const N = nameMap(e);
@@ -811,11 +902,17 @@ export async function saveSettings(pool: Pool, v: Viewer, body: Record<string, u
   invalidate();
   return { ok: true };
 }
+function offerDocOf(e: Engine, empId: string) {
+  const t = (e.state.tasks as Array<Record<string, unknown>>).filter((x) => x.empId === empId && !x.voidAt).pop();
+  return t ? { id: t.id, title: t.title, level: t.level, from: t.from, signedAt: t.signedAt ?? null, due: t.due ?? null } : null;
+}
 export async function employeesView(db: Db) {
   const e = await engine(db); const live = e.zp.liveMonth;
   const people = (e.zp.employees as Array<Record<string, unknown>>).map((p) => ({ userId: p.id, name: p.name, title: p.title, role: p.role, dept: p.dept, team: p.team, leadsTeam: p.leadsTeam,
     offer: e.zp.offerCode(p), level: e.zp.levelOf(p, live), levelChange: e.zp.levelChangeAfter(p, live), rate: e.zp.rateOf(p, live), pctRule: e.zp.pctRuleOf(p, live),
-    official: e.zp.officialOf(p, live), startDate: p.startDate, birthday: p.birthday, isFinance: p.isFinance, leave: p.leave, simple: e.zp.isSimple(p), terms: p.terms }));
+    official: e.zp.officialOf(p, live), startDate: p.startDate, birthday: p.birthday, isFinance: p.isFinance, leave: p.leave, simple: e.zp.isSimple(p), terms: p.terms,
+    // останній чинний документ оферу: підписано / чекає підпису (анульовані — не показуємо)
+    offerDoc: offerDocOf(e, p.id as string) }));
   const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: string | null; birth: string | null; position: string | null; team_id: number | null; level: string | null }>(
     `SELECT u.id, ${NAME_SQL} AS name, COALESCE(u.role_override, u.role) AS role, to_char(e.hired_at, 'YYYY-MM-DD') AS hired_at, to_char(e.birth_date, 'MM-DD') AS birth, e.position, m.team_id,
             (SELECT el.level FROM employee_levels el WHERE el.employee_id = e.id ORDER BY el.from_month DESC LIMIT 1) AS level

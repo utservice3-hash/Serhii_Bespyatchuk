@@ -3,10 +3,11 @@
  * мала власне імʼя в `job_runs` / `monitoredJobs`.
  *  - payrollMonthClose — 1-го: закриття ПОПЕРЕДНЬОГО місяця (idempotent: повторний прогін нічого не робить);
  *  - payrollTtnTick — кожні 15 хв: дата появи ТТН по угодах «Успішно реалізовано» + «утримання знято»;
- *  - payrollBirthdays — 1-го: сповіщення про дні народження місяця (раз на місяць).
+ *  - payrollBirthdays — 1-го: сповіщення про дні народження місяця (раз на місяць);
+ *  - payrollReminders — щодня о 09:00: «заявки на аванс відкрито» тим, хто натиснув «Нагадати» (до дня — нічого не робить).
  */
 import { pool } from "../db/pool.js";
-import { closeMonth, ttnTick, birthdaysTick } from "../payroll/service.js";
+import { closeMonth, ttnTick, birthdaysTick, remindersTick } from "../payroll/service.js";
 import { kyivNow } from "../payroll/state.js";
 import { prevMonth } from "../payroll/engine/zarplata-engine.mjs";
 
@@ -21,4 +22,8 @@ export async function payrollTtnTick() {
 }
 export async function payrollBirthdays() {
   await birthdaysTick(pool, kyivNow().slice(0, 7));
+}
+export async function payrollReminders() {
+  const n = await remindersTick(pool);
+  if (n) console.log(`[payroll] нагадування про аванс: ${n}`);
 }

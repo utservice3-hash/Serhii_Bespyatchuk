@@ -5,16 +5,17 @@
  * Простий кабінет (відділ не продає): без «Що зробити», плану, угод — замість них найближчі дати.
  * Усі суми — з рушія на сервері (`/payroll/me`); тут лише показ і порядок підказок (`todoItems` макета).
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { payrollApi, type Obj } from "../api";
 import { Pill, money, nextMonth, prevMonth, useLoad } from "../ui";
-import { useToast } from "../../components/Toasts";
 import { Block } from "./Block";
-import { ceilE, dd, ddy, levelName, monthGen, monthLow, nf, pc, plural, limitRule } from "./format";
+import { ceilE, dd, ddy, levelName, levelWho, monthGen, monthLow, nf, pc, plural, limitRule } from "./format";
 import { CloseCard } from "./CloseCard";
 import { AdvanceBlock } from "./Advance";
 import { LeaveBlock } from "./ClearanceMine";
 import { CalendarBlock } from "./Payouts";
+import { DEALS_NO_TTN, useAdvanceRemind } from "./remind";
 
 export type CabTab = "home" | "goal" | "pay" | "terms";
 type Go = (tab: CabTab, focus?: string) => void;
@@ -114,8 +115,11 @@ function LsStrip({ me, go }: { me: Obj; go: Go }) {
 }
 
 // ---------- що зробити, щоб отримати більше (макет: `todoItems`) ----------
-type Todo = { v: number; cls: "risk" | "gain" | "done" | "info"; imp: string; lbl: string; h: string; p: string; bar?: number; color?: string; act?: { label: string; run: () => void } };
-function todoItems(me: Obj, go: Go, toast: (t: string) => void): Todo[] {
+type Act = { label: string; run: () => void; busy?: boolean };
+type Todo = { v: number; cls: "risk" | "gain" | "done" | "info"; imp: string; lbl: string; h: string; p: string; bar?: number; color?: string; act?: Act; act2?: Act };
+/** Дії поза кабінетом: інший розділ дашборда, фільтр «без ТТН» у моїх угодах, «Нагадати» про аванс. */
+type Ex = { nav: (section: string) => void; dealsNoTtn: () => void; remind: { label: string; toggle: () => void; busy: boolean } };
+function todoItems(me: Obj, go: Go, ex: Ex): Todo[] {
   const lv = me.live as Obj, c = lv.calc as Obj, S = me.settings as Obj, e = me.employee as Obj, mk = lv.month as string;
   const it: Todo[] = [], left = c.days.left as number;
   const toDeals = { label: "Мої угоди", run: () => go("home", "deals") };
@@ -140,9 +144,9 @@ function todoItems(me: Obj, go: Go, toast: (t: string) => void): Todo[] {
     if (k && !k.noBonus) {
       const ladder = (S.kpi.ladder ?? []) as Array<[number, number]>;
       const curB = k.step ? k.step[1] : 0, nx = ladder.find((s) => s[0] > k.conv);
-      if (nx && k.leads) { const need = Math.max(1, ceilE(nx[0] * k.leads / 100) - k.targetDeals); it.push({ v: nx[1] - curB, cls: "gain", imp: money(nx[1] - curB, { sign: true }), lbl: "до бонусу", h: `Ще ${need} ${plural(need, "цільова угода", "цільові угоди", "цільових угод")} — конверсія ${nx[0]} %`, p: `Зараз ${pc(k.conv)}: ${k.targetDeals} з ${k.leads} цільових звернень. Бонус ${money(nx[1])} замість ${money(curB)}.`, bar: k.conv / nx[0], color: "var(--info)" }); }
+      if (nx && k.leads) { const need = Math.max(1, ceilE(nx[0] * k.leads / 100) - k.targetDeals); it.push({ v: nx[1] - curB, cls: "gain", imp: money(nx[1] - curB, { sign: true }), lbl: "до бонусу", h: `Ще ${need} ${plural(need, "цільова угода", "цільові угоди", "цільових угод")} — конверсія ${nx[0]} %`, p: `Зараз ${pc(k.conv)}: ${k.targetDeals} з ${k.leads} цільових звернень. Бонус ${money(nx[1])} замість ${money(curB)}.`, bar: k.conv / nx[0], color: "var(--info)", act: { label: "Мої звернення", run: () => ex.nav("ai-calls") } }); }
       if (k.step && k.waived) it.push({ v: 2, cls: "done", imp: money(k.step[1]), lbl: "бонус", h: `Маржа від ${nf(S.kpi.waiveFrom)} ₴ — дзвінки не враховуються`, p: `Бонус за КПІ — лише за конверсією: ${pc(k.conv)} → сходинка ${k.step[0]} %.` });
-      else if (k.step && !k.done && k.reach) { const rest = k.need - k.normDays; it.push({ v: k.step[1], cls: "risk", imp: money(k.step[1]), lbl: "зберегти", h: `Норма дзвінків ${S.kpi.normCalls}+ ще в ${rest} ${plural(rest, "день", "дні", "днів")} із ${k.left}`, p: `${k.normDays} з ${k.need} потрібних днів.${c.margin < S.kpi.waiveFrom ? ` Або маржа від ${nf(S.kpi.waiveFrom)} ₴ — ще ${money(S.kpi.waiveFrom - c.margin)}, тоді дзвінки не враховуються.` : ""}`, bar: k.need ? k.normDays / k.need : 0, color: "var(--warn)" }); }
+      else if (k.step && !k.done && k.reach) { const rest = k.need - k.normDays; it.push({ v: k.step[1], cls: "risk", imp: money(k.step[1]), lbl: "зберегти", h: `Норма дзвінків ${S.kpi.normCalls}+ ще в ${rest} ${plural(rest, "день", "дні", "днів")} із ${k.left}`, p: `${k.normDays} з ${k.need} потрібних днів.${c.margin < S.kpi.waiveFrom ? ` Або маржа від ${nf(S.kpi.waiveFrom)} ₴ — ще ${money(S.kpi.waiveFrom - c.margin)}, тоді дзвінки не враховуються.` : ""}`, bar: k.need ? k.normDays / k.need : 0, color: "var(--warn)", act: { label: "Дзвінки сьогодні", run: () => ex.nav("report") } }); }
       else if (k.step && !k.done) it.push({ v: k.step[1], cls: "risk", imp: money(k.step[1]), lbl: "під ризиком", h: "Норму дзвінків цього місяця вже не набрати", p: `${k.normDays} з ${k.need} днів, лишилось ${k.left} ${plural(k.left, "день", "дні", "днів")}. Бонус ${money(k.step[1])} буде, лише якщо маржа дійде до ${nf(S.kpi.waiveFrom)} ₴ — ще ${money(Math.max(0, S.kpi.waiveFrom - c.margin))}.`, bar: c.margin / S.kpi.waiveFrom, color: "var(--warn)", act: toDeals });
     }
     // ТТН поточного місяця: без ТТН понад 7 днів після перевезення
@@ -150,7 +154,7 @@ function todoItems(me: Obj, go: Go, toast: (t: string) => void): Todo[] {
     if (t && t.total && t.pct < min) {
       const today = String(me.today ?? ""), weekAgo = (iso: string) => { const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 7); return d.toISOString().slice(0, 10); };
       const late = ((t.missing ?? []) as Obj[]).filter((d) => weekAgo(String(d.date)) < today);
-      if (late.length) { const need = Math.max(1, ceilE(min * t.total / 100) - t.done), d = late[0]; it.push({ v: S.ttn.hold, cls: "risk", imp: money(S.ttn.hold), lbl: "не втратити", h: `Додати ТТН: ${d.client}, ${dd(d.date)}`, p: `ТТН є в ${t.done} з ${t.total} угод. На закриття місяця потрібно від ${min} % — ще ${need}, інакше ${money(S.ttn.hold)} утримаємо з виплати до закриття ТТН.`, bar: t.done / t.total, color: "var(--warn)", act: { label: "ТТН моніторинг", run: () => toast("ТТН додає бізнес-асистент у «Бізнес-асистент → ТТН моніторинг» — передайте їй документ.") } }); }
+      if (late.length) { const need = Math.max(1, ceilE(min * t.total / 100) - t.done), d = late[0]; it.push({ v: S.ttn.hold, cls: "risk", imp: money(S.ttn.hold), lbl: "не втратити", h: `Додати ТТН: ${d.client}, ${dd(d.date)}`, p: `ТТН є в ${t.done} з ${t.total} угод. На закриття місяця потрібно від ${min} % — ще ${need}, інакше ${money(S.ttn.hold)} утримаємо з виплати до закриття ТТН.`, bar: t.done / t.total, color: "var(--warn)", act: { label: "Угоди без ТТН", run: ex.dealsNoTtn } }); }
     }
     // утримання ТТН попереднього місяця
     const pv = lv.ttnPrev as Obj | null;
@@ -168,7 +172,7 @@ function todoItems(me: Obj, go: Go, toast: (t: string) => void): Todo[] {
     // стандартний офер: рівень за вибором
     if (!ls && start) {
       const ln = e.levelChange as Obj | null;
-      if (ln && ln.from > mk) it.push({ v: 6, cls: "info", imp: levelName(ln.level), lbl: `з 1 ${monthGen(ln.from)}`, h: `З 1 ${monthGen(ln.from)} — ${levelName(ln.level)}`, p: "Новий офер — у ваших документах, рекрутер зв’яжеться для підпису.", act: { label: "Умови «Профі»", run: () => go("terms") } });
+      if (ln && ln.from > mk) it.push({ v: 6, cls: "info", imp: levelName(ln.level), lbl: `з 1 ${monthGen(ln.from)}`, h: `З 1 ${monthGen(ln.from)} — ${levelName(ln.level)}`, p: `${me.levelChangeInfo ? `${levelWho(me.levelChangeInfo as Obj)[0].toUpperCase()}${levelWho(me.levelChangeInfo as Obj).slice(1)}. ` : ""}Новий офер — у ваших документах, рекрутер зв’яжеться для підпису.`, act: { label: "Умови «Профі»", run: () => go("terms") } });
       else if (c.margin >= S.profi.threshold && lv.autoProfi != null && lv.autoProfi >= S.profi.threshold) it.push({ v: 7, cls: "info", imp: `${S.profi.pct2} %`, lbl: "на «Профі»", h: `Маржа від ${nf(S.profi.threshold)} ₴ другий місяць поспіль`, p: `Можна перейти на «Профі» з наступного місяця: без ставки, ${S.profi.pct1}–${S.profi.pct3} %. Рішення ваше або керівництва.`, act: { label: "Порівняти", run: () => go("terms") } });
     }
     const held = ((c.deals ?? []) as Obj[]).filter((d) => !d.counts && String(d.date) <= String(me.today));
@@ -180,13 +184,18 @@ function todoItems(me: Obj, go: Go, toast: (t: string) => void): Todo[] {
   }
   // аванс — ще не відкрито
   const A = lv.advance as Obj, L = A.limit as Obj | null;
-  if (!A.request && !A.open && L && L.amount > 0) it.push({ v: 0, cls: "info", imp: money(L.amount), lbl: "аванс", h: `Аванс — з ${A.fromDay} ${monthGen(mk)}`, p: `На сьогодні можна було б взяти до ${money(L.amount)} (${limitRule(L)}). Вираховується при закритті місяця.`, act: { label: "Виплати", run: () => go("pay", "adv") } });
+  if (!A.request && !A.open && L && L.amount > 0) it.push({ v: 0, cls: "info", imp: money(L.amount), lbl: "аванс", h: `Аванс — з ${A.fromDay} ${monthGen(mk)}`, p: `На сьогодні можна було б взяти до ${money(L.amount)} (${limitRule(L)}). Вираховується при закритті місяця.`, act: { label: ex.remind.label, run: ex.remind.toggle, busy: ex.remind.busy }, act2: { label: "Виплати", run: () => go("pay", "adv") } });
   const rank = (x: Todo) => (x.cls === "risk" || x.cls === "gain" ? 0 : x.cls === "info" ? 1 : 2);
   return it.sort((x, y) => rank(x) - rank(y) || y.v - x.v);
 }
-function TodoBlock({ me, go }: { me: Obj; go: Go }) {
-  const toast = useToast();
-  const it = todoItems(me, go, (t) => toast(t));
+function TodoBlock({ me, go, onChanged }: { me: Obj; go: Go; onChanged: () => Promise<void> }) {
+  const navigate = useNavigate();
+  const rm = useAdvanceRemind(me, onChanged);
+  const it = todoItems(me, go, {
+    nav: (section) => navigate(`/${section}`),
+    dealsNoTtn: () => { window.dispatchEvent(new CustomEvent(DEALS_NO_TTN)); go("home", "deals"); },
+    remind: { label: rm.label, toggle: () => void rm.toggle(), busy: rm.busy },
+  });
   return (
     <Block title="Що зробити, щоб отримати більше" sub="від найвигіднішого · оновлюється щодня">
       {it.length ? it.map((x, i) => (
@@ -196,7 +205,12 @@ function TodoBlock({ me, go }: { me: Obj; go: Go }) {
             <div className="zp-todo__title">{x.h}</div>
             <div className="zp-todo__text">{x.p}</div>
             {x.bar !== undefined && Number.isFinite(x.bar) && <div className="zp-bar"><i style={{ width: `${Math.min(100, Math.max(0, x.bar * 100))}%`, background: x.color ?? "var(--ok)" }} /></div>}
-            {x.act && <div className="zp-row"><button type="button" className="zp-btn zp-btn--sm" onClick={x.act.run}>{x.act.label}</button></div>}
+            {(x.act || x.act2) && (
+              <div className="zp-row">
+                {x.act && <button type="button" className="zp-btn zp-btn--sm" disabled={x.act.busy} onClick={x.act.run}>{x.act.label}</button>}
+                {x.act2 && <button type="button" className="zp-btn zp-btn--ghost zp-btn--sm" onClick={x.act2.run}>{x.act2.label}</button>}
+              </div>
+            )}
           </div>
         </div>
       )) : <p className="zp-note">Зараз нічого робити не треба — ставка нараховується щодня, аванс і виплата — за календарем у «Виплатах».</p>}
@@ -253,11 +267,21 @@ function DealsBlock({ me }: { me: Obj }) {
   const lv = me.live as Obj, S = me.settings as Obj, t = lv.ttn as Obj | null, mk = lv.month as string;
   const [month, setMonth] = useState(mk);
   const [all, setAll] = useState(false);
+  const [noTtn, setNoTtn] = useState(false);
+  // «Угоди без ТТН» з «Що зробити» — вмикає фільтр на поточному місяці
+  useEffect(() => {
+    const on = () => { setMonth(mk); setNoTtn(true); setAll(true); };
+    window.addEventListener(DEALS_NO_TTN, on);
+    return () => window.removeEventListener(DEALS_NO_TTN, on);
+  }, [mk]);
   const live = month === mk;
   const { data } = useLoad(() => (live ? Promise.resolve(null) : payrollApi.myDeals(month)), [month, live]);
   const today = String(me.today ?? "");
   const ds = ((live ? lv.calc.deals : data) ?? []) as Obj[];
-  const list = ds.filter((d) => String(d.date) <= today || !live).slice().reverse();
+  const hasTtn = (d: Obj) => !!d.ttnAt && String(d.ttnAt).slice(0, 10) <= today;
+  const listAll = ds.filter((d) => String(d.date) <= today || !live).slice().reverse();
+  const withoutTtn = listAll.filter((d) => !hasTtn(d)).length;
+  const list = noTtn ? listAll.filter((d) => !hasTtn(d)) : listAll;
   const n = all ? list.length : Math.min(5, list.length);
   return (
     <Block id="deals" title="Угоди «Успішно реалізовано»" aside={
@@ -266,6 +290,11 @@ function DealsBlock({ me }: { me: Obj }) {
           {[mk, prevMonth(mk), prevMonth(prevMonth(mk))].map((m) => <option key={m} value={m}>{monthName(m)}</option>)}
         </select>
         {live && t && <Pill tone={!t.total || t.pct >= S.ttn.minPct ? "ok" : "warn"}>ТТН {t.done} з {t.total}</Pill>}
+        {(withoutTtn > 0 || noTtn) && (
+          <button type="button" className={`zp-tab ${noTtn ? "is-active" : ""}`} style={{ padding: "3px 10px", fontSize: 12.5, borderRadius: 8 }} aria-pressed={noTtn} onClick={() => setNoTtn(!noTtn)}>
+            без ТТН · {withoutTtn}
+          </button>
+        )}
       </>
     }>
       {list.length ? (
@@ -286,7 +315,7 @@ function DealsBlock({ me }: { me: Obj }) {
           </ul>
           {list.length > 5 && <button type="button" className="zp-btn zp-btn--ghost zp-btn--sm" onClick={() => setAll(!all)}>{all ? "Згорнути" : `Усі ${list.length} ${plural(list.length, "угода", "угоди", "угод")}`}</button>}
         </>
-      ) : <p className="zp-note">{live ? "Цього місяця угод ще немає." : `За ${monthLow(month)} угод немає.`}</p>}
+      ) : <p className="zp-note">{noTtn ? "Угод без ТТН немає — усі з документами." : live ? "Цього місяця угод ще немає." : `За ${monthLow(month)} угод немає.`}</p>}
       <p className="zp-hint">Маржа — як рахує ядро дашборда; ТТН — з «Бізнес-асистент → ТТН моніторинг», зазвичай за 5–7 днів після перевезення. На закриття місяця потрібно від {S.ttn.minPct} % угод з ТТН.</p>
     </Block>
   );
@@ -357,7 +386,7 @@ export default function Overview({ me, go, onChanged }: { me: Obj; go: Go; onCha
     showAdv ? <AdvanceBlock key="adv" me={me} onChanged={onChanged} /> : null,
     <BdayBlock key="bday" me={me} />,
     e.leave && e.leave.date?.slice(0, 7) === lv.month ? <LeaveBlock key="leave" me={me} onChanged={onChanged} /> : null,
-    simple ? <CalendarBlock key="cal" me={me} /> : <TodoBlock key="todo" me={me} go={go} />,
+    simple ? <CalendarBlock key="cal" me={me} /> : <TodoBlock key="todo" me={me} go={go} onChanged={onChanged} />,
   ];
   const right: ReactNode[] = [
     <PartsBlock key="parts" me={me} />,

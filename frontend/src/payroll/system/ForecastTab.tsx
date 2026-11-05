@@ -4,7 +4,7 @@
  */
 import type { PayrollCtx } from "../PayrollSection";
 import { payrollApi, type Obj } from "../api";
-import { Card, Empty, Loading, Pill, money, monthTitle, nextMonth, pct, useLoad, type Tone } from "../ui";
+import { Card, Empty, Loading, Pill, RECORD_STATUS, money, monthTitle, nextMonth, pct, useLoad, type Tone } from "../ui";
 import { OFFER_NAMES, kyivToday, plural } from "./common";
 
 const MGEN = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"];
@@ -12,7 +12,9 @@ const gen = (mk: string) => MGEN[Number(mk.slice(5, 7)) - 1] ?? "";
 const low = (mk: string) => monthTitle(mk).split(" ")[0].toLowerCase();
 const lastDay = (mk: string) => { const [y, m] = mk.split("-").map(Number); return new Date(y, m, 0).getDate(); };
 
-const KIND: Record<string, [string, Tone]> = { plan: ["План", "warn"], calls: ["Дзвінки", "warn"], ttn: ["ТТН", "warn"], clearance: ["Обхідний лист", "danger"] };
+const KIND: Record<string, [string, Tone]> = { plan: ["План", "warn"], calls: ["Дзвінки", "warn"], ttn: ["ТТН", "warn"], clearance: ["Обхідний лист", "danger"], dispute: ["Не погоджується", "danger"] };
+const STATUS_ORDER = ["review", "verified", "disputed", "agreed", "submitted", "paid"];
+const ddmm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 
 export default function ForecastTab({ ctx }: { ctx: PayrollCtx }) {
   const mk = ctx.liveMonth;
@@ -26,7 +28,10 @@ export default function ForecastTab({ ctx }: { ctx: PayrollCtx }) {
   const advFrom = F.dates?.advanceFrom ?? S.advance?.fromDay, payBy = F.dates?.payBy ?? S.payByDay;
   const today = kyivToday(), open = today.slice(0, 7) === mk ? Number(today.slice(8, 10)) >= advFrom : today.slice(0, 7) > mk;
   const mP = Math.max(F.margin ?? 0, F.plan ?? 0);
-  const risks = [...(F.risks as Obj[])].sort((a, b) => (b.loss ?? 0) - (a.loss ?? 0));
+  // незгоди закритого місяця — теж ризик (сума виплати під питанням), сортуються разом з рештою за сумою
+  const disputes = ((F.disputes ?? []) as Obj[]).map((d) => ({ kind: "dispute", empId: d.empId, name: d.name, text: d.text, at: d.at, loss: d.pay, month: d.month }));
+  const risks = [...(F.risks as Obj[]), ...disputes].sort((a, b) => (b.loss ?? 0) - (a.loss ?? 0));
+  const CP = F.closedPay as Obj | null;
   const ttnRisk = risks.filter((x) => x.kind === "ttn");
 
   const tiles: Array<[string, string, string]> = [
@@ -41,6 +46,9 @@ export default function ForecastTab({ ctx }: { ctx: PayrollCtx }) {
     { d: `${advFrom}–${lastDay(mk)} ${gen(mk)}`, t: "Аванси", s: open ? `виплачено ${money(F.advPaid)}, заявлено ${money(F.advRequested)}, ще можуть взяти до ${money(F.advLeft)}` : `заявки з ${advFrom}-го; на сьогодні ліміти разом ${money(F.advLeft)}`, v: F.advPaid + F.advRequested + F.advLeft, now: open },
     { d: `${lastDay(mk)} ${gen(mk)}`, t: "Закриття місяця", s: ttnRisk.length ? `ТТН нижче ${S.ttn?.minPct ?? "—"} % і без ТТН понад тиждень: ${ttnRisk.map((x) => x.name ?? "—").join(", ")} — до ${money(ttnRisk.length * (S.ttn?.hold ?? 0))} утримань` : "ТТН — у нормі", v: 0 },
     { d: `до ${S.verifyByDay} ${nm}`, t: "Перевірка фінансиста", s: "кожен працівник погоджує суму або не погоджується", v: 0 },
+    ...(CP ? [{ d: `до ${ddmm(CP.payBy)}`, t: `Виплата за ${low(CP.month)}`, now: !open,
+      s: `${STATUS_ORDER.filter((k) => CP.byStatus?.[k]).map((k) => `${(RECORD_STATUS[k]?.[0] ?? k).toLowerCase()} — ${CP.byStatus[k].n} (${money(CP.byStatus[k].pay)})`).join(" · ") || "записів немає"}${CP.blocked ? ` · ${CP.blocked} ${plural(CP.blocked, "чекає", "чекають", "чекають")} обхідного листа чи рішення ОД` : ""}`,
+      v: CP.total }] : [{ d: "—", t: "Виплата закритого місяця", s: "закритого місяця немає — закриття 1-го о 04:45", v: 0 }]),
     { d: `5–${payBy} ${nm}`, t: "Виплата ЗП", s: `зараз ~${money(F.payNow)}, при виконанні плану ~${money(F.payPlan)}; готівкою й на карти — за формами`, v: F.payPlan },
     { d: "щомісяця", t: "Офіційна ЗП — окремо, через бухгалтерію", s: `${money(F.officialDeducted + F.officialSeparate)}, з неї вираховується з загальної ${money(F.officialDeducted)}`, v: F.officialDeducted + F.officialSeparate },
   ];
@@ -49,8 +57,9 @@ export default function ForecastTab({ ctx }: { ctx: PayrollCtx }) {
     : x.kind === "calls" ? `норму дзвінків уже не набрати (${x.calls?.normDays ?? "—"} з ${x.calls?.need ?? "—"} днів) — бонус лише якщо маржа дійде до ${money(S.kpi?.waiveFrom)}`
     : x.kind === "ttn" ? `ТТН ${x.ttn?.done ?? "—"} з ${x.ttn?.total ?? "—"} (${pct(x.ttn?.pct, 1)}), є угоди без ТТН понад тиждень`
     : x.kind === "clearance" ? `підписано ${x.clearance?.done ?? 0} з ${x.clearance?.total ?? 8} пунктів обхідного листа — фінальна виплата заблокована`
+    : x.kind === "dispute" ? `${low(x.month)}: ${x.text ? `«${x.text}»` : "не погоджується з розрахунковим листом"}${x.at ? ` · ${ddmm(x.at)}` : ""} — чекає відповіді фінансиста або рішення ОД`
     : "—";
-  const stake = (x: Obj) => x.kind === "plan" ? `недоотримає до ${money(x.loss)}` : x.kind === "calls" ? `бонус ${money(x.loss)}` : x.kind === "ttn" ? `утримання ${money(x.loss)}` : "виплата чекає підписів";
+  const stake = (x: Obj) => x.kind === "dispute" ? `виплата ${money(x.loss)}` : x.kind === "plan" ? `недоотримає до ${money(x.loss)}` : x.kind === "calls" ? `бонус ${money(x.loss)}` : x.kind === "ttn" ? `утримання ${money(x.loss)}` : "виплата чекає підписів";
 
   const teams = F.teams as Obj[];
   const teamsNow = teams.reduce((a, t) => a + (t.fundNow ?? 0), 0), teamsPlan = teams.reduce((a, t) => a + (t.fundPlan ?? 0), 0);
@@ -89,7 +98,8 @@ export default function ForecastTab({ ctx }: { ctx: PayrollCtx }) {
                   {risks.map((x, i) => {
                     const [l, tone] = KIND[x.kind] ?? [x.kind, "muted" as Tone];
                     return (
-                      <tr key={`${x.kind}-${x.empId}-${i}`}>
+                      <tr key={`${x.kind}-${x.empId}-${i}`} className={x.kind === "dispute" ? "is-click" : ""} title={x.kind === "dispute" ? "Відкрити в «Перевірці»" : undefined}
+                        onClick={x.kind === "dispute" ? () => ctx.go("verify", { userId: String(x.empId) }) : undefined}>
                         <td><Pill tone={tone}>{l}</Pill></td>
                         <td><b>{x.name ?? `#${x.empId}`}</b></td>
                         <td>{detail(x)}</td>

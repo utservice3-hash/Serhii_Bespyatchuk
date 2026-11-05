@@ -7859,6 +7859,21 @@ INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
  ('lvl',      'Рівень',        false, 'Перехід на «Профі», новий офер', 'менеджер; фінансисти — до відома'),
  ('offer',    'Документи',     true,  'Новий офер — перепідписати', 'рекрутер — задача')
 ON CONFLICT (type) DO NOTHING;
+-- «Нагадати» в кабінеті (04.11.2026): у день, коли відкриваються заявки на аванс, — тому, хто просив.
+INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
+ ('adv.open', 'Аванс', false, 'Відкрито заявки на аванс (на прохання «Нагадати»)', 'працівник, що просив нагадати')
+ON CONFLICT (type) DO NOTHING;
+CREATE TABLE IF NOT EXISTS payroll_reminders (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  month      DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  kind       TEXT NOT NULL CHECK (kind IN ('advance')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at    TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_reminders_open ON payroll_reminders (user_id, month, kind) WHERE sent_at IS NULL;
+-- Канал «email» центру сповіщень: коли лист пішов (SMTP_URL у .env; без нього канал не працює і так і пише в налаштуваннях).
+ALTER TABLE notification_recipients ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ;
 
 -- Довідники за замовчуванням (ТЗ §12 «Запуск»): відділ продажу й відділи, що не продають; команди — з команд Kommo
 -- (офер команди Лілії Шаврової — за групою Kommo 691208). Лише якщо ще немає — правки фінансиста не перетираються.
@@ -7878,7 +7893,7 @@ REVOKE ALL ON payroll_settings_versions, payroll_departments, payroll_teams, pay
   payroll_leaves, payroll_cards, payroll_months, payroll_records, payroll_record_extras, payroll_payout_forms, payroll_payout_lines,
   payroll_advances, payroll_advance_lines, payroll_ttn_seen, payroll_ttn_legacy, payroll_archive, payroll_offer_docs,
   payroll_clearances, payroll_clearance_signatures, payroll_clearance_drafts, payroll_clearance_files, payroll_history,
-  notify_rules, notifications, notification_recipients FROM ai_readonly;
+  notify_rules, notifications, notification_recipients, payroll_reminders FROM ai_readonly;
 
 -- 🗝 Вкладка «Зарплата» — кожному, крім кандидата (кабінет є в кожного, хто є в payroll_employees; решта бачить порожній стан).
 UPDATE roles SET screen_access = screen_access || '{"payroll":true}'::jsonb

@@ -418,7 +418,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "payroll_leaves", "payroll_cards", "payroll_months", "payroll_records", "payroll_record_extras", "payroll_payout_forms", "payroll_payout_lines",
   "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
   "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
-  "notify_rules", "notifications", "notification_recipients",
+  "notify_rules", "notifications", "notification_recipients", "payroll_reminders",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -3263,6 +3263,7 @@ export const MANIFEST_TESTS: string[] = [
   "#2603 ПРАВА «ЗАРПЛАТИ» (ТЗ §2): ключі в каталозі, видача ролям парна, адмін сум не бачить, кандидату вкладки немає",
   "#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, закриття, перевірка, незгода й ОД, форма, відомість, виплата, аванс, обхідний лист, сповіщення",
   "#2604 ФРОНТ «ЗАРПЛАТИ»: пункт меню, розділ, дзвіночок у шапці, вкладки за правами з сервера, один чанк, посилання сповіщень",
+  "#2605 EMAIL-КАНАЛ СПОВІЩЕНЬ: без SMTP_URL вимкнено; лист — UTF-8 base64, тема encoded-word, відправник з імені",
   // core/kvpShip.test.ts — Звіт КВП, режим «🚚 Відправлені авто» (задача 7185, макет затверджено 02.11).
   "#3320 тиждень «Відправлених авто»: оплачено + чекаємо + без оплати == відправлено, межі тижня включно",
   "#3321 🪞 когорта «Відправлених»: без оплати = лише 143 всередині «чекає», оплачено = 142 і етап оплати, день за Києвом",

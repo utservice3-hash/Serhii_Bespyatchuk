@@ -114,7 +114,7 @@ import { minusDealsRouter } from "./routes/minusRegistry.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
 import { payrollRouter } from "./routes/payroll.js";
 import { notificationsRouter } from "./routes/notifications.js";
-import { payrollMonthClose, payrollTtnTick, payrollBirthdays } from "./jobs/payrollJobs.js";
+import { payrollMonthClose, payrollTtnTick, payrollBirthdays, payrollReminders } from "./jobs/payrollJobs.js";
 import { zakaz1cRouter } from "./routes/zakaz1c.js";
 import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
 import { prozorroRouter } from "./routes/prozorro.js";
@@ -825,6 +825,8 @@ cron.schedule("45 4 1 * *", () => { void runJob("payrollMonthClose", () => payro
 cron.schedule("7,22,37,52 * * * *", () => { void runJob("payrollTtnTick", () => payrollTtnTick()); });
 // Дні народження місяця — іменинникам і фінансистам, 1-го о 08:00 за Києвом.
 cron.schedule("0 8 1 * *", () => { void runJob("payrollBirthdays", () => payrollBirthdays()); }, { timezone: "Europe/Kyiv" });
+// «Нагадати» про аванс — щодня о 09:00 за Києвом; у день відкриття заявок (advance.fromDay) шле тим, хто просив.
+cron.schedule("0 9 * * *", () => { void runJob("payrollReminders", () => payrollReminders()); }, { timezone: "Europe/Kyiv" });
 // 🔍 Планова перевірка клієнтів з лімітом і суди боржникам (ТЗ §7) — ВИТРАЧАЮТЬ ТРАНЗАКЦІЇ YouScore, тож у розкладі лише з
 // `CP_BACKGROUND_CHECKS=1` (див. `jobs/counterpartyJobs.ts`). 06:15 за Києвом щодня; суди самі чекають 1-го числа.
 if (CP_BACKGROUND_ON()) {

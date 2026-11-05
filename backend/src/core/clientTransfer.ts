@@ -17,18 +17,7 @@ export async function applyClientTransfer(db: TxClient, a: {
 }): Promise<{ from: number | null; taskId: number | null }> {
   await db.query("BEGIN");
   try {
-    const cur = await db.query<{ pinned_manager_id: number | null }>(
-      `SELECT pinned_manager_id FROM loyalty_overrides WHERE client_key = $1 FOR UPDATE`, [a.clientKey]);
-    const from = cur.rows[0]?.pinned_manager_id ?? null;
-    await db.query(
-      `INSERT INTO loyalty_overrides (client_key, pinned_manager_id, pinned_from_month, updated_by, updated_at)
-       VALUES ($1,$2,$3,$4, now())
-       ON CONFLICT (client_key) DO UPDATE SET pinned_manager_id = EXCLUDED.pinned_manager_id,
-         pinned_from_month = EXCLUDED.pinned_from_month, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-      [a.clientKey, a.toManagerId, a.effectiveFrom, a.userId]);
-    await db.query(
-      `INSERT INTO client_manager_history (client_key, from_manager_id, to_manager_id, effective_from, reason, changed_by, kind)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`, [a.clientKey, from, a.toManagerId, a.effectiveFrom, a.reason, a.userId, a.kind]);
+    const from = await writeClientPin(db, a);
     let taskId: number | null = null;
     if (a.task) {
       const nm = await db.query<{ client_name: string | null; dept: string | null }>(
@@ -50,4 +39,25 @@ export async function applyClientTransfer(db: TxClient, a: {
     await db.query("ROLLBACK");
     throw e;
   }
+}
+
+/**
+ * Закріплення + історія — БЕЗ власної транзакції: для викликачів, що вже всередині своєї (обхідний лист «Зарплати»,
+ * п. 1 — підпис пункту й передача клієнтів мають лягти разом). Ті самі два записи, що й у `applyClientTransfer`, —
+ * одне джерело правди про «хто веде клієнта», а не друга копія SQL.
+ */
+export async function writeClientPin(db: TxClient, a: { clientKey: string; toManagerId: number; reason: string; kind: TransferKind; effectiveFrom: string; userId: number }): Promise<number | null> {
+  const cur = await db.query<{ pinned_manager_id: number | null }>(
+    `SELECT pinned_manager_id FROM loyalty_overrides WHERE client_key = $1 FOR UPDATE`, [a.clientKey]);
+  const from = cur.rows[0]?.pinned_manager_id ?? null;
+  await db.query(
+    `INSERT INTO loyalty_overrides (client_key, pinned_manager_id, pinned_from_month, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4, now())
+     ON CONFLICT (client_key) DO UPDATE SET pinned_manager_id = EXCLUDED.pinned_manager_id,
+       pinned_from_month = EXCLUDED.pinned_from_month, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [a.clientKey, a.toManagerId, a.effectiveFrom, a.userId]);
+  await db.query(
+    `INSERT INTO client_manager_history (client_key, from_manager_id, to_manager_id, effective_from, reason, changed_by, kind)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`, [a.clientKey, from, a.toManagerId, a.effectiveFrom, a.reason, a.userId, a.kind]);
+  return from;
 }
