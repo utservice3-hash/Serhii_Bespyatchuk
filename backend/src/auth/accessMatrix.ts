@@ -2202,8 +2202,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/notifications/read", cls: "deny-only",
     allow: [], deny: [] },
+  /* Правила сповіщень — право `notify_rules` (лише admin і ОД; сід дає й знімає парно — #2603). Кандидата в `deny`
+     НЕМАЄ — з тієї ж причини, що в навчанні (`CANDIDATE_401`): у центру сповіщень немає вкладки, тож проба доходить до
+     перевірки активності акаунта й отримує 401, а матриця рахує «дозволеним» усе, що не 403 (заміряно на прийманні
+     f5f9859 05.11.2026: 2 клітинки «403 → 401»). Живий кандидат упирається в право — 403. */
   { method: "GET", path: "/api/notifications/rules", cls: "GET",
-    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager", "candidate"] },
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/notifications/rules/:type", cls: "deny-only",
-    allow: [], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
 ];
