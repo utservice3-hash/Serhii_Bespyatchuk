@@ -12,7 +12,7 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth, requirePerm, requireRole } from "../auth/middleware.js";
-import { anchorFromCabinet, loadAdBalance } from "../core/adBalance.js";
+import { AD_DAY_COST_SQL, anchorFromCabinet, loadAdBalance } from "../core/adBalance.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
 import { assignAllowed, assignDenyReason, assignTeamIdFor, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
          type MergePairScope } from "../auth/mergeScope.js";
@@ -6175,7 +6175,7 @@ dashboardRouter.post("/ads/balance", requireRole("admin"), async (req, res) => {
     return res.status(400).json({ error: "Вкажіть залишок із кабінету числом, наприклад 29205.81" });
   }
   const today = kyivToday();
-  const t = await pool.query<{ cost: string | null }>(`SELECT sum(cost) AS cost FROM ad_ga4_daily WHERE day = $1::date`, [today]);
+  const t = await pool.query<{ cost: string | null }>(AD_DAY_COST_SQL, [today]);
   const anchor = anchorFromCabinet(value, Number(t.rows[0]?.cost ?? 0), today);
   await pool.query(
     `INSERT INTO ad_balance_anchor (as_of, balance, cabinet_balance, created_by) VALUES ($1::date, $2, $3, $4)`,
