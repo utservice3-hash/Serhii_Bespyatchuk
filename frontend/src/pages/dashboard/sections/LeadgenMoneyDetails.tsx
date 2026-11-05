@@ -261,6 +261,8 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
     : d.cls === "same" ? "гроші пораховано в іншій передачі"
     : d.cls === "regular" ? "постійний клієнт — у гроші лідгена не йде"
     : "";
+  // 🚚 Машина за «Датою загрузки» (задача 7363): дата й плашка, коли грошей ще немає.
+  const noMoneyYet = d.loadDay != null && d.cls !== "success" && d.cls !== "paid";
   const hasMoney = d.cls !== "none" && d.cls !== "same" && d.cls !== "lost" && d.cls !== "regular";
   const title = d.route ?? "угода без назви";
   return (
@@ -287,8 +289,17 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
       <td style={{ ...td, fontWeight: hasMoney && d.price ? 700 : 400, color: hasMoney && d.price ? undefined : MUTED }}>
         {d.minus ? <span title="У продажах угоду позначено «Мінусова угода»: перевезення розбито на мінус і окрему плюсову угоду, а плюсова з передачею лідгена не повʼязана. Машина рахується, сума — ні">мінусова · 0</span>
           : d.price ? formatAmountFull(d.price) : hasMoney ? "не проставлено" : "—"}
+        {d.split && d.split.length > 0 && (
+          <div style={{ fontSize: 11.5, fontWeight: 400, color: MUTED }} title="Одне перевезення, рахунок розділили на кілька угод; сума — разом, машина одна">
+            разом із рахунком {d.split.map((x, i) => <span key={x.dealId}>{i ? ", " : ""}<a href={x.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{x.dealId}</a></span>)}
+          </div>
+        )}
       </td>
-      <td style={{ ...td, textAlign: "left", color: MUTED, whiteSpace: "normal", minWidth: 110, maxWidth: 220 }}>{detail}</td>
+      <td style={{ ...td, textAlign: "left", color: MUTED, whiteSpace: "normal", minWidth: 110, maxWidth: 220 }}>
+        {d.loadDay && <>загрузка {dayLbl(d.loadDay, period)}{detail ? " · " : ""}</>}{detail}
+        {noMoneyYet && <div style={{ display: "inline-block", fontSize: 10.5, fontWeight: 650, color: "var(--warn)", border: "1px solid var(--warn)", borderRadius: 999, padding: "0 6px", marginLeft: 4, whiteSpace: "nowrap" }}
+          title="Авто загружене, а угода ще не «Оплата отримана» і не «Успішна»">гроші ще не зайшли</div>}
+      </td>
     </tr>
   );
 }

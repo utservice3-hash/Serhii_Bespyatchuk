@@ -1,33 +1,52 @@
 import { pool } from "../db/pool.js";
-import {
-  firstTouchByCallerSql, firstTouchMetaSql, type FirstTouchCounts,
-} from "./firstTouchRules.js";
+import { aiCallsList } from "./callAiScreen.js";
+import type { AdPredicate } from "./callAiPilot.js";
+import { FIRST_TOUCH_RULE } from "./callAiTick.js";
+import { FIRST_TOUCH_SHOWN_RUBRICS } from "./callAiProviders.js";
+import { adDealSql, REJECT_NONTARGET } from "./metrics.js";
+import { firstTouchCountsFromCalls, type FirstTouchCounts } from "./firstTouchRules.js";
 
-/** Оцінки «перший дотик» за період для Звіту. Правила — `firstTouchRules.ts`. */
-export async function firstTouchReport(from: string, to: string): Promise<{
+/**
+ * 🎯 «ЦІНУ НАЗВАНО (1-Й ДОТИК)» У ЗВІТІ — ТІ САМІ РОЗМОВИ Й ТЕ САМЕ ПРАВИЛО, ЩО ПЛИТКА «ЦІНА ОЗВУЧЕНА»
+ * НА ЕКРАНІ «ПЕРШИЙ ДОТИК · AI» (задача 7237, Роман 02.11.2026).
+ *
+ * До того Звіт читав лист зовнішнього uts-bot (`first_touch_analysis`), а бот замовк: остання оцінка
+ * 25.09.2026, а з 24.08 — лише «немає запису». Заміряно 02.11: жовтень у Звіті 0 оцінок, на екрані AI
+ * 294 з 579 (51 %). Синк листа живий — порожнє саме джерело, тож «полагодити передачу» не було чого.
+ *
+ * Розмови — `aiCallsList` (той самий виклик, що `/ai-calls`); відбір і ціна — `firstTouchCountsFromCalls`
+ * (`firstTouchRules.ts`): вкладка «Звіт» без нецільових, ціна за `checklist().price`. Що ці числа == плитці, тримає `#3341` на фікстурі й `#3342` на живих даних.
+ *
+ * `noRecord` — розмови Звіту, яких AI ще не розібрав (черга, немає запису): поза відсотком, як було
+ * «немає запису» в бота. До `FIRST_TOUCH_RULE.startDate` розбору не існувало — період, що закінчився
+ * раніше, «не вимірювався», а не «0 з 0» (рішення Романа 02.11.2026: бота під тим самим підписом не
+ * домішуємо).
+ */
+export interface FirstTouchReport {
   byManager: Map<number, FirstTouchCounts>;
   /** Ті самі лічильники з ПОТОЧНОЮ командою людини — для «поза ростером». */
   rows: { managerId: number; teamId: number | null; counts: FirstTouchCounts }[];
+  /** Розмови без відомого менеджера. */
   unmapped: FirstTouchCounts;
-  coveredTeamIds: Set<number>;
+  /** Чи розбирав AI хоч щось у цьому періоді за правилом (період не закінчився до старту розбору). */
+  covered: boolean;
   lastAnalyzedAt: string | null;
-}> {
-  const q = firstTouchByCallerSql(from, to);
-  const [rows, meta] = await Promise.all([
-    pool.query<{ manager_id: number | null; team_id: number | null; analyzed: number; voiced: number; no_record: number }>(q.sql, q.params),
-    pool.query<{ covered_team_ids: number[]; last_analyzed_at: string | null }>(firstTouchMetaSql()),
-  ]);
-  const byManager = new Map<number, FirstTouchCounts>();
-  const list: { managerId: number; teamId: number | null; counts: FirstTouchCounts }[] = [];
-  let unmapped: FirstTouchCounts = { analyzed: 0, voiced: 0, noRecord: 0 };
-  for (const r of rows.rows) {
-    const c = { analyzed: Number(r.analyzed), voiced: Number(r.voiced), noRecord: Number(r.no_record) };
-    if (r.manager_id == null) unmapped = c;
-    else { byManager.set(r.manager_id, c); list.push({ managerId: r.manager_id, teamId: r.team_id, counts: c }); }
+}
+
+/** Оцінки «перший дотик» за період для Звіту. Правила станів — `firstTouchRules.ts`. */
+export async function firstTouchReport(from: string, to: string, adSources: AdPredicate["adSources"]): Promise<FirstTouchReport> {
+  const last = pool.query<{ d: string | null }>(
+    `SELECT to_char(MAX(updated_at AT TIME ZONE 'Europe/Kyiv'), 'YYYY-MM-DD') AS d
+       FROM call_analyses WHERE status = 'done' AND rubric_version = ANY($1::text[])`, [[...FIRST_TOUCH_SHOWN_RUBRICS]]);
+  const covered = to >= FIRST_TOUCH_RULE.startDate;
+  if (!covered) {
+    return { byManager: new Map(), rows: [], unmapped: { analyzed: 0, voiced: 0, noRecord: 0 }, covered, lastAnalyzedAt: (await last).rows[0]?.d ?? null };
   }
-  return {
-    byManager, rows: list, unmapped,
-    coveredTeamIds: new Set((meta.rows[0]?.covered_team_ids ?? []).map(Number)),
-    lastAnalyzedAt: meta.rows[0]?.last_analyzed_at ?? null,
-  };
+  // Розмови до старту розбору за правилом не розбираються, тож «не розібраними» не є — і лише сповільнюють
+  // Звіт (заміряно 02.11.2026: серпень–жовтень 20,2 с при таймауті 20 с; із цією межею — частка того).
+  const since = from > FIRST_TOUCH_RULE.startDate ? from : FIRST_TOUCH_RULE.startDate;
+  const [list, lastRes] = await Promise.all([aiCallsList(pool, { predicate: adDealSql, adSources }, since, to, new Date(), {}), last]);
+  // `nonTarget` — тим самим виразом, що рядок `/ai-calls` (`#3343` звіряє обидва місця).
+  const calls = list.rows.map((r) => ({ ...r, nonTarget: r.rejectReason != null && REJECT_NONTARGET.includes(r.rejectReason) }));
+  return { ...firstTouchCountsFromCalls(calls), covered, lastAnalyzedAt: lastRes.rows[0]?.d ?? null };
 }

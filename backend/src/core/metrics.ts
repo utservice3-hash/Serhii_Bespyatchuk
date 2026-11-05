@@ -6,6 +6,7 @@ import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckCloc
   asOfStaleAfterMin, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, clientKind, type OrphanReason, type ClientKind, type ClientKindWhy } from "./orphanClients.js";
+import { archivedSql, LAST_PAID_CTE } from "./clientArchive.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 import type { LazyCache } from "./lazyCache.js";
@@ -1731,6 +1732,30 @@ export async function rnkConvAsKommo(s: { from: string; to: string }, managerIds
   };
 }
 
+/**
+ * 🆕 «НОВИЙ КЛІЄНТ» ДЛЯ ВІДЗНАКИ ПРЕЗЕНТАЦІЇ (04.11.2026, Даша: «перша успішна угода з клієнтом»). Угода повного циклу
+ * зі статусом «Успішна угода» (142), закрита в періоді (`closed_at_kommo`, Київ), і в того самого клієнта (`client_key`)
+ * немає ЖОДНОЇ раніше закритої успішної угоди — у будь-якого менеджера (визначення «A» глосарію: попередня ВИГРАНА
+ * угода за `closed_at`). Однакова мить — раніший `kommo_id`. Угоди без `client_key` не вгадуємо: окреме число `unknown`.
+ * GLOSSARY §18.
+ */
+export async function firstSuccessByManager(s: { from: string; to: string }): Promise<{ rows: { managerId: number; first: number }[]; unknown: number }> {
+  const r = await pool.query<{ manager_id: number; first: string; unknown: string }>(
+    `WITH s AS (SELECT d.kommo_id, d.manager_id, d.client_key, d.closed_at_kommo AS t FROM deals d
+                 WHERE d.pipeline_id = ANY($1) AND d.status_id = 142 AND d.closed_at_kommo IS NOT NULL)
+     SELECT s.manager_id,
+            COUNT(*) FILTER (WHERE s.client_key IS NOT NULL AND NOT EXISTS (
+              SELECT 1 FROM s s2 WHERE s2.client_key = s.client_key AND (s2.t < s.t OR (s2.t = s.t AND s2.kommo_id < s.kommo_id)))) AS first,
+            COUNT(*) FILTER (WHERE s.client_key IS NULL) AS unknown
+       FROM s JOIN managers m ON m.id = s.manager_id AND m.is_active
+      WHERE (s.t ${KYIV})::date BETWEEN $2 AND $3
+      GROUP BY s.manager_id`, [FC_PIPELINES, s.from, s.to]);
+  return {
+    rows: r.rows.map((x) => ({ managerId: x.manager_id, first: Number(x.first) })).filter((x) => x.first > 0),
+    unknown: r.rows.reduce((a, x) => a + Number(x.unknown), 0),
+  };
+}
+
 // ── Блок A (КВП повна таблиця) — нові метрики ──
 // Прострочена оплата = ЗНІМОК «зараз»: планова дата оплати минула, а угода ще НЕ оплачена
 // (не 142/143 і не в етапі 9 «оплата отримана»). Не залежить від періоду. sum = Σ price.
@@ -2526,6 +2551,15 @@ export interface AdsDayCohort {
   inWork: number;
   /** Програні — статус 143. Разом із `inWork` і `paid` дає рівно `entered`. */
   lost: number;
+  /**
+   * 💰 ПРИНЕСЛИ ЛІДИ ЦЬОГО ДНЯ (Роман 02.11.2026): маржа (`deals.price`, зі знаком) угод когорти дня, що вже
+   * ОПЛАЧЕНІ — статус 142, тобто ① («успішно реалізовано», основна метрика). Рахується ТИМ САМИМ `pop`, що й
+   * `paid` і розкриття дня (`adDealsByDay`), тож дорівнює Σ цін угод із чипом «Оплачено» за побудовою.
+   * Чому тут, а не в `money.ts`: когорта (вхід у ADZONE_TAKEN + `paidAdSql` + сегмент `new`) живе в приватному
+   * `dealCohortCte`; копія когорти в іншому файлі розійшлась би з комірками тихо. Анкер — день ВХОДУ ліда, не
+   * день оплати: число за минулі дні росте, поки угоди дозакриваються.
+   */
+  paidMargin: number;
 }
 
 /** Одна угода рекламної когорти — для розкриття дня на екрані «Реклама». */
@@ -2573,14 +2607,15 @@ export async function conversionAdsByDay(s: MetricScope, adSources: string[]): P
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
   const r = await pool.query<{ day: string; entered: string; won: string;
-                              paid: string; lost: string; in_work: string }>(
+                              paid: string; lost: string; in_work: string; paid_margin: string }>(
     `WITH ${dealCohortCte("$3", "$4", scopeWhere)}
      SELECT to_char((pop.entered_at ${KYIV})::date, 'YYYY-MM-DD') AS day,
             COUNT(*)::int AS entered,
             COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won,
             COUNT(*) FILTER (WHERE pop.status_id = 142)::int AS paid,
             COUNT(*) FILTER (WHERE pop.status_id = 143)::int AS lost,
-            COUNT(*) FILTER (WHERE pop.status_id NOT IN (142, 143))::int AS in_work
+            COUNT(*) FILTER (WHERE pop.status_id NOT IN (142, 143))::int AS in_work,
+            COALESCE(SUM(pop.price) FILTER (WHERE pop.status_id = 142), 0) AS paid_margin
        FROM pop
       WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
         AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
@@ -2590,6 +2625,7 @@ export async function conversionAdsByDay(s: MetricScope, adSources: string[]): P
   return r.rows.map((x) => ({
     day: x.day, entered: Number(x.entered), won: Number(x.won),
     paid: Number(x.paid), lost: Number(x.lost), inWork: Number(x.in_work),
+    paidMargin: Number(x.paid_margin),
   }));
 }
 
@@ -4073,7 +4109,8 @@ export interface OrphanClient {
  */
 export async function orphanClients(months: number): Promise<OrphanClient[]> {
   const r = await pool.query<Record<string, string | null>>(
-    `WITH pay AS (
+    `WITH ${LAST_PAID_CTE},
+     pay AS (
        SELECT d.client_key ck, d.manager_id mid, d.closed_at_kommo dt, d.price, d.client_name nm,
               d.payment_type ptype,
               CASE WHEN lower(COALESCE(d.payment_type,'')) LIKE '%налич%'
@@ -4112,9 +4149,13 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
        JOIN prim p ON p.ck=a.ck
        JOIN managers m ON m.id=p.mid
        LEFT JOIN loyalty_overrides lo ON lo.client_key=a.ck
+       LEFT JOIN arch_paid ap ON ap.client_key=a.ck
        LEFT JOIN LATERAL (SELECT max(calldate) last_call FROM ringostat_calls c WHERE c.client_key=a.ck) rc ON true
       WHERE ${orphanManagerSql("m")}
         AND lo.pinned_manager_id IS NULL
+        -- 🗄 Архівний клієнт (зокрема закритий кнопкою «Закрити», задача 7187) у пул не потрапляє — тим самим
+        -- правилом, що й архів: повертається сам, щойно прийде оплата, пізніша за архівацію.
+        AND NOT ${archivedSql("lo", "ap")}
         AND a.last_dt >= now() - ($2 || ' months')::interval`,
     [GENERIC_CLIENT_KEYS, String(months)]);
   // ☎️🏢 Код компанії й телефони — ОКРЕМИМ запитом за ключами пулу, а не підзапитом у великому:

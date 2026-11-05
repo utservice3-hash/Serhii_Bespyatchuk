@@ -69,7 +69,8 @@ test("#813 ▶ У РЯДКУ ГРАЄ ТУ САМУ РОЗМОВУ, ДАТА Я�
   assert.ok(lt.length > 0, "🔴 гейт втратив предмет: запиту останньої розмови не знайдено");
   // Дата і запис — з ОДНОГО підзапиту (одного рядка), а не з двох окремих «останніх».
   assert.match(lt, /SELECT rc\.calldate, rc\.call_type, rc\.recording, rc\.billsec/, "🔴 запис береться не з того рядка, що дата — ▶ заграє інший дзвінок");
-  assert.match(lt, /rc\.billsec > 0\s+ORDER BY rc\.calldate DESC LIMIT 1/, "🔴 «остання розмова» перестала бути останньою розмовою");
+  // 📵 З 03.11.2026 (задача 7359) між умовою й сортуванням — фільтр номерів перевізників: «остання розмова з клієнтом».
+  assert.match(lt, /rc\.billsec > 0 AND \$\{notCarrierCallSql\("rc"\)\}\s+ORDER BY rc\.calldate DESC LIMIT 1/, "🔴 «остання розмова» перестала бути останньою розмовою");
   assert.match(core, /lt\.recording AS last_talk_recording/, "🔴 запис останньої розмови не доходить до рядка");
   const dash = read("backend/src/routes/dashboard.ts");
   assert.match(dash, /lastTalkRecording: reactByKey\.get\(c\.client_key\)\?\.lastTalkRecording \?\? null,/, "🔴 рядок /client-plans не несе запису останньої розмови");

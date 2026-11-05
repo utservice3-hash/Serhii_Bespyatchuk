@@ -32,18 +32,20 @@ export interface ReportRowIn {
   promiseState: PromiseState | null;
   typeCheck: boolean;
   priceNote: { text: string } | null;
-  missedNote: { text: string } | null;
+  missedNote: { text: string; at?: string } | null;
   conversationType?: string | null;
   reactionMin?: number | null;
   /** Екран D (08.10.2026): чи витягла модель запит клієнта, і чи розібрав розмову тімлід. */
   hasRequest?: boolean;
-  reviewNote?: { text: string } | null;
+  reviewNote?: { text: string; at?: string } | null;
   /** Заперечення з окремої рубрики (ТЗ 08.10.2026); `null`/відсутнє — ще не розібрано цією рубрикою. */
   objection?: { present: boolean; handled: string } | null;
   /** Сира відповідь моделі «чим закінчилось після ціни» (рубрика заперечень v2, з 13.10.2026). */
   decision?: { value: string; quote: string; quoteFound: boolean | null } | null;
   /** 💬 «Коментар менеджера» до розмови з черги (задача 7183, 28.10.2026); `null` — не писав. */
   explainNote?: { text: string; at?: string } | null;
+  /** ✍️ Коментар (`explain` чи `price`) написав САМ менеджер цієї розмови — акаунт, привʼязаний до її менеджера (задача 7351). */
+  managerCommented?: boolean;
   /** Угода розмови заходила в «Виставлення рахунку» або далі (за фактом входу; `firstTouchOutcome.dealsReachedInvoice`). */
   reachedInvoice?: boolean;
 }
@@ -202,19 +204,38 @@ export function reviewReason(r: ReportRowIn): ReviewReason | null {
   return null;
 }
 /**
- * Виходить з черги (задача 7183, рішення Романа 28.10.2026, п.1 «б»): тімлід поставив «Розібрано» / «Опрацьовано» —
- * сам або погодивши коментар менеджера, — АБО угода дійшла до «Виставлення рахунку» чи далі. Друге — лише про чергу:
- * плитки й статистика рахують розмову як і раніше (п.2 «а»), успіх і далі — від «Авто працює».
+ * ✍️ ЗАКРИВАЄ ЛИШЕ КОМЕНТАР МЕНЕДЖЕРА (задача 7351, регламент Юлії від 30.10; рішення Романа 03.11.2026: «тільки з
+ * сьогодні»). Менеджер пише, що було далі, і лише тоді тімлід закриває; помилка AI — «Зворотний звʼязок», а не закриття.
+ * Коментар рахується, лише якщо його написав САМ менеджер розмови (`managerCommented`): заміряно 03.11 — у 185 із 270
+ * «погоджених коментарів» коментар писав той самий тімлід, що й закривав.
+ * Сервер і кнопки забороняють «Розібрано» без такого коментаря з викату 03.11; підрахунок «чим закрито» — з 04.11 (Київ):
+ * усе, закрите ДО цього (зокрема 03.11 до викату: 5 розмов без коментаря менеджера, замір 15:50), лишається закритим як було.
  */
-export const isReviewed = (r: ReportRowIn): boolean => r.reviewNote != null || r.missedNote != null || r.reachedInvoice === true;
+export const REVIEW_MANAGER_COMMENT_FROM = "2026-11-04";
+const kyivDay = (iso: string): string => new Date(iso).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+/** Позначку поставлено до правила 7351 — діє старе правило 7183 (тімлід міг закрити сам). Без дати — стара фікстура. */
+const beforeCommentRule = (n: { at?: string }): boolean => !n.at || kyivDay(n.at) < REVIEW_MANAGER_COMMENT_FROM;
 
 /** Чим закрито розмову з черги — підпис для екрана; `null` — не закрито (або в черзі нічого не було). */
 export type ReviewClosure = "approved" | "direct" | "invoice";
+/**
+ * Виходить з черги (задача 7183, рішення Романа 28.10.2026): тімлід поставив «Розібрано» / «Опрацьовано», АБО угода
+ * дійшла до «Виставлення рахунку» чи далі. Друге — лише про чергу: плитки й статистика рахують розмову як і раніше,
+ * успіх і далі — від «Авто працює». З `REVIEW_MANAGER_COMMENT_FROM` позначка тімліда закриває лише разом із коментарем
+ * менеджера розмови (задача 7351); без нього розмова лишається в черзі.
+ */
 export function reviewClosure(r: ReportRowIn): ReviewClosure | null {
-  if (r.reviewNote != null || r.missedNote != null) return r.explainNote != null || r.priceNote != null ? "approved" : "direct";
+  const marks = [r.reviewNote, r.missedNote].filter((n): n is { text: string; at?: string } => n != null);
+  if (marks.some(beforeCommentRule)) return r.explainNote != null || r.priceNote != null ? "approved" : "direct";
+  if (marks.length && r.managerCommented === true) return "approved";
   return r.reachedInvoice === true ? "invoice" : null;
 }
+export const isReviewed = (r: ReportRowIn): boolean => reviewClosure(r) != null;
 export const needsReview = (r: ReportRowIn): boolean => reviewReason(r) != null && !isReviewed(r);
+/** Чи можна поставити «Розібрано» зараз: менеджер розмови сам написав коментар (задача 7351). Сервер і кнопка — одним правилом. */
+export const canCloseReview = (r: Pick<ReportRowIn, "managerCommented">): boolean => r.managerCommented === true;
+/** Відповідь сервера, коли коментаря менеджера ще немає. */
+export const REVIEW_NEEDS_COMMENT_UA = "Закрити можна після коментаря менеджера: менеджер пише, що було далі. Якщо помилився AI — натисніть «Зворотний звʼязок».";
 
 export interface ReviewQueue { total: number; reviewed: number; left: number; byReason: Record<ReviewReason, number> }
 /** Лічильники смуги «Черга розбору»: `total` — усі, що потребують розбору; `left` — ще не розібрані. */

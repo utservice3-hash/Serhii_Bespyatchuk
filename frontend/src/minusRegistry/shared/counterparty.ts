@@ -54,8 +54,11 @@ export type CpEventType = 'submitted' | 'checked' | 'rechecked' | 'resubmitted' 
 export interface CpEvent { type: CpEventType; by: string | null; byName: string | null; at: string; note: string }
 export interface CpFile { id: string; name: string; size: number }
 export interface ChangeReq { terms: Terms; reason: string; by: string; byName: string; at: string }
-/** Позначка щомісячної перевірки: нова справа за перевезення, клієнт — відповідач. */
-export interface Flag { at: string; what: string; caseNo?: string }
+/**
+ * Чому погодження / ліміт призупинено: 'court' (або без kind — так писали до 03.11.2026) — нова справа за перевезення, клієнт —
+ * відповідач; 'people' — змінився власник / директор після погодження (Роман 03.11.2026: ліміт зупиняється до переузгодження Сергієм).
+ */
+export interface Flag { at: string; what: string; caseNo?: string; kind?: 'court' | 'people' }
 /** Курс НБУ на момент розрахунку (грн за 1 € / $). */
 export interface Rates { eur: number; usd: number; at: string }
 
@@ -112,7 +115,7 @@ export const EVENT_LABEL: Record<CpEventType, string> = {
   approvedChanged: 'Погоджено з іншими умовами',
   returned: 'Повернуто на доопрацювання',
   rejected: 'Відхилено',
-  suspended: 'Погодження призупинено — нова справа',
+  suspended: 'Погодження призупинено',
   changeRequested: 'Запит на зміну умов',
   changeApproved: 'Зміну умов погоджено',
   changeRejected: 'Зміну умов відхилено — діють попередні',

@@ -235,6 +235,16 @@ export const SALES_TEAM_LEAD: Record<number, string> = {
   15: "Михальчевська",
   4: "Шевчук Назар", // «Самостійний» → Шевчук (R2)
 };
+/**
+ * Команда → тімлід депстату для дзвінків (`syncRingostatCalls.buildLeadMap`) — за НОМЕРОМ команди (02.11.2026).
+ * Раніше шукали прізвище в НАЗВІ команди, і перейменування груп у Kommo («Шаврова Team Lead» замість
+ * «РПК - Шаврової Лілії») тихо викинуло дзвінки команди з депстату й плитки: /Шаврово/ ловило лише родовий
+ * відмінок старої назви. Відповідність та сама, що `SALES_TEAM_LEAD`, плюс «Самостійні» (36283) → Шевчук (R2).
+ */
+export const LEAD_BY_TEAM_ID: Readonly<Record<number, string>> = { ...SALES_TEAM_LEAD, 36283: "Шевчук Назар" };
+export function leadOfTeam(teamId: number | null): string | null {
+  return teamId == null ? null : LEAD_BY_TEAM_ID[teamId] ?? null;
+}
 /** Куди складати угоди без менеджера / поза командами (R2). */
 export const SALES_FALLBACK_LEAD = "Шевчук Назар";
 /** Нормалізація прізвища з листа → канон (R2: «самостійні»→«Шевчук Назар»). */

@@ -1,6 +1,7 @@
 import { dedupeDealContactPairs, type DealContactPair } from "./dealContactPairs.js";
 import { pool } from "../db/pool.js";
-import { splitCompanyCodes } from "../core/companyCode.js";
+import { splitCompanyCodes, companyPhones } from "../core/companyCode.js";
+import { normalizeTeamName, teamRenameFromKommo } from "../core/teamName.js";
 import {
   extractPhone,
   extractLeadSource,
@@ -23,6 +24,7 @@ import {
   extractFmIncome,
   extractFmExpense,
   extractTtnFiles,
+  extractOriginalsReceived,
   extractCarrierName,
   extractCarrierEdrpou,
   extractSourceDealId,
@@ -65,6 +67,26 @@ async function fetchByIdsBatched<T>(
   return out;
 }
 
+/** Назва команди йде за групою Kommo (`teamRenameFromKommo`); зайнята іншою командою назва — пропуск із записом у лог. */
+async function renameTeamFromKommo(teamId: number, groupId: number, local: string, kommo: string): Promise<void> {
+  const wanted = normalizeTeamName(kommo);
+  const takenByOther = wanted !== "" && wanted !== local && (await pool.query(
+    `SELECT 1 FROM teams WHERE lower(name) = lower($1) AND id <> $2`, [wanted, teamId])).rows.length > 0;
+  const d = teamRenameFromKommo({ groupId, local, kommo, takenByOther });
+  if (d.kind === "collision") {
+    console.warn(`syncKommo: команду ${teamId} не перейменовано на «${d.name}» — цю назву вже має інша команда`);
+    return;
+  }
+  if (d.kind !== "rename") return;
+  try {
+    await pool.query(`UPDATE teams SET name = $1 WHERE id = $2`, [d.name, teamId]);
+    console.log(`syncKommo: команда ${teamId} «${local}» → «${d.name}» (назва з Kommo)`);
+  } catch (e) {
+    if ((e as { code?: string }).code !== "23505") throw e;
+    console.warn(`syncKommo: команду ${teamId} не перейменовано на «${d.name}» — цю назву вже має інша команда`);
+  }
+}
+
 export async function syncManagers(): Promise<number> {
   const users = await fetchUsers();
 
@@ -72,17 +94,18 @@ export async function syncManagers(): Promise<number> {
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
     if (!group || teamIdByGroupId.has(group.id)) continue;
-    // Match by the STABLE Kommo group id first, so a team renamed locally in
-    // the dashboard (e.g. "Тендери" → "Самостійний") keeps its custom name and
-    // the sync never tries to re-insert the old name (which would collide on
-    // the unique kommo_group_id and crash the whole job).
+    // Match by the STABLE Kommo group id first, so the sync never tries to
+    // re-insert an old name (which would collide on the unique kommo_group_id
+    // and crash the whole job). The name itself now follows Kommo (02.11.2026),
+    // except the groups in KEEP_DASHBOARD_TEAM_NAME (e.g. "Тендери" → "Самостійний").
     let teamId: number;
-    const existing = await pool.query<{ id: number }>(
-      `SELECT id FROM teams WHERE kommo_group_id = $1`,
+    const existing = await pool.query<{ id: number; name: string }>(
+      `SELECT id, name FROM teams WHERE kommo_group_id = $1`,
       [group.id]
     );
     if (existing.rows.length) {
       teamId = existing.rows[0].id;
+      await renameTeamFromKommo(teamId, group.id, existing.rows[0].name, group.name);
     } else {
       const result = await pool.query<{ id: number }>(
         `INSERT INTO teams (name, kommo_group_id)
@@ -633,16 +656,20 @@ async function upsertCompanies(deals: KommoDeal[], companies: KommoCompany[]): P
     const codes = uniq.map((c) => splitCompanyCodes(
       companyFieldValue(c, COMPANY_FIELD_EDRPOU), companyFieldValue(c, COMPANY_FIELD_IPN)));
     await pool.query(
-      `INSERT INTO kommo_companies (company_id, name, edrpou_raw, edrpou, ipn_raw, ipn, updated_at)
-       SELECT * FROM (SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::text[]) AS nm,
-                             UNNEST($3::text[]) AS er, UNNEST($4::text[]) AS e,
-                             UNNEST($5::text[]) AS ir, UNNEST($6::text[]) AS i, now() AS u) v
+      `INSERT INTO kommo_companies (company_id, name, edrpou_raw, edrpou, ipn_raw, ipn, updated_at, phones)
+       SELECT v.id, v.nm, v.er, v.e, v.ir, v.i, v.u, ARRAY(SELECT jsonb_array_elements_text(v.ph))
+         FROM (SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::text[]) AS nm,
+                      UNNEST($3::text[]) AS er, UNNEST($4::text[]) AS e,
+                      UNNEST($5::text[]) AS ir, UNNEST($6::text[]) AS i, now() AS u,
+                      UNNEST($7::jsonb[]) AS ph) v
        ON CONFLICT (company_id) DO UPDATE SET
          name = EXCLUDED.name, edrpou_raw = EXCLUDED.edrpou_raw, edrpou = EXCLUDED.edrpou,
-         ipn_raw = EXCLUDED.ipn_raw, ipn = EXCLUDED.ipn, updated_at = now()`,
+         ipn_raw = EXCLUDED.ipn_raw, ipn = EXCLUDED.ipn, phones = EXCLUDED.phones, updated_at = now()`,
       [uniq.map((c) => c.id), uniq.map((c) => c.name ?? null),
        uniq.map((c) => companyFieldValue(c, COMPANY_FIELD_EDRPOU)), codes.map((c) => c.edrpou),
-       uniq.map((c) => companyFieldValue(c, COMPANY_FIELD_IPN)), codes.map((c) => c.ipn)]);
+       uniq.map((c) => companyFieldValue(c, COMPANY_FIELD_IPN)), codes.map((c) => c.ipn),
+       // ☎️ Телефони з картки компанії (задача 7359) — з того самого знімка, нуль додаткових запитів.
+       uniq.map((c) => JSON.stringify(companyPhones(c.custom_fields_values)))]);
   }
 
   const seen = new Set<string>();
@@ -752,14 +779,14 @@ export async function upsertDeal(
          unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus, reject_reason,
          request_type, sales_channel, carrier_pay_type, carrier_pay_amount,
          client_pay_amount, carrier_obligation, carrier_name, carrier_edrpou, source_deal_id, source_responsible,
-         fm_income, fm_expense, ttn_files, taken_field_at, gclid
+         fm_income, fm_expense, ttn_files, taken_field_at, gclid, originals_received
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12,
                  -- 🔴 КАНОНІЧНИЙ КЛЮЧ РАХУЄМО ТУТ, а не пишемо сирий. Інакше синк при
                  -- наступному оновленні угоди ЗАТЕР би канонічний ключ сирим, і аліас
                  -- тихо перестав би діяти — рівно для тих угод, що змінюються найчастіше.
                  COALESCE((SELECT a.canonical_key FROM client_key_alias a
                             WHERE a.alias_key = $12 AND a.revoked_at IS NULL), $12),
-                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42)
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -811,7 +838,9 @@ export async function upsertDeal(
          -- ⏱ «Взято в работу» (раніше з двох полів) — вікно «Час опрацювання заявки».
          taken_field_at = EXCLUDED.taken_field_at,
          -- 📈 gclid — офлайн-конверсії Google Ads (core/googleAdsConversions.ts).
-         gclid = EXCLUDED.gclid`,
+         gclid = EXCLUDED.gclid,
+         -- 📄 «Оригиналы получено» — «ТТН за документами» Бізнес-асистента (04.11.2026).
+         originals_received = EXCLUDED.originals_received`,
       [
         deal.id,
         deal.name,
@@ -855,6 +884,7 @@ export async function upsertDeal(
         extractTtnFiles(deal),
         extractTakenInWork(deal),
         extractGclid(deal),
+        extractOriginalsReceived(deal),
       ]
     );
 }

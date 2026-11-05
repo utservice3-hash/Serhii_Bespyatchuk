@@ -89,14 +89,14 @@ test("#1900c ПРОВОДКА «БЕЗ РОБОТИ»: період із нал�
 
 interface Cards {
   CARD_MATCH: Record<string, (r: unknown) => boolean>;
-  cardStats: (rows: readonly unknown[]) => { all: number; ordered: number; notOrdered: number; noWork: number; noWorkOnly: number; noTaskOnly: number; overdue: number; more: { n: number; sum: number }; less: { n: number; sum: number }; delta: number };
+  cardStats: (rows: readonly unknown[]) => { all: number; ordered: number; notOrdered: number; noWork: number; noTaskOnly: number; overdue: number; more: { n: number; sum: number }; less: { n: number; sum: number }; delta: number };
   toggleCard: (cur: string, k: string) => string;
   signedUah: (v: number) => string;
 }
 const r = (o: { t?: boolean; b?: boolean; d?: number; nw?: boolean; nt?: boolean; ov?: boolean }) => ({
   orderedThisMonth: !!o.t, orderedBefore: !!o.b, delta: o.d ?? 0, work: { noWork: !!o.nw, noTask: !!o.nt, overdue: !!o.ov } });
 
-test("#1710c КАРТКИ: число в картці == рядкам після кліку; «± до середнього» = Σ більше − Σ менше; без роботи разом із без задачі", async () => {
+test("#3351 КАРТКИ: число в картці == рядкам після кліку; «± до середнього» = Σ більше − Σ менше; у «без роботи» лише без рахунку й оплати (6455)", async () => {
   const c = await import(await transpile("pages/dashboard/clientsCards.ts")) as Cards;
   const rows = [r({ t: true, b: true, d: 5000 }), r({ b: true, d: -9000, nw: true, nt: true }), r({ b: true, d: -1000, ov: true }),
     r({ t: true, d: 2000, nt: true }), r({ d: 0, nw: true }), r({})];
@@ -106,7 +106,10 @@ test("#1710c КАРТКИ: число в картці == рядкам після
     assert.equal(rows.filter(c.CARD_MATCH[k]).length, n, `🔴 картка «${k}»: число ≠ рядкам після кліку`);
   }
   assert.deepEqual([st.ordered, st.notOrdered], [2, 2], "🔴 «не замовили» — не ті, хто замовляв раніше, а цього місяця ні");
-  assert.deepEqual([st.noWork, st.noWorkOnly, st.noTaskOnly], [3, 2, 2], "🔴 «Без роботи» не об'єднано з «Без задачі»");
+  // Обидва боки межі: рядок «без задачі, але з роботою» (4-й) у «без роботи» НЕ йде; «без роботи й без задачі» (2-й) — іде.
+  assert.deepEqual([st.noWork, st.noTaskOnly], [2, 2], "🔴 у «без роботи» потрапили клієнти лише без задачі (6455: тільки без рахунку й оплати)");
+  assert.equal(c.CARD_MATCH.noWork(r({ nt: true })), false, "🔴 клієнт без задачі, але з рахунком чи оплатою, — у «без роботи»");
+  assert.equal(c.CARD_MATCH.noWork(r({ nw: true })), true, "🔴 клієнт без рахунку й оплати не в «без роботи»");
   assert.equal(st.delta, st.more.sum + st.less.sum, "🔴 «± до середнього» ≠ Σ «купили більше» − Σ «купили менше»");
   assert.deepEqual([st.more.sum, st.less.sum, st.delta], [7000, -10_000, -3000]);
   assert.equal(c.toggleCard("noWork", "noWork"), "all", "🔴 повторний клік по картці не знімає фільтр");

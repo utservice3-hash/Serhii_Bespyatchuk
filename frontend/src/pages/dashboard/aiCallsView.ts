@@ -243,11 +243,32 @@ export async function blobErrorBody(data: unknown): Promise<unknown> {
  * Репліка, у якій прозвучала цитата з розбору: перша, чий текст містить цитату (без регістру й зайвих пробілів).
  * −1 — цитати немає або вона не знайдена дослівно (тоді в картці не перемотуємо і не підсвічуємо — не вгадуємо).
  */
-export function quoteTurnIndex(turns: readonly { text: string }[] | null, quote: string): number {
-  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-  const q = norm(quote);
+/**
+ * Де в записі цитата з розбору: індекс репліки, з якої вона ПОЧИНАЄТЬСЯ. Те саме правило, що звірка на сервері
+ * (`quoteInOneChannel`): нормалізація без розділових знаків і пошук по склеєних репліках ОДНОГО каналу — бо модель цитує
+ * фразу, яку розпізнавання розрізало на дві репліки (02.11.2026: «звірено з розшифровкою» було, а «▶ послухати» — ні).
+ */
+const normQuote = (s: string) => s.toLowerCase().replace(/[’'`ʼ]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").replace(/\s+/g, " ").trim();
+export function quoteTurnIndex(turns: readonly { text: string; channel?: number }[] | null, quote: string): number {
+  const q = normQuote(quote);
   if (!turns || q.length < 3) return -1;
-  return turns.findIndex((t) => norm(t.text).includes(q));
+  const byChannel = new Map<number, { idx: number; from: number }[]>();
+  const joined = new Map<number, string>();
+  turns.forEach((t, idx) => {
+    const ch = t.channel ?? 0, prev = joined.get(ch) ?? "";
+    const from = prev ? prev.length + 1 : 0;
+    joined.set(ch, prev ? `${prev} ${normQuote(t.text)}` : normQuote(t.text));
+    byChannel.set(ch, [...(byChannel.get(ch) ?? []), { idx, from }]);
+  });
+  let best = -1;
+  for (const [ch, text] of joined) {
+    const at = text.indexOf(q);
+    if (at < 0) continue;
+    const spans = byChannel.get(ch) ?? [];
+    const start = [...spans].reverse().find((x) => x.from <= at)?.idx ?? -1;
+    if (start >= 0 && (best < 0 || start < best)) best = start;
+  }
+  return best;
 }
 
 // ─── Екран D (08.10.2026): чек-лист і черга розбору ─────────────────────────────────────────────────────────────
@@ -268,11 +289,16 @@ export const CHECK_MARK_UI: Record<CheckMarkT, { label: string; color: string }>
 export type ReviewClosureT = "approved" | "direct" | "invoice";
 export const CLOSURE_UI: Readonly<Record<ReviewClosureT, { label: string; hint: string }>> = {
   approved: { label: "погоджено коментар", hint: "Менеджер пояснив, тімлід погодив" },
-  direct: { label: "закрито тімлідом", hint: "Тімлід закрив сам, без коментаря менеджера" },
+  direct: { label: "закрито тімлідом", hint: "Тімлід закрив сам, без коментаря менеджера — так можна було до 03.11 включно; тепер лише після коментаря менеджера" },
   invoice: { label: "дійшла до рахунку", hint: "Угода дійшла до «Виставлення рахунку» або далі — з черги вийшла сама" },
 };
-/** Текст позначки «Розібрано»: з коментарем менеджера — це погодження, без нього — тімлід закрив сам. */
+/** Текст позначки «Розібрано»: з коментарем менеджера — це погодження, без нього — тімлід закрив сам (лише до 03.11). */
 export const reviewNoteText = (hasManagerComment: boolean): string => (hasManagerComment ? "Погоджено коментар менеджера" : "Розібрано");
+/**
+ * ✍️ Задача 7351 (з 03.11.2026): закрити розмову з черги можна лише після коментаря САМОГО менеджера розмови; помилка AI —
+ * «Зворотний звʼязок». Правило рахує сервер (`managerCommented`, `firstTouchTeamReport.canCloseReview`), тут — підпис.
+ */
+export const WAIT_MANAGER_COMMENT_UA = "Чекає коментаря менеджера: закрити можна, коли менеджер напише, що було далі. Якщо помилився AI — «Зворотний звʼязок».";
 export const REVIEW_REASON_UI: Record<ReviewReasonT, { label: string; tone: Tone }> = {
   noCall: { label: "Немає дзвінка", tone: "bad" },
   late: { label: "Запізнився", tone: "warn" },
@@ -386,6 +412,47 @@ export function queueRows<T extends { needsReview: boolean; reviewReason: Review
     .sort((a, b) => REASON_ORDER[a.reviewReason!] - REASON_ORDER[b.reviewReason!] || b.calledAt.localeCompare(a.calledAt));
 }
 
+// ─── 📋 Розбір по командах (задача 7238, ТЗ Юлі 28.10.2026, задача 1 п.1; рішення Романа 04.11.2026) ─────────────────
+/**
+ * «Треба розібрати» — розмови з причиною розбору (`reviewReason`, та сама, що ставить їх у чергу); «розібрано» — позначка
+ * тімліда («Розібрано» / «Опрацьовано», з 04.11 — лише після коментаря менеджера, правило 7351); «дійшла до рахунку» —
+ * окремо: з черги вона виходить сама, але це не розбір; «лишилось» — ще в черзі. Тож треба = розібрано + рахунок + лишилось.
+ * Відсоток — розібрано серед тих, що тімлід мав розібрати (без «дійшла до рахунку»).
+ * День — за датою РОЗМОВИ (Київ), тиждень пн–нд. Екран вантажить угоди за датою СТВОРЕННЯ, а розмова буває пізніше
+ * (замір 04.11: 14% жовтневих — інший день, 4 з 2024 — понад 14 днів), тому вікно запиту — на `REVIEW_FETCH_BACK_DAYS` раніше.
+ */
+export interface ReviewCount { due: number; reviewed: number; invoice: number; left: number }
+export interface ReviewTeamLine { teamId: number | null; teamName: string; days: ReviewCount[]; week: ReviewCount; pct: number | null }
+export interface ReviewByTeam { days: string[]; teams: ReviewTeamLine[]; total: ReviewTeamLine }
+type ReviewTeamRow = { inReport: boolean; teamId: number | null; teamName?: string | null; calledAt: string;
+  reviewReason: ReviewReasonT | null; reviewClosure: ReviewClosureT | null };
+export const REVIEW_FETCH_BACK_DAYS = 14;
+export const kyivDayOf = (iso: string): string => new Date(iso).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+/** Вікно запиту для тижня з понеділка `monday`: угоди, створені до 14 днів раніше, — їхні розмови теж можуть впасти в тиждень. */
+export function reviewWeekWindow(monday: string): { from: string; to: string } {
+  return { from: addDays(monday, -REVIEW_FETCH_BACK_DAYS), to: addDays(monday, 6) };
+}
+const zeroCount = (): ReviewCount => ({ due: 0, reviewed: 0, invoice: 0, left: 0 });
+export const reviewPct = (c: ReviewCount): number | null => (c.reviewed + c.left ? Math.round((c.reviewed / (c.reviewed + c.left)) * 100) : null);
+export function reviewByTeam(rows: readonly ReviewTeamRow[], monday: string): ReviewByTeam {
+  const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+  const line = (teamId: number | null, teamName: string): ReviewTeamLine => ({ teamId, teamName, days: days.map(zeroCount), week: zeroCount(), pct: null });
+  const byTeam = new Map<number | null, ReviewTeamLine>();
+  const total = line(null, "Разом");
+  for (const r of rows) {
+    if (!r.inReport || r.reviewReason == null) continue;
+    const i = days.indexOf(kyivDayOf(r.calledAt));
+    if (i < 0) continue;
+    const t = byTeam.get(r.teamId) ?? line(r.teamId, r.teamId == null ? "Без команди" : r.teamName ?? `Команда #${String(r.teamId)}`);
+    byTeam.set(r.teamId, t);
+    const k: keyof ReviewCount = r.reviewClosure === "invoice" ? "invoice" : r.reviewClosure ? "reviewed" : "left";
+    for (const c of [t.days[i], t.week, total.days[i], total.week]) { c.due++; c[k]++; }
+  }
+  const teams = [...byTeam.values()].sort((a, b) => (a.teamId == null ? 1 : b.teamId == null ? -1 : a.teamName.localeCompare(b.teamName, "uk")));
+  for (const t of [...teams, total]) t.pct = reviewPct(t.week);
+  return { days, teams, total };
+}
+
 /** Медіана хвилин (реакція по втрачених) — `null`, якщо даних немає. */
 export function medianMin(xs: readonly (number | null | undefined)[]): number | null {
   const v = xs.filter((x): x is number => typeof x === "number").sort((a, b) => a - b);
@@ -398,12 +465,14 @@ export function medianMin(xs: readonly (number | null | undefined)[]): number | 
 // ОДНЕ правило на плитку: і число, і список після кліку беруть `TILE_MATCH[k]` — тож вони не можуть розійтися.
 // Стани й знаменники — від сервера (`checklist`, `flags`, `dealOutcome`); фронт лише рахує.
 
-export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "thinking" | "declined" | "agreedLost" | "messenger" | "messengerSelf";
+export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "thinking" | "declined" | "agreedLost" | "messenger" | "messengerSelf"
+  | "priceExact" | "priceRange" | "priceFrom";
 export interface TileRow {
   promiseState: PromiseStateT | null; checklist: ChecklistT | null; conversationType: ConversationTypeT | null;
   dealOutcome: { state: string } | null; flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
   clientDecision?: { value: ClientDecisionValueT } | null;
   messengerPromises?: number; messengerSignal?: boolean | null;
+  priceForm?: PriceFormT | null; priceFormAnalysed?: boolean;
 }
 export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   noCall: (r) => r.flags.agreement && r.promiseState === "broken",
@@ -423,6 +492,10 @@ export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   // 💬 Задача 7184: менеджер пообіцяв щось у месенджер — система не перевірить; і «сам запропонував месенджер» (лише з цитатою).
   messenger: (r) => (r.messengerPromises ?? 0) > 0,
   messengerSelf: (r) => r.messengerSignal === true,
+  // 💵 Задача 7351: як названо ціну — серед розмов, де ціну назвали (пункт «ціна» = так); форма лише з цитатою, що знайшлась.
+  priceExact: (r) => r.checklist?.price === "y" && r.priceForm === "exact",
+  priceRange: (r) => r.checklist?.price === "y" && r.priceForm === "range",
+  priceFrom: (r) => r.checklist?.price === "y" && r.priceForm === "from",
 };
 /** Скільки успіхів треба в КОЖНІЙ групі, щоб показувати відсоток, а не лише «X з N» (рішення Романа 08.10.2026). */
 export const SUCCESS_MIN_FOR_PCT = 30;
@@ -432,6 +505,8 @@ export interface TileStats {
   objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number };
   /** 🤝 Згода після ціни: серед розмов із ціною й відомим рішенням; `pct` — частка «погодився». Ті самі правила, що фільтри. */
   decision: { agreed: number; thinking: number; declined: number; of: number; pct: number | null };
+  /** 💬 «Сам запропонував месенджер»: `n` — тим самим правилом, що фільтр плитки; `of` — розмови, які рубрика розібрала. */
+  messengerSelf: { n: number; of: number };
 }
 export function tileStats(rows: readonly TileRow[]): TileStats {
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : null);
@@ -446,6 +521,7 @@ export function tileStats(rows: readonly TileRow[]): TileStats {
     lost: rows.filter(TILE_MATCH.lost).length,
     success: { n: rows.filter(TILE_MATCH.success).length, of: rows.filter((r) => r.flags.analysed).length },
     decision: decisionStats(rows),
+    messengerSelf: { n: rows.filter(TILE_MATCH.messengerSelf).length, of: rows.filter((r) => r.messengerSignal != null).length },
   };
 }
 
@@ -533,7 +609,7 @@ export function summaryTeams(rows: readonly { teamId: number | null; teamName?: 
   return [...m].map(([id, name]) => ({ id, name })).sort((a, b) => (a.id == null ? 1 : b.id == null ? -1 : a.name.localeCompare(b.name, "uk")));
 }
 
-const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success", "agreed", "thinking", "declined", "agreedLost", "messenger", "messengerSelf"];
+const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success", "agreed", "thinking", "declined", "agreedLost", "messenger", "messengerSelf", "priceExact", "priceRange", "priceFrom"];
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const LINK_PARAMS = ["from", "to", "tile", "team", "manager"] as const;
 
@@ -569,4 +645,50 @@ export function withoutAiLinkParams(href: string): string {
   const u = new URL(href);
   for (const k of LINK_PARAMS) u.searchParams.delete(k);
   return u.pathname + u.search + u.hash;
+}
+
+// ─── 💬 Рядок «Месенджер» у картці дзвінка (задача 7184; окрема перевірка з цитатою — Роман 02.11.2026) ──────────────
+// Вердикт — тим самим правилом, що сигнал у списку (`messengerSignal` на сервері): «менеджер сам» лише коли цитату
+// знайдено в розмові. Цитата, якої в розмові немає, — «не підтверджено», а не сигнал. Не розбирали — так і пишемо:
+// порожнеча не може читатись як «не пропонував».
+export type MessengerVerdict = "self" | "unconfirmed" | "client" | "none" | "notAnalysed";
+export function messengerVerdict(m: { move: "none" | "manager" | "client"; quote_found?: boolean | null } | null): MessengerVerdict {
+  if (!m) return "notAnalysed";
+  if (m.move === "manager") return m.quote_found === true ? "self" : "unconfirmed";
+  return m.move;
+}
+export const MESSENGER_VERDICT_UI: Record<MessengerVerdict, { text: string; tone: Tone }> = {
+  self: { text: "Менеджер сам запропонував перейти в месенджер — клієнт не просив", tone: "warn" },
+  unconfirmed: { text: "Модель вважає, що запропонував менеджер, але такої фрази в розмові немає — не підтверджено", tone: "muted" },
+  client: { text: "Клієнт сам попросив месенджер", tone: "ok" },
+  none: { text: "Переходу в месенджер не було", tone: "muted" },
+  notAnalysed: { text: "Не розбиралось: перевірка діє для розмов від 30.10, де звучить месенджер", tone: "muted" },
+};
+
+// ─── 💵 Як названо ціну (задача 7351, п.6; Юля 03.11.2026) ──────────────────────────────────────────────────────────
+// Точна сума / вилка (від–до) / «від…» без верхньої межі — і скільки клієнтів після такої ціни погодились. Форма — від
+// сервера (`firstTouchPriceForm.ts`, лише з цитатою, що знайшлась); тут лише підписи й підрахунок тими самими правилами,
+// що фільтри (`TILE_MATCH`). «Від…» поки рахується названою ціною: відсоток «ціну назвали» не змінюється.
+export type PriceFormT = "exact" | "range" | "from";
+export const PRICE_FORM_FROM_UA = "03.11";
+export const PRICE_FORM_UI: Readonly<Record<PriceFormT, { label: string; tile: TileKey; hint: string }>> = {
+  exact: { label: "Точна сума", tile: "priceExact", hint: "Одна конкретна сума, зокрема приблизна одним числом («близько 28 тисяч»); кілька варіантів, кожен точною сумою, — теж точна." },
+  range: { label: "Вилка (від–до)", tile: "priceRange", hint: "Сума з нижньою і верхньою межею: «20–22 тисячі», «від 40 до 45», «шість-сім тисяч»." },
+  from: { label: "«Від…» без верхньої межі", tile: "priceFrom", hint: "Лише нижня межа: «від 90 тисяч», «не менше пʼятнадцяти». Поки рахується названою ціною, але окремим рядком; після тесту до 06.11 вирішимо, чи зараховувати." },
+};
+export const PRICE_FORMS: readonly PriceFormT[] = ["exact", "range", "from"];
+export interface PriceFormLine { form: PriceFormT; n: number; decided: number; agreed: number; pct: number | null }
+/**
+ * `analysed` — розмови з ціною, які рубрика розібрала; `unknown` — з них форму не визначено (модель не почула суми або
+ * цитати в розмові немає). Σ ліній + `unknown` = `analysed` — невідоме видно числом, а не губиться.
+ */
+export function priceFormStats(rows: readonly TileRow[]): { lines: PriceFormLine[]; analysed: number; unknown: number } {
+  const named = rows.filter((r) => r.checklist?.price === "y" && r.priceFormAnalysed === true);
+  const lines = PRICE_FORMS.map((form) => {
+    const g = named.filter(TILE_MATCH[PRICE_FORM_UI[form].tile]);
+    const decided = g.filter((r) => decisionKnown(r.clientDecision)).length;
+    const agreed = g.filter(TILE_MATCH.agreed).length;
+    return { form, n: g.length, decided, agreed, pct: decided ? Math.round((agreed / decided) * 100) : null };
+  });
+  return { lines, analysed: named.length, unknown: named.length - lines.reduce((s, l) => s + l.n, 0) };
 }

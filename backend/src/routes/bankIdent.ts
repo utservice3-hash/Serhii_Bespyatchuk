@@ -30,6 +30,12 @@ import { bankIdentConfigFromEnv, identEngine, type BankIdentOptions, type FullRi
 import { HttpError, errorHandler, personOf, type AuthedRequest, type ReqUser } from "../bankIdent/rights.js";
 import { canSeeTxRow, ourTxSource, publicRow, toLite, type BankTx } from "../bankIdent/txSource.js";
 import { jobSkip, type JobSkip } from "../jobs/jobRuns.js";
+import {
+  EDIT_PERM as OUT_EDIT_PERM, VIEW_PERM as OUT_VIEW_PERM, OUT_FILTERS, OUT_FROM, checkReason as checkOutReason, formatBreakdown,
+  inFilter, isOutOwn, nextAct, outStatus, parseBreakdown, sumLines, type OutFilter, type OutLine,
+} from "../bankIdent/outBreakdown.js";
+import { dealLabels, outCandidateIds, outHistory, outRowForUpdate, outRowsByIds, saveOut } from "../bankIdent/outBreakdownStore.js";
+const OUT_NOT_IN_SCOPE = "Розшифровка — лише для вихідних ФОП Приват, ФОП Моно і картки.";
 
 const MAX_IDS = 500;
 
@@ -318,6 +324,110 @@ r.post("/:txId/comments", async (req: AuthedRequest, res) => {
   const summary = (await commentSummaries(pool, [id])).get(id) || { count: 1, last: comment };
   res.status(201).json({ comment, summary });
 });
+
+// ───────────── 💳 розшифровка вихідних ФОП і картки (задача Тетяни 03.11.2026; `bankIdent/outBreakdown.ts`) ─────────────
+// Бачити — право view_bank_out_breakdown (фінанси й тімліди, Сергій 03.11 «б»); писати — edit_bank_out_breakdown.
+// Межа рядка — та сама `visible()`, що й у решти «Виписки»: прихованих отримувачів і рахунки «лише фінанси» не видно.
+const outCan = (req: AuthedRequest, perm: string) => roleHasPerm(String(req.auth!.roleKey || ""), perm);
+function outNeed(req: AuthedRequest, perm: string): void {
+  personOf(req);
+  if (!outCan(req, perm)) throw new HttpError(403, perm === OUT_EDIT_PERM ? "Немає права вписувати розшифровку." : "Немає права бачити розшифровку вихідних.");
+}
+async function outScope(req: AuthedRequest): Promise<number[]> {
+  const company = typeof req.query.company === "string" ? req.query.company : "";
+  if (!company) return engine.accountIds;
+  if (!/^[a-z_]{1,32}$/.test(company)) throw new HttpError(400, "Некоректна компанія.");
+  const q = await pool.query<{ id: number }>(`SELECT id FROM bank_accounts WHERE company = $1 AND id = ANY($2::int[])`, [company, engine.accountIds]);
+  return q.rows.map((x) => Number(x.id));
+}
+const isOutTx = (t: BankTx) => String(t.direction) === "out" && engine.accountIds.includes(Number(t.account_id));
+/** Вихідні в межах розшифровки, видимі людині; свої перекази (наш IBAN, «між власними») розшифровки не потребують. */
+async function outCandidates(req: AuthedRequest): Promise<Array<{ t: BankTx; own: boolean }>> {
+  const scope = await outScope(req);
+  const txs = await visible(req.user!, await bankIdentOptions.txs.byIds(await outCandidateIds(pool, scope, OUT_FROM)));
+  const rules = await engine.rules();
+  return txs.filter(isOutTx).sort((a, b) => Date.parse(String(b.booked_at)) - Date.parse(String(a.booked_at)))
+    .map((t) => ({ t, own: isOutOwn(toLite(t), rules) }));
+}
+async function outStates(ids: number[], txs: BankTx[], own: Set<number>) {
+  const rows = await outRowsByIds(pool, ids);
+  const labels = await dealLabels(pool, [...new Set([...rows.values()].flatMap((x) => x.lines.filter((l) => l.kind === "deal").map((l) => Number(l.ref))))]);
+  const out: Record<number, unknown> = {};
+  for (const t of txs) {
+    const id = Number(t.id), row = rows.get(id) ?? null, amount = Math.abs(Number(t.amount));
+    out[id] = {
+      txId: id, own: own.has(id) && !row, status: own.has(id) && !row ? "own" : outStatus(row, amount), amount,
+      lines: (row?.lines ?? []).map((l) => {
+        const d = l.kind === "deal" ? labels.get(Number(l.ref)) : undefined;
+        return { kind: l.kind, ref: l.ref, amount: l.amount, note: l.note, name: d?.name ?? null, manager: d?.manager ?? null, known: l.kind !== "deal" || !!d };
+      }),
+      sum: row ? sumLines(row.lines) : 0, text: row ? formatBreakdown(row.lines) : "",
+      corrected: !!row?.corrected, by: row?.setByName ?? null, at: row?.setAt ?? null, reason: row?.reason ?? null,
+    };
+  }
+  return out;
+}
+r.post("/out/state", async (req: AuthedRequest, res) => {
+  outNeed(req, OUT_VIEW_PERM);
+  const ids = parseIds(req.body?.ids);
+  const txs = (await visible(req.user!, await bankIdentOptions.txs.byIds(ids))).filter(isOutTx);
+  const rules = await engine.rules();
+  const own = new Set(txs.filter((t) => isOutOwn(toLite(t), rules)).map((t) => Number(t.id)));
+  res.json({ states: await outStates(txs.map((t) => Number(t.id)), txs, own), canEdit: outCan(req, OUT_EDIT_PERM) });
+});
+r.get("/out/counts", async (req: AuthedRequest, res) => {
+  outNeed(req, OUT_VIEW_PERM);
+  const cands = (await outCandidates(req)).filter((c) => !c.own);
+  const rows = await outRowsByIds(pool, cands.map((c) => Number(c.t.id)));
+  const counts: Record<string, number> = {};
+  for (const f of OUT_FILTERS) counts[f] = cands.filter((c) => inFilter(f, rows.get(Number(c.t.id)) ?? null, Math.abs(Number(c.t.amount)))).length;
+  res.json({ counts, from: OUT_FROM });
+});
+r.get("/out/list", async (req: AuthedRequest, res) => {
+  outNeed(req, OUT_VIEW_PERM);
+  const f = String(req.query.status || "") as OutFilter;
+  if (!OUT_FILTERS.includes(f) || f === "all") throw new HttpError(400, "status: ok | wait | unidentified | corrected");
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 200));
+  const cands = (await outCandidates(req)).filter((c) => !c.own);
+  const rows = await outRowsByIds(pool, cands.map((c) => Number(c.t.id)));
+  const hit = cands.filter((c) => inFilter(f, rows.get(Number(c.t.id)) ?? null, Math.abs(Number(c.t.amount))));
+  const page = hit.slice(0, limit).map((c) => c.t);
+  res.json({ rows: page.map(publicRow), total: hit.length,
+    states: await outStates(page.map((t) => Number(t.id)), page, new Set()), canEdit: outCan(req, OUT_EDIT_PERM) });
+});
+r.get("/out/:txId/history", async (req: AuthedRequest, res) => {
+  outNeed(req, OUT_VIEW_PERM);
+  const id = txIdOf(String(req.params.txId));
+  const t = await oneTx(req.user!, id);
+  if (!isOutTx(t)) throw new HttpError(400, OUT_NOT_IN_SCOPE);
+  res.json({ events: await outHistory(pool, id) });
+});
+/** Записати розшифровку (перший раз — без причини; зміна — з причиною й позначкою «відкориговано») або «неідентифікований». */
+async function outWrite(req: AuthedRequest, kind: "lines" | "unidentify") {
+  outNeed(req, OUT_EDIT_PERM);
+  const me = personOf(req);
+  const id = txIdOf(String(req.params.txId));
+  const t = await oneTx(req.user!, id);
+  if (!isOutTx(t)) throw new HttpError(400, OUT_NOT_IN_SCOPE);
+  let lines: OutLine[] = [];
+  if (kind === "lines") {
+    const p = parseBreakdown(req.body?.text);
+    if (!p.ok) throw new HttpError(400, p.error);
+    lines = p.lines;
+  }
+  await withTx(pool, async (c) => {
+    const before = await outRowForUpdate(c, id);
+    const step = nextAct(before, kind);
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    if (step.needsReason) { const e = checkOutReason(reason); if (e) throw new HttpError(400, e); }
+    await saveOut(c, { txId: id, accountId: Number(t.account_id), bookedAt: new Date(String(t.booked_at)),
+      status: kind === "lines" ? "identified" : "unidentified", lines, corrected: step.corrected || !!before?.corrected,
+      act: step.act, before, reason: reason || null, me });
+  });
+  return (await outStates([id], [t], new Set()))[id];
+}
+r.post("/out/:txId", async (req: AuthedRequest, res) => { res.status(201).json({ state: await outWrite(req, "lines") }); });
+r.post("/out/:txId/unidentify", async (req: AuthedRequest, res) => { res.status(201).json({ state: await outWrite(req, "unidentify") }); });
 
 r.use(errorHandler("bank-ident"));
 

@@ -2,7 +2,7 @@
  * Що вкладки «Узгодження», «Перевірка контрагента» і «Ліміти клієнтів» чекають від «сервера».
  * У дашборді — api.ts (fetch до /api/counterparty і /api/client-limits); у макеті — mockup/src/demoCp.ts (у пам'яті).
  */
-import type { AnyRow, ClientHit, DebtorLimitCell, LimitRow } from '../../shared/clientLimits';
+import type { AnyRow, ClientHit, DebtorLimitCell, LimitRow, ResetLimit } from '../../shared/clientLimits';
 import type { CpAction, CpFile, CpRequestView, CpUser, From, Rates, ReqStatus, Terms, TermsInput } from '../../shared/counterparty';
 import type { Lag } from '../../shared/cpCalc';
 import type { BudgetInfo, CheckView } from '../../shared/cpCheck';
@@ -42,7 +42,7 @@ export interface CpApi {
   fileUrl(id: string): string | null;
 }
 
-export interface LimitsData { me: CpUser; rows: AnyRow[]; debtAt: string | null; monitor: { last: string | null; next: string }; lag: Lag }
+export interface LimitsData { me: CpUser; rows: AnyRow[]; resets?: ResetLimit[]; debtAt: string | null; monitor: { last: string | null; next: string }; lag: Lag }
 export interface LimitBody { limit: number | string; days: number | string; from: From; reason: string }
 /** Колонка «Ліміти» активної дебіторки: at — дата дебіторки; canEdit — олівці (Сергій). */
 export interface DebtorLimitsData { at: string | null; cells: Record<string, DebtorLimitCell>; canEdit: boolean }

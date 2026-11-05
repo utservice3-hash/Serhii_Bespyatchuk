@@ -1,6 +1,7 @@
 import { mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 import { dayBucketCase, dayBucketParts } from "./dayBuckets.js";
 import { teamAtSql, teamOnDateSql } from "./teamAt.js";
+import { callUnitsCte, legsForDays } from "./missedCallUnits.js";
 
 /**
  * 📵 ПРОПУЩЕНІ ВХІДНІ — ОЗНАЧЕННЯ Й ФОРМА ЗАПИТУ. ТЗ-1 від 14.09.2026.
@@ -78,6 +79,10 @@ export const missedDispSql = (a = ""): string => {
 
 /**
  * 🔗 СКЛЕЙКА — ТІЛЬКИ ФОРМОЮ З ВІКОННОЮ ФУНКЦІЄЮ, І ЦЕ НЕ СМАК.
+ *
+ * ⚠️ З 04.11.2026 (задача 7368) ПРОПУЩЕНІ склеюються не тут, а в `missedCallUnits` — по номеру, через усіх
+ * менеджерів. Нижче — про відповідані вхідні блоку D (`answeredCte`), де склейка лишилась у межах менеджера;
+ * обидва застереження (віконна форма, фільтр до склейки) правило `missedCallUnits` виконує так само.
  *
  * `callMerge` дає дві форми. Друга (`mergedNotExists`) тут була б ТИХО НЕПРАВИЛЬНОЮ:
  * вона звіряє плечі умовою `p.manager_id = a.manager_id`, а звичайна рівність при
@@ -163,37 +168,37 @@ export function missedScopeFor(
 }
 
 /**
- * Спільна основа обох запитів: вхідні з нульовою розмовою за період, склеєні,
- * з бакетом доби і з двома LATERAL-сусідами (наш передзвін / клієнт сам).
+ * Спільна основа запитів екрана: ПРОПУЩЕНІ ДЗВІНКИ за період (задача 7368) — плечі одного дзвінка склеєні правилом
+ * `missedCallUnits` (той самий номер, до 1 хв, будь-які менеджери), узяті дзвінки відкинуто, відповідальний — за
+ * календарем чергувань або перший, кому дзвонило. Далі — бакет доби і два LATERAL-сусіди (наш передзвін / клієнт сам).
  *
- * ⚠️ `LEFT JOIN managers`, а не `INNER` — і це не стиль. Сусідній `reportCuts`
- * джойнить `INNER`, бо там кожен дзвінок за побудовою має менеджера; тут INNER
- * зрізав би рівно ті 48.5%, що не мають відповідального.
+ * 🔴 СКОУП ЗВУЖУЄ ВІДПОВІДЬ, А НЕ РОЗРАХУНОК (правило 1): дзвінки склеюються й розподіляються між черговими по ВСІХ
+ * плечах доби, і лише потім відбираються ті, що в зрізі глядача. Інакше тімлід бачив би інший розподіл, ніж адмін.
  *
- * ⚠️ `scope.teamId` СВІДОМО ховає «без відповідального»: дзвінок, що не дійшов до
- * людини, не належить жодній команді. Це не втрата рядка, це чесна відповідь —
- * але на екрані команди підсумок буде меншим за загальний, і так і має бути.
+ * ⚠️ `LEFT JOIN managers`, а не `INNER` — і це не стиль: INNER зрізав би дзвінки без відповідального.
+ *
+ * ⚠️ `scope.teamId` СВІДОМО ховає «без відповідального»: дзвінок, що не дійшов до людини, не належить жодній команді.
+ * Це не втрата рядка, це чесна відповідь — на екрані команди підсумок менший за загальний, і так і має бути.
  */
 export function missedBaseCte(from: string, to: string, s: MissedScope): { cte: string; params: unknown[] } { return baseCte(from, to, s); }
 function baseCte(from: string, to: string, s: MissedScope): { cte: string; params: unknown[] } {
   const p: unknown[] = [from, to];
   const conds = [
     "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1 AND $2",
-    `rc.call_type IN (${list(INBOUND_TYPES)})`,
-    "rc.billsec = 0",
+    "NOT rc.answered",
   ];
   conds.push(...missedScopeConds(s, p));
   const cte = `
-    WITH base AS (
-      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec, rc.disposition,
+    WITH ${callUnitsCte(legsForDays("$1::date", "$2::date"))},
+    base AS (
+      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, 0 AS billsec, rc.disposition,
              ${teamAtSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date")} AS team_at,
              ${dayBucketParts("rc.calldate")}
-        FROM ringostat_calls rc
+        FROM call_units rc
         LEFT JOIN managers m ON m.id = rc.manager_id
        WHERE ${conds.join(" AND ")}
     ),
-    marked AS (SELECT b.*, ${mergedLagGapExpr("b")} AS gap FROM base b),
-    legs AS (SELECT *, ${dayBucketCase()} AS bucket FROM marked WHERE ${mergedLagFirst()}),
+    legs AS (SELECT *, ${dayBucketCase()} AS bucket FROM base),
     withNext AS (
       SELECT f.*, cb.calldate AS cb_at, cb.billsec AS cb_billsec, cb.manager_id AS cb_manager,
              ca.calldate AS ca_at, cs.calldate AS cs_at

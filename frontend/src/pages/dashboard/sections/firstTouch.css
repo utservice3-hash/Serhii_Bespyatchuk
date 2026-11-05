@@ -26,6 +26,7 @@
 .ftd-go:hover { background: var(--brand-dark); }
 
 .ftd-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+@media (min-width: 1101px) { .ftd-kpis.is-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .ftd-kpi { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
 .ftd-kpi-l { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
 .ftd-kpi-v { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
@@ -36,6 +37,13 @@
 .ftd-card-h { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; }
 .ftd-card-h h2 { margin: 0; font-size: 15px; font-weight: 700; }
 .ftd-card-h span { font-size: 12px; color: var(--text-muted); }
+/* 💵 Задача 7351: «Як назвали ціну → згода» — три рядки-фільтри. */
+.ftd-pf { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ftd-pf-row { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.ftd-pf-row.on { border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); }
+.ftd-pf-l { font-size: 13px; font-weight: 600; display: flex; gap: 4px; align-items: center; }
+.ftd-pf-n { font-size: 13px; font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) { .ftd-pf { grid-template-columns: minmax(0, 1fr); } }
 
 .ftd-mgr { display: grid; grid-template-columns: 210px 64px repeat(5, minmax(110px, 1fr)) 110px 80px; gap: 10px 14px; align-items: center; font-size: 13px; min-width: 1110px; }
 /* 🤝 Згода після ціни — окремо від чек-листа: пунктир зліва, щоб не читалась як п'ятий пункт балу. */

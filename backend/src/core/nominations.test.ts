@@ -196,19 +196,6 @@ test("#607 ручний слайд: без заголовка й з чужим �
   if (ok.ok) assert.deepEqual([ok.value.title, ok.value.person, ok.value.fields.body?.length, ok.value.position], ["Вітаємо в команді!", null, 600, 2]);
 });
 
-/**
- * #609 — ПРЕЗЕНТАЦІЯ НЕ РАХУЄ СВОЇХ ЧИСЕЛ. «План виконали» — колонка `pct` Звіту за період з 1-го,
- * «Підсумки» — `glance` Звіту за місяць, рейтинг — знімок/чернетка номінацій. Червоніє, якщо слайди
- * почнуть брати гроші з іншого ендпоінта або виводити відсоток виконання самостійно.
- */
-test("#609 слайди беруть числа лише зі Звіту й номінацій — без власного розрахунку виконання", () => {
-  const src = readFileSync(fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/NominationsPresentation.tsx", import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
-  assert.match(src, /fetchReportPlan\(\{ from: mStart, to: today \}\)/, "🔴 «План виконали» більше не з колонки Звіту за період з 1-го");
-  assert.match(src, /m\.pct < 100/, "🔴 поріг «виконав план» більше не читає `pct` Звіту");
-  assert.match(src, /month\.glance/, "🔴 «Підсумки» більше не з верху Звіту");
-  assert.doesNotMatch(src, /m\.fact\s*\/\s*m\.plan/, "🔴 слайд сам рахує виконання менеджера — має брати `pct` Звіту");
-  assert.doesNotMatch(src, /\/api\/dashboard\/(?!report-plan)|api\.get\(/, "🔴 презентація ходить у сторонній ендпоінт");
-});
 
 /**
  * #613 — ШАБЛОНИ РУЧНИХ СЛАЙДІВ: для КОЖНОГО шаблону порожнє обовʼязкове поле — відмова, а
@@ -255,19 +242,6 @@ test("#643 шаблони: вітальні слайди мають поле ф�
   }
 });
 
-/**
- * #614 — У ПРЕЗЕНТАЦІЇ Є ВЕРСТКА ДЛЯ КОЖНОГО ШАБЛОНУ, І НЕМАЄ ДЛЯ НЕІСНУЮЧИХ. Читає джерело
- * `NominationsPresentation.tsx`: кожен ключ реєстру має свою гілку `case "<ключ>"`, а кожна гілка —
- * ключ у реєстрі. «Додав шаблон і забув верстку» (слайд вийшов би порожнім) червоніє тут.
- */
-test("#614 кожен шаблон слайда має верстку в презентації, і навпаки", async () => {
-  const { SLIDE_TEMPLATES } = await import("./nominationRules.js");
-  const src = readFileSync(fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/NominationsPresentation.tsx", import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
-  const block = src.slice(src.indexOf("function templateSlide("));
-  assert.ok(block.length > 100, "🔴 у презентації немає функції templateSlide — гейт втратив предмет");
-  const cases = [...block.matchAll(/case "([a-z]+)"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(cases, SLIDE_TEMPLATES.map((t) => t.key).sort(), "🔴 набір верстки слайдів ≠ набір шаблонів");
-});
 
 /* ─────────────────────────── зручна вкладка (22.09.2026) ─────────────────────────── */
 
@@ -422,46 +396,6 @@ test("#664 лідогенератори: прорахунки з CRM, решта
   assert.ok((NON_COMMERCIAL_TEAM_IDS as readonly number[]).includes(LEADGEN_TEAM_ID), "🔴 команда рішень лідогенераторів — не некомерційна команда лідогену");
 });
 
-/**
- * #665 — ТАБЛИЦЯ КОНВЕРСІЇ РНК: система + правки. Числа й вибір «на слайд» — НЕЗАЛЕЖНІ (ревʼю 22.09): правка числа не
- * перебудовує вибір інших рядків і не ставить свій; галочка не заморожує числа; «reset» повертає числа CRM, не чіпаючи
- * вибору. Типово на слайді 4 найкращі (при рівності % — більше лідів), явний вибір діє лише для свого рядка. % до сотих.
- * 🧨 Червоніє, якщо правка числа знову змінить вибір слайда, галочка зробить рядок «своїм», або reset забуде CRM.
- */
-test("#665 конверсія РНК: числа й вибір «на слайд» незалежні; reset повертає CRM; типово — 4 найкращі", async () => {
-  const { buildRnkConv, validateConvEdit } = await import("./nominationRules.js");
-  const sys = [
-    { managerId: 1, name: "А", teamId: 13, taken: 20, won: 2 }, { managerId: 2, name: "Б", teamId: 13, taken: 10, won: 3 },
-    { managerId: 3, name: "В", teamId: 15, taken: 9, won: 3 }, { managerId: 4, name: "Г", teamId: 15, taken: 30, won: 3 },
-    { managerId: 5, name: "Ґ", teamId: 15, taken: 0, won: 0 }, { managerId: 6, name: "Д", teamId: 13, taken: 12, won: 5 },
-  ];
-  const at = "2026-09-21T10:00:00.000Z";
-  const onSlide = (c: { rows: { managerId: number; onSlide: boolean }[] }) => c.rows.filter((r) => r.onSlide).map((r) => r.managerId).sort((a, b) => a - b);
-  assert.deepEqual(onSlide(buildRnkConv(sys, [])), [2, 3, 4, 6], "🔴 типовий вибір — не 4 найкращі за % (при рівності — більше лідів)");
-  const e = (x: Partial<{ managerId: number | null; action: "set" | "reset" | "slide" | "comment"; taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null }>) =>
-    ({ managerId: null, action: "set" as const, taken: null, won: null, onSlide: null, comment: null, by: "Даша", at, ...x });
-  // Правка ЧИСЛА (1 → 24/4 = 16,67%) не міняє вибору інших рядків і сама не ставить рядок на слайд явно.
-  const own = buildRnkConv(sys, [e({ managerId: 1, taken: 24, won: 4 }), e({ action: "comment", comment: "реклама зросла" })]);
-  const r1 = own.rows.find((r) => r.managerId === 1)!;
-  assert.deepEqual([r1.taken, r1.won, r1.pct, r1.crm, r1.own?.by], [24, 4, 16.67, { taken: 20, won: 2 }, "Даша"], "🔴 правка не перемогла або % не до сотих");
-  assert.deepEqual(onSlide(own), [1, 2, 3, 6], "🔴 правка одного числа перебудувала вибір слайда для всіх");
-  assert.equal(own.comment?.text, "реклама зросла");
-  // Галочка — лише вибір: число лишається CRM, рядок не «свій»; явний вибір — лише для свого рядка.
-  const tick = buildRnkConv(sys, [e({ managerId: 5, action: "slide", onSlide: true }), e({ managerId: 6, action: "slide", onSlide: false })]);
-  const t5 = tick.rows.find((r) => r.managerId === 5)!;
-  assert.deepEqual([t5.onSlide, t5.own, t5.taken], [true, null, 0], "🔴 галочка заморозила числа або зробила рядок «своїм»");
-  assert.deepEqual(onSlide(tick), [2, 3, 4, 5], "🔴 явний вибір одного рядка зачепив інші");
-  // «Як у CRM» повертає числа, але не забуває вибору слайда.
-  const back = buildRnkConv(sys, [e({ managerId: 5, action: "slide", onSlide: true }), e({ managerId: 5, taken: 3, won: 1 }), e({ managerId: 5, action: "reset" })]);
-  const b5 = back.rows.find((r) => r.managerId === 5)!;
-  assert.deepEqual([b5.taken, b5.won, b5.own, b5.onSlide], [0, 0, null, true], "🔴 «Як у CRM» не повернуло числа або скинуло вибір слайда");
-  assert.equal(validateConvEdit({ weekFrom: "2026-09-14", action: "set", managerId: 1, taken: 3, won: 4 }).ok, false, "🔴 успіх більший за ліди пройшов");
-  assert.equal(validateConvEdit({ weekFrom: "2026-09-14", action: "slide", managerId: 1 }).ok, false, "🔴 вибір слайда без так/ні пройшов");
-  const okSet = validateConvEdit({ weekFrom: "2026-09-14", action: "set", managerId: 1, taken: 24, won: 4, onSlide: true });
-  assert.ok(okSet.ok && okSet.value.onSlide === null, "🔴 правка чисел несе вибір слайда");
-  assert.ok(validateConvEdit({ weekFrom: "2026-09-14", action: "comment", comment: "  " }).ok);
-  assert.equal(validateConvEdit({ weekFrom: "2026-09-15", action: "reset", managerId: 1 }).ok, false, "🔴 тиждень не з понеділка пройшов");
-});
 
 /**
  * #918 — ТИЖДЕНЬ ЗА КИЄВОМ І ЗНІМОК У ВІВТОРОК 15:00 (з 29.09.2026; до того 08:00 — #603/#655 виведені): обидва боки
@@ -508,4 +442,137 @@ test("#916 після знімка свої дані — до пт 23:59 (літ
   assert.deepEqual([after.final.status, after.final.winners, after.final.value, after.after], ["overridden", [3, 9], 120, true], "🔴 поправка після знімка не лягла поверх");
   assert.equal(overlayAfterFreeze(snap, ov("2026-09-29T11:59:00.000Z"), frozenAt).final, snap, "🔴 рішення ДО знімка вже в ньому — накладати вдруге не можна");
   assert.equal(overlayAfterFreeze(snap, ov("2026-10-01T08:00:00.000Z", "retract"), frozenAt).final, snap, "🔴 скасована поправка мусить повертати знімок");
+});
+
+/**
+ * #3460 — ТОП-3 НА ВЕСЬ КОМЕРЦІЙНИЙ ВІДДІЛ (04.11.2026, Даша: «немає більше РПК і РНК»). Рейтинги всіх команд разом;
+ * однаковий результат = однакове місце, місця без пропусків (3, 3, 2 → 1, 1, 2), до 3-го включно (нічия дає більше трьох рядків); «Свої дані» тімліда (X, V)
+ * прибирають з топу людей ЙОГО команди з більшим числом CRM, але не чіпають інших команд; тиждень без рейтингу — переможці.
+ * 🧨 Червоніє, якщо нічия отримає різні місця, правка тімліда лишить у топі «вищого» з його команди або прибере чужого,
+ * або 4-те місце потрапить у топ-3.
+ */
+test("#3460 топ-3 відділу: нічия — одне місце, правка тімліда діє лише на його команду, 4-те місце не в топі", async () => {
+  const { companyTop } = await import("./nominationRules.js");
+  const cell = (status: string, winners: number[], value: number | null, ranking: { managerId: number; value: number | null }[] | null) =>
+    ({ nomination: "cars", final: { status, winners, value }, ranking });
+  const teams = [
+    { teamId: 1, cells: [cell("unconfirmed", [101], 10, [{ managerId: 101, value: 10 }, { managerId: 102, value: 8 }, { managerId: 103, value: 0 }])] },
+    { teamId: 2, cells: [cell("overridden", [202], 9, [{ managerId: 201, value: 12 }, { managerId: 202, value: 8 }, { managerId: 203, value: 5 }])] },
+    { teamId: 3, cells: [cell("unconfirmed", [301], 8, null)] },
+    { teamId: 4, cells: [cell("empty", [], null, [{ managerId: 401, value: 0 }])] },
+  ];
+  const top = companyTop(teams, "cars");
+  assert.deepEqual(top.map((r) => [r.place, r.managerId, r.value, r.manual]),
+    [[1, 101, 10, false], [2, 202, 9, true], [3, 102, 8, false], [3, 301, 8, false]],
+    "🔴 топ-3 відділу не той: нічия, правка тімліда або 4-те місце (203 з 5) порахувались не так");
+  assert.equal(top.some((r) => r.managerId === 201), false, "🔴 правка тімліда лишила в топі людину його команди з більшим числом CRM");
+  assert.ok(top.some((r) => r.managerId === 101 && r.value === 10), "🔴 правка тімліда однієї команди прибрала людину з іншої");
+  assert.deepEqual(companyTop([{ teamId: 9, cells: [cell("empty", [], null, [])] }], "cars"), [], "🔴 порожній тиждень дав переможців");
+  // Місця без пропусків (ревʼю слайда 04.11.2026): 3, 3, 2 → 1, 1, 2 — а не 1, 1, 3 («два треті місця» без другого).
+  const gap = companyTop([{ teamId: 1, cells: [cell("unconfirmed", [1, 2], 3, [{ managerId: 1, value: 3 }, { managerId: 2, value: 3 }, { managerId: 3, value: 2 }, { managerId: 4, value: 1 }])] }], "cars");
+  assert.deepEqual(gap.map((r) => [r.managerId, r.place]), [[1, 1], [2, 1], [3, 2], [4, 3]], "🔴 після нічиї за перше місце пропущено друге");
+});
+
+/**
+ * #3461 — ЛІДЕРБОРД КОНВЕРСІЇ: ТИПОВА ГАЛОЧКА ВІД 20 ЦІЛЬОВИХ, ЯКЩО ТАКИХ НЕМАЄ — ВІД 15 (04.11.2026, Даша; заміняє #665
+ * «типово — 4 найкращі»). Серед порогових — 4 найкращі за % (рівний % — більше лідів). Числа й вибір слайда незалежні,
+ * явна галочка діє лише на свій рядок, «Як у CRM» не скидає галочку; ▲/▼ бере відсоток минулого тижня тієї ж людини.
+ * 🧨 Червоніє, якщо 1/1 = 100% або 10/9 = 90% потрапить на слайд за замовчуванням, поріг 15 не спрацює без людей з 20,
+ * правка числа одного рядка зачепить галочки інших або минулий тиждень загубиться.
+ */
+test("#3461 лідерборд: типова галочка від 20 цільових (немає — від 15), 4 найкращі; правки й галочки незалежні; ▲/▼", async () => {
+  const { buildRnkConv, validateConvEdit } = await import("./nominationRules.js");
+  const sys = [
+    { managerId: 1, name: "А", teamId: 13, taken: 20, won: 2 }, { managerId: 2, name: "Б", teamId: 13, taken: 10, won: 9 },
+    { managerId: 3, name: "В", teamId: 15, taken: 1, won: 1 }, { managerId: 4, name: "Г", teamId: 15, taken: 30, won: 3 },
+    { managerId: 5, name: "Ґ", teamId: 15, taken: 0, won: 0 }, { managerId: 7, name: "Е", teamId: 5, taken: 22, won: 11 },
+    { managerId: 8, name: "Є", teamId: 5, taken: 25, won: 5 }, { managerId: 9, name: "Ж", teamId: 6, taken: 21, won: 3 },
+  ];
+  const at = "2026-11-02T10:00:00.000Z";
+  const onSlide = (c: { rows: { managerId: number; onSlide: boolean }[] }) => c.rows.filter((r) => r.onSlide).map((r) => r.managerId).sort((a, b) => a - b);
+  assert.deepEqual(onSlide(buildRnkConv(sys, [])), [4, 7, 8, 9], "🔴 типовий вибір не «4 найкращі серед тих, у кого ≥ 20 цільових» (1/1 і 10/9 мають лишитись поза)");
+  const small = [{ managerId: 1, name: "А", teamId: 1, taken: 15, won: 3 }, { managerId: 2, name: "Б", teamId: 1, taken: 16, won: 8 }, { managerId: 3, name: "В", teamId: 1, taken: 10, won: 9 }];
+  assert.deepEqual(onSlide(buildRnkConv(small, [])), [1, 2], "🔴 без людей з 20 цільовими не спрацював поріг 15");
+  assert.deepEqual(onSlide(buildRnkConv([{ managerId: 1, name: "А", teamId: 1, taken: 14, won: 14 }], [])), [], "🔴 людина з 14 лідами пройшла поріг 15");
+  const e = (x: Partial<{ managerId: number | null; action: "set" | "reset" | "slide" | "comment"; taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null }>) =>
+    ({ managerId: null, action: "set" as const, taken: null, won: null, onSlide: null, comment: null, by: "Даша", at, ...x });
+  const own = buildRnkConv(sys, [e({ managerId: 1, taken: 24, won: 4 }), e({ action: "comment", comment: "реклама зросла" })]);
+  const r1 = own.rows.find((r) => r.managerId === 1)!;
+  assert.deepEqual([r1.taken, r1.won, r1.pct, r1.crm, r1.own?.by], [24, 4, 16.67, { taken: 20, won: 2 }, "Даша"], "🔴 правка не перемогла або % не до сотих");
+  assert.deepEqual(onSlide(own), [1, 7, 8, 9], "🔴 правка числа рядка 1 перебудувала вибір не за правилом");
+  assert.equal(own.comment?.text, "реклама зросла");
+  const tick = buildRnkConv(sys, [e({ managerId: 5, action: "slide", onSlide: true }), e({ managerId: 7, action: "slide", onSlide: false })]);
+  const t5 = tick.rows.find((r) => r.managerId === 5)!;
+  assert.deepEqual([t5.onSlide, t5.own, t5.taken], [true, null, 0], "🔴 галочка заморозила числа або зробила рядок «своїм»");
+  assert.deepEqual(onSlide(tick), [4, 5, 8, 9], "🔴 явний вибір одного рядка зачепив інші");
+  const back = buildRnkConv(sys, [e({ managerId: 5, action: "slide", onSlide: true }), e({ managerId: 5, taken: 3, won: 1 }), e({ managerId: 5, action: "reset" })]);
+  const b5 = back.rows.find((r) => r.managerId === 5)!;
+  assert.deepEqual([b5.taken, b5.won, b5.own, b5.onSlide], [0, 0, null, true], "🔴 «Як у CRM» не повернуло числа або скинуло вибір слайда");
+  const prev = buildRnkConv(sys, [], new Map([[7, 40], [8, null]]));
+  assert.deepEqual([7, 8, 9].map((id) => prev.rows.find((r) => r.managerId === id)!.prevPct), [40, null, null], "🔴 відсоток минулого тижня загубився або вигаданий");
+  assert.equal(validateConvEdit({ weekFrom: "2026-09-14", action: "set", managerId: 1, taken: 3, won: 4 }).ok, false, "🔴 успіх більший за ліди пройшов");
+  assert.equal(validateConvEdit({ weekFrom: "2026-09-15", action: "reset", managerId: 1 }).ok, false, "🔴 тиждень не з понеділка пройшов");
+});
+
+/**
+ * #3462 — НОВА ПРЕЗЕНТАЦІЯ НЕ РАХУЄ СВОЇХ ГРОШЕЙ (заміняє #609/#614 разом зі старим макетом). «Пульс плану» — верх Звіту
+ * за поточний місяць (`fetchReportPlan` + `glance`), топ-3 — `companyTop` сервера; ручних шаблонів і чужих ендпоінтів немає.
+ * 🧨 Червоніє, якщо пульс піде з іншого місця, топ-3 почне рахуватись на фронті з рейтингів команд, або слайди
+ * почнуть ходити в сторонній ендпоінт.
+ */
+test("#3462 презентація: пульс — верх Звіту за місяць, топ-3 — із сервера, без чужих ендпоінтів і ручних шаблонів", () => {
+  // З 04.11.2026 що на якому слайді — у моделі (`presentationModel.ts`, одна на екран і PPTX): читаємо обидва файли.
+  const fe = (f: string) => readFileSync(fileURLToPath(new URL(`../../../frontend/src/pages/dashboard/${f}`, import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
+  const src = fe("sections/NominationsPresentation.tsx") + "\n" + fe("presentationModel.ts");
+  assert.match(src, /fetchReportPlan\(\{ from: mStart, to: monthEnd\(today\) \}\)/, "🔴 «Пульс плану» більше не з верху Звіту за поточний місяць");
+  assert.match(src, /month\??\.glance/, "🔴 «Пульс плану» не читає `glance` Звіту");
+  assert.match(src, /week\.companyTop\?\.\[k\]/, "🔴 топ-3 більше не з `companyTop` сервера");
+  assert.doesNotMatch(src, /\.ranking\b/, "🔴 презентація сама збирає топ із рейтингів команд — має брати `companyTop`");
+  assert.doesNotMatch(src, /\/api\/dashboard\/(?!report-plan)|api\.get\(/, "🔴 презентація ходить у сторонній ендпоінт");
+  assert.doesNotMatch(src, /templateSlide|fetchManualSlides/, "🔴 у новому макеті знову ручні шаблони");
+});
+
+/**
+ * #3464 — ЛЮДИ ТИЖНЯ: ПРАВИЛА ДАТ (прохід 2, 04.11.2026, Даша). ДР — місяць-день у номінованому тижні (з переходом через
+ * Новий рік і 29.02 у невисокосний рік → 28.02); «новий у команді» — у тижні людині виповнюється 14 днів від прийому;
+ * новачок для відзнаки — від 14 днів до місяця від прийому на кінець тижня. Кожна межа — з обох боків.
+ * 🧨 Червоніє, якщо зсунути будь-яку межу на день, загубити Новий рік або 29.02.
+ */
+test("#3464 люди тижня: ДР у тижні (Новий рік, 29.02), 14 днів від прийому, новачок від 14 днів до місяця — обидва боки", async () => {
+  const { birthdayInWeek, newcomerDay, isRookie, addMonthClamp } = await import("./nominationPeopleRules.js");
+  const W = ["2026-10-19", "2026-10-25"] as const;
+  assert.equal(birthdayInWeek("1990-10-21", ...W), "2026-10-21", "🔴 ДР у середині тижня не знайдено");
+  assert.equal(birthdayInWeek("1990-10-19", ...W), "2026-10-19", "🔴 ДР у понеділок тижня загублено");
+  assert.equal(birthdayInWeek("1990-10-25", ...W), "2026-10-25", "🔴 ДР у неділю тижня загублено");
+  assert.equal(birthdayInWeek("1990-10-18", ...W), null, "🔴 ДР до тижня потрапив у тиждень");
+  assert.equal(birthdayInWeek("1990-10-26", ...W), null, "🔴 ДР після тижня потрапив у тиждень");
+  assert.equal(birthdayInWeek("1985-01-02", "2026-12-28", "2027-01-03"), "2027-01-02", "🔴 ДР після Нового року в тижні-переході загублено");
+  assert.equal(birthdayInWeek("1985-12-31", "2026-12-28", "2027-01-03"), "2026-12-31", "🔴 ДР до Нового року в тижні-переході загублено");
+  assert.equal(birthdayInWeek("1996-02-29", "2027-02-22", "2027-02-28"), "2027-02-28", "🔴 29.02 у невисокосний рік загублено");
+  assert.equal(birthdayInWeek("1996-02-29", "2028-02-28", "2028-03-05"), "2028-02-29", "🔴 29.02 у високосний рік не своєю датою");
+  assert.equal(newcomerDay("2026-10-05", ...W), "2026-10-19", "🔴 14-й день від прийому в понеділок тижня загублено");
+  assert.equal(newcomerDay("2026-10-11", ...W), "2026-10-25", "🔴 14-й день від прийому в неділю тижня загублено");
+  assert.equal(newcomerDay("2026-10-04", ...W), null, "🔴 14-й день до тижня потрапив у тиждень");
+  assert.equal(newcomerDay("2026-10-12", ...W), null, "🔴 13 днів від прийому — уже «новий у команді»");
+  assert.equal(isRookie("2026-10-11", "2026-10-25"), true, "🔴 рівно 14 днів від прийому — ще не новачок");
+  assert.equal(isRookie("2026-10-12", "2026-10-25"), false, "🔴 13 днів від прийому — уже новачок для відзнаки");
+  assert.equal(isRookie("2026-09-26", "2026-10-25"), true, "🔴 до місяця від прийому — уже не новачок");
+  assert.equal(isRookie("2026-09-25", "2026-10-25"), false, "🔴 рівно місяць від прийому — ще новачок (адаптація пройдена)");
+  assert.equal(addMonthClamp("2026-01-31"), "2026-02-28", "🔴 місяць від 31.01 переплигнув лютий");
+});
+
+/**
+ * #3467 — «ЗАВАНТАЖИТИ PDF» (04.11.2026): кнопка в панелі презентації кладе в корінь сторінки (портал) ВСІ слайди — по
+ * сторінці на слайд — і кличе системний друк; стилі друку ховають решту сторінки й задають сторінку 1280×720 з кольорами.
+ * 🧨 Червоніє, якщо в PDF піде лише поточний слайд, портал зникне (тоді друк захопить інтерфейс), або сторінка втратить розмір.
+ */
+test("#3467 презентація: PDF — усі слайди по сторінці 1280×720, з кольорами, через портал і системний друк", () => {
+  const src = readFileSync(fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/NominationsPresentation.tsx", import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
+  const css = readFileSync(fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/presentation.css", import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
+  assert.match(src, /Завантажити PDF/, "🔴 кнопки «Завантажити PDF» немає");
+  assert.match(src, /createPortal\(<div className="ps-print-root">\{slides\.map\(/, "🔴 у PDF іде не кожен слайд або не через портал у корінь сторінки");
+  assert.match(src, /window\.print\(\)/, "🔴 PDF не відкриває системного друку");
+  assert.match(css, /@page \{ size: 1280px 720px; margin: 0; \}/, "🔴 сторінка PDF не 1280×720");
+  assert.match(css, /body > \*:not\(\.ps-print-root\) \{ display: none !important; \}/, "🔴 у PDF потрапить інтерфейс дашборда");
+  assert.match(css, /print-color-adjust: exact/, "🔴 PDF без кольорів слайдів");
 });

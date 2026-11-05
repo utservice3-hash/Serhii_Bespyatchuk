@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AuthPayload } from "../../../auth";
-import { fetchOrphanClients, claimOrphanClient, type OrphanPool, type OrphanGroup, type OrphanClientRow, type ManagerOption } from "../../../api";
+import { fetchOrphanClients, claimOrphanClient, closeOrphanClient, type OrphanPool, type OrphanGroup, type OrphanClientRow, type ManagerOption } from "../../../api";
 
 /**
  * 🧭 ВКЛАДКА «НІЧИЙНІ» — 1:1 з макетом власника (05.08.2026).
@@ -54,18 +54,33 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
     () => managers.filter((m) => auth?.role !== "team_lead" || m.teamId === auth?.teamId),
     [managers, auth]);
 
+  // Рядок зникає без перезавантаження — і після «Взяти», і після «Закрити».
+  const dropRow = (key: string, claimed: boolean) => setData((d) => d && ({
+    ...d,
+    tiles: { ...d.tiles, clients: d.tiles.clients - 1, claimedThisMonth: d.tiles.claimedThisMonth + (claimed ? 1 : 0) },
+    groups: d.groups
+      .map((g) => ({ ...g, clients: g.clients.filter((c) => c.clientKey !== key) }))
+      .filter((g) => g.clients.length > 0),
+  }));
+  const [closing, setClosing] = useState<string | null>(null);
+  const close = async (row: OrphanClientRow, reason: string, comment: string) => {
+    setClaiming(row.clientKey); setNotice(null);
+    try {
+      await closeOrphanClient(row.clientKey, reason, comment);
+      setClosing(null);
+      dropRow(row.clientKey, false);
+      const lbl = data?.closeReasons.find((r) => r.key === reason)?.label ?? reason;
+      setNotice(`«${row.name}» закрито (${lbl.toLowerCase()}) — у «Архіві»; з нічийних прибрано`);
+    } catch (e) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setNotice(msg ?? "Не вдалося закрити клієнта");
+    } finally { setClaiming(null); }
+  };
   const claim = async (row: OrphanClientRow, managerId: number) => {
     setClaiming(row.clientKey); setNotice(null);
     try {
       await claimOrphanClient(row.clientKey, managerId);
-      // Рядок зникає без перезавантаження сторінки (вимога макета).
-      setData((d) => d && ({
-        ...d,
-        tiles: { ...d.tiles, clients: d.tiles.clients - 1, claimedThisMonth: d.tiles.claimedThisMonth + 1 },
-        groups: d.groups
-          .map((g) => ({ ...g, clients: g.clients.filter((c) => c.clientKey !== row.clientKey) }))
-          .filter((g) => g.clients.length > 0),
-      }));
+      dropRow(row.clientKey, true);
     } catch (e) {
       const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setNotice(msg ?? "Не вдалося взяти клієнта");
@@ -173,13 +188,23 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
                       <td style={{ textAlign: "right" }}>{c.revenue12 ? money(c.revenue12) + " ₴" : "—"}</td>
                       <td style={{ textAlign: "right" }}><b>{money(c.revenueAll)} ₴</b></td>
                       <td style={{ textAlign: "right" }}>
-                        {data.access === "self"
+                        {c.onlyCarrierPhones
+                          ? <button className="orph-take" disabled title={CARRIER_ONLY_HINT}>лише номери перевізників</button>
+                          : data.access === "self"
                           ? (claiming === c.clientKey ? <span className="orph-dim">…</span>
                             : <button className="orph-take" disabled={auth?.managerId == null}
                                 onClick={() => auth?.managerId != null && claim(c, auth.managerId)}>Взяти собі</button>)
                           : <ClaimButton row={c} busy={claiming === c.clientKey} managers={assignable} onClaim={claim} />}
+                        {claiming !== c.clientKey && (
+                          <button className="orph-close" onClick={() => setClosing(closing === c.clientKey ? null : c.clientKey)}
+                            title="Перевізник, не цікаво, не актуально чи дубль — в архів із причиною, з нічийних зникає">Закрити</button>
+                        )}
                       </td>
                     </tr>
+                    {closing === c.clientKey && (
+                      <tr><td colSpan={7}><CloseForm row={c} reasons={data.closeReasons} busy={claiming === c.clientKey}
+                        onCancel={() => setClosing(null)} onClose={close} /></td></tr>
+                    )}
                     </Fragmented>
                   ))}
                   {isOpen && rest > 0 && (
@@ -202,6 +227,10 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
   );
 }
 
+/** 📵 Задача 7359: той самий текст, що віддає сервер у `/claim` (`CLAIM_BLOCKED_ERROR`), — тут підказкою. */
+const CARRIER_ONLY_HINT = "У клієнта лише номери перевізників (Lardi або закривали як «Перевізник») — взяти в роботу не можна. "
+  + "Спершу додайте в Kommo номер замовника.";
+
 /** `<>` не можна з ключем у мапі — потрібен саме Fragment із key. */
 function Fragmented({ children }: { children: React.ReactNode }) { return <>{children}</>; }
 
@@ -215,6 +244,26 @@ function Tile({ lab, val, unit, sub }: { lab: string; val: string; unit?: string
       <div className="orph-tile-lab">{lab}</div>
       <div className="orph-tile-val">{val}{unit && <span className="orph-tile-unit"> {unit}</span>}</div>
       <div className="orph-tile-sub">{sub}</div>
+    </div>
+  );
+}
+
+/** 🚫 «Закрити» (задача 7187): причина обовʼязкова, коментар — за бажанням; без причини кнопка неактивна. */
+function CloseForm({ row, reasons, busy, onCancel, onClose }: {
+  row: OrphanClientRow; reasons: { key: string; label: string }[]; busy: boolean;
+  onCancel: () => void; onClose: (r: OrphanClientRow, reason: string, comment: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [comment, setComment] = useState("");
+  return (
+    <div className="orph-closeform">
+      <span>Закрити <b>{row.name}</b>:</span>
+      {reasons.map((r) => (
+        <label key={r.key}><input type="radio" name={`close-${row.clientKey}`} checked={reason === r.key} onChange={() => setReason(r.key)} /> {r.label}</label>
+      ))}
+      <input className="orph-closecomment" placeholder="коментар (необовʼязково)" value={comment} maxLength={2000} onChange={(e) => setComment(e.target.value)} />
+      <button className="orph-take" disabled={!reason || busy} onClick={() => onClose(row, reason, comment)}>{busy ? "…" : "Закрити в архів"}</button>
+      <button className="orph-close" onClick={onCancel}>Скасувати</button>
     </div>
   );
 }

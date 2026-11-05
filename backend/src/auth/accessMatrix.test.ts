@@ -34,6 +34,22 @@ const ADMIN_LEVEL_ROLES = new Set(["admin", "ceo", "opdir", "kvp", "financier"])
  * інакше це знову «непробована роль у deny», з якої й почався інцидент.
  */
 const ADMIN_DENIED_BY_PERM: Record<string, string> = {
+  // 💰 «Зарплата» (ТЗ §2): дії — лише з правом-ключем payroll_* (фінансист, ОД; рішення по незгоді — лише ОД); адмін сум не бачить.
+  "PATCH /api/payroll/records/:month/:userId": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/records/:month/:userId/extras": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/records/:month/:userId/resolve": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/statement/mark-paid": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/advances/:id/pay": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/advances/:id/reject": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/employees/:userId/leave": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/employees": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "PATCH /api/payroll/employees/:userId": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/archive/import": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/settings": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/departments": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/teams": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/offer-tasks/:id/done": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "PUT /api/notifications/rules/:type": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/ba/utb": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
   "PATCH /api/ba/utb/:id": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
   "POST /api/ba/utb/:id/files": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
@@ -45,6 +61,9 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/bank-ident/:txId/not-client": "mark_bank_not_client — лише Бухгалтерія й адмін (ТЗ Сергія 27.10)",
   "POST /api/bank-ident/comments/summary": "bank_out_comments — лише Бухгалтерія й адмін; іншим коментарів не видно взагалі (ТЗ Сергія 27.10)",
   "POST /api/bank-ident/:txId/comments": "bank_out_comments — лише Бухгалтерія й адмін (ТЗ Сергія 27.10)",
+  "POST /api/bank-ident/out/state": "view_bank_out_breakdown — фінанси й тімліди (Сергій 03.11, варіант «б»); СЕО/ОД/КВП права не мають",
+  "POST /api/bank-ident/out/:txId": "edit_bank_out_breakdown — адмін, фінансист, Бухгалтерія, тімлід (задача Тетяни 03.11)",
+  "POST /api/bank-ident/out/:txId/unidentify": "edit_bank_out_breakdown — адмін, фінансист, Бухгалтерія, тімлід (задача Тетяни 03.11)",
   // 🚚 Конфігуратор вантажу (12.10.2026): довідник змінює лише право `manage_cargo` (admin, СЕО, ОД).
   "PUT /api/cargo/reference/vehicles": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",
   "PUT /api/cargo/reference/pallets": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",
@@ -59,16 +78,16 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "PATCH /api/org/teams/:id": "manage_teams — КВП і фінансист вкладку орг-структури мають, керувати командами ні (Роман 27.10.2026: «керівництво і HR»)",
   "PUT /api/org/teams/people/:employeeId": "manage_teams — КВП і фінансист вкладку орг-структури мають, керувати командами ні (Роман 27.10.2026: «керівництво і HR»)",
   // 📋 Опитування (30.09.2026): керувати — лише право `manage_surveys` (admin, СЕО, ОД, HR — рішення Романа
-  // 30.09.2026); kvp і фінансист вкладку бачать і відповідають на адресоване, а створювати й запускати не можуть.
-  "POST /api/surveys/parse": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "PUT /api/surveys/:id": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/templates": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/:id/launch": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/:id/close": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/:id/reopen": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/surveys/:id/remind": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "DELETE /api/surveys/templates/:id": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
+  // 30.09.2026; + КВП з 30.10.2026); фінансист вкладку бачить і відповідає на адресоване, а створювати й запускати не може.
+  "POST /api/surveys/parse": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "PUT /api/surveys/:id": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/templates": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/:id/launch": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/:id/close": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/:id/reopen": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "POST /api/surveys/:id/remind": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
+  "DELETE /api/surveys/templates/:id": "manage_surveys — фінансист його не має (рішення Романа 30.09.2026); КВП має з 30.10.2026",
   // 🗄 Сейф (Таня 08.10.2026: «сейф — лише адмін та я»): «Оновити зараз» — `view_private_finance` (Адмін, фінансист);
   // СЕО, ОД і КВП адмін-рівня його не мають → 403 по ПРАВУ.
   "POST /api/bank/safe/sync": "view_private_finance — СЕО, ОД і КВП його не мають (Таня: «сейф — лише адмін та я», 08.10.2026)",
@@ -147,6 +166,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/secrets/employees/:id/account/reset-password": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr; а саму дію дає reset_passwords / manage_sales_accounts (акаунт у картці, 23.10.2026, #2280); фінансист жодного з них не має",
   "PATCH /api/secrets/employees/:id/account/tracker": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr; а саму дію дає manage_users / manage_sales_accounts (акаунт у картці, 23.10.2026, #2280); фінансист жодного з них не має",
   "POST /api/secrets/employees/:id/dismiss-date": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/employees/:id/level": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рівень «Старт / Профі», 03.11.2026); фінансист його не має",
+  "POST /api/secrets/employees/:id/level/cancel": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рівень «Старт / Профі», 03.11.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/documents": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   // 📷 Фото співробітників (22.09.2026): запис — те саме право сейфу, що й «Найм → Співробітники».
   "POST /api/people/photo/:employeeId": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 22.09.2026); фінансист його не має",

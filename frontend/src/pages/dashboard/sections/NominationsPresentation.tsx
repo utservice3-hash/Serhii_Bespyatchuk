@@ -1,172 +1,69 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { createPortal } from "react-dom";
 import {
-  fetchReportPlan, fetchManualSlides,
-  type NominationWeek, type NominationKey, type ReportPlan, type ManualSlide, type PhotoRef,
+  fetchReportPlan, fetchPresentationExtras, teamPhotoUrl, employeePhotoUrl, fetchPptxTemplate,
+  type NominationWeek, type ReportPlan, type PresentationExtras, type PhotoRef,
 } from "../../../api";
 import { EmployeePhoto } from "./EmployeePhotos";
-import { Logo } from "../../../components/Logo";
-import { formatAmountFull } from "../format";
-import truck from "../../../assets/presentation-truck.jpg";
+import { buildPresentationModel, dmy, short, num, type TopKey, type AwardM, type EventM } from "../presentationModel";
+import { unzip, zipStore, fillPptx, photoNeeds } from "../pptxTemplate";
 import "./presentation.css";
 
 /**
- * 🎞 ПРЕЗЕНТАЦІЯ ЩОТИЖНЕВОЇ ЗУСТРІЧІ (прохід 2, 21.09.2026). Замінює презентацію, яку Даша
- * щовівторка збирала руками. Оформлення — з її шаблону; показ — у браузері на весь екран, ← →.
+ * 🎞 ПРЕЗЕНТАЦІЯ ЩОТИЖНЕВОЇ ЗУСТРІЧІ — МАКЕТ ДАШІ (04.11.2026, «Щотижнева зустріч UTS — новий дизайн»).
+ * Повністю замінює попередню (рішення Романа: «потрібно повністю новий макет»). Один комерційний відділ — без
+ * поділу на РПК/РНК: титул, події тижня, пульс плану, гроші й обсяг тижня (топ-3), особливі відзнаки, лідогенерація,
+ * лідерборд конверсії, фокус.
  *
  * ЗВІДКИ ЧИСЛА — лише з тих самих ендпоінтів, що й екрани, без власної арифметики по грошах:
- *  · рейтинг — `/nominations/week` (зафіксований знімок; до фіксації — чернетка з позначкою);
- *  · «План виконали» — колонка «Виконано» (`pct`) Звіту за період з 1-го числа до сьогодні
- *    (рішення 21.09.2026: від плану на сьогодні, як на Звіті);
- *  · «Підсумки» — верх Звіту за весь поточний місяць (`glance`: факт, план, очікуємо за датою);
- *  · ручні слайди — `/nominations/manual-slides` (новачки, дні народження, новини).
- * 📷 Фото (22.09.2026) — з реєстру «Співробітників»: людей тижня й плану — за менеджером Kommo
- * (`week.photos`), новачка й іменинника — за обраною на слайді людиною (`manual.photos`). Немає — ініціали.
+ *  · «Пульс плану» — верх Звіту за весь поточний місяць (`glance`: факт, план, очікуємо за план. датою);
+ *  · топ-3 — `companyTop` сервера (рейтинги всіх команд тижня, з правками тімлідів);
+ *  · лідогенерація, конверсія, тексти — `/nominations/week`;
+ *  · події тижня, новачки, нові клієнти — `/nominations/presentation-extras` (ядро сервера);
+ *  · «Прорив тижня» — колонка «Виконано %» Звіту за номінований тиждень (`pct`), без власного розрахунку.
+ * Що з цього на якому слайді — `presentationModel.ts`: ОДНА модель і для екрана, і для PPTX.
+ *
+ * ⏳ ПРЕЗЕНТАЦІЯ ЗБИРАЄТЬСЯ НЕ ОДРАЗУ (04.11.2026): дані йдуть кількома запитами, і «Завантажити» до їх приходу давало файл
+ * без половини слайдів. Тому — смужка прогресу, а обидві кнопки завантаження чекають, доки готове ВСЕ.
  */
 
-const MONTHS_GEN = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"];
 const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
-const dmy = (ymd: string) => `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}.${ymd.slice(0, 4)}`;
-const dm = (ymd: string) => `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}`;
 const monthEnd = (ymd: string) => {
   const d = new Date(`${ymd.slice(0, 7)}-01T12:00:00Z`);
   d.setUTCMonth(d.getUTCMonth() + 1, 0);
   return d.toISOString().slice(0, 10);
 };
-const short = (n: string) => n.split(/\s+/).slice(0, 2).join(" ");
-const initials = (n: string) => n.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("").toUpperCase();
-const teamShort = (t: string) => t.split(" - ").slice(1).join(" - ") || t;
-function fmt(unit: "uah" | "count" | "pct", v: number | null): string {
-  if (v == null) return "—";
-  if (unit === "uah") return formatAmountFull(v);
-  if (unit === "pct") return `${Math.round(v)}%`;
-  return String(v);
-}
-/** Бічна панель — як у Даші (слайди 22.09.2026): рейтинг → лідогенерація → статистика відділу; далі наші «План» і «Підсумки». */
-const SECTIONS = ["Рейтинг менеджерів", "Лідогенерація", "Статистика відділу", "Виконання плану", "Підсумки"] as const;
-const convPctText = (won: number, taken: number) => (taken > 0 ? `${(Math.round((won / taken) * 10000) / 100).toFixed(2).replace(".", ",")}%` : "—");
+/** Шрифти макета (Oswald — заголовки, Rubik — текст). Не в збірці свідомо: файл шрифту, на який посилається лише CSS,
+ *  процедура викату видалила б (вона прибирає з докрута все, чого немає в `index.html`). Без інтернету — системний. */
+const FONTS = "https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Rubik:wght@400;500;600;700&display=swap";
+const TONE: Record<EventM["kind"], string> = { birthday: "red", newcomer: "dark", position: "gold" };
 
-/** Хто виконав план з 1-го числа — за колонкою «Виконано» Звіту, по командах. */
-export function planDoneTeams(r: ReportPlan | null): { team: string; people: { id: number; name: string; pct: number }[] }[] {
-  if (!r) return [];
-  const by = new Map<string, { id: number; name: string; pct: number }[]>();
-  for (const m of r.managers) {
-    if (!(m.plan > 0) || m.pct == null || m.pct < 100) continue;
-    const t = m.teamName ?? "Без команди";
-    by.set(t, [...(by.get(t) ?? []), { id: m.managerId, name: m.name, pct: m.pct }]);
-  }
-  return [...by.entries()].sort((a, b) => a[0].localeCompare(b[0], "uk"))
-    .map(([team, people]) => ({ team, people: people.sort((a, b) => b.pct - a.pct) }));
+/** Фото в квадратний JPEG (обрізка по центру): у PPTX коло шаблону, і квадрат лягає в нього без спотворення. */
+async function squareJpeg(url: string, size: number): Promise<Uint8Array | null> {
+  const img = new Image();
+  img.src = url;
+  try { await img.decode(); } catch { return null; }
+  const s = Math.min(img.naturalWidth, img.naturalHeight);
+  if (!s) return null;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  c.getContext("2d")!.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+  const blob = await new Promise<Blob | null>((ok) => c.toBlob(ok, "image/jpeg", 0.88));
+  return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
 }
 
-/** Підпис розділу в бічній панелі для ручного слайда — як у Дашиній презентації. */
-export function manualSection(s: ManualSlide): string {
-  const f = s.fields ?? {};
-  switch (s.kind) {
-    case "newcomer": return "Вітаємо в команді!";
-    case "birthday": return "День народження";
-    case "news": return "Новини";
-    case "contest": return "Конкурс тижня";
-    case "webinar": return f.title || "Анонс";
-    default: return f.title || s.title;
-  }
-}
-const lines = (v?: string) => (v ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
-/** Велике фото слайда-вітання: фото людини з реєстру або ініціали в колі, як раніше. */
-const Photo = ({ who, photo }: { who?: string; photo?: PhotoRef | null }) => (
-  <div className="ps-photo">{photo ? <EmployeePhoto photo={photo} name={who || "?"} className="ps-photo-img" fallbackClassName="ps-ava big" /> : <div className="ps-ava big">{initials(who || "?")}</div>}</div>
-);
-
-/**
- * Верстка ручного слайда за його шаблоном. Компонування кожної гілки — з відповідного слайда Даші
- * (`UTS_weekly_meeting_template.pptx`). Набір гілок звіряє #611 з реєстром шаблонів сервера.
- */
-function templateSlide(s: ManualSlide, photos: Record<string, PhotoRef>): ReactElement {
-  const f = s.fields ?? {};
-  const photo = f.employeeId ? photos[f.employeeId] ?? null : null;
-  switch (s.kind) {
-    case "newcomer":
-      return (<>
-        <div className="ps-h ps-h-bar">{[f.headline, f.person].filter(Boolean).join(" - ")}</div>
-        <div className="ps-tcard">
-          <Photo who={f.person} photo={photo} />
-          <div className="ps-tbody">
-            <div className="ps-tname2">{f.person}</div>
-            {f.achievement ? <div className="ps-tach">{f.achievement}</div> : null}
-            {f.wish ? <div className="ps-twish">{f.wish}</div> : null}
-          </div>
-          {f.date ? <div className="ps-tdate">{f.date}</div> : null}
-        </div>
-      </>);
-    case "birthday":
-      return (<>
-        <div className="ps-h">З Днем народження!</div>
-        <div className="ps-tcard">
-          <Photo who={f.person} photo={photo} />
-          <div className="ps-tbody">
-            <div className="ps-tcong">ВІТАЄМО</div>
-            <div className="ps-tname2">{f.person}</div>
-            <div className="ps-tbday">з Днем народження!</div>
-            {f.wish ? <div className="ps-twish small">{f.wish}</div> : null}
-            {f.date ? <div className="ps-tdate inline">{f.date}</div> : null}
-          </div>
-        </div>
-      </>);
-    case "news":
-      return (<>
-        <div className="ps-h ps-h-big">{f.title || "Новини!"}</div>
-        <div className="ps-tcard col">
-          <div className="ps-news">{f.text}</div>
-          {f.wish ? <div className="ps-newswish">{f.wish}</div> : null}
-        </div>
-      </>);
-    case "contest":
-      return (<>
-        <div className="ps-kick">КОНКУРС ТИЖНЯ</div>
-        <div className="ps-h tight">{f.title || "Три місця на пʼєдесталі"}</div>
-        {f.description ? <div className="ps-desc">{f.description}</div> : null}
-        <div className="ps-podium">
-          <div className="ps-place"><div className="pl">2 МІСЦЕ</div><div className="pv">{f.prize2}</div></div>
-          <div className="ps-place first"><div className="pl">1 МІСЦЕ</div><div className="pv">{f.prize1}</div></div>
-          <div className="ps-place"><div className="pl">3 МІСЦЕ</div><div className="pv">{f.prize3}</div></div>
-        </div>
-        {lines(f.rules).length ? <div className="ps-list"><div className="lt">ПРАВИЛА ЧЕСНОЇ ГРИ</div>
-          {lines(f.rules).map((r) => <div className="li" key={r}><i>→</i>{r}</div>)}</div> : null}
-        {f.total ? <div className="ps-stake"><span>НА КОНУ ЦЬОГО ТИЖНЯ</span><b>{f.total}</b></div> : null}
-      </>);
-    case "webinar":
-      return (<>
-        <div className="ps-kick">АНОНС</div>
-        <div className="ps-h tight">{f.title || "Навчальний вебінар"}</div>
-        {f.description ? <div className="ps-desc">{f.description}</div> : null}
-        <div className="ps-banner"><div className="when">{f.when}</div>
-          <div className="topic"><div className="tl">ТЕМА</div><div className="tv">{f.topic}</div></div></div>
-        <div className="ps-cols">
-          {[["СПІКЕР", f.speaker], ["ФОРМАТ", f.format], ["ДЛЯ КОГО", f.audience]].map(([l, v]) => (
-            <div className="c" key={l}><i /><div className="cl">{l}</div><div className="cv">{v || "—"}</div></div>
-          ))}
-        </div>
-        {lines(f.points).length ? <div className="ps-list"><div className="lt">ЩО РОЗГЛЯНЕМО</div>
-          {lines(f.points).map((r) => <div className="li" key={r}><i>→</i>{r}</div>)}</div> : null}
-      </>);
-    case "custom":
-    default:
-      return (<>
-        <div className="ps-h">{f.title || s.title}</div>
-        <div className="ps-manual">
-          {f.person ? <div className="ps-ava big">{initials(f.person)}</div> : null}
-          <div>{f.person ? <div className="ps-mname">{f.person}</div> : null}{f.body ? <div className="ps-mtext">{f.body}</div> : null}</div>
-        </div>
-      </>);
-  }
-}
+type Step = "month" | "weekRep" | "extras" | "photos" | "fonts";
+const STEPS: { k: Step; label: string }[] = [
+  { k: "month", label: "пульс плану" }, { k: "weekRep", label: "звіт тижня" }, { k: "extras", label: "події й відзнаки" },
+  { k: "photos", label: "фото" }, { k: "fonts", label: "шрифти" },
+];
 
 export function NominationsPresentation({ week, onClose }: { week: NominationWeek; onClose: () => void }) {
-  const [toDate, setToDate] = useState<ReportPlan | null>(null);
   const [month, setMonth] = useState<ReportPlan | null>(null);
-  const [manual, setManual] = useState<ManualSlide[]>([]);
-  const [manualPhotos, setManualPhotos] = useState<Record<string, PhotoRef>>({});
-  // Година зняття чисел «Підсумків»: факт за день зсувається на сотні тисяч — без години число не відтворити.
-  const [loadedAt, setLoadedAt] = useState<string | null>(null);
+  const [weekRep, setWeekRep] = useState<ReportPlan | null>(null);
+  const [extras, setExtras] = useState<PresentationExtras | null>(null);
+  const [teamPhoto, setTeamPhoto] = useState<string | null>(null);
+  const [done, setDone] = useState<Partial<Record<Step, true>>>({});
   const [err, setErr] = useState<string | null>(null);
   const [i, setI] = useState(0);
   const [scale, setScale] = useState(1);
@@ -174,202 +71,296 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
   const viewport = useRef<HTMLDivElement>(null);
   const today = kyivToday();
   const mStart = `${today.slice(0, 7)}-01`;
+  const mark = (k: Step) => setDone((d) => (d[k] ? d : { ...d, [k]: true }));
 
   useEffect(() => {
-    Promise.all([
-      fetchReportPlan({ from: mStart, to: today }),
-      fetchReportPlan({ from: mStart, to: monthEnd(today) }),
-      fetchManualSlides(week.weekFrom),
-    ]).then(([a, b, c]) => {
-      setToDate(a); setMonth(b); setManual(c.slides); setManualPhotos(c.photos ?? {});
-      setLoadedAt(new Date().toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" }));
-    })
-      .catch(() => setErr("Не вдалося завантажити дані для слайдів — спробуйте ще раз"));
-  }, [week.weekFrom, mStart, today]);
+    let l = document.querySelector<HTMLLinkElement>(`link[href="${FONTS}"]`);
+    if (!l) {
+      l = document.createElement("link");
+      l.rel = "stylesheet"; l.href = FONTS;
+      document.head.appendChild(l);
+    }
+    // Шрифти — крок прогресу: PDF зі шрифтом-заміною розʼїжджається. Без інтернету не чекаємо вічно — 5 с і далі.
+    const wait = l.sheet ? Promise.resolve() : new Promise<void>((ok) => { l!.addEventListener("load", () => ok()); l!.addEventListener("error", () => ok()); });
+    void Promise.race([wait.then(() => document.fonts.ready), new Promise((ok) => setTimeout(ok, 5000))]).then(() => mark("fonts"));
+  }, []);
+  useEffect(() => {
+    fetchReportPlan({ from: mStart, to: monthEnd(today) }).then((r) => { setMonth(r); mark("month"); })
+      .catch(() => setErr("Не вдалося завантажити пульс плану — спробуйте ще раз"));
+  }, [mStart, today]);
+  useEffect(() => {
+    fetchReportPlan({ from: week.weekFrom, to: week.weekTo }).then((r) => { setWeekRep(r); mark("weekRep"); })
+      .catch(() => setErr("Не вдалося завантажити звіт тижня — спробуйте ще раз"));
+    fetchPresentationExtras(week.weekFrom).then((x) => { setExtras(x); mark("extras"); })
+      .catch(() => setErr("Не вдалося завантажити події тижня й відзнаки — спробуйте ще раз"));
+  }, [week.weekFrom, week.weekTo]);
 
-  const draft = week.state !== "frozen";
-  const meeting = week.freezeDueAt.slice(0, 10);
-  const name = useCallback((id: number) => week.names[String(id)] ?? `Менеджер #${id}`, [week.names]);
+  const model = useMemo(() => buildPresentationModel({ week, month, weekRep, extras, today }), [week, month, weekRep, extras, today]);
+  /** Фото людини на слайді: менеджер Kommo — з фото тижня, співробітник «Найму» — з фото подій. */
+  const refOf = (n: { managerId?: number | null; employeeId?: number | null }): PhotoRef | null | undefined =>
+    n.employeeId != null ? extras?.photos?.[String(n.employeeId)] : n.managerId != null ? week.photos?.[String(n.managerId)] : null;
+
+  // Фото — коли відомо, хто на слайдах (усі дані прийшли): підтягуємо в кеш наперед, тоді PDF і PPTX їх уже мають.
+  const dataReady = !!(done.month && done.weekRep && done.extras);
+  useEffect(() => {
+    if (!dataReady) return;
+    let alive = true;
+    const jobs = photoNeeds(model).map((n) => {
+      if (n.team) return week.teamPhoto ? teamPhotoUrl(week.teamPhoto.v).then((u) => { if (alive) setTeamPhoto(u); }) : null;
+      const r = refOf(n);
+      return r ? employeePhotoUrl(r) : null;
+    });
+    void Promise.all(jobs).then(() => { if (alive) mark("photos"); });
+    return () => { alive = false; };
+  }, [dataReady, model, week.teamPhoto?.v]); // eslint-disable-line react-hooks/exhaustive-deps
+  const doneN = STEPS.filter((s) => done[s.k]).length;
+  const ready = doneN === STEPS.length && !err;
+  const pending = STEPS.find((s) => !done[s.k]);
 
   const slides = useMemo(() => {
+    const m = model;
     const out: { key: string; node: ReactElement }[] = [];
-    const mark = draft ? <div className="ps-watermark">ЧЕРНЕТКА · тиждень ще не зафіксовано</div> : null;
-    // Розділи бічної панелі — як у Даші: спершу розділи наявних ручних слайдів, потім сталі.
-    // На слайд влазить ~8 рядків (1280×720): більше — не ріжемо мовчки, а кажемо, скільки лишилось поза слайдом.
-    const convAll = (week.rnkConv?.rows ?? []).filter((r) => r.onSlide);
-    const convRows = convAll.slice(0, 8);
-    const hasConv = convRows.length > 0 || !!week.rnkConv?.comment;
-    const nav = [...new Set(manual.map(manualSection)), ...SECTIONS.filter((x) => (x !== "Лідогенерація" || !!week.leadgen) && (x !== "Статистика відділу" || hasConv))];
-    const frame = (active: string, body: ReactElement) => (
-      <div className="ps-slide">
-        <aside className={`ps-side${nav.length > 5 ? " dense" : ""}`}>
-          <div className="ps-logo"><Logo variant="red" size={44} /></div>
-          {nav.map((s) => <div key={s} className={`ps-nav${s === active ? " on" : ""}`}>{s}</div>)}
-          <div className="ps-date">{dmy(meeting)}</div>
-        </aside>
-        <div className="ps-main">{body}</div>
-        {mark}
-      </div>
+    const mark = m.draft ? <div className="ps-watermark">ЧЕРНЕТКА · тиждень ще не зафіксовано</div> : null;
+    const foot = (extra?: string) => <div className="ps-foot">UTS • Комерційний відділ • {dmy(m.meeting)}{extra ? ` • ${extra}` : ""}</div>;
+    const chip = (min: number, tone: "dark" | "red" = "dark") => <div className={`ps-chip ${tone}`}><i className="ps-clock" />{min} хв</div>;
+    const ava = (who: { managerId?: number | null; employeeId?: number | null }, name: string, cls: string) =>
+      <EmployeePhoto photo={refOf(who)} name={name} className={cls} />;
+    const head = (kick: string, title: string, min: number, tone: "dark" | "red" = "dark") => (
+      <div className="ps-head2"><div><div className="ps-kick2">{kick}</div><h2 className="ps-h2">{title}</h2></div>{chip(min, tone)}</div>
     );
 
+    // 1 · Титул
     out.push({ key: "title", node: (
-      <div className="ps-title">
-        <img className="ps-truck" src={truck} alt="" />
-        <div className="ps-tlogo"><Logo variant="red" size={70} /></div>
-        <h1>ЩОТИЖНЕВА<br />ЗУСТРІЧ</h1>
-        <div className="ps-tpill">Для співробітників UTS</div>
-        <div className="ps-tsub">{dmy(meeting)} · підсумки тижня {dm(week.weekFrom)}–{dm(week.weekTo)}</div>
-        <div className="ps-tfoot">UTS — ТРАНСПОРТНА КОМПАНІЯ</div>
+      <div className="ps-slide2 ps-cover">
+        <div className="ps-cover-l">
+          <div className="ps-uts">UTS</div>
+          <h1 className="ps-cover-h">ЩОТИЖНЕВА<br />ЗУСТРІЧ</h1>
+          <div className="ps-cover-sub">Комерційний відділ • {dmy(m.meeting)}</div>
+          <div className="ps-cover-chips"><span className="ps-pill red"><i className="ps-clock" />15 хвилин</span><span className="ps-pill grey">UTS — транспортна компанія</span></div>
+        </div>
+        <div className="ps-cover-stripe" />
+        <div className="ps-cover-r">
+          <div className="ps-cover-photo">{teamPhoto ? <img src={teamPhoto} alt="Фото команди" /> : <span>Фото команди</span>}</div>
+        </div>
         {mark}
       </div>
     ) });
 
-    for (const s of manual) out.push({ key: `m${s.id}`, node: frame(manualSection(s), templateSlide(s, manualPhotos)) });
-    // Імʼя для ініціалів — з того рядка, що малюється (у «План виконали» — зі Звіту: там бувають люди поза ростером тижня).
-    const ava = (id: number, cls: string, who?: string) => <EmployeePhoto key={id} photo={week.photos?.[String(id)]} name={who ?? name(id)} className={cls} />;
-
-    const unit = (k: NominationKey) => week.defs.find((d) => d.key === k)?.unit ?? "count";
-    const card = (dept: "rpk" | "rnk", title: string) => (
-      <div className="ps-card">
-        <div className="ps-head">{title}</div>
-        {week.defs.map((def) => {
-          const k = def.key;
-          const w = week.depts.find((x) => x.dept === dept && x.nomination === k);
-          const teams = w ? w.teams.map((t) => week.teams.find((x) => x.teamId === t)).filter((t): t is NonNullable<typeof t> => !!t) : [];
-          const manualWin = teams.some((t) => t.cells.some((c) => c.nomination === k && c.final.status === "overridden"));
-          return (
-            <div key={k}>
-              <div className="ps-lab">{def.label.toUpperCase()}</div>
-              <div className="ps-val">
-                {k === "intl" && w && w.state === "ok" ? (() => {
-                  // Міжнародні — як у Даші: переможець КОЖНОЇ команди відділу з числом, найбільші зверху.
-                  const list = week.teams.filter((t) => t.dept === dept).map((t) => ({ t, c: t.cells.find((c) => c.nomination === "intl")! }))
-                    .filter((x) => x.c.final.status !== "empty" && x.c.final.value != null).sort((a, b) => (b.c.final.value ?? 0) - (a.c.final.value ?? 0));
-                  return <><span className="ps-avs">{w.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm"))}</span>
-                    <span className="ps-vtext ps-intl">{list.map((x, i) => <span key={x.t.teamId}>{i ? " · " : ""}{x.c.final.winners.map((id) => short(name(id))).join(", ")} — <b>{fmt("count", x.c.final.value)}</b>
-                      {x.c.final.status === "overridden" ? <span className="ps-manual-mark">✎</span> : null}</span>)}</span></>;
-                })() : w && w.state === "ok"
-                  ? <><span className="ps-avs">{w.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm"))}</span>
-                      <span className="ps-vtext">{w.winners.map((id) => short(name(id))).join(", ")} — <b>{fmt(unit(k), w.value)}</b>
-                      {k === "marginPct" && (w.value ?? 0) > week.marginFlagPct ? <span className="ps-flag">⚑ понад {week.marginFlagPct}% від виплати водію</span> : null}
-                      {manualWin ? <span className="ps-manual-mark">✎ за даними тімліда</span> : null}
-                      <div className="ps-tm">{teams.map((t) => teamShort(t.teamName)).join(", ")}</div></span></>
-                  : <span className="ps-muted">ніхто не набрав</span>}
-              </div>
+    // 2 · Події тижня — з «Найму» (ДР, 14 днів від прийому) і «Нова посада» від Даші. Немає подій — слайда немає.
+    const ev = m.events ?? [];
+    if (ev.length) out.push({ key: "events", node: (
+      <div className="ps-slide2">
+        {head("КОМАНДА", "ПОДІЇ ТИЖНЯ", 2)}
+        <div className={`ps-evs n${Math.min(ev.length, 6)}`}>
+          {ev.slice(0, 6).map((e) => (
+            <div className={`ps-ev ${TONE[e.kind]}`} key={`${e.kind}${e.employeeId}`}>
+              {ava({ employeeId: e.employeeId }, e.name, "ps-evava")}
+              <div className="ps-evtag">{e.tag}</div>
+              <div className="ps-evname">{short(e.name)}</div>
+              <div className="ps-evtext">{e.text}</div>
             </div>
-          );
-        })}
+          ))}
+        </div>
+        {ev.length > 6 ? <div className="ps-more">ще {ev.length - 6} — поза слайдом</div> : null}
+        {foot()}
+        {mark}
       </div>
-    );
-    out.push({ key: "rating", node: frame(SECTIONS[0], (
-      <>
-        <div className="ps-kick">ТИЖДЕНЬ {dm(week.weekFrom)}–{dmy(week.weekTo)}</div>
-        <div className="ps-h">Рейтинг менеджерів</div>
-        <div className="ps-two">{card("rpk", "ВРПК — відділ роботи з постійними клієнтами")}{card("rnk", "ВРНК — відділ роботи з новими клієнтами")}</div>
-      </>
-    )) });
+    ) });
 
-    // 📣 Рейтинг лідогенераторів (слайд 4 Даші): 4 номінації; «прорахунки» — з CRM, решта — дані тімліда/керівництва.
-    if (week.leadgen) {
-      const lg = week.leadgen;
-      out.push({ key: "leadgen", node: frame(SECTIONS[1], (
-        <>
-          <div className="ps-kick">ТИЖДЕНЬ {dm(week.weekFrom)}–{dmy(week.weekTo)}</div>
-          <div className="ps-h">Рейтинг лідогенераторів</div>
-          <div className="ps-lg">
-            {week.leadgenDefs.map((def, i) => {
-              const c = lg.cells.find((x) => x.nomination === def.key);
-              const f = c?.final;
-              const ok = !!f && f.status !== "empty" && f.winners.length > 0;
-              return (
-                <div className="ps-lg-item" key={def.key}>
-                  <div className="ps-lg-n">{i + 1}</div>
-                  <div className="ps-lg-body">
-                    <div className="ps-lab">{def.label.toUpperCase()}</div>
-                    {ok ? <>
-                      <div className="ps-lg-who"><span className="ps-avs">{f!.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm", lg.members.find((m) => m.id === id)?.name))}</span>
-                        {f!.winners.map((id) => lg.members.find((m) => m.id === id)?.name ?? name(id)).join(", ")}</div>
-                      <div className="ps-lg-v">{fmt(def.unit, f!.value)}{f!.status === "overridden" ? <span className="ps-manual-mark">✎ за даними тімліда</span> : null}</div>
-                    </> : <div className="ps-muted">{def.noCrm ? "дані не внесено" : "ніхто не набрав"}</div>}
-                  </div>
-                </div>
-              );
-            })}
+    // 3 · Пульс плану — верх Звіту за поточний місяць
+    if (m.pulse) {
+      const q = m.pulse;
+      out.push({ key: "pulse", node: (
+        <div className="ps-slide2 dark">
+          {head(q.monthLabel, "ПУЛЬС ПЛАНУ", 1, "red")}
+          <div className="ps-pulse"><div className="ps-pulse-n">{q.pct == null ? "—" : `${q.pct}%`}</div><div className="ps-pulse-t">плану виконано<br />за місяць</div></div>
+          <div className="ps-bar2"><span style={{ width: `${Math.min(100, q.pct ?? 0)}%` }} /></div>
+          <div className="ps-pcards">
+            <div className="ps-pcard"><div className="l">ФАКТ / ПЛАН</div><div className="v">{num(q.fact)} / {num(q.plan)} ₴</div></div>
+            <div className="ps-pcard"><div className="l">ЗАЛИШИЛОСЬ ДО ПЛАНУ</div><div className="v">{q.left == null ? "план виконано" : `${num(q.left)} ₴`}</div></div>
+            <div className="ps-pcard"><div className="l">ОЧІКУЄМО ЗА ПЛАН. ДАТОЮ</div><div className="v">{num(q.expect)} ₴</div></div>
           </div>
-        </>
-      )) });
+          {foot()}
+          {mark}
+        </div>
+      ) });
     }
-    // 📊 Статистика відділу РНК · найкраща конверсія (слайд 5 Даші): рядки, які Даша/тімлід позначили «на слайд».
-    if (hasConv) {
-      out.push({ key: "rnk-conv", node: frame(SECTIONS[2], (
-        <>
-          <div className="ps-kick">ТИЖДЕНЬ {dm(week.weekFrom)}–{dmy(week.weekTo)}</div>
-          <div className="ps-h">Статистика відділу РНК</div>
-          <div className="ps-conv">
-            <div className="ps-conv-t">
-              <div className="ps-head">Найкраща конверсія</div>
-              <table>
-                <thead><tr><th>Менеджер</th><th>Цільові ліди</th><th>Успіх</th><th>Конверсія</th></tr></thead>
-                <tbody>{convRows.map((r) => <tr key={r.managerId}><td>{r.name}</td><td>{r.taken}</td><td>{r.won}</td><td><b>{convPctText(r.won, r.taken)}</b></td></tr>)}</tbody>
-              </table>
-              {convAll.length > convRows.length ? <div className="ps-muted">ще {convAll.length - convRows.length} — поза слайдом</div> : null}
+
+    // 4–5 · Топ-3 на весь відділ: три рядки; хто ділить місце з третім — підписом знизу (ревʼю 04.11.2026)
+    const topCol = (k: TopKey, title: string) => {
+      const { rows, tied } = m.tops[k];
+      return (
+        <div className="ps-tcol">
+          <div className="ps-tcol-h">{title}</div>
+          {rows.length === 0 ? <div className="ps-trow empty">ніхто не набрав</div> : rows.map((r) => (
+            <div className={`ps-trow p${Math.min(r.place, 3)}`} key={`${r.managerId}`}>
+              <div className="ps-place">{r.place}</div>
+              {ava({ managerId: r.managerId }, r.name, "ps-tava")}
+              <div className="ps-tinfo"><div className="ps-tname">{r.name}</div>
+                <div className={`ps-tval${r.place === 1 ? " first" : ""}`}>{r.text}{r.manual ? <span className="ps-manual">✎</span> : null}</div></div>
             </div>
-            {week.rnkConv?.comment ? <div className="ps-conv-c">{week.rnkConv.comment.text}</div> : null}
+          ))}
+          {tied.length ? <div className="ps-more">з тим самим результатом: {tied.join(", ")}</div> : null}
+        </div>
+      );
+    };
+    out.push({ key: "money", node: (
+      <div className="ps-slide2">
+        {head("НОМІНАЦІЇ • ТОП-3", "ГРОШІ ТИЖНЯ", 2)}
+        <div className="ps-tcols">{topCol("maxDeal", "НАЙБІЛЬШИЙ РАЗОВИЙ ЗАЗОР")}{topCol("revenue", "НАЙБІЛЬШЕ В «УСПІШНИХ»")}</div>
+        {foot("однаковий результат = однакове місце")}
+        {mark}
+      </div>
+    ) });
+    out.push({ key: "volume", node: (
+      <div className="ps-slide2">
+        {head("НОМІНАЦІЇ • ТОП-3", "ОБСЯГ ТИЖНЯ", 2)}
+        <div className="ps-tcols">{topCol("cars", "ПОСТАВЛЕНІ АВТО")}{topCol("intl", "МІЖНАРОДНІ ПЕРЕВЕЗЕННЯ")}</div>
+        {foot("однаковий результат = однакове місце")}
+        {mark}
+      </div>
+    ) });
+
+    // 6 · Особливі відзнаки — по одному переможцю (нічия — усі імена, фото першого)
+    if (m.awards) {
+      const award = (icon: string, title: string, sub: string, a: AwardM) => (
+        <div className="ps-aw">
+          <div className="ps-aw-i">{icon}</div>
+          <div className="ps-aw-t">{title}</div>
+          <div className="ps-aw-s">{sub}</div>
+          <div className="ps-aw-ph">{a.names.length ? ava(a, a.names[0], "ps-awava") : <div className="ps-aw-none" />}</div>
+          <div className="ps-aw-n">{a.names.length ? a.names.map(short).join(", ") : "немає претендентів"}</div>
+          {a.value ? <div className="ps-aw-v">{a.value}</div> : null}
+        </div>
+      );
+      out.push({ key: "awards", node: (
+        <div className="ps-slide2 warm">
+          {head("НОВІ НОМІНАЦІЇ", "ОСОБЛИВІ ВІДЗНАКИ", 3)}
+          <div className="ps-aws">
+            {award("⚡", "ПРОРИВ ТИЖНЯ", "Найвище виконання свого тижневого плану", m.awards.proryv)}
+            {award("☆", "НОВИЙ КЛІЄНТ", "Найбільше перших перевезень з новими", m.awards.clients)}
+            {award("⌕", "СНАЙПЕР", "Найкраща конверсія ліда в успіх", m.awards.sniper)}
+            {award("🎓", "НОВАЧОК ТИЖНЯ", "Найкращий старт на адаптації", m.awards.rookie)}
           </div>
-        </>
-      )) });
+          {foot("по одному переможцю, щоб не затягувати")}
+          {mark}
+        </div>
+      ) });
     }
 
-    const monthWord = MONTHS_GEN[Number(today.slice(5, 7)) - 1];
-    const done = planDoneTeams(toDate);
-    if (toDate && done.length === 0) out.push({ key: "plan-none", node: frame(SECTIONS[3], (
-      <><div className="ps-kick">ВИКОНАННЯ ПЛАНУ · З 1 {monthWord.toUpperCase()} · СТАНОМ НА {dm(today)}</div>
-        <div className="ps-h">План виконали</div>
-        <div className="ps-manual"><div className="ps-mtext">Станом на {dm(today)} план від 1 {monthWord} ще ніхто не виконав на 100%.</div></div></>
-    )) });
-    for (const g of done) out.push({ key: `plan-${g.team}`, node: frame(SECTIONS[3], (
-      <>
-        <div className="ps-kick">ВИКОНАННЯ ПЛАНУ · З 1 {monthWord.toUpperCase()} · СТАНОМ НА {dm(today)}</div>
-        <div className="ps-h">План виконали</div>
-        <div className="ps-plan">
-          <div className="ps-red">
-            <div className="ps-tlab">Команда</div>
-            <div className="ps-tname">{teamShort(g.team)}</div>
-            <div className="ps-pink">План виконали</div>
-            <div className="ps-cong">Вітаємо з успішним виконанням плану! Це чудовий результат, який є вашою спільною заслугою.</div>
-          </div>
-          <div className={`ps-grid${g.people.length > 6 ? " many" : ""}`}>
-            {g.people.map((p) => (
-              <div className="ps-pp" key={p.id}>{ava(p.id, "ps-ava", p.name)}<div className="ps-pn">{short(p.name)}</div><div className="ps-pc">{p.pct}%</div></div>
-            ))}
+    // 7 · Лідогенерація
+    if (m.leadgen) {
+      const lg = m.leadgen;
+      const big = (c: typeof lg.maxDeal, label: string) => (
+        <div className="ps-lgcard">
+          {c.managerId != null ? ava({ managerId: c.managerId }, c.name ?? "", "ps-lgava") : <div className="ps-lgava ps-ph" />}
+          <div><div className="ps-lgl">{label}</div>
+            {c.text ? <><div className="ps-lgv">{c.text}{c.manual ? <span className="ps-manual">✎</span> : null}</div>
+              <div className="ps-lgn">{c.name}</div></> : <div className="ps-lgn muted">дані не внесено</div>}
           </div>
         </div>
-      </>
-    )) });
-
-    if (month) {
-      const g = month.glance;
-      out.push({ key: "summary", node: frame(SECTIONS[4], (
-        <>
-          <div className="ps-kick">НА ЗАВЕРШЕННЯ</div>
-          <div className="ps-h">Дякуємо за увагу!</div>
-          <div className="ps-subt">Найкраща команда — далі тільки більше!</div>
-          <div className="ps-sum">
-            <div className="ps-slab">ПІДСУМКИ · СТАНОМ НА {dm(today)}{loadedAt ? ` ${loadedAt}` : ""}</div>
-            <div className="ps-row"><i /><div><div className="ps-rl">КОМАНДА ЗА МІСЯЦЬ</div>
-              <div className="ps-rv">{Math.round(g.fact).toLocaleString("uk-UA")} / {formatAmountFull(g.plan)}{g.plan > 0 ? ` · ${Math.round((g.fact / g.plan) * 100)}%` : ""}</div></div></div>
-            <div className="ps-row"><i /><div><div className="ps-rl">ОЧІКУЄМО ЗА ПЛАН. ДАТОЮ</div>
-              <div className="ps-rv">{formatAmountFull(g.expectThisMonth)} цей міс</div></div></div>
-          </div>
-          <div className="ps-bye">До зустрічі!</div>
-        </>
-      )) });
+      );
+      out.push({ key: "leadgen", node: (
+        <div className="ps-slide2">
+          {head("ЛІДОГЕНЕРАЦІЯ", "ЛІДЕРИ ЛІДОГЕНЕРАЦІЇ", 1)}
+          <div className="ps-lgcards">{big(lg.maxDeal, "РАЗОВИЙ ЗАЗОР")}{big(lg.quotes, "ПРОРАХУНКИ")}</div>
+          <div className="ps-also"><i className="ps-cal" />Також: {lg.also}</div>
+          {foot()}
+          {mark}
+        </div>
+      ) });
     }
+
+    // 8 · Лідерборд конверсії — рядки, відмічені «на слайд», ▲/▼ проти минулого тижня
+    if (m.conv) {
+      const trCls = { up: "up", down: "down", same: "none", none: "none" } as const;
+      out.push({ key: "conv", node: (
+        <div className="ps-slide2 dark">
+          {head("СТАТИСТИКА ВІДДІЛУ", "ЛІДЕРБОРД КОНВЕРСІЇ", 2, "red")}
+          <div className="ps-lb">
+            <div className="ps-lbt">
+              <table>
+                <thead><tr><th>#</th><th>Менеджер</th><th className="n">Ліди</th><th className="n">Успіх</th><th className="n">Конв.</th><th className="n">Тиждень</th></tr></thead>
+                <tbody>{m.conv.rows.length === 0 ? <tr><td colSpan={6} className="muted">Ніхто не відмічений «на слайд» у вкладці</td></tr> : m.conv.rows.map((r) => (
+                  <tr key={r.managerId} className={r.n === 1 ? "first" : ""}><td>{r.n}</td><td>{r.name}</td><td className="n">{r.taken}</td><td className="n">{r.won}</td>
+                    <td className="n pct">{r.pct}</td><td className="n"><span className={`ps-tr ${trCls[r.dir]}`}>{r.trend}</span></td></tr>
+                ))}</tbody>
+              </table>
+            </div>
+            <div className="ps-concl"><i className="ps-msg" /><div className="ps-concl-h">ВИСНОВОК ТИЖНЯ</div>
+              <div className="ps-concl-t">{m.conv.comment ?? "Висновок ще не написано — коментар у таблиці конверсії у вкладці."}</div></div>
+          </div>
+          {foot("конверсія = успіх / цільові ліди")}
+          {mark}
+        </div>
+      ) });
+    }
+
+    // 9 · Фокус наступного тижня
+    out.push({ key: "focus", node: (
+      <div className="ps-slide2 red">
+        <div className="ps-uts light">UTS</div>
+        <div className="ps-focus-chip">{chip(1)}</div>
+        <div className="ps-focus-k">ФОКУС НАСТУПНОГО ТИЖНЯ</div>
+        <div className="ps-focus-t">{m.focus ?? "Фокус ще не задано"}</div>
+        <div className="ps-focus-bye">ДЯКУЄМО! ДАЛІ ТІЛЬКИ БІЛЬШЕ.</div>
+        <div className="ps-focus-s1" /><div className="ps-focus-s2" />
+        {mark}
+      </div>
+    ) });
     return out;
-  }, [week, manual, manualPhotos, toDate, month, draft, meeting, name, today, loadedAt]);
+  }, [model, teamPhoto, week.photos, extras?.photos]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const n = slides.length;
   const go = (k: number) => setI(Math.max(0, Math.min(n - 1, k)));
+  /**
+   * 📄 ЗАВАНТАЖИТИ PDF (04.11.2026). Усі слайди стосом у корені сторінки (портал), по сторінці 1280×720 на слайд, і системне
+   * вікно друку — там «Зберегти як PDF». Без бібліотек: текст лишається текстом, кольори — через print-color-adjust.
+   * Друк — лише коли кожна картинка стосу домальована: інакше на сторінці лишались ініціали замість фото.
+   */
+  const [printing, setPrinting] = useState(false);
+  useEffect(() => {
+    if (!printing) return;
+    let alive = true;
+    const finish = () => setPrinting(false);
+    addEventListener("afterprint", finish);
+    const t = setTimeout(async () => {
+      const imgs = [...document.querySelectorAll<HTMLImageElement>(".ps-print-root img")];
+      await Promise.race([Promise.all(imgs.map((im) => im.decode().catch(() => undefined))), new Promise((ok) => setTimeout(ok, 4000))]);
+      await document.fonts.ready;
+      if (alive) window.print();
+    }, 400);
+    return () => { alive = false; clearTimeout(t); removeEventListener("afterprint", finish); };
+  }, [printing]);
+
+  /**
+   * 📊 ЗАВАНТАЖИТИ PPTX (04.11.2026, «щоб можна було редагувати»). Шаблон Даші з сервера, у ньому тексти й фото
+   * замінюються моделлю — тож у PowerPoint / Google Slides відкривається ТОЙ САМИЙ макет із живим текстом.
+   */
+  const [pptx, setPptx] = useState<"idle" | "busy">("idle");
+  const [pptxErr, setPptxErr] = useState<string | null>(null);
+  const downloadPptx = async () => {
+    setPptx("busy"); setPptxErr(null);
+    try {
+      const tpl = await unzip(await fetchPptxTemplate());
+      const photos = new Map<string, Uint8Array>();
+      await Promise.all(photoNeeds(model).map(async (nd) => {
+        const url = nd.team ? (week.teamPhoto ? await teamPhotoUrl(week.teamPhoto.v) : null) : await (async () => { const r = refOf(nd); return r ? employeePhotoUrl(r) : null; })();
+        const bytes = url ? await squareJpeg(url, nd.team ? 900 : 400) : null;
+        if (bytes) photos.set(nd.slot, bytes);
+      }));
+      const file = zipStore(fillPptx(tpl, model, photos));
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([file.slice()], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }));
+      a.download = `UTS_щотижнева_зустріч_${dmy(model.meeting)}.pptx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    } catch {
+      setPptxErr("Не вдалося зібрати PPTX — спробуйте ще раз");
+    } finally {
+      setPptx("idle");
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -396,23 +387,32 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
 
   const full = () => { if (document.fullscreenElement) void document.exitFullscreen(); else void overlay.current?.requestFullscreen?.(); };
   const cur = slides[Math.min(i, n - 1)];
+  const wait = ready ? undefined : "Зачекайте — презентація ще збирається";
 
   return (
     <div className="ps-overlay" ref={overlay} role="dialog" aria-label="Презентація щотижневої зустрічі">
       <div className="ps-bar">
-        <b>Презентація · тиждень {dm(week.weekFrom)}–{dm(week.weekTo)}</b>
-        {draft ? <span className="ps-draft">Чернетка: тиждень ще не зафіксовано</span> : null}
-        {err ? <span style={{ color: "#fca5a5" }}>{err}</span> : null}
+        <b>Презентація · тиждень {week.weekFrom.slice(8, 10)}.{week.weekFrom.slice(5, 7)}–{week.weekTo.slice(8, 10)}.{week.weekTo.slice(5, 7)}</b>
+        {model.draft ? <span className="ps-draft">Чернетка: тиждень ще не зафіксовано</span> : null}
+        {!ready && !err ? (
+          <span className="ps-prog" role="status">Готуємо презентацію… {doneN}/{STEPS.length}{pending ? ` · ${pending.label}` : ""}
+            <span className="ps-prog-bar"><span style={{ width: `${(doneN / STEPS.length) * 100}%` }} /></span></span>
+        ) : null}
+        {err || pptxErr ? <span style={{ color: "#fca5a5" }}>{err ?? pptxErr}</span> : null}
         <span className="sp" />
         <button onClick={() => go(i - 1)} aria-label="попередній слайд" disabled={i === 0}>←</button>
         <span>{Math.min(i + 1, n)} / {n}</span>
         <button onClick={() => go(i + 1)} aria-label="наступний слайд" disabled={i >= n - 1}>→</button>
+        <button onClick={() => setPrinting(true)} disabled={!ready || printing} title={wait}>{printing ? "Готую PDF…" : "Завантажити PDF"}</button>
+        <button onClick={() => void downloadPptx()} disabled={!ready || pptx === "busy"} title={wait}>{pptx === "busy" ? "Готую PPTX…" : "Завантажити PPTX"}</button>
         <button onClick={full}>На весь екран</button>
         <button onClick={onClose}>Закрити</button>
       </div>
       <div className="ps-viewport" ref={viewport} onClick={(e) => { if (e.target === viewport.current) go(i + 1); }}>
         <div className="ps-stage" style={{ transform: `translate(-50%, -50%) scale(${scale})` }}>{cur?.node}</div>
       </div>
+      {printing ? createPortal(<div className="ps-print-root">{slides.map((sl) => <div className="ps-print-page" key={sl.key}>{sl.node}</div>)}</div>, document.body) : null}
     </div>
   );
 }
+

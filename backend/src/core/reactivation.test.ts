@@ -1117,6 +1117,67 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
     });
 
     /**
+     * #3331 — 🪞 «ЗАКРИТИ» В «НІЧИЙНИХ» НАСКРІЗНО (задача 7187): роут на справжній схемі + живий SQL пулу. Менеджер без
+     * прапорця — 403; причина поза чотирма — 400; клієнт не з пулу (чинний менеджер) — 409; закритий — в архіві з причиною
+     * й автором, коментар у коментарях клієнта, слід у журналі, з пулу зник, повторне закриття — 409. Пул відкидає
+     * архівних, а архівний із новішою оплатою повертається (правило архіву).
+     * 🧨 Червоніє, якщо пул знову покаже архівного, якщо закриття не дійде до архіву/коментаря або закриє чужого клієнта.
+     */
+    await t.test("#3331 🪞 «ЗАКРИТИ» В НІЧИЙНИХ НАСКРІЗНО: права, причина, лише клієнт пулу → архів, коментар, з пулу зник", async () => {
+      await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (9902,'Звільнений Закр',1,false) ON CONFLICT DO NOTHING`);
+      await c.query(`INSERT INTO users (id, email, password_hash, role, is_active, manager_id, orphan_pool) VALUES
+        (9911,'flag@test','x','manager',true,10,true), (9912,'noflag@test','x','manager',true,10,false) ON CONFLICT (id) DO NOTHING`);
+      const deal = (id: number, ck: string, mgr: number, ago: string) => c.query(
+        `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_name,created_at_kommo,closed_at_kommo)
+         VALUES ($1,$2,$3,8921932,142,1000,$2,$2, now() - interval '${ago}' - interval '5 days', now() - interval '${ago}')`, [id, ck, mgr]);
+      await deal(9700001, "закр-1", 9902, "30 days");
+      await deal(9700002, "закр-2", 9902, "30 days");
+      await deal(9700003, "закр-3", 9902, "2 days");
+      await deal(9700004, "закр-4", 10, "30 days");
+      await c.query(`INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason) VALUES
+        ('закр-2', now() - interval '10 days', 'other'), ('закр-3', now() - interval '10 days', 'carrier')`);
+      try {
+        const M = await import("./metrics.js");
+        const poolKeys = async () => (await M.orphanClients(18)).map((r) => r.clientKey).filter((k) => k.startsWith("закр-")).sort();
+        assert.deepEqual(await poolKeys(), ["закр-1", "закр-3"], "🔴 пул показує архівного (закр-2) або не повернув архівного з новою оплатою (закр-3)");
+        const { dashboardRouter } = await import("../routes/dashboard.js");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const layer = (dashboardRouter as any).stack.find((l: any) => l.route?.path === "/orphan-clients/close" && l.route.methods.post);
+        assert.ok(layer, "🔴 роуту «Закрити» немає");
+        const call = async (userId: number, body: Record<string, unknown>) => {
+          let status = 200, json: { error?: string } = {};
+          const res = { status(x: number) { status = x; return res; }, json(b: object) { json = b; return res; } };
+          const req = { auth: { userId, role: "manager", roleKey: "manager", managerId: 10, teamId: 1 }, body };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          for (const l of layer.route.stack) await l.handle(req, res, () => {});
+          return { status, json };
+        };
+        assert.equal((await call(9912, { clientKey: "закр-1", reason: "carrier" })).status, 403, "🔴 менеджер без прапорця закрив клієнта");
+        assert.equal((await call(9911, { clientKey: "закр-1", reason: "price" })).status, 400, "🔴 прийнято причину поза чотирма");
+        assert.equal((await call(9911, { clientKey: "закр-4", reason: "carrier" })).status, 409, "🔴 закрито клієнта чинного менеджера — не з пулу");
+        const ok = await call(9911, { clientKey: "закр-1", reason: "not_interested", comment: "  сказали, що не возять  " });
+        assert.equal(ok.status, 200, `🔴 закриття не пройшло: ${ok.json.error ?? ""}`);
+        const lo = (await c.query<{ archive_reason: string; archived_by: number; archived: boolean }>(
+          `SELECT archive_reason, archived_by, archived_at IS NOT NULL AS archived FROM loyalty_overrides WHERE client_key='закр-1'`)).rows[0];
+        assert.deepEqual(lo, { archive_reason: "not_interested", archived_by: 9911, archived: true }, "🔴 в архіві не та причина / автор");
+        const cm = (await c.query<{ body: string; author_id: number }>(`SELECT body, author_id FROM client_comments WHERE client_key='закр-1'`)).rows;
+        assert.deepEqual(cm, [{ body: "сказали, що не возять", author_id: 9911 }], "🔴 коментар не ліг у коментарі клієнта");
+        const lg = (await c.query<{ action: string; reason: string; src: string }>(
+          `SELECT action, details->>'reason' reason, details->>'from' src FROM client_admin_log WHERE client_key='закр-1'`)).rows;
+        assert.deepEqual(lg, [{ action: "archive", reason: "not_interested", src: "orphan" }], "🔴 у журналі немає сліду закриття");
+        assert.deepEqual(await poolKeys(), ["закр-3"], "🔴 закритий клієнт лишився в пулі");
+        assert.equal((await call(9911, { clientKey: "закр-1", reason: "carrier" })).status, 409, "🔴 закритого вдруге — не 409");
+      } finally {
+        await c.query(`DELETE FROM client_admin_log WHERE client_key LIKE 'закр-%'`);
+        await c.query(`DELETE FROM client_comments WHERE client_key LIKE 'закр-%'`);
+        await c.query(`DELETE FROM loyalty_overrides WHERE client_key LIKE 'закр-%'`);
+        await c.query(`DELETE FROM deals WHERE kommo_id BETWEEN 9700001 AND 9700004`);
+        await c.query(`DELETE FROM users WHERE id IN (9911, 9912)`);
+        await c.query(`DELETE FROM managers WHERE id = 9902`);
+      }
+    });
+
+    /**
      * #1380d — ЖИВИЙ SQL ПЛАШКИ «ПЕРЕВІЗНИК»: кандидати = останній коментар зі словом «перевіз…» І клієнт
      * ЗАРАЗ не в архіві (повернутий новою оплатою — знову кандидат); тімлід бачить лише свою команду.
      */

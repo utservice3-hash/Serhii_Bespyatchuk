@@ -3,8 +3,8 @@ import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import {
   fetchNominationWeek, reviewNomination, confirmNominationsBulk, fetchDayItems, saveRnkConv,
-  fetchManualSlides, createManualSlide, updateManualSlide, deleteManualSlide, restoreManualSlide, fetchPeoplePhotos,
-  type NominationWeek, type NominationTeam, type NominationCell, type NominationKey, type ManualSlidesResp, type ManualSlide, type ManualSlideKind, type PersonPhoto,
+  saveWeekText, uploadTeamPhoto, teamPhotoUrl, fetchPresentationExtras, saveNewPosition, type PresentationExtras,
+  type NominationWeek, type NominationTeam, type NominationCell, type NominationKey,
   type DayItems, type NominationDef, type RnkConvView,
   lockNominationWeek,
 } from "../../../api";
@@ -36,7 +36,6 @@ const dm = (ymd: string) => `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}`;
 const kyivDateOf = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
 const mondayOf = (ymd: string) => { const dow = new Date(`${ymd}T12:00:00Z`).getUTCDay(); return addDays(ymd, -((dow + 6) % 7)); };
 const whenText = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-const DEPT_LABEL = { rnk: "ВРНК — нові клієнти", rpk: "ВРПК — постійні клієнти" } as const;
 
 /** Означення номінації — менеджерської чи лідогенераторської (одне місце пошуку, щоб не розійтись). */
 const defOf = (week: NominationWeek, key: NominationKey): NominationDef =>
@@ -103,7 +102,7 @@ export function NominationsSection() {
 
   // 🔒 Остаточна фіксація незворотна — тому підтвердження словами, а не лише кліком.
   const lockWeek = async () => {
-    if (!(await dlg.confirm(`Зафіксувати тиждень ${dm(data.weekFrom)}–${dm(data.weekTo)} остаточно? Після цього ніхто — ні тімліди, ні ви — не зможе змінити жодного числа, зокрема лідогенерацію й конверсію РНК.`))) return;
+    if (!(await dlg.confirm(`Зафіксувати тиждень ${dm(data.weekFrom)}–${dm(data.weekTo)} остаточно? Після цього ніхто — ні тімліди, ні ви — не зможе змінити жодного числа, зокрема лідогенерацію й конверсію нових клієнтів.`))) return;
     setLocking(true);
     try { applyData(await lockNominationWeek(data.weekFrom)); }
     catch (e) { toast(errorOf(e), { error: true }); }
@@ -189,7 +188,7 @@ export function NominationsSection() {
             <p className="nm-muted">⚠ «% маржі» не рахується для угод без «Расходу 1» (виплати водію): {data.teams.reduce((a, t) => a + t.noCostDeals, 0)} угод{isLead ? " команди" : ""} цього тижня без нього.</p>
           ) : null}
           {data.rnkConv && (!shownTeam || isLead) ? <ConvCard week={data} conv={data.rnkConv} onData={applyData} /> : null}
-          {!isLead && !shownTeam ? <ManualSlidesCard weekFrom={data.weekFrom} /> : null}
+          {!isLead && !shownTeam ? <PresentationPrepCard week={data} onData={applyData} /> : null}
         </div>
         {drillPanel ? <><div className="nm-aside-back" onClick={() => setDrill(null)} />{drillPanel}</> : null}
       </div>
@@ -247,39 +246,32 @@ function AdminOverview({ week, onOpen }: { week: NominationWeek; onOpen: (teamId
         <table className="nm-table">
           <thead><tr><th>Команда</th>{week.defs.map((d) => <th key={d.key} title={d.hint}>{lbl(d.key)}</th>)}</tr></thead>
           <tbody>
-            {(["rnk", "rpk"] as const).map((dept) => {
-              const teams = week.teams.filter((t) => t.dept === dept);
-              if (teams.length === 0) return null;
-              return [
-                <tr className="dept" key={`${dept}-h`}><td colSpan={week.defs.length + 1}>{DEPT_LABEL[dept]}</td></tr>,
-                ...teams.map((t) => (
-                  <tr key={t.teamId}>
-                    <td><button className="nm-link" onClick={() => onOpen(t.teamId)}>{t.teamName}</button></td>
-                    {t.cells.map((c) => {
-                      const d = defOf(week, c.nomination);
-                      const about = isAbout(c, t.leads.map((l) => l.managerId));
-                      return (
-                        <td key={c.nomination}>
-                          {c.final.status === "empty" ? <span className="nm-muted">ніхто не набрав</span>
-                            : <><span className="nm-name">{c.final.winners.map(short).join(", ")}</span> · <span className="nm-num">{fmtValue(d.unit, c.final.value)}</span></>}
-                          {" "}{c.final.status === "confirmed" ? <span className="nm-pill ok">✓</span>
-                            : c.final.status === "overridden" ? <span className="nm-pill fix">свої дані</span>
-                            : c.final.status === "unconfirmed" && about && !frozen ? <span className="nm-pill draft">за вами</span> : null}
-                          {c.nomination === "marginPct" && (c.final.value ?? 0) > week.marginFlagPct ? <span className="nm-pill danger">понад {week.marginFlagPct}%</span> : null}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                )),
-                <tr className="win" key={`${dept}-w`}>
-                  <td><b>🏆 Переможець {dept === "rnk" ? "ВРНК" : "ВРПК"}</b></td>
-                  {week.defs.map((d) => {
-                    const w = week.depts.find((x) => x.dept === dept && x.nomination === d.key);
-                    return <td key={d.key}>{w && w.state === "ok" ? <b>{w.winners.map(name).join(", ")} · {fmtValue(d.unit, w.value)}</b> : <span className="nm-muted">ніхто не набрав</span>}</td>;
-                  })}
-                </tr>,
-              ];
-            })}
+            {week.teams.map((t) => (
+              <tr key={t.teamId}>
+                <td><button className="nm-link" onClick={() => onOpen(t.teamId)}>{t.teamName}</button></td>
+                {t.cells.map((c) => {
+                  const d = defOf(week, c.nomination);
+                  const about = isAbout(c, t.leads.map((l) => l.managerId));
+                  return (
+                    <td key={c.nomination}>
+                      {c.final.status === "empty" ? <span className="nm-muted">ніхто не набрав</span>
+                        : <><span className="nm-name">{c.final.winners.map(short).join(", ")}</span> · <span className="nm-num">{fmtValue(d.unit, c.final.value)}</span></>}
+                      {" "}{c.final.status === "confirmed" ? <span className="nm-pill ok">✓</span>
+                        : c.final.status === "overridden" ? <span className="nm-pill fix">свої дані</span>
+                        : c.final.status === "unconfirmed" && about && !frozen ? <span className="nm-pill draft">за вами</span> : null}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            {/* 🏆 З 04.11.2026 — один комерційний відділ (Даша): перше місце топ-3 по всіх командах разом. */}
+            <tr className="win">
+              <td><b>🏆 Перше місце · відділ</b></td>
+              {week.defs.map((d) => {
+                const top = (week.companyTop?.[d.key] ?? []).filter((r) => r.place === 1);
+                return <td key={d.key}>{top.length ? <b>{top.map((r) => name(r.managerId)).join(", ")} · {fmtValue(d.unit, top[0].value)}</b> : <span className="nm-muted">ніхто не набрав</span>}</td>;
+              })}
+            </tr>
           </tbody>
         </table>
       </div>
@@ -639,8 +631,8 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
   const onSlideN = conv.rows.filter((r) => r.onSlide).length;
   return (
     <div className="nm-card">
-      <div className="nm-card-h"><b>Статистика відділу РНК · найкраща конверсія</b>
-        <span className="nm-muted">Система рахує як фільтри Kommo: <b>цільові</b> — створені за тиждень угоди з рекламних джерел і реактивації («Источник клиента») без «Не цільових»; <b>успіх</b> — угоди, що зараз від «Контролю перед завантаженням» до «Успішної», з «Датою загрузки» в тижні. Успіх і цільові — різні угоди, тож відсоток буває понад 100%. Змініть числа, якщо рахуєте інакше, і позначте, хто йде на слайд (зараз {onSlideN}).</span>
+      <div className="nm-card-h"><b>Лідерборд конверсії · комерційний відділ</b>
+        <span className="nm-muted">Система рахує як фільтри Kommo: <b>цільові</b> — створені за тиждень угоди з рекламних джерел і реактивації («Источник клиента») без «Не цільових»; <b>успіх</b> — угоди, що зараз від «Контролю перед завантаженням» до «Успішної», з «Датою загрузки» в тижні. Успіх і цільові — різні угоди, тож відсоток буває понад 100%. Змініть числа, якщо рахуєте інакше, і позначте, хто йде на слайд (зараз {onSlideN}; за замовчуванням — 4 найкращі серед тих, у кого від 20 цільових, а якщо таких немає — від 15). Коментар нижче — «Висновок тижня» на слайді.</span>
         {conv.outside != null ? <span className="nm-muted">Поза фільтром (джерело порожнє чи інше): {conv.outside} угод відділу за тиждень.</span> : null}</div>
       {err ? <div className="nm-banner"><span className="nm-err">{err}</span></div> : null}
       <div className="nm-scroll">
@@ -674,7 +666,7 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
                 </tr>
               );
             })}
-            {conv.rows.length === 0 ? <tr><td colSpan={7} className="nm-muted">Менеджерів РНК у заліку цього тижня немає.</td></tr> : null}
+            {conv.rows.length === 0 ? <tr><td colSpan={7} className="nm-muted">Менеджерів рекламних команд у заліку цього тижня немає.</td></tr> : null}
           </tbody>
         </table>
       </div>
@@ -692,114 +684,80 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
 }
 
 /**
- * 🎞 Ручні слайди презентації — ШАБЛОНИ зі слайдів Даші (новий працівник, день народження, новини,
- * конкурс тижня, анонс, довільний). Поля й тексти за замовчуванням приходять із сервера
- * (`SLIDE_TEMPLATES`), тож форма й перевірка не розходяться. Видалення скасовне кнопкою «Відновити».
+ * 🎞 ПІДГОТОВКА ПРЕЗЕНТАЦІЇ (04.11.2026, макет Даші): фото команди для титулу (одне на всі тижні) і «Фокус наступного
+ * тижня». Висновок до лідерборда конверсії — коментар у таблиці конверсії вище. Решту слайдів система збирає сама.
  */
-function ManualSlidesCard({ weekFrom }: { weekFrom: string }) {
-  const [d, setD] = useState<ManualSlidesResp | null>(null);
+function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: (d: NominationWeek) => void }) {
+  const [focus, setFocus] = useState(week.texts?.focus?.text ?? "");
+  const [busy, setBusy] = useState<"focus" | "photo" | "pos" | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [editing, setEditing] = useState<ManualSlide | null>(null);
-  const [kind, setKind] = useState<ManualSlideKind | null>(null);
-  const [vals, setVals] = useState<Record<string, string>>({});
-  const [removed, setRemoved] = useState<ManualSlide | null>(null);
-  const [busy, setBusy] = useState(false);
-  // 📷 Люди реєстру для поля «Фото» (право сейфу). Немає права — поле показує, що список недоступний.
-  const [people, setPeople] = useState<PersonPhoto[] | null>(null);
-  const [peopleErr, setPeopleErr] = useState(false);
+  const [photo, setPhoto] = useState<string | null>(null);
+  // «Нова посада» (прохід 2): співробітник + посада; решту подій тижня система бере з «Найму» сама.
+  const [extras, setExtras] = useState<PresentationExtras | null>(null);
+  const [posEmp, setPosEmp] = useState<string>("");
+  const [posText, setPosText] = useState("");
+  useEffect(() => { setExtras(null); fetchPresentationExtras(week.weekFrom).then(setExtras).catch((e) => setErr(errorOf(e))); }, [week.weekFrom]);
+  const savePos = async (employeeId: number, text: string) => {
+    setBusy("pos"); setErr(null);
+    try { const x = await saveNewPosition({ weekFrom: week.weekFrom, employeeId, text }); if (x) setExtras(x); setPosEmp(""); setPosText(""); }
+    catch (e) { setErr(errorOf(e)); } finally { setBusy(null); }
+  };
+  useEffect(() => { setFocus(week.texts?.focus?.text ?? ""); }, [week.weekFrom, week.texts?.focus?.text]);
   useEffect(() => {
-    fetchPeoplePhotos().then((p) => setPeople(p.filter((x) => x.status !== "dismissed"))).catch(() => setPeopleErr(true));
-  }, []);
-
-  useEffect(() => { setErr(null); setRemoved(null); fetchManualSlides(weekFrom).then(setD).catch((e) => setErr(errorOf(e))); }, [weekFrom]);
-  const tpl = d?.templates.find((t) => t.key === kind) ?? null;
-  const reset = () => { setEditing(null); setKind(null); setVals({}); };
-  const pick = (k: ManualSlideKind) => {
-    const t = d?.templates.find((x) => x.key === k);
-    setEditing(null); setKind(k);
-    setVals(Object.fromEntries((t?.fields ?? []).map((f) => [f.key, f.default ?? ""])));
+    let alive = true;
+    if (week.teamPhoto) void teamPhotoUrl(week.teamPhoto.v).then((u) => { if (alive) setPhoto(u); }); else setPhoto(null);
+    return () => { alive = false; };
+  }, [week.teamPhoto?.v]);
+  const saveFocus = async () => {
+    setBusy("focus"); setErr(null);
+    try { const texts = await saveWeekText({ weekFrom: week.weekFrom, kind: "focus", text: focus.trim() }); onData({ ...week, texts: texts ?? {} }); }
+    catch (e) { setErr(errorOf(e)); } finally { setBusy(null); }
   };
-  const startEdit = (s: ManualSlide) => { setEditing(s); setKind(s.kind); setVals({ ...(s.fields ?? {}) }); };
-  const run = async (fn: () => Promise<ManualSlidesResp>) => {
-    setBusy(true); setErr(null);
-    try { setD(await fn()); return true; } catch (e) { setErr(errorOf(e)); return false; } finally { setBusy(false); }
+  const pickPhoto = (f: File | undefined) => {
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = async () => {
+      setBusy("photo"); setErr(null);
+      try { const tp = await uploadTeamPhoto(String(rd.result)); onData({ ...week, teamPhoto: tp }); }
+      catch (e) { setErr(errorOf(e)); } finally { setBusy(null); }
+    };
+    rd.readAsDataURL(f);
   };
-  const missing = tpl ? tpl.fields.filter((f) => f.required && !(vals[f.key] ?? "").trim()).map((f) => f.label) : [];
-  const save = async () => {
-    if (!kind) return;
-    const p = { weekFrom, kind, fields: vals, position: editing?.position ?? (d?.slides.length ?? 0) };
-    if (await run(() => (editing ? updateManualSlide(editing.id, p) : createManualSlide(p)))) reset();
-  };
-  const label = (k: ManualSlideKind) => d?.templates.find((x) => x.key === k)?.label ?? k;
-
   return (
     <div className="nm-card">
-      <div className="nm-banner"><b>Ручні слайди презентації</b>
-        <span className="nm-muted">Шаблони — як у презентації зустрічі: оберіть шаблон, заповніть поля, слайд зʼявиться після титулу. Числа з CRM сюди не пишуться.</span>
-        {err ? <span className="nm-err">{err}</span> : null}</div>
-      <div className="nm-slides-list">
-        {d && d.slides.length === 0 ? <span className="nm-muted">Цього тижня ручних слайдів немає.</span> : null}
-        {d?.slides.map((s) => (
-          <div className="nm-slide-row" key={s.id}>
-            <span className="nm-pill wait">{label(s.kind)}</span><span className="t">{s.title}</span>
-            <button className="nm-btn" disabled={busy} onClick={() => startEdit(s)}>Змінити</button>
-            <button className="nm-btn" disabled={busy} onClick={() => { setRemoved(s); void run(() => deleteManualSlide(s.id)); }}>Видалити</button>
-          </div>
-        ))}
-        {removed ? <div className="nm-slide-row"><span className="nm-muted">Видалено «{removed.title}».</span>
-          <button className="nm-btn" disabled={busy} onClick={() => { const id = removed.id; setRemoved(null); void run(() => restoreManualSlide(id)); }}>Відновити</button></div> : null}
-      </div>
-      <div className="nm-slides-list">
-        <span className="nm-muted">{editing ? `Змінюєте: ${editing.title}` : "Додати слайд за шаблоном:"}</span>
-        {!editing ? <div className="nm-btns">
-          {(d?.templates ?? []).map((t) => (
-            <button key={t.key} className={`nm-btn${kind === t.key ? " p" : ""}`} onClick={() => pick(t.key)}>{t.label}</button>
+      <div className="nm-card-h"><b>Підготовка презентації</b>
+        <span className="nm-muted">Пульс плану, топ-3, відзнаки, лідогенерацію й конверсію система збирає сама. Тут — те, що вносите ви.</span></div>
+      {err ? <div className="nm-banner"><span className="nm-err">{err}</span></div> : null}
+      <div className="nm-prep">
+        <div className="nm-prep-photo">
+          {photo ? <img src={photo} alt="Фото команди" /> : <div className="nm-muted">Фото команди ще не завантажено — на титулі буде заглушка.</div>}
+          <label className="nm-btn">{busy === "photo" ? "Завантажую…" : photo ? "Замінити фото команди" : "Завантажити фото команди"}
+            <input type="file" accept="image/jpeg,image/png,image/webp" hidden disabled={busy != null} onChange={(e) => pickPhoto(e.target.files?.[0])} /></label>
+        </div>
+        <div className="nm-field"><span>Події тижня: дні народження й новачків (14 днів від прийому) система бере з «Найму». Нову посаду — вкажіть тут:</span>
+          {extras ? <div className="nm-muted">
+            {[...extras.birthdays.map((x) => `🎂 ${x.name}`), ...extras.newcomers.map((x) => `👋 ${x.name}`)].join(" · ") || "Днів народження й новачків цього тижня немає."}
+          </div> : null}
+          {extras?.newPositions.map((x) => (
+            <div className="nm-btns" key={x.employeeId}><span>⭐ <b>{x.name}</b> — {x.position}</span>
+              <button className="nm-btn" disabled={busy != null} onClick={() => void savePos(x.employeeId, "")}>Прибрати</button></div>
           ))}
-        </div> : null}
-      </div>
-      {tpl ? (
-        <div className="nm-form">
-          {tpl.fields.map((f) => f.type === "employee" ? (
-            <label className="nm-field" key={f.key}>
-              <span>{f.label}</span>
-              <span className="nm-pick">
-                {(() => {
-                  const p = people?.find((x) => String(x.employeeId) === vals[f.key]);
-                  return <EmployeePhoto photo={p?.hasPhoto ? { id: p.employeeId, v: p.v } : null} name={p?.name ?? vals.person ?? "?"} size={34} />;
-                })()}
-                {peopleErr ? <span className="nm-muted">Список людей недоступний — потрібне право сейфу. Слайд буде з ініціалами.</span> : (
-                  <select className="nm-inp" id={`nm-ms-${f.key}`} value={vals[f.key] ?? ""} disabled={!people}
-                    onChange={(e) => {
-                      const id = e.target.value, p = people?.find((x) => String(x.employeeId) === id);
-                      // Новачку підставляємо ПІБ, якщо поле ще порожнє; іменинника пишуть у родовому відмінку — його не чіпаємо.
-                      setVals((v) => ({ ...v, [f.key]: id, ...(kind === "newcomer" && p && !(v.person ?? "").trim() ? { person: p.name } : {}) }));
-                    }}>
-                    <option value="">— без фото (ініціали) —</option>
-                    {vals[f.key] && people && !people.some((x) => String(x.employeeId) === vals[f.key])
-                      ? <option value={vals[f.key]}>людина #{vals[f.key]} (звільнена або прибрана з реєстру)</option> : null}
-                    {(people ?? []).map((p) => <option key={p.employeeId} value={String(p.employeeId)}>{p.name}{p.hasPhoto ? "" : " · фото ще немає"}</option>)}
-                  </select>
-                )}
-              </span>
-            </label>
-          ) : (
-            <label className="nm-field" key={f.key} style={f.multiline ? { gridColumn: "1 / -1" } : undefined}>
-              <span>{f.label}{f.required ? " *" : ""}</span>
-              {f.multiline
-                ? <textarea className="nm-inp" id={`nm-ms-${f.key}`} value={vals[f.key] ?? ""} maxLength={f.max} placeholder={f.placeholder}
-                    onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} />
-                : <input className="nm-inp" id={`nm-ms-${f.key}`} value={vals[f.key] ?? ""} maxLength={f.max} placeholder={f.placeholder}
-                    onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} />}
-            </label>
-          ))}
-          <div className="nm-btns" style={{ gridColumn: "1 / -1" }}>
-            <button className="nm-btn p" disabled={busy || missing.length > 0} onClick={() => void save()}
-              title={missing.length ? `Заповніть: ${missing.join(", ")}` : undefined}>{editing ? "Зберегти слайд" : "Додати слайд"}</button>
-            <button className="nm-btn" onClick={reset}>Скасувати</button>
-            {missing.length ? <span className="nm-muted">Заповніть: {missing.join(", ")}</span> : null}
+          <div className="nm-btns">
+            <select className="nm-inp" value={posEmp} onChange={(e) => setPosEmp(e.target.value)} aria-label="Співробітник з новою посадою">
+              <option value="">Співробітник…</option>
+              {(extras?.employees ?? []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+            <input className="nm-inp" value={posText} maxLength={120} onChange={(e) => setPosText(e.target.value)} placeholder="Нова посада, напр. «Тімлід команди»" />
+            <button className="nm-btn p" disabled={busy != null || !posEmp || !posText.trim()} onClick={() => void savePos(Number(posEmp), posText.trim())}>{busy === "pos" ? "Зберігаю…" : "Додати"}</button>
           </div>
         </div>
-      ) : null}
+        <label className="nm-field"><span>Фокус наступного тижня (одна ціль — іде на останній слайд)</span>
+          <textarea className="nm-inp" value={focus} maxLength={400} onChange={(e) => setFocus(e.target.value)} placeholder="Напр.: 10 нових клієнтів або 80% плану до 11.11" /></label>
+        <div className="nm-btns">
+          <button className="nm-btn p" disabled={busy != null || focus.trim() === (week.texts?.focus?.text ?? "")} onClick={() => void saveFocus()}>{busy === "focus" ? "Зберігаю…" : "Зберегти фокус"}</button>
+          {week.texts?.focus ? <span className="nm-muted">{week.texts.focus.by ? `${week.texts.focus.by} · ` : ""}{whenText(week.texts.focus.at)}</span> : null}
+        </div>
+      </div>
     </div>
   );
 }

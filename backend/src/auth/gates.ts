@@ -41,6 +41,16 @@ export interface RouteExemption {
  * `docs/SCOPE_ONLY_ROUTES.md`, яку розсуджує власник ОДНИМ рішенням.
  */
 export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
+  { method: "GET", path: "/api/notifications", permanent: true,
+    why: "Центр сповіщень дашборда (ТЗ «Зарплата» §6) — дзвіночок для КОЖНОГО залогіненого, включно з кандидатом; вкладки немає за побудовою. Межа — requireAuth і «лише свої»: усі запити фільтруються notification_recipients.user_id = id із сесії." },
+  { method: "GET", path: "/api/notifications/badge", permanent: true,
+    why: "Центр сповіщень дашборда (ТЗ «Зарплата» §6) — дзвіночок для КОЖНОГО залогіненого, включно з кандидатом; вкладки немає за побудовою. Межа — requireAuth і «лише свої»: усі запити фільтруються notification_recipients.user_id = id із сесії." },
+  { method: "POST", path: "/api/notifications/read", permanent: true,
+    why: "Центр сповіщень дашборда (ТЗ «Зарплата» §6) — дзвіночок для КОЖНОГО залогіненого, включно з кандидатом; вкладки немає за побудовою. Межа — requireAuth і «лише свої»: усі запити фільтруються notification_recipients.user_id = id із сесії." },
+  { method: "GET", path: "/api/notifications/rules", permanent: true,
+    why: "Правила центру сповіщень (подія → канали): право `notify_rules` (ОД, адмін) перевіряє обробник; вкладки в дзвіночка немає." },
+  { method: "PUT", path: "/api/notifications/rules/:type", permanent: true,
+    why: "Зміна каналів сповіщень: право `notify_rules` (ОД, адмін) перевіряє обробник; вкладки в дзвіночка немає." },
   { method: "GET", path: "/api/people/photo/:employeeId", permanent: true,
     why: "Фото співробітника — на слайдах зустрічі, у номінаціях і (далі) на дошці пошани для всієї команди. Лише "
        + "залогіненим (requireAuth), крім ролі «Кандидат» — їй 403 в самому обробнику; файл береться за імʼям із "
@@ -92,6 +102,10 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Відпустки для тайм-трекера (5149). Стукає його сервер, не браузер: обліковка — окремий ключ "
        + "X-Tracker-Vacations-Key лише на читання (не SSO-ключ). Віддає особу й дати погоджених відпусток, більше нічого; "
        + "без ключа в .env — 503. Тримає `#1807`." },
+  { method: "GET", path: "/api/integrations/tracker/calendar", permanent: true,
+    why: "Календар команди для тайм-трекера (04.11.2026): відсутності, чергування, свята. Стукає його сервер, не браузер: "
+       + "обліковка — той самий ключ X-Tracker-Vacations-Key лише на читання (не SSO-ключ). Віддає особу, дати й тип "
+       + "відсутності чи зміни, більше нічого; без ключа в .env — 503. Тримає `#3352`." },
   { method: "POST", path: "/api/auth/tracker-identity", permanent: true,
     why: "Стукає сервер трекера, не браузер: обліковка — ключ X-Dashboard-Sso-Key плюс "
        + "дійсне посвідчення. Вкладки не має, як і /api/tracker/* нижче." },

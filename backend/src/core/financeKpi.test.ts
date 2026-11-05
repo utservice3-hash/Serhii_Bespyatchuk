@@ -1041,6 +1041,36 @@ test("#1248 РОЗБІР СЕЙФУ: шапка на місці або відм�
 });
 
 /**
+ * #3350 — ШАПКА СЕЙФУ УКРАЇНСЬКОЮ (02.11.2026 таблицю переклали: «Сума», «Курс», «Сума в грн», «Категорія» — синк
+ * мовчав добу; Роман 03.11: «підлаштуватися під нове»). По обидва боки: нова шапка, стара й змішана дають ТІ САМІ рядки
+ * й ключі; назва з чужого місця («Курс» на місці суми) і далі відмова «структура», а текст відмови називає обидві
+ * допустимі назви.
+ * 🧨 Червоніє, якщо українська шапка знову зупинить синк, якщо переклад змінить ключі (масове «зникло + зʼявилось»),
+ * або якщо допустимі назви стануть «будь-якою з усіх» і пропустять переставлену колонку.
+ */
+test("#3350 ШАПКА СЕЙФУ: українська, російська й змішана — ті самі рядки й ключі; назва з чужого місця — відмова", async () => {
+  const ss = await import("./safeSync.js");
+  const kind = (f: () => unknown) => { try { f(); return "ok"; } catch (e) { return (e as { kind?: string }).kind ?? "інше"; } };
+  const UA_HEAD = ["Дата", "Сума", "Валюта", "Курс", "Сума в грн", "На що", "Кому (ID)", "Категорія", "", "Фінансист"];
+  const body = [safeRow(1, { fin: "TRUE", deal: "62467001" }), safeRow(2, { deal: "Іванов" })];
+  const withHead = (h: string[]) => safeSheet(body).map((r) => (r === SAFE_HEAD ? h : r));
+  const sig = (x: { rows: { day: string; amount: number; key: string }[] }) => x.rows.map((r) => [r.day, r.amount, r.key]);
+  const ru = ss.parseSafeSheet(withHead(SAFE_HEAD));
+  const ua = ss.parseSafeSheet(withHead(UA_HEAD));
+  const mixed = ss.parseSafeSheet(withHead(UA_HEAD.map((v, i) => (i === 1 || i === 7 ? SAFE_HEAD[i] : v))));
+  assert.equal(ua.rows.length, 2, "🔴 українська шапка не дала рядків");
+  assert.deepEqual(sig(ua), sig(ru), "🔴 переклад шапки змінив рядки чи ключі — синк побачив би масове «зникло + зʼявилось»");
+  assert.deepEqual(sig(mixed), sig(ru), "🔴 змішана шапка (частину перекладено) розібрана інакше");
+  const misplaced = [...UA_HEAD]; misplaced[1] = "Курс";
+  assert.equal(kind(() => ss.parseSafeSheet([misplaced, safeRow(1)])), "structure", "🔴 «Курс» на місці суми пройшов — допустимі назви не прив'язані до колонки");
+  const swappedUa = [...UA_HEAD]; [swappedUa[5], swappedUa[7]] = [swappedUa[7], swappedUa[5]];
+  assert.equal(kind(() => ss.parseSafeSheet([swappedUa, safeRow(1)])), "structure", "🔴 переставлені колонки в українській шапці пройшли");
+  let msg = "";
+  try { ss.parseSafeSheet([misplaced, safeRow(1)]); } catch (e) { msg = (e as Error).message; }
+  assert.match(msg, /колонка 2: чекали «Сума» або «Сумма», є «Курс»/, "🔴 текст відмови не каже, які назви допустимі");
+});
+
+/**
  * #1248b — ЖИВИЙ SQL: ЗВІРКА ТАБЛИЦІ З СЕЙФОМ (`reconcileSafe`). Нове — додано; зниклий рядок — «зник із таблиці» (не
  * стерто); повернений — відновлено; галочка «Фінансист» — ОНОВЛЕННЯ того самого запису; повтор без змін — нуль змін;
  * записи, перенесені 05.10 (`importSafe`), впізнаються тим самим ключем — без задвоєння; запис, внесений колись у

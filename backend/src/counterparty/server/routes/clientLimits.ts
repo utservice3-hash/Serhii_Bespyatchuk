@@ -14,7 +14,7 @@
  */
 import express, { Router } from 'express';
 import type { Pool } from 'pg';
-import { buildRows, canSeeLimit, cellsFor, clientQuery, isNoLimit, limitOfClient, limitsBadge, parseLimitInput, type AnyRow, type LimitRow } from '../../shared/clientLimits.js';
+import { buildRows, canSeeLimit, cellsFor, clientQuery, isNoLimit, limitOfClient, limitsBadge, parseLimitInput, type AnyRow, type ClientLimit, type Debtor, type LimitRow, type ResetLimit } from '../../shared/clientLimits.js';
 import { FROM_LABEL, diffLines, seesRequests, sideLine, type CpRole, type CpUser, type Terms } from '../../shared/counterparty.js';
 import { DEFAULT_LAG, type Lag } from '../../shared/cpCalc.js';
 import { dayW, money } from '../../shared/cpFormat.js';
@@ -30,6 +30,10 @@ export interface ClientLimitsOptions {
   debts: DebtSource;
   /** Клієнти бази для «＋ Додати клієнта» (задача 7137); немає — пошук і додавання відповідають 503. */
   clients?: ClientDirectory;
+  /** Угоди клієнта кожного ліміту в CRM (Роман 03.11.2026): «не зіставлено з CRM» — ліміт за неактивністю не скидається. */
+  crm?: (limits: ClientLimit[], debtors: Debtor[]) => Promise<Map<string, { matched: boolean; lastDealAt: string | null }>>;
+  /** Скинуті за неактивністю (фільтр «Скинуто»). */
+  resets?: () => Promise<ResetLimit[]>;
   approverIds?: string[];
   roleOf?: (u: ReqUser) => CpRole | null;
   teamOf?: (u: ReqUser) => string[] | Promise<string[]>;
@@ -47,8 +51,13 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
   const r = Router();
   r.use(express.json({ limit: '2mb' }));
 
-  async function rows(): Promise<{ rows: AnyRow[]; at: string | null; cells: ReturnType<typeof buildRows>['cells'] }> {
+  /** withCrm — лише для списку вкладки (лічильник і колонка дебіторки угод CRM не потребують — зайвий запит на кожне опитування). */
+  async function rows(withCrm = false): Promise<{ rows: AnyRow[]; at: string | null; cells: ReturnType<typeof buildRows>['cells'] }> {
     const [limits, d] = await Promise.all([listLimits(pool, now()), opts.debts.debtors().catch(e => { console.error('[client-limits] дебіторка:', e instanceof Error ? e.message : e); return null; })]);
+    if (withCrm && opts.crm) {
+      const crm = await opts.crm(limits, d ? d.list : []).catch(e => { console.error('[client-limits] угоди CRM:', e instanceof Error ? e.message : e); return null; });
+      if (crm) for (const l of limits) l.crm = crm.get(l.id) ?? { matched: false, lastDealAt: null };
+    }
     const b = buildRows(limits, d ? d.list : []);
     return { rows: b.rows, at: d ? d.at : null, cells: b.cells };
   }
@@ -64,8 +73,9 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
 
   r.get('/', async (req: AuthedRequest, res) => {
     const u = await me(req); need(u);
-    const all = await rows();
-    res.json({ me: u, rows: visible(u, all.rows), debtAt: all.at, monitor: await monitorInfo(pool, now(), opts.monitorDay, opts.monitorHour), lag: opts.lag || DEFAULT_LAG });
+    const all = await rows(true);
+    const resets = opts.resets ? (await opts.resets()).filter(x => canSeeLimit(u, x)) : [];
+    res.json({ me: u, rows: visible(u, all.rows), resets, debtAt: all.at, monitor: await monitorInfo(pool, now(), opts.monitorDay, opts.monitorHour), lag: opts.lag || DEFAULT_LAG });
   });
   r.get('/counter', async (req: AuthedRequest, res) => {
     const u = await me(req);

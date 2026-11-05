@@ -53,6 +53,8 @@ export interface Ownership {
   director: { name: string; since: string | null } | null;
   ownersAt: string | null; ownersWhat: string;   // остання зміна складу власників
   dirAt: string | null; dirWhat: string;         // остання зміна директора
+  /** Остання зміна ЛЮДЕЙ у засновниках (увійшов / вийшов) — без змін часток. Немає в перевірках до 03.11.2026. */
+  peopleAt?: string | null;
 }
 export interface ExpressFact { name: string; value: string; tone: 'ok' | 'warn' | 'bad' }
 export interface CheckSubject {

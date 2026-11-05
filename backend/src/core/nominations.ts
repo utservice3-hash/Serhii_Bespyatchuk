@@ -21,9 +21,9 @@ import { kommoLeadUrl } from "./kommoLinks.js";
 import { leadgenStats } from "./leadgenStats.js";
 import {
   NOMINATIONS, NOMINATION_RULE_VERSION, rankNominees, applyReview, fingerprint, deptWinners, weekOf, isFreezeDue, snapshotRows,
-  teamRanking, rankingFromExtra, freezeInstant, freezeDueLabel, editUntilInstant, overlayAfterFreeze, LEADGEN_NOMINATIONS, buildRnkConv,
+  teamRanking, rankingFromExtra, addDays, freezeInstant, freezeDueLabel, editUntilInstant, overlayAfterFreeze, LEADGEN_NOMINATIONS, buildRnkConv,
   type NominationKey, type Ranked, type Review, type Final, type NominationCell, type TeamWeek, type DeptWinner, type WeekView,
-  type RnkConv, type ConvEdit,
+  type RnkConv, type ConvEdit, type WeekTextKind,
 } from "./nominationRules.js";
 export type { NominationCell, TeamWeek, DeptWinner, WeekView } from "./nominationRules.js";
 
@@ -144,7 +144,16 @@ function leadgenWeek(stats: Awaited<ReturnType<typeof leadgenStats>>, reviews: M
  * (`metrics.rnkConvAsKommo`), свого SQL по угодах немає.
  */
 export async function rnkConvWeek(from: string, to: string, rosterIn?: RosterRow[]): Promise<RnkConv> {
-  const roster = (rosterIn ?? await nominationRoster(null, from)).filter((r) => r.dept === "rnk");
+  // 🏢 З 04.11.2026 — весь комерційний відділ (Даша: «немає більше РПК і РНК»), а не лише РНК.
+  const roster = rosterIn ?? await nominationRoster(null, from);
+  // ▲/▼ на слайді: відсоток тих самих людей минулого тижня — тим самим правилом і з правками того тижня.
+  const [cur, prev] = await Promise.all([convOnce(from, to, roster), convOnce(addDays(from, -7), addDays(to, -7), roster)]);
+  const prevPct = new Map(prev.out.rows.map((r) => [r.managerId, r.pct]));
+  const out = buildRnkConv(cur.system, cur.edits, prevPct);
+  // Людей без жодного ліда, успіху й правки в таблиці не показуємо — на весь відділ це шпалери з нулів.
+  return { ...out, rows: out.rows.filter((r) => r.total > 0 || r.taken > 0 || r.won > 0 || r.crm.won > 0 || r.own != null), outside: cur.outside };
+}
+async function convOnce(from: string, to: string, roster: RosterRow[]) {
   const [conv, edits] = await Promise.all([
     metrics.rnkConvAsKommo({ from, to }, roster.map((r) => r.id)),
     pool.query<{ manager_id: number | null; action: ConvEdit["action"]; taken: number | null; won: number | null; on_slide: boolean | null; comment: string | null; by_name: string | null; created_at: Date }>(
@@ -155,8 +164,17 @@ export async function rnkConvWeek(from: string, to: string, rosterIn?: RosterRow
   const byMgr = new Map(conv.rows.map((c) => [c.managerId, c]));
   const system = roster.map((r) => ({ managerId: r.id, name: r.name, teamId: r.teamId,
     taken: byMgr.get(r.id)?.target ?? 0, won: byMgr.get(r.id)?.won ?? 0, total: byMgr.get(r.id)?.total ?? 0 }));
-  const out = buildRnkConv(system, edits.rows.map((e) => ({ managerId: e.manager_id, action: e.action, taken: e.taken, won: e.won, onSlide: e.on_slide, comment: e.comment, by: e.by_name, at: e.created_at.toISOString() })));
-  return { ...out, outside: conv.outside };
+  const ed: ConvEdit[] = edits.rows.map((e) => ({ managerId: e.manager_id, action: e.action, taken: e.taken, won: e.won, onSlide: e.on_slide, comment: e.comment, by: e.by_name, at: e.created_at.toISOString() }));
+  return { system, edits: ed, outside: conv.outside, out: buildRnkConv(system, ed) };
+}
+
+/** Тексти тижня для презентації (04.11.2026): останній запис кожного виду. Лише дописування — історія лишається. */
+export async function weekTexts(weekFrom: string): Promise<NonNullable<WeekView["texts"]>> {
+  const rows = (await pool.query<{ kind: WeekTextKind; text: string; by_name: string | null; created_at: Date }>(
+    `SELECT DISTINCT ON (t.kind) t.kind, t.text, COALESCE(u.full_name, u.email) AS by_name, t.created_at
+       FROM nomination_week_texts t LEFT JOIN users u ON u.id = t.user_id
+      WHERE t.week_from = $1 AND t.kind = 'focus' ORDER BY t.kind, t.id DESC`, [weekFrom])).rows;
+  return Object.fromEntries(rows.filter((r) => r.text.trim()).map((r) => [r.kind, { text: r.text, by: r.by_name, at: r.created_at.toISOString() }]));
 }
 
 /** Живі блоки зафіксованого тижня: лідогенератори (CRM + рішення) і конверсія РНК — не зі знімка. */

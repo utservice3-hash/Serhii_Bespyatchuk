@@ -11,7 +11,8 @@ import { fmtDate, fmtTs, type Toast } from "./BaShared";
  *  • «Угод, де потрібна ТТН» — з CRM за фільтром Даші; поруч посилання на той самий фільтр у Kommo;
  *  • «Прикріплено ТТН» — з поля Kommo «ТТН» серед тих самих угод;
  *  • «Маршрут не збігся» — позначки Даші на угодах (звірку документа робить людина);
- *  • «Наявні» = прикріплено − не збігся; % = наявні ÷ угоди, норма 70%; без угод — «—».
+ *  • «За документами» (04.11.2026, Даша): файла ТТН немає, але «Оплачено из 1с» і «Оригиналы получено»;
+ *  • «Наявні» = прикріплено − не збігся + за документами; % = наявні ÷ угоди, норма 70%; без угод — «—».
  * Розкриття менеджера — його угоди: де ТТН немає, і кнопка «маршрут не збігся» біля прикріплених.
  * «Зафіксувати місяць» — знімок трьох чисел; пізніші зміни в CRM видно поруч.
  */
@@ -64,7 +65,7 @@ export function BaTtn({ meta, toast }: { meta: BaMeta; toast: Toast }) {
           <table className="hr-table">
             <thead><tr>
               <th>Менеджер</th><th className="num">Угод, де потрібна ТТН</th><th className="num">Прикріплено ТТН</th>
-              <th className="num">Маршрут не збігся</th><th className="num">Наявні</th><th>% відповідності</th><th>Динаміка · 6 міс.</th><th>Знімок</th>
+              <th className="num">Маршрут не збігся</th><th className="num">За документами</th><th className="num">Наявні</th><th>% відповідності</th><th>Динаміка · 6 міс.</th><th>Знімок</th>
             </tr></thead>
             <tbody>
               {rows.map((r) => (
@@ -75,6 +76,7 @@ export function BaTtn({ meta, toast }: { meta: BaMeta; toast: Toast }) {
                     <td className="num"><b>{r.live.needed}</b>{r.kommoUrl && <><br /><a className="hr-link" href={r.kommoUrl} target="_blank" rel="noopener noreferrer">фільтр у Kommo ↗</a></>}</td>
                     <td className="num">{r.live.attached}{r.live.unsynced > 0 && <><br /><span className="hr-muted">не синхронізовано: {r.live.unsynced}</span></>}</td>
                     <td className="num">{r.live.mismatched || <span className="hr-muted">0</span>}</td>
+                    <td className="num">{r.live.byDocs || <span className="hr-muted">0</span>}</td>
                     <td className="num"><b>{r.live.present}</b></td>
                     <td>
                       {r.live.pct == null ? <span className="hr-muted">—</span> : (
@@ -99,16 +101,17 @@ export function BaTtn({ meta, toast }: { meta: BaMeta; toast: Toast }) {
                       <button className="hr-btn xs" disabled={busy === r.managerId || r.live.needed === 0} onClick={() => void fix(r)}>{r.saved ? "Перезафіксувати" : "Зафіксувати місяць"}</button>
                     </td>
                   </tr>
-                  {open === r.managerId && <tr><td colSpan={8} style={{ background: "var(--surface-2, var(--bg))" }}><TtnDeals month={month} managerId={r.managerId} toast={toast} onChanged={refresh} /></td></tr>}
+                  {open === r.managerId && <tr><td colSpan={9} style={{ background: "var(--surface-2, var(--bg))" }}><TtnDeals month={month} managerId={r.managerId} toast={toast} onChanged={refresh} /></td></tr>}
                 </Fragment>
               ))}
-              {!rows.length && <tr><td colSpan={8} className="hr-muted" style={{ padding: 16 }}>У цьому місяці в CRM немає успішних безготівкових угод — перевіряти нема що.</td></tr>}
+              {!rows.length && <tr><td colSpan={9} className="hr-muted" style={{ padding: 16 }}>У цьому місяці в CRM немає успішних безготівкових угод — перевіряти нема що.</td></tr>}
             </tbody>
           </table>
         </div>
       )}
       <div className="hr-sect hr-muted">
-        Усе рахується з CRM: угоди — успішні безготівкові (з ПДВ і без), закриті в цьому місяці, по відповідальному; «прикріплено» — є файл у полі «ТТН».
+        Усе рахується з CRM: угоди — успішні безготівкові (з ПДВ і без), закриті в цьому місяці, по відповідальному; «прикріплено» — є файл у полі «ТТН»;
+        «за документами» — файла немає, але «Оплачено из 1с» і «Оригиналы получено».
         Звірку маршруту робить людина: розкрийте менеджера й позначте угоду «маршрут не збігся» — її віднімуть із наявних. Норма — {norm}%.
       </div>
     </div>
@@ -135,7 +138,9 @@ function TtnDeals({ month, managerId, toast, onChanged }: { month: string; manag
     } catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(null); }
   };
   if (!deals) return <p className="loading-text" style={{ margin: 8 }}>Завантаження угод…</p>;
-  const without = deals.filter((d) => d.ttnFiles === 0).length;
+  const without = deals.filter((d) => d.ttnFiles === 0 && !d.byDocs).length;
+  // Чого бракує угоді без файла, щоб зарахуватись «за документами» — словами, а не просто «немає».
+  const lacks = (d: BaTtnDeal) => [!d.docs.paid1c && "«Оплачено из 1с»", d.docs.originals === false && "«Оригиналы получено»"].filter(Boolean).join(", ");
   return (
     <div style={{ padding: "4px 8px 8px" }}>
       <div className="hr-muted" style={{ marginBottom: 6 }}>Угод: {deals.length} · без ТТН: <b style={{ color: without ? "var(--danger)" : undefined }}>{without}</b></div>
@@ -147,7 +152,12 @@ function TtnDeals({ month, managerId, toast, onChanged }: { month: string; manag
               <td><a className="hr-link" href={d.url} target="_blank" rel="noopener noreferrer">{d.name || `№${d.kommoId}`} ↗</a></td>
               <td>{d.client || <span className="hr-muted">не вказано</span>}</td>
               <td>{fmtDate(d.closedOn)}</td>
-              <td>{d.ttnFiles == null ? <span className="hr-muted">не синхронізовано</span> : d.ttnFiles > 0 ? <span className="hr-pill ok">є{d.ttnFiles > 1 ? ` · ${d.ttnFiles}` : ""}</span> : <span className="hr-pill dg">немає</span>}</td>
+              <td>{d.ttnFiles == null ? <span className="hr-muted">не синхронізовано</span>
+                : d.ttnFiles > 0 ? <span className="hr-pill ok">є{d.ttnFiles > 1 ? ` · ${d.ttnFiles}` : ""}</span>
+                : d.byDocs ? <span className="hr-pill ok" title="Файла ТТН немає, але «Оплачено из 1с» і «Оригиналы получено»">за документами</span>
+                : <><span className="hr-pill dg">немає</span>{d.docs.originals == null
+                    ? <span className="hr-muted"> · оригінали не синхронізовано</span>
+                    : <span className="hr-muted"> · бракує: {lacks(d)}</span>}</>}</td>
               <td>{d.ttnFiles && d.ttnFiles > 0 ? (d.mismatch
                 ? <><span className="hr-pill wn">не збігся</span>{d.mismatch.note && <span className="hr-muted"> {d.mismatch.note}</span>} <button className="hr-link" disabled={busy === d.kommoId} onClick={() => void toggle(d)}>зняти</button></>
                 : <button className="hr-btn xs" disabled={busy === d.kommoId} onClick={() => void toggle(d)}>маршрут не збігся</button>)

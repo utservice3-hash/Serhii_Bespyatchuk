@@ -17,8 +17,9 @@ import { UPLOAD_DIR } from "./uploads.js";
 import { randomUUID, createHash } from "crypto";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
+import { promoteToPro, cancelLastLevel } from "../core/employeeLevel.js";
 import { churnReport, linkKommo, listExits, createExit, updateExit, setExitDeleted, ChurnError } from "../core/churn.js";
-import { vaultBotConfigured, vaultBotSend, vaultBotUsername } from "../bot/vaultBot.js";
+import { vaultBotConfigured, vaultBotSend, vaultBotUsername, vaultBotUsernameQuick } from "../bot/vaultBot.js";
 
 /**
  * 🔐 СЕЙФ ДОСТУПІВ СПІВРОБІТНИКІВ (18.09.2026).
@@ -68,7 +69,7 @@ secretsRouter.get("/status", async (req, res) => {
   try {
     const link = await vaultLinkState(pool as unknown as Db, me(req));
     res.json({ keyConfigured: key() != null, botConfigured: vaultBotConfigured(),
-      botUsername: vaultBotConfigured() ? await vaultBotUsername() : null, linked: link.linked, linkedAt: link.linkedAt });
+      botUsername: vaultBotConfigured() ? await vaultBotUsernameQuick() : null, linked: link.linked, linkedAt: link.linkedAt });
   } catch (e) { fail(res, e); }
 });
 
@@ -184,6 +185,13 @@ secretsRouter.post("/employees/:id/dismiss/finish", async (req, res) => {
 // 📉 «Змінити дату звільнення» / «дата невідома» (#2100) — межа та сама, що в реєстру.
 secretsRouter.post("/employees/:id/dismiss-date", async (req, res) => {
   try { res.json(await tx((db) => setDismissDate(db, me(req), num(req.params.id, "id співробітника"), req.body ?? {}))); } catch (e) { fail(res, e); }
+});
+// 🎚 Рівень «Старт / Профі» (03.11.2026, #2970) — статус, без грошей; межа та сама, що в реєстру.
+secretsRouter.post("/employees/:id/level", async (req, res) => {
+  try { res.json(await tx((db) => promoteToPro(db, me(req), num(req.params.id, "id співробітника"), req.body ?? {}))); } catch (e) { fail(res, e); }
+});
+secretsRouter.post("/employees/:id/level/cancel", async (req, res) => {
+  try { res.json(await tx((db) => cancelLastLevel(db, me(req), num(req.params.id, "id співробітника")))); } catch (e) { fail(res, e); }
 });
 secretsRouter.post("/employees/:id/dismiss/revert", async (req, res) => {
   try { res.json(await tx((db) => revertDismissal(db, me(req), num(req.params.id, "id співробітника")))); } catch (e) { fail(res, e); }

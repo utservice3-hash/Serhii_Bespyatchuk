@@ -205,3 +205,48 @@ test("#2962 ЖИВИЙ SQL: «Змінити» правка дат з комен
     assert.deepEqual([r.category, r.category_manual], ["manager", false], "🔴 скидання не повернуло правило за посадою");
   } finally { await s.done(); }
 });
+
+/**
+ * #2970 — РІВЕНЬ «СТАРТ / ПРОФІ» ЗА ІСТОРІЄЮ (03.11.2026, ТЗ Івана; статус, не гроші). Без записів — «Старт»; поточний —
+ * останній НЕскасований за місяцем; скасований перехід не рахується; за рівного місяця перемагає пізніший запис.
+ * 🧨 Червоніє, якщо рахувати скасовані або брати перший запис замість останнього.
+ */
+test("#2970 РІВЕНЬ: без записів — Старт, поточний — останній нескасований, скасований не рахується", async () => {
+  const { currentLevel } = await import("./employeeLevel.js");
+  assert.deepEqual(currentLevel([]), { level: "start", from: null });
+  const pro = { id: 2, level: "pro" as const, from_month: "2026-11-01", cancelled: false };
+  const start = { id: 1, level: "start" as const, from_month: "2026-04-01", cancelled: false };
+  assert.deepEqual(currentLevel([start, pro]), { level: "pro", from: "2026-11-01" }, "🔴 поточний — не останній за місяцем");
+  assert.deepEqual(currentLevel([start, { ...pro, cancelled: true }]), { level: "start", from: "2026-04-01" }, "🔴 скасований перехід рахується");
+  assert.equal(currentLevel([{ ...start, from_month: "2026-11-01", id: 3 }, pro]).level, "start", "🔴 за рівного місяця має перемогти пізніший запис");
+});
+
+/**
+ * #2971 — ЖИВИЙ SQL РІВНЯ: «Перевести на Профі» вимагає місяць і коментар; повторне «Профі» — 409 (назад не переводять);
+ * «Скасувати» знімає перехід, запис лишається в історії; не менеджеру рівень не ставиться (409) і в списку його немає (null).
+ * 🧨 Червоніє, якщо дозволити «Профі» двічі, видаляти запис замість скасування або дати рівень бухгалтеру.
+ */
+test("#2971 ЖИВИЙ SQL РІВНЯ: перевести з місяцем і коментарем, двічі — 409, скасувати лишає історію, не менеджеру — ні", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const lv = await import("./employeeLevel.js");
+  const emp = await import("./employees.js");
+  try {
+    const ids = (await s.c.query(`INSERT INTO employees (full_name, import_key, status, position) VALUES
+      ('Менеджер Тест','m','active','віддалений менеджер'), ('Бухгалтер Тест','b','active','бухгалтерія') RETURNING id`)).rows.map((r) => r.id as number);
+    const [m, b] = ids;
+    const row = async (id: number) => (await emp.listEmployees(s.db)).find((x) => x.id === id)!;
+    assert.deepEqual([(await row(m)).level, (await row(b)).level], ["start", null], "🔴 менеджер без запису — не «Старт» або бухгалтер отримав рівень");
+    await assert.rejects(lv.promoteToPro(s.db, s.hr, m, { month: "2026-11" }), /Коментар/);
+    await assert.rejects(lv.promoteToPro(s.db, s.hr, m, { comment: "x" }), /місяць/);
+    await assert.rejects(lv.promoteToPro(s.db, s.hr, b, { month: "2026-11", comment: "x" }), /лише в менеджерів/);
+    await lv.promoteToPro(s.db, s.hr, m, { month: "2026-11", comment: "двічі поспіль" });
+    assert.deepEqual([(await row(m)).level, (await row(m)).level_from], ["pro", "2026-11-01"]);
+    await assert.rejects(lv.promoteToPro(s.db, s.hr, m, { month: "2026-12", comment: "ще раз" }), /вже на «Профі»/);
+    await lv.cancelLastLevel(s.db, s.hr, m);
+    const after = await row(m);
+    assert.equal(after.level, "start", "🔴 скасування не повернуло «Старт»");
+    assert.deepEqual((after.level_history as { cancelled: boolean }[]).map((h) => h.cancelled), [true], "🔴 скасований запис зник з історії");
+    assert.equal((await s.c.query(`SELECT count(*)::int AS n FROM access_audit WHERE action LIKE 'employees.level%'`)).rows[0].n, 2, "🔴 зміни рівня не в журналі");
+    await assert.rejects(lv.cancelLastLevel(s.db, s.hr, m), /нічого/);
+  } finally { await s.done(); }
+});

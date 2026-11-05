@@ -21,6 +21,7 @@ import { SLEEPING_DAYS, LOST_DAYS, valueScore, type ClientState,
          type ClientSegment } from "./reactivationRules.js";
 import { loadClientSegments, factsFor, inReactivationTab, inClientsScreen } from "./clientSegments.js";
 import { archivedSql, LAST_PAID_CTE, LAST_PAID_JOIN } from "./clientArchive.js";
+import { notCarrierCallSql } from "./carrierPhones.js";
 import { lastOrderCte, daysSinceOrderSql, PAID_DEAL_JOIN, PAID_DEAL_WHERE } from "./clientOrder.js";
 export type { ClientState, ClientSegment };
 void SLEEPING_DAYS; void LOST_DAYS;
@@ -259,11 +260,12 @@ export async function clientStates(
        -- Індекс idx_rc_client_key (client_key, calldate DESC) робить це одним
        -- читанням на клієнта. LEFT JOIN — бо «розмов немає» це РЕЗУЛЬТАТ, а не
        -- привід викинути клієнта зі списку реактивації.
+       -- 📵 Розмова на номер ПЕРЕВІЗНИКА — не розмова з клієнтом (задача 7359): той самий фільтр у спробах нижче.
        LEFT JOIN LATERAL (
          SELECT rc.calldate, rc.call_type, rc.recording, rc.billsec,
                 COALESCE(mt.name, rc.employee_fio) AS talk_by
            FROM ringostat_calls rc LEFT JOIN managers mt ON mt.id = rc.manager_id
-          WHERE rc.client_key = a.client_key AND rc.billsec > 0
+          WHERE rc.client_key = a.client_key AND rc.billsec > 0 AND ${notCarrierCallSql("rc")}
           ORDER BY rc.calldate DESC LIMIT 1
        ) lt ON true
        -- СПРОБИ — недодзвони ПІСЛЯ останньої розмови (без розмови — всі).
@@ -271,7 +273,7 @@ export async function clientStates(
        -- а «чи його добиваються». Складати з розмовою в одну цифру заборонено.
        LEFT JOIN LATERAL (
          SELECT COUNT(*)::int AS n, MAX(rc.calldate) AS last_at FROM ringostat_calls rc
-          WHERE rc.client_key = a.client_key AND rc.billsec = 0
+          WHERE rc.client_key = a.client_key AND rc.billsec = 0 AND ${notCarrierCallSql("rc")}
             AND (lt.calldate IS NULL OR rc.calldate > lt.calldate)
        ) at ON true
       -- 🗄 АРХІВ ЗАМІСТЬ hidden (рішення власника 05.08.2026). Два способи прибрати

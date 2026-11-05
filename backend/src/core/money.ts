@@ -6,7 +6,7 @@ import { pool } from "../db/pool.js";
 import { adDealSql } from "./metrics.js";
 import { ELOGIST_CHANNEL } from "./elogist.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
-import { managerDealClass, type DealState, type ClientSuccess, type PendDay } from "./leadgenHandoffRules.js";
+import { managerDealClass, splitInvoicesOf, type DealState, type ClientSuccess, type PendDay } from "./leadgenHandoffRules.js";
 // 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
 // «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
 // поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
@@ -940,6 +940,35 @@ export async function receivedByChannel(s: MoneyScope, adSources: string[]): Pro
 }
 
 /**
+ * 📅 «НАДІЙШЛО ЦЬОГО ДНЯ» З РЕКЛАМИ — поденна пара `receivedByChannel(...).ad` для екрана «Реклама»
+ * (Роман 02.11.2026: «не зрозуміло, скільки зароблено за один день»). ТІ САМІ рядки, той самий фільтр
+ * `adDealSql` і той самий київський анкер, лише `GROUP BY` дня — тож Σ днів == плитці «Заробили» за
+ * побудовою (гейт це стереже одним викликом). Гроші — маржа (`deals.price`), ② як і в плитці: це не
+ * нове місце ②, а розкладка по днях того самого числа, що вже стоїть на екрані.
+ * ⚠️ Гроші цього дня майже не повʼязані з рекламою цього дня (угода закривається тижнями пізніше) —
+ * «окупність дня» показує інша колонка, когорта `conversionAdsByDay(...).paidMargin`.
+ */
+export async function adReceivedByDay(s: MoneyScope, adSources: string[]): Promise<{ day: string; revenue: number; deals: number }[]> {
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`${ANCHOR_DAY} >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`${ANCHOR_DAY} <= $${p.length}`); }
+  p.push(adSources);
+  conds.push(adDealSql(`$${p.length}`));
+  const r = await pool.query<{ day: string; revenue: string; deals: string }>(
+    `SELECT to_char(${ANCHOR_DAY}, 'YYYY-MM-DD') AS day, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
+       FROM (${src}) src
+       JOIN deals d ON d.kommo_id = src.kommo_id
+       JOIN managers m ON m.id = src.manager_id
+      WHERE ${conds.join(" AND ")}
+      GROUP BY 1 ORDER BY 1`,
+    p
+  );
+  return r.rows.map((x) => ({ day: x.day, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+
+/**
  * ЗНІМОК «станом на зараз» — угоди, що ПРЯМО ЗАРАЗ стоять на етапі 8 чи 9. Прогноз-
  * картка, НІКОЛИ не сумується у виручку періоду (підпис «станом на зараз»).
  */
@@ -1320,8 +1349,10 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
   const ids = [...new Set(dealIds)];
   if (!ids.length) return out;
   const r = await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; price: string | null;
-    is_minus: boolean | null; closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null }>(
+    is_minus: boolean | null; closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null;
+    load_day: string | null }>(
     `SELECT d.kommo_id, d.pipeline_id, d.status_id, d.price, d.is_minus,
+            to_char(d.load_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS load_day,
             (d.closed_at_kommo IS NOT NULL) AS closed,
             NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off,
             to_char(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS closed_day,
@@ -1352,13 +1383,22 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
     xs.push({ day: e.day, pending: c === "paid" || c === "expect" });
     pend.set(id, xs);
   }
+  // 🧾 Виділений рахунок (`HANDOFF_SPLIT_INVOICES`): його бюджет додається до основної угоди — одна машина, дві суми.
+  const extraIds = [...new Set(ids.flatMap((id) => splitInvoicesOf(id)))];
+  const extraPrice = new Map<number, number>();
+  if (extraIds.length) {
+    const xr = await pool.query<{ kommo_id: string; price: string | null }>(
+      `SELECT kommo_id, price FROM deals WHERE kommo_id = ANY($1::bigint[])`, [extraIds]);
+    for (const x of xr.rows) extraPrice.set(Number(x.kommo_id), Math.round(Number(x.price ?? 0)));
+  }
   for (const x of r.rows) {
     const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
+    const extra = splitInvoicesOf(Number(x.kommo_id)).reduce((s, id) => s + (extraPrice.get(id) ?? 0), 0);
     out.set(Number(x.kommo_id), {
       pipelineId, statusId,
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
-      price: Math.round(Number(x.price ?? 0)), minus: x.is_minus === true,
-      closedDay: x.closed_day, autoDay: x.auto_day,
+      price: Math.round(Number(x.price ?? 0)) + extra, minus: x.is_minus === true,
+      closedDay: x.closed_day, autoDay: x.auto_day, loadDay: x.load_day,
       pendDays: (pend.get(Number(x.kommo_id)) ?? []).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
     });
   }

@@ -92,7 +92,8 @@ test("еталон РПК-Яцика серпень 2025: ядро 651 729 ₴ �
   const M = await loadMoney();
   const teams = await M.successByTeam(AUG);
   assert.ok(teams.length > 0, "розріз по командах не може бути порожнім");
-  const y = teams.find((t) => t.teamName === "РПК - Яцика Дмитра");
+  // Команда — за номером (5), а не за назвою: назви з 02.11.2026 йдуть із Kommo і змінюються («Яцик Team lead»).
+  const y = teams.find((t) => t.teamId === 5);
   assert.ok(y, "команда РПК-Яцика має бути присутня");
   assert.ok(y!.deals > 0, "у команди мають бути угоди в серпні 2025");
   assert.ok(Math.abs(y!.revenue - 651729) / 651729 <= 0.01,
@@ -131,7 +132,7 @@ test("еталон РПК-Яцика серпень 2025: ядро 651 729 ₴ �
        -- 🔀 Склад команди — на 31.08.2025 (команда на дату, як у ядрі з 05.10.2026), а не поточний: після
        -- переходу Хомік «без команди» з 01.10 поточна привʼязка викидала її серпень-2025 (−78 тис.) лише тут.
        JOIN teams t ON ${teamJoinSql("t", "m", "$3::date")}
-      WHERE t.name = 'РПК - Яцика Дмитра' AND d.manager_id <> $4`,
+      WHERE t.id = 5 AND d.manager_id <> $4`,
     [[8921932, 155304], AUG.from, AUG.to, shId]
   );
   const M2 = await loadMoney();

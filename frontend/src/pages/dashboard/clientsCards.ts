@@ -19,13 +19,14 @@ export const CARD_MATCH: Record<CardKey, (r: CardRow) => boolean> = {
   notOrdered: (r) => r.orderedBefore && !r.orderedThisMonth,
   more: (r) => r.delta > 0,
   less: (r) => r.delta < 0,
-  // ТЗ п.3: «Без роботи — об'єднуємо з «Без задачі» в одну картку».
-  noWork: (r) => r.work.noWork || r.work.noTask,
+  // Задача 6455 (Юля, 04.11.2026 — «правка не спрацювала?»): у «без роботи» ТІЛЬКИ клієнти без рахунку і без оплати.
+  // Об'єднання з «Без задачі» (ТЗ 5609 п.3) знято: без задачі — підписом під числом і швидким фільтром «Без задач».
+  noWork: (r) => r.work.noWork,
   overdue: (r) => r.work.overdue,
 };
 
 export interface CardStats {
-  all: number; ordered: number; notOrdered: number; noWork: number; noWorkOnly: number; noTaskOnly: number; overdue: number;
+  all: number; ordered: number; notOrdered: number; noWork: number; noTaskOnly: number; overdue: number;
   more: { n: number; sum: number }; less: { n: number; sum: number };
   /** «Плюс / мінус до середнього» = Σ «купили більше» + Σ «купили менше» (друга сума відʼємна) — критерій приймання п.8. */
   delta: number;
@@ -37,7 +38,7 @@ export function cardStats(rows: readonly CardRow[]): CardStats {
   const more = { n: cnt("more"), sum: sum("more") }, less = { n: cnt("less"), sum: sum("less") };
   return {
     all: rows.length, ordered: cnt("ordered"), notOrdered: cnt("notOrdered"), overdue: cnt("overdue"),
-    noWork: cnt("noWork"), noWorkOnly: rows.filter((r) => r.work.noWork).length, noTaskOnly: rows.filter((r) => r.work.noTask).length,
+    noWork: cnt("noWork"), noTaskOnly: rows.filter((r) => r.work.noTask).length,
     more, less, delta: more.sum + less.sum,
   };
 }
