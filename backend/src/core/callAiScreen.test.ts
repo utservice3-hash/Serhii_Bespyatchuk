@@ -2749,7 +2749,7 @@ test("#3728 ЖИВА СХЕМА: суперечність — розбір із 
   await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result) VALUES ($1,'google','gemini-3.8-flash','first-touch-v4','done',$2::jsonb)`,
     [tid, JSON.stringify({ ...RESULT, conversation_type: "call_later", type_confidence: 0.9, type_reason: "незручно говорити", promises: [], objections: [],
       callback_request: { asked: false, quote: "", deadline_text: "", deadline_kind: "none", deadline_minutes: 0, deadline_date: "" }, type_conflict: "call_later_without_request" })]);
-  const row = async () => (await aiCallsList(c.db, FAKE_AD, "2026-10-17", "2026-10-17", NOW, {})).rows.find((r) => r.uniqueid === "z3728")!;
+  const row = async () => (await aiCallsList(c.db, FAKE_AD, "2026-10-17", "2026-10-17", new Date("2026-11-05T10:00:00Z"), {})).rows.find((r) => r.uniqueid === "z3728")!;
   const r0 = await row();
   assert.ok(r0, "🔴 розмови з суперечністю немає в списку — перевіряти нічого");
   assert.deepEqual([r0.state, r0.conversationType, r0.typeConfidence, r0.typeCheck, r0.inReport, r0.typeReason],
