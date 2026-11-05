@@ -630,11 +630,14 @@ test("#7135 ВІКНО ПОКАЗУЄ ТОЙ САМИЙ РЯДОК, ЩО ПІД�
   const src = js.slice(js.indexOf("function enOf("), js.indexOf("function newForm("));
   const SVC = Object.fromEntries(SERVICES.filter((x) => x.en).map((x) => [x.name, x.en]));
   const mk = new Function("orgOf", src + "; return { lineOf: lineOf, routeFrom: routeFrom, prefixOf: prefixOf };");
-  const w = mk(() => ({ servicesEn: SVC })) as { lineOf: Function; routeFrom: Function; prefixOf: Function };
+  const w = mk(() => ({ servicesEn: SVC, services: SERVICES.map((x) => x.name) })) as { lineOf: Function; routeFrom: Function; prefixOf: Function };
   for (const c of LINE_CASES) assert.equal(w.lineOf({ org: "x", currency: c.cur }, c.it), c.want, `вікно: ${c.why}`);
   // «↺ як було» повертає з повного рядка лише маршрут — інакше назва задвоїться.
   assert.equal(w.routeFrom({ org: "x", currency: "EUR" }, { service: "Організація перевезення за маршрутом", route: "Organization of cargo transportation along the route: Kyiv – Riga" }), "Kyiv – Riga");
   assert.equal(w.routeFrom({ org: "x", currency: "UAH" }, { service: "Експедиторські послуги", route: "Свій текст" }), "Свій текст", "чужий текст обрізано");
+  // Послугу змінили ПІСЛЯ «✎ весь рядок» — назва старої послуги теж знімається, інакше «Організація міжнародного…: Organization of…».
+  assert.equal(w.routeFrom({ org: "x", currency: "EUR" }, { service: "Організація міжнародного перевезення",
+    route: "Organization of cargo transportation along the route: Kyiv – Riga" }), "Kyiv – Riga", "назва попередньої послуги лишилась у маршруті");
   assert.match(js, /data-z1c-line='" \+ i \+ "'/, "немає підказки «У рахунку буде»");
   assert.match(js, /if \(fld === "route"\) root\(\)\.find\("\[data-z1c-line='" \+ i \+ "'\]"\)/, "підказка не оновлюється під час введення");
   assert.match(js, /if \(fld === "service"\) \{ if \(it\.full\) it\.changed = true; render\(\); return; \}/, "зміна послуги не оновлює назву в рядку");

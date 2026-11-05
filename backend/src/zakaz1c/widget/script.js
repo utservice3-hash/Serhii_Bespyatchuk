@@ -137,10 +137,12 @@ define(["jquery"], function ($) {
       if ([it.service, enOf(f, it)].some(function (n) { return n && low.indexOf(n.toLowerCase()) === 0; })) return text;
       return prefixOf(f, it) + ": " + text;
     }
-    /** «↺ як було»: з повного рядка — назад лише маршрут. */
+    /** «↺ як було»: з повного рядка — назад лише маршрут. Знімаємо назву БУДЬ-ЯКОЇ послуги: менеджер міг змінити послугу після «✎». */
     function routeFrom(f, it) {
-      var text = String(it.route || "").trim();
-      var hit = [prefixOf(f, it), it.service, enOf(f, it)].filter(function (n) { return n && text.toLowerCase().indexOf(n.toLowerCase()) === 0; })[0];
+      var text = String(it.route || "").trim(), o = orgOf(f.org), en = o.servicesEn || {};
+      var names = (o.services || []).concat(Object.keys(en).map(function (k) { return en[k]; }), [it.service])
+        .sort(function (a, b) { return b.length - a.length; });
+      var hit = names.filter(function (n) { return n && text.toLowerCase().indexOf(n.toLowerCase()) === 0; })[0];
       return hit ? text.slice(hit.length).replace(/^\s*:?\s*/, "") : text;
     }
 
