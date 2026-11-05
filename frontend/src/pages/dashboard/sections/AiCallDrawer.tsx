@@ -151,23 +151,24 @@ export function Analysis({ c }: { c: AiCallCardResp }) {
 
 
 /**
- * 🗂 Тип розмови (ТЗ 30.09.2026): що сказала модель, чи це ручна позначка, і кнопки «Це вантаж» / «Це не вантаж»
+ * 🗂 Тип розмови (ТЗ 30.09.2026): що сказала модель, чи це ручна позначка, і кнопки «Це вантаж» / «Це не вантаж» /
+ * «Розмова обірвалась» (05.11.2026)
  * для тімліда своєї команди й адміна (право вирішує сервер — `canEditType`). Помилку запису видно, а не «нічого».
  */
 function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const r = c.row;
-  const set = async (isCargo: boolean) => {
+  const set = async (isCargo: boolean, cut = false) => {
     setBusy(true); setMsg(null);
-    try { await setAiCallType(r.uniqueid, isCargo); onChanged(); } catch (e) { setMsg(hiringError(e)); }
+    try { await setAiCallType(r.uniqueid, isCargo, cut); onChanged(); } catch (e) { setMsg(hiringError(e)); }
     setBusy(false);
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13.5, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <b>Тип розмови:</b>
-        {r.conversationType ? TYPE_LABEL[r.conversationType] : <span style={{ color: "var(--text-muted)" }}>ще не визначено</span>}
+        {r.typeOverride?.cut ? "розмова обірвалась" : r.conversationType ? TYPE_LABEL[r.conversationType] : <span style={{ color: "var(--text-muted)" }}>ще не визначено</span>}
         {r.typeConfidence != null && <span style={{ color: "var(--text-muted)", fontSize: 12.5 }}>· упевненість {Math.round(r.typeConfidence * 100)}%</span>}
         {r.typeCheck && <Chip tone="warn">Перевірити тип</Chip>}
         <Chip tone={r.inReport ? "ok" : "muted"}>{r.inReport ? "у звіті" : "у виключених"}</Chip>
@@ -175,13 +176,15 @@ function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void 
       {r.typeReason && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>{r.typeReason}</div>}
       {c.typeHistory.length > 0 && (
         <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
-          {c.typeHistory.map((h, i) => <div key={i}>{fmtFull(h.at)} · {h.byName ?? "невідомо хто"} · {h.isCargo ? "«Це вантаж»" : "«Це не вантаж»"}{i === 0 ? " — діє" : ""}</div>)}
+          {c.typeHistory.map((h, i) => <div key={i}>{fmtFull(h.at)} · {h.byName ?? "невідомо хто"} · {h.cut ? "«Розмова обірвалась»" : h.isCargo ? "«Це вантаж»" : "«Це не вантаж»"}{i === 0 ? " — діє" : ""}</div>)}
         </div>
       )}
       {c.canEditType && (
         <div style={{ display: "flex", gap: 6 }}>
           <button type="button" className="hr-btn" disabled={busy} onClick={() => void set(true)}>Це вантаж</button>
           <button type="button" className="hr-btn" disabled={busy} onClick={() => void set(false)}>Це не вантаж</button>
+          <button type="button" className="hr-btn" disabled={busy} onClick={() => void set(false, true)}
+            title="Розмови по суті не було: обрив після привітання, «ага, так». У звіт не йде, підписана як обірвана">Розмова обірвалась</button>
         </div>
       )}
       {msg && <div style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</div>}

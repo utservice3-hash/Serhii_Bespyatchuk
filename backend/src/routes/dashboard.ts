@@ -11532,7 +11532,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/close-deal/revert", async (req, res) =
 });
 
 /**
- * 🗂 Ручний тип розмови (ТЗ «звіт тімліда» 30.09.2026): «Це вантаж» / «Це не вантаж». Право — ПЕРШИМ оператором
+ * 🗂 Ручний тип розмови (ТЗ «звіт тімліда» 30.09.2026): «Це вантаж» / «Це не вантаж» / «Розмова обірвалась» (05.11.2026). Право — ПЕРШИМ оператором
  * (адмін або тімлід; `accessMatrix` — deny-only), скоуп тімліда — той самий, що в картки: чужий дзвінок → 404.
  * Лише дописує журнал `call_type_overrides`.
  */
@@ -11541,11 +11541,14 @@ dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
   if (!canEditType(auth.roleKey)) { res.status(403).json({ error: "Змінювати тип розмови можуть тімлід (своя команда) і адмін" }); return; }
   const isCargo = req.body?.isCargo;
   if (typeof isCargo !== "boolean") { res.status(400).json({ error: "isCargo має бути true або false" }); return; }
+  // «Розмова обірвалась» (05.11.2026) — лише разом з «не вантаж»: вантажна розмова не може бути обірваною.
+  const cut = req.body?.cut ?? false;
+  if (typeof cut !== "boolean" || (cut && isCargo)) { res.status(400).json({ error: "cut — true лише разом з isCargo: false" }); return; }
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
   const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
-  await setCallType(pool, uniqueid, isCargo, { userId: auth.userId ?? null, name: who }, new Date());
+  await setCallType(pool, uniqueid, isCargo, { userId: auth.userId ?? null, name: who }, new Date(), cut);
   res.json({ ok: true });
 });
 

@@ -414,7 +414,7 @@ export interface AiCallRowT {
   silentBeforeClose: boolean | null;
   /** Тип розмови (рубрика v2, ТЗ 30.09.2026) і куди вона йде: звіт чи «Виключені». */
   conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
-  inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
+  inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; cut: boolean; byName: string | null; at: string } | null;
   /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183); `null` — оцінюємо. */
   transportKind: AiTransportKindT | null;
   /** 💬 Задача 7184: обіцянок менеджера в месенджер (не перевірити); сигнал «сам запропонував месенджер» — `null`, якщо не
@@ -501,7 +501,7 @@ export interface AiCallCardResp {
   priceForm: AiPriceFormResultT | null;
   canSeeMessengerSignal: boolean;
   /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
-  typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
+  typeHistory: { isCargo: boolean; cut: boolean; byName: string | null; at: string }[];
   canEditType: boolean;
   /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
   noteRights: { price: boolean; missed: boolean; offline: boolean; explain: boolean };
@@ -635,9 +635,9 @@ export async function fetchAiTeamReport(params: { from: string; to: string; team
   const { data } = await api.get<AiTeamReportResp>("/dashboard/ai-calls/team-report", { params });
   return data;
 }
-/** «Це вантаж» / «Це не вантаж» — ручний тип розмови (тімлід своєї команди, адмін). */
-export async function setAiCallType(uniqueid: string, isCargo: boolean): Promise<void> {
-  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/type`, { isCargo });
+/** «Це вантаж» / «Це не вантаж» / «Розмова обірвалась» (`cut`, 05.11.2026) — ручний тип розмови (тімлід своєї команди, адмін). */
+export async function setAiCallType(uniqueid: string, isCargo: boolean, cut = false): Promise<void> {
+  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/type`, { isCargo, cut });
 }
 export async function fetchAiCallCard(uniqueid: string): Promise<AiCallCardResp> {
   const { data } = await api.get<AiCallCardResp>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}`);

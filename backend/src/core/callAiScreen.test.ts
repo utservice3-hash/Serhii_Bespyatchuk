@@ -548,7 +548,7 @@ test("#857 ТИП НА ЕКРАНІ: вкладки «Звіт / Виключе�
   assert.match(sec, /Виключені · \{excludedCount\}/, "🔴 вкладки «Виключені» з лічильником немає");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /\{c\.canEditType && \(/, "🔴 кнопки зміни типу показуються без дозволу сервера");
-  assert.match(drw, /setAiCallType\(r\.uniqueid, isCargo\)/, "🔴 кнопки не пишуть тип");
+  assert.match(drw, /setAiCallType\(r\.uniqueid, isCargo(, cut)?\)/, "🔴 кнопки не пишуть тип");
 });
 
 /**
@@ -793,7 +793,7 @@ test("#885 ВТРАЧЕНИЙ ЛІД І ПЕРЕДЗВІН · ЯДРО: lead_los
     assert.equal(typeVerdict(ty, 0.95, null, true).inReport, false, `🔴 «${ty}» з обіцянкою передзвонити зайшов у звіт`);
   assert.equal(typeVerdict("other", 0.95, { isCargo: false, byName: "Т", at: "" }, true).inReport, false, "🔴 правило перебило ручну позначку");
   const scr = SRC("core/callAiScreen.ts");
-  assert.match(scr, /const callback = \(res\?\.promises \?\? \[\]\)\.some\(\(p\) => p\.who === "manager" && p\.channel === "call"\);\s*const v = typeVerdict\(type, conf, override, callback\);/,
+  assert.match(scr, /const callback = \(res\?\.promises \?\? \[\]\)\.some\(\(p\) => p\.who === "manager" && p\.channel === "call"\);\s*const v = typeVerdict\(type, conf, override, callback(, conflict)?\);/,
     "🔴 правило вмикає не домовленість менеджера ПЕРЕДЗВОНИТИ");
 
   const { teamReport, poolRows } = await import("./firstTouchTeamReport.js");
@@ -2694,4 +2694,82 @@ test("#3725 ТЕКСТ У КОРОТКОМУ КОМЕНТАРІ: нова зад
   const fresh = (await c.raw.query("SELECT t.comments FROM first_touch_auto_tasks j JOIN tasks t ON t.id = j.task_id WHERE j.item_key = 'u3725c'")).rows[0].comments;
   assert.equal(fresh, plan.items[0].description, "🔴 нова задача несе текст лише в описі — у картці його не видно");
   assert.equal((await A.syncFirstTouchAutoTasks(c.db, plan, now)).filled, 0, "🔴 повторний прохід дописує знову");
+});
+
+/**
+ * #3727 — «РОЗМОВА ОБІРВАЛАСЬ» І СУПЕРЕЧНІСТЬ МОДЕЛІ: ПРАВИЛО, РОУТ, ЕКРАН (рішення Романа 05.11.2026, «1 так 2 так»).
+ * Суперечність (`type_conflict`) — у звіті з «Перевірити тип», але ручна позначка сильніша за неї. «Розмова обірвалась» —
+ * ручна позначка «не вантаж» із підписом: зі звіту прибирає. Роут приймає `cut` лише булевим і лише з `isCargo: false`.
+ * Картка має третю кнопку, що шле `cut`, а історія й список підписують її «обірвалась», а не «Це не вантаж».
+ * 🧨 Червоніє, якщо суперечність сховати у «Виключені» або дати їй перебити людину; якщо «обірвалась» лишить розмову
+ * у звіті; якщо роут прийме `cut` з «Це вантаж» чи не-булеве; якщо кнопка не шле `cut` або підпис зникне.
+ */
+test("#3727 «РОЗМОВА ОБІРВАЛАСЬ» І СУПЕРЕЧНІСТЬ МОДЕЛІ: суперечність — у звіті з «Перевірити тип», «обірвалась» — у Виключені; роут і кнопка", async () => {
+  const { typeVerdict } = await import("./callAiType.js");
+  const ov = (isCargo: boolean, cut = false) => ({ isCargo, cut, byName: "Т", at: "2026-11-05T10:00:00Z" });
+  assert.deepEqual(typeVerdict(null, null, null, false, true), { inReport: true, typeCheck: true, source: "model" }, "🔴 суперечність моделі сховано або без «Перевірити тип»");
+  assert.deepEqual(typeVerdict(null, null, null, false, false), { inReport: true, typeCheck: false, source: "none" }, "дзеркало: без суперечності «ще не розібрано» — без позначки");
+  assert.equal(typeVerdict(null, null, ov(false), false, true).inReport, false, "🔴 суперечність моделі перебила ручну позначку людини");
+  assert.equal(typeVerdict("cargo_request", 0.99, ov(false, true)).inReport, false, "🔴 «Розмова обірвалась» лишила розмову у звіті");
+  assert.equal(typeVerdict("carrier", 0.99, ov(true)).inReport, true, "дзеркало: «Це вантаж» і далі повертає у звіт");
+
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.post("/ai-calls/:uniqueid/type"');
+  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  assert.match(body, /const cut = req\.body\?\.cut \?\? false;\s*if \(typeof cut !== "boolean" \|\| \(cut && isCargo\)\) \{ res\.status\(400\)/, "🔴 роут приймає «обірвалась» разом із «Це вантаж» або не-булеве");
+  assert.match(body, /setCallType\(pool, uniqueid, isCargo, \{[^}]+\}, new Date\(\), cut\)/, "🔴 роут не передає «обірвалась» у журнал");
+  const scr = SRC("core/callAiScreen.ts");
+  assert.match(scr, /\[uniqueid, cut \? false : isCargo, cut \? "cut" : null,/, "🔴 журнал пише «обірвалась» без is_cargo = false чи без kind");
+
+  const drawer = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drawer, /onClick=\{\(\) => void set\(false, true\)\}[\s\S]{0,200}>Розмова обірвалась<\/button>/, "🔴 у картці немає кнопки «Розмова обірвалась» або вона не шле cut");
+  assert.match(drawer, /h\.cut \? "«Розмова обірвалась»"/, "🔴 історія підписує «обірвалась» як «Це не вантаж»");
+  const list = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(list, /!r\.inReport && r\.typeOverride\?\.cut \? <span[^>]*>розмова обірвалась<\/span>/, "🔴 у «Виключених» обірвана розмова без свого підпису");
+  assert.match(readFileSync(FE("api.ts"), "utf8"), /\/type`, \{ isCargo, cut \}\)/, "🔴 фронт не шле cut на сервер");
+});
+
+/**
+ * #3728 — ЖИВА СХЕМА: СУПЕРЕЧНІСТЬ І «ОБІРВАЛАСЬ» НАСКРІЗНО. Розбір із `type_conflict` — це розбір («done»), а не збій:
+ * тип «не визначено», «Перевірити тип», причина словами, у звіті. «Розмова обірвалась» — журнал `is_cargo = false` +
+ * `kind = 'cut'`, список і картка це бачать, розмова йде у «Виключені», а автозадача Роману «аналіз не вдався» по ній
+ * закривається. CHECK не пускає «обірвалась» разом із «вантаж».
+ * 🧨 Червоніє, якщо суперечність лишиться «Аналіз не вдався» чи покаже тип моделі як факт; якщо `kind` не дійде до
+ * списку або картки; якщо CHECK зникне; якщо план автозадач не визнає розмову розвʼязаною.
+ */
+test("#3728 ЖИВА СХЕМА: суперечність — розбір із «Перевірити тип»; «обірвалась» — журнал, Виключені, задача Роману закрита; CHECK", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard, setCallType, TYPE_CONFLICT_REASON } = await import("./callAiScreen.js");
+  const A = await import("./firstTouchAutoTasks.js");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel) VALUES (93728,'D93728',8921932,1,'2026-10-17 15:00:00+03','0503728001','ad')`);
+  await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ('z3728','2026-10-17 15:13:00+03','in','ANSWERED',29,31,9011,'380503728001','https://rec/z3728')`);
+  const tid = (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ('z3728','elevenlabs','scribe_v2','done','[{"channel":0,"start":0,"end":2,"text":"алло, доброго дня","lang":"ukr"},{"channel":1,"start":2,"end":3,"text":"ага, так","lang":"ukr"}]'::jsonb) RETURNING id`)).rows[0].id;
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result) VALUES ($1,'google','gemini-3.8-flash','first-touch-v4','done',$2::jsonb)`,
+    [tid, JSON.stringify({ ...RESULT, conversation_type: "call_later", type_confidence: 0.9, type_reason: "незручно говорити", promises: [], objections: [],
+      callback_request: { asked: false, quote: "", deadline_text: "", deadline_kind: "none", deadline_minutes: 0, deadline_date: "" }, type_conflict: "call_later_without_request" })]);
+  const row = async () => (await aiCallsList(c.db, FAKE_AD, "2026-10-17", "2026-10-17", NOW, {})).rows.find((r) => r.uniqueid === "z3728")!;
+  const r0 = await row();
+  assert.ok(r0, "🔴 розмови з суперечністю немає в списку — перевіряти нічого");
+  assert.deepEqual([r0.state, r0.conversationType, r0.typeConfidence, r0.typeCheck, r0.inReport, r0.typeReason],
+    ["done", null, null, true, true, TYPE_CONFLICT_REASON], "🔴 суперечність не дає «не визначено · Перевірити тип» у звіті з причиною словами");
+
+  await setCallType(c.db, "z3728", false, { userId: 1, name: "Тімлід Т" }, new Date("2026-11-05T10:00:00Z"), true);
+  const r1 = await row();
+  assert.deepEqual([r1.inReport, r1.typeOverride?.cut, r1.typeOverride?.isCargo], [false, true, false], "🔴 «Розмова обірвалась» не прибрала розмову зі звіту або підпис загубився");
+  const card = await aiCallCard(c.db, "z3728", true, {});
+  assert.deepEqual(card?.typeHistory.map((h) => [h.cut, h.isCargo, h.byName]), [[true, false, "Тімлід Т"]], "🔴 історія картки не знає, що це «обірвалась»");
+  await setCallType(c.db, "z3728", false, { userId: 2, name: "Адмін А" }, new Date("2026-11-05T11:00:00Z"));
+  assert.equal((await row()).typeOverride?.cut, false, "дзеркало: звичайне «Це не вантаж» не підписане як обірвана");
+  await assert.rejects(c.raw.query(`INSERT INTO call_type_overrides (uniqueid, is_cargo, kind) VALUES ('z3728', true, 'cut')`), /call_type_overrides_cut_not_cargo/,
+    "🔴 CHECK пустив «обірвалась» разом із «вантаж»");
+  await assert.rejects(c.raw.query(`INSERT INTO call_type_overrides (uniqueid, is_cargo, kind) VALUES ('z3728', false, 'other')`), /check/i, "🔴 CHECK пустив невідомий вид позначки");
+
+  const src = { uniqueid: "z3728", calledAt: "2026-10-17T12:13:00Z", kommoIds: [93728], managerName: "М", teamId: null, teamName: null, failure: null,
+    inReport: false, decision: null, dealOutcome: null };
+  const plan = A.planAutoTasks([{ ...src, state: "llm_failed", typeOverride: { isCargo: false } }], new Map(), new Date("2026-11-05T10:00:00Z"), (id) => `k/${String(id)}`);
+  assert.deepEqual([plan.items.length, plan.resolved.has("z3728")], [0, true], "🔴 після «обірвалась» Роману лишається задача «аналіз не вдався»");
+  const plan2 = A.planAutoTasks([{ ...src, inReport: true, state: "llm_failed", typeOverride: null }], new Map(), new Date("2026-11-05T10:00:00Z"), (id) => `k/${String(id)}`);
+  assert.deepEqual([plan2.items.length, plan2.resolved.has("z3728")], [1, false], "дзеркало: без позначки збій і далі стає задачею Роману");
 });

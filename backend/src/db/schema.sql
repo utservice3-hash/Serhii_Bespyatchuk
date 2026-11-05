@@ -4880,6 +4880,12 @@ CREATE TABLE IF NOT EXISTS call_type_overrides (
   set_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_call_type_overrides_call ON call_type_overrides(uniqueid, set_at DESC);
+-- «Розмова обірвалась» (рішення Романа 05.11.2026): третя ручна позначка. Рядок лишається `is_cargo = false` — для
+-- звіту це «не вантаж», а `kind = 'cut'` лише каже, ЯК підписати. NULL — звичайні «Це вантаж» / «Це не вантаж».
+ALTER TABLE call_type_overrides ADD COLUMN IF NOT EXISTS kind TEXT CHECK (kind IN ('cut'));
+DO $$ BEGIN
+  ALTER TABLE call_type_overrides ADD CONSTRAINT call_type_overrides_cut_not_cargo CHECK (kind IS NULL OR is_cargo = false);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 REVOKE ALL ON call_type_overrides FROM ai_readonly;
 
 -- 📝 КОМЕНТАРІ ДО ПЕРШОГО ДОТИКУ (ТЗ «звіт тімліда» 30.09.2026, п.5 і п.6.3): «Чому не озвучено ціну» (`price`) —

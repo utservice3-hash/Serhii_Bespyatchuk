@@ -470,11 +470,12 @@ export function AiCallsSection() {
                           <td style={{ maxWidth: 380 }}>
                             {(r.typeCheck || !r.inReport || r.typeOverride) && (
                               <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 3 }}>
-                                {r.typeCheck && <span className="ftd-chip" title={`Модель не впевнена в типі (${r.conversationType ? TYPE_LABEL[r.conversationType] : "—"}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}`}
+                                {r.typeCheck && <span className="ftd-chip" title={r.conversationType ? `Модель не впевнена в типі (${TYPE_LABEL[r.conversationType]}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}` : r.typeReason ?? "Тип не визначено"}
                                   style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>Перевірити тип</span>}
                                 {r.messengerSignal === true && <span className="ftd-chip" title="Менеджер сам запропонував перейти в месенджер — клієнт не просив (задача 7184)" style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>сам запропонував месенджер</span>}
                                 {!r.inReport && r.transportKind
                                   ? <span className="ftd-chip" title="Не оцінюємо в першому дотику: на такому перевезенні ціну в першій розмові назвати майже неможливо (задача 7183)" style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>не оцінюємо · {TRANSPORT_LABEL[r.transportKind]}</span>
+                                  : !r.inReport && r.typeOverride?.cut ? <span className="ftd-chip" title="Тімлід позначив: розмови по суті не було" style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>розмова обірвалась</span>
                                   : !r.inReport && r.conversationType && <span className="ftd-chip" title={r.typeReason ?? ""} style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>{TYPE_LABEL[r.conversationType]}</span>}
                                 {r.typeOverride && <span className="ftd-sub">позначено вручну{r.typeOverride.byName ? ` · ${r.typeOverride.byName}` : ""}</span>}
                               </div>

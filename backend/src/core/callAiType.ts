@@ -18,7 +18,12 @@ import type { ConversationType } from "./callAiProviders.js";
 export const CALLBACK_RESCUES: ReadonlySet<string> = new Set(["other", "no_dialog"]);
 export const TYPE_CONFIDENCE_MIN = 0.85;
 
-export interface TypeOverride { isCargo: boolean; byName: string | null; at: string }
+/**
+ * Ручна позначка. `cut` (з 05.11.2026, рішення Романа) — «Розмова обірвалась»: третя кнопка поруч із «Це вантаж» /
+ * «Це не вантаж» для розмов, де по суті нічого не сказано. У журналі це `is_cargo = false` + `kind = 'cut'`, тож для
+ * звіту вона важить як «не вантаж» (у «Виключених»), а на екрані підписана чесно — клієнт, найімовірніше, був.
+ */
+export interface TypeOverride { isCargo: boolean; cut?: boolean; byName: string | null; at: string }
 
 export interface TypeVerdict {
   inReport: boolean;
@@ -29,8 +34,10 @@ export interface TypeVerdict {
 }
 
 export function typeVerdict(type: ConversationType | null | undefined, confidence: number | null | undefined,
-  override: TypeOverride | null, callbackPromised = false): TypeVerdict {
+  override: TypeOverride | null, callbackPromised = false, conflict = false): TypeVerdict {
   if (override) return { inReport: override.isCargo, typeCheck: false, source: "manual" };
+  // Модель суперечить сама собі (`type_conflict`, 05.11.2026) — тип невідомий, і людині треба глянути: у звіті, «Перевірити тип».
+  if (conflict) return { inReport: true, typeCheck: true, source: "model" };
   if (!type) return { inReport: true, typeCheck: false, source: "none" };
   // `call_later` (09.10.2026) — клієнт просив передзвонити: це клієнт, і передзвін рахується як обіцянка — у звіті.
   if (type === "cargo_request" || type === "lead_lost" || type === "call_later") return { inReport: true, typeCheck: false, source: "model" };
