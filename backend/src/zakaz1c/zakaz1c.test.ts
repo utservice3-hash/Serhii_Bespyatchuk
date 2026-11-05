@@ -6,7 +6,7 @@ import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
 import {
   actPdfFrom1c, actRefusal, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, canEdit, customerInfoFrom1c, dealFieldsOf,
-  fromCreateInvoiceReply, genesisComment, invoiceAllowed, orgRules, parseInvoiceForm, parseOrganizations, payStateOf, serviceSwaps,
+  fromCreateInvoiceReply, genesisComment, invoiceAllowed, orgRules, parseInvoiceForm, parseOrganizations, payStateOf, serviceLine, serviceSwaps,
   type BankAccount,
 } from "./invoice.js";
 import { WIDGET_TAG, claimPatch, dealOwner } from "./owner.js";
@@ -121,7 +121,7 @@ test("#7103 ФОРМА → 1С: валюта, організація, ПДВ, з
   assert.ok(!("order_date" in raw), "order_date 1С допише в коментар — і той перестане бути як у Genesis");
   assert.equal(body.items.length, 1);
   assert.deepEqual([body.items[0].name, body.items[0].content, body.items[0].price, body.items[0].code],
-    ["Організація міжнародного перевезення", "м. Praha (CZ) – м. Київ (Київська обл.)", 1800, "000000179"]);
+    ["Організація міжнародного перевезення", "Організація міжнародного перевезення: м. Praha (CZ) – м. Київ (Київська обл.)", 1800, "000000179"]);
   assert.equal(body.pdf, true);
   // Кожна послуга — своїм кодом 1С (відповідь 1С 28.10.2026): за назвою «Експедиторські послуги» 1С не знаходить.
   assert.deepEqual(SERVICES.map((x) => x.code), ["000000092", "000000008", "000000179", "000000252", "000000180"], "коди послуг не ті, що дала 1С");
@@ -583,4 +583,62 @@ test("#7133 SQL ВЕБХУКА — ТИПИ ПАРАМЕТРІВ ЯВНО: «щ�
     assert.ok(sw.includes(piece), `у saveWritten параметр без явного типу (${piece}) — Postgres виведе text і запит упаде`);
   }
   assert.doesNotMatch(sw, /THEN \$[23] END/, "у CASE лишився параметр без типу");
+});
+
+/** Випадки рядка послуги: ті самі ганяємо і через сервер, і через копію логіки у вікні (#7135). */
+const LINE_CASES: { it: { service: string; route: string; full: boolean }; cur: string; want: string; why: string }[] = [
+  { it: { service: "Організація перевезення в межах території України за маршрутом", route: "Львів – Київ", full: false }, cur: "UAH",
+    want: "Організація перевезення в межах території України за маршрутом: Львів – Київ", why: "гривня — назва послуги + маршрут" },
+  { it: { service: "Організація перевезення за маршрутом", route: "Kyiv (Ukraine) – Warsaw (Poland)", full: false }, cur: "EUR",
+    want: "Organization of cargo transportation along the route: Kyiv (Ukraine) – Warsaw (Poland)", why: "валюта — англійська назва, як у Genesis" },
+  { it: { service: "Організація перевезення за маршрутом", route: "Київ – Варшава", full: false }, cur: "UAH",
+    want: "Організація перевезення за маршрутом: Київ – Варшава", why: "та сама послуга в гривні — українською" },
+  { it: { service: "Організація міжнародного перевезення", route: "Київ – Прага", full: false }, cur: "EUR",
+    want: "Організація міжнародного перевезення: Київ – Прага", why: "без англійської назви — українська, а не порожньо" },
+  { it: { service: "Організація перевезення за маршрутом", route: "Організація перевезення за маршрутом: Київ – Львів", full: false }, cur: "UAH",
+    want: "Організація перевезення за маршрутом: Київ – Львів", why: "менеджер вписав назву сам — удруге не додаємо" },
+  { it: { service: "Організація перевезення за маршрутом", route: "organization of cargo transportation along the route: Lviv – Kyiv", full: false }, cur: "EUR",
+    want: "organization of cargo transportation along the route: Lviv – Kyiv", why: "англійська назва в маршруті (будь-який регістр) — без дубля" },
+  { it: { service: "Експедиторські послуги", route: "", full: false }, cur: "UAH", want: "Експедиторські послуги", why: "без маршруту — лише назва" },
+  { it: { service: "Організація перевезення за маршрутом", route: "Перевезення вантажу Львів – Київ (2 авто)", full: true }, cur: "EUR",
+    want: "Перевезення вантажу Львів – Київ (2 авто)", why: "«весь рядок» — рівно як написав менеджер, без назви" },
+];
+
+test("#7134 РЯДОК ПОСЛУГИ ЗБИРАЄМО МИ: «назва: маршрут», у валюті — англійська назва; без дубля; «весь рядок» — як написано", () => {
+  // 05.11.2026 1С перестала дописувати назву послуги (рахунок №9277 надрукував лише «львів - київ») — рядок тепер наш.
+  for (const c of LINE_CASES) assert.equal(serviceLine(c.it, c.cur), c.want, c.why);
+  const form = { ...FORM, currency: "EUR", org: "avtomuv", items: [{ service: "Організація перевезення за маршрутом", route: "Kyiv – Riga", qty: 1, price: 10, vat: 0 }] };
+  const p = parseInvoiceForm(form, ctx);
+  assert.equal(p.ok, true, p.ok ? "" : p.why);
+  if (!p.ok) return;
+  assert.equal(p.form.items[0].full, false, "без прапорця рядок вважається ручним");
+  const who = { customerUid: "u", manager: "m", today: TODAY, orgCode: "000000004" };
+  assert.equal(buildCreateInvoiceBody(1, p.form, who).items[0].content, "Organization of cargo transportation along the route: Kyiv – Riga", "createInvoice шле лише маршрут");
+  assert.equal(buildUpdateInvoiceBody("uid", p.form, { manager: "m", dealId: 1, orgCode: "000000004" }).items[0].content,
+    "Organization of cargo transportation along the route: Kyiv – Riga", "«Змінити» шле рядок не так, як «Виставити»");
+  const full = parseInvoiceForm({ ...form, items: [{ ...form.items[0], route: "Freight Kyiv – Riga", full: true }] }, ctx);
+  assert.equal(full.ok && buildCreateInvoiceBody(1, full.form, who).items[0].content, "Freight Kyiv – Riga", "ручний рядок змінено дорогою");
+  // Пара-заборона: ручний рядок порожній — не шлемо в 1С рахунок без змісту.
+  const empty = parseInvoiceForm({ ...form, items: [{ ...form.items[0], route: "  ", full: true }] }, ctx);
+  assert.equal(empty.ok, false, "порожній ручний рядок пройшов");
+  assert.match(empty.ok ? "" : empty.why, /рядок рахунку порожній/);
+});
+
+test("#7135 ВІКНО ПОКАЗУЄ ТОЙ САМИЙ РЯДОК, ЩО ПІДЕ В 1С: назва перед полем, «У рахунку буде», «✎ весь рядок»; без «оновиться за годину»", () => {
+  const js = WIDGET("script.js");
+  // Копію логіки з вікна ганяємо на тих самих випадках, що й сервер: розійдуться — менеджер побачить не те, що надрукує 1С.
+  const src = js.slice(js.indexOf("function enOf("), js.indexOf("function newForm("));
+  const SVC = Object.fromEntries(SERVICES.filter((x) => x.en).map((x) => [x.name, x.en]));
+  const mk = new Function("orgOf", src + "; return { lineOf: lineOf, routeFrom: routeFrom, prefixOf: prefixOf };");
+  const w = mk(() => ({ servicesEn: SVC })) as { lineOf: Function; routeFrom: Function; prefixOf: Function };
+  for (const c of LINE_CASES) assert.equal(w.lineOf({ org: "x", currency: c.cur }, c.it), c.want, `вікно: ${c.why}`);
+  // «↺ як було» повертає з повного рядка лише маршрут — інакше назва задвоїться.
+  assert.equal(w.routeFrom({ org: "x", currency: "EUR" }, { service: "Організація перевезення за маршрутом", route: "Organization of cargo transportation along the route: Kyiv – Riga" }), "Kyiv – Riga");
+  assert.equal(w.routeFrom({ org: "x", currency: "UAH" }, { service: "Експедиторські послуги", route: "Свій текст" }), "Свій текст", "чужий текст обрізано");
+  assert.match(js, /data-z1c-line='" \+ i \+ "'/, "немає підказки «У рахунку буде»");
+  assert.match(js, /if \(fld === "route"\) root\(\)\.find\("\[data-z1c-line='" \+ i \+ "'\]"\)/, "підказка не оновлюється під час введення");
+  assert.match(js, /if \(fld === "service"\) \{ if \(it\.full\) it\.changed = true; render\(\); return; \}/, "зміна послуги не оновлює назву в рядку");
+  assert.match(js, /a === "full"[\s\S]{0,120}fi\.route = lineOf\(f, fi\); fi\.full = true/, "«✎ весь рядок» не переносить готовий текст");
+  assert.doesNotMatch(js, /оновиться за годину/, "оплату 1С шле вебхуком — «оновиться за годину» вводить в оману");
+  assert.match(MOUNT(), /servicesEn: Object\.fromEntries\(servicesFor\(o\.key\)\.filter\(\(x\) => x\.en\)/, "вікно не отримує англійські назви");
 });

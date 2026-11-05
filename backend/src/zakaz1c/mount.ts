@@ -61,6 +61,7 @@ function orgsForWindow(banks: Map<string, BankAccount[]> | null) {
       key: o.key, short: o.short, name: o.name, match: o.match, available: !!o.code && !noBanks,
       waits: o.waits ?? (noBanks ? ONEC_WAITS.fopBanks : null),
       vatTypes: vatTypesFor(o), itemVats: itemVatsFor(o), services: servicesFor(o.key).map((x) => x.name),
+      servicesEn: Object.fromEntries(servicesFor(o.key).filter((x) => x.en).map((x) => [x.name, x.en])),
       banks: own ? own.map((b) => ({ uid: b.uid, label: b.bank || b.name, currency: b.currency, isMain: b.isMain })) : null,
     };
   });

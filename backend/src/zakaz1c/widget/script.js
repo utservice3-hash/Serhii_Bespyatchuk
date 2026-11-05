@@ -105,7 +105,11 @@ define(["jquery"], function ($) {
       + P + " .msg{border-radius:3px;padding:8px 12px;font-size:13px;margin-top:10px}"
       + P + " .msg.err{background:var(--bad);color:var(--badt)}" + P + " .msg.ok{background:var(--ok);color:var(--okt)}" + P + " .msg.warn{background:var(--part);color:var(--partt)}"
       + P + " .tot{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:var(--mut)}" + P + " .tot b{color:var(--txt)}"
-      + P + " .hint{display:block;margin-top:4px;font-size:11px;color:var(--mut)}"
+      + P + " .hint{display:block;margin-top:4px;font-size:11px;color:var(--mut)}" + P + " .hint b{font-weight:600;color:var(--txt);overflow-wrap:anywhere}"
+      + P + " .warnt{color:var(--partt)}" + P + " .line{display:grid;gap:4px}"
+      + P + " .pfxrow{display:flex;align-items:center;gap:6px}" + P + " .pfxrow .in{flex:1;min-width:120px}"
+      + P + " .pfx{font-size:12px;color:var(--mut);max-width:45%;line-height:1.25}"
+      + P + " .lnk{background:none;border:0;padding:0;color:var(--mut);font-size:11.5px;cursor:pointer;text-decoration:underline}"
       + P + " .prev{border:1px dashed var(--line);border-radius:4px;padding:8px 10px;font-size:12.5px;display:grid;gap:4px;overflow-wrap:anywhere}"
       + P + " .x{background:none;border:0;color:var(--mut);font-size:18px;cursor:pointer;padding:0 4px}"
       + P + " table{width:100%;border-collapse:collapse;margin-top:8px}"
@@ -122,6 +126,23 @@ define(["jquery"], function ($) {
     function invoices() { return state.data.invoices || []; }
     function lastInv() { return invoices()[0] || null; }
     function routeOf(lead) { return lead.cityFrom && lead.cityTo ? lead.cityFrom + " – " + lead.cityTo : ""; }
+    /** Рядок послуги в рахунку — те саме, що складе сервер (`serviceLine` в invoice.ts): 1С друкує рівно його. */
+    function enOf(f, it) { var o = orgOf(f.org); return (o.servicesEn && o.servicesEn[it.service]) || ""; }
+    function prefixOf(f, it) { var en = enOf(f, it); return f.currency !== "UAH" && en ? en : it.service; }
+    function lineOf(f, it) {
+      var text = String(it.route || "").trim();
+      if (it.full) return text;
+      if (!text) return prefixOf(f, it);
+      var low = text.toLowerCase();
+      if ([it.service, enOf(f, it)].some(function (n) { return n && low.indexOf(n.toLowerCase()) === 0; })) return text;
+      return prefixOf(f, it) + ": " + text;
+    }
+    /** «↺ як було»: з повного рядка — назад лише маршрут. */
+    function routeFrom(f, it) {
+      var text = String(it.route || "").trim();
+      var hit = [prefixOf(f, it), it.service, enOf(f, it)].filter(function (n) { return n && text.toLowerCase().indexOf(n.toLowerCase()) === 0; })[0];
+      return hit ? text.slice(hit.length).replace(/^\s*:?\s*/, "") : text;
+    }
 
     /** Ключ форми для 1С (`request_id`): одна відкрита форма — один рахунок, хоч скільки разів натиснуто «Виставити». */
     function uuid() {
@@ -143,19 +164,19 @@ define(["jquery"], function ($) {
         requestId: uuid(), editUid: null,
         org: o.key, currency: "UAH", bankUid: defaultBank(o, "UAH"), agreement: "", vatType: o.vatTypes[0], dueDate: addDays(d.today, 7), actDate: "",
         crmComment: "", stamp: true,
-        items: [{ service: o.services[0], route: routeOf(d.lead), qty: 1, price: d.lead.price || "", vat: o.itemVats[0] }]
+        items: [{ service: o.services[0], route: routeOf(d.lead), full: false, qty: 1, price: d.lead.price || "", vat: o.itemVats[0] }]
       };
     }
     /** «Змінити»: та сама форма з даними рахунку з журналу. Організація й валюта зафіксовані (так і в 1С). */
     function editForm(inv) {
       var o = orgOf(inv.org_key) || state.data.orgs[0];
-      var items = (inv.items || []).map(function (it) { return { service: it.service, route: it.route, qty: it.qty, price: it.price, vat: it.vat }; });
+      var items = (inv.items || []).map(function (it) { return { service: it.service, route: it.route, full: it.full === true, qty: it.qty, price: it.price, vat: it.vat }; });
       return {
         requestId: "", editUid: inv.invoice_uid, editNo: inv.number_print,
         org: o.key, currency: inv.currency, bankUid: inv.bank_uid || defaultBank(o, inv.currency), agreement: inv.agreement_uid || "",
         vatType: inv.vat_type && o.vatTypes.indexOf(inv.vat_type) !== -1 ? inv.vat_type : o.vatTypes[0],
         dueDate: inv.due_date || "", actDate: inv.act_date || "", crmComment: inv.crm_comment || "", stamp: inv.stamp !== false,
-        items: items.length ? items : [{ service: o.services[0], route: "", qty: 1, price: inv.total, vat: o.itemVats[0] }]
+        items: items.length ? items : [{ service: o.services[0], route: "", full: false, qty: 1, price: inv.total, vat: o.itemVats[0] }]
       };
     }
 
@@ -174,7 +195,7 @@ define(["jquery"], function ($) {
       if (p.k === "part") return { k: "part", t: "частково " + money(p.paid) };
       if (p.k === "overdue") return { k: "bad", t: "прострочено" };
       if (p.k === "missing") return { k: "wait", t: "уточнити в бухгалтерії" };
-      if (p.k === "pending") return { k: "wait", t: "оновиться за годину" };
+      // «pending» (рахунок новіший за щогодинний знімок) — для менеджера те саме «чекає оплату»: оплату 1С тепер шле вебхуком за секунди.
       return { k: "wait", t: "чекає оплату" };
     }
     function chip(c) { return "<span class='chip " + c.k + "'>" + esc(c.t) + "</span>"; }
@@ -194,7 +215,6 @@ define(["jquery"], function ($) {
       if (all) { k = "ok"; t = "оплачено повністю"; }
       else if (list.some(function (i) { return i.pay.k === "overdue"; })) { k = "bad"; t = "є прострочка"; }
       else if (list.some(function (i) { return Number(i.pay.paid) > 0; })) { k = "part"; t = "оплачено частково"; }
-      else if (list.length && list.every(function (i) { return i.pay.k === "pending"; })) { t = "оновиться за годину"; }
       var cur = Object.keys(total).sort();
       return {
         chip: { k: k, t: t }, all: !!all, ratio: list.length ? Math.round(share / list.length * 100) : 0,
@@ -288,7 +308,7 @@ define(["jquery"], function ($) {
           + (f.items.length > 1 ? "<button class='x' data-z1c='rm' data-i='" + i + "' aria-label='Прибрати позицію'>✕</button>" : "") + "</div>"
           + "<label><span class='lbl'>Послуга</span><select class='in' data-i='" + i + "' data-f='service'>" + o.services.map(function (n) {
             return "<option" + (it.service === n ? " selected" : "") + ">" + esc(n) + "</option>"; }).join("") + "</select></label>"
-          + "<label><span class='lbl'>Маршрут (у 1С стане після назви послуги)</span><input class='in' data-i='" + i + "' data-f='route' value='" + esc(it.route) + "' placeholder='м. Київ (Київська обл.) – м. Львів (Львівська обл.)'></label>"
+          + lineHtml(f, it, i)
           + "<div class='grid3'><label><span class='lbl'>К-ть</span><input class='in' type='number' min='0' step='1' data-i='" + i + "' data-f='qty' value='" + esc(it.qty) + "'></label>"
           + "<label><span class='lbl'>Ціна, " + esc(f.currency) + "</span><input class='in' type='number' min='0' step='0.01' data-i='" + i + "' data-f='price' value='" + esc(it.price) + "'></label>"
           + "<label><span class='lbl'>ПДВ</span><select class='in' data-i='" + i + "' data-f='vat'" + (o.itemVats.length < 2 ? " disabled" : "") + ">" + o.itemVats.map(function (r) {
@@ -310,6 +330,20 @@ define(["jquery"], function ($) {
         + "Загружен из amoCRM по сделке №" + esc(d.lead.id) + "</b></span></div>"
         + "<div class='row between'><div class='tot' data-z1c-tot>" + totHtml(t, f) + "</div><span class='row'><button class='btn' data-z1c='close'>Скасувати</button>"
         + "<button class='btn main' data-z1c='submit'" + (state.busy ? " disabled" : "") + ">" + (state.busy ? "Відправляємо в 1С…" : locked ? "Зберегти зміни в 1С" : "Виставити в 1С") + "</button></span></div></div>";
+    }
+    /**
+     * Рядок рахунку: назва послуги стоїть перед полем маршруту й не редагується (щоб менеджер не продублював її);
+     * під полем — увесь рядок, як його надрукує 1С. «✎ редагувати весь рядок» — одне поле на весь текст, як у Genesis.
+     */
+    function lineHtml(f, it, i) {
+      var head = "<div class='row between'><span class='lbl' style='margin:0'>" + (it.full ? "Рядок у рахунку (весь)" : "Маршрут") + "</span>"
+        + "<button class='lnk' data-z1c='" + (it.full ? "unfull" : "full") + "' data-i='" + i + "'>" + (it.full ? "↺ як було" : "✎ редагувати весь рядок") + "</button></div>";
+      var field = it.full
+        ? "<input class='in' data-i='" + i + "' data-f='route' value='" + esc(it.route) + "'>"
+        : "<div class='pfxrow'><span class='pfx' title='Назва послуги — підставляється сама'>" + esc(prefixOf(f, it)) + ":</span>"
+          + "<input class='in' data-i='" + i + "' data-f='route' value='" + esc(it.route) + "' placeholder='" + (f.currency === "UAH" ? "м. Київ (Київська обл.) – м. Львів (Львівська обл.)" : "Kyiv (Ukraine) – Warsaw (Poland)") + "'></div>";
+      var warn = it.full && it.changed ? "<span class='hint warnt'>послугу чи валюту змінено — перевірте текст рядка</span>" : "";
+      return "<div class='line'>" + head + field + warn + "<span class='hint'>У рахунку буде: <b data-z1c-line='" + i + "'>«" + esc(lineOf(f, it)) + "»</b></span></div>";
     }
     function totHtml(t, f) {
       return "Сума <b>" + money(t.sub) + "</b>"
@@ -459,15 +493,18 @@ define(["jquery"], function ($) {
         if (f.editUid && o.key !== f.org) { say("warn", "Організацію рахунку змінити не можна — виставте новий рахунок."); render(); return; }
         if (!o.available) { say("warn", o.waits); render(); return; }
         f.org = o.key; f.bankUid = defaultBank(o, f.currency); f.agreement = ""; f.vatType = o.vatTypes[0];
-        f.items.forEach(function (it) { if (o.services.indexOf(it.service) === -1) it.service = o.services[0]; it.vat = o.itemVats[0]; });
+        f.items.forEach(function (it) { if (o.services.indexOf(it.service) === -1) { it.service = o.services[0]; if (it.full) it.changed = true; } it.vat = o.itemVats[0]; });
         state.msg = null;
       }
       else if (a === "cur") {
         if (f.editUid && String(b.data("v")) !== f.currency) { say("warn", "Валюту рахунку змінити не можна — виставте новий рахунок."); render(); return; }
+        if (String(b.data("v")) !== f.currency) f.items.forEach(function (it) { if (it.full) it.changed = true; });
         f.currency = String(b.data("v")); f.agreement = ""; f.bankUid = defaultBank(orgOf(f.org), f.currency);
       }
       else if (a === "bank") f.bankUid = String(b.data("v"));
-      else if (a === "add") { var oo = orgOf(f.org); f.items.push({ service: oo.services[0], route: "", qty: 1, price: "", vat: oo.itemVats[0] }); }
+      else if (a === "add") { var oo = orgOf(f.org); f.items.push({ service: oo.services[0], route: "", full: false, qty: 1, price: "", vat: oo.itemVats[0] }); }
+      else if (a === "full") { var fi = f.items[Number(b.data("i"))]; fi.route = lineOf(f, fi); fi.full = true; fi.changed = false; }
+      else if (a === "unfull") { var ui = f.items[Number(b.data("i"))]; ui.route = routeFrom(f, ui); ui.full = false; ui.changed = false; }
       else if (a === "rm") f.items.splice(Number(b.data("i")), 1);
       else if (a === "submit") { submit(); return; }
       else if (a === "customer") { createCustomer(); return; }
@@ -491,7 +528,13 @@ define(["jquery"], function ($) {
       if (!f) return;
       var k = el.data("k"), i = el.data("i");
       if (k) f[k] = el.is(":checkbox") ? el.prop("checked") : el.val();
-      else if (i !== undefined) f.items[Number(i)][el.data("f")] = el.val();
+      else if (i !== undefined) {
+        var it = f.items[Number(i)], fld = el.data("f");
+        it[fld] = el.val();
+        // Інша послуга — інша назва в рядку: перемальовуємо (це select, курсор не губиться). Ручний рядок не чіпаємо — лише попереджаємо.
+        if (fld === "service") { if (it.full) it.changed = true; render(); return; }
+        if (fld === "route") root().find("[data-z1c-line='" + i + "']").text("«" + lineOf(f, it) + "»");
+      }
       root().find("[data-z1c-tot]").html(totHtml(calc(f), f));
     }
 
