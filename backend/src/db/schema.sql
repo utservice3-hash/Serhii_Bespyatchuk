@@ -4646,9 +4646,8 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS ttn_files INTEGER;
 -- Знімок фіксації місяця тепер несе всі три числа; `ttn_present` = прикріплено − не збігся.
 ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS ttn_attached INTEGER;
 ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS route_mismatch INTEGER;
--- 📄 ТТН «ЗА ДОКУМЕНТАМИ» (Даша, рішення Романа 04.11.2026): угода без файла ТТН теж має ТТН, якщо розхід безнал (з ПДВ
--- чи без, будь-який «Расход 1–5»), «Оплачено из 1с» і «Оригиналы получено». Перші два — з `deal_fin_fields` (синк
--- `syncDealFinance`), третє синк пише сюди: поле Kommo «Оригиналы получено» (2097501, checkbox). NULL = синк ще не бачив
+-- 📄 ТТН «ЗА ДОКУМЕНТАМИ» (Даша, рішення Романа 04.11.2026; без розходу з 05.11.2026): угода без файла ТТН теж має ТТН,
+-- якщо «Оплачено из 1с» (з `deal_fin_fields`, синк `syncDealFinance`) і «Оригиналы получено» — його синк пише сюди: поле Kommo «Оригиналы получено» (2097501, checkbox). NULL = синк ще не бачив
 -- угоду після появи колонки — «не синхронізовано», НЕ «ні». У знімку — скільки зараховано за документами.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS originals_received BOOLEAN;
 ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS ttn_by_docs INTEGER;

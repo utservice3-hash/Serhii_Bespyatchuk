@@ -7,7 +7,7 @@
  *  • «прикріплено» = серед ТИХ САМИХ угод ті, де в полі «ТТН» (2097291) є файл (`deals.ttn_files`,
  *    пише `syncKommo`); NULL — «не синхронізовано», окремим числом, НЕ як 0;
  *  • «наявні» = прикріплено − позначені Дашею «маршрут не збігся» (звірка документа — людина)
- *    + «за документами» (04.11.2026): без файла ТТН, але розхід безнал, «Оплачено из 1с» і «Оригиналы получено»
+ *    + «за документами» (04.11.2026, без розходу з 05.11): без файла ТТН, але «Оплачено из 1с» і «Оригиналы получено»
  *    (правило — `TTN_BY_DOCS_SQL`). Угода з файлом рахується лише як прикріплена, двічі — ніколи;
  *  • % = наявні ÷ угоди, норма 70%; без угод — «—», а не 0%.
  *  • «Зафіксувати місяць» — знімок трьох чисел (CRM потім зміниться, а перевірка стосувалась тих).
@@ -109,11 +109,11 @@ export async function ttnDealsOf(db: Db, ym: string, managerId: number, kommoBas
   if (!isYm(ym)) throw new BaError(400, "Місяць у форматі РРРР-ММ");
   const { from, to } = monthBounds(ym);
   const r = await db.query<{ kommo_id: string; name: string | null; client_name: string | null; closed_on: string; ttn_files: number | null; note: string | null; marked: boolean;
-    by_docs: boolean; originals: boolean | null; paid: boolean; out_beznal: boolean }>(
+    by_docs: boolean; originals: boolean | null; paid: boolean }>(
     `SELECT d.kommo_id, d.name, d.client_name, to_char((d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv'), 'YYYY-MM-DD') AS closed_on,
             d.ttn_files, m.note, (m.kommo_id IS NOT NULL) AS marked,
             (${NO_FILE} AND ${TTN_BY_DOCS_SQL}) IS TRUE AS by_docs, d.originals_received AS originals,
-            (f.paid1c IS TRUE) AS paid, (f.out_vat <> 0 OR f.out_novat <> 0) IS TRUE AS out_beznal
+            (f.paid1c IS TRUE) AS paid
        FROM deals d LEFT JOIN ba_ttn_route_mismatch m ON m.kommo_id = d.kommo_id
        LEFT JOIN deal_fin_fields f ON f.kommo_id = d.kommo_id
       WHERE ${TTN_DEALS_WHERE} AND d.manager_id = $6
@@ -122,8 +122,8 @@ export async function ttnDealsOf(db: Db, ym: string, managerId: number, kommoBas
   return r.rows.map((x) => ({
     kommoId: Number(x.kommo_id), name: x.name ?? "", client: x.client_name ?? "", closedOn: x.closed_on,
     ttnFiles: x.ttn_files, mismatch: x.marked ? { note: x.note ?? "" } : null,
-    // Чому зараховано без файла — або чого бракує: три умови «за документами» окремо, щоб було видно, що саме не так.
-    byDocs: x.by_docs, docs: { outBeznal: x.out_beznal, paid1c: x.paid, originals: x.originals },
+    // Чому зараховано без файла — або чого бракує: обидві умови «за документами» окремо, щоб було видно, що саме не так.
+    byDocs: x.by_docs, docs: { paid1c: x.paid, originals: x.originals },
     url: `${base}/leads/detail/${x.kommo_id}`,
   }));
 }

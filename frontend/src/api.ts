@@ -6160,8 +6160,8 @@ export interface BaTtnRow {
 }
 export interface BaTtnDeal {
   kommoId: number; name: string; client: string; closedOn: string; ttnFiles: number | null; mismatch: { note: string } | null; url: string;
-  /** Зараховано без файла ТТН (04.11.2026) і три умови окремо; `originals: null` — ще не синхронізовано. */
-  byDocs: boolean; docs: { outBeznal: boolean; paid1c: boolean; originals: boolean | null };
+  /** Зараховано без файла ТТН (04.11.2026) і обидві умови окремо; `originals: null` — ще не синхронізовано. */
+  byDocs: boolean; docs: { paid1c: boolean; originals: boolean | null };
 }
 export const fetchBaTtn = async (month: string) => (await api.get<{ month: string; rows: BaTtnRow[] }>("/ba/ttn", { params: { month } })).data;
 export const fetchBaTtnDeals = async (month: string, managerId: number) => (await api.get<{ deals: BaTtnDeal[] }>(`/ba/ttn/${month}/${managerId}/deals`)).data.deals;

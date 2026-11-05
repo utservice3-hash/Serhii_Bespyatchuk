@@ -11,7 +11,7 @@ import { fmtDate, fmtTs, type Toast } from "./BaShared";
  *  • «Угод, де потрібна ТТН» — з CRM за фільтром Даші; поруч посилання на той самий фільтр у Kommo;
  *  • «Прикріплено ТТН» — з поля Kommo «ТТН» серед тих самих угод;
  *  • «Маршрут не збігся» — позначки Даші на угодах (звірку документа робить людина);
- *  • «За документами» (04.11.2026, Даша): файла ТТН немає, але розхід безнал, «Оплачено из 1с» і «Оригиналы получено»;
+ *  • «За документами» (04.11.2026, Даша): файла ТТН немає, але «Оплачено из 1с» і «Оригиналы получено»;
  *  • «Наявні» = прикріплено − не збігся + за документами; % = наявні ÷ угоди, норма 70%; без угод — «—».
  * Розкриття менеджера — його угоди: де ТТН немає, і кнопка «маршрут не збігся» біля прикріплених.
  * «Зафіксувати місяць» — знімок трьох чисел; пізніші зміни в CRM видно поруч.
@@ -111,7 +111,7 @@ export function BaTtn({ meta, toast }: { meta: BaMeta; toast: Toast }) {
       )}
       <div className="hr-sect hr-muted">
         Усе рахується з CRM: угоди — успішні безготівкові (з ПДВ і без), закриті в цьому місяці, по відповідальному; «прикріплено» — є файл у полі «ТТН»;
-        «за документами» — файла немає, але розхід безнал, «Оплачено из 1с» і «Оригиналы получено».
+        «за документами» — файла немає, але «Оплачено из 1с» і «Оригиналы получено».
         Звірку маршруту робить людина: розкрийте менеджера й позначте угоду «маршрут не збігся» — її віднімуть із наявних. Норма — {norm}%.
       </div>
     </div>
@@ -140,7 +140,7 @@ function TtnDeals({ month, managerId, toast, onChanged }: { month: string; manag
   if (!deals) return <p className="loading-text" style={{ margin: 8 }}>Завантаження угод…</p>;
   const without = deals.filter((d) => d.ttnFiles === 0 && !d.byDocs).length;
   // Чого бракує угоді без файла, щоб зарахуватись «за документами» — словами, а не просто «немає».
-  const lacks = (d: BaTtnDeal) => [!d.docs.outBeznal && "розхід безнал", !d.docs.paid1c && "«Оплачено из 1с»", d.docs.originals === false && "«Оригиналы получено»"].filter(Boolean).join(", ");
+  const lacks = (d: BaTtnDeal) => [!d.docs.paid1c && "«Оплачено из 1с»", d.docs.originals === false && "«Оригиналы получено»"].filter(Boolean).join(", ");
   return (
     <div style={{ padding: "4px 8px 8px" }}>
       <div className="hr-muted" style={{ marginBottom: 6 }}>Угод: {deals.length} · без ТТН: <b style={{ color: without ? "var(--danger)" : undefined }}>{without}</b></div>
@@ -154,7 +154,7 @@ function TtnDeals({ month, managerId, toast, onChanged }: { month: string; manag
               <td>{fmtDate(d.closedOn)}</td>
               <td>{d.ttnFiles == null ? <span className="hr-muted">не синхронізовано</span>
                 : d.ttnFiles > 0 ? <span className="hr-pill ok">є{d.ttnFiles > 1 ? ` · ${d.ttnFiles}` : ""}</span>
-                : d.byDocs ? <span className="hr-pill ok" title="Файла ТТН немає, але розхід безнал, «Оплачено из 1с» і «Оригиналы получено»">за документами</span>
+                : d.byDocs ? <span className="hr-pill ok" title="Файла ТТН немає, але «Оплачено из 1с» і «Оригиналы получено»">за документами</span>
                 : <><span className="hr-pill dg">немає</span>{d.docs.originals == null
                     ? <span className="hr-muted"> · оригінали не синхронізовано</span>
                     : <span className="hr-muted"> · бракує: {lacks(d)}</span>}</>}</td>
