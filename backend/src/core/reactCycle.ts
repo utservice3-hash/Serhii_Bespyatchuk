@@ -12,7 +12,8 @@
  */
 import {
   type CycleRow, type Decision, type PoolReason,
-  inReact, cycleMonthOf, allowedDecisions, statusOf, transferMonday, daysLeft,
+  inReact, cycleMonthOf, allowedDecisions, transferMonday, daysLeft,
+  LEADGEN_POOL_ENABLED, decisionsNow, statusNow,
 } from "./reactCycleRules.js";
 
 export interface Db {
@@ -206,15 +207,17 @@ export async function isLeadgenManager(db: Db, managerId: number | null | undefi
 export function cycleView(lastInvoice: string | null, rows: CycleRow[] | undefined, todayYmd: string) {
   const cm = cycleMonthOf(lastInvoice);
   const row = currentRow(rows, lastInvoice);
-  const dl = transferMonday(cm, row);
+  // 🚫 Передачу лідгенам вимкнено (`LEADGEN_POOL_ENABLED`): строку передачі немає, «лідгенам» не пропонується,
+  // рядок пулу показується звичайною реактивацією.
+  const dl = LEADGEN_POOL_ENABLED ? transferMonday(cm, row) : null;
   return {
     cycleMonth: cm,
     lastInvoice,
-    status: statusOf(row),
-    poolReason: row?.poolReason ?? null,
+    status: statusNow(row),
+    poolReason: LEADGEN_POOL_ENABLED ? row?.poolReason ?? null : null,
     /** Понеділок, з якого клієнт до передачі (`YYYY-MM-DD`); черга по 100 може відсунути на тиждень-другий. */
     deadline: dl,
     daysLeft: dl ? daysLeft(dl, todayYmd) : null,
-    allowed: allowedDecisions(row),
+    allowed: decisionsNow(row),
   };
 }

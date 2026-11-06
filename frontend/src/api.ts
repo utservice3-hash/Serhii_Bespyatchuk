@@ -4788,7 +4788,9 @@ export interface ClientPlansResp {
   /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
   leadgenPool?: { canSee: boolean; canTake: boolean };
   /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
-  reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number };
+  reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number;
+    /** Чи ввімкнена передача лідгенам (`LEADGEN_POOL_ENABLED`); з 06.11.2026 — ні. */
+    leadgenPool?: boolean };
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];

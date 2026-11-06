@@ -703,7 +703,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           <>
             <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}
               title="Стан рішення по клієнту в поточному циклі реактивації — з сервера">Рішення:</span>
-            {([["all", "усі"], ["waiting", "чекають рішення"], ["self", "реактивую сам"], ["pool", "у пулі лідгенів"]] as const).map(([k, label]) => (
+            {/* 🚫 Передачу лідгенам вимкнено — «у пулі» не показуємо (сервер віддає таких як «чекають»). */}
+            {(data.reactRules?.leadgenPool === false
+              ? ([["all", "усі"], ["waiting", "чекають рішення"], ["self", "реактивую сам"]] as const)
+              : ([["all", "усі"], ["waiting", "чекають рішення"], ["self", "реактивую сам"], ["pool", "у пулі лідгенів"]] as const)).map(([k, label]) => (
               <button key={k} onClick={() => setCycleSub(k)}
                 style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
                          border: `1px solid ${cycleSub === k ? "#6d28d9" : "#d1d5db"}`,
@@ -757,7 +760,13 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             style={{ border: "none", background: "transparent", cursor: "pointer", color: "#b91c1c", fontSize: 15 }}>×</button>
         </div>
       )}
-      {tab === "react" && data.reactRules && (
+      {tab === "react" && data.reactRules?.leadgenPool === false && (
+        <div style={{ ...S.card, fontSize: 12.5, color: "#4b5563", lineHeight: 1.55, borderLeft: "3px solid #6d28d9" }}>
+          <b>Реактивація</b> — клієнти без виставленого рахунку {data.reactRules.quietMonths} повні календарні місяці
+          (з 4-го місяця). Передачу лідгенам вимкнено з 01.11.2026: клієнт лишається за своїм менеджером.
+        </div>
+      )}
+      {tab === "react" && data.reactRules && data.reactRules.leadgenPool !== false && (
         <div style={{ ...S.card, fontSize: 12.5, color: "#4b5563", lineHeight: 1.55, borderLeft: "3px solid #6d28d9" }}>
           <b>Реактивація</b> — клієнти без виставленого рахунку {data.reactRules.quietMonths} повні календарні місяці
           (з 4-го місяця). Натисніть «🙋 Реактивую сам» або «🎯 Передати лідгенам». Без рахунку й без рішення
