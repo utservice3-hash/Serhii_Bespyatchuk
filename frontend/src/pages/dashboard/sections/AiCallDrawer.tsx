@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, closeAiCallDeal, revertAiCallDeal, sendAiCallFeedback, type AiCallCardResp, type AiQuoted } from "../../../api";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, WAIT_MANAGER_COMMENT_UA, PRICE_FORM_UI, PRICE_FORM_FROM_UA, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, excludedLabel, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, WAIT_MANAGER_COMMENT_UA, PRICE_FORM_UI, PRICE_FORM_FROM_UA, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { ChecklistBlock } from "./FirstTouchChecklist";
 import "./hiring.css";
@@ -168,7 +168,7 @@ function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void 
     <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13.5, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <b>Тип розмови:</b>
-        {r.typeOverride?.cut ? "розмова обірвалась" : r.conversationType ? TYPE_LABEL[r.conversationType] : <span style={{ color: "var(--text-muted)" }}>ще не визначено</span>}
+        {(!r.inReport ? excludedLabel(r) : r.conversationType ? TYPE_LABEL[r.conversationType] : null) ?? <span style={{ color: "var(--text-muted)" }}>ще не визначено</span>}
         {r.typeConfidence != null && <span style={{ color: "var(--text-muted)", fontSize: 12.5 }}>· упевненість {Math.round(r.typeConfidence * 100)}%</span>}
         {r.typeCheck && <Chip tone="warn">Перевірити тип</Chip>}
         <Chip tone={r.inReport ? "ok" : "muted"}>{r.inReport ? "у звіті" : "у виключених"}</Chip>

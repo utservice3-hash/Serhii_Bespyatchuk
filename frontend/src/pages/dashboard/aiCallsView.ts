@@ -204,6 +204,18 @@ export const TYPE_LABEL: Readonly<Record<ConversationTypeT, string>> = {
   other: "Інше",
 };
 
+/**
+ * Чому розмова у «Виключених» — одним підписом (06.11.2026). Ручна позначка «Розмова обірвалась» — так і пишемо;
+ * «незручно говорити» без ручної позначки там лише одне — клієнт передзвонить сам («клієнт просив передзвонити пізніше»);
+ * решта — тип моделі.
+ */
+export const CLIENT_CALLS_BACK_UA = "клієнт просив передзвонити пізніше";
+export function excludedLabel(r: { conversationType: ConversationTypeT | null; typeOverride: { cut?: boolean } | null }): string | null {
+  if (r.typeOverride?.cut) return "розмова обірвалась";
+  if (r.conversationType === "call_later" && !r.typeOverride) return CLIENT_CALLS_BACK_UA;
+  return r.conversationType ? TYPE_LABEL[r.conversationType] : null;
+}
+
 /** Хвилини реакції коротко: «45 хв», «3 год 10 хв», «2 дн 3 год». */
 export function fmtMinutes(m: number): string {
   if (m < 60) return `${String(m)} хв`;

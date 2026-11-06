@@ -389,11 +389,6 @@ export interface AnalysisResult {
   conversation_type?: ConversationType; type_confidence?: number; type_reason?: string; price_value?: string;
   /** Рубрика `first-touch-v4`: клієнт сам попросив передзвонити. У старіших рядках поля немає. */
   callback_request?: CallbackRequest;
-  /**
-   * Позначка НАША, не моделі (з 05.11.2026): модель суперечить сама собі — тип `call_later`, а прохання передзвонити
-   * немає. Розбір не відкидається, тип показується як «не визначено · Перевірити тип», рішення — за людиною.
-   */
-  type_conflict?: "call_later_without_request";
   summary: string;
   manager_channel: "0" | "1" | "unknown";
   client_request: string;
@@ -437,11 +432,10 @@ export function validateAnalysis(x: unknown): { ok: true; value: AnalysisResult 
   const cb = o.callback_request as Record<string, unknown> | undefined;
   if (!cb || typeof cb.asked !== "boolean" || !isStr(cb.quote) || !isStr(cb.deadline_text) || !["minutes", "day", "none"].includes(cb.deadline_kind as string)
     || typeof cb.deadline_minutes !== "number" || !isStr(cb.deadline_date)) return { ok: false, why: "callback_request не тієї форми (рубрика first-touch-v4)" };
-  // Суперечність не виправляємо мовчки: «просив передзвонити» без прохання — модель помилилась в одному з двох полів.
-  // До 05.11.2026 така відповідь валила весь розбір («Аналіз не вдався» — 6 розмов, 5 із них коротші за 40 с, обрив
-  // після привітання). Рішення Романа 05.11.2026: розбір лишається, тип — «не визначено · Перевірити тип» (`typeVerdict`).
-  const conflict = o.conversation_type === "call_later" && !cb.asked;
-  return { ok: true, value: (conflict ? { ...o, type_conflict: "call_later_without_request" } : o) as unknown as AnalysisResult };
+  // `call_later` без прохання — НЕ суперечність (Роман 06.11.2026): «я вам пізніше наберу, я за кермом» — клієнтові
+  // незручно, і передзвонить він САМ, тож нас ні про що не просили. До 05.11.2026 така відповідь валила розбір («Аналіз
+  // не вдався», 6 розмов). Куди її класти — вирішує `typeVerdict` (`clientCallsBack`): у «Виключені».
+  return { ok: true, value: o as unknown as AnalysisResult };
 }
 
 /** Нормалізація для пошуку цитати: регістр, апострофи, розділові знаки, пробіли. */

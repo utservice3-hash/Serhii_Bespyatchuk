@@ -9,6 +9,8 @@ import type { ConversationType } from "./callAiProviders.js";
  *   • будь-який інший тип з упевненістю < 0.85 — теж у звіті, з позначкою «Перевірити тип»: краще зайвий рядок у
  *     звіті, ніж схований клієнт;
  *   • решта — у «Виключених», з типом і причиною.
+ * 06.11.2026: `call_later` (незручно говорити) — у звіті, лише коли клієнт ПРОСИВ нас передзвонити; передзвонить сам —
+ *   у «Виключені» з причиною «клієнт просив передзвонити пізніше».
  * 05.10.2026 (рішення власника після перегляду «Виключених»):
  *   • `lead_lost` (запит став неактуальним) — у звіті, окремою колонкою «Втрачені ліди»: для тімліда це головний сигнал;
  *   • «інше» чи «без розмови», де менеджер домовився ПЕРЕДЗВОНИТИ, — у звіті як запит (`source: "rule"`). Перевізника,
@@ -34,15 +36,16 @@ export interface TypeVerdict {
 }
 
 export function typeVerdict(type: ConversationType | null | undefined, confidence: number | null | undefined,
-  override: TypeOverride | null, callbackPromised = false, conflict = false): TypeVerdict {
+  override: TypeOverride | null, callbackPromised = false, clientCallsBack = false): TypeVerdict {
   if (override) return { inReport: override.isCargo, typeCheck: false, source: "manual" };
-  // Модель суперечить сама собі (`type_conflict`, 05.11.2026) — тип невідомий, і людині треба глянути: у звіті, «Перевірити тип».
-  if (conflict) return { inReport: true, typeCheck: true, source: "model" };
   if (!type) return { inReport: true, typeCheck: false, source: "none" };
+  const sure = typeof confidence === "number" && confidence >= TYPE_CONFIDENCE_MIN;
+  // 06.11.2026 (Роман): «незручно говорити», де клієнт передзвонить САМ (`callback_request.asked = false`), — у «Виключені»
+  // з причиною «клієнт просив передзвонити пізніше»: перевіряти менеджеру нічого. Непевне — як решта, у звіті з «Перевірити тип».
+  if (type === "call_later" && clientCallsBack) return sure ? { inReport: false, typeCheck: false, source: "model" } : { inReport: true, typeCheck: true, source: "model" };
   // `call_later` (09.10.2026) — клієнт просив передзвонити: це клієнт, і передзвін рахується як обіцянка — у звіті.
   if (type === "cargo_request" || type === "lead_lost" || type === "call_later") return { inReport: true, typeCheck: false, source: "model" };
   if (callbackPromised && CALLBACK_RESCUES.has(type)) return { inReport: true, typeCheck: false, source: "rule" };
-  const sure = typeof confidence === "number" && confidence >= TYPE_CONFIDENCE_MIN;
   return sure ? { inReport: false, typeCheck: false, source: "model" } : { inReport: true, typeCheck: true, source: "model" };
 }
 

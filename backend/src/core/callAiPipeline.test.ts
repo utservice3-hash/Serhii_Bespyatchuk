@@ -431,11 +431,11 @@ test("#788 ЧЕРГА: нові дзвінки першими, а не в пор
 });
 
 /**
- * #3726 — РУБРИКА first-touch-v4 (замінює #922, а той — #884; рішення Романа 09.10.2026 — «незручно говорити, просив
+ * #3729 — РУБРИКА first-touch-v4 (замінює #3726 → #922 → #884; рішення Романа 09.10.2026 — «незручно говорити, просив
  * передзвонити»). Усе, що стверджував #884 про v3, лишається правдою (переліковано нижче), плюс: тип `call_later`; поле
- * `callback_request` обовʼязкове; правило 10 у промпті. Змінилось з 05.11.2026 (рішення Романа, «2 так»): «call_later без
- * прохання» більше НЕ валить розбір — приймається з нашою позначкою `type_conflict`, і екран показує «тип не визначено ·
- * Перевірити тип» (#3727). До того така суперечність давала «Аналіз не вдався» на 6 розмовах, 5 — коротші за 40 с. Екран показує v4, поки
+ * `callback_request` обовʼязкове; правило 10 у промпті. З 06.11.2026 (Роман): «call_later без прохання» — НЕ суперечність,
+ * а «клієнт передзвонить сам» («я вам пізніше наберу, я за кермом»): відповідь приймається як є, а куди класти розмову —
+ * вирішує `typeVerdict` (#3731: у «Виключені»). До 05.11.2026 така відповідь давала «Аналіз не вдався» (6 розмов). Екран показує v4, поки
  * її немає — v3, далі v2. Попередній опис #884 (v3, 05.10.2026): модель отримує ДАТУ розмови першим
  * рядком; відповідь без полів строку обіцянки або без ТИПУ розмови — не за схемою, а не «тип невідомий». Тип
  * `lead_lost` (запит став неактуальним) — у переліку; у промпті чотири правила: «хоч одна ознака запиту → вантаж»,
@@ -446,7 +446,7 @@ test("#788 ЧЕРГА: нові дзвінки першими, а не в пор
  * 🧨 Червоніє, якщо не передати час розмови, пропустити відповідь без типу, прибрати будь-яке з правил з промпту,
  * забути v3 у переліку для «Перевізників» чи показувати під час переаналізу порожнечу.
  */
-test("#3726 РУБРИКА first-touch-v4: «незручно говорити» і прохання клієнта передзвонити; правила v3 на місці; без поля прохання — не за схемою; суперечність — розбір із позначкою, а не збій", async (t) => {
+test("#3729 РУБРИКА first-touch-v4: «незручно говорити» і прохання клієнта передзвонити; правила v3 на місці; без поля прохання — не за схемою; «незручно» без прохання — правильна відповідь", async (t) => {
   const pr = await import("./callAiProviders.js");
   assert.equal(pr.RUBRIC_CURRENT, "first-touch-v4");
   assert.deepEqual([...pr.CONVERSATION_TYPES], ["cargo_request", "lead_lost", "call_later", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"]);
@@ -475,15 +475,11 @@ test("#3726 РУБРИКА first-touch-v4: «незручно говорити»
   assert.equal(pr.validateAnalysis(v1).ok, true, "дзеркало: повна відповідь v4 проходить");
   const { callback_request: _drop, ...noField } = v1;
   assert.equal(pr.validateAnalysis(noField).ok, false, "🔴 відповідь без поля прохання прийнято — «просив передзвонити» загубилось би мовчки");
-  const conflict = pr.validateAnalysis({ ...v1, conversation_type: "call_later" });
-  assert.equal(conflict.ok, true, "🔴 «незручно говорити» без прохання знову валить весь розбір — «Аналіз не вдався» замість «Перевірити тип»");
-  assert.equal(conflict.ok && conflict.value.type_conflict, "call_later_without_request", "🔴 суперечність прийнято МОВЧКИ — без позначки екран покаже «просив передзвонити» як факт");
+  const self = pr.validateAnalysis({ ...v1, conversation_type: "call_later" });
+  assert.equal(self.ok, true, "🔴 «незручно говорити, передзвоню сам» знову валить розбір — «Аналіз не вдався»");
+  assert.equal(self.ok && self.value.callback_request?.asked, false, "🔴 «передзвоню сам» дійшов із проханням — правило не відрізнить його від «наберіть мене»");
   const asked = { ...noCb, asked: true, quote: "Потом позвоните" };
-  const real = pr.validateAnalysis({ ...v1, conversation_type: "call_later", callback_request: asked });
-  assert.equal(real.ok, true, "🔴 справжнє «незручно говорити» не проходить схему");
-  assert.equal(real.ok && real.value.type_conflict, undefined, "🔴 справжнє «незручно говорити» позначено суперечністю");
-  const cargo = pr.validateAnalysis(v1);
-  assert.equal(cargo.ok && cargo.value.type_conflict, undefined, "🔴 звичайний запит позначено суперечністю");
+  assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "call_later", callback_request: asked }).ok, true, "🔴 справжнє «незручно говорити» не проходить схему");
   assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "spam" }).ok, false, "🔴 тип поза списком ТЗ прийнято");
   assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "lead_lost" }).ok, true, "🔴 втрачений лід не проходить схему");
   assert.equal(pr.validateAnalysis({ ...v1, type_confidence: 1.4 }).ok, false, "🔴 упевненість поза 0..1 прийнято");

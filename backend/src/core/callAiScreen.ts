@@ -331,20 +331,17 @@ const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_
   + "onx.note AS on_text, onx.set_by_name AS on_by, onx.set_at AS on_at, rvx.note AS rv_text, rvx.set_by_name AS rv_by, rvx.set_at AS rv_at, "
   + "exn.note AS ex_text, exn.set_by_name AS ex_by, exn.set_at AS ex_at";
 
-/** Що показати замість «причини типу», коли модель суперечить сама собі (`type_conflict`). */
-export const TYPE_CONFLICT_REASON = "Модель назвала розмову «просив передзвонити», але прохання передзвонити в розмові немає — тип визначте вручну.";
-
 function typeFields(res: AnalysisResult | null, r: RawRow): Pick<AiCallRow, "conversationType" | "typeConfidence" | "typeReason" | "priceValue" | "inReport" | "typeCheck" | "typeOverride"> {
   const override: TypeOverride | null = r.ov_is_cargo == null ? null
     : { isCargo: r.ov_is_cargo === true, cut: r.ov_kind === "cut", byName: r.ov_by ?? null, at: r.ov_at ? new Date(r.ov_at).toISOString() : "" };
-  // Суперечність моделі (05.11.2026): тип і впевненість не показуємо як факт — «не визначено», причина словами.
-  const conflict = res?.type_conflict != null;
-  const type = conflict ? null : res?.conversation_type ?? null;
-  const conf = conflict ? null : typeof res?.type_confidence === "number" ? res.type_confidence : null;
+  const type = res?.conversation_type ?? null;
+  const conf = typeof res?.type_confidence === "number" ? res.type_confidence : null;
+  // «Незручно говорити», а прохання передзвонити немає — передзвонить сам клієнт (Роман 06.11.2026).
+  const clientCallsBack = type === "call_later" && res?.callback_request?.asked !== true;
   // Домовленість ПЕРЕДЗВОНИТИ від менеджера (а не «напишу в месенджер») — правило 05.10.2026 у `typeVerdict`.
   const callback = (res?.promises ?? []).some((p) => p.who === "manager" && p.channel === "call");
-  const v = typeVerdict(type, conf, override, callback, conflict);
-  return { conversationType: type, typeConfidence: conf, typeReason: conflict ? TYPE_CONFLICT_REASON : res?.type_reason ?? null,
+  const v = typeVerdict(type, conf, override, callback, clientCallsBack);
+  return { conversationType: type, typeConfidence: conf, typeReason: res?.type_reason ?? null,
     priceValue: res?.price_value?.trim() ? res.price_value.trim() : null, inReport: v.inReport, typeCheck: v.typeCheck, typeOverride: override };
 }
 
