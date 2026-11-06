@@ -2825,3 +2825,75 @@ test("#3733 ТИП ЗАПИТУ: внутрішні лише розібрані,
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /id="ai-reqkind"[\s\S]{0,300}const t = requestKindTab\(k\);\s*if \(t\) \{ setTab\(t\);/, "🔴 у фільтрі немає «Тип запиту» або він не перемикає вкладку");
 });
+
+/**
+ * #3734 — «ЧОМУ НЕ ОЗВУЧЕНО ЦІНУ» ПЕРЕЛІКОМ (задача 7239 п.2): перелік один на ядро, фронт і `CHECK` схеми; новий запис —
+ * лише з причиною, «Інше» — лише з текстом; порожньо — прибрати. На екрані: «Причина: пояснення», старий запис — як був;
+ * блок причин — повний розклад розмов без ціни (кожна причина + «старі записи» + «без коментаря»), Σ = розмов без ціни.
+ * 🧨 Червоніє, якщо перелік розійдеться між місцями, вільний текст без причини пройде, «Інше» — без тексту, розклад
+ * загубить старі записи чи розмови без коментаря, або роут/картка не передаватимуть причину.
+ */
+test("#3734 ПРИЧИНИ БЕЗ ЦІНИ: один перелік у ядрі, фронті й схемі; без причини й «Інше» без тексту — ні; розклад без втрат", async () => {
+  const P = await import("./firstTouchPriceReasons.js");
+  const V = await loadView() as unknown as { PRICE_REASONS: readonly string[]; PRICE_REASON_UA: Record<string, string>;
+    priceNoteLine: (n: unknown) => string; priceReasonStats: (r: unknown[]) => { key: string; n: number }[] };
+  assert.deepEqual([...V.PRICE_REASONS], [...P.PRICE_REASONS], "🔴 перелік причин на фронті розійшовся з ядром");
+  assert.deepEqual(V.PRICE_REASON_UA, P.PRICE_REASON_UA, "🔴 підписи причин на фронті розійшлись з ядром");
+  const chk = SRC("db/schema.sql").match(/first_touch_notes_reason_check\s+CHECK \(reason IS NULL OR \(kind = 'price' AND reason IN \(([^)]+)\)\)\)/);
+  assert.ok(chk, "🔴 у схемі немає CHECK на причину");
+  assert.deepEqual(chk[1].split(",").map((x) => x.trim().replace(/'/g, "")), [...P.PRICE_REASONS], "🔴 CHECK у схемі пускає інший перелік, ніж ядро");
+  assert.deepEqual(P.checkPriceNote(null, "  "), { ok: true, reason: null }, "дзеркало: порожньо — прибрати запис");
+  assert.equal(P.checkPriceNote(null, "менеджер новачок").ok, false, "🔴 вільний текст без причини пройшов — рахувати знову не буде з чого");
+  assert.equal(P.checkPriceNote("bogus", "x").ok, false, "🔴 причина поза переліком пройшла");
+  assert.equal(P.checkPriceNote("other", " ").ok, false, "🔴 «Інше» без тексту пройшло");
+  assert.deepEqual(P.checkPriceNote("other", "бензовоз"), { ok: true, reason: "other" });
+  assert.deepEqual(P.checkPriceNote("no_data", ""), { ok: true, reason: "no_data" }, "🔴 причина без пояснення не проходить — текст став обовʼязковим");
+
+  assert.equal(V.priceNoteLine({ text: "Клієнт не дав даних", reason: "no_data" }), "Клієнт не дав даних", "🔴 причина без пояснення показана двічі");
+  assert.equal(V.priceNoteLine({ text: "немає габаритів", reason: "no_data" }), "Клієнт не дав даних: немає габаритів");
+  assert.equal(V.priceNoteLine({ text: "менеджер новачок", reason: null }), "менеджер новачок", "🔴 старий запис змінив текст");
+  const row = (price: string, note: unknown) => ({ checklist: { price }, priceNote: note, flags: {} });
+  const st = V.priceReasonStats([row("n", { text: "a", reason: "no_data" }), row("n", { text: "b", reason: null }), row("n", null), row("y", { text: "c", reason: "other" }), row("n", { text: "d", reason: "hung_up" })]);
+  const by = Object.fromEntries(st.map((x) => [x.key, x.n]));
+  assert.deepEqual([by.no_data, by.hung_up, by.legacy, by.none, by.other], [1, 1, 1, 1, 0], "🔴 розклад причин не той: старі записи чи «без коментаря» загубились, або порахована розмова з ціною");
+  assert.equal(st.reduce((a, x) => a + x.n, 0), 4, "🔴 Σ розкладу ≠ розмов без ціни");
+
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.put("/ai-calls/:uniqueid/note"');
+  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  assert.match(body, /const pr = kind === "price" \? checkPriceNote\(req\.body\?\.reason, text\)[^;]+;\s*if \(!pr\.ok\) \{ res\.status\(400\)[\s\S]*setCallNote\([^;]*pr\.reason\)/, "🔴 роут пише причину без перевірки або не передає її");
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drw, /id="ai-note-price-reason"/, "🔴 у картці немає вибору причини");
+  assert.match(drw, /putAiCallNote\(c\.row\.uniqueid, kind, text, isPrice && reason \? reason : null\)/, "🔴 картка не шле причину");
+  assert.match(readFileSync(FE("api.ts"), "utf8"), /\/note`, \{ kind, text, reason \}\)/, "🔴 фронт не передає причину на сервер");
+});
+
+/**
+ * #3735 — ЖИВА СХЕМА: ПРИЧИНА ПИШЕТЬСЯ Й ЧИТАЄТЬСЯ. Причина без тексту — у записі назва причини; з текстом — текст;
+ * заміна причини перезаписує; список віддає `priceNote.reason`; старий запис без причини лишається `null`; CHECK не
+ * пускає причину поза переліком і причину в інших видах коментарів.
+ * 🧨 Червоніє, якщо причина не дійде до бази чи списку, upsert не оновить її, або зникне CHECK.
+ */
+test("#3735 ЖИВА СХЕМА: причина без ціни — пишеться, замінюється, читається; старий запис — null; CHECK", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, setCallNote } = await import("./callAiScreen.js");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel) VALUES (93735,'D',8921932,1,'2026-10-20 10:00:00+03','0503735001','ad')`);
+  await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ('z3735','2026-10-20 10:10:00+03','out','ANSWERED',60,65,9011,'380503735001','https://rec/z')`);
+  const by = { userId: 1, name: "М" };
+  const reasonOf = async () => (await c.raw.query("SELECT note, reason FROM first_touch_notes WHERE uniqueid = 'z3735' AND kind = 'price'")).rows[0] as { note: string; reason: string | null } | undefined;
+  await setCallNote(c.db, "z3735", "price", "", by, new Date("2026-11-06T10:00:00Z"), "no_data");
+  assert.deepEqual(await reasonOf(), { note: "Клієнт не дав даних", reason: "no_data" }, "🔴 причина без тексту не записалась або запис порожній");
+  await setCallNote(c.db, "z3735", "price", "бензовоз", by, new Date("2026-11-06T11:00:00Z"), "other");
+  assert.deepEqual(await reasonOf(), { note: "бензовоз", reason: "other" }, "🔴 заміна не оновила причину");
+  const row = (await aiCallsList(c.db, FAKE_AD, "2026-10-20", "2026-10-20", new Date("2026-11-06T12:00:00Z"), {})).rows.find((r) => r.uniqueid === "z3735");
+  assert.equal(row?.priceNote?.reason, "other", "🔴 список не віддає причину — блок причин буде порожній");
+  await c.raw.query("UPDATE first_touch_notes SET reason = NULL WHERE uniqueid = 'z3735'");
+  const legacy = (await aiCallsList(c.db, FAKE_AD, "2026-10-20", "2026-10-20", new Date("2026-11-06T12:00:00Z"), {})).rows.find((r) => r.uniqueid === "z3735");
+  assert.deepEqual([legacy?.priceNote?.text, legacy?.priceNote?.reason], ["бензовоз", null], "🔴 старий запис без причини зник або отримав причину");
+  await assert.rejects(c.raw.query("UPDATE first_touch_notes SET reason = 'bogus' WHERE uniqueid = 'z3735'"), /first_touch_notes_reason_check/, "🔴 CHECK пустив причину поза переліком");
+  await assert.rejects(c.raw.query(`INSERT INTO first_touch_notes (uniqueid, kind, note, reason) VALUES ('z3735', 'missed', 'x', 'no_data')`), /first_touch_notes_reason_check/,
+    "🔴 CHECK пустив причину в «Опрацьовано»");
+  await setCallNote(c.db, "z3735", "price", "", by, new Date("2026-11-06T13:00:00Z"), null);
+  assert.equal(await reasonOf(), undefined, "дзеркало: порожньо й без причини — запис прибрано");
+});

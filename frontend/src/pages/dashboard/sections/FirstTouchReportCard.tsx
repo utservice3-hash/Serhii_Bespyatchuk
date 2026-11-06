@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchAiTeamReport, hiringError, type AiManagerLineT, type AiPoolRowT, type AiTeamReportResp } from "../../../api";
 import { InfoHint } from "../widgets";
-import { PROMISE_UI, TONE_COLOR, fmtMinutes } from "../aiCallsView";
+import { PROMISE_UI, TONE_COLOR, fmtMinutes, priceNoteLine } from "../aiCallsView";
 import { AiCallDrawer } from "./AiCallDrawer";
 
 /**
@@ -179,7 +179,7 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
                     <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{fmt(r.calledAt)}{pool.managerId === "all" && <div style={{ fontSize: 12, ...muted }}>{r.managerName ?? "невідомий"}</div>}</td>
                     <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{r.clientPhone ?? <span style={muted}>номера немає</span>}{r.kommoIds.length > 0 && <div style={{ fontSize: 12, ...muted }}>угода {r.kommoIds.join(", ")}</div>}</td>
                     <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{!r.flags.analysed ? <span style={muted}>ще не розібрано</span> : r.flags.lost ? <span style={muted}>не потрібна</span> : r.priceDiscussed ? <>так{r.priceValue ? ` · ${r.priceValue}` : ""}</> : chip("warn", "ні")}</td>
-                    <td style={{ padding: "5px 8px", maxWidth: 220 }}>{r.priceNote?.text ?? (r.flags.noPrice ? chip("warn", "без коментаря") : <span style={muted}>—</span>)}</td>
+                    <td style={{ padding: "5px 8px", maxWidth: 220 }}>{(r.priceNote ? priceNoteLine(r.priceNote) : null) ?? (r.flags.noPrice ? chip("warn", "без коментаря") : <span style={muted}>—</span>)}</td>
                     <td style={{ padding: "5px 8px" }}>{r.promiseState ? chip(PROMISE_UI[r.promiseState].tone, PROMISE_UI[r.promiseState].label) : <span style={muted}>немає</span>}{r.missedNote && <div style={{ fontSize: 12, ...muted }}>опрацьовано</div>}</td>
                     <td style={{ ...num, textAlign: "center" }}>{r.flags.analysed ? r.objections : "—"}</td>
                     <td style={{ padding: "5px 8px", maxWidth: 380 }}>{r.typeCheck && <div style={{ marginBottom: 2 }}>{chip("warn", "Перевірити тип")}</div>}

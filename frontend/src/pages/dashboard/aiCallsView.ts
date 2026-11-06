@@ -237,6 +237,43 @@ export function excludedLabel(r: { conversationType: ConversationTypeT | null; t
   return r.conversationType ? TYPE_LABEL[r.conversationType] : null;
 }
 
+/**
+ * 💬 «Чому не озвучено ціну» — перелік причин (задача 7239 п.2). Дзеркало `PRICE_REASONS` / `PRICE_REASON_UA` у
+ * `core/firstTouchPriceReasons.ts` — у тому самому порядку (гейт звіряє обидва).
+ */
+export const PRICE_REASONS = ["no_data", "rookie_rate", "find_car", "hung_up", "other"] as const;
+export type PriceReasonT = typeof PRICE_REASONS[number];
+export const PRICE_REASON_UA: Readonly<Record<PriceReasonT, string>> = {
+  no_data: "Клієнт не дав даних",
+  rookie_rate: "Новачок уточнює ставку",
+  find_car: "Треба знайти машину",
+  hung_up: "Клієнт поклав слухавку",
+  other: "Інше",
+};
+const reasonUa = (k: string | null | undefined): string | null => (k && k in PRICE_REASON_UA ? PRICE_REASON_UA[k as PriceReasonT] : null);
+/** Як показати запис: «Причина: пояснення»; без пояснення — лише причина; старий запис — як був написаний. */
+export function priceNoteLine(n: { text: string; reason?: string | null }): string {
+  const ua = reasonUa(n.reason);
+  return !ua ? n.text : n.text === ua ? ua : `${ua}: ${n.text}`;
+}
+/** Пояснення без назви причини — для поля редагування (якщо пояснення не писали, у записі стоїть сама назва). */
+export const priceNoteOwnText = (n: { text: string; reason?: string | null } | null): string => (!n ? "" : n.text === reasonUa(n.reason) ? "" : n.text);
+
+/**
+ * Блок «Чому не назвали ціну»: розмови звіту, де ціни не було (`TILE_MATCH.noPrice`), — за причиною. Повний розклад:
+ * кожна причина + «без причини (старі записи)» (текст до 06.11.2026) + «без коментаря». Σ рядків = розмов без ціни.
+ */
+export type PriceReasonKeyT = PriceReasonT | "legacy" | "none";
+export function priceReasonKey(r: { priceNote: { reason?: string | null } | null }): PriceReasonKeyT {
+  if (!r.priceNote) return "none";
+  return r.priceNote.reason && r.priceNote.reason in PRICE_REASON_UA ? r.priceNote.reason as PriceReasonT : "legacy";
+}
+export const PRICE_REASON_KEY_UA: Readonly<Record<PriceReasonKeyT, string>> = { ...PRICE_REASON_UA, legacy: "Без причини (старі записи)", none: "Без коментаря" };
+export function priceReasonStats<T extends TileRow & { priceNote: { reason?: string | null } | null }>(rows: readonly T[]): { key: PriceReasonKeyT; n: number }[] {
+  const noPrice = rows.filter(TILE_MATCH.noPrice);
+  return ([...PRICE_REASONS, "legacy", "none"] as PriceReasonKeyT[]).map((key) => ({ key, n: noPrice.filter((r) => priceReasonKey(r) === key).length }));
+}
+
 /** Хвилини реакції коротко: «45 хв», «3 год 10 хв», «2 дн 3 год». */
 export function fmtMinutes(m: number): string {
   if (m < 60) return `${String(m)} хв`;

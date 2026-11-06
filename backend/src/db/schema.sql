@@ -4916,6 +4916,13 @@ REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- Пишуть менеджер (свої), тімлід (команда), адмін. Список нижче — ОДИН, остаточний (урок 22.10.2026 вище).
 ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
 ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline', 'review', 'explain'));
+-- 💬 Причина «Чому не озвучено ціну» з переліку (задача 7239 п.2, 06.11.2026) — `core/firstTouchPriceReasons.ts`.
+-- NULL — старі записи вільним текстом (до 06.11.2026) і решта видів коментарів. Перелік — той самий, що в ядрі (гейт).
+ALTER TABLE first_touch_notes ADD COLUMN IF NOT EXISTS reason TEXT;
+DO $$ BEGIN
+  ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_reason_check
+    CHECK (reason IS NULL OR (kind = 'price' AND reason IN ('no_data', 'rookie_rate', 'find_car', 'hung_up', 'other')));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- 🎛 НАЛАШТУВАННЯ «ПЕРШОГО ДОТИКУ» (05.10.2026): вікно повторного дзвінка, допуск і мінімальний дедлайн передзвону,
 -- колір блоку «дзвінка в телефонії немає». Журнал: кожна зміна — новий рядок з автором, чинне — останній рядок,
 -- порожньо — поточна поведінка (`core/firstTouchTunables.ts`). Змінює лише адмін у «Налаштуваннях».

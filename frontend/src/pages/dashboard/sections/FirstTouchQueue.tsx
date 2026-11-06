@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchAiCallCard, fetchAiCallRecording, putAiCallNote, hiringError, type AiCallCardResp, type AiCallRowT } from "../../../api";
-import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel, reviewNoteText, WAIT_MANAGER_COMMENT_UA } from "../aiCallsView";
+import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel, reviewNoteText, WAIT_MANAGER_COMMENT_UA, priceNoteLine } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { Analysis, QuoteSeek, FeedbackButton } from "./AiCallDrawer";
 import { ChecklistBlock } from "./FirstTouchChecklist";
@@ -132,7 +132,7 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
                     <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", fontSize: 14 }}>
                       <div className="ftd-sub" style={{ marginBottom: 2 }}>Коментар менеджера · {(cur.explainNote ?? cur.priceNote)!.byName ?? "—"}</div>
                       {cur.explainNote && <div>{cur.explainNote.text}</div>}
-                      {cur.priceNote && <div>{cur.explainNote ? "Ціна: " : ""}{cur.priceNote.text}</div>}
+                      {cur.priceNote && <div>{cur.explainNote ? "Ціна: " : ""}{priceNoteLine(cur.priceNote)}</div>}
                     </div>
                   )}
                   <label htmlFor="ftd-review-note" style={{ fontSize: 13, fontWeight: 600 }}>Коментар менеджеру <span className="ftd-sub">· необовʼязково</span></label>

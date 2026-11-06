@@ -26,6 +26,7 @@ const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, ot
 import { kommoLeadUrl } from "../core/kommoLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
 import { canCloseDeal } from "../core/firstTouchClose.js";
+import { checkPriceNote } from "../core/firstTouchPriceReasons.js";
 import { closeOffer, closeDeal, revertDeal, type CloseKommo } from "../core/firstTouchCloseDb.js";
 import { closeTasksBody, openTasksPath } from "../core/carrierHistory.js";
 import { accumulateKpiTargets } from "../core/kpiTargets.js";
@@ -11600,9 +11601,12 @@ dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
   // ✍️ Задача 7351 (з 03.11.2026): «Розібрано» — лише після коментаря самого менеджера розмови. Зняти позначку (порожній
   // текст) можна завжди.
+  // 💬 Задача 7239: «Чому не озвучено ціну» — причина з переліку (для «Інше» — з текстом); у решти видів причини немає.
+  const pr = kind === "price" ? checkPriceNote(req.body?.reason, text) : { ok: true as const, reason: null };
+  if (!pr.ok) { res.status(400).json({ error: pr.why }); return; }
   if (kind === "review" && text.trim() && !canCloseReview(card.row)) { res.status(409).json({ error: REVIEW_NEEDS_COMMENT_UA }); return; }
   const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
-  await setCallNote(pool, uniqueid, kind as NoteKind, text, { userId: auth.userId ?? null, name: who }, new Date());
+  await setCallNote(pool, uniqueid, kind as NoteKind, text, { userId: auth.userId ?? null, name: who }, new Date(), pr.reason);
   res.json({ ok: true });
 });
 

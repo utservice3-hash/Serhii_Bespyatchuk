@@ -17,7 +17,8 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TILE_MATCH, tileStats, priceFormStats, PRICE_FORM_UI, PRICE_FORM_FROM_UA, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS, CLOSURE_UI,
   TRANSPORT_LABEL, type ExcludedFilterT,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
-  DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams, excludedLabel, REQUEST_KIND_LABEL, requestKindTab, type RequestKindFilterT } from "../aiCallsView";
+  DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams, excludedLabel, REQUEST_KIND_LABEL, requestKindTab, type RequestKindFilterT,
+  priceReasonStats, priceReasonKey, PRICE_REASON_KEY_UA, type PriceReasonKeyT } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -103,6 +104,8 @@ export function AiCallsSection() {
   const [queueSel, setQueueSel] = useState<string | null>(null);
   const [glow, setGlow] = useState(false);
   const [preset, setPreset] = useState<"all" | TileKey>(link.tile ?? "all");
+  // 💬 Задача 7239: клік по причині в блоці «Чому не назвали ціну» — список лише розмов без ціни з цією причиною.
+  const [reasonPick, setReasonPick] = useState<PriceReasonKeyT | null>(null);
   useEffect(() => { if (link.any) window.history.replaceState(window.history.state, "", withoutAiLinkParams(window.location.href)); }, [link]);
   const tableRef = useRef<HTMLElement | null>(null);
   // Прийшли з картки Звіту КВП — одразу до списку розмов цієї плитки («натиснув — висвітлилось, які саме»).
@@ -202,6 +205,8 @@ export function AiCallsSection() {
   // Плитки (ТЗ 08.10.2026): число і список після кліку — одне правило `TILE_MATCH`; стани й знаменники — від сервера.
   const ts = tileStats(rows);
   const pf = priceFormStats(rows);
+  const reasons = priceReasonStats(rows);
+  const reasonsTotal = reasons.reduce((a, x) => a + x.n, 0);
   const split = priceSuccessSplit(rows);
   const target = d.priceTargetPct;
   const lost = rows.filter(TILE_MATCH.lost);
@@ -237,6 +242,7 @@ export function AiCallsSection() {
   const presetOk = (r: (typeof rows)[number]) => preset === "all" || TILE_MATCH[preset](r);
   const needle = q.trim().toLowerCase();
   const shownD = shown.filter((r) => (view === "all" || r.needsReview) && presetOk(r)
+    && (reasonPick == null || (TILE_MATCH.noPrice(r) && priceReasonKey(r) === reasonPick))
     && (!needle || `${r.summary ?? ""} ${r.managerName ?? ""} ${r.priceValue ?? ""}`.toLowerCase().includes(needle)));
   const pickTile = (k: TileKey) => { setPreset(preset === k ? "all" : k); setTab("report"); setView("all"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); };
   const goodBad = (ok: boolean | null) => (ok == null ? "" : ok ? " is-ok" : " is-bad");
@@ -317,6 +323,26 @@ export function AiCallsSection() {
                     </button>
                   );
                 })}
+              </div>
+            )}
+          </section>
+
+          {/* 💬 Задача 7239 п.2: чому не назвали ціну — за причиною з переліку; Σ рядків = розмов без ціни. Клік фільтрує список. */}
+          <section aria-label="Чому не назвали ціну" className="ftd-card ftd-card-pad">
+            <div className="ftd-card-h">
+              <h2>Чому не назвали ціну</h2>
+              <span>{reasonsTotal ? `розмов без ціни: ${String(reasonsTotal)} · причину обирають у картці розмови` : "за цей період розмов без ціни немає"}</span>
+            </div>
+            {reasonsTotal > 0 && (
+              <div className="ftd-pf">
+                {reasons.map((x) => (
+                  <button key={x.key} type="button" className={`ftd-pf-row${reasonPick === x.key ? " on" : ""}`} aria-pressed={reasonPick === x.key}
+                    onClick={() => { setReasonPick(reasonPick === x.key ? null : x.key); setTab("report"); }}>
+                    <span className="ftd-pf-l">{PRICE_REASON_KEY_UA[x.key]}</span>
+                    <span className="ftd-pf-n"><b>{x.n}</b> розмов</span>
+                    <span className="ftd-pf-n">{Math.round((x.n / reasonsTotal) * 100)}%</span>
+                  </button>
+                ))}
               </div>
             )}
           </section>

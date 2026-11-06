@@ -14,6 +14,7 @@ import { FIRST_TOUCH_RULE, firstTouchExclusionSql } from "./callAiTick.js";
 import { monthSpend } from "./callAiPipeline.js";
 import { adCallFacts } from "./adCallFacts.js";
 import { silentBeforeClose, type AdCallFactsParams } from "./adCallFactsRules.js";
+import { PRICE_REASON_UA, type PriceReason } from "./firstTouchPriceReasons.js";
 import { typeVerdict, type TypeOverride } from "./callAiType.js";
 import type { ConversationType } from "./callAiProviders.js";
 import { loadTunables, type FirstTouchTunables } from "./firstTouchTunables.js";
@@ -215,7 +216,8 @@ export interface AiCallRow {
   reactionOffHours: boolean;
 }
 
-export interface CallNote { text: string; byName: string | null; at: string }
+/** `reason` — лише в «Чому не озвучено ціну» (задача 7239): код з `PRICE_REASONS`; `null` — старий запис вільним текстом. */
+export interface CallNote { text: string; byName: string | null; at: string; reason?: string | null }
 
 interface RawRow {
   kommo_id: string | number; uniqueid: string; calldate: Date; call_type: string; billsec: number; created_at: Date;
@@ -226,7 +228,7 @@ interface RawRow {
   /** Розпізнано, але слів немає: `segments` порожній. */
   stt_empty?: boolean | null;
   ov_is_cargo?: boolean | null; ov_kind?: string | null; ov_by?: string | null; ov_at?: Date | null;
-  pn_text?: string | null; pn_by?: string | null; pn_at?: Date | null;
+  pn_text?: string | null; pn_by?: string | null; pn_at?: Date | null; pn_reason?: string | null;
   mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
   rv_text?: string | null; rv_by?: string | null; rv_at?: Date | null;
@@ -298,7 +300,7 @@ export function foldRow(r: RawRow): AiCallRow {
     messengerSignal: state === "done" ? messengerSignal(r.ms_result ?? null) : null,
     priceForm: state === "done" ? priceFormOf(r.pf_result ?? null) : null,
     priceFormAnalysed: state === "done" && r.pf_result != null,
-    priceNote: r.pn_text ? { text: r.pn_text, byName: r.pn_by ?? null, at: r.pn_at ? new Date(r.pn_at).toISOString() : "" } : null,
+    priceNote: r.pn_text ? { text: r.pn_text, byName: r.pn_by ?? null, at: r.pn_at ? new Date(r.pn_at).toISOString() : "", reason: r.pn_reason ?? null } : null,
     missedNote: r.mn_text ? { text: r.mn_text, byName: r.mn_by ?? null, at: r.mn_at ? new Date(r.mn_at).toISOString() : "" } : null,
     offlineNote: r.on_text ? { text: r.on_text, byName: r.on_by ?? null, at: r.on_at ? new Date(r.on_at).toISOString() : "" } : null,
     reviewNote: r.rv_text ? { text: r.rv_text, byName: r.rv_by ?? null, at: r.rv_at ? new Date(r.rv_at).toISOString() : "" } : null,
@@ -330,7 +332,7 @@ const notesJoin = (alias: string): string => `LEFT JOIN first_touch_notes pn ON 
  */
 const managerCommentedCol = (alias: string): string => `EXISTS (SELECT 1 FROM first_touch_notes mcx JOIN users mcu ON mcu.id = mcx.set_by
              WHERE mcx.uniqueid = ${alias}.uniqueid AND mcx.kind IN ('explain', 'price') AND mcu.manager_id = ${alias}.manager_id) AS mgr_commented`;
-const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_at, mn.note AS mn_text, mn.set_by_name AS mn_by, mn.set_at AS mn_at, "
+const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_at, pn.reason AS pn_reason, mn.note AS mn_text, mn.set_by_name AS mn_by, mn.set_at AS mn_at, "
   + "onx.note AS on_text, onx.set_by_name AS on_by, onx.set_at AS on_at, rvx.note AS rv_text, rvx.set_by_name AS rv_by, rvx.set_at AS rv_at, "
   + "exn.note AS ex_text, exn.set_by_name AS ex_by, exn.set_at AS ex_at";
 
@@ -721,12 +723,14 @@ export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by
 
 export type NoteKind = "price" | "missed" | "offline" | "review" | "explain";
 /** Записати (або замінити) коментар виду `kind`. Порожній текст — прибрати коментар. Право й скоуп — у роуті. */
-export async function setCallNote(db: Db, uniqueid: string, kind: NoteKind, text: string, by: { userId: number | null; name: string | null }, at: Date): Promise<void> {
-  const t = text.trim();
+export async function setCallNote(db: Db, uniqueid: string, kind: NoteKind, text: string, by: { userId: number | null; name: string | null }, at: Date,
+  reason: PriceReason | null = null): Promise<void> {
+  // Причина без тексту (задача 7239): у записі стоїть назва причини — усі читачі тексту бачать зміст, а не порожнечу.
+  const t = text.trim() || (reason ? PRICE_REASON_UA[reason] : "");
   if (!t) { await db.query("DELETE FROM first_touch_notes WHERE uniqueid = $1 AND kind = $2", [uniqueid, kind]); return; }
-  await db.query(`INSERT INTO first_touch_notes (uniqueid, kind, note, set_by, set_by_name, set_at) VALUES ($1, $2, $3, $4, $5, $6)
-    ON CONFLICT (uniqueid, kind) DO UPDATE SET note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_by_name = EXCLUDED.set_by_name, set_at = EXCLUDED.set_at`,
-  [uniqueid, kind, t, by.userId, by.name, at.toISOString()]);
+  await db.query(`INSERT INTO first_touch_notes (uniqueid, kind, note, reason, set_by, set_by_name, set_at) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (uniqueid, kind) DO UPDATE SET note = EXCLUDED.note, reason = EXCLUDED.reason, set_by = EXCLUDED.set_by, set_by_name = EXCLUDED.set_by_name, set_at = EXCLUDED.set_at`,
+  [uniqueid, kind, t, reason, by.userId, by.name, at.toISOString()]);
 }
 
 /** Байти запису розмови з Ringostat — та сама політика повторів і стеля розміру, що й у розпізнаванні. */

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, closeAiCallDeal, revertAiCallDeal, sendAiCallFeedback, type AiCallCardResp, type AiQuoted } from "../../../api";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, excludedLabel, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, WAIT_MANAGER_COMMENT_UA, PRICE_FORM_UI, PRICE_FORM_FROM_UA, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, excludedLabel, PRICE_REASONS, PRICE_REASON_UA, priceNoteLine, priceNoteOwnText, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, WAIT_MANAGER_COMMENT_UA, PRICE_FORM_UI, PRICE_FORM_FROM_UA, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { ChecklistBlock } from "./FirstTouchChecklist";
 import "./hiring.css";
@@ -199,24 +199,36 @@ function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void 
 function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind: "price" | "missed" | "offline" | "explain"; title: string; hint: string; onSaved: () => void }) {
   const cur = kind === "price" ? c.row.priceNote : kind === "missed" ? c.row.missedNote : kind === "explain" ? c.row.explainNote : c.row.offlineNote;
   const can = c.noteRights[kind];
-  const [text, setText] = useState(cur?.text ?? "");
+  // 💬 Задача 7239: для «Чому не озвучено ціну» — причина з переліку; текст — пояснення (для «Інше» обовʼязковий).
+  const isPrice = kind === "price";
+  const own = isPrice ? priceNoteOwnText(cur) : cur?.text ?? "";
+  const [text, setText] = useState(own);
+  const [reason, setReason] = useState<string>(cur?.reason ?? "");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  useEffect(() => { setText(cur?.text ?? ""); }, [cur?.text]);
+  useEffect(() => { setText(own); setReason(cur?.reason ?? ""); }, [own, cur?.reason]);
   const save = async () => {
     setBusy(true); setMsg(null);
-    try { await putAiCallNote(c.row.uniqueid, kind, text); onSaved(); } catch (e) { setMsg(hiringError(e)); }
+    try { await putAiCallNote(c.row.uniqueid, kind, text, isPrice && reason ? reason : null); onSaved(); } catch (e) { setMsg(hiringError(e)); }
     setBusy(false);
   };
+  const unchanged = text === own && (!isPrice || reason === (cur?.reason ?? ""));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13.5 }}>
       <b>{title}</b>
-      {cur ? <span>{cur.text} <span style={{ color: "var(--text-muted)", fontSize: 12 }}>· {cur.byName ?? "невідомо хто"}, {fmtFull(cur.at)}</span></span>
+      {cur ? <span>{isPrice ? priceNoteLine(cur) : cur.text} <span style={{ color: "var(--text-muted)", fontSize: 12 }}>· {cur.byName ?? "невідомо хто"}, {fmtFull(cur.at)}</span></span>
         : <span style={{ color: "var(--warn-fg, #8a5a00)", fontSize: 13 }}>{hint}</span>}
       {can && (
-        <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-          <textarea id={`ai-note-${kind}`} className="hr-inp" rows={2} value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1 }} maxLength={2000} />
-          <button type="button" className="hr-btn p" disabled={busy || text === (cur?.text ?? "")} onClick={() => void save()}>{busy ? "Зберігаю…" : "Зберегти"}</button>
+        <div style={{ display: "flex", gap: 6, alignItems: "flex-start", flexWrap: "wrap" }}>
+          {isPrice && (
+            <select id="ai-note-price-reason" className="hr-inp" aria-label="Причина" value={reason} onChange={(e) => setReason(e.target.value)}>
+              <option value="">— оберіть причину —</option>
+              {PRICE_REASONS.map((k) => <option key={k} value={k}>{PRICE_REASON_UA[k]}</option>)}
+            </select>
+          )}
+          <textarea id={`ai-note-${kind}`} className="hr-inp" rows={2} value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1, minWidth: 200 }} maxLength={2000}
+            placeholder={isPrice ? (reason === "other" ? "Напишіть причину" : "Пояснення — за бажанням") : undefined} />
+          <button type="button" className="hr-btn p" disabled={busy || unchanged} onClick={() => void save()}>{busy ? "Зберігаю…" : "Зберегти"}</button>
         </div>
       )}
       {msg && <span style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</span>}

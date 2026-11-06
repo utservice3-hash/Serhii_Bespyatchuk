@@ -482,7 +482,8 @@ export type AiRequestKindT = "domestic" | "international" | "oversize" | "specia
 export type AiTransportKindT = "international" | "oversize" | "tanker" | "dump" | "grain";
 /** Чим закрито розмову з черги: погоджено коментар менеджера · закрито тімлідом без коментаря · угода дійшла до рахунку. */
 export type AiReviewClosureT = "approved" | "direct" | "invoice";
-export interface AiNoteT { text: string; byName: string | null; at: string }
+/** `reason` — лише в «Чому не озвучено ціну» (задача 7239); `null` — старий запис вільним текстом. */
+export interface AiNoteT { text: string; byName: string | null; at: string; reason?: string | null }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
   /** Менеджер «Виключених» не бачить (ТЗ 30.09.2026 п.7) — сервер їх і не віддає. */
@@ -554,8 +555,8 @@ export interface AiCloseOfferT {
   closed: { kommoId: number; reason: string; byName: string | null; at: string } | null;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
-export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review" | "explain", text: string): Promise<void> {
-  await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review" | "explain", text: string, reason: string | null = null): Promise<void> {
+  await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text, reason });
 }
 /** 💬 «Зворотний звʼязок» з розмови: текст тімліда йде в розділ «Зворотний звʼязок» з підставленою розмовою й угодою. */
 export async function sendAiCallFeedback(uniqueid: string, text: string): Promise<void> {
