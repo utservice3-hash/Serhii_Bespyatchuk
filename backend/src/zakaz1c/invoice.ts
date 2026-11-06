@@ -66,7 +66,8 @@ export const SERVICES: { name: string; orgs: OrgKey[] | "all"; code: string; en?
   { name: "Організація перевезення в межах території України за маршрутом", orgs: ["uts", "elogist"], code: "000000092" },
   // Англійською — дослівно як у валютних рахунках Genesis (АвтоМув №9130, 02.11.2026).
   { name: "Організація перевезення за маршрутом", orgs: ["avtomuv", "fop"], code: "000000008", en: "Organization of cargo transportation along the route" },
-  { name: "Організація міжнародного перевезення", orgs: ["avtomuv"], code: "000000179" },
+  // Як найчастіше в рахунках Genesis (11 із 32 валютних PDF з поля «Посилання інвойс €», 06.11.2026).
+  { name: "Організація міжнародного перевезення", orgs: ["avtomuv"], code: "000000179", en: "Organization of international transportation" },
   { name: "Експедиторські послуги", orgs: "all", code: "000000252" },
   { name: "Штрафні санкції за простій автомобільного транспорту", orgs: "all", code: "000000180" },
 ];
@@ -75,7 +76,7 @@ export const servicesFor = (org: OrgKey) => SERVICES.filter((x) => x.orgs === "a
 export const vatTypesFor = (o: OrgRule): VatType[] => (o.vat === "with" ? ["ПДВ в тому числі"] : ["Без ПДВ"]);
 export const itemVatsFor = (o: OrgRule): number[] => (o.vat === "with" ? [20, 14, 7] : [0]);
 
-/** `full` — менеджер редагує весь рядок рахунку сам («✎ редагувати весь рядок»): тоді `route` — увесь рядок, без назви. */
+/** `full` — `route` уже ВЕСЬ рядок рахунку (з 0.5.2 вікно шле лише так: одне поле, назву послуги підставляє саме). Без `full` — лише маршрут (старі вікна). */
 export interface InvoiceItem { service: string; route: string; full: boolean; qty: number; price: number; vat: number }
 
 /**
@@ -159,7 +160,8 @@ export function parseInvoiceForm(body: unknown, ctx: { today: string; orgs: OrgR
     const service = s(r.service, 300), route = s(r.route, 1000), full = r.full === true;
     const qty = num(r.qty ?? 1), price = num(r.price), vat = num(r.vat ?? (o.vat === "with" ? 20 : 0));
     if (!allowed.includes(service)) return { ok: false, why: `Позиція ${i + 1}: послуга не зі списку ${o.short}.` };
-    if (full && !route) return { ok: false, why: `Позиція ${i + 1}: рядок рахунку порожній — напишіть його або натисніть «↺ як було».` };
+    if (full && !route) return { ok: false, why: `Позиція ${i + 1}: рядок рахунку порожній — напишіть його.` };
+    if (full && /:\s*$/.test(route)) return { ok: false, why: `Позиція ${i + 1}: допишіть у рядку рахунку маршрут після назви послуги.` };
     if (!(qty > 0)) return { ok: false, why: `Позиція ${i + 1}: кількість має бути більше 0.` };
     if (!(price > 0)) return { ok: false, why: `Позиція ${i + 1}: ціна має бути більше 0.` };
     if (!itemVatsFor(o).includes(vat)) return { ok: false, why: `Позиція ${i + 1}: ставка ПДВ ${itemVatsFor(o).join(", ")} %.` };
