@@ -190,6 +190,11 @@ export function invoiceAllowed(mode: Zakaz1cMode, a: { edrpou: string; testEdrpo
       return { ok: false, why: `Тестовий режим: рахунок можна виставити лише тестовому контрагенту (ЄДРПОУ ${a.testEdrpou}).` };
     }
   }
+  // Закритий тест (Роман, 06.11.2026: пілот на одному менеджері): live зі списком — справжні рахунки лише тим, хто в ньому.
+  // Порожній список у live — усім. Межа на сервері, бо налаштування «кому видно вкладку» у віджеті — лише вітрина.
+  if (mode === "live" && a.testers.size > 0 && !a.testers.has(a.userId)) {
+    return { ok: false, why: "Віджет у закритому тесті: рахунок у цій угоді виставляйте через Genesis «Заказ 1С»." };
+  }
   return { ok: true };
 }
 

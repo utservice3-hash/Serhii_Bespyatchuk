@@ -13,7 +13,7 @@ import { WIDGET_TAG, claimPatch, dealOwner } from "./owner.js";
 import { writable } from "./payments.js";
 import { PAID_TAG, dealPayState, decidePayment, parseEvent, webhookKeyOk, type PaymentEvent } from "./events.js";
 import { isNetError, withNetRetry } from "./kommoApi.js";
-import { zakaz1cFieldsMode, zakaz1cMode } from "./env.js";
+import { zakaz1cFieldsMode, zakaz1cMode, zakaz1cTesters } from "./env.js";
 import { BEFORE_PAID, PAID_STAGE, patchOf, planPayment, runPayments } from "./payments.js";
 import { invoiceCaption, noteInvoice } from "./notes.js";
 import { SERVICES } from "./invoice.js";
@@ -84,6 +84,19 @@ test("#7102 ТЕСТОВИЙ РЕЖИМ: off — нікому; test — лише
   assert.equal(zakaz1cMode({} as NodeJS.ProcessEnv), "off");
   assert.equal(zakaz1cMode({ ZAKAZ1C_MODE: "yes" } as NodeJS.ProcessEnv), "off");
   assert.equal(zakaz1cMode({ ZAKAZ1C_MODE: "TEST" } as NodeJS.ProcessEnv), "test");
+});
+
+test("#7137 ЗАКРИТИЙ ТЕСТ: live зі списком — справжній рахунок лише людям зі списку, решті відмова з порадою на Genesis", () => {
+  const pilot = { edrpou: "12345678", testEdrpou: "00100110", userId: 16040508, testers: new Set([16040508, 15537212]) };
+  assert.equal(invoiceAllowed("live", pilot).ok, true, "пілотному менеджеру в live не дозволено справжнього контрагента");
+  assert.equal(invoiceAllowed("live", { ...pilot, userId: 15537212 }).ok, true, "другому зі списку не дозволено");
+  const other = invoiceAllowed("live", { ...pilot, userId: 99 });
+  assert.equal(other.ok, false, "live зі списком пустив менеджера поза пілотом");
+  assert.match(other.ok ? "" : other.why, /Genesis/, "відмова не каже, куди йти");
+  assert.equal(invoiceAllowed("live", { ...pilot, edrpou: "" }).ok, false, "пілоту дозволено рахунок без ЄДРПОУ");
+  assert.equal(invoiceAllowed("live", { ...pilot, userId: 99, testers: new Set() }).ok, true, "порожній список у live мав пускати всіх");
+  // Список читається з env так само, як у test: пробіли/коми, сміття відкидається.
+  assert.deepEqual([...zakaz1cTesters({ ZAKAZ1C_TESTERS: " 16040508, 15537212 x" } as NodeJS.ProcessEnv)], [16040508, 15537212]);
 });
 
 const TODAY = "2026-10-28";
@@ -163,7 +176,7 @@ test("#7104 ВІДПОВІДЬ 1С: state:false — помилка словам�
 test("#7105 ВІДЖЕТ: вкладка card_sdk + lcard-0, `{}` лише тестувальникам, запити лише підписаним каналом, секретів немає", () => {
   const manifest = JSON.parse(WIDGET("manifest.json"));
   assert.ok(manifest.locations.includes("card_sdk") && manifest.locations.includes("lcard-0"), "без card_sdk/lcard-0 вкладки не буде");
-  assert.equal(JSON.parse(WIDGET("i18n/ru.json")).widget.name, "ТЕСТ ЗАКАЗ 1С");
+  assert.equal(JSON.parse(WIDGET("i18n/ru.json")).widget.name, "Закритий ТЕСТ 1С");
   const js = WIDGET("script.js");
   assert.match(js, /if \(!allowedHere\(\)\) return Promise\.resolve\(\[\]\);/, "не-тестувальнику вкладка не прибирається");
   assert.match(js, /return t\.length === 0 \|\| t\.indexOf\(me\(\)\) !== -1;/, "порожній список тестувальників не відкриває вкладку всім");

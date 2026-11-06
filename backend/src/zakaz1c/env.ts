@@ -9,7 +9,8 @@
  *   off  (типово) — маршрути відповідають 503, у 1С і Kommo не йде нічого;
  *   test — рахунок дозволено ЛИШЕ на тестового контрагента 1С (`ZAKAZ1C_TEST_EDRPOU`, типово 00100110) і лише
  *          тестувальникам із `ZAKAZ1C_TESTERS` (порожньо — будь-кому). Рахунок усе одно СПРАВЖНІЙ документ у робочій базі 1С;
- *   live — будь-який контрагент, будь-хто з доступом до угоди в Kommo. Вмикає лише власник.
+ *   live — будь-який контрагент. Якщо `ZAKAZ1C_TESTERS` заповнено — лише ці люди («Закритий ТЕСТ 1С», пілот з 06.11.2026);
+ *          порожньо — будь-хто з доступом до угоди в Kommo. Вмикає лише власник.
  */
 
 export type Zakaz1cMode = "off" | "test" | "live";
@@ -43,7 +44,7 @@ export function zakaz1cFieldsMode(env: NodeJS.ProcessEnv = process.env): Zakaz1c
   return m === "live" || m === "own" ? m : "off";
 }
 
-/** Kommo user id тестувальників (через кому). У режимі test — єдині, кому відкрито створення рахунку. */
+/** Kommo user id тестувальників (через кому). У test і live — єдині, кому відкрито створення рахунку; порожньо — усім. */
 export function zakaz1cTesters(env: NodeJS.ProcessEnv = process.env): Set<number> {
   return new Set(str(env.ZAKAZ1C_TESTERS).split(/[,\s]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0));
 }

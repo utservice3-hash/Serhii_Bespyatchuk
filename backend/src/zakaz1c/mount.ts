@@ -220,7 +220,7 @@ export function buildZakaz1cRouter(): Router {
     const c = await createCustomerIn1c(onecServiceBase(), built.body);
     if (!c.ok) return res.status(502).json({ error: c.why });
     if (!c.existed) {
-      await addLeadNote(leadId, `${testMark(mode)}Контрагента «${built.body.name}» створено в 1С з вкладки «ТЕСТ ЗАКАЗ 1С»`).catch(() => undefined);
+      await addLeadNote(leadId, `${testMark(mode)}Контрагента «${built.body.name}» створено в 1С з вкладки «Закритий ТЕСТ 1С»`).catch(() => undefined);
     }
     res.json({ existed: c.existed, warnings: c.warnings });
   });
@@ -268,7 +268,7 @@ export function buildZakaz1cRouter(): Router {
       const patch = claimPatch(leadId, lead, inv.number);
       if (patch) await patchLeads([patch]).catch((e) => { attachError = attachError ?? `угода Kommo: ${(e as Error).message.slice(0, 200)}`; });
       if (!lead.tags.includes(WIDGET_TAG)) {
-        await addLeadNote(leadId, `${testMark(mode)}Угоду веде віджет «ТЕСТ ЗАКАЗ 1С». Рахунки в цій угоді виставляйте там, Genesis не використовуйте.`)
+        await addLeadNote(leadId, `${testMark(mode)}Угоду веде віджет «Закритий ТЕСТ 1С». Рахунки в цій угоді виставляйте там, Genesis не використовуйте.`)
           .catch(() => undefined);
       }
     }
