@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AuthPayload } from "../../../auth";
 import { fetchOrphanClients, fetchManagerOptions, type OrphanPool, type ManagerOption } from "../../../api";
 import { ClientPlansSection } from "./ClientPlansSection";
+import { ClientLeadSection } from "./ClientLeadSection";
 import { OrphanPoolSection } from "./OrphanPoolSection";
 import { ArchiveSection } from "./ArchiveSection";
 import ClosedTasksSection from "./ClosedTasksSection";
@@ -24,9 +25,14 @@ import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
  * (КВП/ОД/адмін): показувати вкладку тому, кому сервер віддасть 403, означало б
  * запропонувати глухий кут.
  */
-type Tab = "plan" | "pool" | "archive" | "closed";
+/**
+ * 🚦 «З КИМ ГОВОРИТИ» — ПЕРША Й ТИПОВА (задача 7360, ТЗ Юлі 28.10.2026, етап 2): простий екран тімліда «команда →
+ * менеджер → клієнти» у трьох кольорах. Повна таблиця лишилась «Планом місяця» — ті самі клієнти, інша подача.
+ */
+type Tab = "lead" | "plan" | "pool" | "archive" | "closed";
 
 const TABS: { key: Tab; label: string }[] = [
+  { key: "lead", label: "З ким говорити" },
   { key: "plan", label: "План місяця" },
   { key: "pool", label: "Нічийні" },
   { key: "archive", label: "Архів" },
@@ -41,7 +47,9 @@ const TABS: { key: Tab; label: string }[] = [
  */
 function readTab(): Tab {
   const t = new URLSearchParams(window.location.search).get("tab");
-  return t === "pool" || t === "archive" || t === "closed" ? t : "plan";
+  // `?tab=react` — старе посилання на реактивацію: веде на повну таблицю, як і раніше (див. `cameFromReact`).
+  if (t === "react") return "plan";
+  return t === "plan" || t === "pool" || t === "archive" || t === "closed" ? t : "lead";
 }
 export function cameFromReact(): boolean {
   return new URLSearchParams(window.location.search).get("tab") === "react";
@@ -95,7 +103,7 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
                           // Реєстр закритих — та сама межа, що архів: адмін-рівень або тімлід.
                           && (t.key !== "closed" || canSeeArchive)),
     [canSeePool, canSeeArchive]);
-  const active = visible.some((t) => t.key === tab) ? tab : "plan";
+  const active = visible.some((t) => t.key === tab) ? tab : "lead";
 
   return (
     <div>
@@ -104,7 +112,7 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
           <div className="cl-crumb">Клієнти · {TABS.find((t) => t.key === active)?.label}</div>
           <h1 className="page-title">Клієнти</h1>
           <div className="cl-sub">
-            Один розділ — чотири роботи. Вкладка визначає, що ти зараз робиш; лічильник показує, де є робота.
+            Один розділ — п'ять робіт. Вкладка визначає, що ти зараз робиш; лічильник показує, де є робота.
           </div>
         </div>
       </div>
@@ -148,6 +156,7 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
         </div>
       )}
 
+      {active === "lead" && auth && <ClientLeadSection auth={auth} />}
       {active === "plan" && auth && <ClientPlansSection auth={auth} fromReact={cameFromReact()} />}
       {active === "pool" && canSeePool && <OrphanPoolSection auth={auth} managers={managers} />}
       {active === "archive" && canSeeArchive && <ArchiveSection auth={auth} />}

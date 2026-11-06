@@ -155,6 +155,8 @@ import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
 import * as repeatScreenRules from "../core/repeatScreenRules.js";
 import * as clientWorkProof from "../core/clientWorkProof.js";
+import * as clientLeadRules from "../core/clientLeadRules.js";
+import * as clientLeadFacts from "../core/clientLeadFacts.js";
 import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
@@ -6793,6 +6795,14 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   };
 
   const lastComment = await latestCommentByClient();
+  // 🚦 Екран тімліда «з ким з постійних говорити» (задача 7360): колір, «працюють», «передати іншому», лічильники.
+  // Правило — `core/clientLeadRules.ts`, факти — `core/clientLeadFacts.ts`; місяць лічильників — поточний (київський).
+  const leadFacts = await clientLeadFacts.leadFactsFor(pool, rosterRows.map((c) => c.client_key));
+  const leadTaskCreated = await clientLeadFacts.taskCreatedFor(pool,
+    rosterRows.map((c) => reactByKey.get(c.client_key)?.taskId).filter((x): x is number => x != null));
+  const leadYm = todayKyiv.slice(0, 7);
+  /** Ручний контакт зберігається в UTC (`…Z`) — день беремо київський. */
+  const kyivDayOfIso = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date(iso));
   const clients = rosterRows.map((c) => {
     const p = planByKey.get(c.client_key);
     const plan = p ? Number(p.plan) : 0;
@@ -6901,6 +6911,32 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         const inv = invoiceProofByKey.get(c.client_key), pay = paymentProofByKey.get(c.client_key);
         return { invoice: inv ? { kommoId: inv.kommoId, stage: inv.stage, at: inv.at, open: inv.open, url: kommoLeadUrl(inv.kommoId) } : null,
                  payment: pay ? { at: pay.at, amount: pay.amount } : null };
+      })(),
+      lead: (() => {
+        const f = leadFacts.get(c.client_key);
+        const segment = factsFor(seg, c.client_key).segment;
+        const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null);
+        const orderDays = lastOrder ? clientLeadRules.daysBetween(lastOrder, todayKyiv) : null;
+        const color = clientLeadRules.colorOf(segment, orderDays);
+        const rt = reactByKey.get(c.client_key);
+        const taskOpen = (rt?.taskId ?? null) != null && !["done", "cancelled"].includes(rt?.taskStatus ?? "");
+        const manualAt = manualByKey.get(c.client_key)?.at ?? null;
+        return {
+          color, lastOrder, orderDays,
+          works: clientLeadRules.workVerdict({
+            talk10: f?.talk10 ?? null, stage: f?.stage ?? null,
+            comment: lastComment.get(c.client_key)?.createdAt ?? null,
+            contact: manualAt ? kyivDayOfIso(manualAt) : null,
+            payment: paymentProofByKey.get(c.client_key)?.at ?? null,
+          }, segment, todayKyiv),
+          talk10: f?.talk10 ?? null,
+          summary: f?.summary ?? null,
+          handOver: clientLeadRules.handOverDue({ color, taskOpen, taskDeadline: rt?.taskDeadline ?? null,
+            taskCreated: rt?.taskId != null ? leadTaskCreated.get(rt.taskId) ?? null : null, talk10: f?.talk10 ?? null, today: todayKyiv }),
+          newRepeat: clientLeadRules.becameRepeatIn(f?.secondPaid ?? null, leadYm),
+          source: clientLeadRules.repeatSource(f?.leadgen ?? false, f?.firstPaidChannel ?? null),
+          lostThisMonth: clientLeadRules.lostIn(lastOrder, leadYm),
+        };
       })(),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
