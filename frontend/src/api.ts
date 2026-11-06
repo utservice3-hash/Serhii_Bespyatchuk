@@ -3415,7 +3415,8 @@ export async function uploadFile(file: File): Promise<{ url: string; name: strin
 
 export interface NewsItem {
   id: number;
-  category: "company" | "logistics" | "sales";
+  /** На сторінці лише `company` (06.11.2026: «Світ логістики» й «Продажі» прибрано). */
+  category: string;
   title: string;
   body: string | null;
   author: string | null;
@@ -3423,16 +3424,11 @@ export interface NewsItem {
   created_at: string;
 }
 
-export interface KmPrices {
-  price_date: string;
-  t20: number | null;
-  t10: number | null;
-  t5: number | null;
-  t2: number | null;
-}
+/** Вкладка «Новин»: `general` — додані вручну; `tech` — автоматичні про оновлення дашборда. */
+export type NewsKind = "general" | "tech";
 
-export async function fetchNews(category?: string): Promise<NewsItem[]> {
-  const { data } = await api.get<{ news: NewsItem[] }>("/news", { params: category ? { category } : {} });
+export async function fetchNews(kind?: NewsKind): Promise<NewsItem[]> {
+  const { data } = await api.get<{ news: NewsItem[] }>("/news", { params: kind ? { kind } : {} });
   return data.news;
 }
 
@@ -3442,20 +3438,6 @@ export async function addNews(payload: { category: string; title: string; body?:
 
 export async function deleteNews(id: number): Promise<void> {
   await api.delete(`/news/${id}`);
-}
-
-export async function fetchKmPrices(): Promise<KmPrices | null> {
-  const { data } = await api.get<{ prices: KmPrices | null }>("/news/km-prices");
-  return data.prices;
-}
-
-export async function saveKmPrices(p: {
-  t20: number | null;
-  t10: number | null;
-  t5: number | null;
-  t2: number | null;
-}): Promise<void> {
-  await api.put("/news/km-prices", p);
 }
 
 export interface ChatUser {
