@@ -17,7 +17,7 @@ import { checklist } from "./firstTouchTeamReport.js";
 type Row = {
   managerId: number | null; teamId: number | null; inReport: boolean; nonTarget: boolean;
   state: string; conversationType: string | null; priceDiscussed: boolean | null; hasRequest: boolean;
-  promiseState: null; objection: null; pipelineGroup: "full" | "qualification" | "other";
+  promiseState: null; objection: null; pipelineGroup: "full" | "qualification" | "other"; adaptation?: boolean | null;
 };
 const call = (managerId: number | null, teamId: number | null, o: Partial<Row> = {}): Row => ({
   managerId, teamId, inReport: true, nonTarget: false, state: "done", conversationType: "cargo_request",
@@ -34,6 +34,7 @@ const FIXTURE: Row[] = [
   call(2, 8, { priceDiscussed: true }), call(2, 8, { nonTarget: true, priceDiscussed: false }), // «Перевізник»
   call(2, 8, { priceDiscussed: false }),                                // цільовий, ціни не було
   call(null, null, { priceDiscussed: true }),                           // без менеджера
+  call(2, 8, { adaptation: true, priceDiscussed: false }),              // новачок на адаптації — не в балі команди (задача 7239)
 ];
 
 test("#3340 ЦІНУ НАЗВАНО · ПРАВИЛА: розмови → лічильники; поза знаменником — втрачений, «передзвоніть», нерозібрані; стани", () => {
@@ -74,6 +75,7 @@ interface ViewMod {
   applyListFilter: <T>(rows: readonly T[], f: object) => T[];
   tabRows: <T>(rows: readonly T[], tab: "report" | "excluded") => T[];
   tileStats: (rows: readonly unknown[]) => { price: { yes: number; of: number } };
+  firstTouchSummary: (rows: readonly unknown[]) => { tiles: { price: { yes: number; of: number } } };
 }
 async function loadView(): Promise<ViewMod> {
   const period = await transpile("pages/dashboard/periodRules.ts");
@@ -82,8 +84,11 @@ async function loadView(): Promise<ViewMod> {
 /** Рядок так, як його віддає `/ai-calls` (поля, які читають фільтр і плитка). Що роут справді так їх складає — `#3343`. */
 const asScreenRow = (r: Row) => ({ ...r, checklist: checklist(r as never),
   transportKind: null, dealOutcome: null, flags: { analysed: false, priceable: false, agreement: false, lost: false } });
+// 06.11.2026 (задача 7239 п.3): плитка — зі СПІЛЬНОЇ функції екрана (`firstTouchSummary`: той самий фільтр, вкладка «Звіт»,
+// без новачків на адаптації), а не з копії формули тут. Копія, написана в тесті, розійшлась із екраном на першій же зміні
+// (прод 06.11: «Звіт 272 з 459 ≠ плитка 316 з 630» — у копії не було фільтра новачків). Твердження те саме: Звіт == плитка.
 const screenPrice = (view: ViewMod, rows: readonly Row[]) =>
-  (({ yes, of }) => ({ yes, of }))(view.tileStats(view.tabRows(view.applyListFilter(rows.map(asScreenRow), view.DEFAULT_LIST_FILTER), "report")).price);
+  (({ yes, of }) => ({ yes, of }))(view.firstTouchSummary(rows.map(asScreenRow)).tiles.price);
 
 test("#3341 ЦІНУ НАЗВАНО · ЗВІТ == ПЛИТКА ЕКРАНА AI на фікстурі по обидва боки кожної межі", async () => {
   const view = await loadView();
