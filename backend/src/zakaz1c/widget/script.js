@@ -106,9 +106,7 @@ define(["jquery"], function ($) {
       + P + " .msg.err{background:var(--bad);color:var(--badt)}" + P + " .msg.ok{background:var(--ok);color:var(--okt)}" + P + " .msg.warn{background:var(--part);color:var(--partt)}"
       + P + " .tot{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:var(--mut)}" + P + " .tot b{color:var(--txt)}"
       + P + " .hint{display:block;margin-top:4px;font-size:11px;color:var(--mut)}" + P + " .hint b{font-weight:600;color:var(--txt);overflow-wrap:anywhere}"
-      + P + " .warnt{color:var(--partt)}" + P + " .line{display:grid;gap:4px}"
-      + P + " .pfxrow{display:flex;align-items:center;gap:6px}" + P + " .pfxrow .in{flex:1;min-width:120px}"
-      + P + " .pfx{font-size:12px;color:var(--mut);max-width:45%;line-height:1.25}"
+      + P + " .line{display:grid;gap:4px}"
       + P + " .lnk{background:none;border:0;padding:0;color:var(--mut);font-size:11.5px;cursor:pointer;text-decoration:underline}"
       + P + " .prev{border:1px dashed var(--line);border-radius:4px;padding:8px 10px;font-size:12.5px;display:grid;gap:4px;overflow-wrap:anywhere}"
       + P + " .x{background:none;border:0;color:var(--mut);font-size:18px;cursor:pointer;padding:0 4px}"
@@ -137,13 +135,21 @@ define(["jquery"], function ($) {
       if ([it.service, enOf(f, it)].some(function (n) { return n && low.indexOf(n.toLowerCase()) === 0; })) return text;
       return prefixOf(f, it) + ": " + text;
     }
-    /** «↺ як було»: з повного рядка — назад лише маршрут. Знімаємо назву БУДЬ-ЯКОЇ послуги: менеджер міг змінити послугу після «✎». */
+    /** Текст рядка без назви послуги на початку. Знімаємо назву БУДЬ-ЯКОЇ послуги організації (укр. чи англ.) — щойно змінили послугу. */
     function routeFrom(f, it) {
       var text = String(it.route || "").trim(), o = orgOf(f.org), en = o.servicesEn || {};
       var names = (o.services || []).concat(Object.keys(en).map(function (k) { return en[k]; }), [it.service])
         .sort(function (a, b) { return b.length - a.length; });
       var hit = names.filter(function (n) { return n && text.toLowerCase().indexOf(n.toLowerCase()) === 0; })[0];
       return hit ? text.slice(hit.length).replace(/^\s*:?\s*/, "") : text;
+    }
+    /**
+     * Рядок рахунку — ОДНЕ поле, менеджер пише його сам. Вибрали послугу, валюту чи організацію — назву послуги на початку
+     * міняємо на нову (у валюті — англійську), решту тексту не чіпаємо. `rest` — текст без старої назви, якщо вже знятий.
+     */
+    function retitle(f, it, rest) {
+      var r = rest == null ? routeFrom(f, it) : rest;
+      it.route = prefixOf(f, it) + ": " + r; it.full = true;
     }
 
     /** Ключ форми для 1С (`request_id`): одна відкрита форма — один рахунок, хоч скільки разів натиснуто «Виставити». */
@@ -162,23 +168,27 @@ define(["jquery"], function ($) {
 
     function newForm() {
       var d = state.data, o = d.orgs.filter(function (x) { return x.available; })[0] || d.orgs[0];
-      return {
+      var f = {
         requestId: uuid(), editUid: null,
         org: o.key, currency: "UAH", bankUid: defaultBank(o, "UAH"), agreement: "", vatType: o.vatTypes[0], dueDate: addDays(d.today, 7), actDate: "",
         crmComment: "", stamp: true,
-        items: [{ service: o.services[0], route: routeOf(d.lead), full: false, qty: 1, price: d.lead.price || "", vat: o.itemVats[0] }]
+        items: [{ service: o.services[0], route: routeOf(d.lead), full: true, qty: 1, price: d.lead.price || "", vat: o.itemVats[0] }]
       };
+      f.items.forEach(function (it) { retitle(f, it); });
+      return f;
     }
     /** «Змінити»: та сама форма з даними рахунку з журналу. Організація й валюта зафіксовані (так і в 1С). */
     function editForm(inv) {
       var o = orgOf(inv.org_key) || state.data.orgs[0];
       var items = (inv.items || []).map(function (it) { return { service: it.service, route: it.route, full: it.full === true, qty: it.qty, price: it.price, vat: it.vat }; });
+      // Рахунки до 0.5.2 зберігали лише маршрут — показуємо весь рядок, як його надрукувала 1С.
+      items.forEach(function (it) { if (!it.full) { it.route = lineOf({ org: o.key, currency: inv.currency }, it); it.full = true; } });
       return {
         requestId: "", editUid: inv.invoice_uid, editNo: inv.number_print,
         org: o.key, currency: inv.currency, bankUid: inv.bank_uid || defaultBank(o, inv.currency), agreement: inv.agreement_uid || "",
         vatType: inv.vat_type && o.vatTypes.indexOf(inv.vat_type) !== -1 ? inv.vat_type : o.vatTypes[0],
         dueDate: inv.due_date || "", actDate: inv.act_date || "", crmComment: inv.crm_comment || "", stamp: inv.stamp !== false,
-        items: items.length ? items : [{ service: o.services[0], route: "", full: false, qty: 1, price: inv.total, vat: o.itemVats[0] }]
+        items: items.length ? items : [{ service: o.services[0], route: o.services[0] + ": ", full: true, qty: 1, price: inv.total, vat: o.itemVats[0] }]
       };
     }
 
@@ -333,19 +343,11 @@ define(["jquery"], function ($) {
         + "<div class='row between'><div class='tot' data-z1c-tot>" + totHtml(t, f) + "</div><span class='row'><button class='btn' data-z1c='close'>Скасувати</button>"
         + "<button class='btn main' data-z1c='submit'" + (state.busy ? " disabled" : "") + ">" + (state.busy ? "Відправляємо в 1С…" : locked ? "Зберегти зміни в 1С" : "Виставити в 1С") + "</button></span></div></div>";
     }
-    /**
-     * Рядок рахунку: назва послуги стоїть перед полем маршруту й не редагується (щоб менеджер не продублював її);
-     * під полем — увесь рядок, як його надрукує 1С. «✎ редагувати весь рядок» — одне поле на весь текст, як у Genesis.
-     */
+    /** Рядок рахунку — одне поле: назва послуги підставляється сама, далі менеджер дописує маршрут і авто. Піде в 1С як є. */
     function lineHtml(f, it, i) {
-      var head = "<div class='row between'><span class='lbl' style='margin:0'>" + (it.full ? "Рядок у рахунку (весь)" : "Маршрут") + "</span>"
-        + "<button class='lnk' data-z1c='" + (it.full ? "unfull" : "full") + "' data-i='" + i + "'>" + (it.full ? "↺ як було" : "✎ редагувати весь рядок") + "</button></div>";
-      var field = it.full
-        ? "<input class='in' data-i='" + i + "' data-f='route' value='" + esc(it.route) + "'>"
-        : "<div class='pfxrow'><span class='pfx' title='Назва послуги — підставляється сама'>" + esc(prefixOf(f, it)) + ":</span>"
-          + "<input class='in' data-i='" + i + "' data-f='route' value='" + esc(it.route) + "' placeholder='" + (f.currency === "UAH" ? "м. Київ (Київська обл.) – м. Львів (Львівська обл.)" : "Kyiv (Ukraine) – Warsaw (Poland)") + "'></div>";
-      var warn = it.full && it.changed ? "<span class='hint warnt'>послугу чи валюту змінено — перевірте текст рядка</span>" : "";
-      return "<div class='line'>" + head + field + warn + "<span class='hint'>У рахунку буде: <b data-z1c-line='" + i + "'>«" + esc(lineOf(f, it)) + "»</b></span></div>";
+      return "<label class='line'><span class='lbl' style='margin:0'>Рядок у рахунку</span>"
+        + "<textarea class='in' rows='2' data-i='" + i + "' data-f='route'>" + esc(it.route) + "</textarea>"
+        + "<span class='hint'>Назва послуги підставляється сама, коли її вибираєте; допишіть маршрут" + (f.currency === "UAH" ? "" : " англійською") + ". У рахунок піде рівно цей текст.</span></label>";
     }
     function totHtml(t, f) {
       return "Сума <b>" + money(t.sub) + "</b>"
@@ -494,19 +496,18 @@ define(["jquery"], function ($) {
         var o = orgOf(String(b.data("v")));
         if (f.editUid && o.key !== f.org) { say("warn", "Організацію рахунку змінити не можна — виставте новий рахунок."); render(); return; }
         if (!o.available) { say("warn", o.waits); render(); return; }
+        var rests = f.items.map(function (it) { return routeFrom(f, it); });
         f.org = o.key; f.bankUid = defaultBank(o, f.currency); f.agreement = ""; f.vatType = o.vatTypes[0];
-        f.items.forEach(function (it) { if (o.services.indexOf(it.service) === -1) { it.service = o.services[0]; if (it.full) it.changed = true; } it.vat = o.itemVats[0]; });
+        f.items.forEach(function (it, j) { if (o.services.indexOf(it.service) === -1) it.service = o.services[0]; it.vat = o.itemVats[0]; retitle(f, it, rests[j]); });
         state.msg = null;
       }
       else if (a === "cur") {
         if (f.editUid && String(b.data("v")) !== f.currency) { say("warn", "Валюту рахунку змінити не можна — виставте новий рахунок."); render(); return; }
-        if (String(b.data("v")) !== f.currency) f.items.forEach(function (it) { if (it.full) it.changed = true; });
         f.currency = String(b.data("v")); f.agreement = ""; f.bankUid = defaultBank(orgOf(f.org), f.currency);
+        f.items.forEach(function (it) { retitle(f, it); });
       }
       else if (a === "bank") f.bankUid = String(b.data("v"));
-      else if (a === "add") { var oo = orgOf(f.org); f.items.push({ service: oo.services[0], route: "", full: false, qty: 1, price: "", vat: oo.itemVats[0] }); }
-      else if (a === "full") { var fi = f.items[Number(b.data("i"))]; fi.route = lineOf(f, fi); fi.full = true; fi.changed = false; }
-      else if (a === "unfull") { var ui = f.items[Number(b.data("i"))]; ui.route = routeFrom(f, ui); ui.full = false; ui.changed = false; }
+      else if (a === "add") { var oo = orgOf(f.org), ni = { service: oo.services[0], route: "", full: true, qty: 1, price: "", vat: oo.itemVats[0] }; retitle(f, ni); f.items.push(ni); }
       else if (a === "rm") f.items.splice(Number(b.data("i")), 1);
       else if (a === "submit") { submit(); return; }
       else if (a === "customer") { createCustomer(); return; }
@@ -532,10 +533,9 @@ define(["jquery"], function ($) {
       if (k) f[k] = el.is(":checkbox") ? el.prop("checked") : el.val();
       else if (i !== undefined) {
         var it = f.items[Number(i)], fld = el.data("f");
+        // Інша послуга — нова назва на початку рядка (стару знімаємо ДО зміни послуги), решта тексту лишається. Це select — курсор не губиться.
+        if (fld === "service") { var rest = routeFrom(f, it); it.service = el.val(); retitle(f, it, rest); render(); return; }
         it[fld] = el.val();
-        // Інша послуга — інша назва в рядку: перемальовуємо (це select, курсор не губиться). Ручний рядок не чіпаємо — лише попереджаємо.
-        if (fld === "service") { if (it.full) it.changed = true; render(); return; }
-        if (fld === "route") root().find("[data-z1c-line='" + i + "']").text("«" + lineOf(f, it) + "»");
       }
       root().find("[data-z1c-tot]").html(totHtml(calc(f), f));
     }
