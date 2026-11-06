@@ -18,13 +18,15 @@ const RED = "#b3261e", GREEN = "#16a34a", AMBER = "#b45309";
 const addDays = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const mondayOf = (iso: string) => addDays(iso, -((new Date(`${iso}T12:00:00Z`).getUTCDay() + 6) % 7));
 export const fmtAt = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+const ddmm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit" }) : "запуску бота");
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
 const PRESETS: { key: Preset; label: string }[] = [{ key: "week", label: "Цей тиждень" }, { key: "month", label: "Місяць" }, { key: "custom", label: "з – по" }];
 
 const STATE: Record<string, { label: string; color: string; bg: string }> = {
   offered: { label: "у менеджера", color: AMBER, bg: "rgba(180,83,9,0.10)" },
   taken: { label: "взяв", color: GREEN, bg: "rgba(22,163,74,0.10)" },
-  dispatcher: { label: "у Даші", color: RED, bg: "rgba(179,38,30,0.08)" },
+  dispatcher: { label: "на Операційному директорі", color: RED, bg: "rgba(179,38,30,0.08)" },
   waiting: { label: "чекає", color: MUTED, bg: "var(--bg)" },
   gone: { label: "пішла з черги", color: MUTED, bg: "var(--bg)" },
 };
@@ -134,17 +136,33 @@ function StatsTab({ s }: { s: LinkedinStats }) {
   return (
     <>
       <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}>
-        <div className="kpi-card"><span className="kpi-label">{s.scope === "all" ? "Заявок створено" : "Заявок отримано"}</span><span className="kpi-value">{k.created}</span>
-          <span style={{ fontSize: 11, color: MUTED }}>{s.scope === "all" ? "нові угоди на етапі «LinkedIn»" : s.scope === "own" ? "бот пропонував мені" : "бот пропонував команді"}</span></div>
+        <div className="kpi-card"><span className="kpi-label">{s.stage ? "Заявок створено" : "Заявок отримано"}</span><span className="kpi-value">{s.stage ? s.stage.created : k.created}</span>
+          <span style={{ fontSize: 11, color: MUTED }}>{s.stage ? `угоди на етапі «LinkedIn»${s.stage.firstDay ? ` (етап з ${ddmm(s.stage.firstDay)})` : ""}` : s.scope === "own" ? "бот пропонував мені" : "бот пропонував команді"}</span></div>
         <div className="kpi-card"><span className="kpi-label">Взяли через бота</span><span className="kpi-value">{k.taken}</span>
-          <span style={{ fontSize: 11, color: MUTED }}>{k.created ? `${String(Math.round((k.taken / k.created) * 100))}% заявок` : "—"}</span></div>
-        {k.dispatcher != null && <div className="kpi-card" style={k.dispatcher ? { borderLeft: `4px solid ${RED}` } : undefined}><span className="kpi-label">Пішли Даші</span><span className="kpi-value">{k.dispatcher}</span>
+          <span style={{ fontSize: 11, color: MUTED }}>{k.created ? `${String(Math.round((k.taken / k.created) * 100))}% із ${String(k.created)}${s.stage ? " у черзі бота" : ""}` : "—"}</span></div>
+        {k.dispatcher != null && <div className="kpi-card" style={k.dispatcher ? { borderLeft: `4px solid ${RED}` } : undefined}><span className="kpi-label">Пішли на Операційного директора</span><span className="kpi-value">{k.dispatcher}</span>
           <span style={{ fontSize: 11, color: MUTED }}>{k.dispatcherDup} дублі · {k.dispatcherNobody} ніхто не взяв</span></div>}
         <div className="kpi-card"><span className="kpi-label">Сер. час взяття</span><span className="kpi-value">{k.avgTakeMin == null ? "—" : `${String(k.avgTakeMin)} хв`}</span>
           <span style={{ fontSize: 11, color: MUTED }}>від пропозиції до «Взяти»</span></div>
         <div className="kpi-card" title="Машини рахуються з каналу LinkedIn: потрібне джерело «LinkedIn» у Kommo і прохід «канал LinkedIn»"><span className="kpi-label">Машин поїхало</span><span className="kpi-value">—</span>
           <span style={{ fontSize: 11, color: MUTED }}>зʼявиться з каналом LinkedIn</span></div>
       </div>
+
+      {s.stage && (
+        <div className="chart-card" style={{ marginTop: 16 }}>
+          <h2 className="chart-title">Створено по днях</h2>
+          {s.stage.byDay.length === 0 ? <p className="loading-text">За період нових угод на етапі «LinkedIn» не було.</p> : (
+            <table className="data-table">
+              <thead><tr><th>Дата</th><th style={{ textAlign: "right" }}>Створено</th></tr></thead>
+              <tbody>
+                {s.stage.byDay.map((d) => <tr key={d.day}><td>{ddmm(d.day)}</td><td style={{ textAlign: "right" }}>{d.count}</td></tr>)}
+                <tr style={{ fontWeight: 700 }}><td>Разом</td><td style={{ textAlign: "right" }}>{s.stage.created}</td></tr>
+              </tbody>
+            </table>
+          )}
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>За датою створення угоди в Kommo. Хто взяв і скільки проігнорував — лише через бота, з {fmtDay(s.queue.launchedAt)}.</div>
+        </div>
+      )}
 
       <div className="chart-card" style={{ marginTop: 16 }}>
         <h2 className="chart-title">{s.scope === "own" ? "Мої показники" : "По менеджерах"}</h2>

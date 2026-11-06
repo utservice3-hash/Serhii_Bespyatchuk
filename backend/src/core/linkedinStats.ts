@@ -1,6 +1,7 @@
 import type { Db } from "./adCallFacts.js";
 import { closeModeOf, type CloseMode } from "./carrierClose.js";
 import { DUP_REASON_PREFIX, nextInRing } from "./linkedinQueue.js";
+import { loadStageCreated, type StageCreated } from "./linkedinStageDeals.js";
 
 /**
  * 🔗 «Клієнти → LinkedIn» (задача 7361): статистика черги за період. Без пулу й без `metrics.ts` — гейти `#3406`/`#3414`
@@ -38,6 +39,8 @@ export interface LinkedinStats {
   kpi: { created: number; taken: number; dispatcher: number | null; dispatcherDup: number | null; dispatcherNobody: number | null; avgTakeMin: number | null };
   perManager: QueueStat[];
   items: QueueItemView[];
+  /** 📅 Лише керівництву: угоди, створені на етапі «LinkedIn» від початку етапу (не лише через бота), по днях. */
+  stage: StageCreated | null;
   /** Рядок черги (хто в колі, хто наступний) — лише керівництву; іншим `members`/`nextName` порожні. */
   queue: { mode: CloseMode; members: number; nextName: string | null; launchedAt: string | null;
     paused: boolean; pausedBy: string | null; pausedAt: string | null };
@@ -110,7 +113,7 @@ export async function loadLinkedinStats(db: Db, fromRaw: unknown, toRaw: unknown
     kpi: { created: Number(k.created), taken: Number(k.taken),
       dispatcher: all ? Number(k.disp) : null, dispatcherDup: all ? Number(k.dup) : null, dispatcherNobody: all ? Number(k.disp) - Number(k.dup) : null,
       avgTakeMin: k.avg_min == null ? null : Number(k.avg_min) },
-    perManager, items,
+    perManager, items, stage: all ? await loadStageCreated(db, from, to) : null,
     queue: { mode: closeModeOf(modeRaw), members: ring.length, nextName: ring.find((r) => r.id === nextId)?.name ?? null,
       launchedAt: st?.launched_at ? new Date(st.launched_at).toISOString() : null,
       paused: st?.paused ?? false, pausedBy: all ? st?.pname ?? null : null, pausedAt: st?.paused_at ? new Date(st.paused_at).toISOString() : null },

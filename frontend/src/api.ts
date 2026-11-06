@@ -6707,6 +6707,8 @@ export interface LinkedinStats {
   perManager: { managerId: number; name: string; received: number; taken: number; ignored: number; avgTakeMin: number | null }[];
   items: { kommoId: number; dealName: string | null; state: string; managerName: string | null; reason: string | null;
     seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number }[];
+  /** Лише керівництву: угоди, створені на етапі «LinkedIn» від початку етапу, по днях (не лише через бота). */
+  stage: { created: number; firstDay: string | null; byDay: { day: string; count: number }[] } | null;
   queue: { mode: "off" | "dry" | "live"; members: number; nextName: string | null; launchedAt: string | null;
     paused: boolean; pausedBy: string | null; pausedAt: string | null };
 }

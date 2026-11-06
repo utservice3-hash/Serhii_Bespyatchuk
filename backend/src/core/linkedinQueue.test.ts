@@ -439,3 +439,48 @@ test("#3415 «Підключіть бот заявок»: менеджер і т
   assert.equal(await person("m-q", "manager", null, true), true, "🔴 Юля внесла в коло, а плашки немає — заявки не дійдуть");
   assert.equal(await person("hr", "hr", "2025-01-01"), false, "🔴 HR бачить плашку бота заявок");
 });
+
+test("#3416 «створено з початку етапу»: тік пише всі угоди етапу (і до запуску бота), без дублів; раз на добу — ті, що пішли; перенесені з іншого етапу не рахуються; межі дат по-київськи включно; лише керівництву", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { sweepStageHistory, SWEEP_EVERY_MS } = await import("./linkedinStageDeals.js");
+  const { loadLinkedinStats } = await import("./linkedinStats.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`TRUNCATE linkedin_stage_deals, linkedin_queue_items, linkedin_queue_log, linkedin_queue_members, linkedin_queue_settings`);
+  const lead = (id: number, iso: string): StageLead => ({ id, name: `Етап ${String(id)}`, createdAt: Z(iso), responsibleUserId: 1 });
+  // Жовтень після 25.10 — Київ = UTC+2. 8001: 30.10 00:30 (перший день — так); 8005 — на етапі, але прийшов з іншого етапу.
+  const stage = [lead(8001, "2026-10-29T22:30:00Z"), lead(8005, "2026-10-30T10:00:00Z"), lead(8002, "2026-11-04T08:01:00Z")];
+  const tick = (iso: string) => runLinkedinQueueTick({ db: c.db, mode: "dry", now: () => new Date(iso), stageLeads: async () => stage, ownerOf: async () => null });
+  await tick("2026-11-04T08:02:00Z");
+  await tick("2026-11-04T08:04:00Z");
+  assert.deepEqual((await q(`SELECT kommo_id::int AS id FROM linkedin_stage_deals ORDER BY 1`)).rows.map((r) => r.id), [8001, 8002, 8005],
+    "🔴 тік не записав угоди етапу (або записав двічі) — старі угоди до запуску бота мають бути в списку");
+  // Пішли з етапу: 8003 — 29.10 23:30 (до періоду), 8004 — 31.10 23:30 (останній день — так), 8006 — 01.11 00:30 (після).
+  const gone = new Map([lead(8003, "2026-10-29T21:30:00Z"), lead(8004, "2026-10-31T21:30:00Z"), lead(8006, "2026-10-31T22:30:00Z"), lead(8005, "2026-10-30T10:00:00Z")].map((l) => [l.id, l]));
+  const deps = { leftIds: async () => [8003, 8004, 8006, 8003], movedInIds: async () => [8005], leads: async (ids: number[]) => ids.map((id) => gone.get(id)!).filter(Boolean) };
+  const t0 = new Date("2026-11-04T09:00:00Z");
+  assert.deepEqual(await sweepStageHistory(c.db, deps, t0), { left: 3, movedIn: 1 });
+  assert.equal(await sweepStageHistory(c.db, deps, new Date(t0.getTime() + 3600_000)), null, "🔴 добір історії ходить у Kommo частіше за раз на добу");
+  assert.ok(await sweepStageHistory(c.db, deps, new Date(t0.getTime() + SWEEP_EVERY_MS + 1)), "🔴 за добу добір історії не повторився");
+  assert.equal((await q(`SELECT COUNT(*)::int AS n FROM linkedin_stage_deals`)).rows[0].n, 6);
+  assert.equal((await q(`SELECT moved_in FROM linkedin_stage_deals WHERE kommo_id = 8005`)).rows[0].moved_in, true, "🔴 перенесену на етап угоду не позначено");
+  const all = await loadLinkedinStats(c.db, "2026-10-30", "2026-10-31", "", t0, { kind: "all" });
+  assert.deepEqual(all.stage, { created: 2, firstDay: "2026-10-29", byDay: [{ day: "2026-10-30", count: 1 }, { day: "2026-10-31", count: 1 }] },
+    "🔴 «створено по днях»: межі періоду не по-київськи включно або перенесена угода порахована як створена");
+  const own = await loadLinkedinStats(c.db, "2026-10-30", "2026-10-31", "", t0, { kind: "own", managerId: -1 });
+  assert.equal(own.stage, null, "🔴 менеджер бачить усі угоди етапу");
+  const team = await loadLinkedinStats(c.db, "2026-10-30", "2026-10-31", "", t0, { kind: "team", teamId: -1 });
+  assert.equal(team.stage, null, "🔴 тімлід бачить усі угоди етапу");
+  assert.equal(all.kpi.created, 0, "🔴 старі угоди потрапили в журнал бота — «взяли через бота» рахувався б від них");
+});
+
+test("#3417 екран: «Пішли на Операційного директора» — без «Даші»; «Створено» керівництву — з угод етапу; джоба черги щодня добирає історію етапу", () => {
+  const ui = read("frontend/src/pages/dashboard/sections/LinkedinSection.tsx");
+  assert.match(ui, /<span className="kpi-label">Пішли на Операційного директора<\/span>/, "🔴 плитку не перейменовано");
+  assert.doesNotMatch(ui, /Даш/, "🔴 на екрані лишилась «Даша» (Роман 06.11.2026: «Пішли на Операційного директора»)");
+  assert.match(ui, /\{s\.stage \? s\.stage\.created : k\.created\}/, "🔴 «Заявок створено» керівництву не з угод етапу");
+  const job = read("backend/src/jobs/linkedinQueueJob.ts");
+  const body = job.slice(job.indexOf("export async function linkedinQueueJob"), job.indexOf("async function stageEventIds"));
+  assert.match(body, /\bawait sweepLinkedinStageHistory\(\)/, "🔴 джоба черги не добирає угоди, що пішли з етапу");
+  assert.match(job, /filter\[\$\{side\}\]\[leads_statuses\]\[0\]\[status_id\]=\$\{String\(statusId\)\}/, "🔴 події Kommo не відфільтровано по етапу LinkedIn");
+});

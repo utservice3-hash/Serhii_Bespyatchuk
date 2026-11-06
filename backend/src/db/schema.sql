@@ -7594,6 +7594,19 @@ CREATE TABLE IF NOT EXISTS linkedin_queue_log (
   at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_linkedin_queue_log_deal ON linkedin_queue_log (kommo_id, at);
+-- 📅 Угоди етапу «LinkedIn» від створення етапу (Роман 06.11.2026: «по старих угодах можемо просто показати скільки
+-- створено і в яку дату, інші етапи не відстежуємо, тільки через бота потім»). Журнал черги знає лише угоди після запуску
+-- бота, а `deal_stage_events` цього етапу не пише (заміряно 06.11: 0 подій), тож список веде сама джоба черги: кожен тік —
+-- ті, що зараз на етапі; раз на добу — з подій Kommo ті, що з етапу вже пішли. `moved_in` — перенесені на етап з іншого
+-- етапу: у «створено» не йдуть (за весь час таких 0; зʼявляться — питання до Юлі).
+CREATE TABLE IF NOT EXISTS linkedin_stage_deals (
+  kommo_id          BIGINT PRIMARY KEY,
+  deal_name         TEXT,
+  created_at_kommo  TIMESTAMPTZ NOT NULL,
+  moved_in          BOOLEAN NOT NULL DEFAULT false,
+  found_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS history_swept_at TIMESTAMPTZ;
 -- Право вести список черги: Юля (kvp) і адмін («Зроби список у налаштуваннях, щоб я могла його міняти без тебе»).
 UPDATE roles SET permissions = permissions || '{"manage_linkedin_queue": true}'::jsonb
  WHERE key IN ('admin', 'kvp');

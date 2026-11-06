@@ -66,7 +66,7 @@ export default function LinkedinQueueTab({ onSaved }: { onSaved?: () => void }) 
             <button type="button" className="hr-btn" disabled={!dirty || busy} onClick={() => void save()} style={dirty ? dark : undefined}>Зберегти</button>
           </div>
         </div>
-        {order.length === 0 ? <p className="loading-text">Список порожній — кожна заявка лишиться на «Операційному директорі» для Даші.</p> : (
+        {order.length === 0 ? <p className="loading-text">Список порожній — кожна заявка лишиться на «Операційному директорі».</p> : (
           <table className="data-table">
             <thead><tr><th style={{ width: 40 }}>№</th><th>Менеджер</th><th>Команда</th><th>Працює з</th><th>Бот</th><th>Сьогодні</th><th style={{ textAlign: "right" }}>Порядок</th></tr></thead>
             <tbody>

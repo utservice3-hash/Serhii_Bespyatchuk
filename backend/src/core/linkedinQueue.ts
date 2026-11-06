@@ -1,4 +1,5 @@
 import type { Db } from "./adCallFacts.js";
+import { recordStageDeals } from "./linkedinStageDeals.js";
 import type { CloseMode } from "./carrierClose.js";
 import { isWorkTime, kyivAt, kyivParts, WORK_END_HOUR, WORK_START_HOUR } from "./leadTakeRules.js";
 
@@ -156,6 +157,8 @@ export async function runLinkedinQueueTick(d: QueueDeps): Promise<QueueReport> {
 
   const leads = await d.stageLeads();
   rep.onStage = leads.length;
+  // 📅 Список угод етапу для «створено з початку етапу» — усі, що на етапі, включно з тими, що були до запуску бота.
+  await recordStageDeals(d.db, leads, now);
   const onStage = new Map(leads.map((l) => [l.id, l]));
   const log = (kommoId: number | string, kind: string, managerId: number | null, note: string | null) =>
     d.db.query(`INSERT INTO linkedin_queue_log (kommo_id, kind, manager_id, note, mode, at) VALUES ($1, $2, $3, $4, $5, $6)`,
