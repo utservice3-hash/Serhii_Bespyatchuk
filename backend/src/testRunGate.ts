@@ -428,6 +428,8 @@ export const ALLOWED_PROD_SKIPS: { name: string; why: string }[] = [
     why: "порожній кластер (`provisionScratch`) — на прод-сервері бінарів PostgreSQL немає за побудовою; у `npm test` обовʼязковий" },
   { name: "#1401 ЖИВИЙ SQL СИНКУ: upsertDeal пише deals.ttn_files і на вставці, і на оновленні",
     why: "порожній кластер (`provisionScratch`) — на прод-сервері бінарів PostgreSQL немає за побудовою; у `npm test` обовʼязковий" },
+  { name: "#3775 ЖИВИЙ SQL LTV: люди + «Інші» = відділ, пул окремо, приріст за період ядром, межа лідгена й тімліда",
+    why: "порожній кластер (`provisionScratch`) — на прод-сервері бінарів PostgreSQL немає за побудовою; у `npm test` обовʼязковий" },
   { name: "#3765 ЖИВИЙ SQL ТТН: за документами — оплата й оригінали, розхід не важить, з файлом не двічі, непрочитане — не синхронізовано",
     why: "порожній кластер (`provisionScratch`) — на прод-сервері бінарів PostgreSQL немає за побудовою; у `npm test` обовʼязковий" },
   { name: "#3762 ЖИВИЙ SQL СИНКУ: upsertDeal пише deals.originals_received і на вставці, і на оновленні",

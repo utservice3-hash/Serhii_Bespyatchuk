@@ -125,6 +125,7 @@ import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
 import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
+import { buildLeadgenLtv } from "./jobs/buildLeadgenLtv.js";
 import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
@@ -857,6 +858,11 @@ if (CP_BACKGROUND_ON()) {
 cron.schedule("50 */3 * * *", () => {
   void runJob("syncCashIncome", () => syncCashIncome());
 });
+
+// 💎 LTV клієнтів лідогенерації (ТЗ 28.10.2026) — о :12 і :42, між синком Kommo, фінполями й подіями стадій.
+cron.schedule("12,42 * * * *", () => {
+  void runJob("buildLeadgenLtv", () => buildLeadgenLtv());
+}, { timezone: "Europe/Kyiv" });
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {

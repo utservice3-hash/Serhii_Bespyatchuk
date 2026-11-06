@@ -231,6 +231,33 @@ export async function fetchLeadgenStageDeals(params: { from: string; to: string;
   const { data } = await api.get<LeadgenStageDealsResp>("/dashboard/leadgen-stage-deals", { params });
   return data;
 }
+
+// 💎 LTV клієнтів лідогенерації (ТЗ 28.10.2026). Дзеркало `core/leadgenLtv.ts` / `leadgenLtvRules.ts`.
+export interface LtvAgg {
+  clients: number; ltv: number; turnover: number; avg: number | null; repeatPct: number | null; dealsPerClient: number | null;
+  growth: number; newClients: number;
+}
+export interface LtvClient {
+  clientKey: string; name: string; firstDay: string; firstDealId: number; firstDealUrl: string; handoffDay: string;
+  handedBy: string; deals: number; ltv: number; turnover: number; ownerName: string | null; segment: string | null; state: string | null;
+  marks: ("merged" | "pool")[];
+}
+export interface LtvPerson { managerId: number | null; name: string; dismissed: boolean; agg: LtvAgg; pool: { clients: number; ltv: number }; top: LtvClient[] }
+export interface LtvCohort extends LtvAgg { ym: string; warn: boolean; unlinkedPct: number | null }
+export interface LeadgenLtvResp {
+  builtAt: string | null; from: string; to: string; totals: LtvAgg; pool: { clients: number; ltv: number };
+  people: LtvPerson[]; others: { agg: LtvAgg; pool: { clients: number; ltv: number }; people: LtvPerson[] } | null;
+  cohorts: LtvCohort[]; unknownActors: number; turnoverMissing: number;
+}
+export async function fetchLeadgenLtv(params: { from: string; to: string; managerId?: number }): Promise<LeadgenLtvResp> {
+  const { data } = await api.get<LeadgenLtvResp>("/dashboard/leadgen-ltv", { params });
+  return data;
+}
+export interface LeadgenLtvClientsResp { clients: LtvClient[]; pool: { clientKey: string; name: string; takenAt: string; ltv: number; deals: number; handedBy: string }[] }
+export async function fetchLeadgenLtvClients(params: { managerId?: number }): Promise<LeadgenLtvClientsResp> {
+  const { data } = await api.get<LeadgenLtvClientsResp>("/dashboard/leadgen-ltv-clients", { params });
+  return data;
+}
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
 export async function fetchLeadgenHandoffDeals(params: { from: string; to: string; managerId?: number }): Promise<LeadgenHandoffDealsResp> {

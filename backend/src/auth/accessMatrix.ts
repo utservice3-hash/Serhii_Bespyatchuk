@@ -761,6 +761,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🔎 «Які угоди рахуємо» (16.10.2026) — межі ті самі, що в «Гроші з передач» (`handoffDealsScope`).
   { method: "GET", path: "/api/dashboard/leadgen-stage-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 💎 LTV клієнтів лідогенерації (ТЗ 28.10.2026, п. 6): ті самі межі, що решта вкладки — `ltvAccess` над `leadgenViewer`;
+  // менеджер поза командою — 403 (проба ходить від нього), лідген — лише свої (тримає `#3772`).
+  { method: "GET", path: "/api/dashboard/leadgen-ltv", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "GET", path: "/api/dashboard/leadgen-ltv-clients", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   // 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) — дзеркало формування плану продажів:
   // перегляд — як `/leadgen-stats`; подає тімлід (своя команда) і адмін-рівень, менеджер — 403
   // першим оператором; затверджує й повертає ЛИШЕ адмін-рівень (`requireRole("admin")`, як

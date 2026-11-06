@@ -108,6 +108,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/leadgen-trend"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen-handoff-deals"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen-stage-deals"), tabs: ["leadgen"] },
+    // 💎 LTV клієнтів лідогенерації (ТЗ 28.10.2026): блок і вкладка «Клієнти LTV» — та сама вкладка; сусід через дефіс — інший роут.
+    { test: pre("/api/dashboard/leadgen-ltv"), tabs: ["leadgen"] },
+    { test: pre("/api/dashboard/leadgen-ltv-clients"), tabs: ["leadgen"] },
     // 📋 Плани лідгенів (25.09.2026): список + подання/затвердження/повернення — ЯВНО, та сама причина.
     { test: pre("/api/dashboard/leadgen-plans"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen"), tabs: ["leadgen"] },
