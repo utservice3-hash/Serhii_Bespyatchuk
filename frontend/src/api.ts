@@ -1311,9 +1311,13 @@ export async function saveAdBalance(balance: number): Promise<{ balance: AdBalan
   const { data } = await api.post<{ balance: AdBalance | null; syncedAt: string | null }>("/dashboard/ads/balance", { balance });
   return data;
 }
-export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[] }> {
-  const { data } = await api.get<{ day: string; deals: AdsDeal[] }>("/dashboard/ads/deals", { params: { day } });
-  return data;
+/** 🧾 Угода, за яку гроші «надійшли цього дня»: success — «Успішно» (142), paid — «Оплата отримана». */
+export interface AdsReceivedDeal {
+  kommoId: number; name: string; price: number; leadDay: string; state: "success" | "paid"; manager: string | null; url: string;
+}
+export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[]; received: AdsReceivedDeal[] }> {
+  const { data } = await api.get<{ day: string; deals: AdsDeal[]; received?: AdsReceivedDeal[] }>("/dashboard/ads/deals", { params: { day } });
+  return { ...data, received: data.received ?? [] };
 }
 
 /** Запис місячного плану. `month` — будь-який день потрібного місяця. */

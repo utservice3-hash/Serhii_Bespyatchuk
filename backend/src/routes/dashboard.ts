@@ -6145,7 +6145,7 @@ dashboardRouter.get("/ads/deals", async (req, res) => {
   const day = dateParam(req.query.day);
   if (!day) return res.status(400).json({ error: "day required" });
   const { adSources } = await getSettings();
-  const deals = await metrics.adDealsByDay(day, adSources);
+  const [deals, received] = await Promise.all([metrics.adDealsByDay(day, adSources), money.adReceivedDeals(day, adSources)]);
   res.json({
     day,
     deals: deals.map((d) => ({
@@ -6155,6 +6155,16 @@ dashboardRouter.get("/ads/deals", async (req, res) => {
       state: d.state,
       reachedMoney: d.reachedMoney,
       url: kommoLeadUrl(d.kommoId), // спільний хелпер: база береться з конфігу в одному місці
+    })),
+    // 🧾 За які угоди «Надійшло цього дня» (05.11.2026) — той самий доступ, що й склад дня.
+    received: received.map((d) => ({
+      kommoId: d.kommoId,
+      name: d.name,
+      price: d.price,
+      leadDay: d.leadDay,
+      state: d.state,
+      manager: d.manager,
+      url: kommoLeadUrl(d.kommoId),
     })),
   });
 });
