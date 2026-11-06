@@ -654,6 +654,22 @@ test("#7136 ВІКНО: ОДНЕ ПОЛЕ «РЯДОК У РАХУНКУ» — �
   const own = { service: ROUTE, route: "Перевезення вантажу Львів – Київ", full: true };
   w.retitle({ org: "x", currency: "UAH" }, own);
   assert.equal(own.route, `${ROUTE}: Перевезення вантажу Львів – Київ`, "свій текст менеджера загубився");
+  // 06.11.2026 Роман поправив саму назву («…за шрутом:»), змінив послугу й повернув — назва задвоїлась. Зіпсована назва — теж назва.
+  const UA = "Організація перевезення в межах території України за маршрутом";
+  const typo = { service: UA, route: `${UA.replace("маршрутом", "шрутом")}: ТЕСТ – ТЕСТ`, full: true };
+  w.retitle({ org: "x", currency: "UAH" }, typo);
+  assert.equal(typo.route, `${UA}: ТЕСТ – ТЕСТ`, "поправлену назву не впізнано — назва задвоїлась");
+  const dup = { service: UA, route: `${UA}: ${UA.replace("маршрутом", "шрутом")}: ТЕСТ – ТЕСТ`, full: true };
+  w.retitle({ org: "x", currency: "UAH" }, dup);
+  assert.equal(dup.route, `${UA}: ТЕСТ – ТЕСТ`, "уже задвоєний рядок не вилікувано");
+  // Зіпсована назва + двокрапка ще й у маршруті: назвою вважається лише текст до ПЕРШОЇ «:».
+  const typoCar = { service: ROUTE, route: "Organization of cargo transportation along the rout: Kyiv – Riga. Car: MAN", full: true };
+  w.retitle({ org: "x", currency: "EUR" }, typoCar);
+  assert.equal(typoCar.route, "Organization of cargo transportation along the route: Kyiv – Riga. Car: MAN", "з назвою зрізано й частину маршруту");
+  // Пара-заборона: двокрапка в самому маршруті без назви — маршрут не обрізаємо.
+  const car = { service: ROUTE, route: "Kyiv – Riga. Car: MAN AA1234BB", full: true };
+  w.retitle({ org: "x", currency: "EUR" }, car);
+  assert.equal(car.route, "Organization of cargo transportation along the route: Kyiv – Riga. Car: MAN AA1234BB", "обрізано маршрут до двокрапки");
   // Одне поле, без перемикача режимів.
   assert.doesNotMatch(js, /редагувати весь рядок|data-z1c='full'|data-z1c='unfull'|як було/, "лишився перемикач ручний/авто");
   assert.match(js, /<textarea class='in' rows='2' data-i='" \+ i \+ "' data-f='route'>/, "немає поля «Рядок у рахунку»");

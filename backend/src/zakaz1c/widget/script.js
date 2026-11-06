@@ -135,13 +135,26 @@ define(["jquery"], function ($) {
       if ([it.service, enOf(f, it)].some(function (n) { return n && low.indexOf(n.toLowerCase()) === 0; })) return text;
       return prefixOf(f, it) + ": " + text;
     }
-    /** Текст рядка без назви послуги на початку. Знімаємо назву БУДЬ-ЯКОЇ послуги організації (укр. чи англ.) — щойно змінили послугу. */
+    /**
+     * Текст рядка без назви послуги на початку — щоб при зміні послуги/валюти не задвоїти назву. Знімаємо назву БУДЬ-ЯКОЇ
+     * послуги організації (укр. чи англ.), а також ЗІПСОВАНУ: менеджер міг поправити саму назву («…за шрутом:») — тоді
+     * назвою вважаємо все до першої «:», якщо воно починається першими двома словами якоїсь назви. Повторюємо — так
+     * лікується й уже задвоєний рядок. Маршрут із двокрапкою без назви («Kyiv – Riga. Car: MAN») не чіпаємо.
+     */
     function routeFrom(f, it) {
       var text = String(it.route || "").trim(), o = orgOf(f.org), en = o.servicesEn || {};
       var names = (o.services || []).concat(Object.keys(en).map(function (k) { return en[k]; }), [it.service])
-        .sort(function (a, b) { return b.length - a.length; });
-      var hit = names.filter(function (n) { return n && text.toLowerCase().indexOf(n.toLowerCase()) === 0; })[0];
-      return hit ? text.slice(hit.length).replace(/^\s*:?\s*/, "") : text;
+        .filter(Boolean).sort(function (a, b) { return b.length - a.length; });
+      var heads = names.map(function (n) { return n.toLowerCase().split(/\s+/).slice(0, 2).join(" "); });
+      for (var k = 0; k < 5; k++) {
+        var low = text.toLowerCase();
+        var hit = names.filter(function (n) { return low.indexOf(n.toLowerCase()) === 0; })[0];
+        if (hit) { text = text.slice(hit.length).replace(/^\s*:?\s*/, ""); continue; }
+        var c = text.indexOf(":"), head = c > 0 ? low.slice(0, c).replace(/\s+/g, " ") : "";
+        if (head && heads.some(function (h) { return head.indexOf(h) === 0; })) { text = text.slice(c + 1).replace(/^\s*/, ""); continue; }
+        break;
+      }
+      return text;
     }
     /**
      * Рядок рахунку — ОДНЕ поле, менеджер пише його сам. Вибрали послугу, валюту чи організацію — назву послуги на початку
