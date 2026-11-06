@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
-import { NEWS_ALIVE, andAlive, DELETE_SQL, newsScope } from "./newsVisibility.js";
+import { NEWS_ALIVE, andAlive, DELETE_SQL, newsScope, NEWS_KIND_SQL, parseNewsKind } from "./newsVisibility.js";
 import { unreadSinceQuery, unreadByIdQuery, maxVisibleIdQuery } from "./newsSeen.js";
 // 🎯 Три запити стали білдерами разом з адресністю (09.09.2026). Гейти нижче про
 //    ЖИВЕ/ВИДАЛЕНЕ, тож вкладки їм байдужі — передаємо порожні свідомо.
@@ -178,19 +178,65 @@ test("#375 білдер: аудиторія завжди ОСТАННІМ пар
 });
 
 /**
- * 🤖 #375b — МАШИННІ ЧИТАЧІ НЕ ФІЛЬТРУЮТЬСЯ, І ЦЕ НАВМИСНО.
+ * 🤖 #3780 — МАШИННИЙ ЧИТАЧ НОВИН ОДИН, І ВІН НЕ ФІЛЬТРУЄТЬСЯ (наступник `#375b`, 06.11.2026).
  *
- * Їх двоє: дедуп RSS (`jobs/syncNews.ts`) і перевірка «той самий блок»
- * (`tools/publishReleaseNews.ts`). Читача-людини в них немає. Дати їм фільтр означало б:
- * перший почне заводити ДУБЛІ статей, другий — публікувати повтори.
+ * Перевірка «той самий блок» (`tools/publishReleaseNews.ts`) читача-людини не має; дати їй фільтр
+ * означало б публікувати повтори. Другий машинний читач — дедуп RSS «Світу логістики» — прибрано
+ * разом із вкладкою (рішення Романа 06.11.2026), і парне твердження каже, ДЕ він тепер: ніде —
+ * розклад його не кличе (інакше зниклий файл просто зробив би гейт зеленим, правило 8).
+ * 🧨 САБОТАЖ: повернути в `index.ts` виклик `runJob("syncNews"` → червоніє.
  */
-test("#375b 🪞 машинні читачі новин фільтра НЕ мають", () => {
-  for (const rel of [["jobs", "syncNews.ts"], ["tools", "publishReleaseNews.ts"]]) {
-    const src = readSrcFile(...rel);
-    assert.doesNotMatch(src, /newsScope\s*\(/,
-      `🔴 ${rel.join("/")} почав фільтрувати новини аудиторією — у нього немає читача, `
-      + "тож фільтр там означає дублі (RSS) або повторні публікації (викат)");
-  }
+test("#3780 🪞 машинний читач новин фільтра НЕ має; RSS «Світу логістики» розклад не кличе", () => {
+  const src = readSrcFile("tools", "publishReleaseNews.ts");
+  assert.doesNotMatch(src, /newsScope\s*\(/,
+    "🔴 tools/publishReleaseNews.ts почав фільтрувати новини аудиторією — у нього немає читача, "
+    + "тож фільтр там означає повторні публікації про викат");
+  assert.doesNotMatch(readSrcFile("index.ts"), /runJob\(\s*"syncNews"/,
+    "🔴 розклад знову тягне RSS «Світу логістики», хоча вкладку прибрано — статті копитимуться невидимими");
+});
+
+/**
+ * 📰 #3780b — СТОРІНКА «НОВИНИ» ПОКАЗУЄ ЛИШЕ НОВИНИ КОМПАНІЇ, ДВОМА ВКЛАДКАМИ (рішення Романа 06.11.2026).
+ * «Загальні» (без `release_sha`) і «Технічні» (з ним) — взаємовиключні й разом покривають усе; умова
+ * «лише компанія» стоїть у `newsScope`, тобто в списку, лічильнику й «долистав досюди» водночас.
+ * 🧨 САБОТАЖ: прибрати `NEWS_SHOWN` з `newsScope` → червоніє.
+ */
+test("#3780b ДВІ ВКЛАДКИ: «Загальні» і «Технічні» — взаємовиключні; RSS і «продажі» поза стрічкою й лічильником", () => {
+  assert.match(newsScope([]).where, /category = 'company'/, "🔴 список/лічильник знову бачать RSS «Світу логістики» чи «продажі»");
+  assert.match(UNREAD_COUNT_SQL, /category = 'company'/, "🔴 значок непрочитаних рахує прибрані вкладки — не згасне");
+  assert.deepEqual([NEWS_KIND_SQL.general, NEWS_KIND_SQL.tech], ["release_sha IS NULL", "release_sha IS NOT NULL"],
+    "🔴 вкладки перестали бути взаємовиключними: одна новина в обох або в жодній");
+  assert.deepEqual(["general", "tech", "logistics", "", undefined].map(parseNewsKind), ["general", "tech", null, null, null],
+    "🔴 невідома вкладка не відкидається");
+});
+
+/**
+ * 📰 #3780c — ЖИВИЙ SQL: ручна новина — у «Загальних», про викат — у «Технічних», стаття RSS — ніде,
+ * і значок непрочитаних рахує рівно дві. Фікстура по обидва боки кожної межі.
+ * 🧨 САБОТАЖ: `NEWS_KIND_SQL.general` → `"TRUE"` → червоніє (новина про викат у «Загальних»).
+ */
+test("#3780c ЖИВИЙ SQL: ручна — «Загальні», про викат — «Технічні», RSS — ніде; лічильник == дві", async (t) => {
+  const { provisionScratch } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    await c.query(`INSERT INTO news (category,title,body,author,release_sha) VALUES
+      ('company','ручна','x','адмін',NULL), ('company','про викат','x','Дашборд','abc1234'),
+      ('logistics','стаття RSS','x','UTSAI',NULL), ('sales','продажі','x','адмін',NULL)`);
+    const titles = async (kind: "general" | "tech") => {
+      const { where, params } = newsScope([], [NEWS_KIND_SQL[kind]]);
+      return (await c.query<{ title: string }>(`SELECT title FROM news ${where} ORDER BY id`, params)).rows.map((r) => r.title);
+    };
+    assert.deepEqual(await titles("general"), ["ручна"], "🔴 «Загальні»: не лише ручна новина компанії");
+    assert.deepEqual(await titles("tech"), ["про викат"], "🔴 «Технічні»: не лише новини про викат");
+    const uq = unreadByIdQuery(0, []);
+    assert.equal((await c.query<{ n: number }>(uq.text, uq.params)).rows[0].n, 2,
+      "🔴 значок непрочитаних рахує статті RSS чи «продажі», яких на сторінці немає");
+  } finally { await c.end(); }
 });
 
 /**

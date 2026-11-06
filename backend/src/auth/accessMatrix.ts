@@ -1269,10 +1269,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/news/unread", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "POST", path: "/api/news/seen", cls: "deny-only", allow: [], deny: [] },
-  { method: "GET", path: "/api/news/km-prices", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
-  { method: "PUT", path: "/api/news/km-prices", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
   // Профіль ТОЙ САМИЙ, що в `/stats/scores`, і це не збіг: обидва стоять на `viewDenied`,
   // тобто пускають наскрізного глядача або того, хто хоч один тип ПРОВОДИТЬ. Фінансист
   // не проводить жодного й наскрізного не має — тому deny, як і на балах.
