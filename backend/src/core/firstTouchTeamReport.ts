@@ -21,6 +21,8 @@ import { median } from "./leadReaction.js";
  */
 
 export interface ReportRowIn {
+  /** 🌱 Розмова менеджера на адаптації (задача 7239 п.3) — не в балі команди. */
+  adaptation?: boolean | null;
   uniqueid: string;
   calledAt: string;
   managerId: number | null;
@@ -108,11 +110,13 @@ function line(rows: readonly ReportRowIn[], managerId: number | null, managerNam
 export interface TeamReport {
   managers: ManagerLine[];
   total: ManagerLine;
+  /** 🌱 Задача 7239 п.3: менеджери в перші 4 тижні від прийому — окремо; у `managers` і «Разом» їхні розмови не входять. */
+  adaptation: ManagerLine[];
   banner: { total: number; byManager: { managerId: number | null; managerName: string; count: number }[] };
 }
 
 /** Рядок на менеджера (той, хто говорив) + «Разом». Менеджер без привʼязки — окремим рядком «Менеджер невідомий». */
-export function teamReport(rows: readonly ReportRowIn[]): TeamReport {
+function byManagerGroups(rows: readonly ReportRowIn[]): ReportRowIn[][] {
   const groups = new Map<string, ReportRowIn[]>();
   for (const r of rows) {
     const k = r.managerId == null ? "none" : String(r.managerId);
@@ -120,13 +124,24 @@ export function teamReport(rows: readonly ReportRowIn[]): TeamReport {
     list.push(r);
     groups.set(k, list);
   }
-  const managers = [...groups.values()].map((g) => line(g, g[0].managerId, g[0].managerName ?? "Менеджер невідомий", g[0].teamName))
-    .filter((l) => l.accepted > 0)
-    .sort((a, b) => a.managerName.localeCompare(b.managerName, "uk"));
+  return [...groups.values()];
+}
+const managerLines = (rows: readonly ReportRowIn[]): ManagerLine[] => byManagerGroups(rows)
+  .map((g) => line(g, g[0].managerId, g[0].managerName ?? "Менеджер невідомий", g[0].teamName))
+  .filter((l) => l.accepted > 0)
+  .sort((a, b) => a.managerName.localeCompare(b.managerName, "uk"));
+
+/** Не в балі команди — розмова менеджера на адаптації (задача 7239 п.3, `core/firstTouchAdaptation.ts`). */
+export const countsForTeam = (r: { adaptation?: boolean | null }): boolean => r.adaptation !== true;
+
+export function teamReport(rows: readonly ReportRowIn[]): TeamReport {
+  const team = rows.filter(countsForTeam);
+  // Банер «дзвінка в телефонії немає» — операційний, а не бал: у ньому всі, і новачки теж.
   const bannerRows = rows.filter(inBanner);
-  const byManager = [...groups.values()].map((g) => ({ managerId: g[0].managerId, managerName: g[0].managerName ?? "Менеджер невідомий", count: g.filter(inBanner).length }))
+  const byManager = byManagerGroups(rows).map((g) => ({ managerId: g[0].managerId, managerName: g[0].managerName ?? "Менеджер невідомий", count: g.filter(inBanner).length }))
     .filter((x) => x.count > 0).sort((a, b) => b.count - a.count);
-  return { managers, total: line(rows, null, "Разом", null), banner: { total: bannerRows.length, byManager } };
+  return { managers: managerLines(team), total: line(team, null, "Разом", null), adaptation: managerLines(rows.filter((r) => !countsForTeam(r))),
+    banner: { total: bannerRows.length, byManager } };
 }
 
 export type PoolFilter = "all" | "noPrice" | "noComment" | "missed" | "typeCheck" | "lost";

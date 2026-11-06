@@ -446,6 +446,8 @@ export interface AiCallRowT {
   transportKind: AiTransportKindT | null;
   /** 🧭 «Тип запиту» (задача 7239); `null` — вид перевезення ще не розібрано. */
   requestKind: AiRequestKindT | null;
+  /** 🌱 Менеджер у перші 4 тижні від прийому (задача 7239 п.3) — не в балі команди; `null` — дати прийому немає. */
+  adaptation: boolean | null;
   /** 💬 Задача 7184: обіцянок менеджера в месенджер (не перевірити); сигнал «сам запропонував месенджер» — `null`, якщо не
    *  розбирали або цій ролі ще не показуємо. */
   messengerPromises: number; messengerSignal: boolean | null;
@@ -603,6 +605,8 @@ export interface AiTeamReportResp {
   /** Колір блоку «дзвінка в телефонії немає» — з «Налаштувань» (адмін). */
   bannerTone: "neutral" | "alert";
   managers: AiManagerLineT[]; total: AiManagerLineT;
+  /** 🌱 Менеджери на адаптації — окремо, у «Разом по команді» не входять (задача 7239 п.3). */
+  adaptation: AiManagerLineT[];
   banner: { total: number; byManager: { managerId: number | null; managerName: string; count: number }[] };
   rows: AiPoolRowT[];
 }

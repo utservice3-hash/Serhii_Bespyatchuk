@@ -18,7 +18,7 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TRANSPORT_LABEL, type ExcludedFilterT,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
   DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams, excludedLabel, REQUEST_KIND_LABEL, requestKindTab, type RequestKindFilterT,
-  priceReasonStats, priceReasonKey, PRICE_REASON_KEY_UA, type PriceReasonKeyT } from "../aiCallsView";
+  priceReasonStats, priceReasonKey, PRICE_REASON_KEY_UA, type PriceReasonKeyT, countsForTeam } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -203,18 +203,24 @@ export function AiCallsSection() {
   for (const r of rows) byState.set(r.state, (byState.get(r.state) ?? 0) + 1);
 
   // Плитки (ТЗ 08.10.2026): число і список після кліку — одне правило `TILE_MATCH`; стани й знаменники — від сервера.
-  const ts = tileStats(rows);
-  const pf = priceFormStats(rows);
+  // 🌱 Задача 7239 п.3: бал і плитки команди — без розмов менеджерів на адаптації (вони — окремим блоком нижче).
+  // Черга розбору й причини без ціни — по всіх: розбирати й пояснювати треба й новачкам.
+  const teamRows = rows.filter(countsForTeam);
+  const ts = tileStats(teamRows);
+  const pf = priceFormStats(teamRows);
   const reasons = priceReasonStats(rows);
   const reasonsTotal = reasons.reduce((a, x) => a + x.n, 0);
-  const split = priceSuccessSplit(rows);
+  const split = priceSuccessSplit(teamRows);
   const target = d.priceTargetPct;
-  const lost = rows.filter(TILE_MATCH.lost);
+  const lost = teamRows.filter(TILE_MATCH.lost);
   const lostReact = medianMin(lost.map((r) => r.reactionMin));
   // Блок менеджерів — по всій команді, без фільтра «менеджер»: інакше після кліку лишався один рядок і повернутись було нікуди.
   // Таблиця й графік — ТІ САМІ рядки: команда з шапки, вкладка «Звіт», «старші 7 днів» діє на обидва (варіант «а», 22.10).
-  const mgrRows = onlyMature(tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report"), today, mgrMature);
+  const mgrAll = onlyMature(tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report"), today, mgrMature);
+  const mgrRows = mgrAll.filter(countsForTeam);
   const lines = managerChecklist(mgrRows);
+  const adaptLines = managerChecklist(mgrAll.filter((r) => !countsForTeam(r)));
+  const noHireDate = new Set(mgrAll.filter((r) => r.adaptation == null && r.managerId != null).map((r) => r.managerId)).size;
   const priceConv = priceConversionByManager(mgrRows);
   const pickedName = lf.managerId != null ? (lines.find((l) => l.managerId === lf.managerId)?.name ?? managers.find(([id]) => id === lf.managerId)?.[1] ?? "менеджер") : null;
   const weakest = lines.find((l) => l.score != null) ?? null;
@@ -409,6 +415,33 @@ export function AiCallsSection() {
               )}
             </div>
             </div>
+          </section>
+
+          {/* 🌱 Задача 7239 п.3: новачки (перші 4 тижні від прийому на день розмови) — окремо; у бал і плитки команди не входять. */}
+          <section aria-label="На адаптації" className="ftd-card ftd-card-pad">
+            <div className="ftd-card-h">
+              <h2>На адаптації <InfoHint text="Розмови в перші 4 тижні від «Дати прийому» з «Найму». У бал команди, плитки вгорі, звіт тімліда, Звіт КВП і ціну у Звіті не входять." /></h2>
+              <span>{adaptLines.length ? `${String(adaptLines.length)} менеджерів · у бал команди не входять` : "у цьому періоді новачків немає"}
+                {noHireDate > 0 && ` · без дати прийому в «Наймі»: ${String(noHireDate)} (рахуються в команді)`}</span>
+            </div>
+            {adaptLines.length > 0 && (
+              <div style={{ overflowX: "auto" }}>
+                <table className="ftd-table" style={{ minWidth: 560 }}>
+                  <thead><tr><th>Менеджер</th><th style={{ textAlign: "right" }}>Розмов</th><th style={{ textAlign: "right" }}>Бал</th>
+                    {CHECK_ITEMS.map((it) => <th key={it.key} style={{ textAlign: "right" }}>{it.label}</th>)}</tr></thead>
+                  <tbody>
+                    {adaptLines.map((l) => (
+                      <tr key={String(l.managerId)}>
+                        <td>{l.name}</td>
+                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{l.calls}</td>
+                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{l.score == null ? "—" : `${String(l.score)}%`}</td>
+                        {CHECK_ITEMS.map((it) => <td key={it.key} style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{l[it.key] == null ? "—" : `${String(l[it.key])}%`}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
 
           <section aria-label="Розмови" className="ftd-card" ref={tableRef}>

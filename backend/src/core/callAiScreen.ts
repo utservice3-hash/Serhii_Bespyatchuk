@@ -15,6 +15,7 @@ import { monthSpend } from "./callAiPipeline.js";
 import { adCallFacts } from "./adCallFacts.js";
 import { silentBeforeClose, type AdCallFactsParams } from "./adCallFactsRules.js";
 import { PRICE_REASON_UA, type PriceReason } from "./firstTouchPriceReasons.js";
+import { onAdaptation, hiredAtJoin } from "./firstTouchAdaptation.js";
 import { typeVerdict, type TypeOverride } from "./callAiType.js";
 import type { ConversationType } from "./callAiProviders.js";
 import { loadTunables, type FirstTouchTunables } from "./firstTouchTunables.js";
@@ -168,6 +169,8 @@ export interface AiCallRow {
   transportKind: ExcludedTransport | null;
   /** 🧭 «Тип запиту» (задача 7239): внутрішній / міжнародний / негабарит / спецперевезення; `null` — вид ще не розібрано. */
   requestKind: RequestKind | null;
+  /** 🌱 Менеджер у перші 4 тижні від прийому на день розмови (задача 7239 п.3) — не в балі команди; `null` — дати прийому немає. */
+  adaptation: boolean | null;
   /** 💬 Обіцянок менеджера в месенджер (Viber, Telegram…) — Ringostat їх не бачить, перевірити не можна (задача 7184). */
   messengerPromises: number;
   /** 💬 Менеджер сам запропонував месенджер (з цитатою); `false` — розібрано, сигналу немає; `null` — не розбирали (задача 7184). */
@@ -229,6 +232,7 @@ interface RawRow {
   stt_empty?: boolean | null;
   ov_is_cargo?: boolean | null; ov_kind?: string | null; ov_by?: string | null; ov_at?: Date | null;
   pn_text?: string | null; pn_by?: string | null; pn_at?: Date | null; pn_reason?: string | null;
+  hired_at?: string | null;
   mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
   rv_text?: string | null; rv_by?: string | null; rv_at?: Date | null;
@@ -296,6 +300,7 @@ export function foldRow(r: RawRow): AiCallRow {
     silentBeforeClose: null,
     ...tf, inReport: tf.inReport && transportKind == null, transportKind,
     requestKind: requestKindOf(transportKind, state === "done" && r.tr_result != null),
+    adaptation: onAdaptation(r.hired_at, new Date(r.calldate).toISOString()),
     messengerPromises: res ? messengerPromisesOf(res.promises) : 0,
     messengerSignal: state === "done" ? messengerSignal(r.ms_result ?? null) : null,
     priceForm: state === "done" ? priceFormOf(r.pf_result ?? null) : null,
@@ -480,7 +485,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result,
            rcx.client_phone, d.pipeline_id, d.reject_reason, d.request_type, trn.tr_result, msn.ms_result, pfm.pf_result,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_kind, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("ft")},
+           ov.ov_is_cargo, ov.ov_kind, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("ft")}, emp.hired_at,
            (SELECT min(e.calldate) FROM ringostat_calls e WHERE rcx.client_phone IS NOT NULL AND e.client_phone = rcx.client_phone
                AND e.call_type = ANY($15::text[]) AND e.calldate >= ft.created_at) AS first_out_at
       FROM (${q.sql}) ft
@@ -490,6 +495,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
       ${notesJoin("ft")}
       LEFT JOIN managers m ON m.id = ft.manager_id
       LEFT JOIN teams tm ON tm.id = m.team_id
+      ${hiredAtJoin("ft.manager_id")}
       LEFT JOIN call_transcripts t ON t.uniqueid = ft.uniqueid AND t.provider = $8 AND t.model = $9
       LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax
                   WHERE ax.transcript_id = t.id AND ax.provider = $10 AND ax.model = $11 AND ax.rubric_version = ANY($12::text[])
@@ -592,12 +598,13 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            rc.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name, rc.client_phone,
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_kind, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("rc")},
+           ov.ov_is_cargo, ov.ov_kind, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("rc")}, emp.hired_at,
            a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result, trn.tr_result, msn.ms_result, pfm.pf_result
       FROM ringostat_calls rc
       ${overrideJoin("rc")}
       ${notesJoin("rc")}
       LEFT JOIN managers m ON m.id = rc.manager_id
+      ${hiredAtJoin("rc.manager_id")}
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN call_transcripts t ON t.uniqueid = rc.uniqueid AND t.provider = $2 AND t.model = $3
       LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax

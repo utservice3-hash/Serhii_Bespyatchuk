@@ -301,7 +301,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, requestKind: null, messengerPromises: 0, messengerSignal: null, priceForm: null, priceFormAnalysed: false, managerCommented: false, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
+    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, requestKind: null, adaptation: null, messengerPromises: 0, messengerSignal: null, priceForm: null, priceFormAnalysed: false, managerCommented: false, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -1094,7 +1094,8 @@ test("#897 МОНО-ЗАПИС ЧЕСНО: моно — розділення з�
 test("#899 ЕКРАН D: менеджери не зникають і вибір знімається, плеєр не грає у фоні, у черзі є розбір і розмова", () => {
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   // 22.10.2026: рядки блоку винесено в `mgrRows` (спільні для таблиці й графіка, #2207) — твердження те саме: без вибраного менеджера.
-  assert.match(sec, /const mgrRows = onlyMature\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\), today, mgrMature\);\s*const lines = managerChecklist\(mgrRows\);/, "🔴 блок менеджерів фільтрується за вибраним менеджером");
+  // 06.11.2026 (задача 7239 п.3): між ними — `mgrRows = mgrAll.filter(countsForTeam)` (новачки окремо); твердження те саме.
+  assert.match(sec, /const mgrAll = onlyMature\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\), today, mgrMature\);\s*const mgrRows = mgrAll\.filter\(countsForTeam\);\s*const lines = managerChecklist\(mgrRows\);/, "🔴 блок менеджерів фільтрується за вибраним менеджером");
   assert.match(sec, /managerId: lf\.managerId === l\.managerId \? null : l\.managerId/, "🔴 повторний клік не знімає вибір менеджера");
   assert.match(sec, /onClick=\{\(\) => setLf\(\{ \.\.\.lf, managerId: null \}\)\} aria-label=\{`Зняти фільтр: \$\{pickedName\}`\}/, "🔴 немає чіпа, що знімає вибір менеджера");
   assert.match(sec, /localStorage\.getItem\("ftd\.mgrCollapsed"\)/, "🔴 блок менеджерів не згортається або не памʼятає цього");
@@ -1385,7 +1386,8 @@ test("#908 ПЛИТКИ: число = рядки після кліку (одне
   assert.deepEqual([sp.named, sp.notNamed, sp.enough], [{ n: 1, of: 1 }, { n: 0, of: 1 }, false], "🔴 відсоток «ціна → успіх» на одиничних угодах");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /const presetOk = \(r: \(typeof rows\)\[number\]\) => preset === "all" \|\| TILE_MATCH\[preset\]\(r\);/, "🔴 фільтр після кліку — не те правило, що плитка");
-  assert.match(sec, /const ts = tileStats\(rows\);/, "🔴 плитки рахуються не спільними правилами");
+  // 06.11.2026 (задача 7239 п.3): плитки — з розмов звіту без новачків (`teamRows`); правило те саме.
+  assert.match(sec, /const teamRows = rows\.filter\(countsForTeam\);\s*const ts = tileStats\(teamRows\);/, "🔴 плитки рахуються не спільними правилами");
   assert.match(sec, /<b>\{scoped\.filter\(TILE_MATCH\[k\]\)\.length\}<\/b>/, "🔴 лічильник у пігулці — не те правило");
   assert.match(sec, /goodBad\(ts\.price\.pct == null \? null : ts\.price\.pct >= target\)/, "🔴 колір плитки ціни не від цілі з налаштувань");
   assert.match(sec, /const target = d\.priceTargetPct;/, "🔴 ціль не з відповіді сервера");
@@ -1929,7 +1931,7 @@ test("#2207 ГРАФІК «ЦІНА → УСПІХ»: з ціною / без о�
   assert.equal(V.onlyMature(fresh, today, true).length, rows.length, "🔴 «старші 7 днів» не прибрав свіжу угоду");
   assert.equal(V.onlyMature(fresh, today, false).length, fresh.length, "🔴 вимкнений фільтр щось прибрав");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /const mgrRows = onlyMature\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\), today, mgrMature\);/, "🔴 рядки блоку не з фільтром «старші 7 днів»");
+  assert.match(sec, /const mgrAll = onlyMature\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\), today, mgrMature\);\s*const mgrRows = mgrAll\.filter\(countsForTeam\);/, "🔴 рядки блоку не з фільтром «старші 7 днів»");
   assert.match(sec, /const lines = managerChecklist\(mgrRows\);/, "🔴 таблиця рахує не ті рядки, що графік");
   assert.match(sec, /const priceConv = priceConversionByManager\(mgrRows\);/, "🔴 графік рахує не ті рядки, що таблиця");
   assert.doesNotMatch(sec, /<FirstTouchPriceChart rows=/, "🔴 окремий блок графіка повернувся поруч із перемикачем");
@@ -2896,4 +2898,79 @@ test("#3735 ЖИВА СХЕМА: причина без ціни — пишеть
     "🔴 CHECK пустив причину в «Опрацьовано»");
   await setCallNote(c.db, "z3735", "price", "", by, new Date("2026-11-06T13:00:00Z"), null);
   assert.equal(await reasonOf(), undefined, "дзеркало: порожньо й без причини — запис прибрано");
+});
+
+/**
+ * #3736 — «НА АДАПТАЦІЇ» (задача 7239 п.3, Роман 06.11.2026 «2 а»): перші 28 днів від прийому на день РОЗМОВИ (день 27 —
+ * так, день 28 — ні, межа за київським днем; розмова до прийому — так); без дати прийому — `null`, у команді як усі. Такі
+ * розмови НЕ в балі команди скрізь: звіт тімліда (`managers`/«Разом» — без них, окремо `adaptation`, банер — з ними),
+ * Звіт (`firstTouchCountsFromCalls`), Звіт КВП і екран AI (`firstTouchSummary`, плитки й таблиця). Вираз один —
+ * `countsForTeam`, фронт — його дзеркало.
+ * 🧨 Червоніє, якщо зсунути межу на день, рахувати від сьогодні, загубити київську добу, лишити новачка в «Разом» чи
+ * плитках, викинути його з банера, або якщо список/картка не беруть дату прийому.
+ */
+test("#3736 НА АДАПТАЦІЇ: 27-й день — так, 28-й — ні, київська доба; не в балі команди у звіті тімліда, Звіті, КВП і на екрані", async () => {
+  const A = await import("./firstTouchAdaptation.js");
+  assert.equal(A.ADAPTATION_DAYS, 28);
+  assert.equal(A.onAdaptation(null, "2026-10-20T08:00:00Z"), null, "🔴 без дати прийому людину записано в новачки чи в досвідчені");
+  assert.equal(A.onAdaptation("2026-10-15", "2026-11-11T08:00:00Z"), true, "🔴 27-й день — уже не адаптація");
+  assert.equal(A.onAdaptation("2026-10-15", "2026-11-12T08:00:00Z"), false, "🔴 28-й день — ще адаптація (межа зсунута)");
+  assert.equal(A.onAdaptation("2026-10-15", "2026-11-11T22:30:00Z"), false, "🔴 межа не за київською добою: 00:30 12.11 за Києвом — це вже 28-й день");
+  assert.equal(A.onAdaptation("2026-10-15", "2026-10-10T08:00:00Z"), true, "🔴 розмова до прийому (стажування) не вважається адаптацією");
+
+  const { teamReport, countsForTeam } = await import("./firstTouchTeamReport.js");
+  const r = (id: string, mgr: number, o: Record<string, unknown>) => ({ uniqueid: id, calledAt: "2026-11-02T08:00:00Z", managerId: mgr, managerName: `M${String(mgr)}`,
+    teamName: "T", inReport: true, state: "done", priceDiscussed: true, promiseState: null, typeCheck: false, priceNote: null, missedNote: null, ...o });
+  const t = teamReport([r("a", 1, {}), r("b", 1, {}), r("c", 2, { adaptation: true, promiseState: "broken" }), r("d", 3, { adaptation: null })] as never[]);
+  assert.deepEqual(t.managers.map((l) => l.managerId), [1, 3], "🔴 новачок у таблиці команди або людину без дати прийому викинуто");
+  assert.equal(t.total.accepted, 3, "🔴 «Разом по команді» рахує новачка");
+  assert.deepEqual(t.adaptation.map((l) => [l.managerId, l.accepted]), [[2, 1]], "🔴 новачка немає в блоці «На адаптації»");
+  assert.equal(t.banner.total, 1, "🔴 банер «дзвінка немає» загубив новачка — це не бал, а невиконана обіцянка");
+  assert.deepEqual([countsForTeam({ adaptation: true }), countsForTeam({ adaptation: false }), countsForTeam({ adaptation: null }), countsForTeam({})], [false, true, true, true]);
+
+  const V = await loadView() as unknown as { countsForTeam: (r: unknown) => boolean };
+  for (const x of [{ adaptation: true }, { adaptation: false }, { adaptation: null }, {}]) assert.equal(V.countsForTeam(x), countsForTeam(x), "🔴 фронт рахує «в балі команди» інакше, ніж ядро");
+
+  assert.match(SRC("core/firstTouchRules.ts"), /if \(!r\.inReport \|\| r\.nonTarget \|\| !countsForTeam\(r\)\) continue;/, "🔴 Звіт рахує розмови новачків у клітинках і команді");
+  const scr = SRC("core/callAiScreen.ts");
+  assert.equal((scr.match(/\$\{hiredAtJoin\("(ft|rc)\.manager_id"\)\}/g) ?? []).length, 2, "🔴 список чи картка не беруть дату прийому");
+  assert.match(scr, /adaptation: onAdaptation\(r\.hired_at, new Date\(r\.calldate\)\.toISOString\(\)\)/, "🔴 адаптація рахується не від дати розмови");
+  const route = SRC("routes/dashboard.ts");
+  assert.match(route, /requestKind: r\.requestKind, adaptation: r\.adaptation,/, "🔴 роут не віддає позначку адаптації");
+  assert.match(route, /banner: report\.banner, adaptation: report\.adaptation,/, "🔴 звіт тімліда не віддає блок «На адаптації»");
+  const view = readFileSync(FE("pages/dashboard/aiCallsView.ts"), "utf8");
+  assert.match(view, /const rows = report\.filter\(countsForTeam\);[\s\S]{0,400}tiles: tileStats\(rows\), lines: managerChecklist\(rows\), total, adaptation:/, "🔴 Звіт КВП рахує бал команди з новачками");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /const teamRows = rows\.filter\(countsForTeam\);\s*const ts = tileStats\(teamRows\);/, "🔴 плитки екрана рахують новачків");
+  assert.match(sec, /const mgrRows = mgrAll\.filter\(countsForTeam\);\s*const lines = managerChecklist\(mgrRows\);\s*const adaptLines = managerChecklist\(mgrAll\.filter\(\(r\) => !countsForTeam\(r\)\)\);/,
+    "🔴 таблиця менеджерів тримає новачків або блоку «На адаптації» немає");
+});
+
+/**
+ * #3737 — ЖИВА СХЕМА: ДАТА ПРИЙОМУ З «НАЙМУ» ДОХОДИТЬ ДО РОЗМОВИ. Менеджер із `employees.hired_at` за 10 днів до розмови —
+ * `adaptation = true`; той самий менеджер у розмові через 40 днів — `false`; менеджер без картки в «Наймі» — `null`.
+ * Звіт тімліда на цих рядках — новачок окремо. (Картка «Найму» на менеджера одна — `uq_employees_manager`.)
+ * 🧨 Червоніє, якщо джойн загубить звʼязок `employees.manager_id`, дату прийому, або позначка не дійде до звіту.
+ */
+test("#3737 ЖИВА СХЕМА: дата прийому з «Найму» → позначка адаптації в рядку; 10-й день — так, 40-й — ні; без картки — null", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList } = await import("./callAiScreen.js");
+  const { teamReport } = await import("./firstTouchTeamReport.js");
+  await c.raw.query(`INSERT INTO managers(id,name,team_id) VALUES (93737,'Новачок Н',901) ON CONFLICT (id) DO NOTHING`);
+  await c.raw.query(`INSERT INTO employees(full_name,import_key,status,hired_at,manager_id) VALUES ('Новачок Н','t3737b','active','2026-10-10',93737)`);
+  const seed = async (n: string, mgr: number, at: string) => {
+    await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel) VALUES ($1,'D',8921932,1,$2,$3,'ad')`, [Number(`9373${n}7`), at, `050373700${n}`]);
+    await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+      VALUES ($1,($2::timestamptz + interval '10 minutes'),'out','ANSWERED',60,65,$3,$4,'https://rec/z')`, [`z3737${n}`, at, mgr, `38050373700${n}`]);
+  };
+  await seed("1", 93737, "2026-10-20 10:00:00+03"); await seed("2", 93737, "2026-11-19 10:00:00+02"); await seed("3", 9011, "2026-10-20 11:00:00+03");
+  const rows = (await aiCallsList(c.db, FAKE_AD, "2026-10-20", "2026-11-19", new Date("2026-11-20T10:00:00Z"), {})).rows;
+  const ad = (u: string) => rows.find((r) => r.uniqueid === u)?.adaptation;
+  assert.ok(rows.some((r) => r.uniqueid === "z37371"), "🔴 розмов новачка немає в списку — перевіряти нічого");
+  assert.equal(ad("z37371"), true, "🔴 10-й день від прийому не позначено адаптацією");
+  assert.equal(ad("z37372"), false, "🔴 40-й день від прийому — досі адаптація");
+  assert.equal(ad("z37373"), null, "🔴 менеджер без картки в «Наймі» отримав позначку");
+  const rep = teamReport(rows);
+  assert.ok(rep.adaptation.some((l) => l.managerId === 93737) && rep.managers.some((l) => l.managerId === 93737),
+    "🔴 у звіті тімліда новачок не поділився: розмова 10-го дня — у блоці адаптації, 40-го — у команді");
 });

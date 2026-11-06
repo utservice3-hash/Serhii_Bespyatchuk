@@ -662,14 +662,21 @@ export function priceConversionByManager<T extends PriceConvRow>(rows: readonly 
 // (`DEFAULT_LIST_FILTER`), та сама вкладка «Звіт» і ті самі `tileStats` / `managerChecklist`. Тому цифри дорівнюють
 // екрану «Перший дотик · AI» за побудовою, а рядок команди — рівно тому, що екран показує з вибраною цією командою.
 
+/**
+ * 🌱 Не в балі команди — розмова менеджера на адаптації (задача 7239 п.3, Роман 06.11.2026 «2 а»). Дзеркало
+ * `countsForTeam` у `core/firstTouchTeamReport.ts`: той самий вираз на екрані AI, у звіті тімліда, у Звіті КВП і у Звіті.
+ */
+export const countsForTeam = (r: { adaptation?: boolean | null }): boolean => r.adaptation !== true;
+
 type SummaryRow = ListFilterRow & TileRow & { inReport: boolean; managerName: string | null; teamName?: string | null;
-  checkScore: { yes: number; total: number } | null };
-export interface FirstTouchSummary<T> { rows: T[]; tiles: TileStats; lines: ChecklistLine[]; total: ChecklistLine | null }
+  checkScore: { yes: number; total: number } | null; adaptation?: boolean | null };
+export interface FirstTouchSummary<T> { rows: T[]; tiles: TileStats; lines: ChecklistLine[]; total: ChecklistLine | null; adaptation: ChecklistLine[] }
 export function firstTouchSummary<T extends SummaryRow>(all: readonly T[], teamId: number | null = null): FirstTouchSummary<T> {
-  const rows = tabRows(applyListFilter(all, { ...DEFAULT_LIST_FILTER, teamId }), "report");
+  const report = tabRows(applyListFilter(all, { ...DEFAULT_LIST_FILTER, teamId }), "report");
+  const rows = report.filter(countsForTeam);
   // Підсумковий рядок — ТА САМА `managerChecklist`, лише всі розмови під одним ключем: жодної другої формули.
   const total = managerChecklist(rows.map((r) => ({ ...r, managerId: null, managerName: "Разом" })))[0] ?? null;
-  return { rows, tiles: tileStats(rows), lines: managerChecklist(rows), total };
+  return { rows, tiles: tileStats(rows), lines: managerChecklist(rows), total, adaptation: managerChecklist(report.filter((r) => !countsForTeam(r))) };
 }
 
 /** Команди, що трапились у рядках (за назвою); розмови без команди — окремим вузлом, а не зникають. */

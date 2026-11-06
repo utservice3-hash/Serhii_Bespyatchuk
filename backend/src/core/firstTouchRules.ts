@@ -11,7 +11,7 @@
  *  · дотик належить тому, хто дзвонив (менеджер розмови на екрані AI);
  *  · доступ — як у решти Звіту (менеджер бачить картки своєї команди).
  */
-import { checklist, type ReportRowIn } from "./firstTouchTeamReport.js";
+import { checklist, countsForTeam, type ReportRowIn } from "./firstTouchTeamReport.js";
 
 export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
 export type FirstTouchState = "measured" | "not_covered";
@@ -31,7 +31,9 @@ export function firstTouchCountsFromCalls(calls: readonly FirstTouchCall[]): {
 } {
   const by = new Map<number | null, { teamId: number | null; c: FirstTouchCounts }>();
   for (const r of calls) {
-    if (!r.inReport || r.nonTarget) continue;
+    // 🌱 Задача 7239 п.3 (Роман 06.11.2026 «2 а»): розмови менеджера на адаптації у Звіті не рахуються — ні в його клітинці,
+    // ні в команді (інакше Σ команди ≠ Σ клітинок); їх видно окремим блоком на екрані AI і в звіті тімліда.
+    if (!r.inReport || r.nonTarget || !countsForTeam(r)) continue;
     const e = by.get(r.managerId) ?? { teamId: r.teamId, c: { analyzed: 0, voiced: 0, noRecord: 0 } };
     const mark = checklist(r)?.price;
     if (mark == null) e.c.noRecord++;

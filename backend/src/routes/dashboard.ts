@@ -11429,7 +11429,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       // П3: прапорець — лише за період після оголошення норми; до того поле є, а екран його не показує.
       silentBeforeClose: r.silentBeforeClose,
       conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
-      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride, transportKind: r.transportKind, requestKind: r.requestKind,
+      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride, transportKind: r.transportKind, requestKind: r.requestKind, adaptation: r.adaptation,
       messengerPromises: r.messengerPromises, messengerSignal: seeMsgSignal ? r.messengerSignal : null,
       priceForm: r.priceForm, priceFormAnalysed: r.priceFormAnalysed,
       priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
@@ -11466,7 +11466,7 @@ dashboardRouter.get("/ai-calls/team-report", async (req, res) => {
   const { bannerTone } = await loadTunables(pool);
   res.json({
     period: { from, to }, truncated, bannerTone,
-    managers: report.managers, total: report.total, banner: report.banner,
+    managers: report.managers, total: report.total, banner: report.banner, adaptation: report.adaptation,
     // Явний перелік полів (#17e2).
     rows: inReport.map((r) => ({
       uniqueid: r.uniqueid, calledAt: r.calledAt, managerId: r.managerId, managerName: r.managerName, teamName: r.teamName,

@@ -147,6 +147,16 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
                 <td style={num}><button type="button" className="hr-btn" onClick={() => { setPool({ managerId: "all", title: "уся команда" }); setPoolKey("all"); }}>Заявки</button></td>
               </tr>
             )}
+            {/* 🌱 Задача 7239 п.3: новачки в перші 4 тижні від прийому — окремо, у «Разом по команді» не входять. */}
+            {(rep.adaptation ?? []).length > 0 && (
+              <tr><td colSpan={COLS.length + 1} style={{ padding: "10px 10px 4px", fontWeight: 700 }}>На адаптації <span style={{ fontWeight: 400, ...muted }}>· перші 4 тижні від прийому, у «Разом по команді» не входять</span></td></tr>
+            )}
+            {(rep.adaptation ?? []).map((l) => (
+              <tr key={`a${String(l.managerId)}`} style={{ borderTop: "1px solid var(--border)" }}>
+                {COLS.map((c) => <td key={c.key} style={c.key === "managerName" ? { padding: "6px 10px" } : num}>{c.key === "managerName" ? l.managerName : cell(l, c.key)}</td>)}
+                <td style={num}><button type="button" className="hr-btn" onClick={() => { setPool({ managerId: l.managerId, title: l.managerName }); setPoolKey("all"); }}>Заявки</button></td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

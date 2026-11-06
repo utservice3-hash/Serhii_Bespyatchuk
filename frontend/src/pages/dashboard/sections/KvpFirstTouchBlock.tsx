@@ -153,6 +153,12 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
       </div>
       {tile && shownTeams.length === 0 && <p style={{ fontSize: 13, color: C.muted, margin: "6px 0 0" }}>Розмов цієї картки за період немає.</p>}
       {!all.total && <p style={{ fontSize: 13, color: C.muted, margin: "6px 0 0" }}>Розібраних перших розмов за цей період ще немає.</p>}
+      {/* 🌱 Задача 7239 п.3: новачки в бал команди не входять — тут лише видно, хто й скільки розмов, деталі — на екрані AI. */}
+      {all.adaptation.length > 0 && (
+        <p style={{ fontSize: 13, color: C.muted, margin: "6px 0 0" }}>
+          На адаптації (перші 4 тижні, у бал команд не входять): {all.adaptation.map((l) => `${l.name} — ${String(l.calls)} розм.${l.score == null ? "" : `, бал ${String(l.score)}%`}`).join(" · ")}
+        </p>
+      )}
     </div>
   );
 }
