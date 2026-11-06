@@ -4,7 +4,7 @@ import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
 import { OBJECTION_RUBRICS, RUBRIC_OBJECTION_V2, type ClientDecision, type ObjectionResult } from "./callAiObjection.js";
 import { dealOutcomes, dealsReachedInvoice, outcomeOfCall, type DealOutcome } from "./firstTouchOutcome.js";
-import { INTL_REQUEST_TYPE, RUBRIC_TRANSPORT_V1, transportExclusion, type ExcludedTransport, type TransportResult } from "./firstTouchTransport.js";
+import { INTL_REQUEST_TYPE, RUBRIC_TRANSPORT_V1, transportExclusion, requestKindOf, mergeRequestKind, type ExcludedTransport, type RequestKind, type TransportResult } from "./firstTouchTransport.js";
 import { RUBRIC_MESSENGER_V1, messengerPromisesOf, messengerSignal, type MessengerResult } from "./firstTouchMessenger.js";
 import { RUBRIC_PRICE_FORM_V1, priceFormOf, type PriceForm, type PriceFormResult } from "./firstTouchPriceForm.js";
 import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, FIRST_TOUCH_SHOWN_RUBRICS, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
@@ -165,6 +165,8 @@ export interface AiCallRow {
   inReport: boolean;
   /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183): міжнародка, трал, цистерна, самоскид, зерновоз; `null` — оцінюємо. */
   transportKind: ExcludedTransport | null;
+  /** 🧭 «Тип запиту» (задача 7239): внутрішній / міжнародний / негабарит / спецперевезення; `null` — вид ще не розібрано. */
+  requestKind: RequestKind | null;
   /** 💬 Обіцянок менеджера в месенджер (Viber, Telegram…) — Ringostat їх не бачить, перевірити не можна (задача 7184). */
   messengerPromises: number;
   /** 💬 Менеджер сам запропонував месенджер (з цитатою); `false` — розібрано, сигналу немає; `null` — не розбирали (задача 7184). */
@@ -291,6 +293,7 @@ export function foldRow(r: RawRow): AiCallRow {
     managerPromises: res ? managerPromisesOf(res).length : 0,
     silentBeforeClose: null,
     ...tf, inReport: tf.inReport && transportKind == null, transportKind,
+    requestKind: requestKindOf(transportKind, state === "done" && r.tr_result != null),
     messengerPromises: res ? messengerPromisesOf(res.promises) : 0,
     messengerSignal: state === "done" ? messengerSignal(r.ms_result ?? null) : null,
     priceForm: state === "done" ? priceFormOf(r.pf_result ?? null) : null,
@@ -446,6 +449,7 @@ export function collapseByCall(rows: readonly AiCallRow[]): AiCallListRow[] {
       if (r.silentBeforeClose === true || (seen.silentBeforeClose == null && r.silentBeforeClose === false)) seen.silentBeforeClose = r.silentBeforeClose;
       // 🚛 Одна з угод розмови — міжнародна за Kommo: розмова не оцінюється (задача 7183).
       if (r.transportKind && !seen.transportKind) { seen.transportKind = r.transportKind; seen.inReport = false; }
+      seen.requestKind = mergeRequestKind(seen.requestKind, r.requestKind);
       continue;
     }
     const { kommoId, ...rest } = r;
@@ -653,6 +657,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     [deals, INTL_REQUEST_TYPE])).rowCount ?? 0) > 0;
   rest.transportKind = transportExclusion({ ai: done ? raw.tr_result ?? null : null, kommoInternational: intl });
   if (rest.transportKind) rest.inReport = false;
+  rest.requestKind = requestKindOf(rest.transportKind, done && raw.tr_result != null);
   return {
     // 🩹 07.10.2026: стан рядка картки — той самий, що в списку (найгірша обіцянка + позначка «поза телефонією»).
     // Без нього `row.promiseState` лишався null з `foldRow`, і в картці НІКОЛИ не зʼявлялись поля «Передзвонив поза

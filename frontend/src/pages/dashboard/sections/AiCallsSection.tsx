@@ -17,7 +17,7 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TILE_MATCH, tileStats, priceFormStats, PRICE_FORM_UI, PRICE_FORM_FROM_UA, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS, CLOSURE_UI,
   TRANSPORT_LABEL, type ExcludedFilterT,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
-  DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams, excludedLabel } from "../aiCallsView";
+  DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams, excludedLabel, REQUEST_KIND_LABEL, requestKindTab, type RequestKindFilterT } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -418,6 +418,20 @@ export function AiCallsSection() {
                   </select>
                 </label>
               )}
+              {/* 🧭 Задача 7239: «Тип запиту» — міжнародку одним кліком; не внутрішні живуть у «Виключених», тож вкладка перемикається сама. */}
+              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Тип запиту
+                <select id="ai-reqkind" value={lf.requestKind ?? "all"} onChange={(e) => {
+                  const k = e.target.value as RequestKindFilterT;
+                  setLf({ ...lf, requestKind: k });
+                  const t = requestKindTab(k);
+                  if (t) { setTab(t); setExType("all"); }
+                }}>
+                  <option value="all">усі · {applyListFilter(d.rows, { ...lf, requestKind: "all" }).length}</option>
+                  {(Object.keys(REQUEST_KIND_LABEL) as (keyof typeof REQUEST_KIND_LABEL)[]).map((k) => (
+                    <option key={k} value={k}>{REQUEST_KIND_LABEL[k]} · {applyListFilter(d.rows, { ...lf, requestKind: k }).length}</option>
+                  ))}
+                </select>
+              </label>
               <div className="hr-seg2" role="group" aria-label="Воронка">
                 {(["all", "full", "qualification"] as const).map((g) => (
                   <button key={g} type="button" className={lf.group === g ? "on" : ""} aria-pressed={lf.group === g} onClick={() => setLf({ ...lf, group: g })}>

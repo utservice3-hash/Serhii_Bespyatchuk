@@ -11428,7 +11428,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       // П3: прапорець — лише за період після оголошення норми; до того поле є, а екран його не показує.
       silentBeforeClose: r.silentBeforeClose,
       conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
-      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride, transportKind: r.transportKind,
+      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride, transportKind: r.transportKind, requestKind: r.requestKind,
       messengerPromises: r.messengerPromises, messengerSignal: seeMsgSignal ? r.messengerSignal : null,
       priceForm: r.priceForm, priceFormAnalysed: r.priceFormAnalysed,
       priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,

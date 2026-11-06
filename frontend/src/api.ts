@@ -444,6 +444,8 @@ export interface AiCallRowT {
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; cut: boolean; byName: string | null; at: string } | null;
   /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183); `null` — оцінюємо. */
   transportKind: AiTransportKindT | null;
+  /** 🧭 «Тип запиту» (задача 7239); `null` — вид перевезення ще не розібрано. */
+  requestKind: AiRequestKindT | null;
   /** 💬 Задача 7184: обіцянок менеджера в месенджер (не перевірити); сигнал «сам запропонував месенджер» — `null`, якщо не
    *  розбирали або цій ролі ще не показуємо. */
   messengerPromises: number; messengerSignal: boolean | null;
@@ -475,6 +477,8 @@ export interface AiClientDecisionT { value: "agreed" | "thinking" | "declined" |
 /** Успіх угоди з Kommo — стан ЗАРАЗ. */
 export interface AiDealOutcomeT { state: "success" | "lost" | "open"; lossReason: string | null }
 export type AiReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
+/** «Тип запиту» — дзеркало `RequestKind` у `core/firstTouchTransport.ts`. */
+export type AiRequestKindT = "domestic" | "international" | "oversize" | "special";
 export type AiTransportKindT = "international" | "oversize" | "tanker" | "dump" | "grain";
 /** Чим закрито розмову з черги: погоджено коментар менеджера · закрито тімлідом без коментаря · угода дійшла до рахунку. */
 export type AiReviewClosureT = "approved" | "direct" | "invoice";

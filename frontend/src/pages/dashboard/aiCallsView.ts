@@ -166,8 +166,28 @@ export const PROMISE_UI: Readonly<Record<PromiseStateT, { label: string; tone: T
 
 export const GROUP_LABEL: Readonly<Record<PipelineGroupT, string>> = { full: "Повний цикл", qualification: "Кваліфікація", other: "Інші воронки" };
 
-export interface ListFilter { group: PipelineGroupT | "all"; teamId: number | null; managerId: number | null; showNonTarget: boolean }
-export interface ListFilterRow { pipelineGroup: PipelineGroupT; teamId: number | null; managerId: number | null; nonTarget: boolean }
+export interface ListFilter { group: PipelineGroupT | "all"; teamId: number | null; managerId: number | null; showNonTarget: boolean;
+  /** 🧭 «Тип запиту» (задача 7239); `"unknown"` — вид перевезення ще не розібрано. */
+  requestKind?: RequestKindFilterT }
+export interface ListFilterRow { pipelineGroup: PipelineGroupT; teamId: number | null; managerId: number | null; nonTarget: boolean;
+  requestKind?: RequestKindT | null }
+
+/**
+ * 🧭 «Тип запиту» (задача 7239, Роман 06.11.2026): внутрішні / міжнародні / негабарит, трал / інше спецперевезення окремо.
+ * «Ще не визначено» — окремим значенням: нерозібрану розмову не записуємо у внутрішні. Не внутрішні живуть у «Виключених»
+ * (їх не оцінюємо, задача 7183), тож вибір такого типу перемикає на ту вкладку — «міжнародка одним кліком».
+ */
+/** Дзеркало `RequestKind` у `core/firstTouchTransport.ts`. */
+export type RequestKindT = "domestic" | "international" | "oversize" | "special";
+export type RequestKindFilterT = RequestKindT | "unknown" | "all";
+export const REQUEST_KIND_LABEL: Readonly<Record<Exclude<RequestKindFilterT, "all">, string>> = {
+  domestic: "Внутрішні", international: "Міжнародні", oversize: "Негабарит, трал", special: "Інше спецперевезення", unknown: "Ще не визначено",
+};
+export const requestKindMatch = (r: { requestKind?: RequestKindT | null }, k: RequestKindFilterT | undefined): boolean =>
+  k == null || k === "all" || (k === "unknown" ? r.requestKind == null : r.requestKind === k);
+/** Куди дивитись для вибраного типу: внутрішні й «не визначено» — у «Звіті», решта — у «Виключених». */
+export const requestKindTab = (k: RequestKindFilterT): ListTab | null =>
+  k === "international" || k === "oversize" || k === "special" ? "excluded" : null;
 
 /**
  * Фільтри списку, окрім кнопок стану (П8-Б): воронка, команда, менеджер; нецільові («Дубль», «Перевізник»)
@@ -180,7 +200,8 @@ export function applyListFilter<T extends ListFilterRow>(rows: readonly T[], f: 
   return rows.filter((r) => (f.group === "all" || r.pipelineGroup === f.group)
     && (f.teamId == null || r.teamId === f.teamId)
     && (f.managerId == null || r.managerId === f.managerId)
-    && (f.showNonTarget || !r.nonTarget));
+    && (f.showNonTarget || !r.nonTarget)
+    && requestKindMatch(r, f.requestKind));
 }
 
 /** Людський підпис терміну обіцянки в картці. */

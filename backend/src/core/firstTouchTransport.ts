@@ -94,3 +94,21 @@ export function transportExclusion(x: { ai: TransportResult | null; kommoInterna
   if (x.ai && x.ai.kind !== "regular" && x.ai.quote_found === true) return x.ai.kind;
   return null;
 }
+
+/**
+ * 🧭 «Тип запиту» для фільтра екрана (задача 7239, рішення Романа 06.11.2026): внутрішні / міжнародні / негабарит, трал /
+ * інше спецперевезення (цистерна, самоскид, зерновоз — окремо, щоб не загубились). Те саме правило, що виключення:
+ * спецвид — лише з `transportExclusion`. «Внутрішнє» — лише коли вид перевезення РОЗІБРАНО й він звичайний; не розібрано
+ * (рубрика ще не дійшла) — `null`, «ще не визначено», а не тихе «внутрішнє».
+ */
+export type RequestKind = "domestic" | "international" | "oversize" | "special";
+export function requestKindOf(excluded: ExcludedTransport | null, analysed: boolean): RequestKind | null {
+  if (excluded === "international" || excluded === "oversize") return excluded;
+  if (excluded) return "special";
+  return analysed ? "domestic" : null;
+}
+/** Розмова на кілька угод: спецвид будь-якої сильніший за «внутрішнє», а «внутрішнє» — за «не визначено». */
+export function mergeRequestKind(a: RequestKind | null, b: RequestKind | null): RequestKind | null {
+  const rank = (k: RequestKind | null) => (k == null ? 0 : k === "domestic" ? 1 : 2);
+  return rank(b) > rank(a) ? b : a;
+}

@@ -301,7 +301,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, messengerPromises: 0, messengerSignal: null, priceForm: null, priceFormAnalysed: false, managerCommented: false, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
+    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, explainNote: null, reachedInvoice: false, transportKind: null, requestKind: null, messengerPromises: 0, messengerSignal: null, priceForm: null, priceFormAnalysed: false, managerCommented: false, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -2783,4 +2783,45 @@ test("#3732 ЖИВА СХЕМА: «передзвонить сам» — у Ви
   assert.deepEqual([plan2.items.length, plan2.resolved.has("z37322")], [1, false], "дзеркало: без позначки збій і далі стає задачею Роману");
   const plan3 = A.planAutoTasks([{ ...src, state: "done", typeOverride: null }], new Map(), new Date("2026-11-06T10:00:00Z"), (id) => `k/${String(id)}`);
   assert.equal(plan3.resolved.has("z37322"), true, "🔴 вдалий повторний розбір не закриває задачу Роману");
+});
+
+/**
+ * #3733 — «ТИП ЗАПИТУ» (задача 7239, Роман 06.11.2026 «1 окремо»): внутрішні / міжнародні / негабарит, трал / інше
+ * спецперевезення / ще не визначено. Спецвид — те саме правило, що виключення (`transportExclusion`); «внутрішнє» — лише
+ * коли вид РОЗІБРАНО; розмова на кілька угод бере найсильніший. Фільтр діє через `applyListFilter`, а вибір не
+ * внутрішнього типу перемикає на «Виключені». Роут віддає поле, рядок рахує його з розбору виду.
+ * 🧨 Червоніє, якщо нерозібрану розмову записати у внутрішні, спецперевезення злити з внутрішніми, «внутрішнє» перебʼє
+ * міжнародну угоду, або фільтр/роут/вкладка загубляться.
+ */
+test("#3733 ТИП ЗАПИТУ: внутрішні лише розібрані, спецперевезення окремо, кілька угод — найсильніший; фільтр і вкладка", async () => {
+  const T = await import("./firstTouchTransport.js");
+  assert.equal(T.requestKindOf(null, false), null, "🔴 нерозібрану розмову записано у внутрішні");
+  assert.equal(T.requestKindOf(null, true), "domestic", "дзеркало: розібране звичайне — внутрішнє");
+  assert.equal(T.requestKindOf("international", false), "international", "🔴 міжнародку з Kommo загублено без розбору");
+  assert.equal(T.requestKindOf("oversize", true), "oversize");
+  for (const k of ["tanker", "dump", "grain"] as const) assert.equal(T.requestKindOf(k, true), "special", `🔴 ${k} не в «Інше спецперевезення»`);
+  assert.equal(T.mergeRequestKind("domestic", "international"), "international", "🔴 «внутрішнє» перебило міжнародну угоду");
+  assert.equal(T.mergeRequestKind("international", "domestic"), "international", "🔴 порядок угод змінив тип");
+  assert.equal(T.mergeRequestKind(null, "domestic"), "domestic", "дзеркало: розібране сильніше за «не визначено»");
+
+  const V = await loadView() as unknown as { applyListFilter: (r: unknown[], f: unknown) => { requestKind: string | null }[]; requestKindTab: (k: string) => string | null;
+    REQUEST_KIND_LABEL: Record<string, string>; DEFAULT_LIST_FILTER: Record<string, unknown> };
+  const rows = ["domestic", "international", "oversize", "special", null].map((k) => ({ pipelineGroup: "full", teamId: 1, managerId: 1, nonTarget: false, requestKind: k }));
+  const pick = (k: string) => V.applyListFilter(rows, { ...V.DEFAULT_LIST_FILTER, requestKind: k }).map((r) => r.requestKind);
+  assert.deepEqual(pick("unknown"), [null], "🔴 «Ще не визначено» бере не лише нерозібрані");
+  assert.deepEqual(pick("domestic"), ["domestic"], "🔴 «Внутрішні» тягнуть нерозібрані чи спецвиди");
+  assert.deepEqual(pick("special"), ["special"]);
+  assert.equal(pick("all").length, 5, "дзеркало: «усі» не фільтрує");
+  assert.equal(V.applyListFilter(rows, V.DEFAULT_LIST_FILTER).length, 5, "🔴 фільтр за замовчуванням ховає розмови — Звіт КВП порахує інше");
+  assert.deepEqual(["international", "oversize", "special", "domestic", "unknown"].map(V.requestKindTab), ["excluded", "excluded", "excluded", null, null],
+    "🔴 міжнародка не відкривається одним кліком — лишається на порожньому «Звіті»");
+  assert.deepEqual(Object.keys(V.REQUEST_KIND_LABEL), ["domestic", "international", "oversize", "special", "unknown"], "🔴 значення фільтра не ті, що в ТЗ");
+
+  const scr = SRC("core/callAiScreen.ts");
+  assert.equal((scr.match(/requestKindOf\(/g) ?? []).length, 2, "🔴 список чи картка рахують тип запиту не тим правилом");
+  assert.match(scr, /requestKind: requestKindOf\(transportKind, state === "done" && r\.tr_result != null\)/, "🔴 «розібрано» визначається не за розбором виду");
+  assert.match(scr, /seen\.requestKind = mergeRequestKind\(seen\.requestKind, r\.requestKind\)/, "🔴 розмова на кілька угод губить тип другої угоди");
+  assert.match(SRC("routes/dashboard.ts"), /transportKind: r\.transportKind, requestKind: r\.requestKind,/, "🔴 роут не віддає тип запиту");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /id="ai-reqkind"[\s\S]{0,300}const t = requestKindTab\(k\);\s*if \(t\) \{ setTab\(t\);/, "🔴 у фільтрі немає «Тип запиту» або він не перемикає вкладку");
 });
