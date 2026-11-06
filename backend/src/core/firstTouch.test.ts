@@ -131,7 +131,8 @@ test("#3343 ЦІНУ НАЗВАНО · ПРОВОДКА: Звіт бере ро�
   assert.match(core, /const since = from > FIRST_TOUCH_RULE\.startDate \? from : FIRST_TOUCH_RULE\.startDate;/,
     "🔴 Звіт тягне розмови до старту розбору — вони стають «не розібраними», а квартал упирається в таймаут 20 с");
   assert.match(rules, /const mark = checklist\(r\)\?\.price;/, "🔴 ціну Звіт рахує не правилом чек-листа екрана");
-  assert.match(rules, /if \(!r\.inReport \|\| r\.nonTarget\) continue;/, "🔴 Звіт бере не вкладку «Звіт» або не ховає нецільових");
+  // 06.11.2026 (задача 7239 п.3): до умови додано `!countsForTeam(r)` — новачки на адаптації у Звіті не рахуються; твердження те саме.
+  assert.match(rules, /if \(!r\.inReport \|\| r\.nonTarget \|\| !countsForTeam\(r\)\) continue;/, "🔴 Звіт бере не вкладку «Звіт» або не ховає нецільових");
   assert.match(core, /nonTarget: r\.rejectReason != null && REJECT_NONTARGET\.includes\(r\.rejectReason\)/, "🔴 нецільові у Звіті визначаються не так, як на екрані");
   const plan = dash.slice(dash.indexOf('dashboardRouter.get("/report-plan"'), dash.indexOf('dashboardRouter.get("/report-plan/', dash.indexOf('dashboardRouter.get("/report-plan"') + 1));
   assert.ok(plan.length > 1000, "🔴 обробник /report-plan не знайдено — гейт нічого не читає");

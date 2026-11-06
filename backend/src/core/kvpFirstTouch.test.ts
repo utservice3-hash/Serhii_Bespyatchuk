@@ -100,7 +100,8 @@ test("#1690d ПРОВОДКА: екран AI і блок КВП беруть Т�
   const ai = FE_SRC("pages/dashboard/sections/AiCallsSection.tsx");
   assert.match(ai, /useState<ListFilter>\(\(\) => \(\{ \.\.\.DEFAULT_LIST_FILTER, teamId: link\.teamId, managerId: link\.managerId \}\)\)/, "🔴 екран AI відкривається не з DEFAULT_LIST_FILTER — склад розмов розійдеться зі Звітом КВП");
   assert.match(ai, /const rows = tabRows\(scopedAll, "report"\);/);
-  assert.match(ai, /const ts = tileStats\(rows\);/, "🔴 плитки екрана AI рахуються не tileStats");
+  // 06.11.2026 (задача 7239 п.3): плитки — з розмов звіту без новачків (`teamRows`), як і в `firstTouchSummary`; функція та сама.
+  assert.match(ai, /const teamRows = rows\.filter\(countsForTeam\);\s*const ts = tileStats\(teamRows\);/, "🔴 плитки екрана AI рахуються не tileStats");
   assert.match(ai, /parseAiLink\(window\.location\.search\)/, "🔴 екран AI не читає перехід зі Звіту КВП");
   const kvp = FE_SRC("pages/dashboard/sections/KvpFirstTouchBlock.tsx");
   assert.match(kvp, /firstTouchSummary\(d\.rows\)/, "🔴 блок КВП рахує не спільною функцією");
