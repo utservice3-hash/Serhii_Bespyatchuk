@@ -548,7 +548,7 @@ test("#857 ТИП НА ЕКРАНІ: вкладки «Звіт / Виключе�
   assert.match(sec, /Виключені · \{excludedCount\}/, "🔴 вкладки «Виключені» з лічильником немає");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /\{c\.canEditType && \(/, "🔴 кнопки зміни типу показуються без дозволу сервера");
-  assert.match(drw, /setAiCallType\(r\.uniqueid, isCargo\)/, "🔴 кнопки не пишуть тип");
+  assert.match(drw, /setAiCallType\(r\.uniqueid, isCargo(, cut)?\)/, "🔴 кнопки не пишуть тип");
 });
 
 /**
@@ -793,7 +793,7 @@ test("#885 ВТРАЧЕНИЙ ЛІД І ПЕРЕДЗВІН · ЯДРО: lead_los
     assert.equal(typeVerdict(ty, 0.95, null, true).inReport, false, `🔴 «${ty}» з обіцянкою передзвонити зайшов у звіт`);
   assert.equal(typeVerdict("other", 0.95, { isCargo: false, byName: "Т", at: "" }, true).inReport, false, "🔴 правило перебило ручну позначку");
   const scr = SRC("core/callAiScreen.ts");
-  assert.match(scr, /const callback = \(res\?\.promises \?\? \[\]\)\.some\(\(p\) => p\.who === "manager" && p\.channel === "call"\);\s*const v = typeVerdict\(type, conf, override, callback\);/,
+  assert.match(scr, /const callback = \(res\?\.promises \?\? \[\]\)\.some\(\(p\) => p\.who === "manager" && p\.channel === "call"\);\s*const v = typeVerdict\(type, conf, override, callback(, clientCallsBack)?\);/,
     "🔴 правило вмикає не домовленість менеджера ПЕРЕДЗВОНИТИ");
 
   const { teamReport, poolRows } = await import("./firstTouchTeamReport.js");
@@ -2694,4 +2694,93 @@ test("#3725 ТЕКСТ У КОРОТКОМУ КОМЕНТАРІ: нова зад
   const fresh = (await c.raw.query("SELECT t.comments FROM first_touch_auto_tasks j JOIN tasks t ON t.id = j.task_id WHERE j.item_key = 'u3725c'")).rows[0].comments;
   assert.equal(fresh, plan.items[0].description, "🔴 нова задача несе текст лише в описі — у картці його не видно");
   assert.equal((await A.syncFirstTouchAutoTasks(c.db, plan, now)).filled, 0, "🔴 повторний прохід дописує знову");
+});
+
+/**
+ * #3731 — «НЕЗРУЧНО ГОВОРИТИ, ПЕРЕДЗВОНИТЬ САМ» І «РОЗМОВА ОБІРВАЛАСЬ»: ПРАВИЛО, РОУТ, ЕКРАН (Роман 05.11.2026 «1 так»,
+ * 06.11.2026 «лише ті, де клієнт передзвонить сам»). `call_later` без прохання (клієнт сам наб'є) — у «Виключені» з
+ * підписом «клієнт просив передзвонити пізніше»; непевне — у звіті з «Перевірити тип»; з проханням нас передзвонити — у
+ * звіті, як і було (#924); ручна позначка сильніша. «Розмова обірвалась» — ручна «не вантаж» із власним підписом. Роут
+ * приймає `cut` лише булевим і лише з `isCargo: false`; картка має третю кнопку, що шле `cut`.
+ * 🧨 Червоніє, якщо «передзвонить сам» лишиться у звіті або забере з собою прохання передзвонити; якщо модель перебʼє
+ * людину; якщо роут прийме «обірвалась» з «Це вантаж»; якщо кнопка не шле `cut` або підписи зникнуть.
+ */
+test("#3731 «ПЕРЕДЗВОНИТЬ САМ» — у Виключені з причиною, прохання нас передзвонити — у звіті; «обірвалась» — ручна позначка; роут і кнопка", async () => {
+  const { typeVerdict } = await import("./callAiType.js");
+  const ov = (isCargo: boolean, cut = false) => ({ isCargo, cut, byName: "Т", at: "2026-11-06T10:00:00Z" });
+  assert.deepEqual(typeVerdict("call_later", 0.95, null, false, true), { inReport: false, typeCheck: false, source: "model" }, "🔴 «клієнт передзвонить сам» лишився у звіті");
+  assert.deepEqual(typeVerdict("call_later", 0.6, null, false, true), { inReport: true, typeCheck: true, source: "model" }, "🔴 непевне «передзвонить сам» сховано без «Перевірити тип»");
+  assert.deepEqual(typeVerdict("call_later", 0.95, null, false, false), { inReport: true, typeCheck: false, source: "model" }, "🔴 прохання НАС передзвонити пішло у Виключені — «не передзвонив» перестане рахуватись");
+  assert.equal(typeVerdict("call_later", 0.95, ov(true), false, true).inReport, true, "🔴 модель перебила ручне «Це вантаж»");
+  assert.equal(typeVerdict("cargo_request", 0.99, ov(false, true)).inReport, false, "🔴 «Розмова обірвалась» лишила розмову у звіті");
+
+  const V = await loadView() as unknown as { excludedLabel: (r: unknown) => string | null; TYPE_LABEL: Record<string, string> };
+  assert.equal(V.excludedLabel({ conversationType: "call_later", typeOverride: null }), "клієнт просив передзвонити пізніше", "🔴 у Виключених немає причини «клієнт просив передзвонити пізніше»");
+  assert.equal(V.excludedLabel({ conversationType: "cargo_request", typeOverride: { cut: true } }), "розмова обірвалась", "🔴 «обірвалась» без свого підпису");
+  assert.equal(V.excludedLabel({ conversationType: "call_later", typeOverride: { cut: false } }), V.TYPE_LABEL.call_later, "дзеркало: ручне «не вантаж» не видається за «передзвонить сам»");
+  assert.equal(V.excludedLabel({ conversationType: "carrier", typeOverride: null }), V.TYPE_LABEL.carrier, "дзеркало: решта — тип моделі");
+
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.post("/ai-calls/:uniqueid/type"');
+  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  assert.match(body, /const cut = req\.body\?\.cut \?\? false;\s*if \(typeof cut !== "boolean" \|\| \(cut && isCargo\)\) \{ res\.status\(400\)/, "🔴 роут приймає «обірвалась» разом із «Це вантаж» або не-булеве");
+  assert.match(body, /setCallType\(pool, uniqueid, isCargo, \{[^}]+\}, new Date\(\), cut\)/, "🔴 роут не передає «обірвалась» у журнал");
+  assert.match(SRC("core/callAiScreen.ts"), /\[uniqueid, cut \? false : isCargo, cut \? "cut" : null,/, "🔴 журнал пише «обірвалась» без is_cargo = false чи без kind");
+
+  const drawer = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drawer, /onClick=\{\(\) => void set\(false, true\)\}[\s\S]{0,200}>Розмова обірвалась<\/button>/, "🔴 у картці немає кнопки «Розмова обірвалась» або вона не шле cut");
+  assert.match(drawer, /h\.cut \? "«Розмова обірвалась»"/, "🔴 історія підписує «обірвалась» як «Це не вантаж»");
+  assert.match(drawer, /!r\.inReport \? excludedLabel\(r\)/, "🔴 картка виключеної розмови не каже чому");
+  assert.match(readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8"), /!r\.inReport && excludedLabel\(r\) && <span[^>]*>\{excludedLabel\(r\)\}<\/span>/, "🔴 у списку «Виключених» немає причини");
+  assert.match(readFileSync(FE("api.ts"), "utf8"), /\/type`, \{ isCargo, cut \}\)/, "🔴 фронт не шле cut на сервер");
+});
+
+/**
+ * #3732 — ЖИВА СХЕМА: «ПЕРЕДЗВОНИТЬ САМ» І «ОБІРВАЛАСЬ» НАСКРІЗНО. Розбір `call_later` без прохання — це розбір («done»):
+ * тип «незручно говорити», у «Виключених». Той самий тип із проханням — у звіті. «Розмова обірвалась» — журнал
+ * `is_cargo = false` + `kind = 'cut'`, список і картка це бачать; автозадача Роману «аналіз не вдався» закривається;
+ * CHECK не пускає «обірвалась» разом із «вантаж».
+ * 🧨 Червоніє, якщо `callback_request.asked` не дійде до правила, `kind` — до списку чи картки, або зникне CHECK.
+ */
+test("#3732 ЖИВА СХЕМА: «передзвонить сам» — у Виключені, з проханням — у звіті; «обірвалась» — журнал, Виключені, задача Роману закрита; CHECK", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard, setCallType } = await import("./callAiScreen.js");
+  const A = await import("./firstTouchAutoTasks.js");
+  const seed = async (n: string, asked: boolean) => {
+    await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel) VALUES ($1,'D',8921932,1,'2026-10-17 15:00:00+03',$2,'ad')`, [Number(`9373${n}`), `050373200${n}`]);
+    await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+      VALUES ($1,'2026-10-17 15:13:00+03','in','ANSWERED',29,31,9011,$2,'https://rec/z')`, [`z3732${n}`, `38050373200${n}`]);
+    const tid = (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+      VALUES ($1,'elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":2,"text":"я вам пізніше наберу","lang":"ukr"}]'::jsonb) RETURNING id`, [`z3732${n}`])).rows[0].id;
+    await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result) VALUES ($1,'google','gemini-3.8-flash','first-touch-v4','done',$2::jsonb)`,
+      [tid, JSON.stringify({ ...RESULT, conversation_type: "call_later", type_confidence: 0.9, type_reason: "за кермом", promises: [], objections: [],
+        callback_request: { asked, quote: asked ? "наберіть через годину" : "", deadline_text: "", deadline_kind: "none", deadline_minutes: 0, deadline_date: "" } })]);
+  };
+  await seed("1", false); await seed("2", true);
+  const rows = async () => (await aiCallsList(c.db, FAKE_AD, "2026-10-17", "2026-10-17", new Date("2026-11-06T10:00:00Z"), {})).rows;
+  const get = async (u: string) => (await rows()).find((r) => r.uniqueid === u);
+  const self = await get("z37321"), asked = await get("z37322");
+  assert.ok(self && asked, "🔴 розмов «незручно говорити» немає в списку — перевіряти нічого");
+  assert.deepEqual([self.state, self.conversationType, self.inReport, self.typeCheck], ["done", "call_later", false, false], "🔴 «клієнт передзвонить сам» не у Виключених або не як розбір");
+  assert.deepEqual([asked.conversationType, asked.inReport], ["call_later", true], "🔴 прохання нас передзвонити зникло зі звіту");
+
+  await setCallType(c.db, "z37322", false, { userId: 1, name: "Тімлід Т" }, new Date("2026-11-06T10:00:00Z"), true);
+  const cut = await get("z37322");
+  assert.deepEqual([cut?.inReport, cut?.typeOverride?.cut, cut?.typeOverride?.isCargo], [false, true, false], "🔴 «Розмова обірвалась» не прибрала розмову зі звіту або підпис загубився");
+  const card = await aiCallCard(c.db, "z37322", true, {});
+  assert.deepEqual(card?.typeHistory.map((h) => [h.cut, h.isCargo, h.byName]), [[true, false, "Тімлід Т"]], "🔴 історія картки не знає, що це «обірвалась»");
+  await setCallType(c.db, "z37322", false, { userId: 2, name: "Адмін А" }, new Date("2026-11-06T11:00:00Z"));
+  assert.equal((await get("z37322"))?.typeOverride?.cut, false, "дзеркало: звичайне «Це не вантаж» не підписане як обірвана");
+  await assert.rejects(c.raw.query(`INSERT INTO call_type_overrides (uniqueid, is_cargo, kind) VALUES ('z37322', true, 'cut')`), /call_type_overrides_cut_not_cargo/,
+    "🔴 CHECK пустив «обірвалась» разом із «вантаж»");
+  await assert.rejects(c.raw.query(`INSERT INTO call_type_overrides (uniqueid, is_cargo, kind) VALUES ('z37322', false, 'other')`), /check/i, "🔴 CHECK пустив невідомий вид позначки");
+
+  const src = { uniqueid: "z37322", calledAt: "2026-10-17T12:13:00Z", kommoIds: [93732], managerName: "М", teamId: null, teamName: null, failure: null,
+    inReport: false, decision: null, dealOutcome: null };
+  const plan = A.planAutoTasks([{ ...src, state: "llm_failed", typeOverride: { isCargo: false } }], new Map(), new Date("2026-11-06T10:00:00Z"), (id) => `k/${String(id)}`);
+  assert.deepEqual([plan.items.length, plan.resolved.has("z37322")], [0, true], "🔴 після «обірвалась» Роману лишається задача «аналіз не вдався»");
+  const plan2 = A.planAutoTasks([{ ...src, inReport: true, state: "llm_failed", typeOverride: null }], new Map(), new Date("2026-11-06T10:00:00Z"), (id) => `k/${String(id)}`);
+  assert.deepEqual([plan2.items.length, plan2.resolved.has("z37322")], [1, false], "дзеркало: без позначки збій і далі стає задачею Роману");
+  const plan3 = A.planAutoTasks([{ ...src, state: "done", typeOverride: null }], new Map(), new Date("2026-11-06T10:00:00Z"), (id) => `k/${String(id)}`);
+  assert.equal(plan3.resolved.has("z37322"), true, "🔴 вдалий повторний розбір не закриває задачу Роману");
 });

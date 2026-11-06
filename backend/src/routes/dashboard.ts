@@ -12,7 +12,7 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth, requirePerm, requireRole } from "../auth/middleware.js";
-import { anchorFromCabinet, loadAdBalance } from "../core/adBalance.js";
+import { AD_DAY_COST_SQL, anchorFromCabinet, loadAdBalance } from "../core/adBalance.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
 import { assignAllowed, assignDenyReason, assignTeamIdFor, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
          type MergePairScope } from "../auth/mergeScope.js";
@@ -6145,7 +6145,7 @@ dashboardRouter.get("/ads/deals", async (req, res) => {
   const day = dateParam(req.query.day);
   if (!day) return res.status(400).json({ error: "day required" });
   const { adSources } = await getSettings();
-  const deals = await metrics.adDealsByDay(day, adSources);
+  const [deals, received] = await Promise.all([metrics.adDealsByDay(day, adSources), money.adReceivedDeals(day, adSources)]);
   res.json({
     day,
     deals: deals.map((d) => ({
@@ -6155,6 +6155,16 @@ dashboardRouter.get("/ads/deals", async (req, res) => {
       state: d.state,
       reachedMoney: d.reachedMoney,
       url: kommoLeadUrl(d.kommoId), // спільний хелпер: база береться з конфігу в одному місці
+    })),
+    // 🧾 За які угоди «Надійшло цього дня» (05.11.2026) — той самий доступ, що й склад дня.
+    received: received.map((d) => ({
+      kommoId: d.kommoId,
+      name: d.name,
+      price: d.price,
+      leadDay: d.leadDay,
+      state: d.state,
+      manager: d.manager,
+      url: kommoLeadUrl(d.kommoId),
     })),
   });
 });
@@ -6175,7 +6185,7 @@ dashboardRouter.post("/ads/balance", requireRole("admin"), async (req, res) => {
     return res.status(400).json({ error: "Вкажіть залишок із кабінету числом, наприклад 29205.81" });
   }
   const today = kyivToday();
-  const t = await pool.query<{ cost: string | null }>(`SELECT sum(cost) AS cost FROM ad_ga4_daily WHERE day = $1::date`, [today]);
+  const t = await pool.query<{ cost: string | null }>(AD_DAY_COST_SQL, [today]);
   const anchor = anchorFromCabinet(value, Number(t.rows[0]?.cost ?? 0), today);
   await pool.query(
     `INSERT INTO ad_balance_anchor (as_of, balance, cabinet_balance, created_by) VALUES ($1::date, $2, $3, $4)`,
@@ -11532,7 +11542,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/close-deal/revert", async (req, res) =
 });
 
 /**
- * 🗂 Ручний тип розмови (ТЗ «звіт тімліда» 30.09.2026): «Це вантаж» / «Це не вантаж». Право — ПЕРШИМ оператором
+ * 🗂 Ручний тип розмови (ТЗ «звіт тімліда» 30.09.2026): «Це вантаж» / «Це не вантаж» / «Розмова обірвалась» (05.11.2026). Право — ПЕРШИМ оператором
  * (адмін або тімлід; `accessMatrix` — deny-only), скоуп тімліда — той самий, що в картки: чужий дзвінок → 404.
  * Лише дописує журнал `call_type_overrides`.
  */
@@ -11541,11 +11551,14 @@ dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
   if (!canEditType(auth.roleKey)) { res.status(403).json({ error: "Змінювати тип розмови можуть тімлід (своя команда) і адмін" }); return; }
   const isCargo = req.body?.isCargo;
   if (typeof isCargo !== "boolean") { res.status(400).json({ error: "isCargo має бути true або false" }); return; }
+  // «Розмова обірвалась» (05.11.2026) — лише разом з «не вантаж»: вантажна розмова не може бути обірваною.
+  const cut = req.body?.cut ?? false;
+  if (typeof cut !== "boolean" || (cut && isCargo)) { res.status(400).json({ error: "cut — true лише разом з isCargo: false" }); return; }
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
   const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
-  await setCallType(pool, uniqueid, isCargo, { userId: auth.userId ?? null, name: who }, new Date());
+  await setCallType(pool, uniqueid, isCargo, { userId: auth.userId ?? null, name: who }, new Date(), cut);
   res.json({ ok: true });
 });
 

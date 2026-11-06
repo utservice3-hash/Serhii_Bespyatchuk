@@ -223,7 +223,7 @@ interface RawRow {
   client_phone?: string | null; pipeline_id?: string | number | null; reject_reason?: string | null;
   /** Розпізнано, але слів немає: `segments` порожній. */
   stt_empty?: boolean | null;
-  ov_is_cargo?: boolean | null; ov_by?: string | null; ov_at?: Date | null;
+  ov_is_cargo?: boolean | null; ov_kind?: string | null; ov_by?: string | null; ov_at?: Date | null;
   pn_text?: string | null; pn_by?: string | null; pn_at?: Date | null;
   mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
@@ -333,18 +333,20 @@ const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_
 
 function typeFields(res: AnalysisResult | null, r: RawRow): Pick<AiCallRow, "conversationType" | "typeConfidence" | "typeReason" | "priceValue" | "inReport" | "typeCheck" | "typeOverride"> {
   const override: TypeOverride | null = r.ov_is_cargo == null ? null
-    : { isCargo: r.ov_is_cargo === true, byName: r.ov_by ?? null, at: r.ov_at ? new Date(r.ov_at).toISOString() : "" };
+    : { isCargo: r.ov_is_cargo === true, cut: r.ov_kind === "cut", byName: r.ov_by ?? null, at: r.ov_at ? new Date(r.ov_at).toISOString() : "" };
   const type = res?.conversation_type ?? null;
   const conf = typeof res?.type_confidence === "number" ? res.type_confidence : null;
+  // «Незручно говорити», а прохання передзвонити немає — передзвонить сам клієнт (Роман 06.11.2026).
+  const clientCallsBack = type === "call_later" && res?.callback_request?.asked !== true;
   // Домовленість ПЕРЕДЗВОНИТИ від менеджера (а не «напишу в месенджер») — правило 05.10.2026 у `typeVerdict`.
   const callback = (res?.promises ?? []).some((p) => p.who === "manager" && p.channel === "call");
-  const v = typeVerdict(type, conf, override, callback);
+  const v = typeVerdict(type, conf, override, callback, clientCallsBack);
   return { conversationType: type, typeConfidence: conf, typeReason: res?.type_reason ?? null,
     priceValue: res?.price_value?.trim() ? res.price_value.trim() : null, inReport: v.inReport, typeCheck: v.typeCheck, typeOverride: override };
 }
 
 /** Остання ручна позначка типу для дзвінка — латеральним підзапитом (`alias` — таблиця з `uniqueid`). */
-const overrideJoin = (alias: string): string => `LEFT JOIN LATERAL (SELECT o.is_cargo AS ov_is_cargo, o.set_by_name AS ov_by, o.set_at AS ov_at
+const overrideJoin = (alias: string): string => `LEFT JOIN LATERAL (SELECT o.is_cargo AS ov_is_cargo, o.kind AS ov_kind, o.set_by_name AS ov_by, o.set_at AS ov_at
       FROM call_type_overrides o WHERE o.uniqueid = ${alias}.uniqueid ORDER BY o.set_at DESC, o.id DESC LIMIT 1) ov ON true`;
 
 /** Обіцянки менеджера з полями строку (рубрика first-touch-v1); без полів — не рахуються. */
@@ -472,7 +474,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result,
            rcx.client_phone, d.pipeline_id, d.reject_reason, d.request_type, trn.tr_result, msn.ms_result, pfm.pf_result,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("ft")},
+           ov.ov_is_cargo, ov.ov_kind, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("ft")},
            (SELECT min(e.calldate) FROM ringostat_calls e WHERE rcx.client_phone IS NOT NULL AND e.client_phone = rcx.client_phone
                AND e.call_type = ANY($15::text[]) AND e.calldate >= ft.created_at) AS first_out_at
       FROM (${q.sql}) ft
@@ -552,7 +554,7 @@ export interface AiCallCard {
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: (PromiseCheck | null)[];
   /** Журнал ручних змін типу — від найновішої; діє перша. */
-  typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
+  typeHistory: { isCargo: boolean; cut: boolean; byName: string | null; at: string }[];
   /** Дзвінки на номер після розмови (до 12, за 7 днів) — щоб стан обіцянки можна було перевірити очима. */
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
   /**
@@ -584,7 +586,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            rc.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name, rc.client_phone,
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("rc")},
+           ov.ov_is_cargo, ov.ov_kind, ov.ov_by, ov.ov_at, ${NOTE_COLS}, ${managerCommentedCol("rc")},
            a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result, trn.tr_result, msn.ms_result, pfm.pf_result
       FROM ringostat_calls rc
       ${overrideJoin("rc")}
@@ -668,9 +670,9 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     callsAfter,
     messenger: done ? raw.ms_result ?? null : null,
     priceForm: done ? raw.pf_result ?? null : null,
-    typeHistory: (await db.query<{ is_cargo: boolean; set_by_name: string | null; set_at: Date }>(
-      "SELECT is_cargo, set_by_name, set_at FROM call_type_overrides WHERE uniqueid = $1 ORDER BY set_at DESC, id DESC LIMIT 20", [uniqueid]))
-      .rows.map((x) => ({ isCargo: x.is_cargo === true, byName: x.set_by_name, at: new Date(x.set_at).toISOString() })),
+    typeHistory: (await db.query<{ is_cargo: boolean; kind: string | null; set_by_name: string | null; set_at: Date }>(
+      "SELECT is_cargo, kind, set_by_name, set_at FROM call_type_overrides WHERE uniqueid = $1 ORDER BY set_at DESC, id DESC LIMIT 20", [uniqueid]))
+      .rows.map((x) => ({ isCargo: x.is_cargo === true, cut: x.kind === "cut", byName: x.set_by_name, at: new Date(x.set_at).toISOString() })),
   };
 }
 
@@ -703,12 +705,13 @@ export async function aiCallsMeta(db: Db, now: Date, caps: AiCallsMeta["caps"]):
 }
 
 /**
- * Ручна позначка типу (ТЗ 30.09.2026): «Це вантаж» / «Це не вантаж». Лише ДОПИСУЄ рядок журналу — попередні
- * лишаються, і видно, хто й коли змінював. Право й скоуп перевіряє роут ДО виклику.
+ * Ручна позначка типу (ТЗ 30.09.2026): «Це вантаж» / «Це не вантаж»; з 05.11.2026 — ще «Розмова обірвалась» (`cut`:
+ * `is_cargo = false` + `kind = 'cut'`). Лише ДОПИСУЄ рядок журналу — попередні лишаються, і видно, хто й коли змінював.
+ * Право й скоуп перевіряє роут ДО виклику.
  */
-export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by: { userId: number | null; name: string | null }, at: Date): Promise<void> {
-  await db.query("INSERT INTO call_type_overrides (uniqueid, is_cargo, set_by, set_by_name, set_at) VALUES ($1, $2, $3, $4, $5)",
-    [uniqueid, isCargo, by.userId, by.name, at.toISOString()]);
+export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by: { userId: number | null; name: string | null }, at: Date, cut = false): Promise<void> {
+  await db.query("INSERT INTO call_type_overrides (uniqueid, is_cargo, kind, set_by, set_by_name, set_at) VALUES ($1, $2, $3, $4, $5, $6)",
+    [uniqueid, cut ? false : isCargo, cut ? "cut" : null, by.userId, by.name, at.toISOString()]);
 }
 
 export type NoteKind = "price" | "missed" | "offline" | "review" | "explain";

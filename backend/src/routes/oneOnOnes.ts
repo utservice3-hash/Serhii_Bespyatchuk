@@ -38,13 +38,20 @@ function canConduct(auth: { role: string; roleKey: string }, type: OneOnOneType)
   return false;
 }
 
+/**
+ * Хто «працює» для 1×1 — той самий стан, що й у ростері аналітики нижче (`/analytics`): звільнений (накладка
+ * адміна або обидва прапорці) — ні, «завершує» — так. Досі тут стояло голе `m.is_active` (лише Kommo), і
+ * звільнений у дашборді, але активний у Kommo лишався в ростері (задача 8249).
+ */
+const SUBJECT_WORKS = managerState.inOwnWorkListsSql("m", activeManagerSql("m"));
+
 /** WHERE для субʼєктів, яких дозволено проводити (за типом і скоупом). */
 function conductSubjectScope(auth: { role: string; roleKey: string; teamId: number | null }, type: OneOnOneType) {
-  if (type === "B") return { where: "m.is_team_lead AND m.is_active", params: [] as unknown[] };
-  if (type === "V") return { where: "m.is_active", params: [] as unknown[] };
+  if (type === "B") return { where: `m.is_team_lead AND ${SUBJECT_WORKS}`, params: [] as unknown[] };
+  if (type === "V") return { where: SUBJECT_WORKS, params: [] as unknown[] };
   // type A
-  if (crossview(auth)) return { where: "m.is_active", params: [] as unknown[] };
-  return { where: "m.team_id = $1 AND m.is_active", params: [auth.teamId] as unknown[] };
+  if (crossview(auth)) return { where: SUBJECT_WORKS, params: [] as unknown[] };
+  return { where: `m.team_id = $1 AND ${SUBJECT_WORKS}`, params: [auth.teamId] as unknown[] };
 }
 
 /** WHERE-фрагмент для VIEW-скоупу (історія/аналітика): наскрізний → усе; інакше лише свої проведені. */

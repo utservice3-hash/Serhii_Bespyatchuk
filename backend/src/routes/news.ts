@@ -2,23 +2,24 @@ import { Router } from "express";
 import { isAdminScope, isAdminOrLead, tabsOfRole } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { unreadSinceQuery, MARK_SEEN_SQL, unreadByIdQuery, maxVisibleIdQuery } from "../core/newsSeen.js";
-import { newsScope, DELETE_SQL } from "../core/newsVisibility.js";
+import { newsScope, DELETE_SQL, NEWS_KIND_SQL, parseNewsKind } from "../core/newsVisibility.js";
 import { requireAuth } from "../auth/middleware.js";
 
 export const newsRouter = Router();
 newsRouter.use(requireAuth);
 
-const CATEGORIES = ["company", "logistics", "sales"];
+/** Вручну публікуються лише новини компанії — вкладка «Загальні» (06.11.2026: інших вкладок немає). */
+const CATEGORIES = ["company"];
 
-/** Latest news, optionally filtered by category. */
+/** Останні новини; `kind=general|tech` — вкладка «Загальні» чи «Технічні» (без нього — обидві). */
 newsRouter.get("/", async (req, res) => {
-  const category = req.query.category as string | undefined;
+  const kind = parseNewsKind(req.query.kind);
   // 🎯 Умови віддаємо БІЛДЕРУ разом із параметрами — він допише «живе» й аудиторію і
   //    поверне готовий WHERE. Клеїти фрагмент тут не можна: категорія необовʼязкова,
   //    тож номер параметра аудиторії плаває між $1 і $2.
   const conds: string[] = [];
   const pre: unknown[] = [];
-  if (category && CATEGORIES.includes(category)) { pre.push(category); conds.push(`category = $${pre.length}`); }
+  if (kind) conds.push(NEWS_KIND_SQL[kind]);
   const { where, params } = newsScope(tabsOfRole(req.auth!.roleKey), conds, pre);
   const result = await pool.query(
     `SELECT id, category, title, body, author, image_url, created_at
@@ -55,7 +56,6 @@ newsRouter.delete("/:id", async (req, res) => {
   res.json({ ok: true, removed: r.rowCount ?? 0 });
 });
 
-/** Today's approximate price per km by tonnage (latest available). */
 /**
  * 🔔 СКІЛЬКИ НОВИН ЗʼЯВИЛОСЬ ПІСЛЯ МОГО ВІЗИТУ — окремим роутом, а не полем у списку.
  *
@@ -103,24 +103,5 @@ newsRouter.post("/seen", async (req, res) => {
   res.json({ ok: true, maxId: max.rows[0]?.max_id ?? 0 });
 });
 
-newsRouter.get("/km-prices", async (_req, res) => {
-  const result = await pool.query(
-    `SELECT price_date, t20, t10, t5, t2 FROM km_prices ORDER BY price_date DESC LIMIT 1`
-  );
-  res.json({ prices: result.rows[0] ?? null });
-});
-
-newsRouter.put("/km-prices", async (req, res) => {
-  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
-  const num = (v: unknown) => (v === "" || v == null ? null : Number(v));
-  const { t20, t10, t5, t2 } = req.body ?? {};
-  const result = await pool.query(
-    `INSERT INTO km_prices (price_date, t20, t10, t5, t2, updated_at)
-     VALUES (current_date, $1, $2, $3, $4, now())
-     ON CONFLICT (price_date) DO UPDATE SET
-       t20 = EXCLUDED.t20, t10 = EXCLUDED.t10, t5 = EXCLUDED.t5, t2 = EXCLUDED.t2, updated_at = now()
-     RETURNING price_date, t20, t10, t5, t2`,
-    [num(t20), num(t10), num(t5), num(t2)]
-  );
-  res.json({ prices: result.rows[0] });
-});
+// 🚚 «Орієнтовні ціни за 1 км» (GET/PUT /km-prices) прибрано 06.11.2026 разом із блоком на сторінці — рішення
+// Романа. Таблиця `km_prices` лишається в базі (один запис від 30.07), її ніхто більше не читає.

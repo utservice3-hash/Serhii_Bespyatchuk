@@ -123,7 +123,6 @@ import { collectLardi } from "./jobs/collectLardi.js";
 import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
-import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 import { backupDb } from "./jobs/backupDb.js";
 import { catchUpAiChat } from "./ai/respond.js";
@@ -867,10 +866,7 @@ cron.schedule("0 5 * * *", () => {
   void runJob("syncCarriers", () => syncCarriers());
 });
 
-// Fetch 3 fresh logistics-industry news items daily at 08:00.
-cron.schedule("0 8 * * *", () => {
-  void runJob("syncNews", () => syncNews());
-});
+// 📰 RSS «Світ логістики» (syncNews) прибрано 06.11.2026 разом із вкладкою — рішення Романа.
 
 // Evaluate KPI plan tasks (auto-complete on target). Every 30 min so today's
 // composite facts are live intraday, not just after the 07:00 daily pass.

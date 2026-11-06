@@ -19,6 +19,22 @@
 export const NEWS_ALIVE = "deleted_at IS NULL";
 
 /**
+ * 📰 ЩО ПОКАЗУЄ СТОРІНКА «НОВИНИ» (рішення Романа 06.11.2026): лише новини компанії — «Загальні» (додані вручну)
+ * і «Технічні» (про оновлення дашборда, `release_sha`). «Світ логістики» (RSS) і «Продажі логістичних послуг»
+ * прибрано повністю: їхні рядки лишаються в базі, але ні в стрічку, ні в лічильник непрочитаних не потрапляють.
+ * Стоїть у `newsScope`, тож список, значок і «прочитано до» читають ОДНЕ правило.
+ */
+export const NEWS_SHOWN = "category = 'company'";
+
+/** Вкладка сторінки «Новини»: `general` — додані вручну; `tech` — автоматичні про оновлення дашборда. */
+export type NewsKind = "general" | "tech";
+export const NEWS_KIND_SQL: Record<NewsKind, string> = {
+  general: "release_sha IS NULL",
+  tech: "release_sha IS NOT NULL",
+};
+export const parseNewsKind = (v: unknown): NewsKind | null => (v === "general" || v === "tech" ? v : null);
+
+/**
  * 🎯 АДРЕСНІСТЬ: НОВИНА НАЗИВАЄ ВКЛАДКИ, ЧИТАЧ БАЧИТЬ ЇЇ, ЯКЩО МАЄ ХОЧ ОДНУ.
  *
  * 🟢 Рішення власника 09.09.2026: «якщо це статистики для адмінів — їх бачать лише
@@ -40,10 +56,9 @@ export const NEWS_ALIVE = "deleted_at IS NULL";
  * параметр аудиторії опиняється то в `$1`, то в `$2`. Сталий рядок такого не вміє —
  * і саме тут народилася б друга умова, яка розійдеться з першою.
  *
- * ⚠️ ЧИТАЧІВ ТАБЛИЦІ ШІСТЬ, ФІЛЬТР НЕСУТЬ ЧОТИРИ. Машинні два — дедуп RSS
- * (`jobs/syncNews.ts`) і перевірка «той самий блок» (`tools/publishReleaseNews.ts`) —
- * лишаються БЕЗ фільтра свідомо: перший почав би заводити дублі статей, другий —
- * публікувати повтори. Це той самий виняток, що вже названий вище для `NEWS_ALIVE`.
+ * ⚠️ МАШИННИЙ ЧИТАЧ — перевірка «той самий блок» (`tools/publishReleaseNews.ts`) — лишається
+ * БЕЗ фільтра свідомо: інакше публікував би повтори. Це той самий виняток, що вже названий
+ * вище для `NEWS_ALIVE`. (Дедуп RSS `jobs/syncNews.ts` прибрано 06.11.2026 разом із джобою.)
  */
 export function newsScope(
   tabs: readonly string[],
@@ -52,7 +67,7 @@ export function newsScope(
 ): { where: string; params: unknown[] } {
   const p = [...params];
   p.push([...tabs]);
-  const all = [...conds, NEWS_ALIVE, `(audience_tabs IS NULL OR audience_tabs && $${p.length}::text[])`];
+  const all = [...conds, NEWS_ALIVE, NEWS_SHOWN, `(audience_tabs IS NULL OR audience_tabs && $${p.length}::text[])`];
   return { where: `WHERE ${all.join(" AND ")}`, params: p };
 }
 

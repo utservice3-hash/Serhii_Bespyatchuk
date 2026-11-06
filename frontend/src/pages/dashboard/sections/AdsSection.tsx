@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchAds, fetchAdsDeals, saveAdPlan, type AdsReport, type AdsDeal } from "../../../api";
+import { fetchAds, fetchAdsDeals, saveAdPlan, type AdsReport, type AdsDeal, type AdsReceivedDeal } from "../../../api";
 
 /**
  * 📣 РЕКЛАМА — день × кампанія, макет «Смуга днів» (рішення власника 09.09.2026).
@@ -81,12 +81,16 @@ const STATE: Record<AdsDeal["state"], { text: string; bg: string; fg: string }> 
   inWork: { text: "У роботі", bg: "var(--rpt-warn-bg, #fdf2e0)", fg: "var(--rpt-warn, #a06a08)" },
   lost: { text: "Не реалізовано", bg: "var(--rpt-bad-bg, #fdecea)", fg: "var(--rpt-bad, #b4231d)" },
 };
+const RECEIVED_STATE: Record<AdsReceivedDeal["state"], string> = { success: "Успішно", paid: "Оплата отримана" };
 
 export function AdsSection({ from, to, canEditPlan }: { from: string; to: string; canEditPlan?: boolean }) {
   const [data, setData] = useState<AdsReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [openDay, setOpenDay] = useState<string | null>(null);
   const [deals, setDeals] = useState<AdsDeal[] | null>(null);
+  // 🧾 За які угоди «Надійшло цього дня» (Роман 05.11.2026) — приходить тим самим запитом, що й склад дня.
+  const [received, setReceived] = useState<AdsReceivedDeal[] | null>(null);
+  const [showReceived, setShowReceived] = useState(false);
   const [planDraft, setPlanDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -104,12 +108,13 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
   // Склад дня тягнеться ОКРЕМО і лише для розкритого: тягнути угоди всіх днів наперед
   // означало б платити за те, чого ніхто не дивиться.
   useEffect(() => {
-    if (!openDay) { setDeals(null); return; }
+    if (!openDay) { setDeals(null); setReceived(null); return; }
     let alive = true;
     setDeals(null);
+    setReceived(null);
     fetchAdsDeals(openDay)
-      .then((r) => { if (alive) setDeals(r.deals); })
-      .catch(() => { if (alive) setDeals([]); });
+      .then((r) => { if (alive) { setDeals(r.deals); setReceived(r.received); } })
+      .catch(() => { if (alive) { setDeals([]); setReceived([]); } });
     return () => { alive = false; };
   }, [openDay]);
 
@@ -296,11 +301,40 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
                 <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.5px", marginTop: 4,
                               color: "var(--rpt-ok, #1a7f4b)" }}>{money(openRow.paidMargin)} ₴</div>
                 <div style={{ ...DIM, fontSize: 11.5 }}>{times(openRow.paidMargin, openRow.cost) ?? "без витрат"} до витрат дня</div></div>
-              <div title={HINT_RECEIVED}><div style={LAB}>Надійшло цього дня ⓘ</div>
+              <button type="button" title={HINT_RECEIVED} aria-expanded={showReceived}
+                      disabled={openRow.receivedDeals === 0} onClick={() => setShowReceived((v) => !v)}
+                      style={{ all: "unset", textAlign: "right", cursor: openRow.receivedDeals ? "pointer" : "default" }}>
+                <div style={LAB}>Надійшло цього дня ⓘ</div>
                 <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.5px", marginTop: 4 }}>{money(openRow.received)} ₴</div>
-                <div style={{ ...DIM, fontSize: 11.5 }}>{openRow.receivedDeals} угод · будь-яких днів</div></div>
+                <div style={{ fontSize: 11.5, color: openRow.receivedDeals ? "var(--rpt-link, #2563eb)" : undefined, opacity: openRow.receivedDeals ? 1 : .6 }}>
+                  {openRow.receivedDeals} угод · {openRow.receivedDeals ? (showReceived ? "сховати ▴" : "за які угоди ▾") : "будь-яких днів"}
+                </div>
+              </button>
             </div>
           </div>
+
+          {showReceived && openRow.receivedDeals > 0 && (
+            <>
+              <div style={{ ...STRIP, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <span>Надійшло цього дня · {openRow.receivedDeals} угод · {money(openRow.received)} ₴</span>
+                <span>гроші за угоди з реклами, закриті або оплачені цього дня; лід міг прийти будь-коли</span>
+              </div>
+              <div style={{ padding: "14px 22px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+                {received === null && <div style={DIM}>Завантаження…</div>}
+                {received?.map((d) => (
+                  <div key={d.kommoId} style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 14, flexWrap: "wrap" }}>
+                    <div style={{ flexGrow: 1, minWidth: 180 }}>
+                      <a href={d.url} target="_blank" rel="noreferrer"
+                         style={{ color: "var(--rpt-link, #2563eb)", textDecoration: "none" }}>{d.name}</a>
+                      <span style={{ ...DIM, fontSize: 12 }}> · лід {dayLabel(d.leadDay)}{d.manager ? ` · ${d.manager}` : ""}</span>
+                    </div>
+                    <div style={{ width: 150, fontSize: 12, fontWeight: 700, color: "var(--rpt-ok, #1a7f4b)" }}>{RECEIVED_STATE[d.state]}</div>
+                    <div style={{ width: 90, textAlign: "right", fontWeight: 700 }}>{money(d.price)} ₴</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
           <div style={STRIP}>Куди пішли гроші цього дня</div>
           <div style={{ padding: "16px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -392,7 +426,15 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
                     <b style={{ color: d.paidMargin ? "var(--rpt-ok, #1a7f4b)" : undefined }}>{money(d.paidMargin)} ₴</b>
                     {times(d.paidMargin, d.cost) && <span style={{ ...DIM, fontSize: 11.5 }}> · {times(d.paidMargin, d.cost)}</span>}
                   </td>
-                  <td style={TD}>{money(d.received)} ₴</td>
+                  <td style={TD}>
+                    {d.receivedDeals > 0
+                      ? <button type="button" title="Показати, за які угоди надійшли гроші"
+                                onClick={(e) => { e.stopPropagation(); setOpenDay(d.day); setShowReceived(true); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                                style={{ all: "unset", cursor: "pointer", color: "var(--rpt-link, #2563eb)", borderBottom: "1px dashed currentColor" }}>
+                          {money(d.received)} ₴
+                        </button>
+                      : `${money(d.received)} ₴`}
+                  </td>
                 </tr>
               ))}
               <tr style={{ background: "var(--rpt-soft, #f6f5f3)" }}>

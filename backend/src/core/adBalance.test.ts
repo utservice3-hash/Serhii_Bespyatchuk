@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { anchorFromCabinet, computeAdBalance, AD_PAYMENTS_SQL, AD_VAT } from "./adBalance.js";
+import { anchorFromCabinet, computeAdBalance, AD_PAYMENTS_SQL, AD_VAT, AD_COSTS_SQL, AD_DAY_COST_SQL, AD_SYNCED_SQL } from "./adBalance.js";
 
 /**
  * #7140 — БАЛАНС РЕКЛАМНОГО КАБІНЕТУ: ПДВ ДІЛЕННЯМ, ВИТРАТИ ×1,2, СЕРЕДНЯ БЕЗ СЬОГОДНІ, ЗВІРКА З КАБІНЕТОМ (30.10.2026).
@@ -56,4 +56,24 @@ test("#7140b БАЛАНС КАБІНЕТУ — ЛИШЕ АДМІНИ: requireRol
   const row = matrix.match(/path: "\/api\/dashboard\/ads\/balance", cls: "GET",\s*allow: \[([^\]]*)\], deny: \[([^\]]*)\]/);
   assert.ok(row, "🔴 немає рядка матриці для GET /api/dashboard/ads/balance");
   assert.ok(row![2].includes('"team_lead"') && !row![1].includes('"team_lead"'), "🔴 тімлід бачить баланс кабінету");
+});
+
+/**
+ * #7140c — СВІЖА ВИТРАТА ДНЯ (заміряно 05.11.2026). GA4 приходить раз на добу о 06:00, тож сьогодні в ньому 241 грн при
+ * реальних 7 448 — і залишок був на ~8 700 вищий за кабінет. Аркуш бюджету синкається щогодини й за повні дні
+ * збігається з GA4. Беремо більше з двох.
+ * 🧨 Червоніє, якщо витрати знову беруться лише з GA4, аркуш перекриває GA4 замість GREATEST, у суму потрапляють
+ * заготовлені майбутні дні аркуша, звірка з кабінетом рахує сьогоднішню витрату іншим правилом або «станом на» забуде аркуш.
+ */
+test("#7140c БАЛАНС КАБІНЕТУ: витрата дня — більше з GA4 і аркуша бюджету, без майбутніх днів аркуша; звірка тим самим правилом", () => {
+  for (const sql of [AD_COSTS_SQL, AD_DAY_COST_SQL]) {
+    assert.match(sql, /FROM ad_ga4_daily/, "🔴 зникло GA4");
+    assert.match(sql, /FROM ad_budget_daily/, "🔴 немає аркуша бюджету — сьогоднішня витрата знову нуль до 06:00 наступного дня");
+    assert.match(sql, /GREATEST\(COALESCE\(g\.cost, 0\), COALESCE\(b\.cost, 0\)\)/, "🔴 не «більше з двох»");
+    assert.match(sql, /FULL JOIN/, "🔴 день, що є лише в одному джерелі, випадає");
+    assert.match(sql, /day <= \(now\(\) AT TIME ZONE 'Europe\/Kyiv'\)::date\)/, "🔴 майбутні заготовлені дні аркуша потрапляють у витрати");
+  }
+  assert.match(AD_SYNCED_SQL, /ad_budget_daily/, "🔴 «станом на» не бачить щогодинного аркуша");
+  const routes = readFileSync(path.join(import.meta.dirname, "..", "routes", "dashboard.js"), "utf8");
+  assert.doesNotMatch(routes, /SELECT sum\(cost\) AS cost FROM ad_ga4_daily WHERE day = \$1::date/, "🔴 звірка рахує сьогоднішню витрату лише з GA4");
 });

@@ -17,7 +17,7 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TILE_MATCH, tileStats, priceFormStats, PRICE_FORM_UI, PRICE_FORM_FROM_UA, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS, CLOSURE_UI,
   TRANSPORT_LABEL, type ExcludedFilterT,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
-  DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams } from "../aiCallsView";
+  DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams, excludedLabel } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -470,12 +470,12 @@ export function AiCallsSection() {
                           <td style={{ maxWidth: 380 }}>
                             {(r.typeCheck || !r.inReport || r.typeOverride) && (
                               <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 3 }}>
-                                {r.typeCheck && <span className="ftd-chip" title={`Модель не впевнена в типі (${r.conversationType ? TYPE_LABEL[r.conversationType] : "—"}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}`}
+                                {r.typeCheck && <span className="ftd-chip" title={r.conversationType ? `Модель не впевнена в типі (${TYPE_LABEL[r.conversationType]}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}` : r.typeReason ?? "Тип не визначено"}
                                   style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>Перевірити тип</span>}
                                 {r.messengerSignal === true && <span className="ftd-chip" title="Менеджер сам запропонував перейти в месенджер — клієнт не просив (задача 7184)" style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>сам запропонував месенджер</span>}
                                 {!r.inReport && r.transportKind
                                   ? <span className="ftd-chip" title="Не оцінюємо в першому дотику: на такому перевезенні ціну в першій розмові назвати майже неможливо (задача 7183)" style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>не оцінюємо · {TRANSPORT_LABEL[r.transportKind]}</span>
-                                  : !r.inReport && r.conversationType && <span className="ftd-chip" title={r.typeReason ?? ""} style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>{TYPE_LABEL[r.conversationType]}</span>}
+                                  : !r.inReport && excludedLabel(r) && <span className="ftd-chip" title={r.typeOverride?.cut ? "Тімлід позначив: розмови по суті не було" : r.typeReason ?? ""} style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>{excludedLabel(r)}</span>}
                                 {r.typeOverride && <span className="ftd-sub">позначено вручну{r.typeOverride.byName ? ` · ${r.typeOverride.byName}` : ""}</span>}
                               </div>
                             )}
