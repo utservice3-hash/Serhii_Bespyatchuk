@@ -6694,3 +6694,26 @@ export const updateOrgTeam = async (id: number, body: { name?: string; kommoTeam
 /** Команда людини без Kommo: `k:<id>` / `d:<id>` або `null` — зняти. */
 export const setEmployeeTeam = async (employeeId: number, team: string | null) =>
   (await api.put<{ ok: true; name: string | null }>(`/org/teams/people/${employeeId}`, { team })).data.name;
+
+// 🔗 Черга LinkedIn (задача 7361): «Клієнти → LinkedIn» — статистика за період і редактор кола («Налаштувати чергу»).
+export interface LinkedinQueueScreen {
+  mode: "off" | "dry" | "live"; launchedAt: string | null;
+  members: { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean; botLinked: boolean }[];
+  candidates: { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }[];
+}
+export interface LinkedinStats {
+  from: string; to: string; scope: "all" | "team" | "own";
+  kpi: { created: number; taken: number; dispatcher: number | null; dispatcherDup: number | null; dispatcherNobody: number | null; avgTakeMin: number | null };
+  perManager: { managerId: number; name: string; received: number; taken: number; ignored: number; avgTakeMin: number | null }[];
+  items: { kommoId: number; dealName: string | null; state: string; managerName: string | null; reason: string | null;
+    seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number }[];
+  queue: { mode: "off" | "dry" | "live"; members: number; nextName: string | null; launchedAt: string | null;
+    paused: boolean; pausedBy: string | null; pausedAt: string | null };
+}
+export const fetchLinkedinStats = async (from: string, to: string) => (await api.get<LinkedinStats>("/linkedin/stats", { params: { from, to } })).data;
+export const fetchLinkedinQueue = async () => (await api.get<LinkedinQueueScreen>("/linkedin-queue")).data;
+export const saveLinkedinQueueMembers = async (managerIds: number[]) => (await api.put<{ ok: boolean }>("/linkedin-queue/members", { managerIds })).data;
+export const setLinkedinQueuePaused = async (paused: boolean) => (await api.put<{ ok: boolean; paused: boolean }>("/linkedin-queue/pause", { paused })).data;
+// 🤖 Бот «UTS Заявки» (черга LinkedIn): підключення власного акаунта.
+export const fetchLeadsBotMe = async () => (await api.get<{ configured: boolean; linked: boolean; inQueue: boolean; eligible: boolean; botUsername: string | null }>("/leads-bot/me")).data;
+export const createLeadsBotLink = async () => (await api.post<{ url: string; code: string; botUsername: string; expiresInSec: number }>("/leads-bot/link")).data;

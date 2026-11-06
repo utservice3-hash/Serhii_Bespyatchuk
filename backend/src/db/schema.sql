@@ -7526,6 +7526,89 @@ CREATE INDEX IF NOT EXISTS idx_employee_levels_emp ON employee_levels (employee_
 -- Персональні дані про умови роботи — не для моделі.
 REVOKE ALL ON employee_levels FROM ai_readonly;
 
+-- 🔗 ЧЕРГА LINKEDIN (задача 7361; рішення Юлі 03.11.2026). Угода на етапі «LinkedIn» (Кваліфікація, 113486296)
+-- іде менеджерам по колу: одночасно лише в одного, 15 хв робочого часу (пн–пт 8–18 за Києвом), хто не взяв —
+-- пропускає чергу; двоє підряд не взяли або клієнт уже в іншого менеджера — лишається на «Операційному директорі», Даші.
+-- Порядок кола — список, який веде Юля в Налаштуваннях (`manage_linkedin_queue`). Логіка — `core/linkedinQueue.ts`.
+CREATE TABLE IF NOT EXISTS linkedin_queue_members (
+  manager_id INTEGER PRIMARY KEY REFERENCES managers(id),
+  position   INTEGER NOT NULL,
+  added_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  added_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Один рядок: де зупинилось коло, з якої миті угоди йдуть у чергу (старіші — ні). «Спірне — Даші» = угода лишається
+-- на службовому «Операційному директорі», Даша розподіляє вручну (Юля 04.11.2026) — окремого акаунта під це немає.
+CREATE TABLE IF NOT EXISTS linkedin_queue_settings (
+  id                 BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  last_manager_id    INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  launched_at        TIMESTAMPTZ,
+  updated_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS linkedin_queue_items (
+  kommo_id          BIGINT PRIMARY KEY,
+  deal_name         TEXT,
+  created_at_kommo  TIMESTAMPTZ,
+  seen_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  seen_responsible  BIGINT,
+  state             TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting', 'offered', 'taken', 'dispatcher', 'gone')),
+  manager_id        INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  offered_ids       INTEGER[] NOT NULL DEFAULT '{}',
+  offered_at        TIMESTAMPTZ,
+  deadline_at       TIMESTAMPTZ,
+  misses            INTEGER NOT NULL DEFAULT 0,
+  reason            TEXT,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_linkedin_queue_items_open ON linkedin_queue_items (state) WHERE state IN ('waiting', 'offered');
+-- Повідомлення з кнопкою «Взяти» в того, кому зараз запропоновано, — щоб погасити кнопку, коли заявка йде далі.
+ALTER TABLE linkedin_queue_items ADD COLUMN IF NOT EXISTS offer_chat_id BIGINT;
+ALTER TABLE linkedin_queue_items ADD COLUMN IF NOT EXISTS offer_message_id BIGINT;
+-- 🤖 Бот «UTS Заявки» (прохід 2б): свій чат на користувача, окремо від бота підпису (`telegram_chat_id`) — інший бот,
+-- інша розмова. Менеджеру без підключеного бота черга нічого не дає (Роман 04.11.2026: «йому нічого не даємо»).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS leads_bot_chat_id BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS leads_bot_linked_at TIMESTAMPTZ;
+-- Одноразові коди підключення (6 цифр, 10 хв), як у бота підпису, але своя таблиця: тамтешній CHECK знає лише свої цілі.
+CREATE TABLE IF NOT EXISTS leads_bot_link_codes (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code       TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_leads_bot_link_codes_live ON leads_bot_link_codes (code) WHERE used_at IS NULL;
+-- ⏸ Кнопка «Зупинити бота» (Роман 03.11.2026): на паузі черга нікому нічого не пропонує й не рахує 15 хв; після запуску
+-- поточні пропозиції отримують свіжі 15 хв (інакше пауза перетворилась би на «проігнорував» без вини менеджера).
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+-- Журнал — з нього статистика «отримав / взяв / проігнорував / за який час». Пише і пробний режим (mode='dry').
+CREATE TABLE IF NOT EXISTS linkedin_queue_log (
+  id         SERIAL PRIMARY KEY,
+  kommo_id   BIGINT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('seen', 'offer', 'ignored', 'taken', 'dispatcher', 'gone')),
+  manager_id INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  note       TEXT,
+  mode       TEXT NOT NULL CHECK (mode IN ('dry', 'live')),
+  at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_linkedin_queue_log_deal ON linkedin_queue_log (kommo_id, at);
+-- Право вести список черги: Юля (kvp) і адмін («Зроби список у налаштуваннях, щоб я могла його міняти без тебе»).
+UPDATE roles SET permissions = permissions || '{"manage_linkedin_queue": true}'::jsonb
+ WHERE key IN ('admin', 'kvp');
+UPDATE roles SET permissions = permissions - 'manage_linkedin_queue'
+ WHERE key NOT IN ('admin', 'kvp');
+-- Екран «LinkedIn» (група «Клієнти», задача 7361): керівництво й КВП — усіх; тімлід — свою команду; менеджер — лише себе
+-- (Роман 04.11.2026; скоуп — `linkedinScope`). Разово, ключ потім веде адмін. Фінансисту — ні: синк «financier = екрани адміна»
+-- вище скопіював би йому кожен новий екран адміна (той самий механізм, що з Prozorro, #2812), тож знімаємо ПІСЛЯ нього.
+UPDATE roles SET screen_access = screen_access || '{"linkedin":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'team_lead', 'manager') AND NOT (screen_access ? 'linkedin');
+UPDATE roles SET screen_access = screen_access || '{"linkedin":false}'::jsonb
+  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'team_lead', 'manager') AND NOT (screen_access ? 'linkedin');
+UPDATE roles SET screen_access = screen_access - 'linkedin'
+ WHERE key = 'financier';
+
 -- 📵 ДОВІДНИК НОМЕРІВ ПЕРЕВІЗНИКІВ (задача 7359, ТЗ Юлії «Контакти клієнтів», етап 1). Останні 9 цифр номера з
 -- машин Lardi (`side='lorry'`) або з угод, закритих як «Перевізник», МІНУС номери з угодою замовника («Успіх» чи в
 -- роботі; рішення Романа 03.11.2026). Похідна таблиця: повністю перебудовується з `lardi_offers` і `deals` джобою
