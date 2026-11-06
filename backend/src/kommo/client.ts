@@ -896,6 +896,27 @@ export async function fetchResponsibleEventsForLeads(ids: readonly number[]): Pr
 }
 
 /**
+ * 💎 Зміни ЕТАПУ по конкретних угодах (`filter[entity_id]`, до 10 за запит) — хто перевів угоду Продзвону в
+ * «Кваліфіковано», тобто хто передав лід (LTV лідогенерації, 06.11.2026). Лише читання; `createdBy` 0 — робот.
+ */
+export async function fetchStatusChangesForLeads(ids: readonly number[]): Promise<{ entityId: number; createdBy: number; toStatusId: number | null; at: number }[]> {
+  type Raw = { entity_id: number; entity_type: string; created_by: number; created_at: number; value_after?: { lead_status?: { id?: number } }[] };
+  const out: { entityId: number; createdBy: number; toStatusId: number | null; at: number }[] = [];
+  for (let i = 0; i < ids.length; i += 10) {
+    const part = ids.slice(i, i + 10);
+    const q = part.map((id, j) => `${encodeURIComponent(`filter[entity_id][${j}]`)}=${id}`).join("&");
+    for (let page = 1; page < 20; page++) {
+      const data = await kommoRequest<KommoListResponse<Raw>>(`/api/v4/events?limit=100&page=${page}&filter[type]=lead_status_changed&filter[entity]=lead&${q}`);
+      const raw = data?._embedded?.events ?? [];
+      for (const e of raw) if (e.entity_type === "lead" && part.includes(e.entity_id))
+        out.push({ entityId: e.entity_id, createdBy: Number(e.created_by) || 0, toStatusId: e.value_after?.[0]?.lead_status?.id ?? null, at: e.created_at });
+      if (raw.length < 100 || !data?._links?.next) break;
+    }
+  }
+  return out;
+}
+
+/**
  * 🔗 Потік системних приміток `lead_auto_created` угод за [fromUnix, toUnix] — сторінками по 250.
  * Сира форма приміток; пару «батьківська → дочірня» дістає чиста `parseLeadChildLink`. Фільтр за
  * `updated_at`: такі примітки не редагуються, тож він дорівнює моменту створення.

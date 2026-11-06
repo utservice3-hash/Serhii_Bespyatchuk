@@ -7923,3 +7923,58 @@ UPDATE roles SET permissions = permissions || '{"payroll_offer_tasks":true}'::js
 UPDATE roles SET permissions = permissions - 'payroll_offer_tasks' WHERE key NOT IN ('hr');
 UPDATE roles SET permissions = permissions || '{"notify_rules":true}'::jsonb WHERE key IN ('opdir', 'admin');
 UPDATE roles SET permissions = permissions - 'notify_rules' WHERE key NOT IN ('opdir', 'admin');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💎 LTV КЛІЄНТІВ ЛІДОГЕНЕРАЦІЇ (ТЗ 28.10.2026, погоджено з директором; Роман 06.11.2026 «роби так, як каже ТЗ»).
+-- Правила — `core/leadgenLtvRules.ts`, збирає джоба `buildLeadgenLtv` (кожні 30 хв). Гроші сюди НЕ пишуться: маржа й
+-- оборот — з ядра (`core/money.ts`) у мить збирання й на кожен запит періоду.
+--  · `leadgen_handoff_actors` — хто перевів угоду Продзвону в «Кваліфіковано» в день передачі (журнал Kommo
+--    `lead_status_changed`, `created_by`). Ядро грошей з передач пише лід на ПОТОЧНОГО відповідального; LTV за ТЗ
+--    закріплює клієнта за тим, хто передав. NULL — Kommo не віддав подію або її зробив робот (видно числом).
+--  · `leadgen_ltv_clients` — один рядок на клієнта лідгена: передача, перша успішна угода, LTV, оборот на мить збирання.
+--  · `leadgen_ltv_pool` — клієнти, яких лідген узяв із «🎯 Пулу лідгенів»: окремо, у основний LTV не входять (п. 3.4).
+--  · `leadgen_ltv_months` — передачі й передачі без угоди менеджера по місяцях (⚠ на когортах).
+--  ⚠️ Revert коду таблиць не прибирає. Модель їх не читає.
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS leadgen_handoff_actors (
+  pz_id               BIGINT NOT NULL,
+  handoff_day         DATE NOT NULL,
+  actor_kommo_user_id BIGINT,
+  fetched_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (pz_id, handoff_day)
+);
+CREATE TABLE IF NOT EXISTS leadgen_ltv_clients (
+  client_key          TEXT PRIMARY KEY,
+  lg_manager_id       INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  actor_kommo_user_id BIGINT,
+  pz_id               BIGINT NOT NULL,
+  handoff_day         DATE NOT NULL,
+  first_deal_id       BIGINT NOT NULL,
+  first_day           DATE NOT NULL,
+  deals               INTEGER NOT NULL CHECK (deals >= 0),
+  ltv                 NUMERIC(14,2) NOT NULL,
+  turnover            NUMERIC(14,2) NOT NULL DEFAULT 0,
+  turnover_missing    INTEGER NOT NULL DEFAULT 0,
+  client_name         TEXT,
+  owner_manager_id    INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  segment             TEXT,
+  state               TEXT,
+  merged              BOOLEAN NOT NULL DEFAULT false,
+  built_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_leadgen_ltv_clients_lg ON leadgen_ltv_clients (lg_manager_id);
+CREATE TABLE IF NOT EXISTS leadgen_ltv_pool (
+  client_key          TEXT PRIMARY KEY,
+  lg_manager_id       INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  taken_at            TIMESTAMPTZ NOT NULL,
+  ltv_after           NUMERIC(14,2) NOT NULL DEFAULT 0,
+  deals_after         INTEGER NOT NULL DEFAULT 0,
+  built_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS leadgen_ltv_months (
+  ym        TEXT PRIMARY KEY CHECK (ym ~ '^[0-9]{4}-[0-9]{2}$'),
+  handoffs  INTEGER NOT NULL CHECK (handoffs >= 0),
+  unlinked  INTEGER NOT NULL CHECK (unlinked >= 0 AND unlinked <= handoffs),
+  built_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+REVOKE ALL ON leadgen_handoff_actors, leadgen_ltv_clients, leadgen_ltv_pool, leadgen_ltv_months FROM ai_readonly;

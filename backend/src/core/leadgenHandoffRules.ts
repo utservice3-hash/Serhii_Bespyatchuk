@@ -120,7 +120,7 @@ export function pickHandoffs<T extends HandoffEntry>(entries: readonly T[]): T[]
  */
 export const REGULAR_MIN_SUCCESSES = 2;
 export const REGULAR_FRESH_MONTHS = 3;
-export interface ClientSuccess { at: number; day: string }
+export interface ClientSuccess { at: number; day: string; /** Угода успіху — LTV лідогенерації шукає першу (06.11.2026). */ dealId?: number }
 
 /**
  * Київська дата на `n` календарних місяців раніше, день обрізано до довжини місяця (31.05 − 3 = 28.02).

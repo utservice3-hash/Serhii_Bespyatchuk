@@ -417,6 +417,31 @@ export const receivedByClientKey = (s: MoneyScope) => receivedByDealAttr(s, "COA
  * — похідна від `client_key_raw` через реєстр псевдонімів).
  */
 export const successByClientKey = (s: MoneyScope) => byDealAttr("success", s, "COALESCE(dd.client_key, '—')");
+
+/**
+ * 🧾 ОБОРОТ ① ПО КЛІЄНТУ — сума рахунку (Σ «Приход 1–5», `deal_fin_fields.income`) тих САМИХ успішних угод, що й
+ * `successByClientKey`, лише замість маржі. Довідкове число поруч із LTV лідогенерації (ТЗ LTV 28.10.2026, п. 3.3:
+ * «оборот — сума рахунків тих самих угод»). Колонки «Факт з рахунку» / «Всього грошей» на екрані клієнтів — МАРЖА,
+ * тож оборотом бути не можуть. Угоди без фінансових полів не мовчать: їх число — `missing`.
+ */
+export async function successIncomeByClientKey(keys: readonly string[]): Promise<Map<string, { income: number; missing: number }>> {
+  const out = new Map<string, { income: number; missing: number }>();
+  if (!keys.length) return out;
+  const p: unknown[] = [];
+  const src = sourceSql("success", p);
+  p.push([...keys]);
+  const keyArg = `$${p.length}`;
+  const rows = (await pool.query<{ k: string; income: string; missing: string }>(
+    `SELECT dd.client_key AS k, COALESCE(SUM(f.income),0) AS income, COUNT(*) FILTER (WHERE f.income IS NULL) AS missing
+       FROM (${src}) src
+       JOIN managers m ON m.id = src.manager_id
+       JOIN deals dd ON dd.kommo_id = src.kommo_id
+       LEFT JOIN deal_fin_fields f ON f.kommo_id = src.kommo_id
+      WHERE dd.client_key = ANY(${keyArg}::text[])
+      GROUP BY 1`, p)).rows;
+  for (const x of rows) out.set(x.k, { income: Number(x.income), missing: Number(x.missing) });
+  return out;
+}
 /**
  * ⏱ ① «УСПІШНО РЕАЛІЗОВАНО» ДЛЯ УГОД ЗІ ЗАДАНИХ ДЖЕРЕЛ (`client_source`) — середній чек рекламної угоди для
  * «суми втрат» вікна «Час опрацювання заявки» (ТЗ 24.09.2026: «середній чек дашборд бере сам — по рекламних
@@ -1464,8 +1489,8 @@ export async function clientSuccessHistory(clientKeys: readonly string[]): Promi
   const out = new Map<string, ClientSuccess[]>();
   const keys = [...new Set(clientKeys.filter((k) => k))];
   if (!keys.length) return out;
-  const r = await pool.query<{ client_key: string; at: Date; day: string }>(
-    `SELECT d.client_key, d.closed_at_kommo AS at,
+  const r = await pool.query<{ client_key: string; at: Date; day: string; kommo_id: string }>(
+    `SELECT d.client_key, d.closed_at_kommo AS at, d.kommo_id,
             to_char(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS day
        FROM deals d
       WHERE d.client_key = ANY($1::text[])
@@ -1475,7 +1500,7 @@ export async function clientSuccessHistory(clientKeys: readonly string[]): Promi
   );
   for (const x of r.rows) {
     const xs = out.get(x.client_key) ?? [];
-    xs.push({ at: new Date(x.at).getTime(), day: x.day });
+    xs.push({ at: new Date(x.at).getTime(), day: x.day, dealId: Number(x.kommo_id) });
     out.set(x.client_key, xs);
   }
   return out;
