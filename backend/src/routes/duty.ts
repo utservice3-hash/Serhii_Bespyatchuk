@@ -33,16 +33,21 @@ const SHIFTS = new Set(["day", "evening", "weekend"]);
 // включно з їхніми тімлідами. Менеджерів РПК/інших до графіка не пропонуємо.
 // 🔢 За НОМЕРОМ команди, а не за словом у назві (30.10.2026, задача 7371): назви приходять із Kommo, і з них прибирають
 // «РНК/РПК» — пошук `ILIKE '%РНК%'` після перейменування відмовив би всім. Джерело номерів — `metrics.RNK_TEAM_IDS`.
-const RNK_TEAM = `t.id = ANY(ARRAY[${RNK_TEAM_IDS.join(", ")}]::int[])`;
+// 👥 Команди чергування — ОКРЕМИЙ перелік від рекламних: + команда Хомік (36284), рішення Романа 06.11.2026 («треба
+// зробити Віці Хомік доступ до цього»). `RNK_TEAM_IDS` свідомо не чіпаємо: на ньому тримаються Звіт, номінації, канали
+// лідів і «Час опрацювання заявки» — розширення там посунуло б цифри.
+export const KHOMIK_TEAM_ID = 36284;
+export const DUTY_TEAM_IDS: readonly number[] = [...RNK_TEAM_IDS, KHOMIK_TEAM_ID];
+const DUTY_TEAM = `t.id = ANY(ARRAY[${DUTY_TEAM_IDS.join(", ")}]::int[])`;
 
 /** Менеджери, доступні для призначення тому, хто дивиться (лід → своя команда). */
 async function assignableManagers(auth: { role: string; teamId: number | null }, teamId: number | null) {
   let scope = teamId;
   if (auth.role === "team_lead") scope = auth.teamId;
   const params: unknown[] = [];
-  // Тімлід — лише РНК (своя команда). Адмін — БУДЬ-ЯКА команда (РНК і РПК) → без RNK-фільтра.
+  // Тімлід — лише своя команда з переліку чергування. Адмін — БУДЬ-ЯКА команда → без фільтра.
   let where = "m.is_active";
-  if (auth.role === "team_lead") where += ` AND ${RNK_TEAM}`;
+  if (auth.role === "team_lead") where += ` AND ${DUTY_TEAM}`;
   if (scope) { params.push(scope); where += ` AND m.team_id = $${params.length}`; }
   const r = await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name
@@ -129,9 +134,9 @@ dutyRouter.post("/", async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !managerId) {
     return res.status(400).json({ error: "date (YYYY-MM-DD) та managerId обовʼязкові" });
   }
-  // Команда менеджера + гейт для тімліда (лише своя команда) + лише РНК-команди.
-  const mgr = await pool.query<{ team_id: number | null; is_rnk: boolean }>(
-    `SELECT m.team_id, (${RNK_TEAM}) AS is_rnk
+  // Команда менеджера + гейт для тімліда (лише своя команда) + лише команди чергування.
+  const mgr = await pool.query<{ team_id: number | null; is_duty_team: boolean }>(
+    `SELECT m.team_id, (${DUTY_TEAM}) AS is_duty_team
        FROM managers m LEFT JOIN teams t ON t.id = m.team_id
       WHERE m.id = $1 AND m.is_active`, [managerId]);
   if (!mgr.rowCount) return res.status(404).json({ error: "Менеджера не знайдено" });
@@ -139,7 +144,7 @@ dutyRouter.post("/", async (req, res) => {
   // Тімлід — лише своя РНК-команда (як було). Адмін — будь-яка команда (РНК і РПК): RNK-гейт
   // до адміна НЕ застосовуємо (рішення власника — адмін може призначити чергового і в РПК).
   if (auth.role === "team_lead") {
-    if (!mgr.rows[0].is_rnk) return res.status(400).json({ error: "У чергуванні беруть участь лише рекламні команди" });
+    if (!mgr.rows[0].is_duty_team) return res.status(400).json({ error: "Ця команда не бере участі в чергуванні" });
     if (teamId !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
   }
   const r = await pool.query<{ id: number }>(

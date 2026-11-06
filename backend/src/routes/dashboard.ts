@@ -155,6 +155,8 @@ import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
 import * as repeatScreenRules from "../core/repeatScreenRules.js";
 import * as clientWorkProof from "../core/clientWorkProof.js";
+import * as clientLeadRules from "../core/clientLeadRules.js";
+import * as clientLeadFacts from "../core/clientLeadFacts.js";
 import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
@@ -6793,6 +6795,14 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   };
 
   const lastComment = await latestCommentByClient();
+  // 🚦 Екран тімліда «з ким з постійних говорити» (задача 7360): колір, «працюють», «передати іншому», лічильники.
+  // Правило — `core/clientLeadRules.ts`, факти — `core/clientLeadFacts.ts`; місяць лічильників — поточний (київський).
+  const leadFacts = await clientLeadFacts.leadFactsFor(pool, rosterRows.map((c) => c.client_key));
+  const leadTaskCreated = await clientLeadFacts.taskCreatedFor(pool,
+    rosterRows.map((c) => reactByKey.get(c.client_key)?.taskId).filter((x): x is number => x != null));
+  const leadYm = todayKyiv.slice(0, 7);
+  /** Ручний контакт зберігається в UTC (`…Z`) — день беремо київський. */
+  const kyivDayOfIso = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date(iso));
   const clients = rosterRows.map((c) => {
     const p = planByKey.get(c.client_key);
     const plan = p ? Number(p.plan) : 0;
@@ -6902,6 +6912,32 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         return { invoice: inv ? { kommoId: inv.kommoId, stage: inv.stage, at: inv.at, open: inv.open, url: kommoLeadUrl(inv.kommoId) } : null,
                  payment: pay ? { at: pay.at, amount: pay.amount } : null };
       })(),
+      lead: (() => {
+        const f = leadFacts.get(c.client_key);
+        const segment = factsFor(seg, c.client_key).segment;
+        const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null);
+        const orderDays = lastOrder ? clientLeadRules.daysBetween(lastOrder, todayKyiv) : null;
+        const color = clientLeadRules.colorOf(segment, orderDays);
+        const rt = reactByKey.get(c.client_key);
+        const taskOpen = (rt?.taskId ?? null) != null && !["done", "cancelled"].includes(rt?.taskStatus ?? "");
+        const manualAt = manualByKey.get(c.client_key)?.at ?? null;
+        return {
+          color, lastOrder, orderDays,
+          works: clientLeadRules.workVerdict({
+            talk10: f?.talk10 ?? null, stage: f?.stage ?? null,
+            comment: lastComment.get(c.client_key)?.createdAt ?? null,
+            contact: manualAt ? kyivDayOfIso(manualAt) : null,
+            payment: paymentProofByKey.get(c.client_key)?.at ?? null,
+          }, segment, todayKyiv),
+          talk10: f?.talk10 ?? null,
+          summary: f?.summary ?? null,
+          handOver: clientLeadRules.handOverDue({ color, taskOpen, taskDeadline: rt?.taskDeadline ?? null,
+            taskCreated: rt?.taskId != null ? leadTaskCreated.get(rt.taskId) ?? null : null, talk10: f?.talk10 ?? null, today: todayKyiv }),
+          newRepeat: clientLeadRules.becameRepeatIn(f?.secondPaid ?? null, leadYm),
+          source: clientLeadRules.repeatSource(f?.leadgen ?? false, f?.firstPaidChannel ?? null),
+          lostThisMonth: clientLeadRules.lostIn(lastOrder, leadYm),
+        };
+      })(),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
       managerName: c.manager_name,
@@ -6989,7 +7025,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     leadgenPool: await leadgenPoolAccess(auth),
     reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, decisionDays: reactCycleRules.DECISION_DAYS,
                   selfGraceDays: reactCycleRules.SELF_GRACE_DAYS, weeklyCap: reactCycleRules.WEEKLY_CAP,
-                  launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR },
+                  launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR,
+                  leadgenPool: reactCycleRules.LEADGEN_POOL_ENABLED },
     thresholds: {
       sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
       lostDays: reactivationRules.LOST_DAYS,
@@ -7512,7 +7549,7 @@ dashboardRouter.post("/client-plan-basis/clear", async (req, res) => {
 async function leadgenPoolAccess(auth: NonNullable<typeof import("express")["request"]["auth"]>):
     Promise<{ canSee: boolean; canTake: boolean }> {
   const isLeadgen = await reactCycle.isLeadgenManager(pool, auth.managerId, metrics.LEADGEN_DASH_TEAM_ID);
-  return reactCycleRules.poolAccess(isLeadgen, isAdminScope(auth));
+  return reactCycleRules.poolAccessNow(isLeadgen, isAdminScope(auth));   // 🚫 передачу лідгенам вимкнено — пул не бачить ніхто
 }
 
 /**
@@ -7525,6 +7562,9 @@ dashboardRouter.post("/react-decision", async (req, res) => {
   if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
   const decision = String(req.body?.decision ?? "");
   if (decision !== "self" && decision !== "leadgen") return res.status(400).json({ error: "decision: self або leadgen" });
+  if (decision === "leadgen" && !reactCycleRules.LEADGEN_POOL_ENABLED) {
+    return res.status(409).json({ error: "Передачу клієнтів лідгенам вимкнено (рішення 31.10.2026)" });
+  }
   const lastInvoice = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
   const owner = await clientOwnerRow(clientKey);
   try {

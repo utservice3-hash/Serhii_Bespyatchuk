@@ -4691,8 +4691,25 @@ export interface CategoryRules {
   stateTips: { sleeping: string; lost: string };
   text: string[];
 }
+/** 🚦 Екран тімліда «з ким з постійних говорити» (задача 7360) — усе рахує сервер (`core/clientLeadRules.ts`). */
+export interface ClientLead {
+  /** Колір — лише від замовлення (рахунок або оплата) і ритму сегмента: 🟢 у ритмі · 🟡 мав замовити · 🔴 180+ днів. */
+  color: "green" | "yellow" | "red";
+  lastOrder: string | null; orderDays: number | null;
+  /** Чи працюють із клієнтом за вікно сегмента і чим це підтверджено (найсвіжіший доказ). */
+  works: { yes: boolean; by: "talk" | "stage" | "comment" | "contact" | "payment" | null; at: string | null; windowDays: number };
+  /** Остання розмова від 10 с і суть останньої розмови, яку розібрав AI. */
+  talk10: string | null;
+  summary: { at: string; text: string } | null;
+  /** Правило Сергія: дедлайн задачі на дзвінок минув, а розмови не було — передати іншому менеджеру. */
+  handOver: boolean;
+  /** Друга оплата припала на поточний місяць; звідки прийшов; став червоним цього місяця. */
+  newRepeat: boolean; source: "leadgen" | "ad" | "manager"; lostThisMonth: boolean;
+}
+
 export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
+  lead: ClientLead;
   /** 👥 Задача 5609 (ТЗ 12.10.2026): замовляв цього місяця / у 3 попередні місяці; середнє за ті самі дні 3 місяців і різниця. */
   orderedThisMonth: boolean; orderedBefore: boolean; prevAvg: number; delta: number;
   /** Звичайна пауза між замовленнями, днів (медіана); `null` — історії замало. */
@@ -4788,7 +4805,9 @@ export interface ClientPlansResp {
   /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
   leadgenPool?: { canSee: boolean; canTake: boolean };
   /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
-  reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number };
+  reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number;
+    /** Чи ввімкнена передача лідгенам (`LEADGEN_POOL_ENABLED`); з 06.11.2026 — ні. */
+    leadgenPool?: boolean };
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];

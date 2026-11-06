@@ -139,7 +139,15 @@ const HR_GOALS = "Роман 12.10.2026 («роби»): Іван (HR) бачив
   + "свої цілі, «Цілі команд» — лише адмін-рівень. Стереже #1630";
 const KVP_SURVEYS = "Роман 30.10.2026: «треба дати можливість створювати опитування в дашборді… Юля Сергіївна, КВП» — право "
   + "`manage_surveys` ролі kvp (у ній один акаунт); створює, запускає, бачить відповіді, як HR. Фінансист і далі — ні";
+const POOL_OFF = "Сергій (TOP Weekly 29.10 і задача 7367 31.10.2026: «вимкнути передачу реактивації лідгенам з 01.11») і "
+  + "Роман 06.11.2026 («просто вимкни і все»): пул лідгенів вимкнено вимикачем `LEADGEN_POOL_ENABLED` — вкладку не бачить "
+  + "ніхто, тож і керівництво отримує 403. Стереже #3441/#3442";
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "admin", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "ceo", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "opdir", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "kvp", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "financier", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
   { method: "GET", path: "/api/surveys/people", role: "kvp", to: "allow", decidedOn: "2026-10-30", decidedBy: "Роман", why: KVP_SURVEYS },
   { method: "GET", path: "/api/surveys/templates", role: "kvp", to: "allow", decidedOn: "2026-10-30", decidedBy: "Роман", why: KVP_SURVEYS },
   { method: "GET", path: "/api/surveys/:id/results", role: "kvp", to: "allow", decidedOn: "2026-10-30", decidedBy: "Роман", why: KVP_SURVEYS },
@@ -815,8 +823,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   // Пул лідгенів бачать лідгени (команда «Лідогенерація») і керівництво (`isAdminScope`). Менеджер і
   // тімлід не проби — відповідь залежить від того, чи тестовий акаунт лідген, а не від ролі.
+  // 🚫 06.11.2026: передачу лідгенам вимкнено (`LEADGEN_POOL_ENABLED = false`) — пул не бачить НІХТО, тож керівництво
+  // теж отримує 403. Зрушення узаконене в ACCEPTED_MATRIX_SHIFTS (POOL_OFF); увімкнуть пул — рядок повертається.
   { method: "GET", path: "/api/dashboard/leadgen-pool", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr"] },
+    allow: [], deny: ["hr", "admin", "ceo", "opdir", "kvp", "financier"] },
   // Брати може ЛИШЕ лідген (собі). Керівництво в deny не пишемо: його відмова — не по праву, а «не лідген»
   // (#11b вимагає для адмін-рівня назване право), а проба з порожнім тілом дала б 400, не мутацію.
   { method: "POST", path: "/api/dashboard/leadgen-pool/take", cls: "deny-only",

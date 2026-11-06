@@ -446,8 +446,9 @@ const RNK_RPK = /РНК|РПК/;
 test("#3300 тип команди за номером: чергування й кольори не шукають «РНК/РПК» у назві", () => {
   const duty = readFileSync(path.join(ROOT, "backend/src/routes/duty.ts"), "utf8");
   assert.doesNotMatch(stripComments(duty), /ILIKE '%РНК%'/, "🔴 чергування знову шукає «РНК» у назві команди — після перейменування в Kommo відмовить усім");
-  assert.match(duty, /const RNK_TEAM = `t\.id = ANY\(ARRAY\[\$\{RNK_TEAM_IDS\.join\(", "\)\}\]::int\[\]\)`;/, "🔴 команди чергування визначаються не номером");
-  assert.match(duty, /\(\$\{RNK_TEAM\}\) AS is_rnk/, "🔴 перевірка «команда нових клієнтів» у записі чергування не за номером");
+  assert.match(duty, /export const DUTY_TEAM_IDS: readonly number\[\] = \[\.\.\.RNK_TEAM_IDS, KHOMIK_TEAM_ID\];/, "🔴 команди чергування визначаються не номером");
+  assert.match(duty, /const DUTY_TEAM = `t\.id = ANY\(ARRAY\[\$\{DUTY_TEAM_IDS\.join\(", "\)\}\]::int\[\]\)`;/, "🔴 команди чергування визначаються не номером");
+  assert.match(duty, /\(\$\{DUTY_TEAM\}\) AS is_duty_team/, "🔴 перевірка «команда чергування» у записі чергування не за номером");
   const colors = readFileSync(path.join(ROOT, "frontend/src/pages/dashboard/teamColors.tsx"), "utf8");
   assert.doesNotMatch(stripComments(colors), RNK_RPK, "🔴 кольори команд знову читають «РНК/РПК» з назви");
   assert.match(colors, /export function teamKind\(id: number \| null \| undefined\)/, "🔴 тип команди на фронті не за номером");
