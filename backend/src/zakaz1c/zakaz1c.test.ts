@@ -121,7 +121,7 @@ test("#7103 ФОРМА → 1С: валюта, організація, ПДВ, з
   assert.ok(!("order_date" in raw), "order_date 1С допише в коментар — і той перестане бути як у Genesis");
   assert.equal(body.items.length, 1);
   assert.deepEqual([body.items[0].name, body.items[0].content, body.items[0].price, body.items[0].code],
-    ["Організація міжнародного перевезення", "Організація міжнародного перевезення: м. Praha (CZ) – м. Київ (Київська обл.)", 1800, "000000179"]);
+    ["Організація міжнародного перевезення", "Organization of international transportation: м. Praha (CZ) – м. Київ (Київська обл.)", 1800, "000000179"]);
   assert.equal(body.pdf, true);
   // Кожна послуга — своїм кодом 1С (відповідь 1С 28.10.2026): за назвою «Експедиторські послуги» 1С не знаходить.
   assert.deepEqual(SERVICES.map((x) => x.code), ["000000092", "000000008", "000000179", "000000252", "000000180"], "коди послуг не ті, що дала 1С");
@@ -593,8 +593,10 @@ const LINE_CASES: { it: { service: string; route: string; full: boolean }; cur: 
     want: "Organization of cargo transportation along the route: Kyiv (Ukraine) – Warsaw (Poland)", why: "валюта — англійська назва, як у Genesis" },
   { it: { service: "Організація перевезення за маршрутом", route: "Київ – Варшава", full: false }, cur: "UAH",
     want: "Організація перевезення за маршрутом: Київ – Варшава", why: "та сама послуга в гривні — українською" },
-  { it: { service: "Організація міжнародного перевезення", route: "Київ – Прага", full: false }, cur: "EUR",
-    want: "Організація міжнародного перевезення: Київ – Прага", why: "без англійської назви — українська, а не порожньо" },
+  { it: { service: "Організація міжнародного перевезення", route: "Kyiv – Prague", full: false }, cur: "EUR",
+    want: "Organization of international transportation: Kyiv – Prague", why: "міжнародне у валюті — англійською, як у рахунках Genesis" },
+  { it: { service: "Експедиторські послуги", route: "Київ – Прага", full: false }, cur: "EUR",
+    want: "Експедиторські послуги: Київ – Прага", why: "без англійської назви — українська, а не порожньо" },
   { it: { service: "Організація перевезення за маршрутом", route: "Організація перевезення за маршрутом: Київ – Львів", full: false }, cur: "UAH",
     want: "Організація перевезення за маршрутом: Київ – Львів", why: "менеджер вписав назву сам — удруге не додаємо" },
   { it: { service: "Організація перевезення за маршрутом", route: "organization of cargo transportation along the route: Lviv – Kyiv", full: false }, cur: "EUR",
@@ -622,26 +624,44 @@ test("#7134 РЯДОК ПОСЛУГИ ЗБИРАЄМО МИ: «назва: ма�
   const empty = parseInvoiceForm({ ...form, items: [{ ...form.items[0], route: "  ", full: true }] }, ctx);
   assert.equal(empty.ok, false, "порожній ручний рядок пройшов");
   assert.match(empty.ok ? "" : empty.why, /рядок рахунку порожній/);
+  // Пара-заборона: у рядку лише назва послуги, маршрут не дописано («Назва: ») — теж не шлемо.
+  const bare = parseInvoiceForm({ ...form, items: [{ ...form.items[0], route: "Organization of cargo transportation along the route: ", full: true }] }, ctx);
+  assert.equal(bare.ok, false, "рядок без маршруту пройшов");
+  assert.match(bare.ok ? "" : bare.why, /допишіть у рядку рахунку маршрут/);
 });
 
-test("#7135 ВІКНО ПОКАЗУЄ ТОЙ САМИЙ РЯДОК, ЩО ПІДЕ В 1С: назва перед полем, «У рахунку буде», «✎ весь рядок»; без «оновиться за годину»", () => {
+test("#7135 ВІКНО: ОДНЕ ПОЛЕ «РЯДОК У РАХУНКУ» — назву послуги підставляє вибір послуги/валюти/організації, решту тексту не чіпає; без «оновиться за годину»", () => {
   const js = WIDGET("script.js");
-  // Копію логіки з вікна ганяємо на тих самих випадках, що й сервер: розійдуться — менеджер побачить не те, що надрукує 1С.
+  // Логіку з вікна ганяємо як є: розійдеться з сервером — менеджер побачить не те, що надрукує 1С.
   const src = js.slice(js.indexOf("function enOf("), js.indexOf("function newForm("));
   const SVC = Object.fromEntries(SERVICES.filter((x) => x.en).map((x) => [x.name, x.en]));
-  const mk = new Function("orgOf", src + "; return { lineOf: lineOf, routeFrom: routeFrom, prefixOf: prefixOf };");
-  const w = mk(() => ({ servicesEn: SVC, services: SERVICES.map((x) => x.name) })) as { lineOf: Function; routeFrom: Function; prefixOf: Function };
+  const mk = new Function("orgOf", src + "; return { lineOf: lineOf, routeFrom: routeFrom, retitle: retitle };");
+  const w = mk(() => ({ servicesEn: SVC, services: SERVICES.map((x) => x.name) })) as { lineOf: Function; routeFrom: Function; retitle: Function };
+  // Старі рахунки (лише маршрут) у «Змінити» показуються весь рядком — так само, як склав би сервер.
   for (const c of LINE_CASES) assert.equal(w.lineOf({ org: "x", currency: c.cur }, c.it), c.want, `вікно: ${c.why}`);
-  // «↺ як було» повертає з повного рядка лише маршрут — інакше назва задвоїться.
-  assert.equal(w.routeFrom({ org: "x", currency: "EUR" }, { service: "Організація перевезення за маршрутом", route: "Organization of cargo transportation along the route: Kyiv – Riga" }), "Kyiv – Riga");
-  assert.equal(w.routeFrom({ org: "x", currency: "UAH" }, { service: "Експедиторські послуги", route: "Свій текст" }), "Свій текст", "чужий текст обрізано");
-  // Послугу змінили ПІСЛЯ «✎ весь рядок» — назва старої послуги теж знімається, інакше «Організація міжнародного…: Organization of…».
-  assert.equal(w.routeFrom({ org: "x", currency: "EUR" }, { service: "Організація міжнародного перевезення",
-    route: "Organization of cargo transportation along the route: Kyiv – Riga" }), "Kyiv – Riga", "назва попередньої послуги лишилась у маршруті");
-  assert.match(js, /data-z1c-line='" \+ i \+ "'/, "немає підказки «У рахунку буде»");
-  assert.match(js, /if \(fld === "route"\) root\(\)\.find\("\[data-z1c-line='" \+ i \+ "'\]"\)/, "підказка не оновлюється під час введення");
-  assert.match(js, /if \(fld === "service"\) \{ if \(it\.full\) it\.changed = true; render\(\); return; \}/, "зміна послуги не оновлює назву в рядку");
-  assert.match(js, /a === "full"[\s\S]{0,120}fi\.route = lineOf\(f, fi\); fi\.full = true/, "«✎ весь рядок» не переносить готовий текст");
+  const INT = "Організація міжнародного перевезення", ROUTE = "Організація перевезення за маршрутом";
+  const it = { service: ROUTE, route: "Kyiv – Riga", full: false };
+  w.retitle({ org: "x", currency: "UAH" }, it);
+  assert.equal(it.route, `${ROUTE}: Kyiv – Riga`, "нова позиція: назва + маршрут з угоди");
+  assert.equal(it.full, true, "рядок з вікна має йти в 1С як є");
+  w.retitle({ org: "x", currency: "EUR" }, it);
+  assert.equal(it.route, "Organization of cargo transportation along the route: Kyiv – Riga", "валюта: назва не стала англійською");
+  // Зміна послуги: стару назву знімаємо ДО того, як послуга змінилась, — інакше «Organization of international…: Organization of cargo…».
+  const rest = w.routeFrom({ org: "x", currency: "EUR" }, it); it.service = INT; w.retitle({ org: "x", currency: "EUR" }, it, rest);
+  assert.equal(it.route, "Organization of international transportation: Kyiv – Riga", "зміна послуги задвоїла або не змінила назву");
+  w.retitle({ org: "x", currency: "UAH" }, it);
+  assert.equal(it.route, `${INT}: Kyiv – Riga`, "назад у гривню — назва не повернулась українською");
+  const own = { service: ROUTE, route: "Перевезення вантажу Львів – Київ", full: true };
+  w.retitle({ org: "x", currency: "UAH" }, own);
+  assert.equal(own.route, `${ROUTE}: Перевезення вантажу Львів – Київ`, "свій текст менеджера загубився");
+  // Одне поле, без перемикача режимів.
+  assert.doesNotMatch(js, /редагувати весь рядок|data-z1c='full'|data-z1c='unfull'|як було/, "лишився перемикач ручний/авто");
+  assert.match(js, /<textarea class='in' rows='2' data-i='" \+ i \+ "' data-f='route'>/, "немає поля «Рядок у рахунку»");
+  assert.match(js, /if \(fld === "service"\) \{ var rest = routeFrom\(f, it\); it\.service = el\.val\(\); retitle\(f, it, rest\);/, "зміна послуги не підставляє назву");
+  assert.match(js, /var rests = f\.items\.map\(function \(it\) \{ return routeFrom\(f, it\); \}\);\s*f\.org = o\.key/, "зміна організації знімає назву вже з новим списком послуг");
+  assert.match(js, /f\.currency = String\(b\.data\("v"\)\);[^\n]*\n\s*f\.items\.forEach\(function \(it\) \{ retitle\(f, it\); \}\);/, "зміна валюти не міняє мову назви");
+  assert.match(js, /f\.items\.forEach\(function \(it\) \{ retitle\(f, it\); \}\);\s*return f;/, "нова форма без назви послуги в рядку");
   assert.doesNotMatch(js, /оновиться за годину/, "оплату 1С шле вебхуком — «оновиться за годину» вводить в оману");
   assert.match(MOUNT(), /servicesEn: Object\.fromEntries\(servicesFor\(o\.key\)\.filter\(\(x\) => x\.en\)/, "вікно не отримує англійські назви");
 });
+
