@@ -230,3 +230,41 @@ export function planSweep(
 export function poolAccess(isLeadgen: boolean, isAdminScope: boolean): { canSee: boolean; canTake: boolean } {
   return { canSee: isLeadgen || isAdminScope, canTake: isLeadgen };
 }
+
+/**
+ * 🚫 ПЕРЕДАЧУ ЛІДГЕНАМ ВИМКНЕНО (Сергій, TOP Weekly 29.10.2026 і задача 7367 31.10: «вимкнути передачу
+ * реактивації лідгенам з 01.11»; правка Олександра в 6437; Роман 06.11.2026: «просто вимкни і все»).
+ *
+ * Вимикається ВСЕ, що кладе клієнта в пул: понеділкова автопередача (`auto`, `self_expired`) і кнопка
+ * «Передати лідгенам» (`manager`). Вкладку «Пул лідгенів» не бачить ніхто, «Взяти» закрите.
+ *
+ * 🔴 ДАНІ НЕ ЧІПАЄМО. Ті, хто вже в пулі (544 на 06.11.2026, жодного не взяв лідген), і так рахувались за
+ * своїм менеджером — пул жив лише в дашборді (`reactCycle.ts`, шапка). Тепер вони показуються звичайними
+ * клієнтами реактивації. Закриття «ожилих» рядків пулу (є рахунок) іде як і йшло.
+ *
+ * Чисті правила вище НЕ змінено: перемикач стоїть на краях (джоба, роут, вигляд циклу), тож повернути
+ * передачу = `true` тут, без переписування правила й гейтів `#840`–`#848`, `#1210`–`#1215`.
+ */
+export const LEADGEN_POOL_ENABLED = false;
+
+/** Чи відкрита передача зараз — з урахуванням вимикача. Джоба питає саме це, а не голе вікно. */
+export function poolTransferOpen(todayYmd: string, kyivHour: number, enabled = LEADGEN_POOL_ENABLED): boolean {
+  return enabled && transferWindowOpen(todayYmd, kyivHour);
+}
+
+/** Доступ до пулу з урахуванням вимикача: вимкнено — не бачить і не бере ніхто. */
+export function poolAccessNow(isLeadgen: boolean, isAdminScope: boolean, enabled = LEADGEN_POOL_ENABLED): { canSee: boolean; canTake: boolean } {
+  return enabled ? poolAccess(isLeadgen, isAdminScope) : { canSee: false, canTake: false };
+}
+
+/** Кнопки циклу з урахуванням вимикача: вимкнено — «Передати лідгенам» не пропонується. */
+export function decisionsNow(row: CycleRow | null, enabled = LEADGEN_POOL_ENABLED): Decision[] {
+  const d = allowedDecisions(row);
+  return enabled ? d : d.filter((x) => x !== "leadgen");
+}
+
+/** Стан для показу з урахуванням вимикача: вимкнено — рядок пулу показується як звичайна реактивація. */
+export function statusNow(row: CycleRow | null, enabled = LEADGEN_POOL_ENABLED): CycleStatus {
+  const st = statusOf(row);
+  return !enabled && st === "pool" ? "waiting" : st;
+}

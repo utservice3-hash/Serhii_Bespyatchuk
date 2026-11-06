@@ -8,6 +8,8 @@
  *     кладуться в пул лідгенів (4.3) — лише коли передача відкрита (`transferWindowOpen`: понеділок з 08:00
  *     і до кінця тижня), не більше `WEEKLY_CAP` за тиждень, від найсвіжішого рахунку (рішення 01.10.2026).
  *
+ * 🚫 З 06.11.2026 п.2 ВИМКНЕНО (`LEADGEN_POOL_ENABLED`, рішення Сергія 31.10): у пул не кладеться ніхто; п.1 іде далі.
+ *
  * Ідемпотентно: повторний прогін того самого тижня межу не перевищить (#1213). Пропущений понеділок (рестарт,
  * падіння) добирає перший прогін того ж тижня — і нічого понад те, що було до передачі в понеділок.
  *
@@ -20,7 +22,7 @@ import { GENERIC_CLIENT_KEYS } from "../core/metrics.js";
 import { loadClientSegments, factsFor, inClientsScreen } from "../core/clientSegments.js";
 import { lastInvoiceByClientKey } from "../core/money.js";
 import { kyivToday } from "../core/dates.js";
-import { planSweep, transferWindowOpen, weekMonday, type Candidate } from "../core/reactCycleRules.js";
+import { planSweep, poolTransferOpen, weekMonday, type Candidate } from "../core/reactCycleRules.js";
 import { cyclesFor, openPool, closeRevived, poolAuto, autoPooledSince } from "../core/reactCycle.js";
 
 /** Добір екрана клієнтів + дата останнього рахунку + дебіторка — одним місцем для джоби й роутів. */
@@ -46,7 +48,9 @@ function kyivHour(now = new Date()): number {
 
 export async function runReactCycleSweep(): Promise<{ pooled: number; closed: number; deferred: number }> {
   const today = kyivToday();
-  const transfer = transferWindowOpen(today, kyivHour());
+  // 🚫 `poolTransferOpen` = вікно передачі І вимикач `LEADGEN_POOL_ENABLED` (передачу лідгенам вимкнено 06.11.2026).
+  // Закриття «ожилих» рядків пулу йде щоразу, незалежно від вимикача.
+  const transfer = poolTransferOpen(today, kyivHour());
   const candidates = await reactCandidates();
   const open = await openPool(pool);
   const openInv = await lastInvoiceByClientKey(open.map((o) => o.clientKey));

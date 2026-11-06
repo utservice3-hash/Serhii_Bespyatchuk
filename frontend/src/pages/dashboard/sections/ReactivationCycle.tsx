@@ -40,6 +40,12 @@ export function ReactCycleStatus({ cycle }: { cycle: ReactCycleView }) {
   // 📅 Строк — ПОНЕДІЛОК із сервера (рішення 01.10.2026: щотижня, ≤100 за тиждень, від найсвіжішого рахунку).
   // «з» — бо черга може відсунути клієнта на тиждень-другий; точного дня фронт не вигадує.
   const dl = cycle.deadline;
+  // 🚫 Передачу лідгенам вимкнено — строку немає, тож і обіцянки «піде лідгенам» немає.
+  if (!dl) {
+    return <div style={{ fontSize: 11, color: "#374151" }} title={`${inv}.`}>
+      {cycle.status === "self" ? "🙋 реактивую сам" : "⏳ у реактивації"}
+    </div>;
+  }
   return (
     <div style={{ fontSize: 11, color: cycle.daysLeft != null && cycle.daysLeft <= 7 ? "#b91c1c" : "#374151" }}
       title={`${inv}. Без рахунку й без рішення клієнт піде в пул лідгенів не раніше понеділка ${dl ? ddmm(dl) : "—"}. Передача — щопонеділка, не більше 100 клієнтів на тиждень, першими — з найсвіжішим рахунком.`}>
@@ -71,7 +77,9 @@ export function ReactCycleButtons({ clientKey, cycle, onDone, onError }: {
     <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
       {cycle.allowed.includes("self") && (
         <button type="button" disabled={busy} style={btn(true)} onClick={() => go("self")}
-          title="Лишається за вами 4 тижні. Якщо рахунку не буде — у найближчий понеділок клієнт піде лідгенам автоматично; продовжити строк повторним натисканням не можна">
+          title={cycle.deadline
+            ? "Лишається за вами 4 тижні. Якщо рахунку не буде — у найближчий понеділок клієнт піде лідгенам автоматично; продовжити строк повторним натисканням не можна"
+            : "Позначка, що ви працюєте з клієнтом самі"}>
           🙋 Реактивую сам
         </button>
       )}

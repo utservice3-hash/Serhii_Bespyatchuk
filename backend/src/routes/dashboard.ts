@@ -6989,7 +6989,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     leadgenPool: await leadgenPoolAccess(auth),
     reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, decisionDays: reactCycleRules.DECISION_DAYS,
                   selfGraceDays: reactCycleRules.SELF_GRACE_DAYS, weeklyCap: reactCycleRules.WEEKLY_CAP,
-                  launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR },
+                  launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR,
+                  leadgenPool: reactCycleRules.LEADGEN_POOL_ENABLED },
     thresholds: {
       sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
       lostDays: reactivationRules.LOST_DAYS,
@@ -7512,7 +7513,7 @@ dashboardRouter.post("/client-plan-basis/clear", async (req, res) => {
 async function leadgenPoolAccess(auth: NonNullable<typeof import("express")["request"]["auth"]>):
     Promise<{ canSee: boolean; canTake: boolean }> {
   const isLeadgen = await reactCycle.isLeadgenManager(pool, auth.managerId, metrics.LEADGEN_DASH_TEAM_ID);
-  return reactCycleRules.poolAccess(isLeadgen, isAdminScope(auth));
+  return reactCycleRules.poolAccessNow(isLeadgen, isAdminScope(auth));   // 🚫 передачу лідгенам вимкнено — пул не бачить ніхто
 }
 
 /**
@@ -7525,6 +7526,9 @@ dashboardRouter.post("/react-decision", async (req, res) => {
   if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
   const decision = String(req.body?.decision ?? "");
   if (decision !== "self" && decision !== "leadgen") return res.status(400).json({ error: "decision: self або leadgen" });
+  if (decision === "leadgen" && !reactCycleRules.LEADGEN_POOL_ENABLED) {
+    return res.status(409).json({ error: "Передачу клієнтів лідгенам вимкнено (рішення 31.10.2026)" });
+  }
   const lastInvoice = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
   const owner = await clientOwnerRow(clientKey);
   try {
