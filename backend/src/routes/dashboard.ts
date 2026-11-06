@@ -101,6 +101,8 @@ import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, 
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam,
   leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, addDays, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
+import { ltvAccess } from "../core/leadgenLtvRules.js";
+import { leadgenLtvView, leadgenLtvClients } from "../core/leadgenLtv.js";
 import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
   mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, planPace, isCurrentFullMonth, PACE_METRICS,
   type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
@@ -604,6 +606,26 @@ dashboardRouter.get("/leadgen-handoff-deals", async (req, res) => {
 
   const hm = await leadgenHandoffMoney(from, to, clamp.scope);
   res.json({ from, to, managerId, deals: hm.deals, totals: handoffMoneyWire(hm.totals) });
+});
+
+// 💎 LTV КЛІЄНТІВ ЛІДОГЕНЕРАЦІЇ (ТЗ 28.10.2026): блок у «Статистиці» й таб «Клієнти LTV». «За весь час» — з таблиці, яку
+// збирає `buildLeadgenLtv`; приріст і нові — за період, ядром. Межа — чиста `ltvAccess` (`#3772`), до будь-якого читання.
+dashboardRouter.get("/leadgen-ltv", async (req, res) => {
+  const pick = parseManagerIdParam(req.query.managerId);
+  if (pick === "bad") return res.status(400).json({ error: "managerId — додатне ціле" });
+  const access = ltvAccess(await leadgenViewerAuth(req.auth!), pick);
+  if (!access.ok) return res.status(access.status).json({ error: access.error });
+  const from = dateParam(req.query.from);
+  const to = dateParam(req.query.to);
+  if (!from || !to || !isRealDate(from) || !isRealDate(to)) return res.status(400).json({ error: "Потрібні from і to — дати YYYY-MM-DD" });
+  res.json(await leadgenLtvView(access.scope, from, to, access.pick));
+});
+dashboardRouter.get("/leadgen-ltv-clients", async (req, res) => {
+  const pick = parseManagerIdParam(req.query.managerId);
+  if (pick === "bad") return res.status(400).json({ error: "managerId — додатне ціле" });
+  const access = ltvAccess(await leadgenViewerAuth(req.auth!), pick);
+  if (!access.ok) return res.status(access.status).json({ error: access.error });
+  res.json(await leadgenLtvClients(access.scope, access.pick));
 });
 
 // 🔎 «ЯКІ УГОДИ РАХУЄМО» (рішення власника 16.10.2026, регламент лідгенів §14, §16): угоди ОДНОГО лідгена за період,

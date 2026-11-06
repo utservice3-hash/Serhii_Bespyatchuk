@@ -108,9 +108,14 @@ import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { callAiJob } from "./jobs/callAiJob.js";
 import { firstTouchAutoTasks } from "./jobs/firstTouchAutoTasks.js";
 import { carrierCallJob } from "./jobs/carrierCallJob.js";
+import { linkedinQueueJob } from "./jobs/linkedinQueueJob.js";
 import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
 import { clientLimitsMirror, clientLimitsReset, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON } from "./jobs/counterpartyJobs.js";
 import { minusDealsRouter } from "./routes/minusRegistry.js";
+import { linkedinQueueRouter } from "./routes/linkedinQueue.js";
+import { linkedinRouter } from "./routes/linkedin.js";
+import { leadsBotRouter } from "./routes/leadsBot.js";
+import { leadsBotEnsureWebhook } from "./bot/leadsBot.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
 import { payrollRouter } from "./routes/payroll.js";
 import { notificationsRouter } from "./routes/notifications.js";
@@ -120,6 +125,7 @@ import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
 import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
+import { buildLeadgenLtv } from "./jobs/buildLeadgenLtv.js";
 import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
@@ -207,6 +213,9 @@ app.use("/api/constructor", constructorRouter); // 📄 Конструктор �
 app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)
 app.use("/api/prozorro", prozorroRouter); // 🏛 «Тендери Prozorro» (#5299): статистика + налаштування, межа — вкладка prozorro
 app.use("/api/minus-deals", minusDealsRouter); // 📒 Реєстр мінусових угод — пакет Сергія (20.10.2026), пункт меню «Реєстри»
+app.use("/api/linkedin-queue", linkedinQueueRouter); // 🔗 Черга LinkedIn — список кола й журнал (задача 7361, Налаштування)
+app.use("/api/leads-bot", leadsBotRouter); // 🤖 бот «UTS Заявки» — вебхук (секрет Telegram) і підключення власного акаунта
+app.use("/api/linkedin", linkedinRouter); // 🔗 «Клієнти → LinkedIn» — статистика черги (вкладка linkedin)
 app.use("/api/counterparty", counterpartyRouter); // 🤝 Узгодження й перевірка контрагента — пакет Сергія (23.10.2026), «Реєстри та узгодження»
 app.use("/api/client-limits", clientLimitsRouter); // 💳 Ліміти клієнтів — той самий пакет, вкладка «Дебіторської заборгованості»
 app.use("/api/payroll", payrollRouter); // 💰 «Зарплата» — пакет Сергія 03.11.2026: система, кабінет «Моя зарплата»
@@ -799,6 +808,14 @@ cron.schedule("4,9,14,19,24,29,34,39,44,49,54,59 * * * *", () => {
   void runJob("carrierCallJob", () => carrierCallJob());
 });
 
+// 🔗 ЧЕРГА LINKEDIN (задача 7361, рішення Юлі 03.11.2026): раз на 2 хв — вікно на «Взяти» 15 хв робочого часу, синк
+// угод (30 хв) для нього запізно. Kommo — ОДИН запит на читання (угоди на етапі). Непарні хвилини: не збігаються з
+// :00/:30 `syncKommo`. Перелік, а не «1-59/2» (той самий node-cron, що читає крок у діапазоні інакше — див. carrierCallJob).
+// Під наглядом (`monitoredJobs.ts`), everyMin == крону. Режим — LINKEDIN_QUEUE (порожньо = пробний, лише журнал).
+cron.schedule("1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51,53,55,57,59 * * * *", () => {
+  void runJob("linkedinQueueJob", () => linkedinQueueJob());
+});
+
 // 📒 РЕЄСТР МІНУСОВИХ УГОД (пакет Сергія 20.10.2026): звірка відкритих запитів із Kommo раз на 10 хв (ТЗ §9) —
 // «мінус зріс» знімає погодження, підтягується перевізник. Хвилини :07, :17 … не збігаються з :00/:30 `syncKommo`
 // і з :04/:09 перевізників. Порожній реєстр — нуль запитів до Kommo. Під наглядом (`monitoredJobs.ts`), everyMin == крону.
@@ -841,6 +858,11 @@ if (CP_BACKGROUND_ON()) {
 cron.schedule("50 */3 * * *", () => {
   void runJob("syncCashIncome", () => syncCashIncome());
 });
+
+// 💎 LTV клієнтів лідогенерації (ТЗ 28.10.2026) — о :12 і :42, між синком Kommo, фінполями й подіями стадій.
+cron.schedule("12,42 * * * *", () => {
+  void runJob("buildLeadgenLtv", () => buildLeadgenLtv());
+}, { timezone: "Europe/Kyiv" });
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {
@@ -1065,6 +1087,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["catchUpAiChat", () => catchUpAiChat()],
   ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
   ["vaultBotEnsureWebhook", () => vaultBotEnsureWebhook()],
+  ["leadsBotEnsureWebhook", () => leadsBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
   ["freezeNominations", () => runFreezeNominations()],
   ["docText", () => runDocText()],

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { HealthBanner } from "./HealthBanner";
 import { VersionBanner } from "./VersionBanner";
+import { LeadsBotBanner } from "./LeadsBotBanner";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
@@ -65,6 +66,8 @@ export const NAV_GROUPS = [
       // 🏛 «Тендери Prozorro» (#5299, 23.10.2026): статистика й налаштування тендерних лідів. Без поля `roles`: видимість —
       // `screen_access` (сид у schema.sql: admin, ceo, opdir, kvp); налаштування всередині — лише адмін, вирішує сервер.
       { key: "prozorro", label: "Тендери Prozorro", icon: "🏛" },
+      // 🔗 «LinkedIn» (задача 7361): статистика черги LinkedIn. Видимість — `screen_access` (сид: admin, ceo, opdir, kvp).
+      { key: "linkedin", label: "LinkedIn", icon: "🔗" },
     ],
   },
   {
@@ -505,6 +508,7 @@ export function Layout({
             саме порядок у потоці — вона пережила свою причину за один прохід. */}
         <VersionBanner />
         {role === "admin" && <HealthBanner />}
+        <LeadsBotBanner />
         {children}
       </main>
     </div>

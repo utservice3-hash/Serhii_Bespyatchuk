@@ -761,6 +761,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🔎 «Які угоди рахуємо» (16.10.2026) — межі ті самі, що в «Гроші з передач» (`handoffDealsScope`).
   { method: "GET", path: "/api/dashboard/leadgen-stage-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 💎 LTV клієнтів лідогенерації (ТЗ 28.10.2026, п. 6): ті самі межі, що решта вкладки — `ltvAccess` над `leadgenViewer`;
+  // менеджер поза командою — 403 (проба ходить від нього), лідген — лише свої (тримає `#3772`).
+  { method: "GET", path: "/api/dashboard/leadgen-ltv", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "GET", path: "/api/dashboard/leadgen-ltv-clients", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   // 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) — дзеркало формування плану продажів:
   // перегляд — як `/leadgen-stats`; подає тімлід (своя команда) і адмін-рівень, менеджер — 403
   // першим оператором; затверджує й повертає ЛИШЕ адмін-рівень (`requireRole("admin")`, як
@@ -1502,6 +1508,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "POST", path: "/api/telegram/sign-webhook", cls: "deny-only",
     allow: [], deny: [] },
+  // 🤖 Бот «UTS Заявки» (черга LinkedIn, задача 7361): вебхук — секрет Telegram; решта — власний акаунт (як telegram-link).
+  { method: "POST", path: "/api/leads-bot/webhook", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "GET", path: "/api/leads-bot/me", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/leads-bot/link", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/leads-bot/unlink", cls: "deny-only",
+    allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/integrations/google-ads/conversions.csv", cls: "deny-only",
@@ -1882,6 +1897,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/prozorro/settings", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🔗 «Клієнти → LinkedIn» (задача 7361): вкладка `linkedin`; менеджер — лише себе, тімлід — команду, керівництво — усіх (Роман 04.11.2026).
+  { method: "GET", path: "/api/linkedin/stats", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["financier", "hr"] },
+  // 🔗 Черга LinkedIn (задача 7361): список кола веде Юля (КВП) і адмін — право `manage_linkedin_queue`, перший middleware.
+  { method: "GET", path: "/api/linkedin-queue", cls: "GET",
+    allow: ["admin", "kvp"], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/linkedin-queue/members", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/linkedin-queue/pause", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/minus-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/minus-deals/counter", cls: "GET",

@@ -231,6 +231,33 @@ export async function fetchLeadgenStageDeals(params: { from: string; to: string;
   const { data } = await api.get<LeadgenStageDealsResp>("/dashboard/leadgen-stage-deals", { params });
   return data;
 }
+
+// 💎 LTV клієнтів лідогенерації (ТЗ 28.10.2026). Дзеркало `core/leadgenLtv.ts` / `leadgenLtvRules.ts`.
+export interface LtvAgg {
+  clients: number; ltv: number; turnover: number; avg: number | null; repeatPct: number | null; dealsPerClient: number | null;
+  growth: number; newClients: number;
+}
+export interface LtvClient {
+  clientKey: string; name: string; firstDay: string; firstDealId: number; firstDealUrl: string; handoffDay: string;
+  handedBy: string; deals: number; ltv: number; turnover: number; ownerName: string | null; segment: string | null; state: string | null;
+  marks: ("merged" | "pool")[];
+}
+export interface LtvPerson { managerId: number | null; name: string; dismissed: boolean; agg: LtvAgg; pool: { clients: number; ltv: number }; top: LtvClient[] }
+export interface LtvCohort extends LtvAgg { ym: string; warn: boolean; unlinkedPct: number | null }
+export interface LeadgenLtvResp {
+  builtAt: string | null; from: string; to: string; totals: LtvAgg; pool: { clients: number; ltv: number };
+  people: LtvPerson[]; others: { agg: LtvAgg; pool: { clients: number; ltv: number }; people: LtvPerson[] } | null;
+  cohorts: LtvCohort[]; unknownActors: number; turnoverMissing: number;
+}
+export async function fetchLeadgenLtv(params: { from: string; to: string; managerId?: number }): Promise<LeadgenLtvResp> {
+  const { data } = await api.get<LeadgenLtvResp>("/dashboard/leadgen-ltv", { params });
+  return data;
+}
+export interface LeadgenLtvClientsResp { clients: LtvClient[]; pool: { clientKey: string; name: string; takenAt: string; ltv: number; deals: number; handedBy: string }[] }
+export async function fetchLeadgenLtvClients(params: { managerId?: number }): Promise<LeadgenLtvClientsResp> {
+  const { data } = await api.get<LeadgenLtvClientsResp>("/dashboard/leadgen-ltv-clients", { params });
+  return data;
+}
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
 export async function fetchLeadgenHandoffDeals(params: { from: string; to: string; managerId?: number }): Promise<LeadgenHandoffDealsResp> {
@@ -6667,3 +6694,28 @@ export const updateOrgTeam = async (id: number, body: { name?: string; kommoTeam
 /** Команда людини без Kommo: `k:<id>` / `d:<id>` або `null` — зняти. */
 export const setEmployeeTeam = async (employeeId: number, team: string | null) =>
   (await api.put<{ ok: true; name: string | null }>(`/org/teams/people/${employeeId}`, { team })).data.name;
+
+// 🔗 Черга LinkedIn (задача 7361): «Клієнти → LinkedIn» — статистика за період і редактор кола («Налаштувати чергу»).
+export interface LinkedinQueueScreen {
+  mode: "off" | "dry" | "live"; launchedAt: string | null;
+  members: { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean; botLinked: boolean }[];
+  candidates: { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }[];
+}
+export interface LinkedinStats {
+  from: string; to: string; scope: "all" | "team" | "own";
+  kpi: { created: number; taken: number; dispatcher: number | null; dispatcherDup: number | null; dispatcherNobody: number | null; avgTakeMin: number | null };
+  perManager: { managerId: number; name: string; received: number; taken: number; ignored: number; avgTakeMin: number | null }[];
+  items: { kommoId: number; dealName: string | null; state: string; managerName: string | null; reason: string | null;
+    seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number }[];
+  /** Лише керівництву: угоди, створені на етапі «LinkedIn» від початку етапу, по днях (не лише через бота). */
+  stage: { created: number; firstDay: string | null; byDay: { day: string; count: number }[] } | null;
+  queue: { mode: "off" | "dry" | "live"; members: number; nextName: string | null; launchedAt: string | null;
+    paused: boolean; pausedBy: string | null; pausedAt: string | null };
+}
+export const fetchLinkedinStats = async (from: string, to: string) => (await api.get<LinkedinStats>("/linkedin/stats", { params: { from, to } })).data;
+export const fetchLinkedinQueue = async () => (await api.get<LinkedinQueueScreen>("/linkedin-queue")).data;
+export const saveLinkedinQueueMembers = async (managerIds: number[]) => (await api.put<{ ok: boolean }>("/linkedin-queue/members", { managerIds })).data;
+export const setLinkedinQueuePaused = async (paused: boolean) => (await api.put<{ ok: boolean; paused: boolean }>("/linkedin-queue/pause", { paused })).data;
+// 🤖 Бот «UTS Заявки» (черга LinkedIn): підключення власного акаунта.
+export const fetchLeadsBotMe = async () => (await api.get<{ configured: boolean; linked: boolean; inQueue: boolean; eligible: boolean; botUsername: string | null }>("/leads-bot/me")).data;
+export const createLeadsBotLink = async () => (await api.post<{ url: string; code: string; botUsername: string; expiresInSec: number }>("/leads-bot/link")).data;

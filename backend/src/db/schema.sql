@@ -7526,6 +7526,102 @@ CREATE INDEX IF NOT EXISTS idx_employee_levels_emp ON employee_levels (employee_
 -- Персональні дані про умови роботи — не для моделі.
 REVOKE ALL ON employee_levels FROM ai_readonly;
 
+-- 🔗 ЧЕРГА LINKEDIN (задача 7361; рішення Юлі 03.11.2026). Угода на етапі «LinkedIn» (Кваліфікація, 113486296)
+-- іде менеджерам по колу: одночасно лише в одного, 15 хв робочого часу (пн–пт 8–18 за Києвом), хто не взяв —
+-- пропускає чергу; двоє підряд не взяли або клієнт уже в іншого менеджера — лишається на «Операційному директорі», Даші.
+-- Порядок кола — список, який веде Юля в Налаштуваннях (`manage_linkedin_queue`). Логіка — `core/linkedinQueue.ts`.
+CREATE TABLE IF NOT EXISTS linkedin_queue_members (
+  manager_id INTEGER PRIMARY KEY REFERENCES managers(id),
+  position   INTEGER NOT NULL,
+  added_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  added_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Один рядок: де зупинилось коло, з якої миті угоди йдуть у чергу (старіші — ні). «Спірне — Даші» = угода лишається
+-- на службовому «Операційному директорі», Даша розподіляє вручну (Юля 04.11.2026) — окремого акаунта під це немає.
+CREATE TABLE IF NOT EXISTS linkedin_queue_settings (
+  id                 BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  last_manager_id    INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  launched_at        TIMESTAMPTZ,
+  updated_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS linkedin_queue_items (
+  kommo_id          BIGINT PRIMARY KEY,
+  deal_name         TEXT,
+  created_at_kommo  TIMESTAMPTZ,
+  seen_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  seen_responsible  BIGINT,
+  state             TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting', 'offered', 'taken', 'dispatcher', 'gone')),
+  manager_id        INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  offered_ids       INTEGER[] NOT NULL DEFAULT '{}',
+  offered_at        TIMESTAMPTZ,
+  deadline_at       TIMESTAMPTZ,
+  misses            INTEGER NOT NULL DEFAULT 0,
+  reason            TEXT,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_linkedin_queue_items_open ON linkedin_queue_items (state) WHERE state IN ('waiting', 'offered');
+-- Повідомлення з кнопкою «Взяти» в того, кому зараз запропоновано, — щоб погасити кнопку, коли заявка йде далі.
+ALTER TABLE linkedin_queue_items ADD COLUMN IF NOT EXISTS offer_chat_id BIGINT;
+ALTER TABLE linkedin_queue_items ADD COLUMN IF NOT EXISTS offer_message_id BIGINT;
+-- 🤖 Бот «UTS Заявки» (прохід 2б): свій чат на користувача, окремо від бота підпису (`telegram_chat_id`) — інший бот,
+-- інша розмова. Менеджеру без підключеного бота черга нічого не дає (Роман 04.11.2026: «йому нічого не даємо»).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS leads_bot_chat_id BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS leads_bot_linked_at TIMESTAMPTZ;
+-- Одноразові коди підключення (6 цифр, 10 хв), як у бота підпису, але своя таблиця: тамтешній CHECK знає лише свої цілі.
+CREATE TABLE IF NOT EXISTS leads_bot_link_codes (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code       TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_leads_bot_link_codes_live ON leads_bot_link_codes (code) WHERE used_at IS NULL;
+-- ⏸ Кнопка «Зупинити бота» (Роман 03.11.2026): на паузі черга нікому нічого не пропонує й не рахує 15 хв; після запуску
+-- поточні пропозиції отримують свіжі 15 хв (інакше пауза перетворилась би на «проігнорував» без вини менеджера).
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+-- Журнал — з нього статистика «отримав / взяв / проігнорував / за який час». Пише і пробний режим (mode='dry').
+CREATE TABLE IF NOT EXISTS linkedin_queue_log (
+  id         SERIAL PRIMARY KEY,
+  kommo_id   BIGINT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('seen', 'offer', 'ignored', 'taken', 'dispatcher', 'gone')),
+  manager_id INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  note       TEXT,
+  mode       TEXT NOT NULL CHECK (mode IN ('dry', 'live')),
+  at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_linkedin_queue_log_deal ON linkedin_queue_log (kommo_id, at);
+-- 📅 Угоди етапу «LinkedIn» від створення етапу (Роман 06.11.2026: «по старих угодах можемо просто показати скільки
+-- створено і в яку дату, інші етапи не відстежуємо, тільки через бота потім»). Журнал черги знає лише угоди після запуску
+-- бота, а `deal_stage_events` цього етапу не пише (заміряно 06.11: 0 подій), тож список веде сама джоба черги: кожен тік —
+-- ті, що зараз на етапі; раз на добу — з подій Kommo ті, що з етапу вже пішли. `moved_in` — перенесені на етап з іншого
+-- етапу: у «створено» не йдуть (за весь час таких 0; зʼявляться — питання до Юлі).
+CREATE TABLE IF NOT EXISTS linkedin_stage_deals (
+  kommo_id          BIGINT PRIMARY KEY,
+  deal_name         TEXT,
+  created_at_kommo  TIMESTAMPTZ NOT NULL,
+  moved_in          BOOLEAN NOT NULL DEFAULT false,
+  found_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE linkedin_queue_settings ADD COLUMN IF NOT EXISTS history_swept_at TIMESTAMPTZ;
+-- Право вести список черги: Юля (kvp) і адмін («Зроби список у налаштуваннях, щоб я могла його міняти без тебе»).
+UPDATE roles SET permissions = permissions || '{"manage_linkedin_queue": true}'::jsonb
+ WHERE key IN ('admin', 'kvp');
+UPDATE roles SET permissions = permissions - 'manage_linkedin_queue'
+ WHERE key NOT IN ('admin', 'kvp');
+-- Екран «LinkedIn» (група «Клієнти», задача 7361): керівництво й КВП — усіх; тімлід — свою команду; менеджер — лише себе
+-- (Роман 04.11.2026; скоуп — `linkedinScope`). Разово, ключ потім веде адмін. Фінансисту — ні: синк «financier = екрани адміна»
+-- вище скопіював би йому кожен новий екран адміна (той самий механізм, що з Prozorro, #2812), тож знімаємо ПІСЛЯ нього.
+UPDATE roles SET screen_access = screen_access || '{"linkedin":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'team_lead', 'manager') AND NOT (screen_access ? 'linkedin');
+UPDATE roles SET screen_access = screen_access || '{"linkedin":false}'::jsonb
+  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'team_lead', 'manager') AND NOT (screen_access ? 'linkedin');
+UPDATE roles SET screen_access = screen_access - 'linkedin'
+ WHERE key = 'financier';
+
 -- 📵 ДОВІДНИК НОМЕРІВ ПЕРЕВІЗНИКІВ (задача 7359, ТЗ Юлії «Контакти клієнтів», етап 1). Останні 9 цифр номера з
 -- машин Lardi (`side='lorry'`) або з угод, закритих як «Перевізник», МІНУС номери з угодою замовника («Успіх» чи в
 -- роботі; рішення Романа 03.11.2026). Похідна таблиця: повністю перебудовується з `lardi_offers` і `deals` джобою
@@ -7923,3 +8019,58 @@ UPDATE roles SET permissions = permissions || '{"payroll_offer_tasks":true}'::js
 UPDATE roles SET permissions = permissions - 'payroll_offer_tasks' WHERE key NOT IN ('hr');
 UPDATE roles SET permissions = permissions || '{"notify_rules":true}'::jsonb WHERE key IN ('opdir', 'admin');
 UPDATE roles SET permissions = permissions - 'notify_rules' WHERE key NOT IN ('opdir', 'admin');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💎 LTV КЛІЄНТІВ ЛІДОГЕНЕРАЦІЇ (ТЗ 28.10.2026, погоджено з директором; Роман 06.11.2026 «роби так, як каже ТЗ»).
+-- Правила — `core/leadgenLtvRules.ts`, збирає джоба `buildLeadgenLtv` (кожні 30 хв). Гроші сюди НЕ пишуться: маржа й
+-- оборот — з ядра (`core/money.ts`) у мить збирання й на кожен запит періоду.
+--  · `leadgen_handoff_actors` — хто перевів угоду Продзвону в «Кваліфіковано» в день передачі (журнал Kommo
+--    `lead_status_changed`, `created_by`). Ядро грошей з передач пише лід на ПОТОЧНОГО відповідального; LTV за ТЗ
+--    закріплює клієнта за тим, хто передав. NULL — Kommo не віддав подію або її зробив робот (видно числом).
+--  · `leadgen_ltv_clients` — один рядок на клієнта лідгена: передача, перша успішна угода, LTV, оборот на мить збирання.
+--  · `leadgen_ltv_pool` — клієнти, яких лідген узяв із «🎯 Пулу лідгенів»: окремо, у основний LTV не входять (п. 3.4).
+--  · `leadgen_ltv_months` — передачі й передачі без угоди менеджера по місяцях (⚠ на когортах).
+--  ⚠️ Revert коду таблиць не прибирає. Модель їх не читає.
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS leadgen_handoff_actors (
+  pz_id               BIGINT NOT NULL,
+  handoff_day         DATE NOT NULL,
+  actor_kommo_user_id BIGINT,
+  fetched_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (pz_id, handoff_day)
+);
+CREATE TABLE IF NOT EXISTS leadgen_ltv_clients (
+  client_key          TEXT PRIMARY KEY,
+  lg_manager_id       INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  actor_kommo_user_id BIGINT,
+  pz_id               BIGINT NOT NULL,
+  handoff_day         DATE NOT NULL,
+  first_deal_id       BIGINT NOT NULL,
+  first_day           DATE NOT NULL,
+  deals               INTEGER NOT NULL CHECK (deals >= 0),
+  ltv                 NUMERIC(14,2) NOT NULL,
+  turnover            NUMERIC(14,2) NOT NULL DEFAULT 0,
+  turnover_missing    INTEGER NOT NULL DEFAULT 0,
+  client_name         TEXT,
+  owner_manager_id    INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  segment             TEXT,
+  state               TEXT,
+  merged              BOOLEAN NOT NULL DEFAULT false,
+  built_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_leadgen_ltv_clients_lg ON leadgen_ltv_clients (lg_manager_id);
+CREATE TABLE IF NOT EXISTS leadgen_ltv_pool (
+  client_key          TEXT PRIMARY KEY,
+  lg_manager_id       INTEGER REFERENCES managers(id) ON DELETE SET NULL,
+  taken_at            TIMESTAMPTZ NOT NULL,
+  ltv_after           NUMERIC(14,2) NOT NULL DEFAULT 0,
+  deals_after         INTEGER NOT NULL DEFAULT 0,
+  built_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS leadgen_ltv_months (
+  ym        TEXT PRIMARY KEY CHECK (ym ~ '^[0-9]{4}-[0-9]{2}$'),
+  handoffs  INTEGER NOT NULL CHECK (handoffs >= 0),
+  unlinked  INTEGER NOT NULL CHECK (unlinked >= 0 AND unlinked <= handoffs),
+  built_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+REVOKE ALL ON leadgen_handoff_actors, leadgen_ltv_clients, leadgen_ltv_pool, leadgen_ltv_months FROM ai_readonly;

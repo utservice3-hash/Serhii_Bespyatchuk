@@ -14,6 +14,7 @@ import { ExtraPlanLines, PaceLines,
 import { LeadgenPlanFormation } from "./LeadgenPlanFormation";
 import { LeadgenCharts } from "./LeadgenCharts";
 import { LeadgenCountedDeals } from "./LeadgenCountedDeals";
+import { LeadgenLtvBlock } from "./LeadgenLtvBlock";
 import { plural } from "../receivablesView";
 
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", MUTED = "var(--text-muted)";
@@ -259,6 +260,8 @@ export function LeadgenSection() {
   const whoAbsent = who !== "all" && !!d && !everyone.some((r) => r.managerId === who);
   const others = d?.others ?? [];
   const [view, setView] = useState<"stats" | "deals">("stats");
+  // «усі клієнти →» у блоці LTV: «Які угоди рахуємо» → «Клієнти LTV» цієї людини (ключ — щоб вкладка стартувала з неї).
+  const [dealsTab, setDealsTab] = useState<{ tab: "lead" | "ltv"; n: number }>({ tab: "lead", n: 0 });
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto" }}>
@@ -337,7 +340,7 @@ export function LeadgenSection() {
       )}
 
       {view === "deals" && !denied && (
-        <LeadgenCountedDeals from={period.from} to={period.to} periodLabel={periodLabel} own={own}
+        <LeadgenCountedDeals key={dealsTab.n} startTab={dealsTab.tab} from={period.from} to={period.to} periodLabel={periodLabel} own={own}
           managerId={who === "all" ? null : who}
           people={d ? [...d.rows, ...others].map((r) => ({ managerId: r.managerId, name: r.name })) : []}
           onPick={(id) => pickWho(String(id))} />
@@ -375,6 +378,9 @@ export function LeadgenSection() {
           {/* Лідгену «Інших» і рівня відділу сервер не віддає (білий список) — і блоків під них немає. */}
           {!own && <Others d={d} who={who} />}
           {!own && <Details d={d} grain={grain} period={period} today={today} open={detailsOpen} onToggle={setDetailsOpen} />}
+          {/* 💎 LTV (ТЗ 28.10.2026): після «Деталей», перед «Планами лідгенів»; лідгену — лише свої клієнти (межа на сервері). */}
+          <LeadgenLtvBlock from={period.from} to={period.to} periodLabel={periodLabel} who={who} own={own}
+            onShowClients={(id) => { if (id != null) pickWho(String(id)); setDealsTab((x) => ({ tab: "ltv", n: x.n + 1 })); setView("deals"); }} />
         </div>
       )}
       <LeadgenPlanFormation initialMonth={period.from.slice(0, 7)} />

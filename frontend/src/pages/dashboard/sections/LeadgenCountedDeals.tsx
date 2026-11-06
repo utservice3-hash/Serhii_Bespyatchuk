@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchLeadgenStageDeals, type LeadgenStageDeal, type LeadgenStageDealsResp } from "../../../api";
+import { fetchLeadgenStageDeals, fetchLeadgenLtvClients, type LeadgenStageDeal, type LeadgenStageDealsResp, type LeadgenLtvClientsResp } from "../../../api";
+import { ClientTable } from "./LeadgenLtvBlock";
 
 /**
  * 🔎 «ЯКІ УГОДИ РАХУЄМО» (рішення власника 16.10.2026, регламент лідгенів §14, §16): окремий екран вкладки «Лідогенерація»
@@ -8,7 +9,7 @@ import { fetchLeadgenStageDeals, type LeadgenStageDeal, type LeadgenStageDealsRe
  * Числа вкладок рахує той самий сервер тими самими правилами, що картки лідгенів (`#1506`). Позначки описують шлях
  * угоди, а не оцінюють його (рішення 14.10: відхилення від регламенту в дашборді не показуємо).
  */
-type Tab = "lead" | "opr" | "quote";
+type Tab = "lead" | "opr" | "quote" | "ltv";
 const MUTED = "var(--text-muted)";
 const fmt = new Intl.DateTimeFormat("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const fmtSec = new Intl.DateTimeFormat("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -19,21 +20,34 @@ function Tag({ tone, children, title }: { tone: "warn" | "info"; children: React
   return <span title={title} style={{ display: "inline-block", fontSize: 11.5, fontWeight: 600, color: c, border: `1px solid ${c}`, borderRadius: 999, padding: "1px 7px", whiteSpace: "nowrap", marginRight: 4 }}>{children}</span>;
 }
 
-export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, people, onPick }: {
+export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, people, onPick, startTab }: {
   from: string; to: string; periodLabel: string; own: boolean;
+  /** З якої вкладки почати: «усі клієнти →» у блоці LTV відкриває «Клієнти LTV». */
+  startTab?: Tab;
   /** Лідген, вибраний угорі вкладки; `null` — «Усі лідгени» (тоді просимо обрати одного). */
   managerId: number | null;
   people: { managerId: number; name: string }[];
   onPick: (id: number) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("lead");
+  const [tab, setTab] = useState<Tab>(startTab ?? "lead");
+  // 💎 «Клієнти LTV» (ТЗ LTV 28.10.2026, п. 5.4) — за весь час, від періоду не залежить; без вибраного лідгена — усі.
+  const [ltv, setLtv] = useState<LeadgenLtvClientsResp | null>(null);
+  const [ltvErr, setLtvErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setLtvErr(null);
+    fetchLeadgenLtvClients({ managerId: own || managerId == null ? undefined : managerId })
+      .then((r) => { if (alive) setLtv(r); })
+      .catch((e) => { if (alive) { setLtv(null); setLtvErr(e?.response?.data?.error ?? "Не вдалося завантажити клієнтів LTV."); } });
+    return () => { alive = false; };
+  }, [managerId, own]);
   const [d, setD] = useState<LeadgenStageDealsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const need = !own && managerId == null;
+  const need = !own && managerId == null && tab !== "ltv";
 
   useEffect(() => {
-    if (need) { setD(null); return; }
+    if (!own && managerId == null) { setD(null); return; } // без лідгена списку етапів немає (лише «Клієнти LTV» — усі)
     let alive = true;
     setLoading(true); setErr(null);
     fetchLeadgenStageDeals({ from, to, managerId: own ? undefined : managerId ?? undefined })
@@ -41,7 +55,7 @@ export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, peo
       .catch((e) => { if (alive) { setD(null); setErr(e?.response?.data?.error ?? "Не вдалося завантажити список. Спробуйте ще раз."); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [from, to, managerId, own, need]);
+  }, [from, to, managerId, own]);
 
   const rows = useMemo(() => {
     const xs = (d?.deals ?? []).filter((x) => (tab === "lead" ? x.leadAt : tab === "opr" ? x.oprAt : x.quoteAt));
@@ -51,7 +65,8 @@ export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, peo
 
   const counted = (x: LeadgenStageDeal) => tab === "lead" ? `${x.leadStage ?? "—"} · ${when(x.leadAt)}`
     : tab === "opr" ? `${x.oprStage ?? "—"} · ${when(x.oprAt)}` : `Кваліфіковано · ${when(x.quoteAt)}`;
-  const tabs: [Tab, string, number | undefined][] = [["lead", "Ліди", d?.counts.leads], ["opr", "ОПР", d?.counts.opr], ["quote", "Прорахунки", d?.counts.quotes]];
+  const tabs: [Tab, string, number | undefined][] = [["lead", "Ліди", d?.counts.leads], ["opr", "ОПР", d?.counts.opr], ["quote", "Прорахунки", d?.counts.quotes],
+    ["ltv", "Клієнти LTV", ltv?.clients.length]];
   const th: React.CSSProperties = { textAlign: "left", padding: "7px 8px", fontSize: 11.5, color: MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".3px", borderBottom: "1px solid var(--border)" };
   const td: React.CSSProperties = { padding: "7px 8px", borderBottom: "1px solid var(--border)", verticalAlign: "top", fontSize: 13 };
 
@@ -82,7 +97,7 @@ export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, peo
           Одна угода за період рахується один раз; угода — на того, хто відповідальний за неї зараз; день — за київським часом.
         </div>
 
-        {!need && <div role="tablist" style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)" }}>
+        {<div role="tablist" style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)" }}>
           {tabs.map(([k, label, n]) => (
             <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
               style={{ border: 0, background: "transparent", padding: "7px 12px", cursor: "pointer", fontSize: 14, color: tab === k ? "var(--text)" : MUTED,
@@ -92,10 +107,31 @@ export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, peo
           ))}
         </div>}
 
-        {err && <div style={{ color: "var(--danger)", fontSize: 13 }}>{err}</div>}
-        {loading && !d && <div style={{ color: MUTED, fontSize: 13 }}>Завантажую…</div>}
-        {d && rows.length === 0 && !loading && <div style={{ color: MUTED, fontSize: 13 }}>За цей період таких угод немає.</div>}
-        {d && rows.length > 0 && (
+        {tab === "ltv" && <>
+          <div style={{ fontSize: 12.5, color: MUTED }}>
+            Клієнти, чия перша успішна угода виросла з переданого ліда, — за весь час, незалежно від періоду. «Хто передав» — хто перевів угоду
+            Продзвону в «Кваліфіковано». LTV — маржа всіх успішних угод клієнта; оборот — сума їхніх рахунків, довідково.
+          </div>
+          {ltvErr && <div style={{ color: "var(--danger)", fontSize: 13 }}>{ltvErr}</div>}
+          {!ltv && !ltvErr && <div style={{ color: MUTED, fontSize: 13 }}>Завантажую…</div>}
+          {ltv && ltv.clients.length === 0 && <div style={{ color: MUTED, fontSize: 13 }}>Клієнтів, приведених цим лідгеном, ще немає.</div>}
+          {ltv && ltv.clients.length > 0 && <ClientTable rows={ltv.clients} wide />}
+          {ltv && ltv.pool.length > 0 && <>
+            <div style={{ fontWeight: 650, marginTop: 6 }}>Повернуті з пулу <span style={{ color: MUTED, fontWeight: 400, fontSize: 12.5 }}>· маржа лише після повернення, в основний LTV не входить</span></div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={th}>Клієнт</th><th style={th}>Узяв із пулу</th><th style={th}>Коли</th><th style={{ ...th, textAlign: "right" }}>Угод після</th><th style={{ ...th, textAlign: "right" }}>Маржа після ₴</th><th style={th}>Позначка</th></tr></thead>
+              <tbody>{ltv.pool.map((p) => (
+                <tr key={p.clientKey}><td style={td}>{p.name}</td><td style={td}>{p.handedBy}</td><td style={td}>{p.takenAt}</td>
+                  <td style={{ ...td, textAlign: "right" }}>{p.deals}</td><td style={{ ...td, textAlign: "right" }}>{p.ltv.toLocaleString("uk-UA")}</td>
+                  <td style={td}><Tag tone="info" title="Клієнта взяли з «Пулу лідгенів»">повернутий з пулу</Tag></td></tr>
+              ))}</tbody>
+            </table>
+          </>}
+        </>}
+        {tab !== "ltv" && err && <div style={{ color: "var(--danger)", fontSize: 13 }}>{err}</div>}
+        {tab !== "ltv" && loading && !d && <div style={{ color: MUTED, fontSize: 13 }}>Завантажую…</div>}
+        {tab !== "ltv" && d && rows.length === 0 && !loading && <div style={{ color: MUTED, fontSize: 13 }}>За цей період таких угод немає.</div>}
+        {tab !== "ltv" && d && rows.length > 0 && (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
               <thead><tr><th style={th}>Угода</th><th style={th}>Назва · джерело</th><th style={th}>Що зарахувалось</th><th style={th}>Шлях етапів</th><th style={th}>Позначка</th></tr></thead>

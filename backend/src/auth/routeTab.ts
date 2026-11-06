@@ -108,6 +108,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/leadgen-trend"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen-handoff-deals"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen-stage-deals"), tabs: ["leadgen"] },
+    // 💎 LTV клієнтів лідогенерації (ТЗ 28.10.2026): блок і вкладка «Клієнти LTV» — та сама вкладка; сусід через дефіс — інший роут.
+    { test: pre("/api/dashboard/leadgen-ltv"), tabs: ["leadgen"] },
+    { test: pre("/api/dashboard/leadgen-ltv-clients"), tabs: ["leadgen"] },
     // 📋 Плани лідгенів (25.09.2026): список + подання/затвердження/повернення — ЯВНО, та сама причина.
     { test: pre("/api/dashboard/leadgen-plans"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen"), tabs: ["leadgen"] },
@@ -168,6 +171,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/counterparty"), tabs: ["registries"] },
     { test: pre("/api/client-limits"), tabs: ["receivables"] },
     { test: pre("/api/prozorro"), tabs: ["prozorro"] }, // #5299 «Тендери Prozorro»
+    { test: pre("/api/linkedin"), tabs: ["linkedin"] }, // 🔗 «LinkedIn» — статистика черги (задача 7361); /api/linkedin-queue — інший роут (право)
     // 💰 «Зарплата» (пакет Сергія 03.11.2026): вкладка — перша межа; права-ключі ТЗ §2 і «лише свої» — у кожному обробнику.
     { test: pre("/api/payroll"), tabs: ["payroll"] },
     { test: pre("/api/documents"), tabs: ["documents"] },

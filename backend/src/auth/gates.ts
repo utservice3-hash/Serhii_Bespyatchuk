@@ -76,6 +76,15 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
   { method: "POST", path: "/api/vault-bot/webhook", permanent: true,
     why: "Стукає сервер Telegram (бот «UTS Сейф»), не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
        + "(виводиться з токена бота, bot/vaultBot.ts). Не збігся → 401 без жодної дії. Робить лише привʼязку чату за одноразовим кодом." },
+  { method: "POST", path: "/api/leads-bot/webhook", permanent: true,
+    why: "Стукає сервер Telegram (бот «UTS Заявки», черга LinkedIn), не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
+       + "(виводиться з токена бота, bot/leadsBot.ts). Не збігся → 401 без жодної дії. «Взяти» діє лише на заявку, запропоновану САМЕ цьому чату (takeOffer)." },
+  { method: "GET", path: "/api/leads-bot/me", permanent: true,
+    why: "Стан підключення бота заявок ВЛАСНОГО токена (для плашки «Підключіть бот заявок»). Скоуп — сам токен; потрібен будь-якій ролі." },
+  { method: "POST", path: "/api/leads-bot/link", permanent: true,
+    why: "Одноразовий код підключення бота заявок для ВЛАСНОГО акаунта (10 хв, як #442b). Скоуп — сам токен." },
+  { method: "POST", path: "/api/leads-bot/unlink", permanent: true,
+    why: "Відʼєднати бот заявок від ВЛАСНОГО акаунта. Скоуп — сам токен." },
   { method: "POST", path: "/api/telegram/sign-webhook", permanent: true,
     why: "Стукає сервер Telegram, не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
        + "(виводиться з токена бота, bot/signBot.ts). Не збігся → 401 без жодної дії. Вкладки бути не може." },
