@@ -1732,6 +1732,30 @@ export async function rnkConvAsKommo(s: { from: string; to: string }, managerIds
   };
 }
 
+/**
+ * 🆕 «НОВИЙ КЛІЄНТ» ДЛЯ ВІДЗНАКИ ПРЕЗЕНТАЦІЇ (04.11.2026, Даша: «перша успішна угода з клієнтом»). Угода повного циклу
+ * зі статусом «Успішна угода» (142), закрита в періоді (`closed_at_kommo`, Київ), і в того самого клієнта (`client_key`)
+ * немає ЖОДНОЇ раніше закритої успішної угоди — у будь-якого менеджера (визначення «A» глосарію: попередня ВИГРАНА
+ * угода за `closed_at`). Однакова мить — раніший `kommo_id`. Угоди без `client_key` не вгадуємо: окреме число `unknown`.
+ * GLOSSARY §18.
+ */
+export async function firstSuccessByManager(s: { from: string; to: string }): Promise<{ rows: { managerId: number; first: number }[]; unknown: number }> {
+  const r = await pool.query<{ manager_id: number; first: string; unknown: string }>(
+    `WITH s AS (SELECT d.kommo_id, d.manager_id, d.client_key, d.closed_at_kommo AS t FROM deals d
+                 WHERE d.pipeline_id = ANY($1) AND d.status_id = 142 AND d.closed_at_kommo IS NOT NULL)
+     SELECT s.manager_id,
+            COUNT(*) FILTER (WHERE s.client_key IS NOT NULL AND NOT EXISTS (
+              SELECT 1 FROM s s2 WHERE s2.client_key = s.client_key AND (s2.t < s.t OR (s2.t = s.t AND s2.kommo_id < s.kommo_id)))) AS first,
+            COUNT(*) FILTER (WHERE s.client_key IS NULL) AS unknown
+       FROM s JOIN managers m ON m.id = s.manager_id AND m.is_active
+      WHERE (s.t ${KYIV})::date BETWEEN $2 AND $3
+      GROUP BY s.manager_id`, [FC_PIPELINES, s.from, s.to]);
+  return {
+    rows: r.rows.map((x) => ({ managerId: x.manager_id, first: Number(x.first) })).filter((x) => x.first > 0),
+    unknown: r.rows.reduce((a, x) => a + Number(x.unknown), 0),
+  };
+}
+
 // ── Блок A (КВП повна таблиця) — нові метрики ──
 // Прострочена оплата = ЗНІМОК «зараз»: планова дата оплати минула, а угода ще НЕ оплачена
 // (не 142/143 і не в етапі 9 «оплата отримана»). Не залежить від періоду. sum = Σ price.

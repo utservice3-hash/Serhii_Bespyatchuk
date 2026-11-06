@@ -1,150 +1,170 @@
-/* 🎞 ПРЕЗЕНТАЦІЯ ЗУСТРІЧІ — стилі слайдів. Усе під `.ps-`. Оформлення взято з шаблону Даші
-   (UTS_weekly_meeting_template.pptx): світло-сірий фон, темна бічна панель, червоний акцент,
-   рожеві смужки номінацій. Слайд — СВІДОМО однотемний (зустріч показують на проєкторі), тож
-   кольори тут фіксовані, а не токени теми дашборда. */
+/* 🎞 ПРЕЗЕНТАЦІЯ ЗУСТРІЧІ — макет Даші (04.11.2026, «Щотижнева зустріч UTS — новий дизайн»). Усе під `.ps-`.
+   Слайд СВІДОМО однотемний (зустріч показують на проєкторі), тож кольори фіксовані, а не токени теми дашборда.
+   Шрифти Oswald / Rubik — з Google Fonts, без них — системні (див. FONTS у NominationsPresentation.tsx). */
 
 .ps-overlay { position: fixed; inset: 0; z-index: 1000; background: #0d0e10; display: flex; flex-direction: column; }
 .ps-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; color: #c9ccd2; font-size: 13px; flex-wrap: wrap; }
 .ps-bar .sp { flex: 1; }
 .ps-bar button { border: 1px solid #3a3d44; background: #1c1e23; color: #e7e8ea; border-radius: 8px; padding: 5px 12px; font: inherit; cursor: pointer; }
 .ps-bar button:focus-visible { outline: 2px solid #C8102E; outline-offset: 2px; }
+.ps-bar button:disabled { opacity: .45; cursor: default; }
+.ps-prog { display: inline-flex; align-items: center; gap: 8px; color: #e7e8ea; }
+.ps-prog-bar { width: 120px; height: 6px; border-radius: 999px; background: #2a2d33; overflow: hidden; }
+.ps-prog-bar span { display: block; height: 100%; background: #C8102E; transition: width .25s; }
 .ps-draft { background: #fef3c7; color: #8a5a00; border-radius: 999px; padding: 2px 10px; font-weight: 700; }
 .ps-viewport { flex: 1; position: relative; overflow: hidden; }
 .ps-stage { position: absolute; left: 50%; top: 50%; width: 1280px; height: 720px; transform-origin: center center; }
 .ps-overlay:fullscreen .ps-bar { display: none; }
+.ps-watermark { position: absolute; right: 22px; top: 14px; background: #fef3c7; color: #8a5a00; border-radius: 999px; padding: 4px 14px; font-size: 14px; font-weight: 700; z-index: 5; }
 
-.ps-slide { width: 1280px; height: 720px; display: flex; background: #F2F2F3; color: #1F2124;
-  font-family: Calibri, "Segoe UI", system-ui, sans-serif; position: relative; overflow: hidden; }
-.ps-side { width: 245px; background: #1A1A1A; padding: 34px 26px; display: flex; flex-direction: column; gap: 6px; position: relative; }
-.ps-logo { width: 80px; height: 66px; background: #fff; border-radius: 10px; display: grid; place-items: center; margin-bottom: 60px; }
-.ps-nav { color: #AEB0B4; font-size: 17px; padding: 12px 16px; border-radius: 12px; }
-.ps-nav.on { background: #C8102E; color: #fff; font-weight: 700; }
-.ps-date { margin-top: auto; align-self: flex-start; background: #262626; color: #D1D5DB; border-radius: 10px; padding: 12px 22px; font-size: 15px; }
-/* Багато ручних розділів — меню щільніше, щоб «Підсумки» не зникали за датою. */
-.ps-side.dense .ps-logo { margin-bottom: 26px; }
-.ps-side.dense .ps-nav { font-size: 14.5px; padding: 8px 14px; border-radius: 10px; }
-.ps-main { flex: 1; padding: 40px 46px 36px; display: flex; flex-direction: column; min-width: 0; }
-.ps-kick { color: #C8102E; font-size: 14px; font-weight: 700; letter-spacing: .08em; }
-.ps-h { margin: 4px 0 22px; font-size: 40px; font-weight: 700; }
-.ps-watermark { position: absolute; right: 22px; top: 18px; background: #fef3c7; color: #8a5a00; border-radius: 999px; padding: 4px 14px; font-size: 14px; font-weight: 700; }
+/* ── каркас слайда ── */
+.ps-slide2 { width: 1280px; height: 720px; position: relative; overflow: hidden; background: #F5F3EF; color: #17181C;
+  font-family: Rubik, "Segoe UI", system-ui, sans-serif; padding: 86px 86px 0; display: flex; flex-direction: column; }
+.ps-slide2.dark { background: #17181C; color: #F5F3EF; }
+.ps-slide2.red { background: #C8102E; color: #fff; }
+.ps-head2 { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 34px; }
+.ps-kick2 { color: #C8102E; font-weight: 700; font-size: 16px; letter-spacing: .14em; }
+.ps-slide2.dark .ps-kick2 { color: #FF5A6E; }
+.ps-h2 { margin: 6px 0 0; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 58px; line-height: 1; letter-spacing: .01em; }
+.ps-chip { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 10px 22px; font-weight: 700; font-size: 17px; color: #fff; background: #17181C; }
+.ps-chip.red { background: #C8102E; }
+.ps-clock { width: 13px; height: 13px; border: 2px solid currentColor; border-radius: 50%; display: inline-block; position: relative; }
+.ps-clock::after { content: ""; position: absolute; left: 4px; top: 1px; width: 2px; height: 5px; background: currentColor; }
+.ps-foot { position: absolute; left: 86px; bottom: 42px; font-size: 16px; color: #8A8780; }
+.ps-slide2.dark .ps-foot { color: #8A8C93; }
+.ps-manual { margin-left: 8px; font-size: .7em; color: #8A8780; }
 
-.ps-two { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; flex: 1; min-height: 0; }
-.ps-card { background: #fff; border-radius: 16px; padding: 16px 18px; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow: hidden; }
-.ps-head { background: #C8102E; color: #fff; border-radius: 12px; padding: 10px 16px; font-size: 15.5px; font-weight: 700; margin-bottom: 4px; }
-.ps-lab { background: #FBE3E7; color: #970B22; border-radius: 8px; padding: 4px 12px; font-size: 11px; font-weight: 700; letter-spacing: .05em; }
-.ps-val { font-size: 16.5px; line-height: 1.3; padding: 2px 12px 4px; }
-.ps-val b { font-weight: 800; }
-.ps-tm { font-size: 12px; color: #6B7280; }
-.ps-flag { font-size: 11px; background: #fff1c2; color: #8a5a00; border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: middle; }
-.ps-muted { color: #6B7280; }
-.ps-manual-mark { font-size: 12px; color: #1d4ed8; margin-left: 6px; }
+/* ── 1 · титул ── */
+.ps-cover { flex-direction: row; padding: 0; }
+.ps-cover-l { width: 62%; padding: 96px 86px; display: flex; flex-direction: column; }
+.ps-uts { font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 38px; color: #C8102E; letter-spacing: .04em; }
+.ps-uts.light { color: #fff; position: absolute; left: 86px; top: 96px; }
+.ps-cover-h { margin: 130px 0 14px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 104px; line-height: .95; }
+.ps-cover-sub { font-size: 24px; color: #4A4A4F; }
+.ps-cover-chips { margin-top: auto; display: flex; gap: 12px; }
+.ps-pill { display: inline-flex; align-items: center; gap: 10px; border-radius: 999px; padding: 13px 24px; font-size: 18px; font-weight: 600; }
+.ps-pill.red { background: #C8102E; color: #fff; }
+.ps-pill.grey { background: #E5E1DA; color: #17181C; font-weight: 400; }
+.ps-cover-stripe { position: absolute; left: 57%; top: -20px; width: 30px; height: 780px; background: #C8102E; transform: rotate(7deg); z-index: 2; }
+.ps-cover-r { flex: 1; background: #17181C; display: grid; place-items: center; }
+.ps-cover-photo { width: 340px; height: 340px; border-radius: 50%; border: 4px solid #C8102E; background: #2A2B31; overflow: hidden;
+  display: grid; place-items: center; color: #B8B9BE; font-size: 18px; margin-left: 40px; }
+.ps-cover-photo img { width: 100%; height: 100%; object-fit: cover; }
 
-.ps-plan { flex: 1; background: #fff; border-radius: 16px; display: flex; overflow: hidden; min-height: 0; }
-.ps-red { width: 34%; background: #C8102E; color: #fff; padding: 36px 30px; display: flex; flex-direction: column; gap: 12px; }
-.ps-tlab { font-size: 18px; opacity: .85; }
-.ps-tname { font-size: 30px; font-weight: 800; line-height: 1.15; }
-.ps-pink { color: #FFE3E7; font-size: 21px; font-weight: 700; margin-top: 18px; }
-.ps-cong { color: #FFF0F1; font-size: 16px; line-height: 1.45; }
-.ps-grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); align-content: center; gap: 26px 18px; padding: 26px; }
-.ps-grid.many { grid-template-columns: repeat(4, 1fr); gap: 18px 12px; }
-.ps-pp { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
-.ps-ava { width: 92px; height: 92px; border-radius: 50%; background: #FBE3E7; color: #970B22; border: 4px solid #C8102E; display: grid; place-items: center; font-size: 30px; font-weight: 800; }
-.ps-grid.many .ps-ava { width: 74px; height: 74px; font-size: 24px; }
-.ps-ava.big { width: 170px; height: 170px; font-size: 54px; flex: none; }
-.ps-pn { font-size: 16px; font-weight: 600; }
-.ps-pc { font-size: 20px; font-weight: 800; color: #C8102E; }
+/* ── 3 · пульс плану ── */
+.ps-pulse { display: flex; align-items: flex-end; gap: 40px; margin-top: 4px; }
+.ps-pulse-n { font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 170px; line-height: .85; color: #FF5A6E; }
+.ps-pulse-t { font-size: 26px; color: #D9D7D2; padding-bottom: 12px; }
+.ps-bar2 { margin: 36px 0 32px; height: 26px; background: #2A2B31; border-radius: 999px; overflow: hidden; }
+.ps-bar2 span { display: block; height: 100%; background: #C8102E; border-radius: 999px; }
+.ps-pcards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+.ps-pcard { background: #22232A; border-radius: 16px; padding: 24px 28px; min-height: 160px; }
+.ps-pcard .l { color: #B8B9BE; font-size: 16px; letter-spacing: .12em; }
+.ps-pcard .v { margin-top: 14px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 600; font-size: 31px; line-height: 1.2; white-space: nowrap; }
 
-.ps-subt { color: #6B7280; font-size: 19px; margin: -14px 0 26px; }
-.ps-sum { background: #fff; border-radius: 16px; padding: 24px 30px; display: flex; flex-direction: column; gap: 18px; }
-.ps-slab { color: #6B7280; font-size: 13px; font-weight: 700; letter-spacing: .08em; }
-.ps-row { display: flex; gap: 16px; align-items: center; }
-.ps-row i { width: 44px; height: 44px; border-radius: 50%; background: #FBE3E7; flex: none; }
-.ps-rl { font-size: 12.5px; color: #6B7280; font-weight: 700; letter-spacing: .06em; }
-.ps-rv { font-size: 24px; font-weight: 800; color: #1F2330; }
-.ps-bye { margin-top: auto; font-size: 26px; font-weight: 800; }
+/* ── 4–5 · топ-3 ── */
+.ps-tcols { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.ps-tcol-h { font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 600; font-size: 30px; color: #C8102E; margin-bottom: 14px; }
+.ps-trow { display: flex; align-items: center; gap: 22px; background: #FCFBF9; border-radius: 16px; padding: 11px 24px; margin-bottom: 12px;
+  border-left: 5px solid #A7ADB5; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.ps-trow.p1 { border-left-color: #C9A227; }
+.ps-trow.p2 { border-left-color: #A7ADB5; }
+.ps-trow.p3 { border-left-color: #B07033; }
+.ps-trow.empty { color: #8A8780; border-left-color: #E5E1DA; }
+.ps-place { width: 24px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 600; font-size: 32px; color: #6B6B70; }
+.ps-trow.p1 .ps-place { color: #B08A12; }
+.ps-trow.p3 .ps-place { color: #B07033; }
+.ps-tava { width: 82px !important; height: 82px !important; border-radius: 50%; border: 3px solid #A7ADB5; object-fit: cover; flex: none; font-size: 24px; }
+.ps-trow.p1 .ps-tava { border-color: #C9A227; }
+.ps-trow.p3 .ps-tava { border-color: #B07033; }
+.ps-tname { font-size: 22px; font-weight: 500; }
+.ps-tval { margin-top: 4px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 600; font-size: 30px; }
+.ps-tval.first { color: #C8102E; }
+.ps-more { color: #6B6B70; font-size: 15px; margin-top: -2px; }
 
-.ps-manual { background: #fff; border-radius: 16px; flex: 1; display: flex; gap: 44px; align-items: center; padding: 44px; min-height: 0; }
-.ps-mname { font-size: 34px; font-weight: 800; }
-.ps-mtext { font-size: 21px; line-height: 1.45; margin-top: 14px; white-space: pre-wrap; }
+/* ── 7 · лідогенерація ── */
+.ps-lgcards { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.ps-lgcard { background: #FCFBF9; border-radius: 18px; min-height: 322px; display: flex; align-items: center; gap: 26px; padding: 30px; }
+.ps-lgava { width: 124px !important; height: 124px !important; border-radius: 50%; border: 4px solid #C8102E; flex: none; object-fit: cover; font-size: 34px; }
+.ps-ph { background: #E5E1DA; }
+.ps-lgl { color: #6B6B70; font-size: 17px; letter-spacing: .12em; }
+.ps-lgv { font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 48px; color: #C8102E; }
+.ps-lgn { font-size: 22px; font-weight: 600; }
+.ps-lgn.muted { color: #8A8780; font-weight: 400; margin-top: 8px; }
+.ps-also { margin-top: 38px; background: #17181C; color: #fff; border-radius: 16px; padding: 22px 30px; font-size: 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ps-cal { width: 18px; height: 16px; border: 2px solid #FF5A6E; border-radius: 3px; display: inline-block; margin-right: 6px; }
 
-.ps-title { width: 1280px; height: 720px; background: #fff; position: relative; overflow: hidden;
-  font-family: Calibri, "Segoe UI", system-ui, sans-serif; color: #1F2124; }
-.ps-truck { position: absolute; right: 0; top: 0; height: 720px; }
-.ps-tlogo { position: absolute; left: 40px; top: 36px; }
-.ps-title h1 { position: absolute; left: 30px; top: 150px; margin: 0; font-size: 72px; line-height: 1.02; font-weight: 800; }
-.ps-tpill { position: absolute; left: 30px; top: 390px; background: #C8102E; color: #fff; border-radius: 14px; padding: 22px 34px; font-size: 22px; font-weight: 700; }
-.ps-tsub { position: absolute; left: 34px; top: 490px; color: #6B7280; font-size: 20px; }
-.ps-tfoot { position: absolute; left: 44px; bottom: 36px; color: #CC0000; font-size: 16px; font-weight: 700; letter-spacing: .06em; }
+/* ── 8 · лідерборд конверсії ── */
+.ps-lb { display: grid; grid-template-columns: 1.95fr 1fr; gap: 32px; align-items: start; }
+.ps-lbt { background: #22232A; border-radius: 18px; padding: 18px 22px; }
+.ps-lbt table { width: 100%; border-collapse: collapse; font-size: 21px; }
+.ps-lbt th { text-align: left; color: #B8B9BE; font-weight: 600; padding: 12px 14px; border: 1px solid #3A3B42; }
+.ps-lbt td { padding: 12px 14px; border: 1px solid #3A3B42; }
+.ps-lbt .n { text-align: right; }
+.ps-lbt tr.first td { background: #4A1620; }
+.ps-lbt tr.first .pct { color: #FF5A6E; }
+.ps-lbt .muted { color: #8A8C93; }
+.ps-tr.up { color: #4ADE80; }
+.ps-tr.down { color: #FF5A6E; }
+.ps-tr.none { color: #8A8C93; }
+.ps-concl { background: #EDE9E2; color: #17181C; border-radius: 18px; padding: 30px; }
+.ps-msg { display: block; width: 24px; height: 20px; border: 2px solid #C8102E; border-radius: 10px; margin-bottom: 16px; }
+.ps-concl-h { font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 26px; }
+.ps-concl-t { margin-top: 12px; font-size: 19px; color: #3A3A3F; white-space: pre-line; }
 
-/* редактор ручних слайдів у вкладці */
-.nm-slides-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; }
-.nm-slide-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
-.nm-slide-row .t { font-weight: 600; }
-.nm-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; padding: 10px 14px 14px; align-items: end; }
+/* ── 9 · фокус ── */
+.ps-focus-chip { position: absolute; left: 892px; top: 96px; }
+.ps-focus-k { margin-top: 160px; font-size: 18px; font-weight: 700; letter-spacing: .14em; }
+.ps-focus-t { margin-top: 18px; max-width: 900px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 66px; line-height: 1.05; white-space: pre-line; }
+.ps-focus-bye { position: absolute; left: 86px; bottom: 82px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 32px; }
+.ps-focus-s1 { position: absolute; left: 1030px; top: -20px; width: 78px; height: 780px; background: #A30E25; transform: rotate(5deg); }
+.ps-focus-s2 { position: absolute; left: 1170px; top: -20px; width: 28px; height: 780px; background: #17181C; transform: rotate(5deg); }
 
-/* ── шаблони ручних слайдів (зі слайдів Даші) ── */
-.ps-h-bar { font-size: 27px; line-height: 1.2; margin-bottom: 18px; }
-.ps-h-big { font-size: 52px; }
-.ps-h.tight { margin: 2px 0 6px; font-size: 36px; }
-.ps-tcard { flex: 1; background: #fff; border: 1px solid #9AA0A6; border-radius: 16px; display: flex; gap: 40px; align-items: center; padding: 34px 44px; position: relative; min-height: 0; }
-.ps-tcard.col { flex-direction: column; align-items: flex-start; justify-content: center; gap: 22px; }
-.ps-photo { width: 300px; height: 400px; background: #E5E7EB; border-radius: 14px; display: grid; place-items: center; flex: none; }
-.ps-tbody { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.ps-tname2 { font-size: 40px; font-weight: 800; line-height: 1.1; }
-.ps-tach { font-size: 22px; font-weight: 700; color: #6B7280; }
-.ps-twish { font-size: 28px; font-weight: 700; color: #6B7280; line-height: 1.3; }
-.ps-twish.small { font-size: 17px; font-weight: 400; line-height: 1.45; }
-.ps-tcong { font-size: 14px; font-weight: 800; color: #C8102E; letter-spacing: .1em; }
-.ps-tbday { font-size: 28px; font-weight: 800; color: #970B22; }
-.ps-tdate { position: absolute; right: 26px; bottom: 22px; background: #FBE3E7; color: #970B22; border-radius: 12px; padding: 12px 24px; font-size: 20px; font-weight: 800; }
-.ps-tdate.inline { position: static; align-self: flex-start; margin-top: 8px; }
-.ps-news { font-size: 30px; font-weight: 800; line-height: 1.3; white-space: pre-wrap; }
-.ps-newswish { font-size: 26px; color: #1F2124; }
-.ps-desc { color: #6B7280; font-size: 16px; line-height: 1.4; margin-bottom: 14px; }
-.ps-podium { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 22px; align-items: end; margin-bottom: 16px; }
-.ps-place { background: #fff; border: 1px solid #9AA0A6; border-radius: 14px; height: 124px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
-.ps-place.first { background: #FBE3E7; height: 140px; }
-.ps-place .pl { font-size: 14px; font-weight: 700; color: #6B7280; letter-spacing: .06em; }
-.ps-place .pv { font-size: 25px; font-weight: 800; }
-.ps-place.first .pv { font-size: 31px; color: #970B22; }
-.ps-list { background: #fff; border: 1px solid #9AA0A6; border-radius: 14px; padding: 16px 26px; display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
-.ps-list .lt { font-size: 13.5px; font-weight: 800; color: #C8102E; letter-spacing: .06em; margin-bottom: 4px; }
-.ps-list .li { font-size: 15.5px; font-weight: 700; display: flex; gap: 10px; }
-.ps-list .li i { color: #C8102E; font-style: normal; }
-.ps-stake { margin-top: auto; background: #C8102E; border-radius: 14px; padding: 16px 28px; display: flex; justify-content: space-between; align-items: center; }
-.ps-stake span { color: #FFE3E7; font-size: 15px; font-weight: 800; letter-spacing: .06em; }
-.ps-stake b { color: #fff; font-size: 28px; font-weight: 800; }
-.ps-banner { background: #C8102E; border-radius: 14px; display: flex; align-items: center; gap: 30px; padding: 22px 34px; margin-bottom: 16px; min-height: 120px; }
-.ps-banner .when { color: #fff; font-size: 29px; font-weight: 800; min-width: 260px; }
-.ps-banner .tl { color: #FFD9DF; font-size: 13px; font-weight: 800; letter-spacing: .08em; }
-.ps-banner .tv { color: #fff; font-size: 23px; font-weight: 800; line-height: 1.25; }
-.ps-cols { background: #fff; border: 1px solid #9AA0A6; border-radius: 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 18px 26px; margin-bottom: 14px; }
-.ps-cols .c i { display: block; width: 36px; height: 36px; border-radius: 50%; background: #FBE3E7; margin-bottom: 8px; }
-.ps-cols .cl { font-size: 12.5px; font-weight: 800; color: #6B7280; letter-spacing: .06em; }
-.ps-cols .cv { font-size: 18px; font-weight: 800; }
+/* ── 2 · події тижня ── */
+.ps-evs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+.ps-ev { background: #FCFBF9; border-radius: 22px; min-height: 428px; display: flex; flex-direction: column; align-items: center; padding: 34px 26px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.ps-evava { width: 166px !important; height: 166px !important; border-radius: 50%; border: 5px solid #C8102E; object-fit: cover; font-size: 40px; }
+.ps-ev.dark .ps-evava { border-color: #17181C; }
+.ps-ev.gold .ps-evava { border-color: #D9A441; }
+.ps-evtag { margin-top: -18px; border-radius: 999px; padding: 6px 16px; font-weight: 700; font-size: 16px; letter-spacing: .1em; background: #C8102E; color: #fff; z-index: 1; }
+.ps-ev.dark .ps-evtag { background: #17181C; }
+.ps-ev.gold .ps-evtag { background: #D9A441; color: #17181C; }
+.ps-evname { margin-top: 18px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 600; font-size: 32px; }
+.ps-evtext { margin-top: 10px; font-size: 19px; color: #5A5A60; max-width: 300px; }
+/* 4 події — один ряд; 5–6 — компактна сітка 3×2 у межах слайда (ревʼю 04.11.2026: 4-та картка накривала підпис). */
+.ps-evs.n4 { grid-template-columns: repeat(4, 1fr); gap: 20px; }
+.ps-evs.n4 .ps-ev { min-height: 400px; padding: 30px 16px; }
+.ps-evs.n4 .ps-evava { width: 140px !important; height: 140px !important; }
+.ps-evs.n4 .ps-evname { font-size: 27px; }
+.ps-evs.n4 .ps-evtext { font-size: 17px; }
+.ps-evs.n5 .ps-ev, .ps-evs.n6 .ps-ev { min-height: 0; height: 206px; padding: 14px 14px 10px; }
+.ps-evs.n5, .ps-evs.n6 { gap: 16px; }
+.ps-evs.n5 .ps-evava, .ps-evs.n6 .ps-evava { width: 84px !important; height: 84px !important; font-size: 24px; border-width: 4px; }
+.ps-evs.n5 .ps-evtag, .ps-evs.n6 .ps-evtag { font-size: 12px; padding: 4px 12px; margin-top: -12px; }
+.ps-evs.n5 .ps-evname, .ps-evs.n6 .ps-evname { font-size: 22px; margin-top: 8px; }
+.ps-evs.n5 .ps-evtext, .ps-evs.n6 .ps-evtext { font-size: 14px; margin-top: 4px; }
 
-/* 📷 Фото з реєстру «Співробітників» (22.09.2026): переможці рейтингу, «План виконали», вітальні слайди. */
-.ps-val { display: flex; gap: 10px; align-items: center; }
-.ps-avs { display: flex; flex: none; }
-.ps-avs:empty { display: none; }
-.ps-av-sm { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; border: 3px solid #C8102E; font-size: 16px; }
-.ps-avs .ps-av-sm + .ps-av-sm { margin-left: -14px; }
-.ps-vtext { min-width: 0; }
-img.ps-ava { object-fit: cover; }
-.ps-photo .ps-photo-img { width: 100%; height: 100%; border-radius: 14px; object-fit: cover; }
+/* ── 6 · особливі відзнаки ── */
+.ps-slide2.warm { background: #EDE9E3; }
+.ps-aws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; }
+.ps-aw { background: #FCFBF9; border-radius: 20px; border-top: 6px solid #C8102E; min-height: 432px; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 26px 18px; }
+.ps-aw-i { color: #C8102E; font-size: 30px; line-height: 1; }
+.ps-aw-t { margin-top: 12px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 700; font-size: 28px; }
+.ps-aw-s { margin-top: 6px; color: #6B6B70; font-size: 16px; min-height: 42px; }
+.ps-aw-ph { margin-top: 16px; }
+.ps-awava { width: 110px !important; height: 110px !important; border-radius: 50%; border: 4px solid #C8102E; object-fit: cover; font-size: 30px; }
+.ps-aw-none { width: 110px; height: 110px; border-radius: 50%; border: 4px dashed #D8D3CB; }
+.ps-aw-n { margin-top: 22px; font-size: 20px; font-weight: 600; }
+.ps-aw-v { margin-top: 12px; font-family: Oswald, "Arial Narrow", Impact, sans-serif; font-weight: 600; font-size: 28px; color: #C8102E; }
 
-/* 📣 Рейтинг лідогенераторів і 📊 статистика РНК (22.09.2026, слайди 4–5 Даші). */
-.ps-intl { line-height: 1.35; }
-.ps-lg { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 20px 26px; align-content: start; }
-.ps-lg-item { background: #fff; border-radius: 16px; padding: 18px 20px; display: flex; gap: 16px; align-items: flex-start; }
-.ps-lg-n { width: 44px; height: 44px; border-radius: 50%; background: #C8102E; color: #fff; display: grid; place-items: center; font-size: 20px; font-weight: 800; flex: none; }
-.ps-lg-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.ps-lg-who { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; }
-.ps-lg-v { font-size: 26px; font-weight: 800; color: #C8102E; }
-.ps-conv { flex: 1; display: grid; grid-template-columns: 1.4fr 1fr; gap: 24px; align-items: start; }
-.ps-conv-t { background: #fff; border-radius: 16px; padding: 16px 18px; }
-.ps-conv-t table { width: 100%; border-collapse: collapse; font-size: 18px; margin-top: 6px; }
-.ps-conv-t th { text-align: left; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #6B7280; padding: 8px 10px; border-bottom: 2px solid #FBE3E7; }
-.ps-conv-t td { padding: 12px 10px; border-bottom: 1px solid #F1F2F4; }
-.ps-conv-t td b { color: #C8102E; }
-.ps-conv-c { background: #FBE3E7; color: #5b0615; border-radius: 16px; padding: 18px 20px; font-size: 18px; line-height: 1.45; white-space: pre-line; }
+/* ── 📄 PDF: усі слайди стосом, сторінка = слайд 1280×720, з кольорами ── */
+.ps-print-root { display: none; }
+@media print {
+  @page { size: 1280px 720px; margin: 0; }
+  html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+  body > *:not(.ps-print-root) { display: none !important; }
+  .ps-print-root { display: block; }
+  .ps-print-page { width: 1280px; height: 720px; overflow: hidden; break-after: page; page-break-after: always; }
+  .ps-print-page:last-child { break-after: auto; page-break-after: auto; }
+  .ps-print-root * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

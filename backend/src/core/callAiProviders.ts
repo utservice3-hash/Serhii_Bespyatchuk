@@ -432,8 +432,9 @@ export function validateAnalysis(x: unknown): { ok: true; value: AnalysisResult 
   const cb = o.callback_request as Record<string, unknown> | undefined;
   if (!cb || typeof cb.asked !== "boolean" || !isStr(cb.quote) || !isStr(cb.deadline_text) || !["minutes", "day", "none"].includes(cb.deadline_kind as string)
     || typeof cb.deadline_minutes !== "number" || !isStr(cb.deadline_date)) return { ok: false, why: "callback_request не тієї форми (рубрика first-touch-v4)" };
-  // Суперечність не виправляємо мовчки: «просив передзвонити» без прохання — модель помилилась в одному з двох полів.
-  if (o.conversation_type === "call_later" && !cb.asked) return { ok: false, why: "тип call_later, а прохання передзвонити немає" };
+  // `call_later` без прохання — НЕ суперечність (Роман 06.11.2026): «я вам пізніше наберу, я за кермом» — клієнтові
+  // незручно, і передзвонить він САМ, тож нас ні про що не просили. До 05.11.2026 така відповідь валила розбір («Аналіз
+  // не вдався», 6 розмов). Куди її класти — вирішує `typeVerdict` (`clientCallsBack`): у «Виключені».
   return { ok: true, value: o as unknown as AnalysisResult };
 }
 

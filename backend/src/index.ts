@@ -106,6 +106,7 @@ import { syncWorkua } from "./jobs/syncWorkua.js";
 import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { callAiJob } from "./jobs/callAiJob.js";
+import { firstTouchAutoTasks } from "./jobs/firstTouchAutoTasks.js";
 import { carrierCallJob } from "./jobs/carrierCallJob.js";
 import { linkedinQueueJob } from "./jobs/linkedinQueueJob.js";
 import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
@@ -116,6 +117,9 @@ import { linkedinRouter } from "./routes/linkedin.js";
 import { leadsBotRouter } from "./routes/leadsBot.js";
 import { leadsBotEnsureWebhook } from "./bot/leadsBot.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
+import { payrollRouter } from "./routes/payroll.js";
+import { notificationsRouter } from "./routes/notifications.js";
+import { payrollMonthClose, payrollTtnTick, payrollBirthdays, payrollReminders } from "./jobs/payrollJobs.js";
 import { zakaz1cRouter } from "./routes/zakaz1c.js";
 import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
 import { prozorroRouter } from "./routes/prozorro.js";
@@ -124,7 +128,6 @@ import { collectLardi } from "./jobs/collectLardi.js";
 import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
-import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 import { backupDb } from "./jobs/backupDb.js";
 import { catchUpAiChat } from "./ai/respond.js";
@@ -214,6 +217,8 @@ app.use("/api/leads-bot", leadsBotRouter); // 🤖 бот «UTS Заявки» �
 app.use("/api/linkedin", linkedinRouter); // 🔗 «Клієнти → LinkedIn» — статистика черги (вкладка linkedin)
 app.use("/api/counterparty", counterpartyRouter); // 🤝 Узгодження й перевірка контрагента — пакет Сергія (23.10.2026), «Реєстри та узгодження»
 app.use("/api/client-limits", clientLimitsRouter); // 💳 Ліміти клієнтів — той самий пакет, вкладка «Дебіторської заборгованості»
+app.use("/api/payroll", payrollRouter); // 💰 «Зарплата» — пакет Сергія 03.11.2026: система, кабінет «Моя зарплата»
+app.use("/api/notifications", notificationsRouter); // 🔔 Центр сповіщень дашборда (ТЗ «Зарплата» §6) — лише свої
 app.use("/api/zakaz1c", zakaz1cRouter); // 🧾 «ТЕСТ ЗАКАЗ 1С» — рахунок у 1С з вкладки угоди Kommo; межа — підпис Kommo, не сесія (zakaz1c/)
 app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор вантажу — пакет Сергія (12.10.2026), вкладка «Калькулятора ставок та вантажу»
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
@@ -785,6 +790,13 @@ cron.schedule("5,15,25,35,45,55 * * * *", () => {
   void runJob("callAiJob", () => callAiJob());
 });
 
+// 📋 АВТОЗАДАЧІ «ПЕРШОГО ДОТИКУ» (задача 7238, ТЗ Юлі 28.10.2026): «погодився, а в Kommo втрачено» → задача тімліду,
+// «аналіз не вдався» → задача Роману (закривається сама). Раз на 30 хв о :12/:42 — не на :00/:30 із syncKommo і не на
+// хвилинах callAiJob. Лише наша БД. Під наглядом (`monitoredJobs.ts`), everyMin == крону — тримає `#3723`.
+cron.schedule("12,42 * * * *", () => {
+  void runJob("firstTouchAutoTasks", () => firstTouchAutoTasks());
+});
+
 // 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ (ТЗ 29.09.2026, рішення Романа: «зразу після фільтра», не щогодини).
 // Раз на 5 хв. Свіже вікно дзвінків (`syncCallsFresh`) з 02.10.2026 іде кожні 3 хв (:01, :04 …), тож на момент
 // цього тіку розмова в базі не старша за 3 хв.
@@ -821,6 +833,15 @@ cron.schedule("3,13,23,33,43,53 * * * *", () => {
 cron.schedule("30 6 * * *", () => {
   void runJob("clientLimitsReset", () => clientLimitsReset());
 }, { timezone: "Europe/Kyiv" });
+// 💰 «Зарплата» (ТЗ §5.6). Закриття попереднього місяця — 1-го о 04:45 за Києвом: ТЗ каже 00:05, але сам же радить
+// зсунути «після синхронізації ядра» — нічна звірка Kommo йде о 04:00, тож угоди останнього дня вже на місці.
+cron.schedule("45 4 1 * *", () => { void runJob("payrollMonthClose", () => payrollMonthClose()); }, { timezone: "Europe/Kyiv" });
+// ТТН: коли зʼявилась по угоді (у ядрі лише кількість файлів) + сповіщення «утримання знято». Кожні 15 хв.
+cron.schedule("7,22,37,52 * * * *", () => { void runJob("payrollTtnTick", () => payrollTtnTick()); });
+// Дні народження місяця — іменинникам і фінансистам, 1-го о 08:00 за Києвом.
+cron.schedule("0 8 1 * *", () => { void runJob("payrollBirthdays", () => payrollBirthdays()); }, { timezone: "Europe/Kyiv" });
+// «Нагадати» про аванс — щодня о 09:00 за Києвом; у день відкриття заявок (advance.fromDay) шле тим, хто просив.
+cron.schedule("0 9 * * *", () => { void runJob("payrollReminders", () => payrollReminders()); }, { timezone: "Europe/Kyiv" });
 // 🔍 Планова перевірка клієнтів з лімітом і суди боржникам (ТЗ §7) — ВИТРАЧАЮТЬ ТРАНЗАКЦІЇ YouScore, тож у розкладі лише з
 // `CP_BACKGROUND_CHECKS=1` (див. `jobs/counterpartyJobs.ts`). 06:15 за Києвом щодня; суди самі чекають 1-го числа.
 if (CP_BACKGROUND_ON()) {
@@ -861,10 +882,7 @@ cron.schedule("0 5 * * *", () => {
   void runJob("syncCarriers", () => syncCarriers());
 });
 
-// Fetch 3 fresh logistics-industry news items daily at 08:00.
-cron.schedule("0 8 * * *", () => {
-  void runJob("syncNews", () => syncNews());
-});
+// 📰 RSS «Світ логістики» (syncNews) прибрано 06.11.2026 разом із вкладкою — рішення Романа.
 
 // Evaluate KPI plan tasks (auto-complete on target). Every 30 min so today's
 // composite facts are live intraday, not just after the 07:00 daily pass.

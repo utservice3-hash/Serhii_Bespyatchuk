@@ -162,3 +162,27 @@ test("#3312 ЖИВА БД: «принесли ліди дня» == Σ цін у�
   // 🪞 Без цього рівність вище не відрізняла б «лише оплачені» від «усі угоди дня».
   assert.ok(pricedNotPaid > 0, "у вікні немає жодної неоплаченої угоди з ціною — гейт не має чого ловити, вікно треба змінити");
 });
+
+/**
+ * #3313 — СКЛАД «НАДІЙШЛО ЦЬОГО ДНЯ» == ЧИСЛУ В КОЛОНЦІ, ПО КОЖНОМУ ДНЮ (Роман 05.11.2026: «кнопка, яка показує, за які
+ * угоди надійшли гроші»). Обидва беруться однією вибіркою `adReceivedFrom`, тож рівність — за побудовою; гейт стереже,
+ * щоб так і лишилось. 🧨 Червоніє, якщо список піде своїм фільтром, іншим анкером дня чи загубить угоду без назви.
+ */
+test("#3313 ЖИВА БД: склад «надійшло цього дня» == числу в колонці, гривня й угода, по кожному дню", needsBackendEnv(), async (t) => {
+  const { getSettings } = await import("../routes/settings.js");
+  const money = await import("./money.js");
+  const { emptyPeriodSkip } = await import("../testMode.js");
+  const { adSources } = await getSettings();
+  const days = (await money.adReceivedByDay({ from: FROM, to: TO }, adSources)).filter((d) => d.deals > 0);
+  const skip = emptyPeriodSkip("грошей із реклами у вікні заміру", days.length, `${FROM}..${TO}`);
+  if (skip) return t.skip(skip);
+  const broken: string[] = [];
+  for (const d of days) {
+    const list = await money.adReceivedDeals(d.day, adSources);
+    const sum = list.reduce((s, x) => s + x.price, 0);
+    if (list.length !== d.deals || Math.round(sum * 100) !== Math.round(d.revenue * 100)) {
+      broken.push(`${d.day}: колонка ${String(d.revenue)} ₴ / ${String(d.deals)} угод ≠ список ${String(sum)} ₴ / ${String(list.length)} угод`);
+    }
+  }
+  assert.deepEqual(broken, [], "🔴 склад «надійшло» розійшовся з колонкою — список рахується не тією вибіркою");
+});

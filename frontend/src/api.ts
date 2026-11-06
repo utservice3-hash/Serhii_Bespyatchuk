@@ -187,9 +187,13 @@ export interface LeadgenHandoffMoney {
   earned: LeadgenMoneyCell;
   /** «Очікування» за правилом Ярослава: авто поїхало В ПЕРІОДІ, зараз «Оплата отримана» / зона «Очікуємо». */
   pending: LeadgenMoneyCell;
-  /** «Машин» — як колонка «Кількість поставлених машин» таблиць лідгенів: `earned.n + pending.n` (рахує бекенд). */
+  /** «Машин» — за «Датою загрузки» угоди менеджера в періоді, як «Відправлені авто» КВП (задача 7363; рахує бекенд). */
   machines: number;
+  /** З них — гроші ще не зайшли (угода не «Оплата отримана» й не «Успішна»). */
+  machinesNoMoney: number;
 }
+/** 🚚 Машини звітного тижня (Пн–Нд) — окремо від періоду (задача 7363). */
+export interface LeadgenWeekCars { machines: number; machinesNoMoney: number }
 /** Стан угоди менеджера з передачі — ЗАРАЗ. `none` — угоди менеджера не знайшлося; `same` — ця передача
  *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо); `regular` — угода постійного клієнта. */
 export type LeadgenDealClass = "success" | "paid" | "expect" | "work" | "lost" | "none" | "same" | "regular";
@@ -206,6 +210,8 @@ export interface LeadgenHandoffDeal {
   carried?: boolean;
   /** Угода менеджера мінусова (поле «Мінусова угода»): машина рахується, сума лідгену — 0 (07.10.2026). */
   minus?: boolean;
+  /** «Дата загрузки» угоди менеджера: є — машина за правилом КВП (задача 7363). */
+  loadDay?: string | null;
   /** Рахунки, виділені з угоди менеджера: їхній бюджет уже в `price`, машина одна (30.10.2026). */
   split?: { dealId: number; url: string }[];
 }
@@ -253,7 +259,8 @@ export interface LeadgenStatsResp {
   grain?: LeadgenGrain;
   buckets?: LeadgenBucket[];
   bucketsByPerson?: LeadgenPersonBucket[];
-  handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[] };
+  handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[];
+    week?: { from: string; to: string; totals: LeadgenWeekCars; byPerson: (LeadgenWeekCars & { managerId: number })[] } };
   /** Гроші з передач по тих самих одиницях, що `buckets` (лише з `grain`); Σ одиниць == `handoffMoney`. */
   handoffMoneyBuckets?: (LeadgenHandoffMoney & { bucket: string })[];
   handoffMoneyBucketsByPerson?: (LeadgenHandoffMoney & { bucket: string; managerId: number })[];
@@ -407,7 +414,7 @@ export interface AiCallRowT {
   silentBeforeClose: boolean | null;
   /** Тип розмови (рубрика v2, ТЗ 30.09.2026) і куди вона йде: звіт чи «Виключені». */
   conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
-  inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
+  inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; cut: boolean; byName: string | null; at: string } | null;
   /** 🚛 Вид перевезення, через який розмову НЕ оцінюємо (задача 7183); `null` — оцінюємо. */
   transportKind: AiTransportKindT | null;
   /** 💬 Задача 7184: обіцянок менеджера в месенджер (не перевірити); сигнал «сам запропонував месенджер» — `null`, якщо не
@@ -494,7 +501,7 @@ export interface AiCallCardResp {
   priceForm: AiPriceFormResultT | null;
   canSeeMessengerSignal: boolean;
   /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
-  typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
+  typeHistory: { isCargo: boolean; cut: boolean; byName: string | null; at: string }[];
   canEditType: boolean;
   /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
   noteRights: { price: boolean; missed: boolean; offline: boolean; explain: boolean };
@@ -628,9 +635,9 @@ export async function fetchAiTeamReport(params: { from: string; to: string; team
   const { data } = await api.get<AiTeamReportResp>("/dashboard/ai-calls/team-report", { params });
   return data;
 }
-/** «Це вантаж» / «Це не вантаж» — ручний тип розмови (тімлід своєї команди, адмін). */
-export async function setAiCallType(uniqueid: string, isCargo: boolean): Promise<void> {
-  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/type`, { isCargo });
+/** «Це вантаж» / «Це не вантаж» / «Розмова обірвалась» (`cut`, 05.11.2026) — ручний тип розмови (тімлід своєї команди, адмін). */
+export async function setAiCallType(uniqueid: string, isCargo: boolean, cut = false): Promise<void> {
+  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/type`, { isCargo, cut });
 }
 export async function fetchAiCallCard(uniqueid: string): Promise<AiCallCardResp> {
   const { data } = await api.get<AiCallCardResp>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}`);
@@ -1304,9 +1311,13 @@ export async function saveAdBalance(balance: number): Promise<{ balance: AdBalan
   const { data } = await api.post<{ balance: AdBalance | null; syncedAt: string | null }>("/dashboard/ads/balance", { balance });
   return data;
 }
-export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[] }> {
-  const { data } = await api.get<{ day: string; deals: AdsDeal[] }>("/dashboard/ads/deals", { params: { day } });
-  return data;
+/** 🧾 Угода, за яку гроші «надійшли цього дня»: success — «Успішно» (142), paid — «Оплата отримана». */
+export interface AdsReceivedDeal {
+  kommoId: number; name: string; price: number; leadDay: string; state: "success" | "paid"; manager: string | null; url: string;
+}
+export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[]; received: AdsReceivedDeal[] }> {
+  const { data } = await api.get<{ day: string; deals: AdsDeal[]; received?: AdsReceivedDeal[] }>("/dashboard/ads/deals", { params: { day } });
+  return { ...data, received: data.received ?? [] };
 }
 
 /** Запис місячного плану. `month` — будь-який день потрібного місяця. */
@@ -3377,7 +3388,8 @@ export async function uploadFile(file: File): Promise<{ url: string; name: strin
 
 export interface NewsItem {
   id: number;
-  category: "company" | "logistics" | "sales";
+  /** На сторінці лише `company` (06.11.2026: «Світ логістики» й «Продажі» прибрано). */
+  category: string;
   title: string;
   body: string | null;
   author: string | null;
@@ -3385,16 +3397,11 @@ export interface NewsItem {
   created_at: string;
 }
 
-export interface KmPrices {
-  price_date: string;
-  t20: number | null;
-  t10: number | null;
-  t5: number | null;
-  t2: number | null;
-}
+/** Вкладка «Новин»: `general` — додані вручну; `tech` — автоматичні про оновлення дашборда. */
+export type NewsKind = "general" | "tech";
 
-export async function fetchNews(category?: string): Promise<NewsItem[]> {
-  const { data } = await api.get<{ news: NewsItem[] }>("/news", { params: category ? { category } : {} });
+export async function fetchNews(kind?: NewsKind): Promise<NewsItem[]> {
+  const { data } = await api.get<{ news: NewsItem[] }>("/news", { params: kind ? { kind } : {} });
   return data.news;
 }
 
@@ -3404,20 +3411,6 @@ export async function addNews(payload: { category: string; title: string; body?:
 
 export async function deleteNews(id: number): Promise<void> {
   await api.delete(`/news/${id}`);
-}
-
-export async function fetchKmPrices(): Promise<KmPrices | null> {
-  const { data } = await api.get<{ prices: KmPrices | null }>("/news/km-prices");
-  return data.prices;
-}
-
-export async function saveKmPrices(p: {
-  t20: number | null;
-  t10: number | null;
-  t5: number | null;
-  t2: number | null;
-}): Promise<void> {
-  await api.put("/news/km-prices", p);
 }
 
 export interface ChatUser {
@@ -5894,13 +5887,22 @@ export interface NominationWeek {
   marginFlagPct: number;
   /** 📷 Фото людей тижня: id менеджера Kommo → фото співробітника (немає в мапі — ініціали). */
   photos: Record<string, PhotoRef>;
+  /** 🏆 Топ-3 на весь комерційний відділ (04.11.2026) — лише керівництву, інакше `null`. */
+  companyTop: Record<string, NominationTopRow[]> | null;
+  /** Тексти тижня для презентації (фокус наступного тижня). */
+  texts: Partial<Record<"focus", { text: string; by: string | null; at: string }>>;
+  /** Фото команди на титулі (версія = id запису) — лише керівництву. */
+  teamPhoto: { v: number } | null;
 }
+export interface NominationTopRow { place: number; managerId: number; teamId: number; value: number; manual: boolean }
 export interface NominationDef { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct"; rule: string; notCounted: string; noCrm?: boolean }
 export interface RnkConvRow {
   managerId: number; name: string; teamId: number; taken: number; won: number; pct: number | null;
   /** «Всього» за фільтром Kommo, разом із «Не цільовими» (лише число системи). */
   total: number;
   crm: { taken: number; won: number }; own: { by: string | null; at: string } | null; onSlide: boolean; canEditRow: boolean;
+  /** Відсоток тієї ж людини минулого тижня — для ▲/▼; `null` — лідів не було. */
+  prevPct: number | null;
 }
 export interface RnkConvView {
   rows: RnkConvRow[]; comment: { text: string; by: string | null; at: string } | null; canComment: boolean;
@@ -5957,6 +5959,44 @@ export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
       .then((r) => URL.createObjectURL(r.data as Blob))
       .catch(() => { photoUrls.delete(k); return null; });
     photoUrls.set(k, u);
+  }
+  return u;
+}
+
+/** 🎞 Тексти тижня й фото команди для нової презентації (04.11.2026) — лише керівництво. */
+export const saveWeekText = async (p: { weekFrom: string; kind: "focus"; text: string }) =>
+  (await api.post<{ texts: NominationWeek["texts"] }>("/nominations/texts", p)).data.texts;
+/** «Нова посада» (прохід 2): посада співробітника на слайді «Події тижня»; порожній текст — прибрати. */
+export const saveNewPosition = async (p: { weekFrom: string; employeeId: number; text: string }) =>
+  (await api.post<{ extras: PresentationExtras }>("/nominations/texts", { ...p, kind: "new_position" })).data.extras;
+/** 👥 Люди тижня для презентації (прохід 2): події тижня й дані відзнак. Фото — за id СПІВРОБІТНИКА. */
+export interface PresentationExtras {
+  weekFrom: string; weekTo: string;
+  birthdays: { employeeId: number; name: string; date: string }[];
+  newcomers: { employeeId: number; name: string; day: string; managerId: number | null; cars: number | null }[];
+  newPositions: { employeeId: number; name: string; position: string; by: string | null; at: string }[];
+  rookies: { employeeId: number; name: string; managerId: number; hiredAt: string; cars: number }[];
+  newClients: { rows: { managerId: number; first: number }[]; unknown: number };
+  /** Менеджери на адаптації (перший місяць від прийому) — у «Прорив тижня» не беруть участі. */
+  adaptingManagerIds: number[];
+  employees: { id: number; name: string }[];
+  photos: Record<string, PhotoRef>;
+}
+export const fetchPresentationExtras = async (weekFrom: string) =>
+  (await api.get<PresentationExtras>("/nominations/presentation-extras", { params: { weekFrom } })).data;
+/** Шаблон PPTX Даші (04.11.2026) — заповнюється в браузері (`pptxTemplate.ts`), лише керівництво. */
+export const fetchPptxTemplate = async () =>
+  new Uint8Array((await api.get<ArrayBuffer>("/nominations/pptx-template", { responseType: "arraybuffer" })).data);
+export const uploadTeamPhoto = async (dataBase64: string) =>
+  (await api.post<{ teamPhoto: { v: number } }>("/nominations/team-photo", { dataBase64 })).data.teamPhoto;
+const teamPhotoUrls = new Map<number, Promise<string | null>>();
+export function teamPhotoUrl(v: number): Promise<string | null> {
+  let u = teamPhotoUrls.get(v);
+  if (!u) {
+    u = api.get("/nominations/team-photo", { responseType: "blob", params: { v } })
+      .then((r) => URL.createObjectURL(r.data as Blob))
+      .catch(() => { teamPhotoUrls.delete(v); return null; });
+    teamPhotoUrls.set(v, u);
   }
   return u;
 }
@@ -6098,13 +6138,17 @@ export const archiveBaEquipment = async (id: number, archived: boolean) => { awa
 export const issueBaEquipment = async (id: number, p: { employeeId: number; issuedOn: string }) => (await api.post<{ issueId: number }>(`/ba/equipment/${id}/issue`, p)).data.issueId;
 export const returnBaIssue = async (issueId: number, returnedOn: string) => { await api.post(`/ba/issues/${issueId}/return`, { returnedOn }); };
 export const undoReturnBaIssue = async (issueId: number) => { await api.post(`/ba/issues/${issueId}/undo-return`); };
-export interface BaTtnCounts { needed: number; attached: number; mismatched: number; unsynced: number; present: number; pct: number | null }
+export interface BaTtnCounts { needed: number; attached: number; mismatched: number; byDocs: number; unsynced: number; present: number; pct: number | null }
 export interface BaTtnRow {
   managerId: number; name: string; active: boolean; live: BaTtnCounts; kommoUrl: string | null;
-  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
+  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnByDocs: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
   history: { month: string; pct: number | null }[];
 }
-export interface BaTtnDeal { kommoId: number; name: string; client: string; closedOn: string; ttnFiles: number | null; mismatch: { note: string } | null; url: string }
+export interface BaTtnDeal {
+  kommoId: number; name: string; client: string; closedOn: string; ttnFiles: number | null; mismatch: { note: string } | null; url: string;
+  /** Зараховано без файла ТТН (04.11.2026) і обидві умови окремо; `originals: null` — ще не синхронізовано. */
+  byDocs: boolean; docs: { paid1c: boolean; originals: boolean | null };
+}
 export const fetchBaTtn = async (month: string) => (await api.get<{ month: string; rows: BaTtnRow[] }>("/ba/ttn", { params: { month } })).data;
 export const fetchBaTtnDeals = async (month: string, managerId: number) => (await api.get<{ deals: BaTtnDeal[] }>(`/ba/ttn/${month}/${managerId}/deals`)).data.deals;
 export const setBaTtnMismatch = async (kommoId: number, note: string) => { await api.put(`/ba/ttn/deals/${kommoId}/mismatch`, { note }); };
@@ -6130,7 +6174,11 @@ export interface FinItem {
   plan: number | null; fact: number | null; note: string | null; state: FinRowState; dataMonths: number;
   /** Рядків таблиці оплат у факті — лише коли факт місяця з таблиці. */
   factRows?: number;
+  /** 🧾 Розпис плану (задача 7832): з чого складається сума; стан — чи сходиться він із планом. */
+  parts: FinPlanPart[]; partsState: FinPartsState; partsLeft: number | null;
 }
+export interface FinPlanPart { amount: number; note: string }
+export type FinPartsState = "none" | "ok" | "under" | "over" | "noplan";
 export interface FinGroup { id: number; name: string; items: FinItem[] }
 export interface FinResp { id: number; name: string; groups: FinGroup[] }
 export interface FinMonth {
@@ -6277,6 +6325,10 @@ export const setFinItemSections = async (items: { id: number; section: FinSectio
   (await api.put<{ previous: { id: number; section: FinSection | null }[] }>("/finance/item-sections", { items })).data;
 export const setFinItemOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/items/${id}/off`, { off })).data;
 export const saveFinValues = async (month: string, cells: FinCell[]) => (await api.put<{ changed: number }>("/finance/values", { month, cells })).data;
+export const saveFinPlanParts = async (itemId: number, month: string, parts: { amount: string; note: string }[]) =>
+  (await api.put<{ changed: boolean; parts: FinPlanPart[] }>("/finance/plan-parts", { itemId, month, parts })).data;
+export const fetchPrevFinPlanParts = async (itemId: number, m: string) =>
+  (await api.get<{ month: string; parts: FinPlanPart[] }>("/finance/plan-parts/prev", { params: { itemId, m } })).data;
 export const saveFinNote = async (itemId: number, month: string, text: string) => { await api.put("/finance/notes", { itemId, month, text }); };
 export const setFinApproval = async (month: string) => { await api.post("/finance/approval", { month, approved: true }); };
 /** 📜 Реєстр змін: записи про місяць (цифри, коментарі, погодження) + зміни статей за цей місяць; нові згори. */

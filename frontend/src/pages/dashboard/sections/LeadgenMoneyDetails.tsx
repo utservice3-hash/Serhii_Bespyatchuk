@@ -261,6 +261,8 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
     : d.cls === "same" ? "гроші пораховано в іншій передачі"
     : d.cls === "regular" ? "постійний клієнт — у гроші лідгена не йде"
     : "";
+  // 🚚 Машина за «Датою загрузки» (задача 7363): дата й плашка, коли грошей ще немає.
+  const noMoneyYet = d.loadDay != null && d.cls !== "success" && d.cls !== "paid";
   const hasMoney = d.cls !== "none" && d.cls !== "same" && d.cls !== "lost" && d.cls !== "regular";
   const title = d.route ?? "угода без назви";
   return (
@@ -293,7 +295,11 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
           </div>
         )}
       </td>
-      <td style={{ ...td, textAlign: "left", color: MUTED, whiteSpace: "normal", minWidth: 110, maxWidth: 220 }}>{detail}</td>
+      <td style={{ ...td, textAlign: "left", color: MUTED, whiteSpace: "normal", minWidth: 110, maxWidth: 220 }}>
+        {d.loadDay && <>загрузка {dayLbl(d.loadDay, period)}{detail ? " · " : ""}</>}{detail}
+        {noMoneyYet && <div style={{ display: "inline-block", fontSize: 10.5, fontWeight: 650, color: "var(--warn)", border: "1px solid var(--warn)", borderRadius: 999, padding: "0 6px", marginLeft: 4, whiteSpace: "nowrap" }}
+          title="Авто загружене, а угода ще не «Оплата отримана» і не «Успішна»">гроші ще не зайшли</div>}
+      </td>
     </tr>
   );
 }

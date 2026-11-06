@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useDialogs } from "../components/Dialogs";
 import { usePolling } from "../hooks/usePolling";
 import { mergeTasksPreservingEdits, type TaskDirtyFields } from "./dashboard/taskMerge";
 import { isBusy, shouldApplyRefresh } from "./dashboard/refreshGate";
@@ -19,14 +18,7 @@ import {
   fetchConversation,
   fetchUnreadCount,
   sendMessage,
-  fetchNews,
-  addNews,
-  deleteNews,
-  fetchKmPrices,
-  saveKmPrices,
   uploadFile,
-  type NewsItem,
-  type KmPrices,
   type ChatUser,
   type ChatMessage,
   fetchManagerBreakdown,
@@ -78,6 +70,7 @@ import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import RegistriesPage from "../minusRegistry/client/RegistriesPage";
+import PayrollSection from "../payroll/PayrollSection";
 import { regTabsFor } from "../minusRegistry/client/regTabs";
 import { ProzorroSection } from "./dashboard/sections/ProzorroSection";
 import { LinkedinSection } from "./dashboard/sections/LinkedinSection";
@@ -106,6 +99,7 @@ import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansTabs } from "./dashboard/sections/PlansTabs";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
 import { RecordingDock } from "./dashboard/sections/RecordingDock";
+import { NewsSection } from "./dashboard/sections/NewsSection";
 
 
 /**
@@ -120,7 +114,6 @@ function serverReason(err: unknown): string {
 }
 
 export function Dashboard() {
-  const dlg = useDialogs();
   const auth = useMemo(() => getAuthPayload(), []);
   // Розділ живе в URL (/report, /kvp, …) — посилання, «назад/вперед», закладки
   // працюють, а F5 лишає тебе на місці. «/» = Звіт (лендинг для всіх ролей).
@@ -328,19 +321,16 @@ export function Dashboard() {
   useEffect(() => {
     fetchNewsUnread(readNewsSeenId()).then((r) => setNewsUnread(r.unread)).catch(() => setNewsUnread(0));
   }, []);
+  // 📰 Мітка «прочитано до» — знімається ДО позначки прочитаним, щоб стрічка підсвітила саме те, чого ще не бачили.
+  const [newsSeenBefore, setNewsSeenBefore] = useState(() => readNewsSeenId());
   useEffect(() => {
     if (section !== "news") return;
+    setNewsSeenBefore(readNewsSeenId());
     markNewsSeen().then((maxId) => {
       try { localStorage.setItem(NEWS_SEEN_KEY, String(maxId)); } catch { /* приватний режим — значок просто не запамʼятає, не біда */ }
       setNewsUnread(0);
     }).catch(() => { /* значок лишиться — не біда */ });
   }, [section]);
-
-  const [newsCategory, setNewsCategory] = useState<"company" | "logistics" | "sales">("company");
-  const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
-  const [kmPrices, setKmPrices] = useState<KmPrices | null>(null);
-  const [newsForm, setNewsForm] = useState<{ title: string; body: string; imageUrl?: string }>({ title: "", body: "" });
-  const [kmForm, setKmForm] = useState({ t20: "", t10: "", t5: "", t2: "" });
 
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
@@ -824,38 +814,6 @@ export function Dashboard() {
     setChatMessages((prev) => [...prev, msg]);
   }
 
-  useEffect(() => {
-    if (section !== "news") return;
-    fetchNews(newsCategory).then(setNewsItems).catch(() => setNewsItems([]));
-  }, [section, newsCategory]);
-
-  useEffect(() => {
-    if (section !== "news") return;
-    fetchKmPrices()
-      .then((p) => {
-        setKmPrices(p);
-        if (p) setKmForm({ t20: String(p.t20 ?? ""), t10: String(p.t10 ?? ""), t5: String(p.t5 ?? ""), t2: String(p.t2 ?? "") });
-      })
-      .catch(() => setKmPrices(null));
-  }, [section]);
-
-  async function handleAddNews() {
-    if (!newsForm.title.trim()) return;
-    await addNews({ category: newsCategory, title: newsForm.title, body: newsForm.body, imageUrl: newsForm.imageUrl });
-    setNewsForm({ title: "", body: "" });
-    setNewsItems(await fetchNews(newsCategory));
-  }
-
-  async function handleSaveKm() {
-    await saveKmPrices({
-      t20: kmForm.t20 ? Number(kmForm.t20) : null,
-      t10: kmForm.t10 ? Number(kmForm.t10) : null,
-      t5: kmForm.t5 ? Number(kmForm.t5) : null,
-      t2: kmForm.t2 ? Number(kmForm.t2) : null,
-    });
-    setKmPrices(await fetchKmPrices());
-  }
-
   // Sync status drives both the Overview quick-sync control and the Settings card.
   useEffect(() => {
     if (section !== "overview" && section !== "settings") return;
@@ -1180,6 +1138,7 @@ export function Dashboard() {
       {section === "surveys" && <SurveysSection />}
       {/* 🏢 Орг структура (задача 7062). Статичний імпорт — гейт #225; бачать усі ролі, доступ вирішує сервер (вкладка org). */}
       {section === "org" && <OrgSection />}
+      {section === "payroll" && <PayrollSection />}
       {section === "registries" && <RegistriesPage tabs={regTabsFor(auth?.roleKey ?? auth?.role)} onNavigate={(_t, url) => navigate(url)} />}
       {/* 🏛 «Тендери Prozorro» (#5299): статичний імпорт — гейт #225; доступ вирішує сервер (вкладка prozorro). */}
       {section === "prozorro" && <ProzorroSection roleKey={auth?.roleKey ?? null} />}
@@ -1421,149 +1380,7 @@ export function Dashboard() {
         </>
       )}
 
-      {section === "news" && (
-        <>
-          <div className="page-header">
-            <h1 className="page-title">Новини</h1>
-          </div>
-
-          <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title">🚚 Орієнтовні ціни за 1 км (сьогодні)</h2>
-            <div className="kpi-grid">
-              {([["20 т", "t20"], ["10 т", "t10"], ["5 т", "t5"], ["2 т", "t2"]] as const).map(([label, key]) => (
-                <div className="kpi-card" key={key}>
-                  <span className="kpi-label">Вантажівка {label}</span>
-                  <span className="kpi-value">
-                    {kmPrices && kmPrices[key] != null ? `${kmPrices[key]} ₴/км` : "—"}
-                  </span>
-                </div>
-              ))}
-            </div>
-            {auth?.role === "admin" && (
-              <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-                {(["t20", "t10", "t5", "t2"] as const).map((key) => (
-                  <input
-                    key={key}
-                    type="number"
-                    placeholder={key.replace("t", "") + "т ₴/км"}
-                    value={kmForm[key]}
-                    onChange={(e) => setKmForm({ ...kmForm, [key]: e.target.value })}
-                    style={{ width: 110 }}
-                  />
-                ))}
-                <button onClick={handleSaveKm} style={{ padding: "8px 16px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}>
-                  Зберегти ціни
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="page-filters" style={{ marginBottom: 12 }}>
-            {([["company", "Новини компанії"], ["logistics", "Світ логістики"], ["sales", "Продажі логістичних послуг"]] as const).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setNewsCategory(key)}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: 16,
-                  border: `1px solid ${newsCategory === key ? "#c5141c" : "var(--border)"}`,
-                  background: newsCategory === key ? "#c5141c" : "var(--card-bg)",
-                  color: newsCategory === key ? "#fff" : "var(--text)",
-                  cursor: "pointer",
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {auth?.role === "admin" && (
-            <div className="chart-card" style={{ marginBottom: 16 }}>
-              <h2 className="chart-title">Додати новину ({newsCategory === "company" ? "компанія" : newsCategory === "logistics" ? "логістика" : "продажі"})</h2>
-              <input
-                placeholder="Заголовок"
-                value={newsForm.title}
-                onChange={(e) => setNewsForm({ ...newsForm, title: e.target.value })}
-                style={{ width: "100%", marginBottom: 8 }}
-              />
-              <textarea
-                placeholder="Текст новини"
-                value={newsForm.body}
-                onChange={(e) => setNewsForm({ ...newsForm, body: e.target.value })}
-                style={{ width: "100%", minHeight: 70, marginBottom: 8, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
-              />
-              <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={async (e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      const up = await uploadFile(f);
-                      setNewsForm((prev) => ({ ...prev, imageUrl: up.url }));
-                    }
-                  }}
-                />
-                {newsForm.imageUrl && (
-                  <img src={newsForm.imageUrl} alt="" style={{ height: 40, borderRadius: 6 }} />
-                )}
-              </div>
-              <button onClick={handleAddNews} style={{ padding: "8px 18px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}>
-                Опублікувати
-              </button>
-            </div>
-          )}
-
-          {newsItems.length === 0 ? (
-            <p className="loading-text">Новин поки немає.</p>
-          ) : (
-            <div className="chart-grid">
-              {newsItems.map((n) => (
-                <div className="chart-card" key={n.id}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
-                    <h2 className="chart-title">{n.title}</h2>
-                    {auth?.role === "admin" && (
-                      <button
-                        /* 🔴 ПІДТВЕРДЖЕННЯ — БО ДІЯ ДЛЯ ВСІХ, А ЗНАЧОК ЧИТАВСЯ ЯК «ЗАКРИТИ».
-                           07.09.2026 новина про викат зникла за годину саме так: хрестик у
-                           кутку картки виглядає як «прибрати з очей», а робив видалення для
-                           всієї компанії. Текст питання називає обидва факти — для кого і
-                           чи зворотно. */
-                        onClick={async () => {
-                          if (!(await dlg.confirm(`Видалити новину «${n.title}»?\n\nВона зникне В УСІХ, не лише у вас. Запис зберігається, і адміністратор може повернути його через базу.`))) return;
-                          await deleteNews(n.id);
-                          setNewsItems(await fetchNews(newsCategory));
-                        }}
-                        title="Видалити новину для всіх"
-                        style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)" }}
-                      >
-                        🗑
-                      </button>
-                    )}
-                  </div>
-                  {/* 🕒 Час новини. Поле `created_at` приходило з роута від самого початку —
-                      його просто ніхто не малював, тож стрічка не давала відповіді на
-                      «коли це було». Формат короткий: дата й година, без секунд. */}
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
-                    {new Date(n.created_at).toLocaleString("uk-UA", {
-                      day: "2-digit", month: "2-digit", year: "numeric",
-                      hour: "2-digit", minute: "2-digit",
-                    })}
-                    {n.author && ` · ${n.author}`}
-                  </div>
-                  {n.image_url && (
-                    <img src={n.image_url} alt="" style={{ maxWidth: "100%", borderRadius: 8, marginBottom: 8 }} />
-                  )}
-                  {n.body && <p style={{ color: "var(--text)", whiteSpace: "pre-wrap" }}>{n.body}</p>}
-                  <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                    {new Date(n.created_at).toLocaleDateString("uk-UA")}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
+      {section === "news" && <NewsSection isAdmin={auth?.role === "admin"} seenBefore={newsSeenBefore} />}
 
       {section === "training" && <TrainingSection isAdmin={auth?.role === "admin"} roleKey={auth?.roleKey} />}
 

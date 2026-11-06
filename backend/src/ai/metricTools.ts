@@ -75,7 +75,7 @@ export const FORBIDDEN_TABLES = [
   // 💰 Фінанси (29.09.2026): витрати компанії по статтях, зокрема фонд оплати праці. REVOKE у схемі. Тримає #934.
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
   // 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026). REVOKE у схемі. Тримає #934.
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "fin_plan_parts", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
   // 📄 Конструктор документів (30.09.2026): реквізити контрагентів і суми заявок. REVOKE у схемі.
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "bank_out_breakdown", "bank_out_breakdown_events", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations", "bank_ident_settings", "bank_tx_ident", "bank_tx_ident_events", "bank_tx_comments",
   // 📋 Опитування (30.09.2026): відповіді людей, зокрема анонімні. REVOKE у схемі.
@@ -94,6 +94,12 @@ export const FORBIDDEN_TABLES = [
   "zakaz_onec_invoices", "zakaz_onec_pay_plan", "zakaz_onec_events",
   // 🧮 Відгуки на розрахунок ставки (27.10.2026): коментарі людей вільним текстом. REVOKE у схемі. Тримає #2774.
   "rate_feedback",
+  // 💰 «Зарплата» і центр сповіщень (04.11.2026): суми ЗП, шифри карт, обхідні листи, сповіщення людям. REVOKE у схемі.
+  "payroll_settings_versions", "payroll_departments", "payroll_teams", "payroll_employees", "payroll_terms", "payroll_official",
+  "payroll_leaves", "payroll_cards", "payroll_months", "payroll_records", "payroll_record_extras", "payroll_payout_forms", "payroll_payout_lines",
+  "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
+  "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
+  "notify_rules", "notifications", "notification_recipients", "payroll_reminders",
 ];
 
 /**

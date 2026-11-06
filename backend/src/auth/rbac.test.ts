@@ -447,8 +447,12 @@ test("#5.13 🔴 HR НЕ успадкував нічого з того, що о�
   // 27.10 «роби», задача 7062). Фінансист його НЕ має — знімається парою після синків (#2705).
   // 27.10.2026: + `manage_teams` — команди дашборду й команда людини без Kommo (рішення Романа 27.10, п.1: «керівництво і
   // HR»). Фінансист його НЕ має — знімається парою після синків (#2855).
-  assert.deepEqual(perms, ["edit_1x1_forms", "edit_org", "manage_sales_accounts", "manage_surveys", "manage_teams", "manage_training", "view_all_1x1", "view_employee_secrets"],
-    `🔴 набір прав HR змінився: ${perms.join(", ")} — очікували два 1×1-права, право сейфу, акаунти менеджерів, керування опитуваннями, редагування навчання й орг-структури, команди`);
+  // 04.11.2026: + `payroll_offer_tasks` — задачі по оферу в «Зарплаті» (рішення Романа 04.11: «HR має мати payroll_offer_tasks,
+  // це свідомо»). Видає схема лише HR і знімає в усіх інших ролях — фінансист його НЕ має (перевірка нижче). Приймання
+  // викату 7b7d2f7 почервоніло саме тут — гейт спрацював як задумано.
+  assert.deepEqual(perms, ["edit_1x1_forms", "edit_org", "manage_sales_accounts", "manage_surveys", "manage_teams", "manage_training", "payroll_offer_tasks", "view_all_1x1", "view_employee_secrets"],
+    `🔴 набір прав HR змінився: ${perms.join(", ")} — очікували два 1×1-права, право сейфу, акаунти менеджерів, керування опитуваннями, редагування навчання й орг-структури, команди, задачі по оферу`);
+  assert.notEqual(fin.permissions.payroll_offer_tasks, true, "🔴 фінансист отримав `payroll_offer_tasks` — право задумане лише для HR");
   // Жодного з прав, які фінансист дістав при підйомі до адміна.
   const gained = ["admin_scope", "approve_plans", "enter_manual_stats", "export",
     "manage_bank_accounts", "manage_bank_hidden", "manage_goals", "submit_plans",
@@ -470,8 +474,10 @@ test("#5.13 🔴 HR НЕ успадкував нічого з того, що о�
   // контрагента» (роль пакета `staff`, `counterparty/roles.ts`; мінусові угоди й узгодження — 403). Рішення Сергія в ТЗ пакета
   // §3 і слово Романа 24.10 «виконуй все що тут в макеті було». Приймання викату eed01ba почервоніло саме тут — гейт спрацював.
   // 🟢 `org` додано 27.10.2026 — «Орг структура»: вкладка ВСІМ ролям, включно з кандидатом (рішення Романа 27.10, задача 7062).
+  // 🟢 `payroll` додано 04.11.2026 — «Зарплата»: вкладка всім, крім кандидата (кабінет «Моя зарплата»; ТЗ пакета §2/§7). Суми
+  // всіх HR НЕ бачить — це право `payroll_view_all`, а в HR лише задачі оферу. Приймання викату 2fe9837 почервоніло саме тут.
   assert.deepEqual(screens,
-    ["documents", "duty", "feedback", "goals", "hiring", "messenger", "news", "oneonone", "org", "registries", "surveys", "tasks", "training"],
+    ["documents", "duty", "feedback", "goals", "hiring", "messenger", "news", "oneonone", "org", "payroll", "registries", "surveys", "tasks", "training"],
     `🔴 набір екранів HR змінився: ${screens.join(", ")}`);
   // Дзеркало: фінансист МАЄ бути адміном — інакше тест зеленів би й тоді, коли
   // підйом фінансиста зламався, і «HR не успадкував» не доводило б нічого.

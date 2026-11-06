@@ -102,6 +102,8 @@ const READERS: Record<string, "fx" | "uah" | "none"> = {
   "counterparty/debtSourceDb.ts": "fx", "counterparty/clientDirectoryDb.ts": "fx", "counterparty/legacyLimits.ts": "none",
   "jobs/reactCycleSweep.ts": "none", "jobs/receivableDeadlineTasks.ts": "none", "jobs/reactivateLeads.ts": "none",
   "jobs/buildPaymentFile.ts": "fx", "routes/dashboard.ts": "fx",
+  // 💰 обхідний лист п. 1: лише ключі клієнта за назвою для переприв'язки відповідального — сум не читає
+  "payroll/service.ts": "none",
 };
 
 /**

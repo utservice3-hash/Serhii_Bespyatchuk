@@ -90,7 +90,7 @@ export const MARGIN_FLAG_PCT = 250;
 const KYIV = "Europe/Kyiv";
 /** Київська календарна дата моменту — `YYYY-MM-DD`. */
 export const kyivDate = (at: Date): string => at.toLocaleDateString("en-CA", { timeZone: KYIV });
-const addDays = (ymd: string, n: number): string => {
+export const addDays = (ymd: string, n: number): string => {
   const d = new Date(`${ymd}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
@@ -187,6 +187,38 @@ export function teamRanking(cands: readonly Candidate[]): RankRow[] {
       if (sb != null) return 1;
       return (b.value ?? -Infinity) - (a.value ?? -Infinity) || a.managerId - b.managerId;
     });
+}
+
+/**
+ * 🏆 ТОП-3 НА ВЕСЬ КОМЕРЦІЙНИЙ ВІДДІЛ (04.11.2026, Даша: «немає більше РПК і РНК, просто комерційний відділ»).
+ * Рейтинги всіх команд разом; однаковий результат = однакове місце, місця без пропусків (3, 3, 2 → 1, 1, 2), до 3-го
+ * включно — тож при нічиїх рядків може бути більше трьох (слайд показує три й підписує решту). «Свої дані» тімліда (переможець X, число V) кажуть,
+ * хто найкращий у ЙОГО команді: X отримує V, а люди тієї команди, у кого в CRM більше за V, з топу прибираються.
+ * Тиждень без збереженого рейтингу (до 22.09.2026) — лише фінальні переможці команд.
+ */
+export interface TopRow { place: number; managerId: number; teamId: number; value: number; manual: boolean }
+export function companyTop(teams: readonly { teamId: number; cells: readonly { nomination: string; final: { status: string; winners: readonly number[]; value: number | null }; ranking: readonly RankRow[] | null }[] }[],
+  key: string, places = 3): TopRow[] {
+  const all: Omit<TopRow, "place">[] = [];
+  for (const t of teams) {
+    const c = t.cells.find((x) => x.nomination === key);
+    if (!c) continue;
+    const pos = (v: number | null): v is number => v != null && Number.isFinite(v) && norm(v) > 0;
+    if (c.final.status === "overridden" && pos(c.final.value)) {
+      const v = c.final.value, x = c.final.winners;
+      for (const r of c.ranking ?? []) if (pos(r.value) && !x.includes(r.managerId) && norm(r.value) <= norm(v)) all.push({ managerId: r.managerId, teamId: t.teamId, value: r.value, manual: false });
+      for (const id of x) all.push({ managerId: id, teamId: t.teamId, value: v, manual: true });
+    } else if (c.ranking) {
+      for (const r of c.ranking) if (pos(r.value)) all.push({ managerId: r.managerId, teamId: t.teamId, value: r.value, manual: false });
+    } else if (pos(c.final.value)) {
+      for (const id of c.final.winners) all.push({ managerId: id, teamId: t.teamId, value: c.final.value, manual: false });
+    }
+  }
+  all.sort((a, b) => norm(b.value) - norm(a.value) || a.managerId - b.managerId);
+  // Місця БЕЗ ПРОПУСКІВ (20.11 → 04.11.2026, ревʼю слайда): 3, 3, 2 → 1, 1, 2, як у прикладі Даші (1, 2, 2). Зі «стандартним»
+  // місцем (1 + скільки вище) після двох перших іде одразу третє — на слайді «два треті місця» без другого.
+  const distinct = [...new Set(all.map((r) => norm(r.value)))];
+  return all.map((r) => ({ ...r, place: 1 + distinct.indexOf(norm(r.value)) })).filter((r) => r.place <= places);
 }
 
 /** Відбиток того, що бачив тімлід: якщо CRM після підтвердження змінився — підтвердження протухло. */
@@ -340,8 +372,29 @@ export interface WeekView {
    * живе й правиться після фіксації (рішення ревʼю 22.09.2026).
    */
   leadgen: TeamWeek | null;
-  /** Статистика відділу РНК · конверсія (живе CRM + правки Даші й тімлідів; у знімок не йде). */
+  /** Статистика відділу · конверсія (живе CRM + правки Даші й тімлідів; у знімок не йде). З 04.11.2026 — весь відділ. */
   rnkConv: RnkConv | null;
+  /** Тексти тижня для презентації (фокус наступного тижня) — останній запис кожного виду. */
+  texts?: Partial<Record<WeekTextKind, { text: string; by: string | null; at: string }>>;
+}
+/**
+ * Види текстів тижня (04.11.2026): `focus` — «Фокус наступного тижня»; `new_position` — «Нова посада» на слайді «Події
+ * тижня» (про співробітника, текст — посада; порожній — прибрати). Висновок до конверсії — коментар таблиці конверсії.
+ */
+export const WEEK_TEXT_KINDS = ["focus", "new_position"] as const;
+export type WeekTextKind = (typeof WEEK_TEXT_KINDS)[number];
+export function validateWeekText(body: unknown):
+  { ok: true; value: { weekFrom: string; kind: WeekTextKind; text: string; employeeId: number | null } } | { ok: false; error: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const weekFrom = typeof b.weekFrom === "string" ? b.weekFrom : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekFrom) || weekOf(weekFrom).from !== weekFrom) return { ok: false, error: "weekFrom — понеділок тижня (YYYY-MM-DD)" };
+  if (!(WEEK_TEXT_KINDS as readonly string[]).includes(String(b.kind))) return { ok: false, error: "невідомий вид тексту" };
+  const kind = b.kind as WeekTextKind;
+  const text = typeof b.text === "string" ? b.text.trim().slice(0, 400) : "";
+  if (kind === "focus") return { ok: true, value: { weekFrom, kind, text, employeeId: null } };
+  const id = Number(b.employeeId);
+  if (!Number.isInteger(id) || id <= 0 || id > 2_147_483_647) return { ok: false, error: "«Нова посада» — оберіть співробітника" };
+  return { ok: true, value: { weekFrom, kind, text, employeeId: id } };
 }
 
 /* ───────────────────────── статистика відділу РНК · конверсія (22.09.2026) ───────────────────────── */
@@ -359,6 +412,8 @@ export interface ConvRow {
   crm: { taken: number; won: number };
   own: { by: string | null; at: string } | null;
   onSlide: boolean;
+  /** Відсоток тієї ж людини минулого тижня (з правками того тижня) — для ▲/▼ на слайді; `null` — лідів не було. */
+  prevPct: number | null;
 }
 export interface RnkConv {
   rows: ConvRow[]; comment: { text: string; by: string | null; at: string } | null;
@@ -376,6 +431,12 @@ export interface ConvEdit {
 }
 /** Скільки рядків іде на слайд, поки ніхто не вибрав руками (у Даші — 2–4). Лише типовий вибір, Даша його змінює. */
 export const CONV_DEFAULT_ON_SLIDE = 4;
+/**
+ * 🎯 ПОРІГ ТИПОВОЇ ГАЛОЧКИ (04.11.2026, Даша): «загалом прийнято від 20 цільових, але якщо немає 20-ти — беру від 15».
+ * Без порогу 1 лід / 1 успіх = 100% забирав слайд у людей з реальним обсягом. Даша й далі ставить галочки руками.
+ */
+export const CONV_MIN_LEADS = 20;
+export const CONV_MIN_LEADS_FALLBACK = 15;
 const pct2 = (won: number, taken: number): number | null => (taken > 0 ? Math.round((won / taken) * 10000) / 100 : null);
 
 /**
@@ -383,7 +444,8 @@ const pct2 = (won: number, taken: number): number | null => (taken > 0 ? Math.ro
  * системи; коментар — остання правка без людини. Хто на слайді: явний вибір, інакше — 4 найкращі за %,
  * при рівності — з більшою кількістю лідів. Відсоток — до сотих (4/24 = 16,67%, а не «17,00%»).
  */
-export function buildRnkConv(system: readonly { managerId: number; name: string; teamId: number; taken: number; won: number; total?: number }[], edits: readonly ConvEdit[]): RnkConv {
+export function buildRnkConv(system: readonly { managerId: number; name: string; teamId: number; taken: number; won: number; total?: number }[], edits: readonly ConvEdit[],
+  prevPct: ReadonlyMap<number, number | null> = new Map()): RnkConv {
   const nums = new Map<number, ConvEdit>(); // остання правка ЧИСЕЛ (set / reset)
   const slide = new Map<number, boolean>();  // останній ЯВНИЙ вибір «на слайд»
   let comment: RnkConv["comment"] = null;
@@ -399,10 +461,12 @@ export function buildRnkConv(system: readonly { managerId: number; name: string;
     const taken = own ? e!.taken! : s.taken;
     const won = own ? e!.won! : s.won;
     return { managerId: s.managerId, name: s.name, teamId: s.teamId, taken, won, pct: pct2(won, taken), total: s.total ?? s.taken, crm: { taken: s.taken, won: s.won },
-      own: own ? { by: e!.by, at: e!.at } : null, onSlide: false };
+      own: own ? { by: e!.by, at: e!.at } : null, onSlide: false, prevPct: prevPct.get(s.managerId) ?? null };
   });
-  // Типовий вибір — 4 найкращі за %; явний вибір рядка перемагає лише ДЛЯ ЦЬОГО рядка.
-  const byPct = [...rows].filter((r) => r.pct != null).sort((a, b) => b.pct! - a.pct! || b.taken - a.taken || a.managerId - b.managerId);
+  // Типовий вибір — 4 найкращі за % серед тих, у кого ≥ 20 цільових (немає таких — ≥ 15); явний вибір рядка перемагає
+  // лише ДЛЯ ЦЬОГО рядка.
+  const min = rows.some((r) => r.taken >= CONV_MIN_LEADS) ? CONV_MIN_LEADS : CONV_MIN_LEADS_FALLBACK;
+  const byPct = [...rows].filter((r) => r.pct != null && r.taken >= min).sort((a, b) => b.pct! - a.pct! || b.taken - a.taken || a.managerId - b.managerId);
   const top = new Set(byPct.slice(0, CONV_DEFAULT_ON_SLIDE).map((r) => r.managerId));
   const out = rows.map((r) => ({ ...r, onSlide: slide.has(r.managerId) ? slide.get(r.managerId)! : top.has(r.managerId) }));
   out.sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || b.taken - a.taken || a.managerId - b.managerId);

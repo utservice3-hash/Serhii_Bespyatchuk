@@ -62,9 +62,10 @@ export function orgRules(): OrgRule[] {
  * у 1С шлемо КОДОМ, бо за назвою «Експедиторські послуги» не знаходяться (у назві в 1С латинська «i»), а невідомий
  * код 1С тепер відхиляє, а не підміняє стандартною послугою.
  */
-export const SERVICES: { name: string; orgs: OrgKey[] | "all"; code: string }[] = [
+export const SERVICES: { name: string; orgs: OrgKey[] | "all"; code: string; en?: string }[] = [
   { name: "Організація перевезення в межах території України за маршрутом", orgs: ["uts", "elogist"], code: "000000092" },
-  { name: "Організація перевезення за маршрутом", orgs: ["avtomuv", "fop"], code: "000000008" },
+  // Англійською — дослівно як у валютних рахунках Genesis (АвтоМув №9130, 02.11.2026).
+  { name: "Організація перевезення за маршрутом", orgs: ["avtomuv", "fop"], code: "000000008", en: "Organization of cargo transportation along the route" },
   { name: "Організація міжнародного перевезення", orgs: ["avtomuv"], code: "000000179" },
   { name: "Експедиторські послуги", orgs: "all", code: "000000252" },
   { name: "Штрафні санкції за простій автомобільного транспорту", orgs: "all", code: "000000180" },
@@ -74,7 +75,28 @@ export const servicesFor = (org: OrgKey) => SERVICES.filter((x) => x.orgs === "a
 export const vatTypesFor = (o: OrgRule): VatType[] => (o.vat === "with" ? ["ПДВ в тому числі"] : ["Без ПДВ"]);
 export const itemVatsFor = (o: OrgRule): number[] => (o.vat === "with" ? [20, 14, 7] : [0]);
 
-export interface InvoiceItem { service: string; route: string; qty: number; price: number; vat: number }
+/** `full` — менеджер редагує весь рядок рахунку сам («✎ редагувати весь рядок»): тоді `route` — увесь рядок, без назви. */
+export interface InvoiceItem { service: string; route: string; full: boolean; qty: number; price: number; vat: number }
+
+/**
+ * Рядок послуги в рахунку («Содержание услуги»). З 05.11.2026 1С друкує рівно те, що ми передали, і назву послуги
+ * сама не дописує — тож рядок складаємо ми: «назва: маршрут»; у валютному рахунку — англійська назва, як у Genesis.
+ * Якщо менеджер уже вписав назву в маршрут, удруге не додаємо. Вікно показує те саме («У рахунку буде…»).
+ */
+export const servicePrefix = (service: string, currency: string) => {
+  const en = SERVICES.find((x) => x.name === service)?.en;
+  return currency !== "UAH" && en ? en : service;
+};
+export function serviceLine(it: Pick<InvoiceItem, "service" | "route" | "full">, currency: string): string {
+  const text = it.route.trim();
+  if (it.full) return text;
+  const prefix = servicePrefix(it.service, currency);
+  if (!text) return prefix;
+  const lower = text.toLowerCase();
+  const names = [it.service, SERVICES.find((x) => x.name === it.service)?.en ?? ""].filter(Boolean);
+  if (names.some((n) => lower.startsWith(n.toLowerCase()))) return text;
+  return `${prefix}: ${text}`;
+}
 
 /** Те, що надсилає вікно. Дату рахунку, контрагента й менеджера сервер бере сам. */
 export interface InvoiceForm {
@@ -134,13 +156,14 @@ export function parseInvoiceForm(body: unknown, ctx: { today: string; orgs: OrgR
   const items: InvoiceItem[] = [];
   for (const [i, raw] of rawItems.entries()) {
     const r = (raw ?? {}) as Record<string, unknown>;
-    const service = s(r.service, 300), route = s(r.route, 1000);
+    const service = s(r.service, 300), route = s(r.route, 1000), full = r.full === true;
     const qty = num(r.qty ?? 1), price = num(r.price), vat = num(r.vat ?? (o.vat === "with" ? 20 : 0));
     if (!allowed.includes(service)) return { ok: false, why: `Позиція ${i + 1}: послуга не зі списку ${o.short}.` };
+    if (full && !route) return { ok: false, why: `Позиція ${i + 1}: рядок рахунку порожній — напишіть його або натисніть «↺ як було».` };
     if (!(qty > 0)) return { ok: false, why: `Позиція ${i + 1}: кількість має бути більше 0.` };
     if (!(price > 0)) return { ok: false, why: `Позиція ${i + 1}: ціна має бути більше 0.` };
     if (!itemVatsFor(o).includes(vat)) return { ok: false, why: `Позиція ${i + 1}: ставка ПДВ ${itemVatsFor(o).join(", ")} %.` };
-    items.push({ service, route, qty, price, vat });
+    items.push({ service, route, full, qty, price, vat });
   }
   const dueDate = s(b.dueDate, 10), actDate = s(b.actDate, 10);
   if (dueDate && !DATE_RE.test(dueDate)) return { ok: false, why: "«Оплатити до» — у форматі РРРР-ММ-ДД." };
@@ -185,7 +208,7 @@ export function dealFieldsOf(form: Pick<InvoiceForm, "actDate" | "crmComment">) 
 }
 
 const itemsOf = (form: InvoiceForm) => form.items.map((it) => ({ code: SERVICES.find((x) => x.name === it.service)?.code ?? "", article: "",
-  name: it.service, unit: "Послуга", qty: it.qty, price: it.price, vat: it.vat, content: it.route }));
+  name: it.service, unit: "Послуга", qty: it.qty, price: it.price, vat: it.vat, content: serviceLine(it, form.currency) }));
 
 /**
  * Тіло `POST /createInvoice`. Чиста функція: гейт звіряє, що жодне поле вікна не загубилось дорогою.

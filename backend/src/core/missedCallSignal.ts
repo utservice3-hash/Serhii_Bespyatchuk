@@ -1,6 +1,6 @@
-import { CALL_MERGE_WINDOW, mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 import { INBOUND_TYPES, OUTBOUND_TYPES, missedDispSql, CALLBACK_MIN_TALK_SEC, AUTO_CLOSE_CLIENT_SELF_PREFIX, AUTO_CLOSE_SUCCESS_PREFIX } from "./missedCallsRules.js";
 import { dayBucketCase, dayBucketParts, type DayBucket } from "./dayBuckets.js";
+import { callUnitsCte, MISSED_LEG_GAP } from "./missedCallUnits.js";
 import { carrierHistorySql, carrierTaskCloseReason, HISTORY_GUARD, readHistoryGate } from "./carrierHistory.js";
 
 /**
@@ -21,10 +21,11 @@ import { carrierHistorySql, carrierTaskCloseReason, HISTORY_GUARD, readHistoryGa
  * 🔴 МОДУЛЬ БЕЗ `pool`. Базу дає той, хто кличе (`Db`), тож поведінку джоби гейт `#457`
  * проганяє на порожньому кластері з керованим «зараз», а не читає з файла.
  *
- * 🔴 ПРОПУЩЕНИЙ — ТОЙ САМИЙ, ЩО НА ЕКРАНІ. Склейка плечей (`mergedLagGapExpr`), вердикт
- * по першому плечу (`missedDispSql`) і порядок «спершу вхідні, тоді склейка» — з
- * `callMerge`/`missedCallsRules`, а не переписані. Інакше менеджер отримав би задачу
- * на дзвінок, якого немає в блоці C, або навпаки.
+ * 🔴 ПРОПУЩЕНИЙ — ТОЙ САМИЙ, ЩО НА ЕКРАНІ. Дзвінок, його відповідальний і «узяли / ні» — з
+ * `missedCallUnits.callUnitsCte` (задача 7368), тієї самої, що й основа екрана, а не переписані.
+ * Інакше менеджер отримав би задачу на дзвінок, якого немає в блоці C, або навпаки (03.11:
+ * Федькевич — 38 задач по дзвінках, які взяли інші). Плечі беремо з початку київської доби:
+ * черга двох чергових рахується від неї.
  *
  * ⚠️ Персональні дані: таблиця-журнал несе номер і менеджера — рівно те, що вже лежить у
  * `ringostat_calls` (відкрита `ai_readonly`), а заголовок задачі з номером модель бачить
@@ -91,22 +92,13 @@ export function signalGroupsSql(now: Date): { sql: string; params: unknown[] } {
       SELECT $1::timestamptz AS now_at,
              (date_trunc('day', ($1::timestamptz - interval '${SIGNAL_LOOKBACK}') ${KY}) ${KY}) AS day_start
     ),
-    base AS (
-      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.calldate, rc.billsec, rc.disposition
-        FROM ringostat_calls rc, bounds bd
-       WHERE rc.calldate >= bd.day_start - interval '${CALL_MERGE_WINDOW}'
-         AND rc.calldate <= bd.now_at
-         AND rc.call_type IN (${inList(INBOUND_TYPES)})
-         AND rc.billsec = 0
-         AND rc.manager_id IS NOT NULL
-         AND rc.client_phone IS NOT NULL
-    ),
-    marked AS (SELECT b.*, ${mergedLagGapExpr("b")} AS gap FROM base b),
+    ${callUnitsCte(`rc.calldate >= (SELECT day_start FROM bounds) - interval '${MISSED_LEG_GAP}' AND rc.calldate <= (SELECT now_at FROM bounds)`)},
     missed AS (
-      SELECT m.manager_id, m.client_phone, m.calldate,
-             (m.calldate ${KY})::date AS kday, ${dayBucketParts("m.calldate")}
-        FROM marked m, bounds bd
-       WHERE ${mergedLagFirst()} AND ${missedDispSql("m")} AND m.calldate >= bd.day_start
+      SELECT u.manager_id, u.client_phone, u.calldate,
+             (u.calldate ${KY})::date AS kday, ${dayBucketParts("u.calldate")}
+        FROM call_units u, bounds bd
+       WHERE NOT u.answered AND ${missedDispSql("u")} AND u.manager_id IS NOT NULL AND u.client_phone IS NOT NULL
+         AND u.calldate >= bd.day_start
     ),
     flagged AS (
       SELECT x.*, (

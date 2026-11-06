@@ -12,6 +12,7 @@ import { useClientLimitsCount } from "../minusRegistry/client/clientLimits/useCl
 import { usePolling } from "../hooks/usePolling";
 import { useBankIdentBadge } from "../bankIdent/dashboard";
 import { getAuthPayload } from "../auth";
+import { NotificationBell } from "./NotificationBell";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
 export const NAV_GROUPS = [
@@ -81,6 +82,9 @@ export const NAV_GROUPS = [
       // поки одна вкладка — «Реєстр мінусових угод». Пункт — лише ролям із вкладкою `registries`;
       // число — скільки чекає саме вашої дії (Сергію — «На погодженні», бухгалтерії — «Погоджено», менеджеру — свої «Повернуто»).
       { key: "registries", label: "Реєстри та узгодження", icon: "📒" },
+      // 💰 «Зарплата» (пакет Сергія 03.11.2026): кабінет «Моя зарплата» — кожному в зарплаті; перевірка, відомість, аванси,
+      // прогноз, обхідні — за правами `payroll_*`. Без поля `roles`: видимість — `screen_access.payroll` (усі, крім кандидата).
+      { key: "payroll", label: "Зарплата", icon: "💰" },
       { key: "oneonone", label: "Ван-ту-ван", icon: "🤝", roles: ["admin", "team_lead"] },
       { key: "rates", label: "Калькулятор ставок та вантажу", icon: "🧮" },
       { key: "goals", label: "Місячні цілі", icon: "🎯", roles: ["admin", "team_lead"] },
@@ -134,7 +138,7 @@ type NavItem = { key: string; label: string; icon: string; roles?: readonly stri
  * сама, без ще одного викату. Київська дата сьогодні порівнюється рядком «РРРР-ММ-ДД».
  */
 const ORG_NEW_UNTIL = "2026-11-11";
-const NEW_UNTIL: Readonly<Record<string, string>> = { org: ORG_NEW_UNTIL };
+const NEW_UNTIL: Readonly<Record<string, string>> = { org: ORG_NEW_UNTIL, payroll: "2026-11-18" };
 const isNewItem = (key: string) => {
   const until = NEW_UNTIL[key];
   return !!until && new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }) < until;
@@ -424,6 +428,8 @@ export function Layout({
             marginBottom: 12,
           }}
         >
+          {/* 🔔 Центр сповіщень (ТЗ «Зарплата» §6): «потрібна дія» й «до відома» з усіх модулів; кнопка веде на місце дії. */}
+          <NotificationBell onGo={(section, query) => navigate(`/${section}${query ?? ""}`)} />
           <button
             onClick={() =>
               window.dispatchEvent(

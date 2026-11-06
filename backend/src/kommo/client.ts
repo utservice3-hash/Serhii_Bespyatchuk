@@ -402,6 +402,17 @@ export function extractTtnFiles(deal: KommoDeal): number {
   }).length;
 }
 
+/**
+ * 📄 «Оригиналы получено» (2097501, checkbox) — одна з двох умов «ТТН за документами» (Даша, 04.11.2026). Kommo не віддає
+ * порожній checkbox зовсім, тож поля немає — це `false`, а не «невідомо»: «невідомо» (NULL у `deals.originals_received`)
+ * — лише угода, яку синк ще не бачив після появи колонки.
+ */
+export const FIELD_ORIGINALS = 2097501;
+export function extractOriginalsReceived(deal: KommoDeal): boolean {
+  const v = deal.custom_fields_values?.find((f) => f.field_id === FIELD_ORIGINALS)?.values?.[0]?.value;
+  return v === true || v === "true" || v === 1 || v === "1";
+}
+
 /** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */
 export function extractPaymentType(deal: KommoDeal): string | null {
   return fieldText(deal, FIELD_PAYMENT_TYPE);

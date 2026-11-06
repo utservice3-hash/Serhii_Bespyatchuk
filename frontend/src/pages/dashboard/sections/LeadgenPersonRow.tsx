@@ -1,4 +1,4 @@
-import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec, LeadgenExtraExec, LeadgenPersonPace, LeadgenPlanPace } from "../../../api";
+import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec, LeadgenExtraExec, LeadgenPersonPace, LeadgenPlanPace, LeadgenWeekCars } from "../../../api";
 import { formatAmountFull } from "../format";
 import { Donut } from "./ReportPlanSection";
 import { ddmm, addDays, dow, mondayOf } from "../periodRules";
@@ -153,12 +153,14 @@ export function bucketLabel(b: string, grain: LeadgenGrain, period: { from: stri
  * кільце, головні числа; клік розгортає розбивку на одиницю нижче обраного періоду
  * (місяць/довгий період — тижні, тиждень/короткий період — дні, день — без розбивки).
  */
-export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyBuckets, grain, units, targets, period, statusful, open, onToggle }: {
+export function LeadgenPersonRow({ row, plan, money, week, dataPeriod, buckets, moneyBuckets, grain, units, targets, period, statusful, open, onToggle }: {
   row: Row;
   /** План і виконання на період (лише учасникам команди). Немає або `none` — «плану немає», кільце — конверсія, як було. */
   plan?: LeadgenPersonPlan;
   /** Гроші з переданих цією людиною лідів (див. `LeadgenHandoffMoney`); немає — «—». */
   money?: LeadgenHandoffMoney;
+  /** 🚚 Машини звітного тижня (Пн–Нд) з межами — окремо від періоду (задача 7363). */
+  week?: { from: string; to: string; cars: LeadgenWeekCars | null };
   /** Період, за який УЖЕ завантажені числа рядка (`money` з нього). Список грошей бере саме його, а не щойно
    *  обраний `period`: інакше під час перезавантаження список нового періоду звірявся б зі старим рядком. */
   dataPeriod: { from: string; to: string };
@@ -224,7 +226,7 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
           <Stat v={row.opr} l="ОПР" />
           <Stat v={row.quotes} l="Прорахунки" />
           <Stat v={row.warming} l="Підігрів" />
-          <Stat v={money?.machines ?? 0} l="Машин" />
+          <Cars money={money} week={week} />
           <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена (будь-коли), що стали «Успішна угода» в цьому періоді; без постійних клієнтів">
             <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmountFull(money.earned.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
@@ -322,6 +324,26 @@ function Buckets({ row, rows, money, grain, period }: {
 
 function Chip({ children }: { children: React.ReactNode }) {
   return <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 20, background: "var(--bg)", color: MUTED, border: "1px solid var(--border)" }}>{children}</span>;
+}
+
+/**
+ * 🚚 Машини за «Датою загрузки» (як «Відправлені авто» КВП, задача 7363): число періоду, під ним — звітний тиждень,
+ * і плашка «гроші ще не зайшли», коли частина машин ще без оплати.
+ */
+function Cars({ money, week }: { money?: LeadgenHandoffMoney; week?: { from: string; to: string; cars: LeadgenWeekCars | null } }) {
+  const v = money?.machines ?? 0, noMoney = money?.machinesNoMoney ?? 0;
+  const wk = week?.cars?.machines ?? 0;
+  const ddmm = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}`;
+  return (
+    <span style={{ textAlign: "center", minWidth: 64 }}
+      title="Машини — угоди з передач лідгена, у яких «Дата загрузки» в періоді (як «Відправлені авто» у Звіті КВП). Етап не важливий: машина на «Виставленні рахунку» теж рахується. Гроші — окремо, за своїми правилами">
+      <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: v ? "var(--text)" : MUTED }}>{n(v)}</span>
+      <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Машин</span>
+      {week && <span style={{ display: "block", fontSize: 10.5, color: MUTED, marginTop: 1 }} title={`Звітний тиждень ${ddmm(week.from)}–${ddmm(week.to)} (Пн–Нд), окремо від періоду`}>тиждень {n(wk)}</span>}
+      {noMoney > 0 && <span style={{ display: "inline-block", fontSize: 10, fontWeight: 650, color: "var(--warn)", border: "1px solid var(--warn)", borderRadius: 999, padding: "0 6px", marginTop: 2, whiteSpace: "nowrap" }}
+        title="Авто загружене, а угода ще не «Оплата отримана» і не «Успішна» — грошей за ці машини поки немає">гроші ще не зайшли · {n(noMoney)}</span>}
+    </span>
+  );
 }
 
 function Stat({ v, l }: { v: number; l: string }) {

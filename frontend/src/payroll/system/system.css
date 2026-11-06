@@ -1,0 +1,77 @@
+/* 💰 «Зарплата» · системні вкладки (прогноз, аналітика, обхідні, архів, налаштування, задачі). Префікс `zps-`;
+   кольори — змінні дашборда й `.zp` (payroll.css). */
+
+/* перемикач-сегменти */
+.zps-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 11px; background: var(--zp-soft); }
+.zps-seg button { padding: 5px 11px; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.zps-seg button[aria-pressed="true"] { background: var(--card-bg); color: var(--text); box-shadow: var(--shadow); }
+.zps-seg button:disabled { cursor: not-allowed; }
+
+.zps-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); font-weight: 600; font-size: 13px; }
+.zps-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* сітки */
+.zps-cols { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1100px) { .zps-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); } }
+.zps-g3 { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.zps-g2 { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.zps-lbl { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); margin-top: 6px; }
+
+/* календар готівки */
+.zps-cal { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.zps-cal li { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 4px 14px; align-items: start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; }
+.zps-cal li.is-now { border-color: color-mix(in srgb, var(--info) 55%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--info) 25%, transparent); }
+.zps-cal .d { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--text-muted); padding-top: 2px; }
+.zps-cal small { display: block; color: var(--text-muted); font-size: 13px; }
+.zps-cal .v { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 600px) { .zps-cal li { grid-template-columns: minmax(0, 1fr) auto; } .zps-cal .d { grid-column: 1 / -1; } }
+
+/* аналітика */
+.zps-anbar { display: grid; justify-items: end; gap: 3px; min-width: 90px; }
+.zps-anbar i { display: block; height: 4px; border-radius: 999px; background: var(--brand); max-width: 100%; }
+.zps-an-grp td { background: var(--zp-soft); }
+.zps-an-tm td:first-child { padding-left: 26px; }
+.zps-an-person td { font-size: 12.5px; color: var(--text-muted); }
+.zps-an-person td:first-child { padding-left: 40px; }
+.zps-notes { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
+
+/* обхідний лист */
+.zps-clr { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.zps-clr > li { display: grid; grid-template-columns: 28px minmax(0, 1fr) 180px 190px; gap: 6px 14px; padding: 14px 16px; border-top: 1px solid var(--border); }
+.zps-clr > li:first-child { border-top: 0; }
+.zps-clr > li.is-ok { background: color-mix(in srgb, var(--ok) 6%, var(--card-bg)); }
+.zps-clr > li.is-now { background: color-mix(in srgb, var(--warn) 7%, var(--card-bg)); }
+.zps-clr > li.is-lock { color: var(--text-muted); }
+.zps-clr > li.is-last { border-top: 2px solid var(--text-muted); }
+.zps-clr .no { color: var(--text-muted); font-weight: 600; }
+.zps-clr .tx { display: grid; gap: 4px; min-width: 0; }
+.zps-clr .tx small { color: var(--text-muted); font-size: 13px; }
+.zps-clr .rs { display: grid; align-content: start; }
+.zps-clr .rs span { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); }
+.zps-clr .sg { display: grid; align-content: start; gap: 4px; font-size: 13.5px; }
+.zps-clr-cl { display: grid; gap: 4px; }
+.zps-clr-cl > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 6px 10px; border-radius: 8px; background: var(--zp-soft); }
+.zps-clr-cl select { width: auto; min-width: 200px; }
+.zps-checks { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.zps-shots { display: flex; flex-wrap: wrap; gap: 8px; }
+.zps-shots a { display: block; width: 96px; height: 72px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.zps-shots img { width: 100%; height: 100%; object-fit: cover; display: block; }
+@media (max-width: 900px) { .zps-clr > li { grid-template-columns: 24px minmax(0, 1fr); } .zps-clr .rs, .zps-clr .sg { grid-column: 2; } }
+
+/* архів — графік */
+.zps-chart { width: 100%; height: auto; display: block; }
+.zps-chart text { font-size: 11px; fill: var(--text-muted); }
+.zps-chart line.grid { stroke: var(--border); stroke-dasharray: 3 4; }
+
+/* налаштування */
+.zps-rules td:first-child { white-space: nowrap; font-weight: 600; }
+.zps-hist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13.5px; }
+.zps-hist li { padding-left: 14px; position: relative; }
+.zps-hist li::before { content: ""; position: absolute; left: 0; top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.zps-hist .w { color: var(--text-muted); }
+.zps-lvl { display: inline-block; padding: 1px 8px; border-radius: 7px; font-size: 12.5px; font-weight: 650; background: var(--info-bg); color: var(--info); }
+.zps-lvl--profi { background: var(--zp-violet-bg); color: var(--zp-violet); }
+
+/* задачі */
+.zps-tasks { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.zps-task { display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; }

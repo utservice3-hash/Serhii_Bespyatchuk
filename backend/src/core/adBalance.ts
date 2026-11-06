@@ -8,7 +8,7 @@
  *
  * Формула — у гривнях «як у кабінеті», тобто З ПДВ (кабінет і списує витрати з ПДВ: жовтень 125 794 у кабінеті проти
  * 103 849 у GA4 = ×1,2):
- *     залишок = точка звірки + Σ поповнень (з «Виписки») − 1,2 × Σ витрат GA4 (без ПДВ)
+ *     залишок = точка звірки + Σ поповнень (з «Виписки») − 1,2 × Σ витрат без ПДВ (GA4 або аркуш бюджету — див. AD_COSTS_SQL)
  *     без ПДВ = залишок ÷ 1,2
  * ⚠️ ПДВ знімається ДІЛЕННЯМ на 1,2, а не «−20%»: на історії «−20%» дає неможливий мінусовий залишок (−4 623),
  * ділення — правдоподібний (+24 544 без ПДВ ≈ 29 453 з ПДВ).
@@ -77,15 +77,29 @@ export const AD_PAYMENTS_SQL = `
    WHERE t.direction = 'out' AND t.deleted_at IS NULL AND t.counterparty_name ILIKE '%гугл%'
      AND (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date >= $1::date`;
 
-/** Витрати по днях із GA4 (без ПДВ) — від точки звірки, але не менше ніж за AD_AVG_DAYS + 1 день для середньої. */
-export const AD_COSTS_SQL = `
-  SELECT to_char(day, 'YYYY-MM-DD') AS day, sum(cost) AS cost
-    FROM ad_ga4_daily
-   WHERE day >= LEAST($1::date, (now() AT TIME ZONE 'Europe/Kyiv')::date - ${AD_AVG_DAYS + 1})
-   GROUP BY day`;
+/**
+ * Витрати по днях без ПДВ — від точки звірки, але не менше ніж за AD_AVG_DAYS + 1 день для середньої.
+ *
+ * 🔴 ДВА ДЖЕРЕЛА, БІЛЬШЕ З ДВОХ (заміряно 05.11.2026). GA4 тягнемо раз на добу о 06:00, тож сьогоднішній день у ньому
+ * весь день майже нуль (05.11: 241 грн проти 7 448 в аркуші) — і залишок був завищений на добову витрату (~8 700 з ПДВ).
+ * Аркуш бюджету (`ad_budget_daily`, щогодини) за повні дні збігається з GA4 до гривні, а сьогодні — свіжіший.
+ * GREATEST, а не «аркуш замість GA4»: аркуш буває без рядка чи з нулем, тоді лишається GA4. Майбутні дні аркуша
+ * (заготовлені рядки плану) не беремо.
+ */
+const AD_COST_DAYS = `
+  SELECT to_char(day, 'YYYY-MM-DD') AS day, GREATEST(COALESCE(g.cost, 0), COALESCE(b.cost, 0)) AS cost
+    FROM (SELECT day, sum(cost) AS cost FROM ad_ga4_daily WHERE day >= $1::date GROUP BY day) AS g
+    FULL JOIN (SELECT day, budget_fact AS cost FROM ad_budget_daily
+                WHERE day >= $1::date AND day <= (now() AT TIME ZONE 'Europe/Kyiv')::date) AS b USING (day)`;
 
-/** Коли GA4 востаннє синхронізувався — «станом на». */
-export const AD_SYNCED_SQL = `SELECT max(synced_at) AS synced_at FROM ad_ga4_daily`;
+export const AD_COSTS_SQL = AD_COST_DAYS.replaceAll("$1::date", `LEAST($1::date, (now() AT TIME ZONE 'Europe/Kyiv')::date - ${AD_AVG_DAYS + 1})`);
+
+/** Витрата одного дня без ПДВ тим самим правилом — для звірки з кабінетом. */
+export const AD_DAY_COST_SQL = `SELECT sum(cost) AS cost FROM (${AD_COST_DAYS}) AS d WHERE day = to_char($1::date, 'YYYY-MM-DD')`;
+
+/** «Станом на» — свіжіше з двох синків. */
+export const AD_SYNCED_SQL = `
+  SELECT GREATEST((SELECT max(synced_at) FROM ad_ga4_daily), (SELECT max(synced_at) FROM ad_budget_daily)) AS synced_at`;
 
 type Q = { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> };
 

@@ -402,6 +402,8 @@ function People({ d, who, whoName, whoAbsent, grain, period, today, statusful, o
         <LeadgenPersonRow key={r.managerId} row={r} units={units}
           plan={d.plans?.byPerson.find((x) => x.managerId === r.managerId)}
           money={d.handoffMoney?.byPerson.find((x) => x.managerId === r.managerId)}
+          week={d.handoffMoney?.week ? { from: d.handoffMoney.week.from, to: d.handoffMoney.week.to,
+            cars: d.handoffMoney.week.byPerson.find((x) => x.managerId === r.managerId) ?? null } : undefined}
           dataPeriod={{ from: d.from, to: d.to }}
           buckets={byPerson.filter((w) => w.managerId === r.managerId)} grain={grain}
           moneyBuckets={(d.handoffMoneyBucketsByPerson ?? []).filter((x) => x.managerId === r.managerId)}
@@ -666,7 +668,7 @@ function HandoffMoneyCol({ m }: { m: LeadgenHandoffMoney | undefined }) {
     <div>
       <div style={lab}>💰 Гроші з переданих лідів <InfoHint text={hint} /></div>
       <div style={{ fontSize: 11, color: MUTED, margin: "1px 0 2px" }}>успішні — за датою успіху · очікування — що чекає оплати на кінець періоду · з передач будь-якого місяця</div>
-      <div style={{ fontSize: 13, fontWeight: 700, margin: "2px 0" }} title="Як «Кількість поставлених машин» у таблицях лідгенів: угоди, по яких авто поїхало й гроші прийшли чи йдуть (успішні + очікування)">🚚 {m.machines.toLocaleString("uk-UA")} {plural(m.machines, "машина", "машини", "машин")}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, margin: "2px 0" }} title="Машини — угоди з передач, у яких «Дата загрузки» в періоді (як «Відправлені авто» у Звіті КВП), незалежно від етапу. Гроші — окремо, за своїми правилами">🚚 {m.machines.toLocaleString("uk-UA")} {plural(m.machines, "машина", "машини", "машин")}{m.machinesNoMoney > 0 && <small style={{ fontSize: 12, color: "var(--warn)", fontWeight: 600 }}> · гроші ще не зайшли: {m.machinesNoMoney.toLocaleString("uk-UA")}</small>}</div>
       <div style={val}>{formatAmountFull(m.earned.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>успішні · {m.earned.n.toLocaleString("uk-UA")} {plural(m.earned.n, "угода", "угоди", "угод")}</small></div>
       <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{formatAmountFull(m.pending.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>очікування · {m.pending.n.toLocaleString("uk-UA")} {plural(m.pending.n, "угода", "угоди", "угод")}</small></div>
       <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>

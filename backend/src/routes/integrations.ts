@@ -3,6 +3,7 @@ import { Router } from "express";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
 import { trackerPeriodError, trackerVacations } from "../core/vacationRules.js";
+import { trackerCalendar } from "../core/trackerCalendar.js";
 import { conversionsCsv, loadConversions } from "../core/googleAdsConversions.js";
 
 /**
@@ -31,6 +32,20 @@ integrationsRouter.get("/tracker/vacations", async (req, res) => {
   const err = trackerPeriodError(from, to);
   if (err) return res.status(400).json({ error: err });
   res.json({ vacations: await trackerVacations(pool, from as string, to as string) });
+});
+
+/**
+ * 📅 КАЛЕНДАР КОМАНДИ ДЛЯ ТАЙМ-ТРЕКЕРА (04.11.2026): відсутності (погоджені й «на погодженні»), чергування, свята.
+ * `?from&to` — як у `vacations` (обидва дні включно, не довше року); ключ той самий — `X-Tracker-Vacations-Key`.
+ * Правила відповіді — `core/trackerCalendar.ts`, контракт — `docs/TRACKER_CALENDAR_API.md`.
+ */
+integrationsRouter.get("/tracker/calendar", async (req, res) => {
+  if (!config.tracker.vacationsKey) return res.status(503).json({ error: "not_configured" });
+  if (!keyAccepted(req.header("X-Tracker-Vacations-Key"), config.tracker.vacationsKey)) return res.status(401).json({ error: "bad_key" });
+  const { from, to } = req.query;
+  const err = trackerPeriodError(from, to);
+  if (err) return res.status(400).json({ error: err });
+  res.json(await trackerCalendar(pool, from as string, to as string));
 });
 
 /**
