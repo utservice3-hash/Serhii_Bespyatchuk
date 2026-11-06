@@ -97,6 +97,16 @@ export function stateSql(alias = "m", activeExpr = "", mws = "mws"): string {
                ELSE 'active' END`;
 }
 
+/**
+ * «Списки про наявну роботу» одним предикатом БЕЗ JOIN — дзеркало `inOwnWorkLists`: звільнений (накладка
+ * адміна або обидва прапорці активності) — ні, «завершує» — так. Для запитів по `managers m` без `stateJoinSql`
+ * (1×1, задача 8249: Шевчук Назар «звільнений» з 08.09, а в Kommo активний — і лишався в ростері Яцика).
+ */
+export function inOwnWorkListsSql(alias = "m", activeExpr = ""): string {
+  return `(SELECT ${stateSql(alias, activeExpr, "ows")} FROM (SELECT 1) ows_one
+             LEFT JOIN manager_work_state ows ON ows.manager_id = ${alias}.id) <> 'dismissed'`;
+}
+
 /** «Кому ставимо план» одним предикатом — дзеркало `hasPlan` на боці SQL. */
 export function hasPlanSql(alias = "m", activeExpr = "", mws = "mws"): string {
   return `(${stateSql(alias, activeExpr, mws)}) = 'active'`;
