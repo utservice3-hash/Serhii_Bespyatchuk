@@ -126,3 +126,28 @@ test("#3469 PPTX: шаблон на місці, імена й суми тижн�
   // дзеркало: слайд із даними НЕ викидається
   assert.equal((dec.decode(f.get("ppt/presentation.xml")!).match(/<p:sldId /g) ?? []).length, 9, "🔴 викинуто слайд, на якому є дані");
 });
+
+/**
+ * #3471 — ЗВУК ПРЕЗЕНТАЦІЇ (09.11.2026). Музика Даші — лише на титулі, поки збираються (і лише коли трек є); фанфари — на
+ * вході на слайд з номінантами, ОДИН раз за показ; «Події тижня», «Пульс» і «Фокус» — без фанфар; 🔇 глушить усе.
+ * 🧨 Червоніє, якщо музика заграє на іншому слайді, фанфари — на «Пульсі», не заграють на «Грошах тижня», повторяться при
+ * поверненні на слайд або прорвуться крізь 🔇.
+ */
+test("#3471 звук презентації: музика лише на титулі, фанфари на слайдах з номінантами раз за показ, 🔇 глушить усе", async () => {
+  const { soundFor, FANFARE_SLIDES } = await load("presentationSound.ts");
+  const none = new Set<string>();
+  const on = (key: string, o: { muted?: boolean; hasMusic?: boolean; played?: Set<string> } = {}) =>
+    soundFor(key, { muted: o.muted ?? false, hasMusic: o.hasMusic ?? true, played: o.played ?? none });
+  assert.deepEqual(on("title"), { music: true, fanfare: false }, "🔴 на титулі не грає музика або грають фанфари");
+  assert.deepEqual(on("title", { hasMusic: false }), { music: false, fanfare: false }, "🔴 музика «грає» без треку");
+  for (const k of ["events", "pulse", "focus"]) assert.deepEqual(on(k), { music: false, fanfare: false }, `🔴 на слайді «${k}» звук, якого там бути не має`);
+  for (const k of ["money", "volume", "awards", "leadgen", "conv"]) {
+    assert.deepEqual(on(k), { music: false, fanfare: true }, `🔴 на слайді з номінантами «${k}» немає фанфар (або грає музика)`);
+    assert.equal(on(k, { played: new Set([k]) }).fanfare, false, `🔴 фанфари на «${k}» повторились при поверненні`);
+  }
+  assert.equal(on("volume", { played: new Set(["money"]) }).fanfare, true, "🔴 фанфари одного слайда заглушили інший");
+  for (const k of ["title", "money", "conv"]) assert.deepEqual(on(k, { muted: true }), { music: false, fanfare: false }, `🔴 звук прорвався крізь 🔇 на «${k}»`);
+  // Перелік слайдів з фанфарами — ключі, що справді існують у презентації (інакше фанфари мовчки не заграли б ніде).
+  const src = readFileSync(FE("sections/NominationsPresentation.tsx"), "utf8");
+  for (const k of FANFARE_SLIDES) assert.match(src, new RegExp(`key: "${k}"`), `🔴 слайда «${k}» у презентації немає — фанфари на ньому не заграють`);
+});

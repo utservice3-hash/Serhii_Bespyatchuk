@@ -8,6 +8,7 @@ import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkPhoto, photoDir, photoStoredName } from "../core/peopleRules.js";
+import { checkMusic, musicStoredName, musicTitle, MUSIC_TYPES, type MusicExt } from "../core/nominationMusic.js";
 import { presentationExtras } from "../core/nominationPeople.js";
 import type { TeamWeek } from "../core/nominationRules.js";
 import { managerPhotos, employeePhotos } from "../core/people.js";
@@ -78,6 +79,7 @@ async function withRights(view: WeekView, v: Viewer) {
     companyTop: admin ? Object.fromEntries(NOMINATIONS.filter((n) => !HIDDEN_ON_SCREEN.includes(n.key)).map((n) => [n.key, companyTop(view.teams, n.key)])) : null,
     texts: await weekTexts(view.weekFrom),
     teamPhoto: admin ? await teamPhotoRef() : null,
+    music: admin ? await musicRef() : null,
   };
 }
 /** Команда рядка рішення: звичайна команда заліку або рейтинг лідогенераторів. */
@@ -287,6 +289,47 @@ nominationsRouter.post("/team-photo", safe(async (req: Request, res: Response) =
     await pool.query(`INSERT INTO nomination_team_photos (file, user_id) VALUES ($1, $2)`, [stored, req.auth!.userId]);
   } catch (e) { await unlink(path.join(photoDir(), stored)).catch(() => undefined); throw e; }
   res.status(201).json({ teamPhoto: await teamPhotoRef() });
+}));
+
+/**
+ * 🎵 МУЗИКА НА ТИТУЛІ (09.11.2026). Трек грає на першому слайді, поки люди збираються; один на всі тижні, Даша міняє,
+ * коли хоче. Як фото команди: файл у корені теки документів (`music-`), у таблиці — лише дописування; «прибрати» —
+ * рядок без файла. Читає й пише лише керівництво (презентація — їхня).
+ */
+async function musicRef(): Promise<{ v: number; title: string | null } | null> {
+  const r = (await pool.query<{ id: number; file: string | null; title: string | null }>(
+    `SELECT id, file, title FROM nomination_music ORDER BY id DESC LIMIT 1`)).rows[0];
+  return r?.file ? { v: r.id, title: r.title } : null;
+}
+nominationsRouter.get("/music", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v || v.role !== "admin") return res.status(403).json({ error: "Музика презентації — для керівництва" });
+  const r = (await pool.query<{ file: string | null }>(`SELECT file FROM nomination_music ORDER BY id DESC LIMIT 1`)).rows[0];
+  if (!r?.file) return res.status(404).json({ error: "Музику ще не завантажено" });
+  const ext = path.extname(r.file).slice(1) as MusicExt;
+  res.sendFile(path.join(photoDir(), path.basename(r.file)), { headers: { "Content-Type": MUSIC_TYPES[ext], "Cache-Control": "private, max-age=86400" } }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: "Файл музики на диску не знайдено" });
+  });
+}));
+nominationsRouter.post("/music", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v || v.role !== "admin") return res.status(403).json({ error: "Музику презентації завантажує керівництво" });
+  // Без файла — «прибрати музику»: рядок без файла, попередні лишаються в історії.
+  if (req.body?.remove === true) {
+    await pool.query(`INSERT INTO nomination_music (file, title, user_id) VALUES (NULL, NULL, $1)`, [req.auth!.userId]);
+    return res.status(201).json({ music: await musicRef() });
+  }
+  const raw = req.body?.dataBase64;
+  const buf = typeof raw === "string" && raw ? Buffer.from(raw.includes(",") ? raw.split(",")[1] : raw, "base64") : null;
+  const chk = checkMusic(buf);
+  if (!chk.ok) return res.status(400).json({ error: chk.error });
+  const stored = musicStoredName(randomUUID(), chk.ext);
+  await mkdir(photoDir(), { recursive: true });
+  await writeFile(path.join(photoDir(), stored), buf!);
+  try {
+    await pool.query(`INSERT INTO nomination_music (file, title, user_id) VALUES ($1, $2, $3)`, [stored, musicTitle(req.body?.name), req.auth!.userId]);
+  } catch (e) { await unlink(path.join(photoDir(), stored)).catch(() => undefined); throw e; }
+  res.status(201).json({ music: await musicRef() });
 }));
 
 /**

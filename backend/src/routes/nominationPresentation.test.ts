@@ -93,6 +93,11 @@ test("#3463 ДИМ: презентація — топ-3 відділу лише 
           headersSent: false,
           status(s: number) { status = s; return res; },
           json(b: unknown) { body = b; res.headersSent = true; resolve(); return res; },
+          // Файлові відповіді (фото, музика): тіло = шлях, байти й заголовки — щоб звірити, ЩО саме віддано.
+          sendFile(f: string, opts: { headers?: Record<string, string> }, cb: (e?: unknown) => void) {
+            try { body = { file: f, bytes: readFileSync(f), headers: opts?.headers ?? {} }; res.headersSent = true; resolve(); }
+            catch (e) { cb(e); }
+          },
         };
         handler({ auth: AUTH[o.who ?? "admin"], query: o.query ?? {}, body: o.body ?? {}, params: {}, headers: {} }, res);
       });
@@ -137,6 +142,55 @@ test("#3463 ДИМ: презентація — топ-3 відділу лише 
     assert.ok(ph.body.teamPhoto?.v > 0, "🔴 фото команди не зберіглось");
     assert.equal((await call("GET", "/week", { query: q })).body.teamPhoto?.v, ph.body.teamPhoto.v, "🔴 тиждень не знає про фото команди");
     await assert.rejects(() => c.query(`DELETE FROM nomination_team_photos`), /заборонено/, "🔴 фото команди можна стерти з історії");
+
+    /**
+     * #3470 — МУЗИКА НА ТИТУЛІ (09.11.2026): завантажує й читає лише керівництво; тип — за байтами (PDF під «.mp3» —
+     * відмова), понад 20 МБ — відмова; адмін отримує РІВНО ті байти, що завантажив, з типом аудіо; «прибрати» — новий
+     * рядок, історію стерти не можна; тімліду тиждень музики не віддає. 🧨 Червоніє, якщо зняти перевірку ролі, приймати
+     * не-аудіо, віддати чужий файл чи дозволити стерти історію.
+     */
+    await t.test("#3470 ДИМ: музика презентації — лише керівництво, тип за байтами, до 20 МБ, ті самі байти назад, історія незмінна", async () => {
+      const { checkMusic } = await import("../core/nominationMusic.js");
+      const id3 = (n: number) => Buffer.concat([Buffer.from("ID3\x04\x00\x00\x00\x00\x00\x00", "latin1"), Buffer.alloc(n, 7)]);
+      // Розпізнавання за байтами — обидва боки межі.
+      assert.equal(checkMusic(new Uint8Array(id3(100))).ok, true, "🔴 MP3 з тегом ID3 не прийнято");
+      assert.equal(checkMusic(new Uint8Array(Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x64]), Buffer.alloc(100)]))).ok, true, "🔴 MP3 без тегу не прийнято");
+      assert.equal(checkMusic(new Uint8Array(Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from("ftypM4A "), Buffer.alloc(40)]))).ok, true, "🔴 M4A не прийнято");
+      assert.equal(checkMusic(new Uint8Array(Buffer.concat([Buffer.from("OggS"), Buffer.alloc(40)]))).ok, true, "🔴 OGG не прийнято");
+      assert.equal(checkMusic(new Uint8Array(Buffer.concat([Buffer.from("%PDF-1.4"), Buffer.alloc(40)]))).ok, false, "🔴 PDF прийнято як музику");
+      assert.equal(checkMusic(new Uint8Array(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(40)]))).ok, false, "🔴 PNG прийнято як музику");
+      const b64 = (b: Buffer) => `data:audio/mpeg;base64,${b.toString("base64")}`;
+      // Нічого не завантажено — 404, у тижні музики немає.
+      assert.equal((await call("GET", "/music")).status, 404, "🔴 музика є до завантаження");
+      assert.equal((await call("GET", "/week", { query: q })).body.music, null, "🔴 тиждень бачить музику до завантаження");
+      // Межа ролі: тімлід і менеджер — ні завантажити, ні прочитати.
+      assert.equal((await call("POST", "/music", { who: "lead", body: { dataBase64: b64(id3(100)), name: "x.mp3" } })).status, 403, "🔴 тімлід завантажив музику");
+      assert.equal((await call("POST", "/music", { who: "mgr", body: { remove: true } })).status, 403, "🔴 менеджер прибрав музику");
+      // Не-аудіо й завеликий файл — відмова.
+      assert.equal((await call("POST", "/music", { body: { dataBase64: b64(Buffer.from("%PDF-1.4 xxxxxxxxxxxx")), name: "трек.mp3" } })).status, 400, "🔴 PDF під іменем .mp3 прийнято");
+      assert.equal((await call("POST", "/music", { body: { dataBase64: b64(id3(20 * 1024 * 1024)), name: "довгий.mp3" } })).status, 400, "🔴 файл понад 20 МБ прийнято");
+      // Дзеркало: адмін завантажує — і отримує рівно ті байти, з типом аудіо.
+      const track = id3(4096);
+      const up = await call("POST", "/music", { body: { dataBase64: b64(track), name: "C:\\fakepath\\Збір команди.mp3" } });
+      assert.equal(up.status, 201, JSON.stringify(up.body));
+      assert.ok(up.body.music?.v > 0, "🔴 музика не збереглась");
+      assert.equal(up.body.music.title, "Збір команди.mp3", "🔴 назва треку з шляхом або загублена");
+      const wk = await call("GET", "/week", { query: q });
+      assert.deepEqual(wk.body.music, up.body.music, "🔴 тиждень не знає про музику");
+      assert.equal((await call("GET", "/week", { who: "lead", query: q })).body.music, null, "🔴 тімлід бачить музику презентації");
+      const got = await call("GET", "/music");
+      assert.equal(got.status, 200);
+      assert.ok(Buffer.compare(got.body.bytes, track) === 0, "🔴 віддано не ті байти, що завантажено");
+      assert.equal(got.body.headers["Content-Type"], "audio/mpeg", "🔴 музика віддається без типу аудіо");
+      assert.equal((await call("GET", "/music", { who: "lead" })).status, 403, "🔴 тімлід читає музику");
+      // «Прибрати» — новий рядок: музики немає, а історія лишилась.
+      const rm = await call("POST", "/music", { body: { remove: true } });
+      assert.equal(rm.status, 201); assert.equal(rm.body.music, null, "🔴 музику не прибрано");
+      assert.equal((await call("GET", "/music")).status, 404, "🔴 прибрана музика далі віддається");
+      assert.equal((await call("GET", "/week", { query: q })).body.music, null, "🔴 тиждень бачить прибрану музику");
+      assert.equal(Number((await c.query(`SELECT count(*) FROM nomination_music`)).rows[0].count), 2, "🔴 «прибрати» стерло історію замість дописати");
+      await assert.rejects(() => c.query(`DELETE FROM nomination_music`), /заборонено/, "🔴 історію музики можна стерти");
+    });
   } finally {
     await c.end();
     const { pool } = await import("../db/pool.js");

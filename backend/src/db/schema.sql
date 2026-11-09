@@ -4095,6 +4095,20 @@ DROP TRIGGER IF EXISTS trg_nomination_team_photos_immutable ON nomination_team_p
 CREATE TRIGGER trg_nomination_team_photos_immutable BEFORE UPDATE OR DELETE ON nomination_team_photos
   FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
 
+-- 🎵 Музика на титулі презентації (09.11.2026): трек грає на першому слайді, поки люди збираються. Завантажує керівництво;
+-- лише дописування — «прибрати музику» = новий рядок без файла, тож історія завантажень лишається. Файл — у корені теки
+-- документів з префіксом `music-` (під нічним бекапом, як фото команди).
+CREATE TABLE IF NOT EXISTS nomination_music (
+  id          SERIAL PRIMARY KEY,
+  file        TEXT CHECK (file IS NULL OR file ~ '^music-[0-9a-f-]+\.(mp3|m4a|ogg)$'),
+  title       TEXT CHECK (title IS NULL OR length(title) <= 120),
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+DROP TRIGGER IF EXISTS trg_nomination_music_immutable ON nomination_music;
+CREATE TRIGGER trg_nomination_music_immutable BEFORE UPDATE OR DELETE ON nomination_music
+  FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
+
 -- Вкладка «Номінації тижня»: керівництво (admin, ceo, opdir, kvp) і тімліди. Менеджерам — дошка в
 -- проході 3. ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
 UPDATE roles SET screen_access = screen_access || '{"nominations":true}'::jsonb

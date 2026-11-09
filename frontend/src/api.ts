@@ -5948,6 +5948,8 @@ export interface NominationWeek {
   texts: Partial<Record<"focus", { text: string; by: string | null; at: string }>>;
   /** Фото команди на титулі (версія = id запису) — лише керівництву. */
   teamPhoto: { v: number } | null;
+  /** 🎵 Музика на титулі презентації (09.11.2026) — лише керівництву; null — не завантажено або прибрано. */
+  music?: { v: number; title: string | null } | null;
 }
 export interface NominationTopRow { place: number; managerId: number; teamId: number; value: number; manual: boolean }
 export interface NominationDef { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct"; rule: string; notCounted: string; noCrm?: boolean }
@@ -6044,6 +6046,21 @@ export const fetchPptxTemplate = async () =>
   new Uint8Array((await api.get<ArrayBuffer>("/nominations/pptx-template", { responseType: "arraybuffer" })).data);
 export const uploadTeamPhoto = async (dataBase64: string) =>
   (await api.post<{ teamPhoto: { v: number } }>("/nominations/team-photo", { dataBase64 })).data.teamPhoto;
+/** 🎵 Музика на титулі: завантажити (файл як data-URL + назва) або прибрати. */
+export const uploadMusic = async (dataBase64: string, name: string) =>
+  (await api.post<{ music: NominationWeek["music"] }>("/nominations/music", { dataBase64, name })).data.music ?? null;
+export const removeMusic = async () => (await api.post<{ music: NominationWeek["music"] }>("/nominations/music", { remove: true })).data.music ?? null;
+const musicUrls = new Map<number, Promise<string | null>>();
+export function musicUrl(v: number): Promise<string | null> {
+  let u = musicUrls.get(v);
+  if (!u) {
+    u = api.get("/nominations/music", { responseType: "blob", params: { v } })
+      .then((r) => URL.createObjectURL(r.data as Blob))
+      .catch(() => { musicUrls.delete(v); return null; });
+    musicUrls.set(v, u);
+  }
+  return u;
+}
 const teamPhotoUrls = new Map<number, Promise<string | null>>();
 export function teamPhotoUrl(v: number): Promise<string | null> {
   let u = teamPhotoUrls.get(v);

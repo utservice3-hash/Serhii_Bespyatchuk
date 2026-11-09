@@ -3,7 +3,7 @@ import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import {
   fetchNominationWeek, reviewNomination, confirmNominationsBulk, fetchDayItems, saveRnkConv,
-  saveWeekText, uploadTeamPhoto, teamPhotoUrl, fetchPresentationExtras, saveNewPosition, type PresentationExtras,
+  saveWeekText, uploadTeamPhoto, teamPhotoUrl, uploadMusic, removeMusic, musicUrl, fetchPresentationExtras, saveNewPosition, type PresentationExtras,
   type NominationWeek, type NominationTeam, type NominationCell, type NominationKey,
   type DayItems, type NominationDef, type RnkConvView,
   lockNominationWeek,
@@ -689,7 +689,7 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
  */
 function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: (d: NominationWeek) => void }) {
   const [focus, setFocus] = useState(week.texts?.focus?.text ?? "");
-  const [busy, setBusy] = useState<"focus" | "photo" | "pos" | null>(null);
+  const [busy, setBusy] = useState<"focus" | "photo" | "pos" | "music" | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
   // «Нова посада» (прохід 2): співробітник + посада; решту подій тижня система бере з «Найму» сама.
@@ -708,6 +708,29 @@ function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: 
     if (week.teamPhoto) void teamPhotoUrl(week.teamPhoto.v).then((u) => { if (alive) setPhoto(u); }); else setPhoto(null);
     return () => { alive = false; };
   }, [week.teamPhoto?.v]);
+  // 🎵 Музика на титулі (09.11.2026): грає на першому слайді, поки люди збираються.
+  const [music, setMusic] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (week.music) void musicUrl(week.music.v).then((u) => { if (alive) setMusic(u); }); else setMusic(null);
+    return () => { alive = false; };
+  }, [week.music?.v]);
+  const pickMusic = (f: File | undefined) => {
+    if (!f) return;
+    if (f.size > 20 * 1024 * 1024) { setErr("Файл музики більший за 20 МБ — оберіть коротший трек або менший файл"); return; }
+    const rd = new FileReader();
+    rd.onload = async () => {
+      setBusy("music"); setErr(null);
+      try { const m = await uploadMusic(String(rd.result), f.name); onData({ ...week, music: m }); }
+      catch (e) { setErr(errorOf(e)); } finally { setBusy(null); }
+    };
+    rd.readAsDataURL(f);
+  };
+  const dropMusic = async () => {
+    setBusy("music"); setErr(null);
+    try { await removeMusic(); onData({ ...week, music: null }); }
+    catch (e) { setErr(errorOf(e)); } finally { setBusy(null); }
+  };
   const saveFocus = async () => {
     setBusy("focus"); setErr(null);
     try { const texts = await saveWeekText({ weekFrom: week.weekFrom, kind: "focus", text: focus.trim() }); onData({ ...week, texts: texts ?? {} }); }
@@ -733,6 +756,15 @@ function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: 
           {photo ? <img src={photo} alt="Фото команди" /> : <div className="nm-muted">Фото команди ще не завантажено — на титулі буде заглушка.</div>}
           <label className="nm-btn">{busy === "photo" ? "Завантажую…" : photo ? "Замінити фото команди" : "Завантажити фото команди"}
             <input type="file" accept="image/jpeg,image/png,image/webp" hidden disabled={busy != null} onChange={(e) => pickPhoto(e.target.files?.[0])} /></label>
+        </div>
+        <div className="nm-field"><span>Музика на початок — грає на титульному слайді, поки всі збираються (у презентації її можна вимкнути кнопкою 🔊 або клавішею M)</span>
+          {music ? <div className="nm-btns"><span>🎵 <b>{week.music?.title ?? "Трек"}</b></span><audio controls preload="none" src={music} style={{ height: 32 }} /></div>
+            : <div className="nm-muted">Музику ще не завантажено — титул буде без звуку.</div>}
+          <div className="nm-btns">
+            <label className="nm-btn">{busy === "music" ? "Завантажую…" : music ? "Замінити музику" : "Завантажити музику (MP3, M4A, OGG до 20 МБ)"}
+              <input type="file" accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/ogg,.mp3,.m4a,.ogg" hidden disabled={busy != null} onChange={(e) => pickMusic(e.target.files?.[0])} /></label>
+            {music ? <button className="nm-btn" disabled={busy != null} onClick={() => void dropMusic()}>Прибрати музику</button> : null}
+          </div>
         </div>
         <div className="nm-field"><span>Події тижня: дні народження й новачків (14 днів від прийому) система бере з «Найму». Нову посаду — вкажіть тут:</span>
           {extras ? <div className="nm-muted">

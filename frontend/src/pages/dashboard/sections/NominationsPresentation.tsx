@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchReportPlan, fetchPresentationExtras, teamPhotoUrl, employeePhotoUrl, fetchPptxTemplate,
+  fetchReportPlan, fetchPresentationExtras, teamPhotoUrl, employeePhotoUrl, fetchPptxTemplate, musicUrl,
   type NominationWeek, type ReportPlan, type PresentationExtras, type PhotoRef,
 } from "../../../api";
 import { EmployeePhoto } from "./EmployeePhotos";
 import { buildPresentationModel, dmy, short, num, type TopKey, type AwardM, type EventM } from "../presentationModel";
 import { unzip, zipStore, fillPptx, photoNeeds } from "../pptxTemplate";
+import { soundFor, playFanfare, FANFARE_SLIDES } from "../presentationSound";
 import "./presentation.css";
 
 /**
@@ -369,6 +370,8 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       else if (e.key === "Home") setI(0);
       else if (e.key === "End") setI(n - 1);
       else if (e.key === "Escape" && !document.fullscreenElement) onClose();
+      // M — за кодом клавіші, щоб працювало й на українській розкладці («ь»).
+      else if (e.code === "KeyM") setMuted((m) => !m);
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
@@ -387,6 +390,53 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
 
   const full = () => { if (document.fullscreenElement) void document.exitFullscreen(); else void overlay.current?.requestFullscreen?.(); };
   const cur = slides[Math.min(i, n - 1)];
+
+  /**
+   * 🎵 ЗВУК (09.11.2026): музика Даші — лише на титулі, поки люди збираються; фанфари — на вході на слайд з номінантами,
+   * раз за показ. Що саме звучить — `soundFor` (гейт #3471); тут лише програвання. Відкриття презентації — це клік, тож
+   * браузер дозволяє звук; якщо все ж ні — кнопка «▶ Музика».
+   */
+  const [muted, setMuted] = useState(false);
+  const [musicSrc, setMusicSrc] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const audio = useRef<HTMLAudioElement>(null);
+  const actx = useRef<AudioContext | null>(null);
+  const played = useRef(new Set<string>());
+  useEffect(() => {
+    let alive = true;
+    setMusicSrc(null);
+    if (week.music) void musicUrl(week.music.v).then((u) => { if (alive) setMusicSrc(u); });
+    return () => { alive = false; };
+  }, [week.music?.v]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { audio.current?.pause(); void actx.current?.close().catch(() => undefined); }, []);
+  const key = cur?.key ?? "";
+  useEffect(() => {
+    const a = audio.current;
+    const plan = soundFor(key, { muted, hasMusic: !!musicSrc, played: played.current });
+    // Слайд з номінантами зараховано й тоді, коли звук вимкнено: увімкнули на ньому ж — фанфари не наздоганяють.
+    if ((FANFARE_SLIDES as readonly string[]).includes(key)) played.current.add(key);
+    if (plan.fanfare) {
+      try {
+        const ctx = (actx.current ??= new AudioContext());
+        void ctx.resume().then(() => playFanfare(ctx));
+      } catch { /* без Web Audio — тиша, презентація працює */ }
+    }
+    if (!a) return;
+    if (plan.music) {
+      a.volume = 0.6;
+      a.play().then(() => setBlocked(false)).catch(() => setBlocked(true));
+      return;
+    }
+    setBlocked(false);
+    if (muted || a.paused) { a.pause(); return; }
+    // Пішли з титулу — музика затихає за ~1.5 с, а не обривається.
+    const t = setInterval(() => {
+      if (a.volume > 0.05) a.volume = Math.max(0, a.volume - 0.04);
+      else { a.pause(); clearInterval(t); }
+    }, 100);
+    return () => clearInterval(t);
+  }, [key, muted, musicSrc]);
+  const soundBtn = <button onClick={() => setMuted((m) => !m)} aria-label={muted ? "увімкнути звук" : "вимкнути звук"} title="Звук (клавіша M)">{muted ? "🔇 Звук вимкнено" : "🔊 Звук"}</button>;
   const wait = ready ? undefined : "Зачекайте — презентація ще збирається";
 
   return (
@@ -405,12 +455,18 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
         <button onClick={() => go(i + 1)} aria-label="наступний слайд" disabled={i >= n - 1}>→</button>
         <button onClick={() => setPrinting(true)} disabled={!ready || printing} title={wait}>{printing ? "Готую PDF…" : "Завантажити PDF"}</button>
         <button onClick={() => void downloadPptx()} disabled={!ready || pptx === "busy"} title={wait}>{pptx === "busy" ? "Готую PPTX…" : "Завантажити PPTX"}</button>
+        {soundBtn}
         <button onClick={full}>На весь екран</button>
         <button onClick={onClose}>Закрити</button>
       </div>
       <div className="ps-viewport" ref={viewport} onClick={(e) => { if (e.target === viewport.current) go(i + 1); }}>
         <div className="ps-stage" style={{ transform: `translate(-50%, -50%) scale(${scale})` }}>{cur?.node}</div>
+        {/* На весь екран панелі немає — на титулі з музикою кнопка звуку лишається в куті. */}
+        {key === "title" && musicSrc ? (
+          <div className="ps-sound">{blocked && !muted ? <button onClick={() => void audio.current?.play().then(() => setBlocked(false)).catch(() => undefined)}>▶ Музика</button> : null}{soundBtn}</div>
+        ) : null}
       </div>
+      {musicSrc ? <audio ref={audio} src={musicSrc} loop preload="auto" /> : null}
       {printing ? createPortal(<div className="ps-print-root">{slides.map((sl) => <div className="ps-print-page" key={sl.key}>{sl.node}</div>)}</div>, document.body) : null}
     </div>
   );
