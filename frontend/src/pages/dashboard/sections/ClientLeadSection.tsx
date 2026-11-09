@@ -27,7 +27,7 @@ const COLOR = {
   yellow: { dot: "🟡", title: "Жовті", sub: "мали замовити за своїм ритмом, але не замовили", bg: "#fffbeb", fg: "#92400e", line: "#fcd34d" },
   red: { dot: "🔴", title: "Червоні", sub: "втрачені — 180+ днів без замовлення", bg: "#fef2f2", fg: "#991b1b", line: "#fca5a5" },
 } as const;
-const WORK_BY: Record<string, string> = { talk: "розмова", stage: "рух угоди", comment: "коментар", contact: "контакт", payment: "оплата у Виписці" };
+const WORK_BY: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці" };
 const SOURCE: Record<string, string> = { leadgen: "лідогенерація", ad: "реклама", manager: "менеджер" };
 
 const S = {
@@ -183,7 +183,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
           <td style={S.td}>
             {L.works.yes
               ? <span style={S.chip("#dcfce7", "#166534")} title={`за ${L.works.windowDays} дн. (ритм сегмента) є робота`}>✅ працюють · {WORK_BY[L.works.by ?? ""]} {dm(L.works.at)}</span>
-              : <span style={S.chip("#fef2f2", "#b91c1c")} title="розмова від 10 с, рух угоди, коментар, контакт або оплата у Виписці — нічого">роботи немає за {L.works.windowDays} дн.</span>}
+              : <span style={S.chip("#fef2f2", "#b91c1c")} title="розмова від 10 с, нова угода чи рух угоди, замовлення, коментар, контакт або оплата у Виписці — нічого">роботи немає за {L.works.windowDays} дн.</span>}
           </td>
           <td style={{ ...S.td, minWidth: 220 }}>
             <RowComment clientKey={c.clientKey} value={c.lastComment} canWrite onSaved={load} />

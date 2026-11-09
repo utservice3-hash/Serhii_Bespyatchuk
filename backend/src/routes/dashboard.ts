@@ -6803,6 +6803,35 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const leadYm = todayKyiv.slice(0, 7);
   /** Ручний контакт зберігається в UTC (`…Z`) — день беремо київський. */
   const kyivDayOfIso = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date(iso));
+  /** 🚦 Колір, робота, «передати» — одним правилом на рядок (7360); «Немає роботи» й «днів тому» беруть звідси (8333). */
+  const leadOf = (c: (typeof rosterRows)[number]) => {
+    const f = leadFacts.get(c.client_key);
+    const segment = factsFor(seg, c.client_key).segment;
+    const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null);
+    const orderDays = lastOrder ? clientLeadRules.daysBetween(lastOrder, todayKyiv) : null;
+    const color = clientLeadRules.colorOf(segment, orderDays);
+    const rt = reactByKey.get(c.client_key);
+    const taskOpen = (rt?.taskId ?? null) != null && !["done", "cancelled"].includes(rt?.taskStatus ?? "");
+    const manualAt = manualByKey.get(c.client_key)?.at ?? null;
+    return {
+      color, lastOrder, orderDays,
+      works: clientLeadRules.workVerdict({
+        talk10: f?.talk10 ?? null, stage: f?.stage ?? null,
+        comment: lastComment.get(c.client_key)?.createdAt ?? null,
+        contact: manualAt ? kyivDayOfIso(manualAt) : null,
+        payment: paymentProofByKey.get(c.client_key)?.at ?? null,
+        order: lastOrder, dealNew: f?.dealNew ?? null,
+      }, segment, todayKyiv),
+      talk10: f?.talk10 ?? null,
+      summary: f?.summary ?? null,
+      handOver: clientLeadRules.handOverDue({ color, taskOpen, taskDeadline: rt?.taskDeadline ?? null,
+        taskCreated: rt?.taskId != null ? leadTaskCreated.get(rt.taskId) ?? null : null, talk10: f?.talk10 ?? null, today: todayKyiv }),
+      newRepeat: clientLeadRules.becameRepeatIn(f?.secondPaid ?? null, leadYm),
+      source: clientLeadRules.repeatSource(f?.leadgen ?? false, f?.firstPaidChannel ?? null),
+      lostThisMonth: clientLeadRules.lostIn(lastOrder, leadYm),
+    };
+  };
+  const leadByKey = new Map(rosterRows.map((c) => [c.client_key, leadOf(c)]));
   const clients = rosterRows.map((c) => {
     const p = planByKey.get(c.client_key);
     const plan = p ? Number(p.plan) : 0;
@@ -6867,10 +6896,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       orders: Number(c.orders),
       lifetimeRevenue: Number(c.revenue),
       since: c.first_paid ? c.first_paid.slice(0, 7) : null,   // YYYY-MM
-      lastOrderDays: dayOf(c.last_paid),
+      // 🗓 «Днів тому» — від свіжішого з рахунку й оплати (задача 8333), а не від самої оплати.
+      lastOrderDays: leadByKey.get(c.client_key)!.orderDays,
       // 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1): одне правило на сервері — `core/clientTabs.ts`.
       // 🔁 З блоку 4 (п.4.1) «Реактивація» = 3 повні місяці без рахунку, а не дні від оплати.
-      tabGroup: clientTabs.clientTabGroup(inReactNow(c.client_key), dayOf(c.last_paid)),
+      tabGroup: clientTabs.clientTabGroup(inReactNow(c.client_key), leadByKey.get(c.client_key)!.orderDays),
       // 🔁 Цикл реактивації (п.4.2–4.3): стан рішення, строк до автопередачі й дозволені кнопки. Лише для
       // тих, хто у вкладці; решті — null («не стосується»), щоб фронт не малював кнопки живому клієнту.
       lastInvoice: lastInvByKey.get(c.client_key) ?? null,
@@ -6898,9 +6928,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       /** 🧾 Гроші «з рахунку» по місяцях (останній — місяць екрана) і середнє за 3 повні місяці перед ним (макет 5609). */
       historyInv: histInvByKey.get(c.client_key) ?? histMonths.map(() => 0),
       avg3: (() => { const a = histInvByKey.get(c.client_key); return a ? Math.round((a[2] + a[3] + a[4]) / 3) : 0; })(),
+      // 🧾 Задача 8333: «Немає роботи» = немає жодної роботи за ритм сегмента (той самий вердикт, що «працюють») і немає
+      // відкритої задачі чи кроку. Докази 6455 (угода від рахунку, оплата у Виписці) лишились у рядку для показу.
       work: repeatScreenRules.workFlags({
-        invoice: invoiceProofByKey.get(c.client_key) ?? null,
-        payment: paymentProofByKey.get(c.client_key) ?? null,
+        works: leadByKey.get(c.client_key)!.works.yes,
         stepOpen: stepByKey.has(c.client_key), stepDue: stepByKey.get(c.client_key)?.due_date ?? null,
         taskOpen: (reactByKey.get(c.client_key)?.taskId ?? null) != null && !["done", "cancelled"].includes(reactByKey.get(c.client_key)?.taskStatus ?? ""),
         taskDue: reactByKey.get(c.client_key)?.taskDeadline ?? null,
@@ -6912,32 +6943,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         return { invoice: inv ? { kommoId: inv.kommoId, stage: inv.stage, at: inv.at, open: inv.open, url: kommoLeadUrl(inv.kommoId) } : null,
                  payment: pay ? { at: pay.at, amount: pay.amount } : null };
       })(),
-      lead: (() => {
-        const f = leadFacts.get(c.client_key);
-        const segment = factsFor(seg, c.client_key).segment;
-        const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null);
-        const orderDays = lastOrder ? clientLeadRules.daysBetween(lastOrder, todayKyiv) : null;
-        const color = clientLeadRules.colorOf(segment, orderDays);
-        const rt = reactByKey.get(c.client_key);
-        const taskOpen = (rt?.taskId ?? null) != null && !["done", "cancelled"].includes(rt?.taskStatus ?? "");
-        const manualAt = manualByKey.get(c.client_key)?.at ?? null;
-        return {
-          color, lastOrder, orderDays,
-          works: clientLeadRules.workVerdict({
-            talk10: f?.talk10 ?? null, stage: f?.stage ?? null,
-            comment: lastComment.get(c.client_key)?.createdAt ?? null,
-            contact: manualAt ? kyivDayOfIso(manualAt) : null,
-            payment: paymentProofByKey.get(c.client_key)?.at ?? null,
-          }, segment, todayKyiv),
-          talk10: f?.talk10 ?? null,
-          summary: f?.summary ?? null,
-          handOver: clientLeadRules.handOverDue({ color, taskOpen, taskDeadline: rt?.taskDeadline ?? null,
-            taskCreated: rt?.taskId != null ? leadTaskCreated.get(rt.taskId) ?? null : null, talk10: f?.talk10 ?? null, today: todayKyiv }),
-          newRepeat: clientLeadRules.becameRepeatIn(f?.secondPaid ?? null, leadYm),
-          source: clientLeadRules.repeatSource(f?.leadgen ?? false, f?.firstPaidChannel ?? null),
-          lostThisMonth: clientLeadRules.lostIn(lastOrder, leadYm),
-        };
-      })(),
+      lead: leadByKey.get(c.client_key)!,
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
       managerName: c.manager_name,

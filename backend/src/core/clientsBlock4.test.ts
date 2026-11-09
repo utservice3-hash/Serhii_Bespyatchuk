@@ -53,7 +53,13 @@ test("#840 3 ПОВНІ МІСЯЦІ БЕЗ РАХУНКУ: межа по оби
   assert.ok(TAB_GROUP_RANK.regular < TAB_GROUP_RANK.yellow && TAB_GROUP_RANK.yellow < TAB_GROUP_RANK.react);
 });
 
-test("#840c ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДОК: фільтр, порядок і жовтий фон — з поля сервера; група — від рахунку", () => {
+/**
+ * #3451 — НАСТУПНИК `#840c` (задача 8333, 09.11.2026): те саме «фронт не має власного правила вкладок», але група рядка
+ * («жовті» — 30+ днів без замовлення) тепер рахується від тієї самої дати, що «днів тому», — свіжішого з рахунку й
+ * оплати (`lead.orderDays`), а не від самої оплати. Інакше «днів тому» й жовтий фон розійшлися б (і живий гейт ростеру).
+ * 🧨 Червоніє, якщо група знову піде від дати оплати або фронт заведе власний поріг.
+ */
+test("#3451 ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДОК: фільтр, порядок і жовтий фон — з поля сервера; група — від рахунку й дати замовлення", () => {
   const list = read(`${SECTIONS}/ClientPlansSection.tsx`);
   assert.match(list, /tab === "regular" && c\.tabGroup === "react"\) return false/, "🔴 вкладка «Постійні» фільтрує не за групою сервера");
   assert.match(list, /tab === "react" && c\.tabGroup !== "react"\) return false/, "🔴 вкладка «Реактивація» фільтрує не за групою сервера");
@@ -62,8 +68,8 @@ test("#840c ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДО�
   assert.doesNotMatch(list, /const risk = [^;]*lastOrderDays/, "🔴 у фронті знову власний поріг «жовтого» — друга редакція правила");
   assert.doesNotMatch(list, /stateFilter/, "🔴 повернувся ряд «Стан:» поруч із вкладками — дві осі на одне питання");
   const dash = codeOnly(read("backend/src/routes/dashboard.ts"));
-  assert.match(dash, /tabGroup: clientTabs\.clientTabGroup\(inReactNow\(c\.client_key\), dayOf\(c\.last_paid\)\)/,
-    "🔴 група вкладки /client-plans рахується не від рахунку (п.4.1) — або знову від стану за днями оплати");
+  assert.match(dash, /tabGroup: clientTabs\.clientTabGroup\(inReactNow\(c\.client_key\), leadByKey\.get\(c\.client_key\)!\.orderDays\)/,
+    "🔴 група вкладки /client-plans рахується не від рахунку (п.4.1) або не від тієї дати, що «днів тому» (8333)");
   assert.match(dash, /const inReactNow = \(key: string\) => reactCycleRules\.inReact\(lastInvByKey\.get\(key\) \?\? null, nowYm\);/,
     "🔴 «у реактивації» рахується не правилом ядра від дати останнього рахунку");
   assert.match(dash, /money\.lastInvoiceByClientKey\(clientKeys\)/, "🔴 дата останнього рахунку не з ядра грошей — розійдеться з фактом «з рахунку»");

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sameWindows, deltaVsAvg, workFlags, noWorkFrom, NO_WORK_DAYS, NO_WORK_DAYS_MIN, NO_WORK_DAYS_MAX } from "./repeatScreenRules.js";
+import { workVerdict, type WorkFacts } from "./clientLeadRules.js";
+import { stateOf, type ClientSegment } from "./reactivationRules.js";
 
 /**
  * 👥 «ПОСТІЙНІ КЛІЄНТИ» ПІСЛЯ TOP WEEKLY 12.10 (задача 5609, ТЗ Юлі 12.10.2026, регламент ред. 2): картки, що фільтрують
@@ -35,56 +37,67 @@ test("#1710 ВІКНА ПОРІВНЯННЯ: той самий відрізок 
 });
 
 /**
- * #1900 — «БЕЗ РОБОТИ» ЗА УГОДОЮ З РАХУНКОМ АБО ОПЛАТОЮ (задача 6455, правило Сергія 20.10.2026; Роман 23.10.2026).
- * Роботу підтверджує ЛИШЕ угода «від рахунку» або оплата; розмови, крок і задача з датою — більше ні. «Без задачі» і
- * «прострочена» — як були. Період за замовчуванням 30 днів, межі налаштування 7–180, перший день = сьогодні − N.
- * 🧨 Червоніє, якщо повернути крок / задачу в правило, рахувати «без роботи» при оплаті або при угоді, чи зсунути період.
+ * #3449 🪞 — «НЕМАЄ РОБОТИ» ЗА РИТМОМ СЕГМЕНТА (задача 8333, ТЗ Юлі 06.11; Роман 09.11 «так, роби»; наступник `#1900`).
+ * Робота = будь-що з вердикту «працюють» (розмова від 10 с, рух чи нова угода, замовлення, оплата у Виписці, коментар,
+ * контакт) АБО відкрита задача чи крок. «Без задачі» і «прострочена» — як були.
+ * 🔴 ГОЛОВНЕ — ВЛАСТИВІСТЬ, А НЕ ПРИКЛАД: для кожного сегмента й кожного дня 0…400 клієнт, чий стан «Активний», НЕ може
+ * бути «Немає роботи» — саме цей збіг (54 клієнти 06.11) Дмитро Яцик назвав брехнею екрана.
+ * 🧨 Червоніє, якщо задача/крок перестануть рятувати, замовлення випаде з доказів або вікно роботи розійдеться з ритмом.
  */
-test("#1900 БЕЗ РОБОТИ = НЕМАЄ НІ УГОДИ З РАХУНКОМ, НІ ОПЛАТИ: крок і задача більше не рятують; без задачі й прострочена — як були", () => {
-  const today = "2026-10-23";
-  const base = { invoice: null, payment: null, stepOpen: false, stepDue: null, taskOpen: false, taskDue: null, today };
-  assert.equal(NO_WORK_DAYS, 30);
-  assert.ok(NO_WORK_DAYS_MIN <= NO_WORK_DAYS && NO_WORK_DAYS <= NO_WORK_DAYS_MAX);
-  assert.equal(noWorkFrom(today, 30), "2026-09-23", "🔴 період «без роботи» зсунуто");
-  assert.equal(noWorkFrom("2026-03-01", 1), "2026-02-28", "🔴 межа місяця");
-  assert.deepEqual(workFlags(base), { noWork: true, noTask: true, overdue: false }, "🔴 клієнт без угоди й оплати не «без роботи»");
-  assert.equal(workFlags({ ...base, invoice: { kommoId: 1 } }).noWork, false, "🔴 угода з рахунком не підтверджує роботу");
-  assert.equal(workFlags({ ...base, payment: { at: "2026-10-20" } }).noWork, false, "🔴 оплата у Виписці не підтверджує роботу");
-  assert.deepEqual(workFlags({ ...base, stepOpen: true, stepDue: "2026-10-30" }), { noWork: true, noTask: false, overdue: false },
-    "🔴 крок із датою досі рятує від «без роботи» (Роман 23.10: більше ні)");
-  assert.deepEqual(workFlags({ ...base, taskOpen: true, taskDue: "2026-10-30" }), { noWork: true, noTask: false, overdue: false },
-    "🔴 задача з датою досі рятує від «без роботи»");
-  assert.deepEqual(workFlags({ ...base, stepOpen: true, stepDue: "2026-10-22" }), { noWork: true, noTask: false, overdue: true }, "🔴 прострочений крок не прострочений");
-  assert.deepEqual(workFlags({ ...base, invoice: { kommoId: 1 }, stepOpen: true, stepDue: null }), { noWork: false, noTask: false, overdue: false });
-  // У правилі немає жодного входу про розмови — щоб їх не повернули «за звичкою».
+test("#3449 🪞 НЕМАЄ РОБОТИ = ні роботи за ритм сегмента, ні задачі, ні кроку; «Активний» ніколи не «Немає роботи»", () => {
+  const today = "2026-11-09";
+  const base = { works: false, stepOpen: false, stepDue: null, taskOpen: false, taskDue: null, today };
+  assert.deepEqual(workFlags(base), { noWork: true, noTask: true, overdue: false }, "🔴 клієнт без жодної роботи не «Немає роботи»");
+  assert.equal(workFlags({ ...base, works: true }).noWork, false, "🔴 робота за ритм не рятує від «Немає роботи»");
+  assert.deepEqual(workFlags({ ...base, taskOpen: true, taskDue: "2026-11-20" }), { noWork: false, noTask: false, overdue: false },
+    "🔴 відкрита задача не рахується роботою (Юля 06.11: «задача = є робота»)");
+  assert.deepEqual(workFlags({ ...base, stepOpen: true, stepDue: "2026-11-01" }), { noWork: false, noTask: false, overdue: true },
+    "🔴 відкритий крок не рахується роботою, або прострочений крок не прострочений");
+  // Нові докази 8333 — по обидва боки вікна (регулярний: 30 днів).
+  const none: WorkFacts = { talk10: null, stage: null, comment: null, contact: null, payment: null };
+  assert.deepEqual([workVerdict({ ...none, order: "2026-10-10" }, "regular", today).by, workVerdict({ ...none, order: "2026-10-09" }, "regular", today).yes],
+    ["order", false], "🔴 замовлення не підтверджує роботу, або межа вікна зсунута");
+  assert.equal(workVerdict({ ...none, dealNew: "2026-11-02" }, "regular", today).by, "deal", "🔴 нова угода будь-якого етапу не рахується роботою");
+  // Властивість: «Активний» (оплата `d` днів тому, d — будь-яке) ⇒ є робота.
+  const ymd = (d: number) => new Date(Date.parse(`${today}T00:00:00Z`) - d * 864e5).toISOString().slice(0, 10);
+  for (const seg of ["vip", "regular", "episodic", "unknown"] as ClientSegment[]) {
+    let actives = 0;
+    for (let d = 0; d <= 400; d++) {
+      if (stateOf(d, seg) !== "active") continue;
+      actives++;
+      const v = workVerdict({ ...none, order: ymd(d) }, seg, today);
+      assert.equal(workFlags({ ...base, works: v.yes }).noWork, false, `🔴 ${seg}: «Активний» (${d} дн.) і «Немає роботи» одночасно`);
+    }
+    assert.ok(actives > 0, `фікстура: для ${seg} не знайшлося жодного активного дня — властивість нічого не перевірила`);
+  }
+  // У правилі немає входів 6455 — щоб «лише рахунок або оплата» не повернули мовчки.
   const src = SRC("core/repeatScreenRules.ts");
   const fn = src.slice(src.indexOf("export function workFlags("), src.indexOf("\n}\n", src.indexOf("export function workFlags(")));
-  assert.doesNotMatch(fn, /lastTalk|lastManual|ahead\(/, "🔴 у правило «без роботи» повернулись розмови чи крок / задача з датою");
+  assert.match(fn, /noWork: !w\.works && !w\.stepOpen && !w\.taskOpen,/, "🔴 «Немає роботи» рахується не за новим правилом");
 });
 
 /**
- * #1900c — ПРОВОДКА: `/client-plans` бере період із НАЛАШТУВАННЯ (а не з константи), факти — з `clientWorkProof` по тих
- * самих ключах, у рядок кладе доказ; налаштування є на бекенді й у формі; екран підписує нове правило. 🧨 Червоніє, якщо
- * повернути константу, загубити доказ у рядку або лишити старий підпис «ні розмови в Ringostat».
+ * #3450 — ПРОВОДКА «НЕМАЄ РОБОТИ» І «ДНІВ ТОМУ» (задача 8333; наступник `#1900c`): рядок `/client-plans` бере `works`
+ * з того самого вердикту, що екран «З ким говорити» (і передає йому замовлення й нову угоду); «днів тому» і група
+ * «жовті» — від свіжішого з рахунку й оплати; докази 6455 (угода від рахунку, оплата у Виписці) лишились у рядку для
+ * показу, період доказу — з налаштувань.
+ * 🧨 Червоніє, якщо `noWork` знову рахуватимуть від доказів 6455, «днів тому» — від самої оплати, або два екрани
+ * отримають різні вердикти.
  */
-test("#1900c ПРОВОДКА «БЕЗ РОБОТИ»: період із налаштувань, докази по тих самих ключах, у рядку й на екрані; старих підписів немає", () => {
+test("#3450 ПРОВОДКА: «Немає роботи» з вердикту «працюють», «днів тому» й група — від замовлення; докази в рядку лишились", () => {
   const route = SRC("routes/dashboard.ts");
   const h = route.slice(route.indexOf(`dashboardRouter.get("/client-plans"`), route.indexOf("dashboardRouter.", route.indexOf(`dashboardRouter.get("/client-plans"`) + 10));
-  assert.match(h, /const noWorkDays = \(await getSettings\(\)\)\.noWorkDays;/, "🔴 період «без роботи» не з налаштувань");
+  assert.match(h, /work: repeatScreenRules\.workFlags\(\{\s*works: leadByKey\.get\(c\.client_key\)!\.works\.yes,/, "🔴 «Немає роботи» не з вердикту «працюють»");
+  assert.match(h, /order: lastOrder, dealNew: f\?\.dealNew \?\? null,/, "🔴 замовлення й нова угода не доходять до вердикту");
+  assert.match(h, /lastOrderDays: leadByKey\.get\(c\.client_key\)!\.orderDays,/, "🔴 «днів тому» — не від свіжішого з рахунку й оплати");
+  assert.match(h, /clientTabs\.clientTabGroup\(inReactNow\(c\.client_key\), leadByKey\.get\(c\.client_key\)!\.orderDays\)/, "🔴 «жовті» рахуються від іншої дати, ніж «днів тому»");
+  assert.match(h, /lead: leadByKey\.get\(c\.client_key\)!,/, "🔴 екран «З ким говорити» отримує інший вердикт, ніж «Немає роботи»");
+  assert.match(h, /const noWorkDays = \(await getSettings\(\)\)\.noWorkDays;/);
   assert.match(h, /clientWorkProof\.invoiceProofByClientKey\(pool, clientKeys, repeatScreenRules\.noWorkFrom\(todayKyiv, noWorkDays\), todayKyiv\)/);
-  assert.match(h, /clientWorkProof\.paymentProofByClientKey\(pool, clientKeys, noWorkDays\)/);
-  assert.match(h, /invoice: invoiceProofByKey\.get\(c\.client_key\) \?\? null,\s*payment: paymentProofByKey\.get\(c\.client_key\) \?\? null,/, "🔴 правило отримує не ті факти");
   assert.match(h, /workProof: \(\(\) => \{/, "🔴 у рядку немає доказу роботи");
-  assert.match(h, /noWorkDays \},/, "🔴 екран підписує не той період, що рахує сервер");
-  assert.doesNotMatch(h, /NO_WORK_DAYS/, "🔴 сервер рахує константою, а не налаштуванням");
-  const settings = SRC("routes/settings.ts");
-  assert.match(settings, /noWorkDays: clampInt\(body\.noWorkDays, NO_WORK_DAYS_MIN, NO_WORK_DAYS_MAX, current\.noWorkDays\),/);
-  const fe = (rel: string) => readFileSync(FE(rel), "utf8");
-  assert.match(fe("pages/dashboard/sections/SettingsSection.tsx"), /\{ key: "noWorkDays", label: /, "🔴 період не можна змінити в Налаштуваннях");
-  const scr = fe("pages/dashboard/sections/ClientPlansSection.tsx");
-  assert.doesNotMatch(scr, /ні розмови в Ringostat, ні ручного контакту|ні розмови, ні контакту в месенджері|ні розмови в телефонії/, "🔴 на екрані лишився старий підпис «без роботи»");
+  const scr = FE_SRC("pages/dashboard/sections/ClientPlansSection.tsx");
+  assert.doesNotMatch(scr, /днів без угоди з рахунком і без оплати|немає ні угоди на «Виставленні рахунку» чи далі, ні оплати від клієнта у Виписці/, "🔴 на екрані лишився підпис правила 6455");
   assert.match(scr, /c\.workProof\.invoice\.url/, "🔴 біля клієнта немає посилання на угоду-доказ");
-  assert.match(scr, /"Підтвердження роботи"/, "🔴 у CSV немає доказу");
 });
 
 interface Cards {

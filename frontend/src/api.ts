@@ -4697,7 +4697,7 @@ export interface ClientLead {
   color: "green" | "yellow" | "red";
   lastOrder: string | null; orderDays: number | null;
   /** Чи працюють із клієнтом за вікно сегмента і чим це підтверджено (найсвіжіший доказ). */
-  works: { yes: boolean; by: "talk" | "stage" | "comment" | "contact" | "payment" | null; at: string | null; windowDays: number };
+  works: { yes: boolean; by: "talk" | "stage" | "deal" | "order" | "comment" | "contact" | "payment" | null; at: string | null; windowDays: number };
   /** Остання розмова від 10 с і суть останньої розмови, яку розібрав AI. */
   talk10: string | null;
   summary: { at: string; text: string } | null;

@@ -21,7 +21,7 @@
 import { SEGMENT_SLEEPING_DAYS, LOST_DAYS, stateOf, type ClientSegment } from "./reactivationRules.js";
 
 export type LeadColor = "green" | "yellow" | "red";
-export type WorkBy = "talk" | "stage" | "comment" | "contact" | "payment";
+export type WorkBy = "talk" | "stage" | "comment" | "contact" | "payment" | "order" | "deal";
 export type RepeatSource = "leadgen" | "ad" | "manager";
 
 /** Мінімальна тривалість розмови, що вважається роботою (ТЗ: «розмова від 10 с»). */
@@ -54,6 +54,12 @@ export const workWindowDays = (segment: ClientSegment): number => SEGMENT_SLEEPI
 /** Факти роботи — київські дати `YYYY-MM-DD` останньої події кожного виду (або null). */
 export interface WorkFacts {
   talk10: string | null; stage: string | null; comment: string | null; contact: string | null; payment: string | null;
+  /**
+   * 🧾 Задача 8333 (Юля 06.11, Роман 09.11 «так, роби»): замовлення (рахунок або оплата — свіжіше) і НОВА угода
+   * будь-якого етапу теж підтверджують роботу. Саме `order` гарантує, що «Активний» і «Немає роботи» не збігаються:
+   * активний = замовив у межах ритму, а вікно роботи — той самий ритм.
+   */
+  order?: string | null; dealNew?: string | null;
 }
 
 /**
@@ -64,10 +70,10 @@ export function workVerdict(f: WorkFacts, segment: ClientSegment, today: string)
   const windowDays = workWindowDays(segment);
   const from = addDays(today, -windowDays);
   let by: WorkBy | null = null, at: string | null = null;
-  for (const k of ["talk10", "stage", "comment", "contact", "payment"] as const) {
+  for (const k of ["talk10", "stage", "comment", "contact", "payment", "order", "dealNew"] as const) {
     const d = f[k]?.slice(0, 10) ?? null;
     if (!d || d < from || d > today) continue;
-    if (at == null || d > at) { at = d; by = k === "talk10" ? "talk" : k; }
+    if (at == null || d > at) { at = d; by = k === "talk10" ? "talk" : k === "dealNew" ? "deal" : k; }
   }
   return { yes: by != null, by, at, windowDays };
 }

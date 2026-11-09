@@ -34,6 +34,8 @@ const STICKY_TH: React.CSSProperties = { position: "sticky", top: 0, zIndex: 2, 
 /** Ширини двох закріплених зліва колонок «Робота» й «Клієнт» — назва клієнта завжди видна (ТЗ 5609, п.6). */
 const W_WORK = 112, W_NAME = 260;
 const dm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+/** Чим підтверджено роботу (вердикт «працюють», задача 8333) — словами для підказки. */
+const WORK_BY_TEXT: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці" };
 const uah = (n: number) => `${Math.round(n).toLocaleString("uk-UA")} ₴`;
 /** 🧾 Підтвердження роботи словами (підказка і CSV) — угода «від рахунку» і / або оплата; порожньо — роботи немає. */
 function workProofText(c: { workProof: ClientPlanRow["workProof"] }): string {
@@ -174,7 +176,7 @@ const vipSleeping = (c: ClientPlanRow) => c.segment === "vip" && (c.daysSince ??
  */
 type QuickKey = "noWork" | "noTask" | "vipNoTask" | "step_overdue" | "vip_sleeping" | "sleeping" | "no_talk" | "debt_hold" | "stale" | "yearGone";
 const QUICK: readonly { key: QuickKey; label: string; title: string; fn: (c: ClientPlanRow) => boolean }[] = [
-  { key: "noWork", label: "Без роботи", title: "за період (Налаштування) немає ні угоди на «Виставленні рахунку» чи далі, ні оплати від клієнта у Виписці", fn: (c) => c.work.noWork },
+  { key: "noWork", label: "Без роботи", title: "за ритм клієнта (ВІП 14, регулярний 30, решта 60 днів) немає ні розмови від 10 с, ні нової угоди чи руху угоди, ні рахунку чи оплати, ні коментаря чи контакту — і немає відкритої задачі чи кроку", fn: (c) => c.work.noWork },
   { key: "noTask", label: "Без задачі", title: "немає відкритої задачі чи наступного кроку", fn: (c) => c.work.noTask },
   { key: "vipNoTask", label: "ВІП 14+ без задачі", title: "ВІП не замовляє 14+ днів, а задачі немає — у першу чергу", fn: (c) => vipSleeping(c) && c.work.noTask },
   { key: "step_overdue", label: "Задача прострочена", title: "дата задачі чи наступного кроку минула", fn: (c) => c.work.overdue },
@@ -202,7 +204,7 @@ function flagsOf(c: ClientPlanRow): { label: string; tone: "bad" | "warn" }[] {
 /** Колонки таблиці (макет 5609 + три колонки ТЗ п.5). `sort` — ключ сортування кліком по заголовку. */
 type SortKey = "work" | "name" | "manager" | "segment" | "lastOrder" | "period" | "talk" | "avg3" | "fact" | "lifetime" | "ordered" | "margin6m" | "flags" | "task";
 const COLS: readonly { key: SortKey; label: string; num?: boolean; title: string }[] = [
-  { key: "work", label: "Робота", title: "Немає роботи — 30+ днів ні розмови, ні переписки, і немає наступного кроку з датою" },
+  { key: "work", label: "Робота", title: "Немає роботи — за ритм клієнта (ВІП 14, регулярний 30, решта 60 днів) немає ні розмови від 10 с, ні нової угоди чи руху угоди, ні рахунку чи оплати, ні коментаря чи контакту — і немає відкритої задачі чи кроку" },
   { key: "name", label: "Клієнт", title: "Назва клієнта в CRM; «обʼєднано» — злиті юрособи й контакти" },
   { key: "manager", label: "Менеджер", title: "Відповідальний менеджер і його команда" },
   { key: "segment", label: "Сегмент і стан", title: "Сегмент за звичною паузою між оплатами; стан — чи замовляє у своєму ритмі" },
@@ -391,8 +393,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         {/* 📌 «Робота» і назва клієнта закріплені зліва (ТЗ 5609, п.6). «Без роботи» — червона смуга (макет). */}
         <td style={{ ...S.td, ...STICKY_COL(0, W_WORK), background: bg, boxShadow: c.work.noWork ? "inset 4px 0 0 #dc2626" : undefined }}>
           {c.work.noWork
-            ? <span style={S.chip("#dc2626", "#fff")} title={`За ${data.compare.noWorkDays} днів немає ні угоди на «Виставленні рахунку» чи далі, ні оплати від клієнта у Виписці`}>Немає роботи</span>
-            : <span style={S.chip("#dcfce7", "#166534")} title={`Роботу підтверджує: ${workProofText(c)}`}>В роботі</span>}
+            ? <span style={S.chip("#dc2626", "#fff")} title="За ритм клієнта (ВІП 14, регулярний 30, решта 60 днів) немає ні розмови від 10 с, ні нової угоди чи руху угоди, ні рахунку чи оплати, ні коментаря чи контакту — і немає відкритої задачі чи кроку">Немає роботи</span>
+            : <span style={S.chip("#dcfce7", "#166534")} title={c.lead.works.yes ? `Роботу підтверджує: ${WORK_BY_TEXT[c.lead.works.by ?? ""] ?? ""} ${c.lead.works.at ? dm(c.lead.works.at) : ""}${workProofText(c) ? `; ${workProofText(c)}` : ""}` : "відкрита задача чи крок по клієнту"}>В роботі</span>}
           {/* 🧾 Чим підтверджено роботу (задача 6455): угода з посиланням у Kommo або оплата. */}
           {c.workProof.invoice
             ? <div style={{ fontSize: 10.5, marginTop: 3, lineHeight: 1.25 }}>
@@ -616,7 +618,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         </Card>
         <Card title="без роботи" value={String(cs.noWork)} tone={cs.noWork ? "bad" : undefined} on={card === "noWork"}
           onClick={() => setCard(toggleCard(card, "noWork"))}
-          sub={`${data.compare.noWorkDays} днів без угоди з рахунком і без оплати · окремо без задачі: ${cs.noTaskOnly}`} />
+          sub={`за ритм клієнта (14 / 30 / 60 дн.) ні розмови, ні угоди, ні замовлення, ні задачі · окремо без задачі: ${cs.noTaskOnly}`} />
         <Card title="задача прострочена" value={String(cs.overdue)} tone={cs.overdue ? "warn" : undefined} on={card === "overdue"}
           onClick={() => setCard(toggleCard(card, "overdue"))} sub="дата задачі чи наступного кроку минула, а її не закрили" />
       </div>
@@ -794,7 +796,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           </thead>
           <tbody>
             {/* «Без роботи» — окремим блоком зверху, «В роботі» — під ним (макет 5609). */}
-            {noWorkRows.length > 0 && groupHead("Без роботи", noWorkRows.length, `за ${data.compare.noWorkDays} днів немає ні угоди на «Виставленні рахунку» чи далі, ні оплати від клієнта у Виписці`, true)}
+            {noWorkRows.length > 0 && groupHead("Без роботи", noWorkRows.length, `за ритм клієнта (ВІП 14, регулярний 30, решта 60 днів) ні розмови від 10 с, ні угоди, ні замовлення, ні коментаря чи контакту, і немає відкритої задачі`, true)}
             {noWorkRows.map(renderRow)}
             {workRows.length > 0 && groupHead("В роботі", workRows.length, `за ${data.compare.noWorkDays} днів є угода з рахунком (або в роботі після рахунку) чи оплата від клієнта`, false)}
             {workRows.map(renderRow)}

@@ -20,6 +20,8 @@ export interface LeadFacts {
   summary: { at: string; text: string } | null;
   /** Остання зміна етапу будь-якої угоди клієнта в Kommo. */
   stage: string | null;
+  /** Остання НОВА угода клієнта (дата створення в Kommo), будь-який етап — задача 8333. */
+  dealNew: string | null;
   /** Дата другої оплаченої угоди (коли клієнт став постійним) і канал першої. */
   secondPaid: string | null;
   firstPaidChannel: string | null;
@@ -32,7 +34,7 @@ const KYIV_DAY = (col: string) => `to_char(${col} AT TIME ZONE 'Europe/Kyiv', 'Y
 export async function leadFactsFor(db: Db, keys: string[], stageSinceDays = 200): Promise<Map<string, LeadFacts>> {
   const out = new Map<string, LeadFacts>();
   if (!keys.length) return out;
-  const [talk, summ, stage, paid, lg] = await Promise.all([
+  const [talk, summ, stage, paid, lg, fresh] = await Promise.all([
     db.query<{ client_key: string; d: string }>(
       `SELECT DISTINCT ON (rc.client_key) rc.client_key, ${KYIV_DAY("rc.calldate")} AS d
          FROM ringostat_calls rc
@@ -59,10 +61,14 @@ export async function leadFactsFor(db: Db, keys: string[], stageSinceDays = 200)
           WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1) AND d.closed_at_kommo IS NOT NULL) z
         WHERE rn <= 2`, [keys]),
     db.query<{ client_key: string }>(`SELECT DISTINCT client_key FROM leadgen_ltv_clients WHERE client_key = ANY($1)`, [keys]),
+    db.query<{ client_key: string; d: string }>(
+      `SELECT d.client_key, ${KYIV_DAY("max(d.created_at_kommo)")} AS d FROM deals d
+        WHERE d.client_key = ANY($1) AND d.created_at_kommo >= now() - make_interval(days => $2)
+        GROUP BY d.client_key`, [keys, stageSinceDays]),
   ]);
   const get = (k: string): LeadFacts => {
     let f = out.get(k);
-    if (!f) { f = { talk10: null, summary: null, stage: null, secondPaid: null, firstPaidChannel: null, leadgen: false }; out.set(k, f); }
+    if (!f) { f = { talk10: null, summary: null, stage: null, dealNew: null, secondPaid: null, firstPaidChannel: null, leadgen: false }; out.set(k, f); }
     return f;
   };
   for (const r of talk.rows) get(r.client_key).talk10 = r.d;
@@ -73,6 +79,7 @@ export async function leadFactsFor(db: Db, keys: string[], stageSinceDays = 200)
     else get(r.client_key).secondPaid = r.d;
   }
   for (const r of lg.rows) get(r.client_key).leadgen = true;
+  for (const r of fresh.rows) get(r.client_key).dealNew = r.d;
   return out;
 }
 

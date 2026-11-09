@@ -58,10 +58,11 @@ export function noWorkFrom(today: string, days: number): string {
 }
 
 export interface WorkInput {
-  /** Угода «від рахунку» за період або зараз у роботі на такому етапі (`clientWorkProof.invoiceProofByClientKey`). */
-  invoice: { kommoId: number } | null;
-  /** Оплата від клієнта у Виписці за період (`clientWorkProof.paymentProofByClientKey`). */
-  payment: { at: string } | null;
+  /**
+   * Є робота за ритм сегмента (`clientLeadRules.workVerdict(...).yes`): розмова від 10 с, рух або нова угода, рахунок чи
+   * оплата (замовлення), оплата у Виписці, коментар, контакт. Одне правило з екраном «З ким говорити».
+   */
+  works: boolean;
   /** Відкритий наступний крок у картці клієнта і його дата (може бути без дати). */
   stepOpen: boolean; stepDue: string | null;
   /** Відкрита задача по клієнту в Задачнику і її строк. */
@@ -71,16 +72,16 @@ export interface WorkInput {
 
 /**
  * Позначки рядка. «Задача» по клієнту — відкритий наступний крок у картці АБО відкрита задача в Задачнику.
- *  · `noWork` (задача 6455, правило Сергія 20.10.2026): за період НЕМАЄ ні угоди на етапі «Виставлення рахунку» або
- *    далі, ні оплати від клієнта у Виписці. Розмови, ручні контакти, кроки й задачі роботу не підтверджують (до
- *    23.10.2026 підтверджували — регламент ред. 2, п.4.2);
+ *  · `noWork` (задача 8333, ТЗ Юлі 06.11 + Роман 09.11 «так, роби»; СКАСОВУЄ правило Сергія з 6455 «лише рахунок або
+ *    оплата за 30 днів»): за ритм сегмента (ВІП 14, регулярний 30, решта 60 днів) немає жодної роботи (`works`) І немає
+ *    відкритої задачі чи кроку. Наслідок за побудовою: «Активний» (замовив у межах ритму) ніколи не «Немає роботи».
  *  · `noTask` — немає жодної відкритої задачі чи кроку;
  *  · `overdue` — дата відкритої задачі чи кроку вже минула.
  */
 export function workFlags(w: WorkInput): { noWork: boolean; noTask: boolean; overdue: boolean } {
   const late = (open: boolean, due: string | null) => open && due != null && due.slice(0, 10) < w.today;
   return {
-    noWork: w.invoice == null && w.payment == null,
+    noWork: !w.works && !w.stepOpen && !w.taskOpen,
     noTask: !w.stepOpen && !w.taskOpen,
     overdue: late(w.stepOpen, w.stepDue) || late(w.taskOpen, w.taskDue),
   };
