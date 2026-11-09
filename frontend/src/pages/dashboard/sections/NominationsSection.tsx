@@ -752,10 +752,12 @@ function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: 
         <span className="nm-muted">Пульс плану, топ-3, відзнаки, лідогенерацію й конверсію система збирає сама. Тут — те, що вносите ви.</span></div>
       {err ? <div className="nm-banner"><span className="nm-err">{err}</span></div> : null}
       <div className="nm-prep">
-        <div className="nm-prep-photo">
-          {photo ? <img src={photo} alt="Фото команди" /> : <div className="nm-muted">Фото команди ще не завантажено — на титулі буде заглушка.</div>}
-          <label className="nm-btn">{busy === "photo" ? "Завантажую…" : photo ? "Замінити фото команди" : "Завантажити фото команди"}
-            <input type="file" accept="image/jpeg,image/png,image/webp" hidden disabled={busy != null} onChange={(e) => pickPhoto(e.target.files?.[0])} /></label>
+        <div className="nm-field"><span>Фото команди — на титульний слайд</span>
+          <div className="nm-prep-photo">
+            {photo ? <img src={photo} alt="Фото команди" /> : <div className="nm-muted">Фото команди ще не завантажено — на титулі буде заглушка.</div>}
+            <label className="nm-btn">{busy === "photo" ? "Завантажую…" : photo ? "Замінити фото команди" : "Завантажити фото команди"}
+              <input type="file" accept="image/jpeg,image/png,image/webp" hidden disabled={busy != null} onChange={(e) => pickPhoto(e.target.files?.[0])} /></label>
+          </div>
         </div>
         <div className="nm-field"><span>Музика на початок — грає на титульному слайді, поки всі збираються (у презентації її можна вимкнути кнопкою 🔊 або клавішею M)</span>
           {music ? <div className="nm-btns"><span>🎵 <b>{week.music?.title ?? "Трек"}</b></span><audio controls preload="none" src={music} style={{ height: 32 }} /></div>
@@ -783,11 +785,13 @@ function PresentationPrepCard({ week, onData }: { week: NominationWeek; onData: 
             <button className="nm-btn p" disabled={busy != null || !posEmp || !posText.trim()} onClick={() => void savePos(Number(posEmp), posText.trim())}>{busy === "pos" ? "Зберігаю…" : "Додати"}</button>
           </div>
         </div>
+        <div className="nm-field">
         <label className="nm-field"><span>Фокус наступного тижня (одна ціль — іде на останній слайд)</span>
           <textarea className="nm-inp" value={focus} maxLength={400} onChange={(e) => setFocus(e.target.value)} placeholder="Напр.: 10 нових клієнтів або 80% плану до 11.11" /></label>
         <div className="nm-btns">
           <button className="nm-btn p" disabled={busy != null || focus.trim() === (week.texts?.focus?.text ?? "")} onClick={() => void saveFocus()}>{busy === "focus" ? "Зберігаю…" : "Зберегти фокус"}</button>
           {week.texts?.focus ? <span className="nm-muted">{week.texts.focus.by ? `${week.texts.focus.by} · ` : ""}{whenText(week.texts.focus.at)}</span> : null}
+        </div>
         </div>
       </div>
     </div>
