@@ -133,16 +133,6 @@ export const NAV_GROUPS = [
 
 type NavItem = { key: string; label: string; icon: string; roles?: readonly string[] };
 
-/**
- * Позначка «НОВЕ» біля пункту — 14 днів від викату (ТЗ орг-структури). Дата, а не лічильник: після неї позначка зникає
- * сама, без ще одного викату. Київська дата сьогодні порівнюється рядком «РРРР-ММ-ДД».
- */
-const ORG_NEW_UNTIL = "2026-11-11";
-const NEW_UNTIL: Readonly<Record<string, string>> = { org: ORG_NEW_UNTIL, payroll: "2026-11-18" };
-const isNewItem = (key: string) => {
-  const until = NEW_UNTIL[key];
-  return !!until && new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }) < until;
-};
 export type NavKey = (typeof NAV_GROUPS)[number]["items"][number]["key"];
 
 // Вкладки, ПРИБРАНІ з навігації (меню/таби/командна панель) за рішенням власника —
@@ -373,11 +363,6 @@ export function Layout({
                 >
                   <span className="sidebar-nav-icon"><NavIcon k={item.key} /></span>
                   {!collapsed && item.label}
-                  {!badge && !collapsed && isNewItem(item.key) && (
-                    <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, background: "#c8102e", color: "#fff", borderRadius: 6, padding: "1px 6px" }}>
-                      НОВЕ
-                    </span>
-                  )}
                   {badge > 0 && (
                     <span
                       style={{
