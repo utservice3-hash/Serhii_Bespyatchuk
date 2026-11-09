@@ -28,7 +28,7 @@ export interface PresentationExtras {
    * новачка крихітний, і 2664% «прориву» в людини, прийнятої 19.10, — шум, а не результат; у них своя «Новачок тижня»).
    */
   adaptingManagerIds: number[];
-  /** Активні співробітники — для вибору людини в «Новій посаді». */
+  /** Активні співробітники комерційного відділу (ростер тижня) — для вибору людини в «Новій посаді». */
   employees: { id: number; name: string }[];
   /** Фото за id СПІВРОБІТНИКА (а не менеджера Kommo). */
   photos: Record<string, { id: number; v: number }>;
@@ -82,7 +82,9 @@ export async function presentationExtras(weekFromIn: string): Promise<Presentati
   return {
     weekFrom, weekTo, birthdays, newcomers, newPositions, rookies, newClients,
     adaptingManagerIds: people.filter((p) => p.manager_id != null && p.hired_at && weekTo < addMonthClamp(p.hired_at)).map((p) => p.manager_id!),
-    employees: people.map((p) => ({ id: p.id, name: p.full_name })),
+    // Вибір для «Нової посади» — лише комерційний відділ, тим самим ростером, що й «новий у команді» (рішення Романа
+    // 09.11.2026: у списку були бухгалтерія, фінанси, CEO — 64 людини замість 46).
+    employees: people.filter((p) => p.manager_id != null && sales.has(p.manager_id)).map((p) => ({ id: p.id, name: p.full_name })),
     photos: await employeePhotos(ids),
   };
 }
