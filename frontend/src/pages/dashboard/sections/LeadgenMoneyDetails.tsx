@@ -290,8 +290,11 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
         {d.minus ? <span title="У продажах угоду позначено «Мінусова угода»: перевезення розбито на мінус і окрему плюсову угоду, а плюсова з передачею лідгена не повʼязана. Машина рахується, сума — ні">мінусова · 0</span>
           : d.price ? formatAmountFull(d.price) : hasMoney ? "не проставлено" : "—"}
         {d.split && d.split.length > 0 && (
-          <div style={{ fontSize: 11.5, fontWeight: 400, color: MUTED }} title="Одне перевезення, рахунок розділили на кілька угод; сума — разом, машина одна">
-            разом із рахунком {d.split.map((x, i) => <span key={x.dealId}>{i ? ", " : ""}<a href={x.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{x.dealId}</a></span>)}
+          <div style={{ fontSize: 11.5, fontWeight: 400, color: MUTED }}
+            title={d.split.some((x) => x.loadDay)
+              ? "Один запит клієнта, загруз розділили на кілька авто: сума — разом, кожен рахунок — окрема машина за своєю датою загрузки"
+              : "Одне перевезення, рахунок розділили на кілька угод; сума — разом, машина одна"}>
+            разом із рахунком {d.split.map((x, i) => <span key={x.dealId}>{i ? ", " : ""}<a href={x.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{x.dealId}</a>{x.loadDay ? ` (загрузка ${x.loadDay.slice(8, 10)}.${x.loadDay.slice(5, 7)})` : ""}</span>)}
           </div>
         )}
       </td>

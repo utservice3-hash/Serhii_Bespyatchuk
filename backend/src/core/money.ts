@@ -6,7 +6,7 @@ import { pool } from "../db/pool.js";
 import { adDealSql } from "./metrics.js";
 import { ELOGIST_CHANNEL } from "./elogist.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
-import { managerDealClass, splitInvoicesOf, type DealState, type ClientSuccess, type PendDay } from "./leadgenHandoffRules.js";
+import { managerDealClass, moneyCameIn, splitInvoicesOf, splitIsEachCar, type DealState, type ClientSuccess, type PendDay, type ExtraCar } from "./leadgenHandoffRules.js";
 // 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
 // «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
 // поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
@@ -1453,22 +1453,40 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
     xs.push({ day: e.day, pending: c === "paid" || c === "expect" });
     pend.set(id, xs);
   }
-  // 🧾 Виділений рахунок (`HANDOFF_SPLIT_INVOICES`): його бюджет додається до основної угоди — одна машина, дві суми.
+  // 🧾 Виділений рахунок (`HANDOFF_SPLIT_INVOICES`): його бюджет додається до основної угоди; машина одна, або —
+  // для `eachCar` — кожен рахунок окремою машиною за своєю «Датою загрузки».
   const extraIds = [...new Set(ids.flatMap((id) => splitInvoicesOf(id)))];
+  // Для `eachCar` кожен виділений рахунок — ще й окрема машина: його «Дата загрузки» і чи зайшли за нього гроші
+  // (клас — та сама `managerDealClass` над тим самим реєстром, що й для основної угоди).
   const extraPrice = new Map<number, number>();
+  const extraCar = new Map<number, ExtraCar>();
   if (extraIds.length) {
-    const xr = await pool.query<{ kommo_id: string; price: string | null }>(
-      `SELECT kommo_id, price FROM deals WHERE kommo_id = ANY($1::bigint[])`, [extraIds]);
-    for (const x of xr.rows) extraPrice.set(Number(x.kommo_id), Math.round(Number(x.price ?? 0)));
+    const xr = await pool.query<{ kommo_id: string; price: string | null; pipeline_id: string; status_id: string;
+      closed: boolean; written_off: boolean; load_day: string | null }>(
+      `SELECT d.kommo_id, d.price, d.pipeline_id, d.status_id,
+              (d.closed_at_kommo IS NOT NULL) AS closed,
+              NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off,
+              to_char(d.load_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS load_day
+         FROM deals d WHERE d.kommo_id = ANY($1::bigint[])`, [extraIds]);
+    for (const x of xr.rows) {
+      const id = Number(x.kommo_id);
+      extraPrice.set(id, Math.round(Number(x.price ?? 0)));
+      const c = managerDealClass({ pipelineId: Number(x.pipeline_id), statusId: Number(x.status_id), closed: x.closed,
+        writtenOff: x.written_off }, HANDOFF_CLASS_RULES);
+      extraCar.set(id, { dealId: id, loadDay: x.load_day, moneyCame: moneyCameIn(c) });
+    }
   }
   for (const x of r.rows) {
     const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
-    const extra = splitInvoicesOf(Number(x.kommo_id)).reduce((s, id) => s + (extraPrice.get(id) ?? 0), 0);
+    const extras = splitInvoicesOf(Number(x.kommo_id));
+    const extra = extras.reduce((s, id) => s + (extraPrice.get(id) ?? 0), 0);
+    const extraCars = splitIsEachCar(Number(x.kommo_id))
+      ? extras.map((id) => extraCar.get(id)).filter((c): c is ExtraCar => c != null) : [];
     out.set(Number(x.kommo_id), {
       pipelineId, statusId,
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
       price: Math.round(Number(x.price ?? 0)) + extra, minus: x.is_minus === true,
-      closedDay: x.closed_day, autoDay: x.auto_day, loadDay: x.load_day,
+      closedDay: x.closed_day, autoDay: x.auto_day, loadDay: x.load_day, extraCars,
       pendDays: (pend.get(Number(x.kommo_id)) ?? []).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
     });
   }

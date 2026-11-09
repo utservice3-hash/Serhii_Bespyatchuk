@@ -162,7 +162,14 @@ export interface DealState {
   pendDays?: readonly PendDay[];
   /** Київська «Дата загрузки» угоди менеджера (`deals.load_at`) — якір машини (`isMachineIn`). */
   loadDay?: string | null;
+  /**
+   * Виділені рахунки, що є ОКРЕМИМИ машинами (`HANDOFF_SPLIT_INVOICES` з `eachCar`): «Дата загрузки» кожного й
+   * чи зайшли за нього гроші. Будує `money.handoffDealStates`; порожньо — машина одна (сама угода).
+   */
+  extraCars?: readonly ExtraCar[];
 }
+/** Виділений рахунок — окрема машина: своя «Дата загрузки», гроші — за ЙОГО етапом (`moneyCameIn`). */
+export interface ExtraCar { dealId: number; loadDay: string | null; moneyCame: boolean }
 /** Стан дня угоди менеджера для «Очікування»: `pending` — у зоні «оплачено / очікуємо» на кінець дня. */
 export interface PendDay { day: string; pending: boolean }
 /**
@@ -180,6 +187,8 @@ export type ClassifiedHandoff<T extends HandoffEntry> = T & {
   minus?: boolean;
   /** «Дата загрузки» угоди менеджера — якір машини; у `none`/`same`/`regular` — `null` (не машина лідгена). */
   loadDay?: string | null;
+  /** Виділені рахунки-машини (`DealState.extraCars`); у `none`/`same`/`regular` — порожньо. */
+  extraCars?: readonly ExtraCar[];
 };
 
 /**
@@ -192,16 +201,28 @@ export type ClassifiedHandoff<T extends HandoffEntry> = T & {
  * 🧾 РАХУНОК, ВИДІЛЕНИЙ З УГОДИ МЕНЕДЖЕРА — рішення поштучно, не правило. Одне перевезення з одного прорахунку,
  * але менеджер розділив рахунок на дві угоди; друга створена з угоди менеджера, а не з угоди Продзвону, тож до
  * передачі вона не привʼязується. Для угод зі списку бюджет передачі = основна угода + виділені рахунки
- * (`money.handoffDealStates`), машина — одна, стан і дати — основної угоди. Загальне правило «одна передача — одна
+ * (`money.handoffDealStates`), стан і дати — основної угоди. Машина — одна, а з `eachCar` (рішення 09.11.2026)
+ * кожен виділений рахунок — ще й окрема машина за своєю «Датою загрузки», як «Відправлені авто» КВП, і «гроші
+ * ще не зайшли» за ним — за його власним етапом. Загальне правило «одна передача — одна
  * угода менеджера» НЕ змінено; повторні замовлення клієнта сюди не потрапляють.
  */
-export const HANDOFF_SPLIT_INVOICES: readonly { mainDealId: number; extraDealIds: readonly number[]; decided: string; reason: string }[] = [
-  { mainDealId: 62807983, extraDealIds: [62817473], decided: "Юлія Левентова й Роман, 30.10.2026",
+export const HANDOFF_SPLIT_INVOICES: readonly {
+  mainDealId: number; extraDealIds: readonly number[];
+  /** `true` — кожен виділений рахунок є окремою машиною за СВОЄЮ «Датою загрузки» (як «Відправлені авто» КВП). */
+  eachCar: boolean;
+  decided: string; reason: string;
+}[] = [
+  { mainDealId: 62807983, extraDealIds: [62817473], eachCar: false, decided: "Юлія Левентова й Роман, 30.10.2026",
     reason: "Демчук, передача 62613661 від 27.10: одна машина Дніпро – Харків, рахунок розділили на ЕКСПЕРТ БОКС ПАК (760) і ВАРАН (3 420)" },
+  { mainDealId: 62832949, extraDealIds: [62839599, 62839603], eachCar: true, decided: "Роман, 09.11.2026 (варіант «три машини»)",
+    reason: "Крупник, передача 62643775 від 05.11 (клієнт Оксана, Полтава): один запит, загруз розділили на три авто — Полтава – Харків ×2 (09.11) і Полтава – Краснопалівка (10.11)" },
 ];
 /** Виділені рахунки угоди менеджера (порожньо — немає). */
 export const splitInvoicesOf = (dealId: number | null | undefined): readonly number[] =>
   dealId == null ? [] : HANDOFF_SPLIT_INVOICES.find((x) => x.mainDealId === dealId)?.extraDealIds ?? [];
+/** Чи є виділені рахунки угоди окремими машинами (`eachCar`). Немає запису — ні. */
+export const splitIsEachCar = (dealId: number | null | undefined): boolean =>
+  dealId != null && HANDOFF_SPLIT_INVOICES.find((x) => x.mainDealId === dealId)?.eachCar === true;
 
 export const leadgenPrice = (st: Pick<DealState, "price" | "minus">): number => (st.minus ? 0 : st.price);
 
@@ -223,7 +244,7 @@ export function classifyHandoffs<T extends HandoffEntry>(
   // Угоди, які забрали передачі РАНІШЕ за період, — для когорти вже «та сама угода» (гроші в них рахуються там).
   const seen = new Set<number>(ownedEarlier);
   return picked.map((h) => {
-    const noAnchor = { successDay: null, autoDay: null, loadDay: null };
+    const noAnchor = { successDay: null, autoDay: null, loadDay: null, extraCars: [] as readonly ExtraCar[] };
     if (h.dealId == null) return Object.assign({}, h, { cls: "none" as const, price: 0 }, noAnchor);
     const st = states.get(h.dealId);
     if (!st) throw new Error(`угода менеджера ${h.dealId} (передача ${h.pzId}) без стану з грошового ядра`);
@@ -239,6 +260,7 @@ export function classifyHandoffs<T extends HandoffEntry>(
       autoDay: st.autoDay ?? null,
       pendDays: st.pendDays ?? [],
       loadDay: st.loadDay ?? null,
+      extraCars: st.extraCars ?? [],
     });
   });
 }
@@ -381,10 +403,23 @@ export function anchoredRows<T extends HandoffEntry>(
     .filter((h) => (h.successDay != null && inP(h.successDay)) || pendingIn(h, inP) || isMachineIn(h, inP));
 }
 
-/** 🚚 Машина періоду: «Дата загрузки» в періоді (`DayIn` уже обрізаний сьогоднішнім днем). Див. `machines`. */
-export const isMachineIn = (r: { loadDay?: string | null }, inP: DayIn): boolean => r.loadDay != null && inP(r.loadDay);
 /** Гроші за машину вже зайшли: угода зараз «Оплата отримана» або «Успішна». */
 export const moneyCameIn = (c: LeadgenDealClass): boolean => c === "success" || c === "paid";
+/**
+ * 🚚 МАШИНИ ПЕРЕДАЧІ ПЕРІОДУ: сама угода менеджера + виділені рахунки-машини (`extraCars`), кожна — за СВОЄЮ
+ * «Датою загрузки» в періоді (`DayIn` уже обрізаний сьогоднішнім днем). `moneyCame` — за класом угоди, а для
+ * виділеного рахунку — за його власним етапом.
+ */
+export function machinesIn(r: { cls: LeadgenDealClass; loadDay?: string | null; extraCars?: readonly ExtraCar[] }, inP: DayIn):
+  { day: string; moneyCame: boolean }[] {
+  const out: { day: string; moneyCame: boolean }[] = [];
+  if (r.loadDay != null && inP(r.loadDay)) out.push({ day: r.loadDay, moneyCame: moneyCameIn(r.cls) });
+  for (const x of r.extraCars ?? []) if (x.loadDay != null && inP(x.loadDay)) out.push({ day: x.loadDay, moneyCame: x.moneyCame });
+  return out;
+}
+/** 🚚 Передача має машину в періоді (`machinesIn` не порожній). Див. `machines`. */
+export const isMachineIn = (r: { cls: LeadgenDealClass; loadDay?: string | null; extraCars?: readonly ExtraCar[] }, inP: DayIn): boolean =>
+  machinesIn(r, inP).length > 0;
 
 /** «Успішні» й «Очікування» периоду над класифікованими передачами (`anchoredRows`). */
 export function anchoredMoney(rows: readonly { cls: LeadgenDealClass; price: number; successDay: string | null; autoDay: string | null; pendDays?: readonly PendDay[] }[], inP: DayIn):
@@ -400,9 +435,9 @@ export function anchoredMoney(rows: readonly { cls: LeadgenDealClass; price: num
 
 function withAnchored(m: LeadgenHandoffMoney, anchored: readonly ClassifiedHandoff<HandoffEntry>[], inP: DayIn): LeadgenHandoffMoney {
   const a = anchoredMoney(anchored, inP);
-  const cars = anchored.filter((h) => isMachineIn(h, inP));
+  const cars = anchored.flatMap((h) => machinesIn(h, inP));
   return Object.assign(m, { earned: a.earned, pending: a.pending, machines: cars.length,
-    machinesNoMoney: cars.filter((h) => !moneyCameIn(h.cls)).length });
+    machinesNoMoney: cars.filter((c) => !c.moneyCame).length });
 }
 
 /**
@@ -505,8 +540,11 @@ export interface LeadgenHandoffDeal {
   minus: boolean;
   /** «Дата загрузки» угоди менеджера — машина за правилом КВП (`isMachineIn`); `null` — авто ще не загружене. */
   loadDay: string | null;
-  /** Виділені з угоди менеджера рахунки, чий бюджет уже в `price` (`HANDOFF_SPLIT_INVOICES`). */
-  split: { dealId: number; url: string }[];
+  /**
+   * Виділені з угоди менеджера рахунки, чий бюджет уже в `price` (`HANDOFF_SPLIT_INVOICES`). `loadDay` — лише коли
+   * рахунок є окремою машиною (`eachCar`), інакше `null` (машина одна — рядок).
+   */
+  split: { dealId: number; url: string; loadDay: string | null }[];
 }
 
 /** Порожній або з самих пробілів текст CRM — «не заповнено», а не порожній підпис. */
@@ -555,7 +593,8 @@ export function handoffDealRow(
     url: deps.leadUrl(h.dealId ?? h.pzId),
     autoDay: h.autoDay, inPeriod: h.inPeriod !== false, carried: h.carried === true, minus: h.minus === true,
     loadDay: linked ? h.loadDay ?? null : null,
-    split: linked ? splitInvoicesOf(h.dealId).map((id) => ({ dealId: id, url: deps.leadUrl(id) })) : [],
+    split: linked ? splitInvoicesOf(h.dealId).map((id) => ({ dealId: id, url: deps.leadUrl(id),
+      loadDay: (h.extraCars ?? []).find((x) => x.dealId === id)?.loadDay ?? null })) : [],
   };
 }
 
@@ -874,8 +913,8 @@ export function handoffMoneyBuckets<T extends HandoffEntry>(
       if (period.end == null) { if (pendingIn(r, period)) put(money, k(r.autoDay), r); }
       else for (const b of units) if (pendingIn(r, unitOf(b))) put(money, b, r);
     }
-    // 🚚 Машина — в одиниці своєї «Дати загрузки» (Σ одиниць == періоду: дата одна).
-    if (isMachineIn(r, period)) put(money, k(r.loadDay as string), r);
+    // 🚚 Машина — в одиниці своєї «Дати загрузки»; у виділених рахунків-машин — у своїй (Σ одиниць == періоду).
+    for (const c of machinesIn(r, period)) put(money, k(c.day), r);
   }
   const buckets = [...new Set([...cohort.keys(), ...money.keys()])].sort();
   return buckets.map((bucket): TrendMoneyBucket => {

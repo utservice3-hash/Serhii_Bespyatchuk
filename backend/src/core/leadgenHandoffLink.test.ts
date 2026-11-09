@@ -1075,14 +1075,49 @@ test("#1509 ЖИВИЙ SQL: виділений рахунок додає бюд�
   assert.deepEqual([got.get(62807983)?.price, got.get(62807983)?.cls], [4_180, "success"], "🔴 основна угода зі списку: бюджет без виділеного рахунку або змінився стан");
   assert.equal(got.get(plain)?.price, 760, "🔴 угода поза списком отримала чужий бюджет — загальне правило зламалось");
   assert.equal(got.has(62817473), false, "🔴 виділений рахунок став окремою угодою передачі — машина порахується двічі");
+  assert.deepEqual(got.get(62807983)?.extraCars, [], "🔴 запис без eachCar отримав рахунки-машини — машина одна стала двома");
   const base = { day: "2026-03-09", lgId: 1, lgTeamId: 1, pzId: 1, at: 0, dealName: "р", dealClient: "к", salesManager: "м",
     dealReason: null, closedDay: null, planPayDay: null, pzName: "р", pzClient: "к", clientKey: null, linkPrio: 0,
     cls: "success" as const, price: 4_180, autoDay: null } as unknown as Parameters<typeof handoffDealRow>[0];
   const deps = { stageName: () => "Успішна угода", qualificationPipelines: [] as number[], leadUrl: (id: number) => `u/${id}` };
   const row = handoffDealRow({ ...base, dealId: 62807983 } as typeof base, { pipelineId: FC[0], statusId: 142 }, deps);
-  assert.deepEqual(row.split, [{ dealId: 62817473, url: "u/62817473" }], "🔴 рядок не називає виділений рахунок");
+  assert.deepEqual(row.split, [{ dealId: 62817473, url: "u/62817473", loadDay: null }], "🔴 рядок не називає виділений рахунок");
   assert.deepEqual(handoffDealRow({ ...base, dealId: plain } as typeof base, { pipelineId: FC[0], statusId: 142 }, deps).split, [],
     "🔴 рядок поза списком показує виділений рахунок");
+});
+
+/**
+ * #3790b — ЖИВИЙ SQL: ВИДІЛЕНІ РАХУНКИ-МАШИНИ (рішення Романа 09.11.2026, 62832949 + 62839599, 62839603). Основна угода несе
+ * бюджет разом з обома рахунками, а кожен рахунок — свою київську «Дату загрузки» і те, чи зайшли за нього гроші, за ЙОГО
+ * етапом («Оплата отримана» — так, «Виставлення рахунку» — ні). Рядок списку називає рахунки з датами загрузки.
+ * 🧨 САБОТАЖ: у `handoffDealStates` `moneyCame: moneyCameIn(c)` → `moneyCame: false` → червоніє (оплачений рахунок без грошей).
+ */
+test("#3790b ЖИВИЙ SQL: рахунки-машини — бюджет разом, кожен зі своєю київською загрузкою й грошима за своїм етапом", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money } = await core();
+  const { handoffDealRow } = await import("./leadgenHandoffRules.js");
+  const mk = async (id: number, status: number, price: number, load: Date) => {
+    await client!.query(
+      `INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, load_at, created_at_kommo, client_key, client_name)
+       VALUES ($1, 'гейт #3790b', 3, $2, $3, $4, $5, $6, NULL, NULL)`, [id, FC[0], status, price, load, utc("2026-11-05T14:54:47")]);
+  };
+  await mk(62832949, 100274340, 5_449, utc("2026-11-08T22:00:00"));   // 09.11 за Києвом, «Виставлення рахунку»
+  await mk(62839599, 69716460, 6_740, utc("2026-11-08T22:00:00"));    // 09.11, «Оплата отримана»
+  await mk(62839603, 100274340, 6_740, utc("2026-11-09T22:00:00"));   // 10.11, «Виставлення рахунку»
+  const got = (await money.handoffDealStates([62832949])).get(62832949);
+  assert.deepEqual([got?.price, got?.cls, got?.loadDay], [18_929, "expect", "2026-11-09"], "🔴 бюджет не разом із двома рахунками або змінився стан основної");
+  assert.deepEqual(got?.extraCars, [
+    { dealId: 62839599, loadDay: "2026-11-09", moneyCame: true },
+    { dealId: 62839603, loadDay: "2026-11-10", moneyCame: false },
+  ], "🔴 рахунки-машини: не та київська загрузка або гроші не за власним етапом");
+  const h = { day: "2026-11-05", lgId: 1, lgTeamId: 1, pzId: 62643775, at: 0, dealId: 62832949, dealName: "р", dealClient: "к", salesManager: "м",
+    dealReason: null, closedDay: null, planPayDay: null, pzName: "р", pzClient: "к", clientKey: null, linkPrio: 0,
+    cls: "expect" as const, price: 18_929, autoDay: null, extraCars: got?.extraCars } as unknown as Parameters<typeof handoffDealRow>[0];
+  const row = handoffDealRow(h, { pipelineId: FC[0], statusId: 100274340 }, { stageName: () => "Виставлення рахунку", qualificationPipelines: [], leadUrl: (id) => `u/${id}` });
+  assert.deepEqual(row.split, [
+    { dealId: 62839599, url: "u/62839599", loadDay: "2026-11-09" },
+    { dealId: 62839603, url: "u/62839603", loadDay: "2026-11-10" },
+  ], "🔴 рядок не називає рахунки-машини з датами загрузки");
 });
 
 /**

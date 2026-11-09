@@ -9,7 +9,7 @@ import {
   type StageBucketRow, type CallBucketRow, type HandoffLinkInfo, type HandoffRowDeps, type LeadgenDealClass, type HandoffEntry, type DealState, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
-import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, dayInRange, pendingIn, leadgenPeriod, stageDealFlags, reportWeekPeriod, type ClientSuccess } from "./leadgenHandoffRules.js";
+import { HANDOFF_SPLIT_INVOICES, isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, dayInRange, pendingIn, leadgenPeriod, stageDealFlags, reportWeekPeriod, type ClientSuccess } from "./leadgenHandoffRules.js";
 
 /**
  * #670…#674, #680 — ГРОШІ З ПЕРЕДАНИХ ЛІДІВ: чисті правила (рішення власника 22.09.2026).
@@ -782,6 +782,42 @@ test("#3730b МАШИНИ ПО ТИЖНЯХ: у тижні загрузки, Σ 
   assert.deepEqual([w("2026-10-12")?.machines, w("2026-10-19")?.machines], [1, 1], "🔴 машина не в тижні своєї загрузки");
   assert.equal(weeks.reduce((a, b) => a + b.totals.machines, 0), v.totals.machines, "🔴 Σ тижнів машин ≠ періоду");
   assert.deepEqual([w("2026-10-19")?.earned.n, w("2026-10-19")?.earned.sum], [1, 2_000], "🔴 машина й успіх одного тижня задвоїли «Успішні»");
+});
+
+/**
+ * #3790 — ВИДІЛЕНІ РАХУНКИ-МАШИНИ (рішення Романа 09.11.2026, Крупник: передача 62643775 → 62832949 + 62839599, 62839603).
+ * Один запит, загруз розділили на кілька авто: кожен рахунок — окрема машина за СВОЄЮ «Датою загрузки», як «Відправлені
+ * авто» КВП; «гроші ще не зайшли» — за власним етапом рахунку. Машина поза періодом / без дати — ні. По тижнях кожна —
+ * у тижні своєї загрузки, Σ тижнів == періоду. Дзеркало: запис без `eachCar` (62807983) — машина одна.
+ * 🧨 САБОТАЖ: у `machinesIn` прибрати цикл по `extraCars` → червоніє (машин 1 замість 3).
+ */
+test("#3790 ВИДІЛЕНІ РАХУНКИ-МАШИНИ: кожен — машина за своєю загрузкою, гроші — за своїм етапом; без eachCar — машина одна", () => {
+  const pin = HANDOFF_SPLIT_INVOICES.find((x) => x.mainDealId === 62832949);
+  assert.ok(pin && pin.eachCar && pin.extraDealIds.join() === "62839599,62839603", "🔴 запис 62832949 + 62839599, 62839603 (три машини) зник або змінився");
+  assert.equal(HANDOFF_SPLIT_INVOICES.find((x) => x.mainDealId === 62807983)?.eachCar, false, "🔴 62807983 (одна машина) став «кожен рахунок — машина»");
+  const E = (pz: number, deal: number): HandoffEntry =>
+    ({ pzId: pz, lgId: 7, lgTeamId: 1, at: Date.parse("2026-11-05T09:00:00Z") + pz, day: "2026-11-05", dealId: deal });
+  const states = new Map<number, DealState>([
+    [9791, { cls: "expect", price: 18_929, closedDay: null, autoDay: null, loadDay: "2026-11-06", pendDays: [],
+      extraCars: [{ dealId: 9792, loadDay: "2026-11-06", moneyCame: true }, { dealId: 9793, loadDay: "2026-11-10", moneyCame: false },
+        { dealId: 9794, loadDay: null, moneyCame: false }] }],
+    [9795, { cls: "expect", price: 4_180, closedDay: null, autoDay: null, loadDay: "2026-11-09", pendDays: [] }],
+  ]);
+  const P = leadgenPeriod("2026-11-01", "2026-11-30", "2026-11-12");
+  const v = handoffView([E(1, 9791)], states, { teamId: null, managerId: null }, new Map(), P);
+  assert.deepEqual([v.totals.machines, v.totals.machinesNoMoney], [3, 2],
+    "🔴 машин не 3 (угода + два рахунки з датою) або «гроші ще не зайшли» не 2 (угода в очікуванні + рахунок 10.11)");
+  const day6 = handoffView([E(1, 9791)], states, { teamId: null, managerId: null }, new Map(), leadgenPeriod("2026-11-06", "2026-11-06", "2026-11-12"));
+  assert.deepEqual([day6.totals.machines, day6.totals.machinesNoMoney], [2, 1], "🔴 день 06.11: рахунок із загрузкою 10.11 потрапив у машини дня");
+  const early = handoffView([E(1, 9791)], states, { teamId: null, managerId: null }, new Map(), leadgenPeriod("2026-11-01", "2026-11-30", "2026-11-09"));
+  assert.equal(early.totals.machines, 2, "🔴 рахунок із загрузкою після «сьогодні» вже рахується машиною");
+  const weeks = handoffMoneyBuckets(handoffView([E(1, 9791)], states, { teamId: null, managerId: null }, new Map(), leadgenPeriod("2026-11-01", "2026-11-30", "2026-11-20")).rows, "week",
+    leadgenPeriod("2026-11-01", "2026-11-30", "2026-11-20"));
+  const w = (b: string) => weeks.find((x) => x.bucket === b)?.totals.machines;
+  assert.deepEqual([w("2026-11-02"), w("2026-11-09")], [2, 1], "🔴 машини не в тижнях своїх загрузок (Пн 02.11: 06.11 ×2; Пн 09.11: 10.11)");
+  assert.equal(weeks.reduce((a, b) => a + b.totals.machines, 0), 3, "🔴 Σ тижнів машин ≠ періоду");
+  const one = handoffView([E(2, 9795)], states, { teamId: null, managerId: null }, new Map(), P);
+  assert.equal(one.totals.machines, 1, "🔴 угода без виділених рахунків-машин дала не одну машину");
 });
 
 /**
