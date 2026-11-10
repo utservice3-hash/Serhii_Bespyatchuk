@@ -583,6 +583,34 @@ test("#1640 ТАБЛИЦЯ УМОВ: порожні необовʼязкові �
 });
 
 /**
+ * #7610 — ЗАЯВКА ПЕРЕВІЗНИКУ ДРУКУЄ ОДЕРЖУВАЧА (10.11.2026, Роман: «так, додавай»). У шаблоні пакета Сергія одержувача
+ * перевізнику не друкували: поле в формі заповнювали, а в Word/PDF воно не йшло (Іван, заявка 62835181). Тепер — два
+ * рядки після дати навантаження; порожні не друкуються (як решта необовʼязкових, #1640). Word і PDF однаково.
+ * 🧨 Червоніє, якщо прибрати рядки з таблиці перевізника або друкувати їх порожніми.
+ */
+test("#7610 ЗАЯВКА ПЕРЕВІЗНИКУ: вантажоодержувач і його контакт друкуються; порожні — ні", () => {
+  const a = fakeAssets();
+  try {
+    for (const name of ["carr-uts", "carr-fop", "carr-avm"]) {
+      const s = ref[name].state;
+      assert.ok(s.trip.consignee && s.trip.consigneeC, `🔴 «${name}»: у фікстурі немає одержувача — перевіряти нічого`);
+      const html = printHTML(s, s.num, {});
+      const xml = new TextDecoder().decode(unzipStored(buildDocx(s, s.num, loadDocImages(a.dir, s.ent, s.stamp))).get("word/document.xml")!);
+      for (const [label, v] of [["Вантажоодержувач", s.trip.consignee], ["Контактна особа одержувача, телефон", s.trip.consigneeC]]) {
+        assert.ok(html.includes(`${label}</td><td class="v2">${v}<`), `🔴 «${name}»: у PDF немає рядка «${label}»`);
+        assert.ok(xml.includes(label) && xml.includes(v), `🔴 «${name}»: у Word немає рядка «${label}»`);
+      }
+      assert.ok(html.indexOf("Дата, час навантаження") < html.indexOf("Вантажоодержувач")
+        && html.indexOf("Вантажоодержувач") < html.indexOf("Адреси розвантаження"), `🔴 «${name}»: одержувач не між навантаженням і розвантаженням`);
+      const empty = { ...s, trip: { ...s.trip, consignee: "", consigneeC: "" } };
+      const eh = printHTML(empty, s.num, {});
+      const ex = new TextDecoder().decode(unzipStored(buildDocx(empty, s.num, loadDocImages(a.dir, s.ent, s.stamp))).get("word/document.xml")!);
+      assert.ok(!eh.includes("Вантажоодержувач") && !ex.includes("Контактна особа одержувача"), `🔴 «${name}»: порожній одержувач надруковано`);
+    }
+  } finally { a.dispose(); }
+});
+
+/**
  * #1641 — ВАЛЮТА «на день розвантаження», «ІНШЕ…» В ОПЛАТІ, ПРОСТІЙ АВТОМУВ 24 ГОД (задачі 5452, 5453, fb105; 12.10.2026).
  * Власний текст оплати друкується дослівно; простій АвтоМув — 24 год і в коді, і в сиді юросіб (схема).
  */
