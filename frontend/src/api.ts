@@ -213,7 +213,7 @@ export interface LeadgenHandoffDeal {
   /** «Дата загрузки» угоди менеджера: є — машина за правилом КВП (задача 7363). */
   loadDay?: string | null;
   /** Рахунки, виділені з угоди менеджера: їхній бюджет уже в `price`, машина одна (30.10.2026). */
-  split?: { dealId: number; url: string }[];
+  split?: { dealId: number; url: string; loadDay?: string | null }[];
 }
 /** 🔎 «Які угоди рахуємо» (16.10.2026): угода лідгена, що потрапила в ліди / ОПР / прорахунки за період. Час — ISO. */
 export interface LeadgenStageDeal {
