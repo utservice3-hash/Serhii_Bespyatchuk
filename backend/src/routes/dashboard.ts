@@ -74,7 +74,7 @@ import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
-import { mergeAdDays } from "../ga4/report.js";
+import { mergeAdDays, mergeAdMonths } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
@@ -6110,9 +6110,47 @@ dashboardRouter.get("/ads", async (req, res) => {
     money.adReceivedByDay({ from, to }, adSources),
   ]);
 
+  // 💰 #8702 — «Заробили ліди»: ті самі гроші, що «Надійшло», за датою ЛІДА (ядро `money.adEarned*`). Окремою хвилею
+  // запитів, а не в тому ж Promise.all: пул спільний з /overview, і вісім важких запитів разом — це черга (#36).
+  // Місяці — від 1 січня поточного року до сьогодні (Київ), незалежно від обраного періоду: таблиця окупності
+  // показує рік, щоб «відкотити на три місяці» можна було без перемикання.
+  const yearFrom = `${kyivToday().slice(0, 4)}-01-01`;
+  const yearTo = kyivToday();
+  const [earnedDays, campLeads, campEarned] = await Promise.all([
+    money.adEarnedByDay({ from, to }, adSources),
+    metrics.adLeadsByCampaign({ from, to }, adSources),
+    money.adEarnedByCampaign({ from, to }, adSources),
+  ]);
+  const [monthCost, yearLeads, yearEarned, yearReceived] = await Promise.all([
+    pool.query<{ month: string; cost: string }>(
+      `SELECT to_char(day, 'YYYY-MM') AS month, SUM(cost) AS cost
+         FROM ad_ga4_daily WHERE day >= $1::date AND day <= $2::date GROUP BY 1`,
+      [yearFrom, yearTo]
+    ),
+    metrics.conversionAdsByDay({ from: yearFrom, to: yearTo }, adSources),
+    money.adEarnedByMonth({ from: yearFrom, to: yearTo }, adSources),
+    money.adReceivedByDay({ from: yearFrom, to: yearTo }, adSources),
+  ]);
+  const months = mergeAdMonths(
+    new Map(monthCost.rows.map((r) => [r.month, Number(r.cost)])),
+    yearLeads,
+    new Map(yearEarned.filter((r) => r.key !== null).map((r) => [r.key as string, { revenue: r.earned, deals: r.deals }])),
+    yearReceived,
+  );
+  // Кампанія = ліди (популяція «Узято») ∪ гроші (за датою ліда); `null` — органіка й без мітки.
+  const campaignLeads = new Map<string | null, { campaign: string | null; leads: number; earned: number; earnedDeals: number }>();
+  const campOf = (c: string | null) => {
+    const e = campaignLeads.get(c) ?? { campaign: c, leads: 0, earned: 0, earnedDeals: 0 };
+    campaignLeads.set(c, e);
+    return e;
+  };
+  for (const l of campLeads) campOf(l.campaign).leads += l.leads;
+  for (const r of campEarned) { const e = campOf(r.key); e.earned += r.earned; e.earnedDeals += r.deals; }
+
   const leadsByDay = new Map(leads.map((l) => [l.day, l]));
   const sheetByDay = new Map(sheet.rows.map((r) => [r.day, Number(r.budget_fact)]));
   const receivedByDay = new Map(received.map((r) => [r.day, { revenue: r.revenue, deals: r.deals }]));
+  const earnedByDay = new Map(earnedDays.filter((r) => r.key !== null).map((r) => [r.key as string, { revenue: r.earned, deals: r.deals }]));
   const campaigns = ga4.rows.map((r) => ({
     day: r.day,
     campaign: r.campaign,
@@ -6126,7 +6164,7 @@ dashboardRouter.get("/ads", async (req, res) => {
   // Дні збирає ЧИСТА функція над чотирма джерелами (GA4 ∪ ліди ядра ∪ аркуш ∪ гроші, що надійшли) —
   // саме тому її можна прогнати фікстурою «GA4 порожній, ліди є» (ворота `#372`).
   // Поля в ній перелічені ЯВНО, без спреду (ворота `#17e2`).
-  const days = mergeAdDays(campaigns, leadsByDay, sheetByDay, receivedByDay);
+  const days = mergeAdDays(campaigns, leadsByDay, sheetByDay, receivedByDay, earnedByDay);
 
   // 💰 ПЛАН і ДОХІД — обидва з ЄДИНИХ джерел, а не порахованi тут.
   // План: `core/adBudget` (той самий модуль читає КВП — рішення «скрізь один план»).
@@ -6151,6 +6189,8 @@ dashboardRouter.get("/ads", async (req, res) => {
     revenue: revenue.ad.revenue,
     revenueDeals: revenue.ad.deals,
     elogist: { leads: elogistLeads, revenue: revenue.elogist.revenue, revenueDeals: revenue.elogist.deals },
+    months,
+    campaignLeads: [...campaignLeads.values()],
   });
 });
 
@@ -6170,7 +6210,8 @@ dashboardRouter.get("/ads/deals", async (req, res) => {
   const day = dateParam(req.query.day);
   if (!day) return res.status(400).json({ error: "day required" });
   const { adSources } = await getSettings();
-  const [deals, received] = await Promise.all([metrics.adDealsByDay(day, adSources), money.adReceivedDeals(day, adSources)]);
+  const [deals, received, earned] = await Promise.all([metrics.adDealsByDay(day, adSources), money.adReceivedDeals(day, adSources),
+    money.adEarnedDeals(day, adSources)]);
   res.json({
     day,
     deals: deals.map((d) => ({
@@ -6187,6 +6228,16 @@ dashboardRouter.get("/ads/deals", async (req, res) => {
       name: d.name,
       price: d.price,
       leadDay: d.leadDay,
+      state: d.state,
+      manager: d.manager,
+      url: kommoLeadUrl(d.kommoId),
+    })),
+    // 💰 #8702 — за які угоди «Заробили ліди дня»: створені цього дня й уже оплачені; `paidDay` — коли надійшли гроші.
+    earned: earned.map((d) => ({
+      kommoId: d.kommoId,
+      name: d.name,
+      price: d.price,
+      paidDay: d.paidDay,
       state: d.state,
       manager: d.manager,
       url: kommoLeadUrl(d.kommoId),
