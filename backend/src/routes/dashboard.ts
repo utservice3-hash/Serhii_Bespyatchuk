@@ -6575,7 +6575,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     reactCycle.cyclesFor(pool, clientKeys),
   ]);
   const nowYm = kyivToday().slice(0, 7);
-  const inReactNow = (key: string) => reactCycleRules.inReact(lastInvByKey.get(key) ?? null, nowYm);
+  // 🌙 Сезонний не в сезоні — не в реактивації (задача 8351): ні вкладки, ні циклу.
+  const inReactNow = (key: string) => !factsFor(seg, key).offSeason && reactCycleRules.inReact(lastInvByKey.get(key) ?? null, nowYm);
   // 🔗 Хто приєднаний до кожного рядка (ТЗ 22.09, п.2.3) — лише назви, у гроші не входить.
   const aliasByKey = await clientAliasNames.aliasNamesFor(clientKeys);
   // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
@@ -6809,13 +6810,15 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     const segment = factsFor(seg, c.client_key).segment;
     const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null);
     const orderDays = lastOrder ? clientLeadRules.daysBetween(lastOrder, todayKyiv) : null;
-    const color = clientLeadRules.colorOf(segment, orderDays);
+    // 🌙 Сезонний не в сезоні (8351) — зелений: дзвонити не треба, і «Немає роботи» на ньому не горить.
+    const off = factsFor(seg, c.client_key).offSeason;
+    const color = off ? "green" as const : clientLeadRules.colorOf(segment, orderDays);
     const rt = reactByKey.get(c.client_key);
     const taskOpen = (rt?.taskId ?? null) != null && !["done", "cancelled"].includes(rt?.taskStatus ?? "");
     const manualAt = manualByKey.get(c.client_key)?.at ?? null;
     return {
       color, lastOrder, orderDays,
-      works: clientLeadRules.workVerdict({
+      works: off ? { yes: true, by: "season" as const, at: null, windowDays: clientLeadRules.workWindowDays(segment) } : clientLeadRules.workVerdict({
         talk10: f?.talk10 ?? null, stage: f?.stage ?? null,
         comment: lastComment.get(c.client_key)?.createdAt ?? null,
         contact: manualAt ? kyivDayOfIso(manualAt) : null,
@@ -6828,7 +6831,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         taskCreated: rt?.taskId != null ? leadTaskCreated.get(rt.taskId) ?? null : null, talk10: f?.talk10 ?? null, today: todayKyiv }),
       newRepeat: clientLeadRules.becameRepeatIn(f?.secondPaid ?? null, leadYm),
       source: clientLeadRules.repeatSource(f?.leadgen ?? false, f?.firstPaidChannel ?? null),
-      lostThisMonth: clientLeadRules.lostIn(lastOrder, leadYm),
+      lostThisMonth: !off && clientLeadRules.lostIn(lastOrder, leadYm),
+      offSeason: off,
     };
   };
   const leadByKey = new Map(rosterRows.map((c) => [c.client_key, leadOf(c)]));
@@ -6856,8 +6860,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       // стосується», і фронт підписує це словом, а не лишає порожню клітинку.
       daysSince: reactByKey.get(c.client_key)?.daysSince ?? null,
       value: reactByKey.get(c.client_key)?.value ?? null,
-      seasonal: reactByKey.get(c.client_key)?.seasonal ?? false,
-      seasonalNote: reactByKey.get(c.client_key)?.seasonalNote ?? null,
+      // 🌙 Сезонність — з ядра (8351): позначка, місяці, примітка і чи клієнт зараз не в сезоні.
+      seasonal: factsFor(seg, c.client_key).seasonal,
+      seasonalNote: factsFor(seg, c.client_key).seasonNote,
+      seasonMonths: factsFor(seg, c.client_key).seasonMonths,
       lastTalk: reactByKey.get(c.client_key)?.lastTalk ?? null,
       lastTalkDays: reactByKey.get(c.client_key)?.lastTalkDays ?? null,
       // 🎧 ТА САМА розмова, що `lastTalk` — з одного рядка ядра (п.3.3: «клікабельний, щоб одразу послухати»).
@@ -7761,7 +7767,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
       last_paid: string | null; payment_type: string | null; manager_name: string | null;
       team_name: string | null; pinned_manager_id: number | null;
       archived_at: string | null; archive_reason: string | null;
-      force_regular: boolean | null; force_note: string | null }>(
+      force_regular: boolean | null; force_note: string | null;
+      seasonal: boolean | null; season_months: number[] | null; season_note: string | null }>(
       `WITH paid AS (
          SELECT d.manager_id, d.price, d.closed_at_kommo
            FROM deals d
@@ -7789,7 +7796,10 @@ dashboardRouter.get("/client-card", async (req, res) => {
               (SELECT o2.archived_at FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archived_at,
               (SELECT o2.archive_reason FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archive_reason,
               (SELECT o2.force_regular FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS force_regular,
-              (SELECT o2.note FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS force_note
+              (SELECT o2.note FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS force_note,
+              (SELECT o2.seasonal FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS seasonal,
+              (SELECT o2.seasonal_months FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS season_months,
+              (SELECT o2.seasonal_note FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS season_note
          FROM agg a
          LEFT JOIN pm ON true
          LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
@@ -7987,6 +7997,12 @@ dashboardRouter.get("/client-card", async (req, res) => {
      * картці дві дії одного рівня закриті по-різному, і ніхто не памʼятатиме чому.
      */
     canForceRegular: isAdminScope(auth),
+    // 🌙 Сезонність (8351): ставить лише КВП / ОД / адмін — та сама межа, що в `/client-seasonal`.
+    canSeason: isAdminScope(auth),
+    seasonal: h?.seasonal ?? false,
+    seasonMonths: (h?.season_months ?? []).map(Number),
+    seasonNote: h?.season_note ?? null,
+    offSeason: reactivationRules.offSeason(h?.seasonal ?? false, h?.season_months ?? null, Number(kyivToday().slice(5, 7))),
     forcedRegular: h?.force_regular ?? false,
     forceNote: h?.force_note ?? null,
     archived: isArchived(h?.archived_at ?? null, h?.last_paid ?? null),
@@ -8344,22 +8360,30 @@ dashboardRouter.get("/reactivation-closed", async (req, res) => {
   });
 });
 
-/** Позначка «сезонний» — єдине, що ставиться руками (з дат її вивести неможливо). */
+/**
+ * 🌙 Позначка «сезонний» з місяцями сезону — єдине, що ставиться руками (з дат її вивести неможливо).
+ * Задача 8351 (ТЗ Юлі 06.11, Роман 10.11 «роби»): ставить лише КВП / ОД / адмін (`isAdminScope`); тімлід просить
+ * через КВП (до 10.11 міг сам — `isAdminOrLead`). Місяці — 1–12, правило «не в сезоні» — `reactivationRules.offSeason`.
+ * Зняти позначку = місяці теж стираються.
+ */
 dashboardRouter.post("/client-seasonal", async (req, res) => {
   const auth = req.auth!;
-  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminScope(auth)) return res.status(403).json({ error: "Сезонність ставить КВП — тімлід просить через неї" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
   if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
   const seasonal = req.body?.seasonal === true;
   const note = String(req.body?.note ?? "").trim().slice(0, 300) || null;
+  const months = seasonal ? reactivationRules.cleanSeasonMonths(req.body?.months) : [];
+  if (seasonal && !months.length) return res.status(400).json({ error: "Оберіть місяці, коли клієнт возить" });
+  if (months.length === 12) return res.status(400).json({ error: "Усі 12 місяців — це не сезонний клієнт" });
   await pool.query(
-    `INSERT INTO loyalty_overrides (client_key, seasonal, seasonal_note, updated_by, updated_at)
-     VALUES ($1,$2,$3,$4, now())
-     ON CONFLICT (client_key) DO UPDATE SET seasonal = EXCLUDED.seasonal,
-       seasonal_note = EXCLUDED.seasonal_note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, seasonal, note, auth.userId]);
-  res.json({ ok: true, seasonal });
+    `INSERT INTO loyalty_overrides (client_key, seasonal, seasonal_note, seasonal_months, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4,$5, now())
+     ON CONFLICT (client_key) DO UPDATE SET seasonal = EXCLUDED.seasonal, seasonal_note = EXCLUDED.seasonal_note,
+       seasonal_months = EXCLUDED.seasonal_months, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, seasonal, note, seasonal ? months : null, auth.userId]);
+  res.json({ ok: true, seasonal, months });
 });
 
 // ───────────────────────── ОБʼЄДНАННЯ КЛІЄНТІВ ─────────────────────────

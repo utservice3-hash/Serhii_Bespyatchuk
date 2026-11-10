@@ -6,6 +6,7 @@ import { RowComment } from "./RowComment";
 import { CreateTaskDialog } from "./ReactivationBits";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
+import { monthsLabel } from "./ClientSeasonBlock";
 
 /**
  * 🚦 «З КИМ З ПОСТІЙНИХ ГОВОРИТИ» — ПРОСТИЙ ЕКРАН ТІМЛІДА (ТЗ Юлі 28.10.2026, етап 2; задача 7360).
@@ -27,7 +28,7 @@ const COLOR = {
   yellow: { dot: "🟡", title: "Жовті", sub: "мали замовити за своїм ритмом, але не замовили", bg: "#fffbeb", fg: "#92400e", line: "#fcd34d" },
   red: { dot: "🔴", title: "Червоні", sub: "втрачені — 180+ днів без замовлення", bg: "#fef2f2", fg: "#991b1b", line: "#fca5a5" },
 } as const;
-const WORK_BY: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці" };
+const WORK_BY: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці", season: "не сезон (сезонний)" };
 const SOURCE: Record<string, string> = { leadgen: "лідогенерація", ad: "реклама", manager: "менеджер" };
 
 const S = {
@@ -172,6 +173,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
             <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, flexWrap: "wrap" }}>
               <SegmentBadge segment={c.segment} tip={data.categoryRules?.segmentTips[c.segment]} />
               {L.handOver && <span style={S.chip("#dc2626", "#fff")} title="дедлайн задачі на дзвінок минув, а розмови від 10 с після неї не було (правило Сергія). Передає тімлід.">⚠️ передати іншому менеджеру</span>}
+              {L.offSeason && <span style={S.chip("#eef2ff", "#4338ca")} title={`сезонний клієнт: возить ${monthsLabel(c.seasonMonths)} — зараз не сезон, дзвонити не треба`}>🌙 не сезон</span>}
               {L.newRepeat && <span style={S.chip("#dcfce7", "#166534")} title={`друга оплата — цього місяця · звідки: ${SOURCE[L.source]}`}>новий постійний</span>}
             </div>
             {!mgrRows && <div style={grey}>{c.managerName}</div>}

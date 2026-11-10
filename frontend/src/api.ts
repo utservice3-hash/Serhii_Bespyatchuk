@@ -4703,7 +4703,7 @@ export interface ClientLead {
   color: "green" | "yellow" | "red";
   lastOrder: string | null; orderDays: number | null;
   /** Чи працюють із клієнтом за вікно сегмента і чим це підтверджено (найсвіжіший доказ). */
-  works: { yes: boolean; by: "talk" | "stage" | "deal" | "order" | "comment" | "contact" | "payment" | null; at: string | null; windowDays: number };
+  works: { yes: boolean; by: "talk" | "stage" | "deal" | "order" | "comment" | "contact" | "payment" | "season" | null; at: string | null; windowDays: number };
   /** Остання розмова від 10 с і суть останньої розмови, яку розібрав AI. */
   talk10: string | null;
   summary: { at: string; text: string } | null;
@@ -4711,6 +4711,8 @@ export interface ClientLead {
   handOver: boolean;
   /** Друга оплата припала на поточний місяць; звідки прийшов; став червоним цього місяця. */
   newRepeat: boolean; source: "leadgen" | "ad" | "manager"; lostThisMonth: boolean;
+  /** 🌙 Сезонний клієнт не в сезоні (8351) — зелений, дзвонити не треба. */
+  offSeason: boolean;
 }
 
 export interface ClientPlanRow {
@@ -4778,6 +4780,8 @@ export interface ClientPlanRow {
   value: number | null;
   seasonal: boolean;
   seasonalNote: string | null;
+  /** 🌙 Місяці сезону (1–12), задача 8351; порожньо — позначка без дії. */
+  seasonMonths: number[];
   lastTalk: string | null;
   lastTalkDays: number | null;
   /** 📱 Останній контакт: свіжіше з розмови Ringostat і ручного запису (Viber/Telegram/…). */
@@ -5009,6 +5013,8 @@ export interface ClientCard {
   assignTeamId?: number | null;
   /** ⭐ «Вважати постійним попри правило» — право, стан і примітка «чому». */
   canForceRegular: boolean; forcedRegular: boolean; forceNote: string | null;
+  /** 🌙 Сезонний клієнт (8351): право (КВП / ОД / адмін), позначка, місяці сезону (1–12), примітка, чи зараз не сезон. */
+  canSeason: boolean; seasonal: boolean; seasonMonths: number[]; seasonNote: string | null; offSeason: boolean;
   /** Клієнт ЗАРАЗ в архіві (з автоповерненням) — тоді дія зворотна. */
   archived: boolean;
   archiveReason: string | null;
@@ -5123,7 +5129,7 @@ export async function fetchReactivationList(params?: { managerId?: number; teamI
   const { data } = await api.get<ReactivationResp>("/dashboard/reactivation-list", { params });
   return data;
 }
-export async function setClientSeasonal(body: { clientKey: string; seasonal: boolean; note?: string }): Promise<{ seasonal: boolean }> {
+export async function setClientSeasonal(body: { clientKey: string; seasonal: boolean; note?: string; months?: number[] }): Promise<{ seasonal: boolean; months: number[] }> {
   const { data } = await api.post("/dashboard/client-seasonal", body);
   return data;
 }

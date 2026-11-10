@@ -217,4 +217,21 @@ export function keepInReactivation(f: { phoneKey: boolean; paymentType: string |
  * бо тягнув її з модуля, що імпортує пул. Тобто гейт доводив не своє твердження, а
  * лише те, що модуль підвантажився. Значення НЕ змінилось — переїхав лише дім.
  */
+/**
+ * 🌙 СЕЗОННИЙ КЛІЄНТ НЕ В СЕЗОНІ (задача 8351, ТЗ Юлі 06.11; Роман 10.11 «роби»).
+ * КВП позначає клієнта сезонним і ставить місяці, коли він возить (1–12, будь-які, і через Новий рік теж —
+ * листопад–лютий це просто {11, 12, 1, 2}). Поза цими місяцями клієнт «не в сезоні»: не сплячий і не втрачений,
+ * не в реактивації. Без місяців позначка НЕ ДІЄ — інакше клієнт, позначений до 8351 без місяців, зник би зі сплячих
+ * назавжди (рішення Романа 10.11: лишити без дії, поки КВП не поставить місяці).
+ */
+export function offSeason(seasonal: boolean, months: readonly number[] | null | undefined, monthNum: number): boolean {
+  return seasonal && !!months && months.length > 0 && !months.includes(monthNum);
+}
+
+/** Місяці сезону з вводу: цілі 1–12, без повторів, по зростанню. Решту відкидаємо. */
+export function cleanSeasonMonths(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map(Number).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12))].sort((a, b) => a - b);
+}
+
 export const RETURNED_CLOSE_REASON = "returned: клієнт повернувся — задачу закрито автоматично";

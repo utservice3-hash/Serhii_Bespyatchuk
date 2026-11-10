@@ -739,6 +739,9 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal_note TEXT;
+-- 🌙 Місяці сезону (1–12) сезонного клієнта — задача 8351 (Юля 06.11, Роман 10.11 «роби»). Поза ними клієнт «не в
+-- сезоні»: не сплячий, не в реактивації, не «Немає роботи». NULL / порожньо = позначка без дії (як до 8351).
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal_months SMALLINT[];
 -- Місяць, З ЯКОГО діє нове закріплення менеджера. Правило власника: поточний
 -- місяць лишається за старим (план і факт не рухаються посеред місяця), новий
 -- планує з наступного. NULL = діє одразу (закріплення, зроблені до цього правила).
