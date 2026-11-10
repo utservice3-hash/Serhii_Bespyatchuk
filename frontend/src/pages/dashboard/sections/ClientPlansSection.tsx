@@ -17,6 +17,7 @@ import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { ReactCycleStatus, ReactCycleButtons, LeadgenPoolPanel } from "./ReactivationCycle";
+import { monthsLabel } from "./ClientSeasonBlock";
 
 /**
  * «ПОСТІЙНІ КЛІЄНТИ» (задача 5609, ТЗ Юлі 12.10.2026 після TOP Weekly; регламент ред. 2).
@@ -35,7 +36,7 @@ const STICKY_TH: React.CSSProperties = { position: "sticky", top: 0, zIndex: 2, 
 const W_WORK = 112, W_NAME = 260;
 const dm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 /** Чим підтверджено роботу (вердикт «працюють», задача 8333) — словами для підказки. */
-const WORK_BY_TEXT: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці" };
+const WORK_BY_TEXT: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці", season: "не сезон (сезонний)" };
 const uah = (n: number) => `${Math.round(n).toLocaleString("uk-UA")} ₴`;
 /** 🧾 Підтвердження роботи словами (підказка і CSV) — угода «від рахунку» і / або оплата; порожньо — роботи немає. */
 function workProofText(c: { workProof: ClientPlanRow["workProof"] }): string {
@@ -425,7 +426,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         <td style={S.td}>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             <SegmentBadge segment={c.segment} tip={data?.categoryRules?.segmentTips[c.segment]} />
-            <StateChip state={c.state} rule={c.state === "sleeping" ? data?.categoryRules?.stateTips.sleeping : c.state === "lost" ? data?.categoryRules?.stateTips.lost : undefined} />
+            {c.lead.offSeason
+              ? <span style={S.chip("#eef2ff", "#4338ca")} title={`Сезонний: возить ${monthsLabel(c.seasonMonths)}${c.seasonalNote ? ` · «${c.seasonalNote}»` : ""}. Зараз не сезон — не сплячий і не в реактивації.`}>🌙 не сезон</span>
+              : <StateChip state={c.state} rule={c.state === "sleeping" ? data?.categoryRules?.stateTips.sleeping : c.state === "lost" ? data?.categoryRules?.stateTips.lost : undefined} />}
+            {c.seasonal && c.seasonMonths.length > 0 && !c.lead.offSeason && <span style={S.chip("#eef2ff", "#4338ca")} title={`Сезонний: возить ${monthsLabel(c.seasonMonths)}`}>🌙 сезон</span>}
           </div>
           {c.paymentType && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>{c.paymentType}</div>}
         </td>

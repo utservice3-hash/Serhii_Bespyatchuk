@@ -6,6 +6,7 @@ import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabe
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { ReactCycleStatus, ReactCycleButtons } from "./ReactivationCycle";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
+import { ClientSeasonBlock } from "./ClientSeasonBlock";
 import { formatAmountFull } from "../format";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 
@@ -213,6 +214,12 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                 </>
               )}
             </div>
+          )}
+
+          {/* 🌙 Сезонний клієнт (задача 8351) — лише КВП / ОД / адмін; право й стан — із сервера. */}
+          {card.canSeason && (
+            <ClientSeasonBlock clientKey={clientKey} seasonal={card.seasonal} months={card.seasonMonths} note={card.seasonNote}
+              offSeason={card.offSeason} onSaved={() => { load(); onChanged?.(); }} />
           )}
 
           {/* 👤 ПЕРЕДАЧА — ОКРЕМОЮ КНОПКОЮ, А НЕ В ЗГОРНУТОМУ БЛОЦІ (ТЗ 22.09, п.3.2). Доти вона ховалась

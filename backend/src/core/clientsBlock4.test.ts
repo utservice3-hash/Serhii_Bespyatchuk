@@ -54,12 +54,13 @@ test("#840 3 ПОВНІ МІСЯЦІ БЕЗ РАХУНКУ: межа по оби
 });
 
 /**
- * #3451 — НАСТУПНИК `#840c` (задача 8333, 09.11.2026): те саме «фронт не має власного правила вкладок», але група рядка
+ * #3452 — НАСТУПНИК `#3451` (задача 8351, 10.11.2026): усе те саме, плюс «у реактивації» не рахується для сезонного
+ * клієнта не в сезоні (`factsFor(seg, key).offSeason`). Попередник `#3451` — наступник `#840c` (задача 8333, 09.11.2026): те саме «фронт не має власного правила вкладок», але група рядка
  * («жовті» — 30+ днів без замовлення) тепер рахується від тієї самої дати, що «днів тому», — свіжішого з рахунку й
  * оплати (`lead.orderDays`), а не від самої оплати. Інакше «днів тому» й жовтий фон розійшлися б (і живий гейт ростеру).
  * 🧨 Червоніє, якщо група знову піде від дати оплати або фронт заведе власний поріг.
  */
-test("#3451 ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДОК: фільтр, порядок і жовтий фон — з поля сервера; група — від рахунку й дати замовлення", () => {
+test("#3452 ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДОК: група — від рахунку й дати замовлення; сезонний не в сезоні — не в реактивації", () => {
   const list = read(`${SECTIONS}/ClientPlansSection.tsx`);
   assert.match(list, /tab === "regular" && c\.tabGroup === "react"\) return false/, "🔴 вкладка «Постійні» фільтрує не за групою сервера");
   assert.match(list, /tab === "react" && c\.tabGroup !== "react"\) return false/, "🔴 вкладка «Реактивація» фільтрує не за групою сервера");
@@ -70,7 +71,7 @@ test("#3451 ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДО�
   const dash = codeOnly(read("backend/src/routes/dashboard.ts"));
   assert.match(dash, /tabGroup: clientTabs\.clientTabGroup\(inReactNow\(c\.client_key\), leadByKey\.get\(c\.client_key\)!\.orderDays\)/,
     "🔴 група вкладки /client-plans рахується не від рахунку (п.4.1) або не від тієї дати, що «днів тому» (8333)");
-  assert.match(dash, /const inReactNow = \(key: string\) => reactCycleRules\.inReact\(lastInvByKey\.get\(key\) \?\? null, nowYm\);/,
+  assert.match(dash, /const inReactNow = \(key: string\) => !factsFor\(seg, key\)\.offSeason && reactCycleRules\.inReact\(lastInvByKey\.get\(key\) \?\? null, nowYm\);/,
     "🔴 «у реактивації» рахується не правилом ядра від дати останнього рахунку");
   assert.match(dash, /money\.lastInvoiceByClientKey\(clientKeys\)/, "🔴 дата останнього рахунку не з ядра грошей — розійдеться з фактом «з рахунку»");
   assert.match(dash, /tabGroupRank: clientTabs\.TAB_GROUP_RANK,/, "🔴 ранги груп не приходять із сервера");

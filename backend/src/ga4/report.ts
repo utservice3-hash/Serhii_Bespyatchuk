@@ -129,6 +129,8 @@ export type AdDay = {
   paidMargin: number;
   /** 💰 Надійшло ЦЬОГО дня з реклами (маржа, ліди будь-якого дня) — Σ днів == плитці «Заробили». */
   received: number; receivedDeals: number;
+  /** 💰 #8702: заробили ліди, що ПРИЙШЛИ цього дня (`money.adEarnedByDay`) — гроші лишаються на дні ліда. */
+  earned: number; earnedDeals: number;
 };
 
 export function mergeAdDays(
@@ -136,6 +138,7 @@ export function mergeAdDays(
   leadsByDay: ReadonlyMap<string, AdLeadsRow>,
   sheetByDay: ReadonlyMap<string, number>,
   receivedByDay: ReadonlyMap<string, AdReceivedRow> = new Map(),
+  earnedByDay: ReadonlyMap<string, AdReceivedRow> = new Map(),
 ): AdDay[] {
   const ga4 = new Map<string, { cost: number; clicks: number; sessions: number }>();
   for (const c of campaigns) {
@@ -146,7 +149,7 @@ export function mergeAdDays(
   // День вважається таким, що БУВ, якщо про нього знає хоч одне джерело.
   // Гроші теж: день, коли лише НАДІЙШЛИ кошти (без витрат і лідів), інакше зник би з таблиці разом із грошима,
   // і Σ колонки «Надійшло» розійшлась би з плиткою «Заробили».
-  const all = new Set<string>([...ga4.keys(), ...leadsByDay.keys(), ...sheetByDay.keys(), ...receivedByDay.keys()]);
+  const all = new Set<string>([...ga4.keys(), ...leadsByDay.keys(), ...sheetByDay.keys(), ...receivedByDay.keys(), ...earnedByDay.keys()]);
   return [...all].sort((a, b) => a.localeCompare(b)).map((day) => {
     const g = ga4.get(day);
     return {
@@ -163,6 +166,43 @@ export function mergeAdDays(
       paidMargin: leadsByDay.get(day)?.paidMargin ?? 0,
       received: receivedByDay.get(day)?.revenue ?? 0,
       receivedDeals: receivedByDay.get(day)?.deals ?? 0,
+      earned: earnedByDay.get(day)?.revenue ?? 0,
+      earnedDeals: earnedByDay.get(day)?.deals ?? 0,
     };
   });
+}
+
+/**
+ * 📅 ОКУПНІСТЬ ПО МІСЯЦЯХ (#8702) — чиста згортка: витрати GA4 місяця, «Узято» й «у роботі» ядра (дні → місяць),
+ * «заробили ліди місяця» (за датою ліда) і «надійшло в місяці» (за датою грошей). `settled` = узято − у роботі:
+ * по скількох лідах уже є результат («дозріло»). Місяць без жодного джерела не створюється.
+ * Тримає `#3315`.
+ */
+export type AdMonth = { month: string; cost: number; leads: number; settled: number; earned: number; earnedDeals: number; received: number };
+
+export function mergeAdMonths(
+  costByMonth: ReadonlyMap<string, number>,
+  leadDays: readonly { day: string; entered: number; inWork: number }[],
+  earnedByMonth: ReadonlyMap<string, AdReceivedRow>,
+  receivedDays: readonly { day: string; revenue: number }[],
+): AdMonth[] {
+  const leads = new Map<string, { leads: number; inWork: number }>();
+  for (const d of leadDays) {
+    const m = d.day.slice(0, 7);
+    const e = leads.get(m) ?? { leads: 0, inWork: 0 };
+    e.leads += d.entered; e.inWork += d.inWork;
+    leads.set(m, e);
+  }
+  const received = new Map<string, number>();
+  for (const d of receivedDays) received.set(d.day.slice(0, 7), (received.get(d.day.slice(0, 7)) ?? 0) + d.revenue);
+  const all = new Set<string>([...costByMonth.keys(), ...leads.keys(), ...earnedByMonth.keys(), ...received.keys()]);
+  return [...all].sort((a, b) => a.localeCompare(b)).map((month) => ({
+    month,
+    cost: Math.round((costByMonth.get(month) ?? 0) * 100) / 100,
+    leads: leads.get(month)?.leads ?? 0,
+    settled: (leads.get(month)?.leads ?? 0) - (leads.get(month)?.inWork ?? 0),
+    earned: earnedByMonth.get(month)?.revenue ?? 0,
+    earnedDeals: earnedByMonth.get(month)?.deals ?? 0,
+    received: Math.round((received.get(month) ?? 0) * 100) / 100,
+  }));
 }

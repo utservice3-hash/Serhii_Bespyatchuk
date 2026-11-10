@@ -21,7 +21,7 @@
 import { SEGMENT_SLEEPING_DAYS, LOST_DAYS, stateOf, type ClientSegment } from "./reactivationRules.js";
 
 export type LeadColor = "green" | "yellow" | "red";
-export type WorkBy = "talk" | "stage" | "comment" | "contact" | "payment" | "order" | "deal";
+export type WorkBy = "talk" | "stage" | "comment" | "contact" | "payment" | "order" | "deal" | "season";
 export type RepeatSource = "leadgen" | "ad" | "manager";
 
 /** Мінімальна тривалість розмови, що вважається роботою (ТЗ: «розмова від 10 с»). */

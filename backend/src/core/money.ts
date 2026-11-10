@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 // одне одного лише всередині функцій (не на рівні модуля), тож ESM-live-binding резолвиться
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
 import { adDealSql } from "./metrics.js";
+import { adCampaignTagSql, LEAD_PARENT_JOIN } from "./adCampaign.js";
 import { ELOGIST_CHANNEL } from "./elogist.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { managerDealClass, moneyCameIn, splitInvoicesOf, splitIsEachCar, type DealState, type ClientSuccess, type PendDay, type ExtraCar } from "./leadgenHandoffRules.js";
@@ -1033,6 +1034,88 @@ export async function adReceivedDeals(day: string, adSources: string[]): Promise
     name: x.name?.trim() || "без назви в CRM",
     price: Number(x.price ?? 0),
     leadDay: x.lead_day,
+    state: Number(x.status_id) === 142 ? "success" : "paid",
+    manager: x.manager,
+  }));
+}
+
+/**
+ * 💰 «ЗАРОБИЛИ ЛІДИ» — ГРОШІ ЗА ДАТОЮ ЛІДА (задача #8702, зустріч 09.11.2026, Сергій: «усі надходження прив'язуємо
+ * до місяця створення угоди»; Олександр: інакше «нема причинно-наслідкового звʼязку» між рекламою місяця й грошима).
+ *
+ * ТІ САМІ угоди й та сама маржа, що в «Надійшло» (`sourceSql("received")` + `adDealSql`, ті самі JOIN-и), — лише
+ * інший анкер дня: не коли надійшли гроші, а коли ПРИЙШОВ лід (`created_at_kommo`; копія → батько, `LEAD_PARENT_JOIN`).
+ * Тому за весь час Σ «заробили ліди» == Σ «надійшло» гривня в гривню — це стереже `#3314`.
+ * ⚠️ Число минулого періоду РОСТЕ, поки його угоди в роботі: місяць «дозріває» ~3 місяці.
+ */
+const LEAD_AT = "COALESCE(par.created_at_kommo, d.created_at_kommo)";
+const LEAD_DAY = `(${LEAD_AT} AT TIME ZONE 'Europe/Kyiv')::date`;
+
+function adEarnedFrom(s: MoneyScope, adSources: string[]): { from: string; p: unknown[] } {
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`${LEAD_DAY} >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`${LEAD_DAY} <= $${p.length}`); }
+  p.push(adSources);
+  conds.push(adDealSql(`$${p.length}`));
+  return {
+    from: `FROM (${src}) src
+       JOIN deals d ON d.kommo_id = src.kommo_id
+       JOIN managers m ON m.id = src.manager_id
+       ${LEAD_PARENT_JOIN("d")}
+      WHERE ${conds.join(" AND ")}`,
+    p,
+  };
+}
+
+export interface AdEarnedRow { key: string | null; earned: number; deals: number }
+
+async function adEarnedGrouped(s: MoneyScope, adSources: string[], keySql: string): Promise<AdEarnedRow[]> {
+  const q = adEarnedFrom(s, adSources);
+  const r = await pool.query<{ key: string | null; earned: string; deals: string }>(
+    `SELECT ${keySql} AS key, COALESCE(SUM(src.price),0) AS earned, COUNT(*) AS deals
+       ${q.from}
+      GROUP BY 1 ORDER BY 1`,
+    q.p
+  );
+  return r.rows.map((x) => ({ key: x.key, earned: Number(x.earned), deals: Number(x.deals) }));
+}
+
+/** По днях ліда (YYYY-MM-DD). Угода без дати створення дає `key: null` — лише у вибірці «за весь час». */
+export const adEarnedByDay = (s: MoneyScope, adSources: string[]) =>
+  adEarnedGrouped(s, adSources, `to_char(${LEAD_DAY}, 'YYYY-MM-DD')`);
+/** По місяцях ліда (YYYY-MM) — таблиця «Окупність по місяцях». */
+export const adEarnedByMonth = (s: MoneyScope, adSources: string[]) =>
+  adEarnedGrouped(s, adSources, `to_char(${LEAD_DAY}, 'YYYY-MM')`);
+/** По мітці кампанії ліда; `key: null` — органіка й угоди без мітки (рядок «без мітки»). */
+export const adEarnedByCampaign = (s: MoneyScope, adSources: string[]) =>
+  adEarnedGrouped(s, adSources, adCampaignTagSql("d"));
+
+export interface AdEarnedDeal {
+  kommoId: number; name: string; price: number;
+  /** Коли надійшли гроші (анкер `received`, Київ) — гроші лишаються на дні ліда, а тут видно, коли прийшли. */
+  paidDay: string;
+  state: "success" | "paid";
+  manager: string | null;
+}
+
+/** Склад «Заробили ліди дня» — ТА САМА вибірка без GROUP BY, тож Σ цін == числу дня (`#3314b`). */
+export async function adEarnedDeals(day: string, adSources: string[]): Promise<AdEarnedDeal[]> {
+  const q = adEarnedFrom({ from: day, to: day }, adSources);
+  const r = await pool.query<{ kommo_id: string; name: string | null; price: string | null; paid_day: string;
+                               status_id: string; manager: string | null }>(
+    `SELECT src.kommo_id, d.name, src.price, d.status_id, m.name AS manager,
+            to_char(${ANCHOR_DAY}, 'YYYY-MM-DD') AS paid_day
+       ${q.from}
+      ORDER BY src.price DESC NULLS LAST, src.kommo_id`,
+    q.p
+  );
+  return r.rows.map((x) => ({
+    kommoId: Number(x.kommo_id),
+    name: x.name?.trim() || "без назви в CRM",
+    price: Number(x.price ?? 0),
+    paidDay: x.paid_day,
     state: Number(x.status_id) === 142 ? "success" : "paid",
     manager: x.manager,
   }));

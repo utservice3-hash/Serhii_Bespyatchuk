@@ -142,7 +142,10 @@ const KVP_SURVEYS = "Роман 30.10.2026: «треба дати можливі
 const POOL_OFF = "Сергій (TOP Weekly 29.10 і задача 7367 31.10.2026: «вимкнути передачу реактивації лідгенам з 01.11») і "
   + "Роман 06.11.2026 («просто вимкни і все»): пул лідгенів вимкнено вимикачем `LEADGEN_POOL_ENABLED` — вкладку не бачить "
   + "ніхто, тож і керівництво отримує 403. Стереже #3441/#3442";
+const SEASON_KVP = "Юля, задача 8351 (06.11.2026): «я (КВП) можу вручну змінити сегмент… Тімлід просить зміну через мене»; "
+  + "Роман 10.11.2026 — «роби» на план зі звуженням права. До цього позначку «сезонний» міг ставити й тімлід (`isAdminOrLead`)";
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  { method: "POST", path: "/api/dashboard/client-seasonal", role: "team_lead", to: "deny", decidedOn: "2026-11-10", decidedBy: "Юля і Роман", why: SEASON_KVP },
   { method: "GET", path: "/api/dashboard/leadgen-pool", role: "admin", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
   { method: "GET", path: "/api/dashboard/leadgen-pool", role: "ceo", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
   { method: "GET", path: "/api/dashboard/leadgen-pool", role: "opdir", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
@@ -885,8 +888,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🚫 «Закрити» в «Нічийних» (задача 7187) — той самий допуск, що «Взяти в роботу»: менеджер без прапорця — 403.
   { method: "POST", path: "/api/dashboard/orphan-clients/close", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  // 🌙 Сезонність ставить лише КВП / ОД / адмін (задача 8351, з 10.11.2026): тімлід — 403 ДО читання тіла, тож проба
+  // безпечна. Зрушення узаконене (SEASON_KVP).
   { method: "POST", path: "/api/dashboard/client-seasonal", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: ["hr", "manager", "team_lead"] },
   { method: "POST", path: "/api/dashboard/reactivation-task", cls: "deny-only",
     allow: [], deny: ["hr"] },
   // 📋 Реєстр закритих (07.09.2026): читання, тому пробувати безпечно й team_lead —

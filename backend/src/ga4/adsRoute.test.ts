@@ -80,7 +80,7 @@ test("#372b 🪞 ІНВАРІАНТ ГРУПУВАННЯ ЖИВИЙ, і роут
   const src = readFileSync(ROUTE_SRC, "utf8");
   assert.match(src, /const from = dateParam\(req\.query\.from\)/,
     "🔴 роут /ads більше не нормалізує дату через dateParam — порожній рядок знову дійде до ('')::date");
-  assert.match(src, /const days = mergeAdDays\(campaigns, leadsByDay, sheetByDay, receivedByDay\)/,
+  assert.match(src, /const days = mergeAdDays\(campaigns, leadsByDay, sheetByDay, receivedByDay, earnedByDay\)/,
     "🔴 роут /ads більше не кличе mergeAdDays — дні знову будуються з самого GA4, і ліди зникають разом із днем");
 });
 
