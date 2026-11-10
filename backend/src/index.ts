@@ -128,6 +128,7 @@ import { collectLardi } from "./jobs/collectLardi.js";
 import { buildLeadgenLtv } from "./jobs/buildLeadgenLtv.js";
 import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
+import { prozorroTasks } from "./jobs/prozorroTasks.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 import { backupDb } from "./jobs/backupDb.js";
@@ -796,6 +797,12 @@ cron.schedule("5,15,25,35,45,55 * * * *", () => {
 // хвилинах callAiJob. Лише наша БД. Під наглядом (`monitoredJobs.ts`), everyMin == крону — тримає `#3723`.
 cron.schedule("12,42 * * * *", () => {
   void runJob("firstTouchAutoTasks", () => firstTouchAutoTasks());
+});
+
+// ☎️ ЗАДАЧІ «ЗВʼЯЗАТИСЯ» ПО ТЕНДЕРАХ PROZORRO (задача 8731): закриваються самі після вихідного дзвінка > 8 с. Раз на 30 хв о
+// :22/:52 — не на :00/:30 із syncKommo і не на хвилинах інших автозадач. Лише наша БД. Під наглядом (`monitoredJobs.ts`).
+cron.schedule("22,52 * * * *", () => {
+  void runJob("prozorroTasks", () => prozorroTasks());
 });
 
 // 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ (ТЗ 29.09.2026, рішення Романа: «зразу після фільтра», не щогодини).

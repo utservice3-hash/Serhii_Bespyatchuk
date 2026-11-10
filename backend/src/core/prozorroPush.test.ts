@@ -8,6 +8,7 @@ import {
 } from "./prozorroPush.js";
 import { activeNiches, canEditSettings, parseConfig, saveConfig, type PzConfig } from "./prozorroSettings.js";
 import { parsePeriod } from "./prozorroStats.js";
+import { assignTarget, callClosesTask, rotationPick, OPDIR_KOMMO_USER_ID } from "./prozorroAssign.js";
 import type { Db } from "./adCallFacts.js";
 
 const SRC = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
@@ -128,18 +129,19 @@ test("#2364 СТЕЛЯ І ЗБОЇ: стеля 2 з 5; поодинокий зб
 
 /** Фейкова БД для налаштувань: варіанти лідогенів, поточний конфіг, імена, журнал. */
 function fakeDb(options: number[], start: Partial<PzConfig> = {}) {
-  const state = { cfg: { responsibleManagerId: null, mode: "dry", dailyLimit: null, minAmount: 500000, nichesOff: [], ...start } as PzConfig, log: [] as unknown[][], writes: 0 };
+  const state = { cfg: { assignMode: "one", responsibleManagerId: null, rotationIds: [], rotationFrom: null, mode: "dry", dailyLimit: null, minAmount: 500000, nichesOff: [], ...start } as PzConfig, log: [] as unknown[][], writes: 0 };
   const db: Db = {
     query: (async (sql: string, params?: unknown[]) => {
       if (/FROM managers m JOIN teams t/.test(sql)) return { rows: options.map((id) => ({ id, name: `L${String(id)}`, team: "Лідогенерація" })) };
       if (/FROM prozorro_settings WHERE id = 1/.test(sql)) {
         const c = state.cfg;
-        return { rows: [{ m: c.responsibleManagerId, mode: c.mode, daily_limit: c.dailyLimit, min_amount: String(c.minAmount), niches_off: c.nichesOff }] };
+        return { rows: [{ m: c.responsibleManagerId, mode: c.mode, daily_limit: c.dailyLimit, min_amount: String(c.minAmount), niches_off: c.nichesOff,
+          assign_mode: c.assignMode, rotation_ids: c.rotationIds, rotation_from: c.rotationFrom }] };
       }
       if (/SELECT id, name FROM managers WHERE id = ANY/.test(sql)) return { rows: ((params?.[0] as number[]) ?? []).map((id) => ({ id, name: `L${String(id)}` })) };
       if (/INSERT INTO prozorro_settings \(/.test(sql)) {
-        const [m, mode, dl, ma, no] = params as [number | null, PzConfig["mode"], number | null, number, string[]];
-        state.cfg = { responsibleManagerId: m, mode, dailyLimit: dl, minAmount: ma, nichesOff: no }; state.writes++; return { rows: [] };
+        const [m, mode, dl, ma, no, , am, ri, rf] = params as [number | null, PzConfig["mode"], number | null, number, string[], unknown, PzConfig["assignMode"], number[], string | null];
+        state.cfg = { assignMode: am, responsibleManagerId: m, rotationIds: ri, rotationFrom: rf, mode, dailyLimit: dl, minAmount: ma, nichesOff: no }; state.writes++; return { rows: [] };
       }
       if (/INSERT INTO prozorro_settings_log/.test(sql)) { state.log.push(params ?? []); return { rows: [] }; }
       throw new Error(`неочікуваний SQL: ${sql.slice(0, 80)}`);
@@ -169,7 +171,7 @@ test("#2365 НАЛАШТУВАННЯ: адмін і ОД; межі полів; �
   assert.deepEqual(g?.allow, ["admin", "opdir"], "🔴 GET налаштувань у матриці не «адмін і ОД» (або дзеркало: Сергію закрито)");
   assert.ok(g?.deny.includes("kvp") && g.deny.includes("ceo") && g.deny.includes("manager") && p?.deny.includes("manager"), "🔴 матриця не стереже заборону");
 
-  const ok = { responsibleManagerId: 12, mode: "live", dailyLimit: 5, minAmount: 500000, nichesOff: ["Медицина (важке)"] };
+  const ok = { assignMode: "one", responsibleManagerId: 12, rotationIds: [], rotationFrom: null, mode: "live", dailyLimit: 5, minAmount: 500000, nichesOff: ["Медицина (важке)"] };
   assert.deepEqual(parseConfig(ok), { ok: true, value: ok });
   assert.equal(parseConfig({ ...ok, dailyLimit: null }).ok, true, "дзеркало: без ліміту — можна");
   for (const [bad, why] of [[{ ...ok, mode: "LIVE" }, "режим"], [{ ...ok, dailyLimit: 0 }, "ліміт 0"], [{ ...ok, dailyLimit: 501 }, "ліміт 501"],
@@ -182,7 +184,7 @@ test("#2365 НАЛАШТУВАННЯ: адмін і ОД; межі полів; �
   const f = fakeDb([12, 13]);
   assert.deepEqual(await saveConfig(f.db, { ...f.state.cfg, responsibleManagerId: 99 }, who), { ok: false, error: "Можна вибрати лише активного лідогена з акаунтом Kommo" },
     "🔴 вибрано не лідогена / неактивного");
-  assert.deepEqual(await saveConfig(f.db, { responsibleManagerId: 12, mode: "live", dailyLimit: 5, minAmount: 200000, nichesOff: [] }, who), { ok: true, changed: 4 });
+  assert.deepEqual(await saveConfig(f.db, { assignMode: "one", responsibleManagerId: 12, rotationIds: [], rotationFrom: null, mode: "live", dailyLimit: 5, minAmount: 200000, nichesOff: [] }, who), { ok: true, changed: 4 });
   assert.deepEqual(f.state.log.map((l) => l.slice(0, 3)), [["режим", "пробний", "бойовий"], ["лідоген", "не вибрано", "L12"], ["ліміт на день", "без ліміту", "5"],
     ["мінімальна сума", "500 000 ₴", "200 000 ₴"]], "🔴 журнал не по полях або не людськими словами");
   assert.deepEqual([await saveConfig(f.db, { ...f.state.cfg }, who), f.state.log.length, f.state.writes], [{ ok: true, changed: 0 }, 4, 1], "🔴 повтор без змін записано");
@@ -311,4 +313,68 @@ test("#2373 ПІДТВЕРДЖЕННЯ: готовність у відповід
   assert.match(fe, /if \(c\.mode === "live" && view\.config\.mode !== "live"\) \{\n\s+const yes = await dialogs\.confirm\(\{ title: "Увімкнути бойовий режим\?"[\s\S]{0,700}?\n\s+if \(!yes\) return;\n\s+\}\n\s+setBusy\(true\)/,
     "🔴 бойовий режим вмикається без підтвердження (або збереження йде й без згоди)");
   assert.match(fe, /const next = whatNext\(c, view\);/, "🔴 «Що буде далі» рахується не з форми");
+});
+
+/**
+ * #3740 — ЧЕРГА ПО ДНЯХ (задача 8731; Роман 10.11.2026: «по днях», «продовжувати чергу» на вихідних). Усі угоди дня — одній людині,
+ * наступного дня — наступній, по колу; календарні дні, тож субота й неділя теж мають чергового; від дня збереження — перший у списку.
+ * Режими: «Операційний директор» — акаунт ОД; одна людина — вибраний; порожня черга / не вибрано — нікому (угоди чекають).
+ * 🧨 САБОТАЖ: у `rotationPick` прибрати `% ids.length` по колу (брати `ids[k]`) → червоніє (четвертий день — нікого).
+ */
+test("#3740 ЧЕРГА ПО ДНЯХ: день — одна людина, далі наступна по колу, вихідні теж; режими ОД / одна людина / порожньо — нікому", () => {
+  const ids = [11, 22, 33], from = "2026-11-13"; // пʼятниця
+  const days = ["2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17"].map((d) => rotationPick(ids, from, d));
+  assert.deepEqual(days, [11, 22, 33, 11, 22], "🔴 черга не по днях по колу (пт 11, сб 22, нд 33, пн 11, вт 22)");
+  assert.equal(rotationPick(ids, from, "2026-11-12"), 33, "🔴 день до відліку не по колу назад");
+  assert.equal(rotationPick([], from, from), null, "🔴 порожня черга дала людину");
+  const base = { responsibleManagerId: 7, rotationIds: ids, rotationFrom: from };
+  assert.deepEqual(assignTarget({ ...base, assignMode: "opdir" }, from), { kind: "opdir" }, "🔴 режим ОД не на акаунт ОД");
+  assert.deepEqual(assignTarget({ ...base, assignMode: "one" }, "2026-11-15"), { kind: "person", managerId: 7 }, "🔴 одна людина — не вибраний");
+  assert.deepEqual(assignTarget({ ...base, assignMode: "rotation" }, "2026-11-15"), { kind: "person", managerId: 33 }, "🔴 черга віддала не чергового");
+  assert.equal(assignTarget({ ...base, assignMode: "rotation", rotationIds: [] }, from).kind, "none", "🔴 порожня черга — комусь");
+  assert.equal(assignTarget({ ...base, assignMode: "one", responsibleManagerId: null }, from).kind, "none", "🔴 не вибраний лідоген — комусь");
+  assert.equal(OPDIR_KOMMO_USER_ID, 904923, "🔴 акаунт «Операційний директор» підмінено");
+});
+
+/**
+ * #3740b — ЗАДАЧА «ЗВʼЯЗАТИСЯ» ЗАКРИВАЄТЬСЯ САМА лише від успішного дзвінка: вихідний (out / transitout), розмова ДОВШЕ 8 с, не раніше
+ * за створення угоди. Обидва боки кожної межі: 9 с — так, 8 с — ні; вхідний — ні; дзвінок до угоди — ні.
+ * 🧨 САБОТАЖ: у `callClosesTask` `billsec > minSec` → `>=` → червоніє (8 с закрило задачу).
+ */
+test("#3740b АВТОЗАКРИТТЯ: вихідний дзвінок довше 8 с після створення угоди — так; 8 с, вхідний, до угоди — ні", () => {
+  const OUT = ["out", "transitout"], at = Date.parse("2026-11-11T06:10:00Z");
+  const c = (callType: string, billsec: number, dt: number) => callClosesTask({ callType, billsec, at: at + dt * 1000 }, at, OUT, 8);
+  assert.equal(c("out", 9, 60), true, "🔴 вихідний 9 с після угоди не закрив");
+  assert.equal(c("transitout", 30, 60), true, "🔴 transitout не рахується вихідним");
+  assert.equal(c("out", 8, 60), false, "🔴 8 с закрило (межа — довше 8 с)");
+  assert.equal(c("in", 120, 60), false, "🔴 вхідний закрив задачу");
+  assert.equal(c("out", 120, -60), false, "🔴 дзвінок до створення угоди закрив задачу");
+});
+
+/**
+ * #3740c — НАЛАШТУВАННЯ ЧЕРГИ: режим лише з трьох; черга — без повторів, не порожня в режимі черги; у чергу — лише активна людина з
+ * акаунтом Kommo; змінили склад чи порядок — відлік з сьогодні, не змінили — відлік той самий; журнал «розподіл» і «черга» людськими словами.
+ * 🧨 САБОТАЖ: у `saveConfig` відлік завжди `prev.rotationFrom` → червоніє (нова черга почалась би не з першого).
+ */
+test("#3740c НАЛАШТУВАННЯ ЧЕРГИ: межі, лише активні з Kommo, відлік від збереження, журнал людськими словами", async () => {
+  const ok = { assignMode: "rotation", responsibleManagerId: null, rotationIds: [12, 13], rotationFrom: null, mode: "live", dailyLimit: null, minAmount: 500000, nichesOff: [] };
+  assert.equal(parseConfig(ok).ok, true);
+  for (const [bad, why] of [[{ ...ok, assignMode: "admin" }, "режим"], [{ ...ok, rotationIds: [] }, "порожня черга"], [{ ...ok, rotationIds: [12, 12] }, "повтор"],
+    [{ ...ok, rotationIds: ["12"] }, "id рядком"]] as const) assert.equal(parseConfig(bad).ok, false, `🔴 пропущено: ${why}`);
+  const f = fakeDb([12, 13]);
+  const people = new Set([12, 13, 14]);
+  const db: Db = { query: (async (sql: string, params?: unknown[]) => (/LEFT JOIN teams t/.test(sql)
+    ? { rows: [...people].map((id) => ({ id, name: `L${String(id)}`, team: "Т", leadgen: id < 14 })) } : f.db.query(sql, params as never[]))) as Db["query"] };
+  const who = { userId: 50, name: "Роман" };
+  const cfg = parseConfig(ok); assert.ok(cfg.ok);
+  assert.deepEqual(await saveConfig(db, { ...cfg.value, rotationIds: [12, 99] }, who, "2026-11-11"), { ok: false, error: "У чергу можна додати лише активну людину з акаунтом Kommo" },
+    "🔴 у чергу додано не активну людину");
+  assert.equal((await saveConfig(db, cfg.value, who, "2026-11-11")).ok, true);
+  assert.equal(f.state.cfg.rotationFrom, "2026-11-11", "🔴 нова черга почалась не з дня збереження");
+  assert.deepEqual(f.state.log.filter((l) => l[0] === "розподіл" || l[0] === "черга").map((l) => l.slice(0, 3)),
+    [["розподіл", "на одну людину", "по черзі по днях"], ["черга", "порожня", "L12 → L13"]], "🔴 журнал черги не людськими словами");
+  await saveConfig(db, { ...f.state.cfg, dailyLimit: 10 }, who, "2026-11-12");
+  assert.equal(f.state.cfg.rotationFrom, "2026-11-11", "🔴 зміна іншого поля перезапустила чергу");
+  await saveConfig(db, { ...f.state.cfg, rotationIds: [13, 12, 14] }, who, "2026-11-13");
+  assert.equal(f.state.cfg.rotationFrom, "2026-11-13", "🔴 зміна складу черги не перезапустила відлік");
 });

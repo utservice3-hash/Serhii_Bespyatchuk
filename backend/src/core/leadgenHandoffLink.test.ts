@@ -1140,3 +1140,47 @@ test("#3730d ЖИВИЙ SQL: стан угоди передачі несе «Д�
   assert.equal(got.get(late)?.loadDay, "2026-03-02", "🔴 дата загрузки не за Києвом (22:30 UTC 01.03 = 02.03)");
   assert.equal(got.get(none)?.loadDay, null, "🔴 угода без дати загрузки отримала дату");
 });
+
+/**
+ * #3740d — ЖИВИЙ SQL: ЗАДАЧА «ЗВʼЯЗАТИСЯ» ПО ТЕНДЕРНИХ УГОДАХ (задача 8731). Угода на людину → задача її акаунту дашборда, термін —
+ * сьогодні за Києвом; повторний прохід дубля не ставить; угода на «Операційного директора» і стара (до `CONTACT_TASKS_FROM`) — без
+ * задачі; людина без акаунта — без задачі. Закриття: вихідний 8 с — ні, 9 с — так (задача «Готово» з причиною, журнал статусу).
+ * 🧨 САБОТАЖ: у `createContactTasks` прибрати `AND l.task_id IS NULL` → червоніє (повторний прохід поставив дубль).
+ */
+test("#3740d ЖИВИЙ SQL: тендерна угода → задача «звʼязатися» людині на сьогодні, без дублів, ОД і старі — без; закриває дзвінок > 8 с", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const pz = await import("./prozorroTasks.js");
+  const db = client as unknown as Parameters<typeof pz.createContactTasks>[0];
+  await client.query(`INSERT INTO managers (id, name, team_id, kommo_user_id) VALUES (9701,'Тендерник',1,97010001),(9702,'Без входу',1,97020001)
+    ON CONFLICT (id) DO NOTHING`);
+  await client.query(`INSERT INTO users (id,email,password_hash,role,manager_id,is_active) VALUES (9701,'t9701@x','x','manager',9701,true)`);
+  await client.query(`INSERT INTO prozorro_tenders (ua_id) VALUES ('UA-3740-1'),('UA-3740-2'),('UA-3740-3'),('UA-3740-4')`);
+  const lead = async (ua: string, resp: number, pushed: string) => (await client!.query<{ id: string }>(
+    `INSERT INTO prozorro_leads (edrpou, ua_id, company_name, contact_name, phone, amount, card_text, mode, responsible_user_id, kommo_lead_id, pushed_at)
+     VALUES ('12345678', $1, 'ТОВ Тест', 'Іван', '067 111 22 33', 750000, 'картка', 'live', $2, 88000000 + length($1), $3) RETURNING id::text`,
+    [ua, resp, pushed])).rows[0].id;
+  const mine = await lead("UA-3740-1", 97010001, "2026-11-11T04:06:00Z");
+  const od = await lead("UA-3740-2", 904923, "2026-11-11T04:06:00Z");
+  const old = await lead("UA-3740-3", 97010001, "2026-11-09T04:06:00Z");
+  const nouser = await lead("UA-3740-4", 97020001, "2026-11-11T04:06:00Z");
+  const now = new Date("2026-11-11T05:00:00Z");
+  const r1 = await pz.createContactTasks(db, now, (id) => `u/${String(id)}`);
+  const r2 = await pz.createContactTasks(db, now, (id) => `u/${String(id)}`);
+  assert.deepEqual([r1.created, r1.noUser, r2.created], [1, 1, 0], "🔴 поставлено не рівно одну задачу або повторний прохід поставив дубль");
+  const task = (await client.query<{ task_id: number | null }>(`SELECT task_id FROM prozorro_leads WHERE id = ANY($1::bigint[]) ORDER BY id`, [[mine, od, old, nouser]])).rows.map((x) => x.task_id);
+  assert.ok(task[0] != null && task.slice(1).every((x) => x == null), "🔴 задача в угоди ОД, старої чи людини без входу — або немає у своєї");
+  const tk = (await client.query<{ assignee_user_id: number; deadline: string; status: string; title: string }>(
+    `SELECT assignee_user_id, to_char(deadline, 'YYYY-MM-DD') AS deadline, status, title FROM tasks WHERE id = $1`, [task[0]])).rows[0];
+  assert.deepEqual([tk.assignee_user_id, tk.deadline, tk.status], [9701, "2026-11-11", "not_started"], "🔴 задача не тій людині або не на сьогодні");
+  assert.match(tk.title, /Зв'язатися: ТОВ Тест/, "🔴 назва задачі без компанії");
+  const call = async (id: string, billsec: number, at: string, type = "out") => client!.query(
+    `INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, client_phone) VALUES ($1, $2, $3, $4, '380671112233')`, [id, at, type, billsec]);
+  await call("c3740-1", 8, "2026-11-11T06:00:00Z"); await call("c3740-2", 90, "2026-11-11T06:01:00Z", "in");
+  assert.equal((await pz.closeContactTasks(db, new Date("2026-11-11T06:30:00Z"))).closed, 0, "🔴 закрило вихідним 8 с або вхідним");
+  await call("c3740-3", 9, "2026-11-11T07:00:00Z");
+  assert.equal((await pz.closeContactTasks(db, new Date("2026-11-11T07:30:00Z"))).closed, 1, "🔴 вихідний 9 с не закрив задачу");
+  const done = (await client.query<{ status: string; close_reason: string | null; n: number }>(
+    `SELECT t.status, t.close_reason, (SELECT count(*)::int FROM task_status_log s WHERE s.task_id = t.id AND s.to_status = 'done') AS n FROM tasks t WHERE t.id = $1`, [task[0]])).rows[0];
+  assert.deepEqual([done.status, done.n], ["done", 1], "🔴 задача не «Готово» або без запису в журналі статусу");
+  assert.match(done.close_reason ?? "", /вихідний дзвінок/, "🔴 причина закриття не названа");
+});
