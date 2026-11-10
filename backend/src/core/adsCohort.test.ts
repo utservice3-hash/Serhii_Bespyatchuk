@@ -186,3 +186,63 @@ test("#3313 ЖИВА БД: склад «надійшло цього дня» == 
   }
   assert.deepEqual(broken, [], "🔴 склад «надійшло» розійшовся з колонкою — список рахується не тією вибіркою");
 });
+
+/**
+ * #3314 — «ЗАРОБИЛИ ЛІДИ» == «НАДІЙШЛО» ЗА ВЕСЬ ЧАС (задача #8702). Ті самі угоди й та сама маржа, лише день — дата ліда,
+ * а не дата грошей. Тож без меж дат обидві суми рівні гривня в гривню й угода в угоду (обидві беруться в одну мить).
+ * 🧨 Червоніє, якщо «заробили» піде іншим фільтром, загубить угоди без менеджера чи копія з двома батьками подвоїться.
+ */
+test("#3314 ЖИВА БД: Σ «заробили ліди» за весь час == Σ «надійшло» за весь час, гривня й угода", needsBackendEnv(), async () => {
+  const { getSettings } = await import("../routes/settings.js");
+  const money = await import("./money.js");
+  const { adSources } = await getSettings();
+  const [earned, received] = await Promise.all([money.adEarnedByDay({}, adSources), money.adReceivedByDay({}, adSources)]);
+  const e = earned.reduce((s, r) => ({ rev: s.rev + r.earned, n: s.n + r.deals }), { rev: 0, n: 0 });
+  const r = received.reduce((s, x) => ({ rev: s.rev + x.revenue, n: s.n + x.deals }), { rev: 0, n: 0 });
+  assert.deepEqual([Math.round(e.rev * 100), e.n], [Math.round(r.rev * 100), r.n],
+    `🔴 заробили ${String(e.rev)} ₴ / ${String(e.n)} угод ≠ надійшло ${String(r.rev)} ₴ / ${String(r.n)} угод`);
+});
+
+/**
+ * #3314b — СКЛАД «ЗАРОБИЛИ ЛІДИ ДНЯ» == ЧИСЛУ ДНЯ, по кожному дню вікна (правило «розкриття пояснює число»).
+ * 🧨 Червоніє, якщо список угод дня піде своєю вибіркою, а не `adEarnedFrom`.
+ */
+test("#3314b ЖИВА БД: склад «заробили ліди дня» == числу дня, по кожному дню", needsBackendEnv(), async (t) => {
+  const { getSettings } = await import("../routes/settings.js");
+  const money = await import("./money.js");
+  const { emptyPeriodSkip } = await import("../testMode.js");
+  const { adSources } = await getSettings();
+  const days = (await money.adEarnedByDay({ from: FROM, to: TO }, adSources)).filter((d) => d.key !== null && d.deals > 0);
+  const skip = emptyPeriodSkip("заробленого лідами реклами у вікні заміру", days.length, `${FROM}..${TO}`);
+  if (skip) return t.skip(skip);
+  const broken: string[] = [];
+  for (const d of days) {
+    const list = await money.adEarnedDeals(d.key as string, adSources);
+    const sum = list.reduce((s, x) => s + x.price, 0);
+    if (list.length !== d.deals || Math.round(sum * 100) !== Math.round(d.earned * 100)) {
+      broken.push(`${String(d.key)}: число ${String(d.earned)} ₴ / ${String(d.deals)} ≠ список ${String(sum)} ₴ / ${String(list.length)}`);
+    }
+  }
+  assert.deepEqual(broken, [], "🔴 склад «заробили ліди дня» розійшовся з числом дня");
+});
+
+/**
+ * #3314c — КАМПАНІЇ СХОДЯТЬСЯ З ПЛИТКАМИ: Σ «заробили» по кампаніях (з рядком «без мітки») == Σ по днях, і Σ лідів по
+ * кампаніях == Σ «Узято» ядра за той самий період. 🧨 Червоніє, якщо мітка кампанії загубить або подвоїть угоди.
+ */
+test("#3314c ЖИВА БД: кампанії (з «без мітки») == дні: гроші й «Узято»", needsBackendEnv(), async (t) => {
+  const { getSettings } = await import("../routes/settings.js");
+  const money = await import("./money.js");
+  const metrics = await import("./metrics.js");
+  const { emptyPeriodSkip } = await import("../testMode.js");
+  const { adSources } = await getSettings();
+  const s = { from: FROM, to: TO };
+  const [byCamp, byDay, leadsCamp, leadsDay] = await Promise.all([money.adEarnedByCampaign(s, adSources), money.adEarnedByDay(s, adSources),
+    metrics.adLeadsByCampaign(s, adSources), metrics.conversionAdsByDay(s, adSources)]);
+  const skip = emptyPeriodSkip("рекламних лідів у вікні заміру", leadsDay.reduce((x, d) => x + d.entered, 0), `${FROM}..${TO}`);
+  if (skip) return t.skip(skip);
+  const sum = (rows: { earned: number }[]) => Math.round(rows.reduce((x, r) => x + r.earned, 0) * 100);
+  assert.equal(sum(byCamp), sum(byDay), "🔴 гроші по кампаніях не сходяться з грошима по днях");
+  assert.equal(leadsCamp.reduce((x, r) => x + r.leads, 0), leadsDay.reduce((x, d) => x + d.entered, 0),
+    "🔴 ліди по кампаніях не сходяться з «Узято»");
+});

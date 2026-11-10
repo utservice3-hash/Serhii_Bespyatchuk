@@ -10,6 +10,7 @@ import { archivedSql, LAST_PAID_CTE } from "./clientArchive.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 import type { LazyCache } from "./lazyCache.js";
+import { adCampaignTagSql, LEAD_PARENT_JOIN } from "./adCampaign.js";
 // 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
 // (задача 4892, `core/teamAt.ts`). Знімки «станом на зараз» (очікування, дебіторка, застряглі,
 // прострочені) лишаються на поточній команді; когортні воронки — окремим проходом.
@@ -2627,6 +2628,28 @@ export async function conversionAdsByDay(s: MetricScope, adSources: string[]): P
     paid: Number(x.paid), lost: Number(x.lost), inWork: Number(x.in_work),
     paidMargin: Number(x.paid_margin),
   }));
+}
+
+/**
+ * 🏷 ЛІДИ ПО КАМПАНІЯХ (#8702) — ТА САМА популяція `pop`, що й «Узято» в `conversionAdsByDay`, лише GROUP BY мітки
+ * кампанії (`adCampaignTagSql`). Тож Σ по кампаніях (разом із `campaign: null`) == Σ «Узято» за період (`#3314c`).
+ */
+export async function adLeadsByCampaign(s: MetricScope, adSources: string[]): Promise<{ campaign: string | null; leads: number }[]> {
+  const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
+  const fromRef = (params.push(s.from ?? null), `$${params.length}`);
+  const toRef = (params.push(s.to ?? null), `$${params.length}`);
+  const r = await pool.query<{ campaign: string | null; leads: string }>(
+    `WITH ${dealCohortCte("$3", "$4", "")}
+     SELECT ${adCampaignTagSql("t")} AS campaign, COUNT(*)::int AS leads
+       FROM pop
+       JOIN deals t ON t.kommo_id = pop.kommo_id
+       ${LEAD_PARENT_JOIN("t")}
+      WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
+        AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
+      GROUP BY 1`,
+    params
+  );
+  return r.rows.map((x) => ({ campaign: x.campaign, leads: Number(x.leads) }));
 }
 
 /**

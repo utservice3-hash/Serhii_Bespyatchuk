@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AdsSection } from "./AdsSection";
 import { AdBalanceChip } from "./AdBalanceChip";
 import { PeriodNav } from "../PeriodNav";
+import { PeriodStrip } from "../PeriodStrip";
 import { monthStart, periodOf, todayKyiv, type PeriodState } from "../periodRules";
 
 /**
@@ -22,12 +23,15 @@ export default function AdsPage({ role }: { role?: string }) {
   });
   const adsPeriod = periodOf(nav);
   return (
-    <div>
+    // Одна колонка з екраном нижче (`.rpt`: 1240 px по центру) — заголовок, навігатор і шкала стоять урівень із плитками.
+    <div className="rpt">
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h1 className="page-title">📣 Реклама</h1>
         <AdBalanceChip />
       </div>
       <PeriodNav state={nav} onPatch={(patch) => setNav((s) => ({ ...s, ...patch }))} today={today} />
+      {/* 🎚 Шкала одиниць режиму (Роман 10.11.2026): дні місяця / тижні / місяці року — вибір одним кліком. */}
+      <PeriodStrip state={nav} onPatch={(patch) => setNav((s) => ({ ...s, ...patch }))} today={today} />
       {/* Право змінювати план мусить збігатися з межами роуту PUT /settings/ad-plan
           (deny: kvp, financier, hr, team_lead, manager). */}
       <AdsSection from={adsPeriod.from} to={adsPeriod.to}

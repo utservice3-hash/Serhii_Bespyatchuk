@@ -1288,6 +1288,25 @@ export interface AdsDay {
   /** 💰 Надійшло ЦЬОГО дня з реклами (маржа, ліди будь-якого дня). Σ днів == `AdsReport.revenue` («Заробили»). */
   received: number;
   receivedDeals: number;
+  /**
+   * 💰 ЗАРОБИЛИ ЛІДИ ДНЯ (задача #8702, зустріч 09.11.2026): маржа угод, СТВОРЕНИХ цього дня, які вже оплачені
+   * («Успішно» або «Оплата отримана»), хоч би коли надійшли гроші. Росте, поки угоди дня в роботі.
+   * Відсутнє — старий сервер: екран бере `paidMargin`.
+   */
+  earned?: number;
+  earnedDeals?: number;
+}
+/** 📅 Окупність місяця: гроші привʼязані до місяця, коли прийшов лід (#8702). */
+export interface AdsMonth {
+  month: string;      // YYYY-MM
+  cost: number;
+  leads: number;
+  /** Скільки лідів місяця вже мають результат (оплачено або втрачено) — «дозріло». */
+  settled: number;
+  earned: number;
+  earnedDeals: number;
+  /** Надійшло в цьому місяці від реклами будь-якого часу — касове число, як плитка. */
+  received: number;
 }
 export interface AdsCampaign {
   day: string;
@@ -1314,6 +1333,14 @@ export interface AdsReport {
    * ціни ліда й ROMI.
    */
   elogist: { leads: number; revenue: number; revenueDeals: number };
+  /** Помісячна окупність від січня (#8702). Відсутнє — старий сервер: таблицю не показуємо. */
+  months?: AdsMonth[];
+  /**
+   * 📊 Ліди й гроші періоду ПО КАМПАНІЯХ — за міткою кампанії в угоді (utm_campaign / ADV_CAMP, перший захід на сайт).
+   * Замір 10.11.2026: справжню кампанію мають ~80% рекламних угод і ~80% грошей. `campaign: null` — органіка й угоди
+   * без мітки, щоб «Разом» сходилось із плиткою. Відсутнє — старий сервер: колонки доходу не показуємо.
+   */
+  campaignLeads?: { campaign: string | null; leads: number; earned: number; earnedDeals: number }[];
 }
 
 /** Одна угода рекламної когорти дня — для розкриття. */
@@ -1326,6 +1353,9 @@ export interface AdsDeal {
   /** Дійшла до грошової зони — може бути true і в стані inWork («Виставлення рахунку»). */
   reachedMoney: boolean;
   url: string;
+  /** 💰 #8702: коли угода принесла гроші (оплачена) — гроші лишаються на дні ліда, а тут видно, коли прийшли. */
+  paidDay?: string | null;
+  manager?: string | null;
 }
 
 export async function fetchAds(params: { from?: string; to?: string }): Promise<AdsReport> {
@@ -1351,9 +1381,13 @@ export async function saveAdBalance(balance: number): Promise<{ balance: AdBalan
 export interface AdsReceivedDeal {
   kommoId: number; name: string; price: number; leadDay: string; state: "success" | "paid"; manager: string | null; url: string;
 }
-export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[]; received: AdsReceivedDeal[] }> {
-  const { data } = await api.get<{ day: string; deals: AdsDeal[]; received?: AdsReceivedDeal[] }>("/dashboard/ads/deals", { params: { day } });
-  return { ...data, received: data.received ?? [] };
+/** 💰 Угода, яку створили цього дня і яка вже принесла гроші (#8702); `paidDay` — коли надійшли. */
+export interface AdsEarnedDeal {
+  kommoId: number; name: string; price: number; paidDay: string; state: "success" | "paid"; manager: string | null; url: string;
+}
+export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[]; received: AdsReceivedDeal[]; earned: AdsEarnedDeal[] | null }> {
+  const { data } = await api.get<{ day: string; deals: AdsDeal[]; received?: AdsReceivedDeal[]; earned?: AdsEarnedDeal[] }>("/dashboard/ads/deals", { params: { day } });
+  return { ...data, received: data.received ?? [], earned: data.earned ?? null };
 }
 
 /** Запис місячного плану. `month` — будь-який день потрібного місяця. */
