@@ -13,6 +13,7 @@ import { todayKyiv } from "../periodRules";
 import { FirstTouchSettingsCard } from "./FirstTouchSettingsCard";
 import { MissedNormCard } from "./MissedCallsTzBlocks";
 import { Toggle } from "../widgets";
+import { isGranted, toggled } from "../roleAccess";
 import { OrgTeamsCard } from "./OrgTeams";
 
 /** 👥 Відділи дашборду (27.10.2026) — та сама картка, що в режимі «Редагувати» орг-структури (`OrgTeams.tsx`). */
@@ -664,8 +665,9 @@ function RolesTab() {
 
   const builtIn = !!draft?.built_in;
   const setScope = (s: "own" | "team" | "company") => draft && setDraft({ ...draft, data_scope: s });
-  const tglTab = (k: string) => draft && setDraft({ ...draft, screen_access: { ...draft.screen_access, [k]: !draft.screen_access[k] } });
-  const tglPerm = (k: string) => draft && setDraft({ ...draft, permissions: { ...draft.permissions, [k]: !draft.permissions[k] } });
+  // увімкнено — лише власний ключ із `true` (roleAccess.ts): `screen_access["constructor"]` інакше бере прототип і «горить»
+  const tglTab = (k: string) => draft && setDraft({ ...draft, screen_access: toggled(draft.screen_access, k) });
+  const tglPerm = (k: string) => draft && setDraft({ ...draft, permissions: toggled(draft.permissions, k) });
 
   const save = async () => {
     if (!draft || builtIn) return;
@@ -758,7 +760,7 @@ function RolesTab() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 10 }}>
               {SCREEN_TABS.map((t) => (
                 <div key={t.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", border: "1px solid var(--border)", borderRadius: 10 }}>
-                  <Toggle on={!!draft.screen_access[t.key]} disabled={builtIn} onClick={() => tglTab(t.key)} />
+                  <Toggle on={isGranted(draft.screen_access, t.key)} disabled={builtIn} onClick={() => tglTab(t.key)} />
                   <span style={{ fontWeight: 600, fontSize: 13.5 }}>{t.label}{t.key === "settings" && " 🔒"}</span>
                 </div>
               ))}
@@ -768,7 +770,7 @@ function RolesTab() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {PERMS.map((p) => (
                 <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <Toggle on={!!draft.permissions[p.key]} disabled={builtIn} onClick={() => tglPerm(p.key)} />
+                  <Toggle on={isGranted(draft.permissions, p.key)} disabled={builtIn} onClick={() => tglPerm(p.key)} />
                   <span style={{ fontWeight: 600, fontSize: 13.5 }}>{p.label}</span>
                   {p.hint && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>— {p.hint}</span>}
                 </div>

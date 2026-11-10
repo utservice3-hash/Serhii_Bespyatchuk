@@ -307,6 +307,7 @@ export const MANIFEST_FILES: string[] = [
   "statistics/financeSnapshot.test.js",
   "auth/matrixAnswer.test.js",
   "auth/rbac.test.js",
+  "auth/roleToggle.test.js",
   "auth/roleScopeInput.test.js",
   "auth/scopeInvariants.test.js",
   "core/conversion.test.js",
@@ -559,6 +560,8 @@ export const MANIFEST_TESTS: string[] = [
   // auth/matrixAnswer.test.ts
   "#24r ТРИ ВІДПОВІДІ, НЕ ДВІ: 5xx не каже про доступ НІЧОГО",
   "#24s ДЗЕРКАЛО: справжні порушення далі ловляться в ОБИДВА боки",
+  // auth/roleToggle.test.ts
+  "#7611 РОЛІ: тумблер «увімкнено» лише для власного ключа з true — «constructor» без ключа вимкнений, клік вмикає",
   // auth/rbac.test.ts
   "#5.1 МАТРИЦЯ ЕКРАНІВ: кожна роль бачить рівно свої вкладки",
   "#5.2 SCOPE-COMPAT: до admin піднімається рівно той, хто має admin_scope",
