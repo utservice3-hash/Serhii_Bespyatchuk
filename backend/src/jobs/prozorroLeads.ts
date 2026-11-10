@@ -5,8 +5,10 @@ import { makeProzorroClient } from "../core/prozorroClient.js";
 import { runProzorroCollect, type LeadRow, type PzCollectResult, type PzStore, type TenderRow } from "../core/prozorroCollect.js";
 import { quietTooLong, reportText } from "../core/prozorroRules.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
+import { createContactTasks, resolveResponsible } from "../core/prozorroTasks.js";
+import { kommoLeadUrl } from "../core/kommoLinks.js";
 import { COMPANY_EDRPOU_FIELD, MAX_PUSH_ATTEMPTS, pushLeads, responsibleProblem, type KommoPushDeps, type PendingLead, type PushStore,
-  type PushTally, type Responsible } from "../core/prozorroPush.js";
+  type PushTally } from "../core/prozorroPush.js";
 
 /**
  * 🏛 PROZORRO-ЛІДИ — ДЖОБА (задача #5299). Щодня о 06:05 за Києвом (`index.ts`), під наглядом (`monitoredJobs.ts`).
@@ -76,14 +78,6 @@ export const prozorroStore: PzStore = {
   },
 };
 
-/** Хто веде тендерні ліди — з налаштувань екрана (`prozorro_settings`); null — не вибрано. */
-export async function readResponsible(): Promise<Responsible | null> {
-  const r = await pool.query<{ id: number; name: string; kommo_user_id: string | null; is_active: boolean }>(
-    `SELECT m.id, m.name, m.kommo_user_id::text, m.is_active FROM prozorro_settings s JOIN managers m ON m.id = s.responsible_manager_id
-      WHERE s.id = 1`);
-  const x = r.rows[0];
-  return x ? { managerId: x.id, name: x.name, kommoUserId: x.kommo_user_id ? Number(x.kommo_user_id) : null, active: x.is_active } : null;
-}
 
 /** Черга на запис: лише рядки бойового режиму, ще без угоди, з невичерпаними спробами; найстаріші першими. */
 export async function readPending(maxAttempts: number): Promise<PendingLead[]> {
@@ -141,20 +135,25 @@ export async function prozorroLeads(): Promise<(PzCollectResult & { push: PushTa
     store: prozorroStore, niches: activeNiches(cfg.nichesOff), now, minAmount: cfg.minAmount, mode,
   });
   // ✍️ Запис у Kommo — ЛИШЕ в бойовому режимі. Лідоген не вибраний / неактивний — не пишемо нічого, рядки чекають.
+  // Кому — за режимом розподілу (задача 8731): «Операційний директор», одна людина чи черговий дня (`core/prozorroAssign.ts`).
   let push: PushTally | null = null;
   let pushWaiting: string | null = null;
+  let tasks: { created: number; noUser: number } | null = null;
   if (mode === "live") {
     const pending = await readPending(MAX_PUSH_ATTEMPTS);
-    const who = await readResponsible();
+    const { who } = await resolveResponsible(pool, cfg, now);
     const problem = responsibleProblem(who);
     if (problem) pushWaiting = `${problem}; чекають запису: ${String(pending.length)}`;
     else push = await pushLeads(pending, who!.kommoUserId!, kommoPush, pushStore, cfg.dailyLimit ?? Number.POSITIVE_INFINITY);
+    // 📋 Задача «звʼязатися» на сьогодні — по кожній новій угоді, що пішла на людину (на ОД — ні).
+    tasks = await createContactTasks(pool, now, kommoLeadUrl);
   }
   const last = await pool.query<{ at: Date | null }>(`SELECT max(created_at) AS at FROM prozorro_leads`);
   const quiet = !res.tally.baseline && quietTooLong(last.rows[0]?.at ?? null, res.launch, now);
   const text = reportText(res.tally, { mode: mode === "live" ? "live" : "dry", minAmount: cfg.minAmount, quiet })
     + (push ? `\nKommo: записано ${String(push.pushed)} з ${String(push.pending)} у черзі, невдало ${String(push.failed)}, наявних компаній ${String(push.companiesReused)}` : "")
     + (pushWaiting ? `\n⚠️ Kommo: ${pushWaiting}` : "")
+    + (tasks ? `\nЗадачі «звʼязатися»: поставлено ${String(tasks.created)}${tasks.noUser ? `, без акаунта дашборда ${String(tasks.noUser)}` : ""}` : "")
     + (res.verdict.ok ? "" : `\n🔴 ${res.verdict.error}`);
   console.log(`prozorroLeads: ${JSON.stringify({ ...res.tally, byNiche: undefined })}\n${text}`);
   if (!res.verdict.ok) throw new Error(res.verdict.error);

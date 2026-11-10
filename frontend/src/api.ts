@@ -628,9 +628,15 @@ export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp>
 }
 /** 🏛 «Тендери Prozorro» (#5299): статистика по днях (екран) і налаштування (лише адмін). */
 export type PzModeT = "off" | "dry" | "live";
-export interface PzConfigT { responsibleManagerId: number | null; mode: PzModeT; dailyLimit: number | null; minAmount: number; nichesOff: string[] }
+/** Кому йдуть угоди (задача 8731): «Операційний директор», одна людина чи черга по днях. */
+export type PzAssignModeT = "opdir" | "one" | "rotation";
+export interface PzConfigT { assignMode: PzAssignModeT; responsibleManagerId: number | null; rotationIds: number[]; rotationFrom: string | null;
+  mode: PzModeT; dailyLimit: number | null; minAmount: number; nichesOff: string[] }
 export interface ProzorroSettingsResp {
   config: PzConfigT;
+  /** Кого можна поставити в чергу (лідогени першими) і чия черга сьогодні / завтра (лише збереженої черги). */
+  people: { id: number; name: string; team: string; leadgen: boolean }[];
+  turn: { today: string | null; tomorrow: string | null } | null;
   responsible: { name: string; active: boolean; hasKommo: boolean } | null;
   options: { id: number; name: string; team: string }[];
   niches: { name: string; words: number; on: boolean; leads30d: number }[];

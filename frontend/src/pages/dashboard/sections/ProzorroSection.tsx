@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fetchProzorroSettings, fetchProzorroStats, hiringError, saveProzorroSettings,
-  type ProzorroSettingsResp, type ProzorroStatsResp, type PzConfigT, type PzModeT } from "../../../api";
+  type ProzorroSettingsResp, type ProzorroStatsResp, type PzConfigT, type PzModeT, type PzAssignModeT } from "../../../api";
 import { todayKyiv } from "../periodRules";
 import { useDialogs } from "../../../components/Dialogs";
 
@@ -149,8 +149,23 @@ function StatsTab(p: ProzorroScreenProps) {
 const MODE_UI: { key: PzModeT; label: string; hint: string }[] = [
   { key: "off", label: "Вимкнено", hint: "Збору немає. Нічого не шукаємо й нічого не пишемо." },
   { key: "dry", label: "Пробний", hint: "Збираємо переможців і рахуємо статистику, але в Kommo нічого не пишемо." },
-  { key: "live", label: "Бойовий", hint: "Нові переможці щоранку йдуть у Kommo на вибраного лідогена." },
+  { key: "live", label: "Бойовий", hint: "Нові переможці щоранку йдуть у Kommo — кому, вибирається нижче." },
 ];
+const ASSIGN_UI: { key: PzAssignModeT; label: string; hint: string }[] = [
+  { key: "opdir", label: "На «Операційного директора»", hint: "Усі угоди — на акаунт «Операційний директор» у Kommo, далі їх розбирають вручну. Задачу «зв'язатися» не ставимо." },
+  { key: "one", label: "Одна людина", hint: "Усі угоди — на вибраного лідогена. Йому ж — задача «зв'язатися» на сьогодні." },
+  { key: "rotation", label: "По черзі по днях", hint: "Усі угоди одного дня — одній людині, наступного дня — наступній, по колу (вихідні теж). Кожному — задача «зв'язатися» на сьогодні." },
+];
+
+/** Кому підуть угоди за формою: текст для «Що буде далі» й підтвердження. `null` — нікому (не вибрано). */
+export function assigneeText(c: PzConfigT, v: ProzorroSettingsResp): string | null {
+  if (c.assignMode === "opdir") return "акаунт «Операційний директор» (розбирають вручну, без задачі)";
+  if (c.assignMode === "one") return v.options.find((o) => o.id === c.responsibleManagerId)?.name ?? null;
+  const names = c.rotationIds.map((id) => v.people.find((p) => p.id === id)?.name ?? `#${String(id)}`);
+  if (!names.length) return null;
+  const saved = JSON.stringify(c.rotationIds) === JSON.stringify(v.config.rotationIds) && v.config.assignMode === "rotation";
+  return `по черзі по днях: ${names.join(" → ")}${saved && v.turn?.today ? ` (сьогодні — ${v.turn.today}, завтра — ${v.turn.tomorrow ?? "—"})` : " (відлік — з дня збереження)"}`;
+}
 const field = { display: "grid", gap: 4, fontSize: 13, fontWeight: 600 } as const;
 const inp = { padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", maxWidth: 320 } as const;
 const hintS = { fontSize: 11.5, fontWeight: 400, color: "var(--text-muted)" } as const;
@@ -166,7 +181,7 @@ const uahS = (n: number) => `${Math.round(n).toLocaleString("uk-UA")} ₴`;
 export function whatNext(c: PzConfigT, v: ProzorroSettingsResp): { tone: "ok" | "warn" | "off"; lines: string[] } {
   const r = v.readiness;
   const when = `${dmy(r.nextRun.date)} о ${r.nextRun.time}`;
-  const who = v.options.find((o) => o.id === c.responsibleManagerId)?.name ?? null;
+  const who = assigneeText(c, v);
   const lines: string[] = [];
   if (c.mode === "off") return { tone: "off", lines: ["Збір вимкнено — вранці нічого не відбудеться: ні пошуку, ні записів у Kommo."] };
   lines.push(`Наступний збір: ${when}.`);
@@ -177,7 +192,8 @@ export function whatNext(c: PzConfigT, v: ProzorroSettingsResp): { tone: "ok" | 
     return { tone: "ok", lines };
   }
   if (!who) {
-    lines.push(c.responsibleManagerId == null ? "⚠️ Бойовий режим, але лідоген не вибраний — у Kommo нічого не піде, ліди чекатимуть."
+    lines.push(c.assignMode === "rotation" ? "⚠️ Бойовий режим, але черга порожня — у Kommo нічого не піде, ліди чекатимуть."
+      : c.responsibleManagerId == null ? "⚠️ Бойовий режим, але лідоген не вибраний — у Kommo нічого не піде, ліди чекатимуть."
       : "⚠️ Вибраний лідоген неактивний — у Kommo нічого не піде, доки не виберете іншого.");
     return { tone: "warn", lines };
   }
@@ -207,17 +223,18 @@ function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c:
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => { setC(view.config); }, [view]);
   const changed = JSON.stringify(c) !== JSON.stringify(view.config);
-  const liveNoOne = c.mode === "live" && c.responsibleManagerId == null;
+  const liveNoOne = c.mode === "live" && ((c.assignMode === "one" && c.responsibleManagerId == null) || (c.assignMode === "rotation" && !c.rotationIds.length));
   const cur = view.responsible;
   const curMissing = c.responsibleManagerId != null && !view.options.some((o) => o.id === c.responsibleManagerId);
   const r = view.readiness;
   const next = whatNext(c, view);
-  const whoName = view.options.find((o) => o.id === c.responsibleManagerId)?.name ?? null;
+  const whoName = assigneeText(c, view);
+  const toggle = (id: number) => setC({ ...c, rotationIds: c.rotationIds.includes(id) ? c.rotationIds.filter((x) => x !== id) : [...c.rotationIds, id] });
   const save = async () => {
     // Підтвердження ЛИШЕ на увімкнення бойового режиму: це єдина зміна, після якої щось піде в CRM.
     if (c.mode === "live" && view.config.mode !== "live") {
       const yes = await dialogs.confirm({ title: "Увімкнути бойовий режим?", okLabel: "Увімкнути",
-        text: `Щоранку о ${r.nextRun.time} нові переможці тендерів від ${uahS(c.minAmount)} підуть у Kommo («Продзвін» → «Тендер AI») на ${whoName ?? "— лідоген не вибраний, нічого не піде —"}, ${c.dailyLimit ? `не більше ${String(c.dailyLimit)} угод за ранок` : "без ліміту"}. Наявних угод, компаній і контактів у Kommo це не змінює. Вимкнути можна тут же, будь-коли.` });
+        text: `Щоранку о ${r.nextRun.time} нові переможці тендерів від ${uahS(c.minAmount)} підуть у Kommo («Продзвін» → «Тендер AI») на ${whoName ?? "— нікого не вибрано, нічого не піде —"}, ${c.dailyLimit ? `не більше ${String(c.dailyLimit)} угод за ранок` : "без ліміту"}. Наявних угод, компаній і контактів у Kommo це не змінює. Вимкнути можна тут же, будь-коли.` });
       if (!yes) return;
     }
     setBusy(true); setMsg(null);
@@ -236,8 +253,8 @@ function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c:
         <h2 className="chart-title">Перевірка готовності</h2>
         <Check state={r.lastRun.error ? "bad" : r.lastRun.at ? "ok" : "wait"} title="Prozorro"
           text={r.lastRun.error ? `останній збір упав: ${r.lastRun.error}` : r.lastRun.at ? `останній збір ${fmtAt(r.lastRun.at)} — без помилок` : `ще не запускався — перший збір ${dmy(r.nextRun.date)} о ${r.nextRun.time}`} />
-        <Check state={whoName ? "ok" : c.mode === "live" ? "bad" : "wait"} title="Лідоген"
-          text={whoName ? `${whoName} — активний, має акаунт Kommo` : c.responsibleManagerId == null ? "не вибраний" : "вибраний лідоген неактивний — виберіть іншого"} />
+        <Check state={whoName ? "ok" : c.mode === "live" ? "bad" : "wait"} title="Кому угоди"
+          text={whoName ?? (c.assignMode === "rotation" ? "черга порожня" : c.responsibleManagerId == null ? "лідоген не вибраний" : "вибраний лідоген неактивний — виберіть іншого")} />
         <Check state={r.kommo.ok ? "ok" : "bad"} title="Kommo"
           text={r.kommo.ok ? "етап «Тендер AI» у «Продзвоні» і джерело «AI тендер» на місці" : r.kommo.problems.join("; ")} />
         <Check state={r.baselineDone ? "ok" : "wait"} title="Точка відліку"
@@ -253,16 +270,41 @@ function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c:
             </div>
             <span style={hintS}>{MODE_UI.find((m) => m.key === c.mode)!.hint}</span>
           </div>
-          <label style={field}>Хто веде тендерні ліди
+          <div style={field}>Кому йдуть угоди
+            <div className="cl-tabs" style={{ width: "fit-content", flexWrap: "wrap" }}>
+              {ASSIGN_UI.map((m) => <button key={m.key} type="button" className="cl-tab" aria-pressed={c.assignMode === m.key} onClick={() => setC({ ...c, assignMode: m.key })}>{m.label}</button>)}
+            </div>
+            <span style={hintS}>{ASSIGN_UI.find((m) => m.key === c.assignMode)!.hint}</span>
+          </div>
+          {c.assignMode === "rotation" && (
+            <div style={field}>Черга (порядок — як відмічали)
+              {view.turn && JSON.stringify(c.rotationIds) === JSON.stringify(view.config.rotationIds) && view.config.assignMode === "rotation"
+                && <span style={{ fontSize: 13, fontWeight: 400 }}>Сьогодні — <b>{view.turn.today ?? "—"}</b>, завтра — <b>{view.turn.tomorrow ?? "—"}</b></span>}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "2px 12px", maxHeight: 260, overflow: "auto", fontWeight: 400 }}>
+                {view.people.map((p) => {
+                  const n = c.rotationIds.indexOf(p.id);
+                  return (
+                    <label key={p.id} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
+                      <input type="checkbox" checked={n >= 0} onChange={() => toggle(p.id)} />
+                      {n >= 0 && <b style={{ minWidth: 16 }}>{n + 1}.</b>}
+                      <span>{p.name} <span style={{ color: "var(--text-muted)", fontSize: 11.5 }}>· {p.leadgen ? "лідоген" : p.team}</span></span>
+                    </label>
+                  );
+                })}
+              </div>
+              <span style={hintS}>Лідогени першими, далі менеджери. Людей без акаунта Kommo в списку немає. Задача «зв'язатися» ставиться тим, хто має вхід у дашборд.</span>
+            </div>
+          )}
+          {c.assignMode === "one" && <label style={field}>Хто веде тендерні ліди
             <select value={c.responsibleManagerId ?? ""} onChange={(e) => setC({ ...c, responsibleManagerId: e.target.value ? Number(e.target.value) : null })} style={inp}>
               <option value="">— не вибрано —</option>
               {curMissing && cur && <option value={c.responsibleManagerId!}>{cur.name} (неактивний — виберіть іншого)</option>}
               {view.options.map((l) => <option key={l.id} value={l.id}>{l.name} · {l.team}</option>)}
             </select>
             <span style={hintS}>Один лідоген. Список — активні лідогени з акаунтом Kommo.</span>
-          </label>
-          {view.options.length === 0 && <div style={{ color: "#b3261e", fontSize: 13 }}>Активних лідогенів з акаунтом Kommo не знайдено — вибрати нікого.</div>}
-          {liveNoOne && <div style={{ color: "#b3261e", fontSize: 13 }}>Бойовий режим без лідогена: ліди збиратимуться, але в Kommo не підуть, доки когось не виберете.</div>}
+          </label>}
+          {c.assignMode === "one" && view.options.length === 0 && <div style={{ color: "#b3261e", fontSize: 13 }}>Активних лідогенів з акаунтом Kommo не знайдено — вибрати нікого.</div>}
+          {liveNoOne && <div style={{ color: "#b3261e", fontSize: 13 }}>Бойовий режим, але нікого не вибрано: ліди збиратимуться, але в Kommo не підуть, доки когось не виберете.</div>}
           <div style={{ fontSize: 13 }}>
             Записано в Kommo: <b>{view.queue.pushed}</b> · чекають запису: <b>{view.queue.waiting}</b>
             {view.queue.exhausted > 0 && <span style={{ color: "#b3261e" }}> · не вдалось після 3 спроб: {view.queue.exhausted}</span>}

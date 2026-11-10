@@ -6505,6 +6505,14 @@ CREATE TABLE IF NOT EXISTS prozorro_settings (
   set_at                 TIMESTAMPTZ
 );
 INSERT INTO prozorro_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+-- 🎯 Задача 8731 (TOP Weekly 09.11.2026, відповіді Романа 10.11): кому йдуть угоди — `opdir` (акаунт «Операційний директор»),
+--  `one` (одна людина — як було), `rotation` (по черзі ПО ДНЯХ від `rotation_from`, вихідні теж). Чисті правила — `core/prozorroAssign.ts`.
+ALTER TABLE prozorro_settings ADD COLUMN IF NOT EXISTS assign_mode TEXT NOT NULL DEFAULT 'one' CHECK (assign_mode IN ('opdir','one','rotation'));
+ALTER TABLE prozorro_settings ADD COLUMN IF NOT EXISTS rotation_ids INTEGER[] NOT NULL DEFAULT '{}';
+ALTER TABLE prozorro_settings ADD COLUMN IF NOT EXISTS rotation_from DATE;
+-- Задача «звʼязатися» по угоді (8731): яка задача поставлена й коли закрита автоматично (вихідний дзвінок > 8 с).
+ALTER TABLE prozorro_leads ADD COLUMN IF NOT EXISTS task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL;
+ALTER TABLE prozorro_leads ADD COLUMN IF NOT EXISTS task_closed_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS prozorro_settings_log (
   id              BIGSERIAL PRIMARY KEY,
   field           TEXT NOT NULL,
