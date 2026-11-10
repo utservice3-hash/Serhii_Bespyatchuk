@@ -182,14 +182,14 @@ test("#2365 НАЛАШТУВАННЯ: адмін і ОД; межі полів; �
 
   const who = { userId: 50, name: "Роман" };
   const f = fakeDb([12, 13]);
-  assert.deepEqual(await saveConfig(f.db, { ...f.state.cfg, responsibleManagerId: 99 }, who), { ok: false, error: "Можна вибрати лише активного лідогена з акаунтом Kommo" },
+  assert.deepEqual(await saveConfig(f.db, { ...f.state.cfg, responsibleManagerId: 99 }, who, "true"), { ok: false, error: "Можна вибрати лише активного лідогена з акаунтом Kommo" },
     "🔴 вибрано не лідогена / неактивного");
-  assert.deepEqual(await saveConfig(f.db, { assignMode: "one", responsibleManagerId: 12, rotationIds: [], rotationFrom: null, mode: "live", dailyLimit: 5, minAmount: 200000, nichesOff: [] }, who), { ok: true, changed: 4 });
+  assert.deepEqual(await saveConfig(f.db, { assignMode: "one", responsibleManagerId: 12, rotationIds: [], rotationFrom: null, mode: "live", dailyLimit: 5, minAmount: 200000, nichesOff: [] }, who, "true"), { ok: true, changed: 4 });
   assert.deepEqual(f.state.log.map((l) => l.slice(0, 3)), [["режим", "пробний", "бойовий"], ["лідоген", "не вибрано", "L12"], ["ліміт на день", "без ліміту", "5"],
     ["мінімальна сума", "500 000 ₴", "200 000 ₴"]], "🔴 журнал не по полях або не людськими словами");
-  assert.deepEqual([await saveConfig(f.db, { ...f.state.cfg }, who), f.state.log.length, f.state.writes], [{ ok: true, changed: 0 }, 4, 1], "🔴 повтор без змін записано");
+  assert.deepEqual([await saveConfig(f.db, { ...f.state.cfg }, who, "true"), f.state.log.length, f.state.writes], [{ ok: true, changed: 0 }, 4, 1], "🔴 повтор без змін записано");
   const g2 = fakeDb([13], { responsibleManagerId: 12 });
-  assert.deepEqual(await saveConfig(g2.db, { ...g2.state.cfg, minAmount: 300000 }, who), { ok: true, changed: 1 },
+  assert.deepEqual(await saveConfig(g2.db, { ...g2.state.cfg, minAmount: 300000 }, who, "true"), { ok: true, changed: 1 },
     "🔴 вибраний, але вже неактивний лідоген блокує збереження інших полів");
 });
 
@@ -367,14 +367,14 @@ test("#3740c НАЛАШТУВАННЯ ЧЕРГИ: межі, лише актив�
     ? { rows: [...people].map((id) => ({ id, name: `L${String(id)}`, team: "Т", leadgen: id < 14 })) } : f.db.query(sql, params as never[]))) as Db["query"] };
   const who = { userId: 50, name: "Роман" };
   const cfg = parseConfig(ok); assert.ok(cfg.ok);
-  assert.deepEqual(await saveConfig(db, { ...cfg.value, rotationIds: [12, 99] }, who, "2026-11-11"), { ok: false, error: "У чергу можна додати лише активну людину з акаунтом Kommo" },
+  assert.deepEqual(await saveConfig(db, { ...cfg.value, rotationIds: [12, 99] }, who, "true", "2026-11-11"), { ok: false, error: "У чергу можна додати лише активного менеджера чи лідогена з акаунтом Kommo" },
     "🔴 у чергу додано не активну людину");
-  assert.equal((await saveConfig(db, cfg.value, who, "2026-11-11")).ok, true);
+  assert.equal((await saveConfig(db, cfg.value, who, "true", "2026-11-11")).ok, true);
   assert.equal(f.state.cfg.rotationFrom, "2026-11-11", "🔴 нова черга почалась не з дня збереження");
   assert.deepEqual(f.state.log.filter((l) => l[0] === "розподіл" || l[0] === "черга").map((l) => l.slice(0, 3)),
     [["розподіл", "на одну людину", "по черзі по днях"], ["черга", "порожня", "L12 → L13"]], "🔴 журнал черги не людськими словами");
-  await saveConfig(db, { ...f.state.cfg, dailyLimit: 10 }, who, "2026-11-12");
+  await saveConfig(db, { ...f.state.cfg, dailyLimit: 10 }, who, "true", "2026-11-12");
   assert.equal(f.state.cfg.rotationFrom, "2026-11-11", "🔴 зміна іншого поля перезапустила чергу");
-  await saveConfig(db, { ...f.state.cfg, rotationIds: [13, 12, 14] }, who, "2026-11-13");
+  await saveConfig(db, { ...f.state.cfg, rotationIds: [13, 12, 14] }, who, "true", "2026-11-13");
   assert.equal(f.state.cfg.rotationFrom, "2026-11-13", "🔴 зміна складу черги не перезапустила відлік");
 });

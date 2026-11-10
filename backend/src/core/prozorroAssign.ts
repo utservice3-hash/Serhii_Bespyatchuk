@@ -16,6 +16,15 @@ export const ASSIGN_MODES: readonly AssignMode[] = ["opdir", "one", "rotation"];
 /** Акаунт Kommo «Операційний директор» (managers.id 2) — службовий, на нього падає все в режимі `opdir`. */
 export const OPDIR_KOMMO_USER_ID = 904923;
 export const ROTATION_MAX = 30;
+/** «Комерційний відділ» (КВП, Левентова) — не менеджер, у чергу не йде (Роман 10.11.2026: «Левентову прибери»). */
+export const KVP_DEPT_TEAM_ID = 37283;
+/**
+ * Хто може бути в черзі (Роман 10.11.2026: «тільки менеджери з акаунтом в Kommo + лідогенератори»): КОМЕРЦІЙНИЙ менеджер за
+ * правилом ядра (`metrics.commercialManagerSql` — його передає роут: модуль без імпортів) або команда «Лідогенерація»; без КВП-відділу.
+ * Без команди (Роман, «Операційний директор») і фінанси — ні. Аліас таблиці managers — `m`.
+ */
+export const rotationScopeSql = (commercialSql: string, leadgenTeamId: number): string =>
+  `((${commercialSql}) OR m.team_id = ${Math.trunc(leadgenTeamId)}) AND m.team_id IS DISTINCT FROM ${KVP_DEPT_TEAM_ID}`;
 
 const dayNum = (d: string): number => Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10))) / 86_400_000;
 export const addDays = (d: string, n: number): string => new Date((dayNum(d) + n) * 86_400_000).toISOString().slice(0, 10);

@@ -1184,3 +1184,28 @@ test("#3740d ЖИВИЙ SQL: тендерна угода → задача «зв
   assert.deepEqual([done.status, done.n], ["done", 1], "🔴 задача не «Готово» або без запису в журналі статусу");
   assert.match(done.close_reason ?? "", /вихідний дзвінок/, "🔴 причина закриття не названа");
 });
+
+/**
+ * #3740e — ЖИВИЙ SQL: ХТО МОЖЕ БУТИ В ЧЕРЗІ ТЕНДЕРІВ (Роман 10.11.2026: «тільки менеджери з акаунтом в Kommo + лідогенератори»,
+ * «Левентову прибери»). Менеджер продажної команди й лідоген — так; без команди (Роман, ОД), фінанси, «Комерційний відділ» (КВП),
+ * без акаунта Kommo, неактивний — ні. Роут передає саме це правило і в список, і в перевірку збереження.
+ * 🧨 САБОТАЖ: у `rotationScopeSql` прибрати `AND m.team_id IS DISTINCT FROM ${KVP_DEPT_TEAM_ID}` → червоніє (КВП у черзі).
+ */
+test("#3740e ЖИВИЙ SQL: у черзі тендерів — менеджери продажних команд і лідгени; без команди, фінанси, КВП, без Kommo — ні", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { rotationOptions } = await import("./prozorroSettings.js");
+  const { rotationScopeSql, KVP_DEPT_TEAM_ID } = await import("./prozorroAssign.js");
+  const { commercialManagerSql, LEADGEN_DASH_TEAM_ID } = await import("./metrics.js");
+  await client.query(`INSERT INTO teams (id, name) VALUES (9790, 'Тест Team Lead 3740'), (12, 'Тест фінанси 3740'), ($1, 'Тест КВП 3740'), ($2, 'Тест лідген 3740')
+    ON CONFLICT DO NOTHING`, [KVP_DEPT_TEAM_ID, LEADGEN_DASH_TEAM_ID]);
+  await client.query(`INSERT INTO managers (id, name, team_id, kommo_user_id, is_active) VALUES
+    (9791,'Продажник',9790,97910001,true),(9792,'Лідген',$2,97920001,true),(9793,'Без команди',NULL,97930001,true),
+    (9794,'Фінансист',12,97940001,true),(9795,'КВП',$1,97950001,true),(9796,'Без Kommo',9790,NULL,true),(9797,'Звільнений',9790,97970001,false)`,
+    [KVP_DEPT_TEAM_ID, LEADGEN_DASH_TEAM_ID]);
+  const ids = (await rotationOptions(client as never, rotationScopeSql(commercialManagerSql("m"), LEADGEN_DASH_TEAM_ID)))
+    .map((p) => p.id).filter((id) => id >= 9791 && id <= 9797).sort();
+  assert.deepEqual(ids, [9791, 9792], "🔴 у черзі не лише менеджер продажів і лідген (або когось із них немає)");
+  const route = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "prozorro.ts"), "utf8");
+  assert.match(route, /loadSettingsView\(pool, MAX_PUSH_ATTEMPTS, PEOPLE_SCOPE\)/, "🔴 список черги на екрані не за правилом");
+  assert.match(route, /saveConfig\(pool, parsed\.value, \{[^}]*\}, PEOPLE_SCOPE\)/, "🔴 збереження черги перевіряє не тим правилом");
+});

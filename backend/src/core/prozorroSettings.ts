@@ -93,11 +93,11 @@ export async function leadgenOptions(db: Db): Promise<LeadgenOption[]> {
 
 /** Кого можна поставити в чергу: будь-хто активний з акаунтом Kommo — лідогени й менеджери (Сергій 09.11: «менеджери теж можуть»). */
 export interface PersonOption { id: number; name: string; team: string; leadgen: boolean }
-export async function rotationOptions(db: Db): Promise<PersonOption[]> {
+export async function rotationOptions(db: Db, scopeSql: string): Promise<PersonOption[]> {
   const r = await db.query<{ id: number; name: string; team: string | null; leadgen: boolean }>(
     `SELECT m.id, m.name, t.name AS team, COALESCE(${LEADGEN_TEAM_SQL}, false) AS leadgen
        FROM managers m LEFT JOIN teams t ON t.id = m.team_id
-      WHERE m.is_active AND m.kommo_user_id IS NOT NULL ORDER BY 4 DESC, m.name`);
+      WHERE m.is_active AND m.kommo_user_id IS NOT NULL AND ${scopeSql} ORDER BY 4 DESC, m.name`);
   return r.rows.map((x) => ({ id: x.id, name: x.name, team: x.team ?? "без команди", leadgen: x.leadgen }));
 }
 
@@ -122,7 +122,7 @@ export function describeChanges(prev: PzConfig, next: PzConfig, names: ReadonlyM
 }
 
 /** Зберегти. Лідоген — лише з активних лідогенів (або «не вибрано»). Без змін — нічого не пишемо. */
-export async function saveConfig(db: Db, next: PzConfig, who: { userId: number | null; name: string | null }, today: string = kyivDay(new Date())):
+export async function saveConfig(db: Db, next: PzConfig, who: { userId: number | null; name: string | null }, scopeSql: string, today: string = kyivDay(new Date())):
   Promise<{ ok: true; changed: number } | { ok: false; error: string }> {
   const opts = await leadgenOptions(db);
   const prev = await loadConfig(db);
@@ -133,8 +133,8 @@ export async function saveConfig(db: Db, next: PzConfig, who: { userId: number |
   // Черга: нових людей — лише активних з акаунтом Kommo; уже вибраного й згодом неактивного можна лишити (як лідогена вище).
   const added = next.rotationIds.filter((x) => !prev.rotationIds.includes(x));
   if (added.length) {
-    const ok = new Set((await rotationOptions(db)).map((o) => o.id));
-    if (added.some((x) => !ok.has(x))) return { ok: false, error: "У чергу можна додати лише активну людину з акаунтом Kommo" };
+    const ok = new Set((await rotationOptions(db, scopeSql)).map((o) => o.id));
+    if (added.some((x) => !ok.has(x))) return { ok: false, error: "У чергу можна додати лише активного менеджера чи лідогена з акаунтом Kommo" };
   }
   // Відлік черги — з дня, коли її задали: змінився склад чи порядок або щойно ввімкнули чергу → сьогодні перший у списку.
   const queueChanged = prev.rotationIds.join(",") !== next.rotationIds.join(",") || (next.assignMode === "rotation" && prev.assignMode !== "rotation");
@@ -171,7 +171,7 @@ export interface ProzorroSettingsView {
   history: { field: string; oldValue: string | null; newValue: string | null; setByName: string | null; setAt: string }[];
 }
 
-export async function loadSettingsView(db: Db, maxAttempts: number): Promise<ProzorroSettingsView> {
+export async function loadSettingsView(db: Db, maxAttempts: number, scopeSql: string): Promise<ProzorroSettingsView> {
   const config = await loadConfig(db);
   const cur = config.responsibleManagerId == null ? null : (await db.query<{ name: string; is_active: boolean; has_kommo: boolean }>(
     `SELECT name, is_active, (kommo_user_id IS NOT NULL) AS has_kommo FROM managers WHERE id = $1`, [config.responsibleManagerId])).rows[0] ?? null;
@@ -186,7 +186,7 @@ export async function loadSettingsView(db: Db, maxAttempts: number): Promise<Pro
     .map((r) => [r.niche, r.n] as [string, number]));
   const hist = (await db.query<{ field: string; old_value: string | null; new_value: string | null; set_by_name: string | null; set_at: Date }>(
     `SELECT field, old_value, new_value, set_by_name, set_at FROM prozorro_settings_log ORDER BY set_at DESC, id DESC LIMIT 30`)).rows;
-  const people = await rotationOptions(db);
+  const people = await rotationOptions(db, scopeSql);
   const name = (id: number | null) => (id == null ? null : people.find((p) => p.id === id)?.name ?? `#${String(id)}`);
   const day = kyivDay(new Date());
   const turn = config.assignMode === "rotation" && config.rotationIds.length
