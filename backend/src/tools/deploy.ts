@@ -356,8 +356,10 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * `vite build` типів не перевіряє. Два різні кроки, і жоден не заміняє іншого.
    * Крок стоїть у фазі CHECK, тобто у стенді: у докруті йому не місце — саме заради
    * цього збірку й виносили.
+   * 🧱 11.11.2026: ЛИШЕ `vite build`, а не `npm run build` (= `tsc -b && vite build`). Типи щойно перевірив `tscFront`,
+   * а другий `tsc -b` (~900 МБ) хостинг убивав за лімітом памʼяті акаунта — викат падав на цьому кроці (#3821).
    */
-  buildFront: (c) => run("buildFront", () => { needDeps(c.fe, "frontend"); sh("npm", ["run", "build"], c.fe); }, "бандл фронту (vite) — у СТЕНДІ"),
+  buildFront: (c) => run("buildFront", () => { needDeps(c.fe, "frontend"); sh("npx", ["vite", "build"], c.fe); }, "бандл фронту (vite) — у СТЕНДІ"),
   /**
    * 🔴 КРИТЕРІЙ — ПРИРІСТ, А НЕ КОД 0. Розгорнуто в `testDelta.ts`; тут — механіка
    * двох прогонів. Ціна заміряна: +78 с (worktree+збірка 12.4 с, прогін бази 65.8 с).

@@ -75,3 +75,20 @@ test("#3820 ПРОВОДКА ЗБІРКИ: переклад першим, пер
   assert.match(deploy, /buildBack: \(c\) => run\("buildBack", \(\) => \{ needDeps\(c\.be, "backend"\); sh\("rm", \["-rf", "dist"\], c\.be\); sh\("npm", \["run", "build"\], c\.be\); \}/,
     "🔴 крок buildBack більше не кличе npm run build після rm -rf dist");
 });
+
+/**
+ * #3821 — ФРОНТ НА СТЕНДІ: ТИПИ ОДИН РАЗ, БАНДЛ — БЕЗ ПОВТОРНОГО `tsc`. `tscFront` робить `npx tsc -b` (типи),
+ * `buildFront` — лише `npx vite build` (бандл), і `tscFront` іде раніше у фазі check. 11.11.2026 `buildFront` кликав
+ * `npm run build` (= `tsc -b && vite build`), тобто другий `tsc -b` (~900 МБ), і хостинг його вбивав.
+ * 🧨 Червоніє, якщо `buildFront` знову кличе `npm run build` (повторний tsc), якщо `tscFront` перестане перевіряти типи
+ * або стане ПІСЛЯ бандла.
+ */
+test("#3821 ФРОНТ НА СТЕНДІ: типи один раз (tscFront), бандл — vite build без повторного tsc", async () => {
+  const deploy = read("backend/src/tools/deploy.ts");
+  assert.match(deploy, /tscFront: \(c\) => run\("tscFront", \(\) => sh\("npx", \["tsc", "-b"\], c\.fe\)/, "🔴 tscFront більше не перевіряє типи фронту");
+  assert.match(deploy, /buildFront: \(c\) => run\("buildFront", \(\) => \{ needDeps\(c\.fe, "frontend"\); sh\("npx", \["vite", "build"\], c\.fe\); \}/,
+    "🔴 buildFront знову кличе npm run build — другий tsc -b, і хостинг уб'є крок за памʼяттю");
+  const { planSteps } = await import("./deployPlan.js");
+  const check = planSteps("check", "full").map((x) => x.id);
+  assert.ok(check.indexOf("tscFront") >= 0 && check.indexOf("tscFront") < check.indexOf("buildFront"), "🔴 типи фронту перевіряються не перед бандлом");
+});
