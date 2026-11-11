@@ -6617,6 +6617,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // 8135) або в пулі лідгенів — геть зі списку ДО всіх лічильників (без роботи, без задачі, кольори, реактивація).
   // Одна множина (`HANDED_OFF_SQL`) на всі читачі; повертається сам, щойно позначку знімуть (взяли / ожив / відкликали).
   const handedOff = await orphanRelease.handedOffKeys(pool);
+  // 🔢 Скільки прибрали — НАЗВАНО числом (`totals.handedOff`), інакше вони зникли б з Σ мовчки (#721b → #3823).
+  const handedOffCount = clientsRes.rows.filter((c) => handedOff.has(c.client_key)).length;
   clientsRes.rows = clientsRes.rows.filter((c) => !handedOff.has(c.client_key));
   const clientKeys = clientsRes.rows.map((c) => c.client_key);
   const keySet = new Set(clientKeys);
@@ -7205,6 +7207,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        * тож без цього числа вони зникли б мовчки.
        */
       skippedGeneric: bridge.skippedGeneric,
+      /**
+       * 🧭 Віддані в «Нічийні» або в пулі лідгенів (8349) — у списку й лічильниках менеджера їх немає. Названі числом,
+       * щоб «активні + місток + разові + дженерики + віддані = база» сходилось і втрата не читалась як «клієнтів стало менше».
+       */
+      handedOff: handedOffCount,
       /** Розбивка ЖИВИХ по сегментах — та, що стоїть над таблицею. */
       activeBySegment: bridge.bySegment,
       currentWeekIndex: curIdx < 0 ? null : curIdx,
@@ -8428,10 +8435,14 @@ dashboardRouter.get("/reactivation-list", async (req, res) => {
   else if (req.query.managerId) scope = { managerId: Number(req.query.managerId) };
   else if (req.query.teamId) scope = { teamId: Number(req.query.teamId) };
 
-  const [clients, returned30] = await Promise.all([
+  const [allClients, returned30, handedOffR] = await Promise.all([
     reactivation.clientStates(scope),
     reactivation.returnedAfterTask(30, scope),
+    orphanRelease.handedOffKeys(pool),
   ]);
+  // 🧭 8349: віддані в «Нічийні» й ті, хто в пулі лідгенів, — не в реактивації менеджера; та сама множина, що
+  // в «Клієнти та реактивація», інакше «місток» і цей список розійшлися б (#30p).
+  const clients = allClients.filter((c) => !handedOffR.has(c.clientKey));
 
   // Ранжування за ЦІННІСТЮ (ядро), сезонні — ВНИЗ списку і без задач.
   // 💬 Останній коментар у рядок — те саме поле `client_comments`, що в картці.
