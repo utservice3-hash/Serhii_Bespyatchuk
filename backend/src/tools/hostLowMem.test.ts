@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
-import { planSteps, npmTestArgs, heavyForeign, TEST_RUNNER } from "./deployPlan.js";
+import { planSteps, npmTestArgs, baseTestArgs, heavyForeign, TEST_RUNNER } from "./deployPlan.js";
 
 /**
  * 🧠 ВИКАТ НА ПОТУЖНОСТЯХ, ЯКІ Є (11.11.2026, Роман: «ні ліміт ми не підіймаємо … оптимізуй»).
@@ -82,8 +82,61 @@ test("#3880b 🪞 ОБГОРТКА: запускає node з вибраною п
   const flags = shown.stdout.trim().split(" ").filter((a) => a.startsWith("--test-concurrency"));
   assert.deepEqual(flags, ["--test-concurrency=3"], `🔴 node отримав не ту паралельність: ${shown.stdout.trim()}`);
   assert.match(shown.stdout, /--no-warnings/, "🔴 чужий прапорець загубився по дорозі");
+  // Стеля справді ЗАСТОСОВУЄТЬСЯ (а не лише рахується): та сама команда з 8 на «хостингу» дає 4, поза ним — 8,
+  // перевизначення — 2. Без `buildArgs(argv, n)` усі три дали б 8.
+  const flagOf = (e: NodeJS.ProcessEnv) => spawnSync(process.execPath, [script, "--test-concurrency=8", "-p", "process.execArgv.join(' ')"], { encoding: "utf8", env: { ...env, ...e } }).stdout.trim();
+  assert.match(flagOf({ UTS_HOST_LVE: "1" }), /^--test-concurrency=4\b/, "🔴 на хостингу обгортка пропустила 8 — стеля рахується, але не застосовується");
+  assert.match(flagOf({ UTS_HOST_LVE: "0" }), /^--test-concurrency=8\b/, "🔴 поза хостингом обгортка змінила паралельність");
+  assert.match(flagOf({ UTS_HOST_LVE: "1", UTS_TEST_CONCURRENCY: "2" }), /^--test-concurrency=2\b/, "🔴 перевизначення не дійшло до node");
   const code = spawnSync(process.execPath, [script, "-e", "process.exit(7)"], { encoding: "utf8", env });
   assert.equal(code.status, 7, "🔴 обгортка проковтнула код виходу — падіння набору читалось би як зелене");
+});
+
+/**
+ * #3880c 🪞 УБИТА ОБГОРТКА НЕ ЛИШАЄ ЖИВОГО НАБОРУ. `SIGTERM` обгортці → набір (дочірній node) теж завершується, а код
+ * обгортки — ненульовий. Знахідка рецензії 11.11: з `spawnSync` сигнал убивав лише обгортку, а набір жив далі — з усіма
+ * тест-процесами, тобто рівно тією памʼяттю, від якої ми лікуємось. Дзеркало: без сигналу набір доживає до кінця.
+ * 🧨 Червоніє, якщо обгортка перестане передавати сигнал або знову чекатиме набір синхронно.
+ */
+test("#3880c 🪞 УБИТА ОБГОРТКА НЕ ЛИШАЄ ЖИВОГО НАБОРУ: SIGTERM доходить до дочірнього node", async () => {
+  const script = path.join(ROOT, "backend", TEST_RUNNER);
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const run = (kill: boolean) => new Promise<{ childPid: number; code: number | null; childAlive: boolean }>((resolve) => {
+    const p = spawn(process.execPath, [script, "-e", `console.log(process.pid); setTimeout(() => {}, ${kill ? 30000 : 300})`], { stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, UTS_TEST_CONCURRENCY: "" } });
+    let childPid = 0;
+    p.stdout.on("data", (b: Buffer) => { if (!childPid) { childPid = Number(String(b).trim().split("\n")[0]); if (kill) p.kill("SIGTERM"); } });
+    p.on("exit", (code) => setTimeout(() => resolve({ childPid, code, childAlive: childPid ? alive(childPid) : true }), 300));
+  });
+  const killed = await run(true);
+  assert.ok(killed.childPid > 0, "🔴 набір не стартував");
+  if (killed.childAlive) process.kill(killed.childPid, "SIGKILL");
+  assert.equal(killed.childAlive, false, "🔴 обгортку вбито, а набір живий — памʼять лишилась зайнятою");
+  assert.notEqual(killed.code, 0, "🔴 убитий набір дав код 0 — читалось би як зелене");
+  const calm = await run(false);
+  assert.equal(calm.code, 0, "🔴 без сигналу набір не дожив до кінця");
+});
+
+/**
+ * #3889 🪞 БАЗА БЕРЕ СВОЇ АРГУМЕНТИ, ДЕРЕВО — СВОЇ. Аргументи дерева можуть називати файли, яких у базі (прод) ще немає
+ * (новий репортер, preload), — тоді node падав би до першого тесту, TAP порожній, і зміна скрипта `test` назавжди
+ * застрягла б на кроці. Тож `baseTestArgs` приймає і новий формат (`node scripts/testRun.mjs …`), і старий
+ * (`node --test-reporter… --test …`), а крок `test` дає базі аргументи з `${beBase}/package.json`.
+ * 🧨 Червоніє, якщо база знову отримає аргументи дерева, або старий формат бази перестане розбиратись (перший викат цієї
+ * зміни, коли прод ще старий, обірвався б).
+ */
+test("#3889 🪞 БАЗА БЕРЕ СВОЇ АРГУМЕНТИ: і новий формат скрипта, і старий; крок test дає базі її package.json", () => {
+  const OLD = 'node --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test "dist/**/*.test.js"';
+  assert.deepEqual(baseTestArgs(OLD), ["--test-reporter=tap", "--test-reporter-destination=stdout", "--test-reporter=./dist/testRunGate.js", "--test-reporter-destination=stdout", "--test", "dist/**/*.test.js"],
+    "🔴 старий формат скрипта бази не розібрано — перший викат обірвався б");
+  const cur = (JSON.parse(read("backend/package.json")) as { scripts: Record<string, string> }).scripts.test;
+  assert.deepEqual(baseTestArgs(cur), npmTestArgs(cur), "🔴 новий формат бази розбирається інакше, ніж дерева");
+  assert.throws(() => baseTestArgs("npm run x --test"), /node/, "🔴 скрипт не з node прийнято");
+  assert.throws(() => baseTestArgs("node scripts/testRun.mjs --version"), /--test/);
+  const deploy = read("backend/src/tools/deploy.ts");
+  const at = deploy.indexOf("  test: async (c) => {");
+  const body = deploy.slice(at, deploy.indexOf("\n  recount:", at)).replace(/\/\/.*$/gm, "");
+  assert.match(body, /runTests\(beBase, baseTestArgs\(scriptOf\(beBase\)\)\)/, "🔴 база отримує не свої аргументи");
+  assert.match(body, /runTests\(c\.be, npmTestArgs\(scriptOf\(c\.be\)\)\)/, "🔴 дерево біжить не своїм скриптом через обгортку");
 });
 
 /**
@@ -123,8 +176,8 @@ test("#3882 🪞 КРОК test: база й дерево — обгорткою 
   const body = deploy.slice(at, deploy.indexOf("\n  recount:", at)).replace(/\/\/.*$/gm, "");
   assert.ok(at > 0, "🔴 крок test не знайдено");
   assert.doesNotMatch(body, /sh\("npm",\s*\["test"\]/, "🔴 крок test знову кличе npm test — база бігтиме без стелі");
-  assert.match(body, /sh\("node", \[`\$\{c\.be\}\/\$\{TEST_RUNNER\}`, \.\.\.testArgs\], cwd\)/, "🔴 прогін іде не обгорткою стенда");
-  assert.match(body, /runTests\(beBase\)/); assert.match(body, /runTests\(c\.be\)/);
+  assert.match(body, /sh\("node", \[`\$\{c\.be\}\/\$\{TEST_RUNNER\}`, \.\.\.args\], cwd\)/, "🔴 прогін іде не обгорткою стенда");
+  assert.match(body, /runTests\(beBase, /); assert.match(body, /runTests\(c\.be, /);
 });
 
 /**
@@ -209,6 +262,59 @@ test("#3884 🪞 ДРАЙВЕР ТИПІВ: помилку в частині з�
     writeFileSync(path.join(dir, "src", "d.ts"), "export const d: number = 1;\n");
     const clean = judgeParts({ "tsconfig.json": { roots: 6, parts: 3 } }, [0, 1, 2].map((i) => ({ ...checkPart(ts, cfg, i, 3), part: i })));
     assert.deepEqual([clean.ok, clean.diagnostics], [true, []], `🔴 чиста фікстура не зелена: ${clean.diagnostics.join("\n")}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/**
+ * #3890 🪞 ФАЙЛ ПОЗА `include`, ЩО ПОТРАПИВ У ПРОГРАМУ ІМПОРТОМ, ТЕЖ ПЕРЕВІРЕНО — як у `tsc -b`. Живий випадок:
+ * `vite.config.ts` імпортує `buildEnvGuard.ts`, якого немає в `include` `tsconfig.node.json`; знахідка рецензії 11.11 —
+ * перша редакція драйвера його помилок не бачила. Дзеркало: файл із `node_modules` (бібліотека) — не перевіряється.
+ * 🧨 Червоніє, якщо драйвер знову звітуватиме лише корені (помилка в імпортованому файлі пройде) або почне перевіряти
+ * бібліотеки (хибні червоні з чужого коду).
+ */
+test("#3890 🪞 ФАЙЛ ПОЗА include, ІМПОРТОВАНИЙ КОРЕНЕМ, ПЕРЕВІРЕНО; бібліотека з node_modules — ні", async () => {
+  const { checkPart, judgeParts } = await parts();
+  const dir = mkdtempSync(path.join(tmpdir(), "uts-tcextra-"));
+  try {
+    mkdirSync(path.join(dir, "src")); mkdirSync(path.join(dir, "node_modules", "libx"), { recursive: true });
+    writeFileSync(path.join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { target: "es2020", lib: ["ES2020"], module: "esnext", moduleResolution: "bundler", strict: true, noEmit: true, types: [] }, include: ["src"] }));
+    writeFileSync(path.join(dir, "guard.ts"), "export const g: number = 'не число';\n");                 // ← поза include, помилка
+    writeFileSync(path.join(dir, "node_modules", "libx", "package.json"), JSON.stringify({ name: "libx", types: "index.ts" }));
+    writeFileSync(path.join(dir, "node_modules", "libx", "index.ts"), "export const l: number = 'чужа помилка';\n");
+    writeFileSync(path.join(dir, "src", "a.ts"), "import { g } from '../guard';\nimport { l } from 'libx';\nexport const a = g + l;\n");
+    const cfg = path.join(dir, "tsconfig.json");
+    const r = { ...checkPart(ts, cfg, 0, 1), part: 0 };
+    const v = judgeParts({ "tsconfig.json": { roots: 1, parts: 1 } }, [r]);
+    assert.ok(v.diagnostics.some((d) => /guard\.ts/.test(d)), `🔴 помилку в імпортованому файлі поза include пропущено:\n${v.diagnostics.join("\n")}`);
+    assert.ok(!v.diagnostics.some((d) => /libx/.test(d)), "🔴 драйвер перевіряє бібліотеку з node_modules — хибні червоні з чужого коду");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/**
+ * #3891 🪞 ГЛОБАЛЬНЕ ДОПОВНЕННЯ, ЯКЕ БАЧИТЬ ЛИШЕ ЧАСТИНА, ДОХОДИТЬ ДО ВСІХ (друга фаза). Файл із `declare global`, що
+ * лежить ПОЗА коренями й потрапляє в програму лише через імпорт з одного кореня, у повній програмі видно всім; у частині
+ * без того імпорту — ні. `missingGlobals` каже, чого бракує кожній частині, а прогін із цим як додатковим коренем
+ * прибирає хибну помилку. Знахідка рецензії 11.11.
+ * 🧨 Червоніє, якщо `missingGlobals` поверне порожнечу (частина без доповнення лишиться з хибною помилкою) або якщо
+ * додатковий корінь не дійде до програми частини.
+ */
+test("#3891 🪞 ГЛОБАЛЬНЕ ДОПОВНЕННЯ ОДНІЄЇ ЧАСТИНИ ДОХОДИТЬ ДО ВСІХ: друга фаза прибирає хибну помилку", async () => {
+  const m = await parts() as Parts & { checkRange: (t: typeof ts, cfg: string, from: number, to: number, extra?: string[]) => { config: string; from: number; to: number; files: number; checked: number; globals: string[]; diagnostics: string[] }; missingGlobals: (r: { globals: string[] }[]) => string[][] };
+  const dir = mkdtempSync(path.join(tmpdir(), "uts-tcglob-"));
+  try {
+    mkdirSync(path.join(dir, "src")); mkdirSync(path.join(dir, "lib"));
+    writeFileSync(path.join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { target: "es2020", lib: ["ES2020"], module: "esnext", moduleResolution: "bundler", strict: true, noEmit: true, types: [] }, include: ["src"] }));
+    writeFileSync(path.join(dir, "lib", "aug.ts"), "declare global { var __uts3891: number }\nexport const aug = 1;\n");
+    writeFileSync(path.join(dir, "src", "a.ts"), "import { aug } from '../lib/aug';\nexport const a = aug;\n");
+    writeFileSync(path.join(dir, "src", "b.ts"), "export const b: number = __uts3891 + 1;\n");
+    const cfg = path.join(dir, "tsconfig.json");
+    const first = [m.checkRange(ts, cfg, 0, 1), m.checkRange(ts, cfg, 1, 2)];
+    assert.ok(first[1].diagnostics.some((d) => /__uts3891/.test(d)), "фікстура: без другої фази частина b мусить мати хибну помилку — інакше гейт нічого не доводить");
+    const miss = m.missingGlobals(first);
+    assert.deepEqual(miss[0], [], "🔴 частині a (яка бачить доповнення) щось «бракує»");
+    assert.equal(miss[1].length, 1, "🔴 частині b не названо доповнення, яке бачить a");
+    const again = m.checkRange(ts, cfg, 1, 2, miss[1]);
+    assert.deepEqual(again.diagnostics, [], `🔴 друга фаза не прибрала хибну помилку:\n${again.diagnostics.join("\n")}`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

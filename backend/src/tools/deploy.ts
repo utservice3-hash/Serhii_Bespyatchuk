@@ -19,7 +19,7 @@ import {
   standToRefusal,
   MARK_REPORT, MARK_STOP,
   holdsLockAfter,
-  npmTestArgs, heavyForeign, TEST_RUNNER,
+  npmTestArgs, baseTestArgs, heavyForeign, TEST_RUNNER,
   shouldRerunAccept, acceptAfterRerun, shouldAlertOnStop, stopAlertText, alertDelivery,
   type AcceptRound,
   type Mode, type Phase, type Step, type Artifact,
@@ -453,15 +453,16 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
 
       // ⚠️ `npm test` віддає ненульовий код за будь-якого падіння — це НОРМА тут,
       // тож вивід ЛОВИМО, а не даємо йому обірвати крок.
-      // 🧪 Обидва прогони — обгорткою СТЕНДА з аргументами скрипта `test` стенда (`npmTestArgs`, #3882): база — старий
-      // код, і її власний `npm test` біг би без стелі паралельності (47 процесів на хостингу вбивали прод). Без `npm`.
-      const testArgs = npmTestArgs((JSON.parse(readFileSync(`${c.be}/package.json`, "utf8")) as { scripts: Record<string, string> }).scripts.test);
-      const runTests = (cwd: string): string => {
-        try { return sh("node", [`${c.be}/${TEST_RUNNER}`, ...testArgs], cwd); }
+      // 🧪 Обидва прогони — обгорткою СТЕНДА (стеля паралельності на хостингу, #3882), без `npm`; аргументи — кожне
+      // дерево СВОЇ: база — старий код, і її власний `npm test` біг би без стелі (47 процесів на хостингу вбивали прод),
+      // а аргументи дерева можуть називати файли, яких у базі ще немає (`baseTestArgs`, #3889).
+      const scriptOf = (dir: string) => (JSON.parse(readFileSync(`${dir}/package.json`, "utf8")) as { scripts: Record<string, string> }).scripts.test;
+      const runTests = (cwd: string, args: string[]): string => {
+        try { return sh("node", [`${c.be}/${TEST_RUNNER}`, ...args], cwd); }
         catch (e) { return String((e as { stdout?: string }).stdout ?? ""); }
       };
-      const baseTap = parseTap(runTests(beBase));
-      const treeTap = parseTap(runTests(c.be));
+      const baseTap = parseTap(runTests(beBase, baseTestArgs(scriptOf(beBase))));
+      const treeTap = parseTap(runTests(c.be, npmTestArgs(scriptOf(c.be))));
       if (baseTap.length === 0 || treeTap.length === 0) {
         return { id: "test", ok: false, detail:
           `🔴 порожній TAP (база ${baseTap.length}, дерево ${treeTap.length}) — прогін не відбувся. `

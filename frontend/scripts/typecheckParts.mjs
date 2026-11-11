@@ -19,9 +19,9 @@
  * Частин: `UTS_TSC_PARTS` (дефолт 4) для конфігів, де коренів більше за `SPLIT_FROM`; решта — однією частиною.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_PARTS = 4;
 /**
@@ -70,15 +70,30 @@ function parse(ts, configPath) {
 /** Скільки частин для конфігу з такою кількістю коренів. */
 export function partsFor(rootCount, wanted) { return rootCount > SPLIT_FROM ? wanted : 1; }
 
-/** Діапазон [from, to) відсортованих коренів конфігу — так частину можна поділити навпіл без перерахунку. */
-export function checkRange(ts, configPath, from, to) {
+/**
+ * Діапазон [from, to) відсортованих коренів конфігу — так частину можна поділити навпіл без перерахунку.
+ * `extraRoots` — глобальні доповнення, які побачили ІНШІ частини (друга фаза, `missingGlobals`).
+ * Діагностику дає для: власних коренів + ПРОЄКТНИХ файлів поза коренями, що потрапили в програму імпортом (напр.
+ * `buildEnvGuard.ts`, який імпортує `vite.config.ts`, — `tsc -b` перевіряє і його). Такі файли можуть бути в кількох
+ * частинах — однакову діагностику дедуплікує вирок.
+ */
+export function checkRange(ts, configPath, from, to, extraRoots = []) {
   const parsed = parse(ts, configPath);
   const all = [...parsed.fileNames].sort();
+  const allSet = new Set(all);
   const mine = all.slice(from, to);
-  const roots = [...new Set([...mine, ...ambientFiles(all, (f) => readFileSync(f, "utf8"))])];
+  const roots = [...new Set([...mine, ...ambientFiles(all, (f) => readFileSync(f, "utf8")), ...extraRoots])];
   const program = ts.createProgram({ rootNames: roots, options: parsed.options, projectReferences: parsed.projectReferences });
   const diags = [...parsed.errors, ...program.getOptionsDiagnostics(), ...program.getGlobalDiagnostics()];
-  let checked = 0;
+  let checked = 0; const extras = []; const globals = [];
+  const projectFile = (sf) => !program.isSourceFileDefaultLibrary(sf) && !program.isSourceFileFromExternalLibrary(sf)
+    && !/[\\/]node_modules[\\/]/.test(sf.fileName) && !(sf.isDeclarationFile && parsed.options.skipLibCheck);
+  for (const sf of program.getSourceFiles()) {
+    if (!program.isSourceFileDefaultLibrary(sf) && (/\bdeclare\s+global\b/.test(sf.text) || (sf.moduleAugmentations?.length ?? 0) > 0)) globals.push(sf.fileName);
+    if (allSet.has(sf.fileName) || !projectFile(sf)) continue;
+    extras.push(sf.fileName);
+    diags.push(...program.getSyntacticDiagnostics(sf), ...program.getSemanticDiagnostics(sf));
+  }
   for (const f of mine) {
     const sf = program.getSourceFile(f);
     if (!sf) continue;
@@ -87,7 +102,17 @@ export function checkRange(ts, configPath, from, to) {
   }
   const fmtHost = { getCanonicalFileName: (f) => f, getCurrentDirectory: () => path.dirname(configPath), getNewLine: () => "\n" };
   const text = diags.map((d) => ts.formatDiagnostics([d], fmtHost).trim());
-  return { config: path.basename(configPath), from, to, files: mine.length, checked, roots: roots.length, programFiles: program.getSourceFiles().length, diagnostics: text };
+  return { config: path.basename(configPath), from, to, files: mine.length, checked, extras, globals: globals.sort(), roots: roots.length, programFiles: program.getSourceFiles().length, diagnostics: text };
+}
+
+/**
+ * Друга фаза (знахідка рецензії 11.11): глобальне доповнення з ПАКЕТА (`declare global` у .d.ts бібліотеки) потрапляє лише
+ * в ті частини, чиї файли цей пакет імпортують. У повній програмі його бачать усі — отже частина без нього могла б дати
+ * хибну помилку або сховати справжню. Вихід: які доповнення бачили інші частини, а ця — ні.
+ */
+export function missingGlobals(reports) {
+  const union = new Set(reports.flatMap((r) => r.globals ?? []));
+  return reports.map((r) => { const have = new Set(r.globals ?? []); return [...union].filter((g) => !have.has(g)).sort(); });
 }
 
 /** Межі частин: неперервні шматки, як у `splitParts`. */
@@ -146,14 +171,18 @@ export function afterPart(q, status, signal, reported) {
   return { dead: `${signal ? `убито сигналом ${signal}` : `код ${status}`}${diedOfMemory(status, signal) ? " — памʼять, ділити вже нікуди" : reported ? "" : " — частина не відзвітувала"}` };
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isMain = (() => {
+  try { return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+})();
 if (isMain) {
   const ts = (await import("typescript")).default;
   const self = fileURLToPath(import.meta.url);
-  const [mode, cfg, fromS, toS] = process.argv.slice(2);
+  const [mode, cfg, fromS, toS, ...extraRoots] = process.argv.slice(2);
   if (mode === "--range") {
-    const r = checkRange(ts, cfg, Number(fromS), Number(toS));
-    process.stdout.write(PART_MARK + JSON.stringify(r) + "\n");
+    const r = checkRange(ts, cfg, Number(fromS), Number(toS), extraRoots);
+    // Синхронно в fd 1: `process.stdout.write` + `exit` на macOS обрізає звіт понад 64 КБ (знахідка рецензії).
+    writeSync(1, PART_MARK + JSON.stringify(r) + "\n");
     process.exit(0);
   }
   const root = path.resolve(path.dirname(self), "..", "tsconfig.json");
@@ -163,27 +192,45 @@ if (isMain) {
     console.error("typecheckParts: UTS_TSC_PARTS і UTS_TSC_PART_HEAP_MB мають бути цілими (≥1 і ≥64)"); process.exit(1);
   }
   const expected = {}; const reports = []; const deaths = [];
+  const runRange = (cfg, q, extra) => {
+    const t0 = Date.now();
+    const p = spawnSync(process.execPath, [`--max-old-space-size=${heap}`, self, "--range", cfg, String(q.from), String(q.to), ...extra],
+      { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+    const line = (p.stdout ?? "").split("\n").find((l) => l.startsWith(PART_MARK));
+    return { p, line, secs: ((Date.now() - t0) / 1000).toFixed(1) };
+  };
   for (const cfg of configsOf(ts, root)) {
     const roots = parse(ts, cfg).fileNames.length;
     expected[path.basename(cfg)] = { roots };
     // Черга діапазонів: убитий памʼяттю ділиться навпіл (до MAX_SPLITS разів), а не валить крок «через раз».
     const queue = partRanges(roots, partsFor(roots, wanted)).map(([from, to]) => ({ from, to, splits: 0 }));
+    const mine = [];
     while (queue.length) {
       const q = queue.shift();
-      const t0 = Date.now();
-      const p = spawnSync(process.execPath, [`--max-old-space-size=${heap}`, self, "--range", cfg, String(q.from), String(q.to)],
-        { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
-      const line = (p.stdout ?? "").split("\n").find((l) => l.startsWith(PART_MARK));
+      const { p, line, secs } = runRange(cfg, q, []);
       const label = `${path.basename(cfg)} файли ${q.from}…${q.to - 1}`;
       const next = afterPart(q, p.status, p.signal, Boolean(line));
       if (next.ok) {
         const r = JSON.parse(line.slice(PART_MARK.length));
-        reports.push(r);
-        console.log(`typecheckParts: ${label} — ${r.checked} файлів, у програмі ${r.programFiles}, ${((Date.now() - t0) / 1000).toFixed(1)} с, діагностик ${r.diagnostics.length}`);
+        mine.push({ r, q });
+        console.log(`typecheckParts: ${label} — ${r.checked} файлів (+${r.extras.length} поза коренями), у програмі ${r.programFiles}, ${secs} с, діагностик ${r.diagnostics.length}`);
       } else if (next.split) {
         console.log(`typecheckParts: ${label} — убито памʼяттю (${p.signal ?? `код ${p.status}`}), ділю навпіл і повторюю`);
         queue.unshift(...next.split);
       } else deaths.push(`${label}: ${next.dead} ${String(p.stderr ?? "").slice(-300)}`);
+    }
+    // Друга фаза: частина, що не бачила глобального доповнення інших, переганяється з ним (`missingGlobals`).
+    const missing = missingGlobals(mine.map((m) => m.r));
+    for (let i = 0; i < mine.length; i++) {
+      if (!missing[i].length) { reports.push(mine[i].r); continue; }
+      const { q } = mine[i];
+      const { p, line, secs } = runRange(cfg, q, missing[i]);
+      const label = `${path.basename(cfg)} файли ${q.from}…${q.to - 1}`;
+      if (line && p.status === 0) {
+        const r = JSON.parse(line.slice(PART_MARK.length));
+        reports.push(r);
+        console.log(`typecheckParts: ${label} — друга фаза з ${missing[i].length} глобальними доповненнями інших частин, ${secs} с, діагностик ${r.diagnostics.length}`);
+      } else deaths.push(`${label}: друга фаза не пройшла (${p.signal ?? `код ${p.status}`}) ${String(p.stderr ?? "").slice(-300)}`);
     }
   }
   const v = judgeParts(expected, reports);

@@ -13,11 +13,13 @@
  *
  * Аргументи передаються як є, тож усі літерали режимів (`--import ./dist/testReadOnly.js`, вартовий
  * `--test-reporter=./dist/testRunGate.js`) лишаються в `package.json`, де їх стережуть `#203b` і read-only-гейти.
- * Перевизначити: `UTS_TEST_CONCURRENCY=<n>`. Код виходу — код набору.
+ * Перевизначити: `UTS_TEST_CONCURRENCY=<n>`; ознаку хостингу — `UTS_HOST_LVE=1|0` (для гейта `#3880b`). Код виходу — код набору.
+ * Сигнали (`SIGTERM`/`SIGINT`/`SIGHUP`) передаються набору: убита обгортка не лишає живих тест-процесів, тобто тієї
+ * самої памʼяті, від якої ми лікуємось (знахідка рецензії 11.11).
  */
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /** Стеля на хостингу. 4, а не 8: поруч у фазі `check` уже живуть прод (300–450 МБ) і PHP (сплески до ~1,5 ГБ RSS). */
 export const HOST_TEST_CONCURRENCY = 4;
@@ -62,15 +64,29 @@ export function buildArgs(argv, n) {
   return n === null || n === undefined ? out : [`--test-concurrency=${n}`, ...out];
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+/** Хостинг? `/proc/lve` — ліміт памʼяті акаунта; `UTS_HOST_LVE=1|0` перевизначає (гейт, ручна перевірка). */
+export function onHost(env = process.env, exists = existsSync) {
+  if (env.UTS_HOST_LVE === "1") return true;
+  if (env.UTS_HOST_LVE === "0") return false;
+  return exists("/proc/lve");
+}
+
+/** Чи цей файл запущено як програму — за СПРАВЖНІМИ шляхами: через симлінк `argv[1]` і `import.meta.url` різняться. */
+const isMain = (() => {
+  try { return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+})();
 if (isMain) {
   const argv = process.argv.slice(2);
-  const lve = existsSync("/proc/lve");
+  const lve = onHost();
   const n = pickConcurrency({ lve, requested: requestedConcurrency(argv), override: process.env.UTS_TEST_CONCURRENCY });
   // stderr, а не stdout: stdout кроку `test` розбирається як TAP.
   console.error(`testRun: паралельність ${n ?? "дефолт node"}${lve ? ` (хостинг, стеля ${HOST_TEST_CONCURRENCY})` : ""}`);
-  const r = spawnSync(process.execPath, buildArgs(argv, n), { stdio: "inherit" });
-  if (r.error) { console.error(`testRun: не вдалось запустити node: ${r.error.message}`); process.exit(1); }
-  if (r.signal) { console.error(`testRun: набір убито сигналом ${r.signal}`); process.exit(1); }
-  process.exit(r.status ?? 1);
+  const child = spawn(process.execPath, buildArgs(argv, n), { stdio: "inherit" });
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => { child.kill(sig); });
+  child.on("error", (e) => { console.error(`testRun: не вдалось запустити node: ${e.message}`); process.exit(1); });
+  child.on("exit", (code, signal) => {
+    if (signal) { console.error(`testRun: набір завершено сигналом ${signal}`); process.exit(1); }
+    process.exit(code ?? 1);
+  });
 }

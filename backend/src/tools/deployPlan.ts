@@ -604,6 +604,21 @@ export function npmTestArgs(script: string): string[] {
 }
 
 /**
+ * 🧪 АРГУМЕНТИ НАБОРУ БАЗИ — З ЇЇ ВЛАСНОГО СКРИПТА `test` (знахідка рецензії 11.11). База — старий код (прод), і
+ * аргументи дерева можуть називати файли, яких у базі ще немає (новий репортер, новий preload): node впав би до першого
+ * тесту, TAP вийшов би порожнім, і будь-яка зміна скрипта `test` назавжди застрягла б на кроці. Тож база бере СВОЇ
+ * аргументи — і в новому форматі (`node scripts/testRun.mjs …`), і в старому (`node --test-reporter… --test …`), — а
+ * стелю паралельності однаково дає обгортка стенда, якою прогін запускається.
+ */
+export function baseTestArgs(script: string): string[] {
+  const tokens = (script.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((t) => t.replace(/^(["'])(.*)\1$/, "$2"));
+  if (tokens[0] !== "node") throw new Error(`скрипт \`test\` бази не починається з \`node\` («${tokens.slice(0, 2).join(" ")}») — не знаю, як його запустити обгорткою`);
+  const args = tokens[1] === TEST_RUNNER ? tokens.slice(2) : tokens.slice(1);
+  if (!args.includes("--test")) throw new Error("у скрипті `test` бази немає `--test` — це не прогін набору");
+  return args;
+}
+
+/**
  * 🏋 ЧУЖІ ВАЖКІ ПРОЦЕСИ НА ХОСТИНГУ (11.11.2026, #3886) — те, що кожна сесія досі перевіряла власним `wait-<sha>.sh`.
  * Вхід — рядки `ps -o pid=,args=`; `self` — pid-и цього ланцюга і його предків (їх не рахуємо).
  * Важкі: прогін набору (`--test`, `*.test.js`, `test:prod|ai|matrix`), компілятор TypeScript, `vite build`,
