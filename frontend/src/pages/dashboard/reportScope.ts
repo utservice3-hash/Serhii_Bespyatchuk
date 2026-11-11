@@ -73,5 +73,14 @@ export function mergeReportPlans(parts: ReportPlan[]): ReportPlan {
 
   // `scope`/`elapsed`/`remainingWorkdays` — властивості ПЕРІОДУ й ГЛЯДАЧА, однакові
   // в усіх частинах (той самий from/to, той самий токен). Беремо з першої.
-  return { ...base, glance, managers, dismissed };
+  // 📵 Пропущені: лічильники додаються; МЕДІАНИ НЕ СКЛАДАЮТЬСЯ — загальна стає `null` («—» з поясненням),
+  // а медіана кожної команди лишається своєю в `byTeam` (для підсумків груп).
+  const seenTeam = new Set<number>();
+  const missedMeta: ReportPlan["missedMeta"] = {
+    total: parts.reduce((s, p) => s + (p.missedMeta?.total ?? 0), 0),
+    totalNoCallback: parts.reduce((s, p) => s + (p.missedMeta?.totalNoCallback ?? 0), 0),
+    medianMin: null,
+    byTeam: parts.flatMap((p) => p.missedMeta?.byTeam ?? []).filter((t) => !seenTeam.has(t.teamId) && (seenTeam.add(t.teamId), true)),
+  };
+  return { ...base, glance, managers, dismissed, missedMeta };
 }

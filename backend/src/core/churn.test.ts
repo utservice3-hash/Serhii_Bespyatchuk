@@ -250,3 +250,27 @@ test("#2971 ЖИВИЙ SQL РІВНЯ: перевести з місяцем і �
     await assert.rejects(lv.cancelLastLevel(s.db, s.hr, m), /нічого/);
   } finally { await s.done(); }
 });
+
+/**
+ * #7705 — РІВЕНЬ ПО МЕНЕДЖЕРУ CRM ДЛЯ «ЗВІТУ» (зустріч 10.11.2026, правка 4). Привʼязка — `employees.manager_id`.
+ * Обидва боки межі: «Профі» — «Профі», продажник без запису — «Старт», не-продажник — `null`, менеджер без
+ * людини реєстру — ВІДСУТНІЙ у мапі (екран пише «?», а не «Старт»), скасований перехід — знову «Старт».
+ * 🧨 Червоніє, якщо невідомого назвати «Стартом», дати рівень бухгалтеру або брати рівень чужої людини.
+ */
+test("#7705 ЖИВИЙ SQL: рівень по менеджеру — Профі/Старт/null, без привʼязки — відсутній, скасований — Старт", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const lv = await import("./employeeLevel.js");
+  try {
+    await s.c.query(`INSERT INTO managers (id, name) VALUES (1,'Профі М'),(2,'Старт М'),(3,'Бух М'),(4,'Без реєстру')`);
+    const ids = (await s.c.query(`INSERT INTO employees (full_name, import_key, status, position, manager_id) VALUES
+      ('Профі М','p','active','менеджер з продажу',1), ('Старт М','s','active','менеджер з продажу',2), ('Бух М','b','active','бухгалтерія',3)
+      RETURNING id`)).rows.map((r) => r.id as number);
+    await lv.promoteToPro(s.db, s.hr, ids[0], { month: "2026-10", comment: "перевели" });
+    const got = await lv.levelByManager(s.db, [1, 2, 3, 4]);
+    assert.deepEqual([got.get(1), got.get(2), got.get(3)], ["pro", "start", null], "🔴 рівні по менеджерах не ті");
+    assert.equal(got.has(4), false, "🔴 менеджеру без людини реєстру вигадано рівень");
+    assert.equal((await lv.levelByManager(s.db, [])).size, 0);
+    await lv.cancelLastLevel(s.db, s.hr, ids[0]);
+    assert.equal((await lv.levelByManager(s.db, [1])).get(1), "start", "🔴 скасований «Профі» лишився «Профі»");
+  } finally { await s.done(); }
+});

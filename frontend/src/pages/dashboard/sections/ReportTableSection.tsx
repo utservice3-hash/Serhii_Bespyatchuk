@@ -5,7 +5,8 @@ import {
   REPORT_COLS, OPTIONAL_COLS, sortRows, footValue, firstTouchLabel,
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
   applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
-  isLockedCol, colVisible,
+  isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT,
+  fmtCallback, callbackTone,
   type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
@@ -100,6 +101,39 @@ export function ReportTableSection({
     setOrder(next);
     writeColOrder(colStore(), userId, next);
   };
+  // ↔️ Ширина «Менеджер» (тягнеться за край, як в Excel) — особиста, `rptMgrWidth:<userId>`.
+  const [mgrW, setMgrW] = useState<number | null>(() => readMgrWidth(colStore(), userId));
+  const mgrTh = useRef<HTMLTableCellElement | null>(null);
+  const startResize = (e: React.PointerEvent<HTMLSpanElement>) => {
+    e.preventDefault(); e.stopPropagation();
+    const x0 = e.clientX;
+    const w0 = mgrTh.current?.getBoundingClientRect().width ?? mgrW ?? 240;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    let last = w0;
+    const move = (ev: PointerEvent) => { last = clampMgrWidth(w0 + ev.clientX - x0); setMgrW(last); };
+    const up = () => {
+      el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
+      document.body.style.cursor = ""; document.body.style.userSelect = "";
+      writeMgrWidth(colStore(), userId, last);
+    };
+    document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+    el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+  };
+  const resetWidth = () => { setMgrW(null); writeMgrWidth(colStore(), userId, null); };
+  /**
+   * ⤢ НА ВЕСЬ ЕКРАН (зустріч 10.11.2026, правка 4). Не Fullscreen API браузера, а картка поверх сторінки:
+   * API на iPhone не працює, а підказки «?» (портал у body) під нативним повноекранним режимом не видно.
+   * Esc або «✕ Згорнути» повертають як було.
+   */
+  const [fs, setFs] = useState(false);
+  useEffect(() => {
+    if (!fs) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector("[role=tooltip]")) setFs(false); };
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow; document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [fs]);
 
   // Обраний менеджер зник із набору (змінили період/команду) — фільтр знімаємо,
   // інакше екран лишився б порожнім без пояснення.
@@ -280,6 +314,8 @@ export function ReportTableSection({
           ordered={cols} onStep={moveStep} dnd={dnd} dropOn={dropOn}
           shown={cols.length} total={REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : true)).length}
         />
+        <button type="button" onClick={() => setFs(true)} title="Розгорнути таблицю на все вікно (Esc — згорнути)"
+          style={{ ...selStyle, minWidth: 0 }}>⤢ На весь екран</button>
       </div>
 
       {/**
@@ -296,7 +332,15 @@ export function ReportTableSection({
         <div style={{ marginBottom: 14 }}>{renderCard(rows[0])}</div>
       )}
 
-      <div className="chart-card" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="chart-card" style={{ padding: 0, overflow: "hidden",
+        ...(fs ? { position: "fixed", inset: 0, zIndex: 50, margin: 0, borderRadius: 0, display: "flex", flexDirection: "column" } : null) }}>
+        {fs && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 14px",
+            borderBottom: "1px solid var(--border)", background: "var(--card-bg)" }}>
+            <b style={{ fontSize: 13 }}>Звіт · менеджери · {periodLabel}</b>
+            <button type="button" onClick={() => setFs(false)} style={{ ...selStyle, minWidth: 0 }}>✕ Згорнути (Esc)</button>
+          </div>
+        )}
         {/**
           * 📌 ЛИПКА ШАПКА — ОДИН СКРОЛ-КОНТЕЙНЕР НА ОБИДВІ ОСІ (26.10.2026).
           *
@@ -310,27 +354,41 @@ export function ReportTableSection({
           * колонка «Менеджер» (`left: 0`) і загальний підсумок (`bottom: 0`) липнуть
           * в ОДНОМУ контейнері, а кут «Менеджер» має найвищий z-index.
           */}
-        <div style={{ overflow: "auto", maxHeight: "calc(100vh - 120px)" }}>
+        <div style={{ overflow: "auto", maxHeight: "calc(100vh - 120px)", ...(fs ? { maxHeight: "none", flex: 1 } : null) }}>
           <table className="data-table rpt-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontVariantNumeric: "tabular-nums" }}>
             <thead>
               <tr>
                 {cols.map((c, i) => (
                   <th key={c.key} onClick={() => onSort(c.key)} {...dnd(c.key)}
+                    ref={c.key === "name" ? mgrTh : undefined}
                     className={c.key === "name" ? "sticky-mgr" : undefined}
                     title={isPinnedCol(c.key) ? undefined : "Клік — сортування; перетягніть, щоб змінити порядок"}
                     style={{
                       position: "sticky", top: 0, zIndex: c.key === "name" ? 5 : 3,
                       // Фон НЕПРОЗОРИЙ (токен теми): без нього рядки просвічують крізь шапку.
                       background: "var(--surface-2)", cursor: c.key === "rank" ? "default" : "pointer",
-                      textAlign: c.left ? "left" : "right", whiteSpace: "nowrap",
-                      fontSize: 11, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase",
+                      textAlign: c.left ? "left" : "right",
+                      // ↔️ ВУЖЧІ КОЛОНКИ (правка 4): назва переноситься на 2 рядки замість того, щоб розпирати
+                      // колонку; «Менеджер» не переноситься — його ширину людина задає сама.
+                      whiteSpace: c.key === "name" ? "nowrap" : "normal", verticalAlign: "bottom", lineHeight: 1.2,
+                      ...(c.key === "name" ? null : { maxWidth: 92, minWidth: 54 }),
+                      fontSize: 10.5, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase",
                       color: c.key === sortKey ? "var(--brand)" : "var(--text-muted)",
-                      padding: "10px 12px", borderBottom: "1px solid var(--border-strong)",
+                      padding: "10px 7px", borderBottom: "1px solid var(--border-strong)",
                       ...(dropOn === c.key ? { boxShadow: "inset 3px 0 0 var(--brand)" } : null),
-                      ...(c.key === "name" ? { left: 0, boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)" } : null),
+                      ...(c.key === "name" ? { left: 0, boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)",
+                        ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden" } : null) } : null),
                     }}>
                     {c.title}
-                    {c.help && <HelpDot text={c.help} title={c.title} alignRight={i > cols.length / 2} />}
+                    {c.help && <HelpDot text={c.help} short={c.key in COL_SHORT ? COL_SHORT[c.key as keyof typeof COL_SHORT] : undefined}
+                      title={c.title} alignRight={i > cols.length / 2} />}
+                    {c.key === "name" && (
+                      <span role="separator" aria-orientation="vertical" aria-label="Змінити ширину колонки «Менеджер»"
+                        title="Потягніть, щоб змінити ширину · подвійний клік — як було"
+                        onPointerDown={startResize} onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => { e.stopPropagation(); resetWidth(); }}
+                        className="rpt-resize" />
+                    )}
                     {c.key !== "rank" && (
                       <span style={{ marginLeft: 3, fontSize: 9, opacity: c.key === sortKey ? 1 : 0.35 }}>
                         {c.key === sortKey ? (sortDir === -1 ? "▼" : "▲") : "↕"}
@@ -359,7 +417,7 @@ export function ReportTableSection({
                       style={{ cursor: "pointer" }}>
                     {cols.map((c) => (
                       <Cell key={c.key} col={c} m={m} idx={i} isOpen={open === m.managerId}
-                            responseByMgr={responseByMgr} />
+                            responseByMgr={responseByMgr} mgrW={mgrW} />
                     ))}
                   </tr>
                   {open === m.managerId && (
@@ -374,7 +432,8 @@ export function ReportTableSection({
               {grouped && (
                 <tr>
                   {cols.map((c) => (
-                    <FootCell key={c.key} col={c} rows={g.rows} scopeLabel={`Команда · ${g.name}`} count={g.rows.length} group />
+                    <FootCell key={c.key} col={c} rows={g.rows} scopeLabel={`Команда · ${g.name}`} count={g.rows.length} group
+                      callbackMedian={data.missedMeta?.byTeam.find((t) => t.teamId === g.id)?.medianMin ?? null} />
                   ))}
                 </tr>
               )}
@@ -388,7 +447,8 @@ export function ReportTableSection({
             <tfoot>
               <tr>
                 {cols.map((c) => (
-                  <FootCell key={c.key} col={c} rows={rows} scopeLabel={scopeLabel} count={rows.length} />
+                  <FootCell key={c.key} col={c} rows={rows} scopeLabel={scopeLabel} count={rows.length}
+                    callbackMedian={mgrFilter === "" ? data.missedMeta?.medianMin ?? null : rows[0]?.missed?.medianMin ?? null} />
                 ))}
               </tr>
             </tfoot>
@@ -396,6 +456,7 @@ export function ReportTableSection({
         </div>
       </div>
 
+      <MissedOutside data={data} rows={rows} filtered={mgrFilter !== ""} />
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 11, lineHeight: 1.55 }}>
         <b style={{ color: "var(--text)" }}>Клік по менеджеру</b> розкриває його тижні: план кожного
         тижня — той, що був <b style={{ color: "var(--text)" }}>зафіксований у понеділок</b>, а не
@@ -416,7 +477,8 @@ const selStyle: React.CSSProperties = {
   borderRadius: "var(--r-md)", padding: "7px 11px", fontSize: 12, cursor: "pointer", minWidth: 230,
 };
 const tdBase: React.CSSProperties = {
-  padding: "9px 12px", textAlign: "right", whiteSpace: "nowrap",
+  // ↔️ Вужчі колонки (зустріч 10.11.2026, правка 4): 8px з боків замість 12 — таблиця вміщує більше чисел.
+  padding: "9px 8px", textAlign: "right", whiteSpace: "nowrap",
   borderBottom: "1px solid var(--border)", fontSize: 13,
 };
 const none = <span style={{ color: "var(--text-muted)", opacity: 0.6 }}>—</span>;
@@ -432,9 +494,11 @@ const badge: React.CSSProperties = {
   display: "inline-block", padding: "2px 8px", borderRadius: "var(--r-pill)", fontSize: 12, fontWeight: 600,
 };
 
-function Cell({ col, m, idx, isOpen, responseByMgr }: {
+function Cell({ col, m, idx, isOpen, responseByMgr, mgrW }: {
   col: ColDef; m: ReportPlanManager; idx: number; isOpen: boolean;
   responseByMgr?: Map<number, number | null>;
+  /** ↔️ Ширина «Менеджер», задана людиною; `null` — природна. */
+  mgrW?: number | null;
 }) {
   const st: React.CSSProperties = { ...tdBase, textAlign: col.left ? "left" : "right" };
   switch (col.key) {
@@ -442,14 +506,14 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
       return <td style={{ ...st, color: "var(--text-muted)", width: 26 }}>{idx + 1}</td>;
     case "name":
       return (
-        <td className="sticky-mgr" style={{ ...st, position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", minWidth: 210, boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)" }}>
+        <td className="sticky-mgr" title={mgrW != null ? m.name : undefined}
+          style={{ ...st, position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)",
+            ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden", textOverflow: "ellipsis" } : { minWidth: 210 }) }}>
           <span style={{ display: "inline-block", width: 12, color: "var(--text-muted)", fontSize: 10, transform: isOpen ? "rotate(90deg)" : "none" }}>▸</span>{" "}
           <span style={{ fontWeight: 600 }}>{m.name}</span>
-          <span style={{ marginLeft: 5, fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: "var(--r-pill)", background: "var(--info-bg)", color: "var(--info)" }}>
-            {m.tag.toUpperCase()}
-          </span>
+          {(mgrW == null || mgrW >= MGR_W_TIGHT) && <LevelChip level={m.level} />}
           <VacationMark managerId={m.managerId} />
-          <div style={{ color: "var(--text-muted)", fontSize: 11, paddingLeft: 18 }}>{m.teamName ?? "Поза командами"}</div>
+          <div style={{ color: "var(--text-muted)", fontSize: 11, paddingLeft: 18, overflow: "hidden", textOverflow: "ellipsis" }}>{m.teamName ?? "Поза командами"}</div>
         </td>
       );
     case "status":
@@ -542,6 +606,22 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
     case "srcNoChannel": return <td style={st}>{m.srcNoChannel || none}</td>;
     case "dispRevenue":
       return <td style={st}>{m.kpi.dispatch.revenue ? `${K(m.kpi.dispatch.revenue)} ₴` : none}</td>;
+    case "missed": {
+      const c = m.missed;
+      if (!c) return <td style={st}>{none}</td>;
+      if (c.missed === 0) return <td style={{ ...st, color: "var(--text-muted)" }} title="пропущених за період не було">0</td>;
+      return (
+        <td style={st}>{c.missed}
+          {c.noCallback > 0 && <span style={{ color: "var(--danger)", fontSize: 11 }} title="досі без передзвону"> ({c.noCallback})</span>}
+        </td>
+      );
+    }
+    case "callbackMin": {
+      const v = m.missed?.medianMin ?? null;
+      if (v == null) return <td style={st} title="передзвонів за період не було">{none}</td>;
+      const tone = callbackTone(v);
+      return <td style={{ ...st, ...(tone ? { color: `var(--${tone})` } : null) }}>{fmtCallback(v)}</td>;
+    }
     case "responseTime": {
       if (!responseByMgr) return <td style={{ ...st, color: "var(--text-muted)" }}>…</td>;
       const v = responseByMgr.get(m.managerId);
@@ -556,9 +636,11 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
   }
 }
 
-function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
+function FootCell({ col, rows, scopeLabel, count, group, callbackMedian }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
   /** Підсумок ГРУПИ (команди) всередині таблиці — тонший, ніж загальний унизу. */
-  group?: boolean }) {
+  group?: boolean;
+  /** ⏱ Медіана передзвону ЦЬОГО підсумку — з сервера одним запитом (медіани не складаються). */
+  callbackMedian?: number | null }) {
   const st: React.CSSProperties = {
     padding: group ? "8px 12px" : "11px 12px", textAlign: col.left ? "left" : "right",
     fontWeight: 700, fontSize: group ? 12.5 : 13,
@@ -572,6 +654,16 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
   };
   if (col.key === "rank") return <td style={st} />;
   if (col.key === "name") return <td style={st}>{scopeLabel} · {count}</td>;
+  if (col.key === "callbackMin") {
+    if (callbackMedian == null) return <td style={{ ...st, color: "var(--text-muted)", fontWeight: 500 }}
+      title="Медіану не можна скласти з медіан менеджерів; загальна — на вкладці «Пропущені дзвінки»">—</td>;
+    const tone = callbackTone(callbackMedian);
+    return <td style={{ ...st, ...(tone ? { color: `var(--${tone})` } : null) }} title="медіана передзвону по всіх пропущених цього обсягу">{fmtCallback(callbackMedian)}</td>;
+  }
+  if (col.key === "missed") {
+    const n = rows.reduce((s, m) => s + (m.missed?.missed ?? 0), 0), nc = rows.reduce((s, m) => s + (m.missed?.noCallback ?? 0), 0);
+    return <td style={st}>{n}{nc > 0 && <span style={{ color: "var(--danger)", fontSize: 11, fontWeight: 500 }}> ({nc})</span>}</td>;
+  }
   const f = footValue(col.key, rows);
   // 🎯 Підсумок групи, де жодної людини не виміряно, — «не вимірюється», а не «—» (рецензія 17.09.2026).
   if (col.key === "firstTouch" && rows.length > 0 && rows.every((m) => m.firstTouch?.state !== "measured")) {
@@ -627,8 +719,11 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
  * 🔴 КЛІК ЗУПИНЯЄТЬСЯ: заголовок сортує таблицю, тож без `stopPropagation` спроба
  * прочитати пояснення перевертала б сортування — дія, якої людина не просила.
  */
-function HelpDot({ text, title, alignRight }: { text: string; title: string; alignRight?: boolean }) {
+function HelpDot({ text, short, title, alignRight }: { text: string;
+  /** 💬 Коротко й простими словами — показується першим; технічне `text` — під «Звідки береться ▸». */
+  short?: string; title: string; alignRight?: boolean }) {
   const [open, setOpen] = useState(false);
+  const [more, setMore] = useState(false);
   /** Клік/тап ПРИШПИЛЮЄ: поки читаєш — вікно стоїть. Наведення так не робить. */
   const [pinned, setPinned] = useState(false);
   const [box, setBox] = useState<{ top: number; left: number; right: number } | null>(null);
@@ -640,7 +735,7 @@ function HelpDot({ text, title, alignRight }: { text: string; title: string; ali
   };
   const show = () => { measure(); setOpen(true); };
   const hide = () => { if (!pinned) setOpen(false); };
-  const close = () => { setPinned(false); setOpen(false); };
+  const close = () => { setPinned(false); setOpen(false); setMore(false); };
   const stop = (e: { preventDefault: () => void; stopPropagation: () => void }) => {
     e.preventDefault(); e.stopPropagation();
   };
@@ -649,7 +744,10 @@ function HelpDot({ text, title, alignRight }: { text: string; title: string; ali
   // що перекриває вміст. Слухачі живуть лише поки вікно відкрите.
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => { if (!btn.current?.contains(e.target as Node)) close(); };
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!btn.current?.contains(t) && !(t instanceof Element && t.closest("[role=tooltip]"))) close();
+    };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
     // Позиція фіксована відносно вікна, тож при скролі її треба перерахувати —
     // інакше підказка «відклеїться» від свого заголовка.
@@ -708,7 +806,17 @@ function HelpDot({ text, title, alignRight }: { text: string; title: string; ali
             textTransform: "none", letterSpacing: 0, whiteSpace: "normal", textAlign: "left",
           }}
         >
-          {text}
+          {short ? (<>
+            <b style={{ display: "block", marginBottom: 3 }}>{title}</b>
+            {short}
+            <span role="button" tabIndex={0}
+              onClick={(e) => { stop(e); setPinned(true); setMore((v) => !v); }}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { stop(e); setPinned(true); setMore((v) => !v); } }}
+              style={{ display: "block", marginTop: 6, color: "var(--brand)", fontSize: 11, cursor: "pointer" }}>
+              Звідки береться {more ? "▾" : "▸"}
+            </span>
+            {more && <span style={{ display: "block", marginTop: 4, color: "var(--text-muted)", fontSize: 11 }}>{text}</span>}
+          </>) : text}
           {pinned && (
             <span style={{ display: "block", marginTop: 6, color: "var(--text-muted)", fontSize: 11 }}>
               Esc або клік поза вікном — закрити
@@ -1054,3 +1162,40 @@ function WeeksDrill({ managerId, month }: { managerId: number; month: string }) 
   );
 }
 const wTd: React.CSSProperties = { padding: "6px 10px", borderBottom: "1px dashed var(--border)", fontSize: 12 };
+
+/**
+ * 🎚 «СТАРТ» / «ПРОФІ» ЗАМІСТЬ РНК/РПК (зустріч 10.11.2026, правка 4: «категорія з вкладки «Найм», РНК/РПК —
+ * відмовились»). Рівень ставлять у «Наймі» (`employee_levels`), сюди він приходить з `/report-plan`.
+ * `null` — людина не продажник, позначки немає; "unlinked" — менеджер не привʼязаний до людини реєстру:
+ * пишемо «?» з поясненням, а не «Старт» — невідоме не стає конкретною відповіддю.
+ */
+export function LevelChip({ level }: { level: ReportPlanManager["level"] | undefined }) {
+  if (level == null) return null;
+  const pro = level === "pro", unk = level === "unlinked";
+  return (
+    <span title={unk ? "Менеджера не привʼязано до картки у «Наймі» — рівень невідомий" : "Рівень умов з вкладки «Найм»"}
+      style={{ marginLeft: 5, fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: "var(--r-pill)",
+        background: pro ? "var(--ok-bg)" : "var(--surface-2)", color: pro ? "var(--ok)" : "var(--text-muted)" }}>
+      {unk ? "?" : pro ? "Профі" : "Старт"}
+    </span>
+  );
+}
+
+/**
+ * 📵 ПРОПУЩЕНІ ПОЗА ТАБЛИЦЕЮ — одним рядком під нею, а не розмазані по менеджерах (рішення 10.11.2026, макет).
+ * Без цього Σ колонки «Пропущені» читалась би як «усі пропущені відділу», а це лише частина: решта — без
+ * відповідального або в людей поза Звітом (лідогенерація, не-комерційні команди).
+ */
+function MissedOutside({ data, rows, filtered }: { data: ReportPlan; rows: ReportPlanManager[]; filtered: boolean }) {
+  const meta = data.missedMeta;
+  if (!meta || filtered) return null;
+  const inTable = rows.reduce((s, m) => s + (m.missed?.missed ?? 0), 0);
+  const rest = meta.total - inTable;
+  return (
+    <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
+      📵 Пропущених усього <b style={{ color: "var(--text)" }}>{meta.total}</b>: {inTable} — у менеджерів таблиці
+      {rest > 0 ? <>, ще <b style={{ color: "var(--text)" }}>{rest}</b> — без відповідального або в людей поза Звітом (лідогенерація тощо)</> : null}.
+      Детально — вкладка «Пропущені дзвінки».
+    </div>
+  );
+}

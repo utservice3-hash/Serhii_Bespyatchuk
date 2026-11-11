@@ -21,7 +21,8 @@ export type ColKey =
   | "dispatch" | "avgCheck" | "fact" | "factNew" | "factRepeat" | "factUndef" | "plan" | "pct"
   | "projected" | "needPerDay" | "expectThisMonth" | "expectNew" | "expectRepeat" | "awaitNoDate"
   | "jamDeals" | "jam" | "dobir" | "talks" | "normDays" | "dispRevenue" | "responseTime"
-  | "srcAd" | "srcLeadgen" | "srcElogist" | "srcOther" | "srcNoChannel" | "firstTouch";
+  | "srcAd" | "srcLeadgen" | "srcElogist" | "srcOther" | "srcNoChannel" | "firstTouch"
+  | "missed" | "callbackMin";
 
 /**
  * Як колонка згортається в підсумковий рядок.
@@ -73,6 +74,53 @@ export interface ColDef {
  * цього переліку має бути свідомим рішенням, а не побічним ефектом.
  */
 export const NO_HELP_COLS: ColKey[] = ["rank", "name"];
+
+/**
+ * 💬 КОРОТКЕ ПОЯСНЕННЯ ПРОСТИМИ СЛОВАМИ — перше, що бачить людина під «?» (зустріч 10.11.2026, макет правок 3–7).
+ *
+ * 🔴 ЧОМУ ОКРЕМО ВІД `help`. `help` — довідка для нас: функція ядра, заміри, застереження. Менеджеру вона
+ * читається як шум, і саме тому «?» ніхто не відкривав. Тепер вікно показує спершу це речення, а `help` —
+ * під «Звідки береться ▸». Тип — `Record` по ВСІХ ключах, крім `NO_HELP_COLS`: нова колонка без короткого
+ * пояснення не збереться (`tsc -b`), а не просто почервоніє в гейті.
+ */
+export const COL_SHORT: Record<Exclude<ColKey, "rank" | "name">, string> = {
+  status: "Чи встигає менеджер з планом: у нормі / відстає / зрив. Рахується за темпом — скільки вже отримано проти плану з урахуванням робочих днів, що минули.",
+  created: "Скільки угод створено за період; у дужках — нові / постійні клієнти.",
+  ads: "Скільки рекламних лідів менеджер прийняв у роботу за період.",
+  leadgen: "Скільки угод менеджер отримав від лідогенерації за період.",
+  conv: "Яка частка лідів з реклами й лідогенерації стала виграною угодою. Показується, коли лідів 10 і більше.",
+  convAd: "Яка частка рекламних лідів стала виграною угодою.",
+  convLg: "Яка частка лідів від лідогенерації стала виграною угодою.",
+  dispatch: "Скільки авто поставлено / скільки треба за тижневою ціллю.",
+  avgCheck: "Середня сума однієї угоди менеджера (угоди в роботі + виграні).",
+  fact: "Гроші, що реально надійшли від клієнтів за обраний період.",
+  factNew: "Частина отриманих грошей від нових клієнтів.",
+  factRepeat: "Частина отриманих грошей від постійних клієнтів.",
+  factUndef: "Гроші, які не вдалось віднести ні до нових, ні до постійних клієнтів (у CRM не вказано клієнта й канал).",
+  plan: "Грошовий план менеджера на місяць. Для неповного періоду — пропорційно робочим дням.",
+  pct: "Скільки відсотків плану вже виконано: Отримано ÷ План.",
+  missed: "Пропущені вхідні дзвінки менеджера за період. Червоним у дужках — скільки з них досі без передзвону.",
+  callbackMin: "Скільки зазвичай минає від пропущеного дзвінка до передзвону (медіана). Помаранчевим — понад 5 хв, червоним — понад 15 хв.",
+  projected: "Очікуваний підсумок місяця: уже отримано + рахунки з датою оплати в цьому місяці. Лише для поточного місяця.",
+  needPerDay: "Скільки треба приносити щодня до кінця місяця, щоб виконати план.",
+  expectThisMonth: "Виставлені рахунки, які клієнт має оплатити цього місяця (є планова дата). Входять у прогноз.",
+  expectNew: "Частина очікуваних цього місяця грошей від нових клієнтів.",
+  expectRepeat: "Частина очікуваних цього місяця грошей від постійних клієнтів.",
+  awaitNoDate: "Гроші в очікуванні без планової дати оплати. У прогноз не входять — це ризик.",
+  jamDeals: "Скільки угод ЗАРАЗ стоїть на етапі «Виставлення рахунку» — рахунок ще не виставлено. Стан на сьогодні, від періоду не залежить.",
+  jam: "Сума угод, що ЗАРАЗ стоять на етапі «Виставлення рахунку» (рахунок ще не виставлено). Стан на сьогодні.",
+  dobir: "Скільки менеджер у середньому добирає новими угодами за місяць (середнє за 3 місяці). У прогноз не входить.",
+  talks: "Розмови / спроби дзвінків за період.",
+  normDays: "Скільки днів менеджер виконав норму дзвінків (норма — у Налаштуваннях) / скільки робочих днів минуло.",
+  srcAd: "Скільки зі створених угод прийшло з реклами.",
+  srcLeadgen: "Скільки зі створених угод прийшло від лідогенерації.",
+  srcElogist: "Скільки зі створених угод прийшло із сайту eLogist.",
+  srcOther: "Скільки угод менеджер завів сам — без реклами й лідогенерації (переважно постійні клієнти).",
+  srcNoChannel: "Угоди, у яких у CRM не вказано канал, — джерело невідоме.",
+  firstTouch: "У скількох % перших розмов з рекламним лідом менеджер назвав ціну. Розмови оцінює AI.",
+  dispRevenue: "Сума поставлених авто за період.",
+  responseTime: "Частка нових лідів, на які менеджер відреагував пізніше ніж за годину.",
+};
 
 /** 🎯 Відсоток «ціну названо» — від ОЦІНЕНИХ розмов (без «немає запису»). `null` = нема з чого рахувати. */
 export const firstTouchPct = (voiced: number, analyzed: number): number | null =>
@@ -170,6 +218,12 @@ export const REPORT_COLS: ColDef[] = [
     help: "Місячний грошовий план, апорт по робочих днях періоду. Джерело: plans.managerPlan." },
   { key: "pct", title: "Викон.", core: true, val: (m) => m.pct, foot: "ratio:pct",
     help: "Отримано ÷ план." },
+  // 📵 ПРОПУЩЕНІ Й ПЕРЕДЗВІН (зустріч 10.11.2026, правка 3): «Час опрацювання заявки» зі Звіту прибрано, а
+  // пропущені стали колонками таблиці. Числа — з `/report-plan` (ті самі функції ядра, що вкладка «Пропущені»).
+  { key: "missed", title: "Пропущені", core: true, val: (m) => m.missed?.missed ?? null, foot: "add",
+    help: "Пропущені вхідні за період; у дужках — скільки з них досі без передзвону (ні менеджер, ні колега не передзвонили). Джерело: missedCalls.missedByManager — той самий виклик, що вкладка «Пропущені дзвінки», зі скоупом Звіту. Дзвінки без відповідального й людей поза таблицею в рядки не розносяться — їх число стоїть під таблицею." },
+  { key: "callbackMin", title: "Передзвін", core: true, val: (m) => m.missed?.medianMin ?? null, foot: "share:none",
+    help: "Медіана хвилин від пропущеного до передзвону (половина передзвонів швидша, половина — повільніша). Джерело: missedCalls.missedByManager.medianMin. Підсумок команди — медіана команди одним запитом (missedByTeam), підсумок обсягу — missedSummary: медіани не складаються й не усереднюються." },
 
   { key: "projected", title: "Прогноз", core: false, val: (m) => (m.monthInProgress ? m.projected : null), foot: "add",
     help: "Очікуваний підсумок місяця = факт + рахунки з плановою датою. Лише для повного поточного місяця. Джерело: projected." },
@@ -264,7 +318,7 @@ export const isLockedCol = (k: ColKey): boolean => LOCKED_COLS.includes(k);
 export const DEFAULT_OPT_ON: Record<string, boolean> = {
   ...Object.fromEntries(REPORT_COLS.filter((c) => c.core && !isLockedCol(c.key)).map((c) => [c.key, true])),
   projected: true, needPerDay: true, expectThisMonth: true, awaitNoDate: true,
-  jamDeals: true, responseTime: true,
+  jamDeals: true, responseTime: true, missed: true, callbackMin: true,
   jam: false, dobir: false, talks: false, dispRevenue: false,
   srcAd: false, srcLeadgen: false, srcElogist: false, srcOther: false, srcNoChannel: false,
   firstTouch: true,
@@ -304,7 +358,7 @@ export const COL_GROUP_OF: Record<ColKey, ColGroup> = {
   created: "leads", ads: "leads", leadgen: "leads", conv: "leads", convAd: "leads", convLg: "leads",
   srcAd: "src", srcLeadgen: "src", srcElogist: "src", srcOther: "src", srcNoChannel: "src",
   dispatch: "auto", dispRevenue: "auto",
-  talks: "calls", normDays: "calls", firstTouch: "calls", responseTime: "calls",
+  talks: "calls", normDays: "calls", firstTouch: "calls", responseTime: "calls", missed: "calls", callbackMin: "calls",
 };
 
 /**
@@ -543,3 +597,45 @@ export function footValue(key: ColKey, rows: ReportPlanManager[]): FootValue {
   }, 0);
   return { kind, value };
 }
+
+/**
+ * ↔️ ШИРИНА КОЛОНКИ «МЕНЕДЖЕР» — ЯК В EXCEL (зустріч 10.11.2026, правка 4: «ліва колонка з менеджерами має
+ * згортатися… щоб можна було рухати»). Тягнеш правий край заголовка — ширина змінюється; подвійний клік —
+ * як було. Особисто, окремим ключем `rptMgrWidth:<userId>` — як вибір і порядок колонок.
+ * `null` = «не задано»: колонка має природну ширину (не 0 — порожнє не виражаємо нулем, правило 7).
+ */
+export const MGR_W_MIN = 70;
+export const MGR_W_MAX = 480;
+/** Нижче цієї ширини позначка «Старт/Профі» ховається: обрізана, вона читалась би як сміття. */
+export const MGR_W_TIGHT = 260;
+export const clampMgrWidth = (w: number): number => Math.max(MGR_W_MIN, Math.min(MGR_W_MAX, Math.round(w)));
+export const MGR_W_LS = "rptMgrWidth";
+export const mgrWidthKey = (userId: number | null | undefined): string =>
+  userId != null ? `${MGR_W_LS}:${String(userId)}` : MGR_W_LS;
+export function readMgrWidth(store: ColsStore | null, userId: number | null | undefined): number | null {
+  try {
+    const raw = store?.getItem(mgrWidthKey(userId));
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? clampMgrWidth(n) : null;
+  } catch {
+    return null;
+  }
+}
+export function writeMgrWidth(store: ColsStore | null, userId: number | null | undefined, w: number | null): boolean {
+  try {
+    if (!store) return false;
+    if (w == null) store.removeItem?.(mgrWidthKey(userId));
+    else store.setItem(mgrWidthKey(userId), String(clampMgrWidth(w)));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** ⏱ «Передзвін» у клітинці: до години — хвилини, далі — години й хвилини. `null` — «—». */
+export const fmtCallback = (min: number | null): string =>
+  min == null ? "—" : min < 60 ? `${String(min)} хв` : `${String(Math.floor(min / 60))} год ${String(min % 60)} хв`;
+/** Колір передзвону: понад 15 хв — червоний, понад 5 — помаранчевий (як у макеті, погодженому 10.11.2026). */
+export const callbackTone = (min: number | null): "danger" | "warn" | null =>
+  min == null ? null : min > 15 ? "danger" : min > 5 ? "warn" : null;

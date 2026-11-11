@@ -13,7 +13,7 @@ import {
   periodOf, periodLabelOf, type PeriodMode, type PeriodState,
 } from "../periodRules";
 import { InfoHint } from "../widgets";
-import { ReportTableSection } from "./ReportTableSection";
+import { ReportTableSection, LevelChip } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
 import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#213`.
@@ -120,7 +120,6 @@ function DealName({ name, url }: { name: string; url: string | null }) {
 }
 
 const SICON: Record<string, string> = { g: "🟢", a: "🟠", r: "🔴" };
-const TAGCOL: Record<string, string> = { rpk: BAR, rnk: "#7a52c7", self: GREEN };
 
 // Комерційний скоуп (A1): у перемикачі команд не показуємо некомерційні команди — фінанси й лідогенерацію
 // (= бекенд KVP_FINANCE/LEADGEN). Список один на фронт — pages/dashboard/teamSets.ts.
@@ -699,7 +698,8 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
         {/* who + status */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            {m.name}<span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: TAGCOL[m.tag] + "22", color: TAGCOL[m.tag] }}>{m.tag.toUpperCase()}</span>
+            {/* 🎚 «Старт / Профі» з «Найму» замість РНК/РПК (зустріч 10.11.2026, правка 4). */}
+            {m.name}<LevelChip level={m.level} />
             {isSelf && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: BAR + "22", color: BAR }}>ТИ</span>}
             <VacationMark managerId={m.managerId} />
           </span>

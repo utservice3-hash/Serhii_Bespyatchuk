@@ -1678,3 +1678,8 @@ tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
 .tc-btn.pri { border: 0; background: var(--brand); color: #fff; }
 .tc-btn.pri:disabled { background: color-mix(in srgb, var(--text-muted) 22%, var(--card-bg)); color: var(--text-muted); cursor: not-allowed; }
 @media (max-width: 600px) { .tc { padding: 14px; } .tc-kbd { display: none; } .tc-pop { width: min(290px, 80vw); } }
+
+/* ↔️ Край колонки «Менеджер» у таблиці Звіту — тягнеться, як в Excel (зустріч 10.11.2026). */
+.rpt-resize { position: absolute; top: 0; right: -4px; width: 9px; height: 100%; cursor: col-resize; z-index: 6; touch-action: none; }
+.rpt-resize::after { content: ""; position: absolute; top: 22%; bottom: 22%; left: 4px; width: 2px; border-radius: 1px; background: var(--border-strong); }
+.rpt-resize:hover::after, .rpt-resize:active::after { top: 0; bottom: 0; background: var(--brand); }

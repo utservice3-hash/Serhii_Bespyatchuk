@@ -37,6 +37,33 @@ export async function levelsByEmployee(db: Db): Promise<Map<number, LevelState>>
   return out;
 }
 
+/**
+ * 🎚 РІВЕНЬ ПО МЕНЕДЖЕРУ CRM — для таблиці «Звіту» (зустріч 10.11.2026: «категорія Старт/Профі з вкладки «Найм»,
+ * РНК/РПК — відмовились»). Те саме правило, що в реєстрі (`core/employees.ts`): лише категорія `manager` має рівень,
+ * без запису — «Старт». Звʼязок менеджер → людина реєстру — `employees.manager_id` (привʼязка до Kommo, `churn.linkKommo`;
+ * заміряно 11.11.2026: 56 із 56 активних менеджерів з командою привʼязані, і там, де є ще й акаунт, обидва шляхи
+ * збігаються 55 із 55).
+ *
+ * 🔴 НЕВІДОМЕ НЕ СТАЄ «СТАРТОМ». Менеджера, якого не привʼязано до людини реєстру, у мапі НЕМАЄ — екран не
+ * пише йому «Старт», бо ми не знаємо, хто це. Людина реєстру не-продажник — `null`: рівень її не стосується.
+ * Кілька людей на одного менеджера — береться найменший `employees.id` (стабільно, без вгадування).
+ */
+export async function levelByManager(db: Db, managerIds: number[]): Promise<Map<number, EmpLevel | null>> {
+  const out = new Map<number, EmpLevel | null>();
+  if (!managerIds.length) return out;
+  const rows = (await db.query<{ manager_id: number; id: number; position: string | null; category: string | null }>(
+    `SELECT DISTINCT ON (e.manager_id) e.manager_id, e.id, e.position, e.category
+       FROM employees e
+      WHERE e.manager_id = ANY($1::int[])
+      ORDER BY e.manager_id, e.id`, [managerIds])).rows;
+  if (!rows.length) return out;
+  const levels = await levelsByEmployee(db);
+  for (const r of rows) {
+    out.set(r.manager_id, effectiveCategory(r.category, r.position) === "manager" ? (levels.get(r.id)?.level ?? "start") : null);
+  }
+  return out;
+}
+
 const monthOf = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}$/.test(v) ? `${v}-01` : null);
 
 async function salesEmployee(db: Db, id: number) {
