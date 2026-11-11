@@ -217,25 +217,27 @@ export function srcText(x: AnyRow): string {
 }
 
 // ---------- права ----------
+/** Хто змінює ліміти: погоджувач (Сергій) і ті, кому сервер поставив limitEditor (Дарʼя — Сергій 11.11.2026). */
+export const editsLimits = (u: CpUser) => u.role === 'approver' || !!u.limitEditor;
 export const canSeeLimit = (u: CpUser, x: Pick<AnyRow, 'managerId'>) => seesAll(u.role) || x.managerId === u.id || inMyTeam(u, x.managerId);
 /** Лічильник на вкладці: перевищено + прострочено + нова справа. Бухгалтерії й керівникам без дій — не показуємо. */
 export const limitsBadge = (u: CpUser, rows: AnyRow[]) =>
-  u.role === 'approver' || canSubmit(u.role) ? rows.filter(x => !isNoLimit(x) && canSeeLimit(u, x) && x.alert).length : 0;
+  editsLimits(u) || canSubmit(u.role) ? rows.filter(x => !isNoLimit(x) && canSeeLimit(u, x) && x.alert).length : 0;
 
 export type LimitAction = 'edit' | 'keep' | 'set' | 'openReq' | 'applyNew' | 'apply' | 'requestChange';
 /**
  * Хто що може (сервер перевіряє edit / keep / set; решта — переходи в «Узгодження»):
- *   Сергій — «Змінити ліміт» (з причиною), «Задати ліміт» боржнику без ліміту, «Лишити ліміт» після нової справи;
+ *   Сергій і Дарʼя (editsLimits) — «Змінити ліміт» (з причиною), «Задати ліміт» боржнику без ліміту, «Лишити ліміт» після нової справи;
  *            призупинене погодження (req) — рішення в самому запиті;
  *   менеджер (свій клієнт) — «Подати запит на ліміт» / «на нові умови» (перенесений чи заданий ліміт) / «Запросити зміну умов» (req);
  *   тім-лід — клієнти команди лише переглядає.
  */
 export function limitActions(u: CpUser, x: AnyRow): LimitAction[] {
   if (isNoLimit(x)) {
-    if (u.role === 'approver') return ['set'];
+    if (editsLimits(u)) return ['set'];
     return canSubmit(u.role) && x.managerId === u.id ? ['applyNew'] : [];
   }
-  if (u.role === 'approver') return x.suspended ? (x.src === 'req' ? ['openReq'] : ['keep', 'edit']) : ['edit'];
+  if (editsLimits(u)) return x.suspended ? (x.src === 'req' ? ['openReq'] : ['keep', 'edit']) : ['edit'];
   if (canSubmit(u.role) && x.managerId === u.id) {
     if (x.src !== 'req') return ['apply'];
     return x.change || x.suspended ? [] : ['requestChange'];

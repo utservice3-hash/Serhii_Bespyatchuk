@@ -4,7 +4,7 @@
  * Вигляд = узгоджений макет v5 (23.10). Стилі — client/counterparty/cp.css (спільні з «Узгодженням»).
  */
 import {
-  LFILTERS, LGROUPS, LIMIT_EVENT_LABEL, LIMIT_EVENT_TONE, canSeeLimit, isNoLimit, limGroup, limIn, limitActions, limitState, limitsBadge, rowRank, shortName, srcText, suspendWhy,
+  LFILTERS, LGROUPS, LIMIT_EVENT_LABEL, LIMIT_EVENT_TONE, canSeeLimit, editsLimits, isNoLimit, limGroup, limIn, limitActions, limitState, limitsBadge, rowRank, shortName, srcText, suspendWhy,
   type AnyRow, type LimFilter, type LimGroupBy, type LimitRow, type NoLimitRow, type ResetLimit,
 } from '../../shared/clientLimits';
 import { ENT_LABEL, FROM_LABEL, PAY_SHORT, canSubmit, diffLines, sideLine, type CpUser, type From } from '../../shared/counterparty';
@@ -35,7 +35,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
   let me: CpUser | null = null, rows: AnyRow[] = [], resets: ResetLimit[] = [], debtAt: string | null = null, monitor: { last: string | null; next: string } | null = null;
   let loadErr = '', filter: LimFilter = 'all', query = '', openId: string | null = null, decision: Decision = null, busy = false, alive = true;
   let pending: NavTarget | null = o.initial || null;
-  /** «＋ Додати клієнта» (Сергій, задача 7137): пошук по всій базі → та сама форма «Задати ліміт». */
+  /** «＋ Додати клієнта» (Сергій і Дарʼя, задача 7137): пошук по всій базі → та сама форма «Задати ліміт». */
   let adding: { q: string; hits: ClientHitView[] | null; loading: boolean; err: string; pick: ClientHitView | null } | null = null;
   let searchSeq = 0, searchTimer: ReturnType<typeof setTimeout> | undefined;
   /** Групування (Сергій 28.10) — запамʼятовується в браузері; згорнуті групи — до перезавантаження. */
@@ -85,7 +85,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     $('filters')!.innerHTML = LFILTERS.filter(([k]) => k !== 'reset' || resets.length || filter === 'reset')
       .map(([k, t]) => `<button type="button" data-lf="${k}" aria-pressed="${filter === k}">${t} <span class="cp-c">${k === 'reset' ? resets.length : all.filter(x => limIn(x, k)).length}</span></button>`).join('');
     $('at')!.textContent = debtAt ? `Борг — з дебіторки на ${dm(debtAt)}` : 'Дебіторка недоступна — борг не показано';
-    $('add')!.innerHTML = u.role === 'approver' ? '<button type="button" class="cp-btn cp-pri" data-add>＋ Додати клієнта</button>' : '';
+    $('add')!.innerHTML = editsLimits(u) ? '<button type="button" class="cp-btn cp-pri" data-add>＋ Додати клієнта</button>' : '';
     const qq = query.trim().toLowerCase();
     const list = all.filter(x => x.id === freshId || (limIn(x, filter) && (!qq || x.name.toLowerCase().includes(qq) || x.members.some(m => m.code.toLowerCase().includes(qq) || m.name.toLowerCase().includes(qq)))))
       .sort((a, b) => Number(b.id === freshId) - Number(a.id === freshId) || rowRank(a) - rowRank(b) || shortName(a.name).localeCompare(shortName(b.name), 'uk'));
@@ -298,7 +298,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
         : hintFoot('Коду ЄДРПОУ в дебіторці немає — подайте запит з вкладки «Узгодження роботи з новим контрагентом».');
       return u.role === 'lead' && x.managerId !== u.id ? teamHint : '';
     }
-    if (u.role === 'approver') {
+    if (editsLimits(u)) {
       if (decision === 'edit') return foot(`<button type="button" class="cp-btn cp-okb" data-act="lim-edit-go" disabled>Зберегти ліміт</button><button type="button" class="cp-btn" data-act="cancel">Скасувати</button>`, 'Нові ліміт і дні одразу підуть у дебіторку.');
       if (acts.includes('openReq')) return foot('<button type="button" class="cp-btn cp-pri" data-act="open-req">Відкрити запит</button>', 'Погодження призупинено — рішення в запиті.');
       if (acts.includes('keep')) return foot(`<button type="button" class="cp-btn cp-okb" data-act="lim-keep"${dis}>Лишити ліміт</button><button type="button" class="cp-btn" data-act="lim-edit"${dis}>Змінити ліміт</button>`, `${x.flag?.kind === 'people' ? 'Змінився власник / директор' : 'Нова справа в суді'} — вирішіть, чи лишати ліміт.`);
