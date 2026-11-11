@@ -383,7 +383,7 @@ test("#3824 РЕАКТИВАЦІЯ: команда в кожному рядку,
  * ПРАВИЛО (`archivedSql`), а не його застосування: інакше інваріант порівнював би
  * запит сам із собою й став би тавтологією. Це та сама межа, що в `#17c`.
  */
-test("#3823 ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втрачені + віддані = кваліфікована база, разових серед 2+ НУЛЬ", needsApi(), async () => {
+test("#3827 ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втрачені + віддані + фізособи <3 поїздок = кваліфікована база, разових серед 2+ НУЛЬ", needsApi(), async () => {
   // 🔴 ПИТАННЯ, НА ЯКЕ ВІДПОВІДАЄ ЦЕЙ ГЕЙТ. Екран планів показує ~164 клієнти
   // замість 1 137 — і це ПРАВИЛЬНО: спрацювали дві різні зміни правил (жорсткий
   // поділ за станом + двошляхова кваліфікація). Але рівно так само виглядало б,
@@ -398,7 +398,7 @@ test("#3823 ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втр�
     clients: { clientKey: string; segment: string }[];
     totals: { totalClients: number; inReactivation: number;
               inReactivationSleeping: number; inReactivationLost: number;
-              longLapsedCount: number; oneOff: number; skippedGeneric: number; handedOff: number;
+              longLapsedCount: number; oneOff: number; skippedGeneric: number; handedOff: number; skippedFewTrips: number;
               activeBySegment: Record<string, number> };
   };
   const t = plans.totals;
@@ -452,9 +452,10 @@ test("#3823 ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втр�
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
       WHERE NOT ${archivedSql("lo", "ap")}`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
   // 🧭 З 11.11.2026 (8349) — ще й віддані в «Нічийні» / у пулі лідгенів: зі списку менеджера їх прибрано, але названо.
-  assert.equal(t.totalClients + t.inReactivation + t.oneOff + t.skippedGeneric + t.handedOff, whole,
+  // 🚶 З 11.11.2026 (8339) — ще й сплячі/втрачені фізособи з менш ніж 3 поїздками: з реактивації прибрані, але названі.
+  assert.equal(t.totalClients + t.inReactivation + t.oneOff + t.skippedGeneric + t.handedOff + t.skippedFewTrips, whole,
     `🔴 активні ${t.totalClients} + місток ${t.inReactivation} + разові ${t.oneOff}`
-    + ` + дженерики ${t.skippedGeneric} + віддані ${t.handedOff} ≠ база ${whole} — хтось зник між екранами, і без цієї`
+    + ` + дженерики ${t.skippedGeneric} + віддані ${t.handedOff} + фізособи <3 ${t.skippedFewTrips} ≠ база ${whole} — хтось зник між екранами, і без цієї`
     + " перевірки це виглядало б як «клієнтів стало менше»");
   console.log(`   ℹ активних ${t.totalClients} · сплячих ${t.inReactivationSleeping}`
     + ` · втрачених ${t.inReactivationLost} (з них архів ${t.longLapsedCount})`
@@ -645,7 +646,7 @@ test("#30n КАРТКА · «УСПІШНІ УГОДИ»: жодного ряд�
     `🔴 перевірено ${checked} карток / ${rows} рядків — замало, щоб щось довести`);
 });
 
-test("#30l КАРТКА: дії керування видно ТОМУ, кому роут їх дозволяє", needsApi(), async () => {
+test("#3828 КАРТКА: дії керування видно ТОМУ, кому роут їх дозволяє; тімлід архівує свого клієнта", needsApi(), async () => {
   // 🪞 ДЗЕРКАЛЬНА ПАРА, і вона тут обовʼязкова. Односторонній тест («менеджер не
   // бачить кнопки») зеленів би й тоді, якби кнопки не бачив НІХТО — тобто саме в
   // стані, який ми щойно виправляли: дія без входу.
@@ -684,8 +685,10 @@ test("#30l КАРТКА: дії керування видно ТОМУ, кому
   assert.ok(own, "🔴 у команди тімліда немає клієнтів — дзеркало нема на чому перевіряти");
   const asLead = await (await get("/api/dashboard/client-card?clientKey=" + encodeURIComponent(own!), lead.token)).json() as
     { canArchive?: boolean; canMerge?: boolean; mergeScope?: string; months?: unknown[] };
-  assert.equal(asLead.canArchive, false,
-    "🔴 тімлід бачить кнопку архівації, яка на сервері дасть 403 — дозвіл і кнопка розійшлись");
+  // 🗄 З 11.11.2026 (8323): тімлід архівує клієнта СВОЄЇ команди сам — сервер це дозволяв і раніше (кламп по команді),
+  // а картка кнопку ховала. Тепер кнопка і дозвіл збігаються в бік «можна».
+  assert.equal(asLead.canArchive, true,
+    "🔴 тімлід не бачить «в архів» на клієнті своєї команди, хоча сервер йому дозволяє — дозвіл і кнопка розійшлись");
   assert.equal(asLead.canMerge, true,
     "🔴 тімліду закрили обʼєднання — це вже не межа, а втрачена дія (дзеркало до рядка вище: "
     + "якби ми різали права всім підряд, перша перевірка теж зеленіла б)");

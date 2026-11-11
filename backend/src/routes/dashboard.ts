@@ -163,6 +163,7 @@ import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as orphanRelease from "../core/orphanRelease.js";
 import * as problemClient from "../core/problemClient.js";
+import * as clientKindFacts from "../core/clientKindFacts.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate, periodNotOver } from "../core/dates.js";
@@ -6835,9 +6836,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    * зникають у тиші — вони окремим числом `skippedGeneric`, інакше ми повторили б
    * рівно ту помилку, яку цією правкою й лікуємо.
    */
-  const bridge = { sleeping: 0, lost: 0, longLapsed: 0, oneOff: 0, skippedGeneric: 0,
+  const bridge = { sleeping: 0, lost: 0, longLapsed: 0, oneOff: 0, skippedGeneric: 0, skippedFewTrips: 0,
     bySegment: { vip: 0, regular: 0, episodic: 0, unknown: 0 } as Record<string, number> };
   const reactivationRows: typeof clientsRes.rows = [];
+  // 🚶 8339: вид клієнта (юр/ФОП чи фіз) — одним пакетним запитом для всього списку.
+  const kindByKey = await clientKindFacts.kindsFor(pool, clientsRes.rows.map((c) => c.client_key));
   const activeRows = clientsRes.rows.filter((c) => {
     const f = factsFor(seg, c.client_key);
     // 🎯 РАЗОВІ — НЕ постійні (двошляхова кваліфікація, рішення власника 05.08.2026).
@@ -6846,6 +6849,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     if (!f.qualified) { bridge.oneOff++; return false; }
     if (f.state === "sleeping" || f.state === "lost") {
       if (!keepInReactivation(f)) { bridge.skippedGeneric++; return false; }
+      // 🚶 8339: фізособа з менш ніж 3 поїздками — не в реактивації (назване числом `skippedFewTrips`, а не тихо).
+      if (reactivationRules.fewTripsPerson({ kind: kindByKey.get(c.client_key) ?? "legal", orders: Number(c.orders) })) {
+        bridge.skippedFewTrips++; return false;
+      }
       if (f.longLapsed) bridge.longLapsed++;   // підмножина втрачених, не окрема купка
       if (f.state === "sleeping") bridge.sleeping++; else bridge.lost++;
       // 🔗 Той самий рядок, який раніше просто зникав, тепер їде в ростер другим
@@ -7212,6 +7219,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        * щоб «активні + місток + разові + дженерики + віддані = база» сходилось і втрата не читалась як «клієнтів стало менше».
        */
       handedOff: handedOffCount,
+      /** 🚶 Фізособи з менш ніж 3 поїздками, що заснули (8339): не в реактивації — названі числом, щоб Σ сходилась. */
+      skippedFewTrips: bridge.skippedFewTrips,
       /** Розбивка ЖИВИХ по сегментах — та, що стоїть над таблицею. */
       activeBySegment: bridge.bySegment,
       currentWeekIndex: curIdx < 0 ? null : curIdx,
@@ -8109,7 +8118,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
      * `{clientKey, hidden}` — тобто **мовчки нічого не робила**: 200 у відповідь,
      * нуль змін у БД, `hidden` завжди false. Заміна — архів: причина, дата, автор.
      */
-    canArchive: isAdminScope(auth),
+    // 🗄 8323 (Юля 06.11, Роман 11.11 «роби»): тімлід прибирає разових САМ — та сама межа, що в POST /client-archive
+    // (`isAdminOrLead` + кламп по команді). Картку тімлід бачить лише свого клієнта (`canSeeClient`), тож тут досить ролі.
+    canArchive: isAdminOrLead(auth),
     /**
      * ⭐ «Вважати постійним попри правило» — та сама межа, що архівація
      * (`isAdminScope`: КВП/ОД/адмін), і це не спрощення: рішення власника
@@ -8442,7 +8453,10 @@ dashboardRouter.get("/reactivation-list", async (req, res) => {
   ]);
   // 🧭 8349: віддані в «Нічийні» й ті, хто в пулі лідгенів, — не в реактивації менеджера; та сама множина, що
   // в «Клієнти та реактивація», інакше «місток» і цей список розійшлися б (#30p).
-  const clients = allClients.filter((c) => !handedOffR.has(c.clientKey));
+  // 🚶 8339: та сама множина «фізособа з менш ніж 3 поїздками», що прибирає місток «Клієнти та реактивація».
+  const kindR = await clientKindFacts.kindsFor(pool, allClients.map((c) => c.clientKey));
+  const clients = allClients.filter((c) => !handedOffR.has(c.clientKey)
+    && !(c.state !== "active" && reactivationRules.fewTripsPerson({ kind: kindR.get(c.clientKey) ?? "legal", orders: c.orders })));
 
   // Ранжування за ЦІННІСТЮ (ядро), сезонні — ВНИЗ списку і без задач.
   // 💬 Останній коментар у рядок — те саме поле `client_comments`, що в картці.

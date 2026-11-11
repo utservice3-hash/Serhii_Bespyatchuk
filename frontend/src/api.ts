@@ -4935,6 +4935,10 @@ export interface ClientPlansResp {
     oneOff: number;
     /** 📵 Сплячі/втрачені з ключем-телефоном без безналу — фільтр реактивації їх прибрав. */
     skippedGeneric: number;
+    /** 🚶 Фізособи з менш ніж 3 поїздками, що заснули (8339) — не в реактивації. */
+    skippedFewTrips?: number;
+    /** 🧭 Віддані в «Нічийні» або в пулі лідгенів (8349) — не в списку менеджера. */
+    handedOff?: number;
     /** Розбивка ЖИВИХ по сегментах — цифра над таблицею. */
     activeBySegment: Record<ClientSegment, number>;
   };
