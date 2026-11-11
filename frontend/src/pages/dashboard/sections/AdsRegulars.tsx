@@ -151,7 +151,7 @@ export function AdsRegulars({ from, to }: { from: string; to: string }) {
 
       <div style={{ ...CARD, padding: "20px 8px 8px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "0 14px 14px" }}>
-          <div style={LAB}>Постійні клієнти · за маржею</div>
+          <div style={LAB}>Список постійних · за маржею</div>
           <div style={{ display: "inline-flex", gap: 2, padding: 3, borderRadius: 10, border: "1px solid var(--rpt-line, #e8e6e3)" }}>
             {(["all", "vip", "regular", "episodic", "unknown"] as const).map((k) => (
               <button key={k} type="button" aria-pressed={seg === k} onClick={() => setSeg(k)}
