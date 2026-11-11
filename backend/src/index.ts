@@ -100,6 +100,7 @@ import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatis
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
+import { runOrphanToLeadgen } from "./jobs/orphanToLeadgen.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncTldv } from "./jobs/syncTldv.js";
 import { syncWorkua } from "./jobs/syncWorkua.js";
@@ -498,6 +499,13 @@ cron.schedule("40 0 * * *", () => {
 }, { timezone: "Europe/Kyiv" });
 cron.schedule("0 8 * * 1", () => {
   void runJob("reactCycleSweep", () => runReactCycleSweep());
+}, { timezone: "Europe/Kyiv" });
+/**
+ * 🧭 «Нічийні» → пул лідгенів (задача 8135): щогодини о :10 за Києвом — хто з відданих менеджерами чекає довше за
+ * робочий день, іде лідгенам; хто ожив (новий рахунок) — лишається за менеджером. everyMin == 60 у нагляді.
+ */
+cron.schedule("10 * * * *", () => {
+  void runJob("orphanToLeadgen", () => runOrphanToLeadgen());
 }, { timezone: "Europe/Kyiv" });
 
 // КРОК 4 (Звірка) + AUTO-HEAL. ЩОНОЧІ 03:35 — лише ОСТАННІ 2 МІСЯЦІ: швидко/дешево,
@@ -1106,6 +1114,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["rebuildCarrierPhones", () => rebuildCarrierPhones()],
   ["hiringAccess", () => closeExpiredCandidateAccess()],
   ["reactCycleSweep", () => runReactCycleSweep()],
+  ["orphanToLeadgen", () => runOrphanToLeadgen()],
   ["syncReceivables", () => syncReceivables()],
   ["syncLeadgenRegistry", () => syncLeadgenRegistry()],
   ["syncFirstTouch", () => syncFirstTouch()],

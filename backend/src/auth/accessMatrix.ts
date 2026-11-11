@@ -139,18 +139,24 @@ const HR_GOALS = "Роман 12.10.2026 («роби»): Іван (HR) бачив
   + "свої цілі, «Цілі команд» — лише адмін-рівень. Стереже #1630";
 const KVP_SURVEYS = "Роман 30.10.2026: «треба дати можливість створювати опитування в дашборді… Юля Сергіївна, КВП» — право "
   + "`manage_surveys` ролі kvp (у ній один акаунт); створює, запускає, бачить відповіді, як HR. Фінансист і далі — ні";
-const POOL_OFF = "Сергій (TOP Weekly 29.10 і задача 7367 31.10.2026: «вимкнути передачу реактивації лідгенам з 01.11») і "
-  + "Роман 06.11.2026 («просто вимкни і все»): пул лідгенів вимкнено вимикачем `LEADGEN_POOL_ENABLED` — вкладку не бачить "
-  + "ніхто, тож і керівництво отримує 403. Стереже #3441/#3442";
+const POOL_BACK = "Юля, задачі 8135 + 8349 (ТЗ 06.11 і 09.11.2026 у 8850): «не спрацьовується — менеджер віддає в нічийні, "
+  + "всім іде сповіщення, хто хоче — бере. За день ніхто не взяв — клієнт іде в пул лідгенів»; Роман 11.11.2026 — «так» на план. "
+  + "Екран пулу знову бачать лідгени й керівництво (`LEADGEN_POOL_SCREEN`), стара передача з реактивації лишається вимкненою. "
+  + "Стереже #3801";
+const ORPHAN_ALL_MGRS = "Роман 11.11.2026 (задача 8135, п.1 плану «так»): групу «Віддали менеджери» в «Нічийних» бачать і беруть "
+  + "собі ВСІ менеджери, а не лише двоє з прапорцем — «всі бачать, хто хоче — бере». Решта пулу й «Закрити» — як і було, лише з "
+  + "прапорцем; без прапорця менеджер у `/claim` проходить межу, тож проба з порожнім тілом дає 400. Стереже #3803";
 const SEASON_KVP = "Юля, задача 8351 (06.11.2026): «я (КВП) можу вручну змінити сегмент… Тімлід просить зміну через мене»; "
   + "Роман 10.11.2026 — «роби» на план зі звуженням права. До цього позначку «сезонний» міг ставити й тімлід (`isAdminOrLead`)";
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
   { method: "POST", path: "/api/dashboard/client-seasonal", role: "team_lead", to: "deny", decidedOn: "2026-11-10", decidedBy: "Юля і Роман", why: SEASON_KVP },
-  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "admin", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
-  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "ceo", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
-  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "opdir", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
-  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "kvp", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
-  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "financier", to: "deny", decidedOn: "2026-11-06", decidedBy: "Сергій і Роман", why: POOL_OFF },
+  { method: "GET", path: "/api/dashboard/orphan-clients", role: "manager", to: "allow", decidedOn: "2026-11-11", decidedBy: "Роман", why: ORPHAN_ALL_MGRS },
+  { method: "POST", path: "/api/dashboard/orphan-clients/claim", role: "manager", to: "dropped", decidedOn: "2026-11-11", decidedBy: "Роман", why: ORPHAN_ALL_MGRS },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "admin", to: "allow", decidedOn: "2026-11-11", decidedBy: "Юля і Роман", why: POOL_BACK },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "ceo", to: "allow", decidedOn: "2026-11-11", decidedBy: "Юля і Роман", why: POOL_BACK },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "opdir", to: "allow", decidedOn: "2026-11-11", decidedBy: "Юля і Роман", why: POOL_BACK },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "kvp", to: "allow", decidedOn: "2026-11-11", decidedBy: "Юля і Роман", why: POOL_BACK },
+  { method: "GET", path: "/api/dashboard/leadgen-pool", role: "financier", to: "allow", decidedOn: "2026-11-11", decidedBy: "Юля і Роман", why: POOL_BACK },
   { method: "GET", path: "/api/surveys/people", role: "kvp", to: "allow", decidedOn: "2026-10-30", decidedBy: "Роман", why: KVP_SURVEYS },
   { method: "GET", path: "/api/surveys/templates", role: "kvp", to: "allow", decidedOn: "2026-10-30", decidedBy: "Роман", why: KVP_SURVEYS },
   { method: "GET", path: "/api/surveys/:id/results", role: "kvp", to: "allow", decidedOn: "2026-10-30", decidedBy: "Роман", why: KVP_SURVEYS },
@@ -830,10 +836,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   // Пул лідгенів бачать лідгени (команда «Лідогенерація») і керівництво (`isAdminScope`). Менеджер і
   // тімлід не проби — відповідь залежить від того, чи тестовий акаунт лідген, а не від ролі.
-  // 🚫 06.11.2026: передачу лідгенам вимкнено (`LEADGEN_POOL_ENABLED = false`) — пул не бачить НІХТО, тож керівництво
-  // теж отримує 403. Зрушення узаконене в ACCEPTED_MATRIX_SHIFTS (POOL_OFF); увімкнуть пул — рядок повертається.
+  // 🚫 06.11.2026 пул вимикали (POOL_OFF) — керівництво отримувало 403. 🧭 11.11.2026 екран повернуто (POOL_BACK, задачі
+  // 8135 + 8349): у пулі лише ті, хто прийшов із «Нічийних»; керівництво знову 200 (`isAdminScope`).
   { method: "GET", path: "/api/dashboard/leadgen-pool", cls: "GET",
-    allow: [], deny: ["hr", "admin", "ceo", "opdir", "kvp", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr"] },
   // Брати може ЛИШЕ лідген (собі). Керівництво в deny не пишемо: його відмова — не по праву, а «не лідген»
   // (#11b вимагає для адмін-рівня назване право), а проба з порожнім тілом дала б 400, не мутацію.
   { method: "POST", path: "/api/dashboard/leadgen-pool/take", cls: "deny-only",
@@ -881,10 +887,19 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // нічийний саме тому, що не належить нікому, і ділити його по командах немає
   // за чим. МЕНЕДЖЕР — 403: пул це інструмент розподілу, а не самообслуговування.
   // Виняток діє ТІЛЬКИ на ці два роути; будь-який інший кламиться як досі.
+  // 🧭 11.11.2026 (задача 8135, ORPHAN_ALL_MGRS): менеджер без прапорця бачить групу «Віддали менеджери» (200) і бере
+  // звідти собі (у `/claim` проходить межу → порожнє тіло дає 400, тож у deny-only його більше немає).
   { method: "GET", path: "/api/dashboard/orphan-clients", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/orphan-clients/claim", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: ["hr"] },
+  // 🧭 «В нічийні» / «Відкликати» (8135): межа — `canSeeClient` ПЕРШИМ оператором (менеджер свого, тімлід своєї
+  // команди, керівництво будь-кого), як `/react-decision`. Проба з неіснуючим ключем дає менеджеру/тімліду 403 по
+  // клієнту, а не по ролі — тому в deny лише hr (вкладка `loyalty`).
+  { method: "POST", path: "/api/dashboard/orphan-clients/release", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/orphan-clients/unrelease", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   // 🚫 «Закрити» в «Нічийних» (задача 7187) — той самий допуск, що «Взяти в роботу»: менеджер без прапорця — 403.
   { method: "POST", path: "/api/dashboard/orphan-clients/close", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },

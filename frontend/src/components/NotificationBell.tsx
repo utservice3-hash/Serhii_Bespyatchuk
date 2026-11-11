@@ -32,6 +32,8 @@ export function linkTarget(n: Pick<NotificationT, "module" | "link">): { section
   const go = n.link as Record<string, unknown> | null;
   if (!go) return null;
   if (typeof go.toast === "string") return { toast: go.toast };
+  // 🧭 Загальна адреса «розділ + запит» (перший — «Клієнти» → «Нічийні», задача 8135); вкладки «Зарплати» — нижче.
+  if (typeof go.section === "string") return { section: go.section, query: typeof go.query === "string" ? go.query : "" };
   const tab = ZP_TABS[String(go.tab)];
   if (!tab) return null;
   const q = new URLSearchParams({ tab });

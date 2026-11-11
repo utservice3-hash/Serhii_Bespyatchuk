@@ -57,7 +57,8 @@ export async function runReactCycleSweep(): Promise<{ pooled: number; closed: nu
   const rows = await cyclesFor(pool, candidates.map((c) => c.clientKey));
   const pooledThisWeek = transfer ? await autoPooledSince(pool, weekMonday(today)) : 0;
   const actions = planSweep(candidates, rows,
-    open.map((o) => ({ clientKey: o.clientKey, cycleMonth: o.cycleMonth, lastInvoice: openInv.get(o.clientKey) ?? null })),
+    open.map((o) => ({ clientKey: o.clientKey, cycleMonth: o.cycleMonth, lastInvoice: openInv.get(o.clientKey) ?? null,
+      poolReason: o.poolReason, pooledDay: o.pooledAt })),
     today, { transfer, pooledThisWeek });
   const closed = await closeRevived(pool, actions.close);
   const pooled = await poolAuto(pool, actions.pool);

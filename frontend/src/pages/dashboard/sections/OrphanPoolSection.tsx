@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AuthPayload } from "../../../auth";
-import { fetchOrphanClients, claimOrphanClient, closeOrphanClient, type OrphanPool, type OrphanGroup, type OrphanClientRow, type ManagerOption } from "../../../api";
+import { fetchOrphanClients, claimOrphanClient, closeOrphanClient, type OrphanPool, type OrphanGroup, type OrphanClientRow, type ReleasedClientRow, type ManagerOption } from "../../../api";
 
 /**
  * 🧭 ВКЛАДКА «НІЧИЙНІ» — 1:1 з макетом власника (05.08.2026).
@@ -61,6 +61,7 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
     groups: d.groups
       .map((g) => ({ ...g, clients: g.clients.filter((c) => c.clientKey !== key) }))
       .filter((g) => g.clients.length > 0),
+    released: (d.released ?? []).filter((c) => c.clientKey !== key),
   }));
   const [closing, setClosing] = useState<string | null>(null);
   const close = async (row: OrphanClientRow, reason: string, comment: string) => {
@@ -76,7 +77,7 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
       setNotice(msg ?? "Не вдалося закрити клієнта");
     } finally { setClaiming(null); }
   };
-  const claim = async (row: OrphanClientRow, managerId: number) => {
+  const claim = async (row: { clientKey: string }, managerId: number) => {
     setClaiming(row.clientKey); setNotice(null);
     try {
       await claimOrphanClient(row.clientKey, managerId);
@@ -89,6 +90,21 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
 
   if (err) return <div className="chart-card" style={{ padding: 20, color: "var(--danger)" }}>{err}</div>;
   if (!data) return <div className="loading-text" style={{ padding: 20 }}>Завантаження…</div>;
+  const released = data.released ?? [];
+  // 🧭 Менеджер без прапорця (8135) бачить лише «Віддали менеджери» — решти пулу для нього немає.
+  if (data.access === "released") {
+    return (
+      <div>
+        {notice && <div className="orph-notice">{notice}</div>}
+        {released.length === 0
+          ? <div className="chart-card" style={{ padding: 24, color: "var(--text-muted)" }}>
+              Зараз ніхто з менеджерів не віддав клієнтів у «Нічийні». Коли віддадуть — прийде сповіщення, і клієнт зʼявиться тут.
+            </div>
+          : <ReleasedBlock rows={released} canAssign={false} managers={assignable} myManagerId={auth?.managerId ?? null}
+              claiming={claiming} onClaim={claim} />}
+      </div>
+    );
+  }
   if (data.tiles.clients === 0)
     return <div className="chart-card" style={{ padding: 24, color: "var(--text-muted)" }}>Нічийних клієнтів немає.</div>;
 
@@ -118,6 +134,11 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
       </div>
 
       {notice && <div className="orph-notice">{notice}</div>}
+
+      {released.length > 0 && (
+        <ReleasedBlock rows={released} canAssign={data.access === "full"} managers={assignable}
+          myManagerId={auth?.managerId ?? null} claiming={claiming} onClaim={claim} />
+      )}
 
       <div className="chart-card" style={{ padding: 0, overflow: "hidden" }}>
         <table className="data-table orph-table">
@@ -197,7 +218,7 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
                           : <ClaimButton row={c} busy={claiming === c.clientKey} managers={assignable} onClaim={claim} />}
                         {claiming !== c.clientKey && (
                           <button className="orph-close" onClick={() => setClosing(closing === c.clientKey ? null : c.clientKey)}
-                            title="Перевізник, не цікаво, не актуально чи дубль — в архів із причиною, з нічийних зникає">Закрити</button>
+                            title="Перевізник, разове перевезення, закрились, не цікаво, не актуально чи дубль — в архів із причиною, з нічийних зникає">Закрити</button>
                         )}
                       </td>
                     </tr>
@@ -268,10 +289,74 @@ function CloseForm({ row, reasons, busy, onCancel, onClose }: {
   );
 }
 
+/**
+ * 🧭 «ВІДДАЛИ МЕНЕДЖЕРИ» (задача 8135): клієнти, від яких менеджер відмовився кнопкою «В нічийні», — найближчий строк
+ * першим. Хто візьме до строку — клієнт його; ніхто — джоба віддасть лідгенам. Бере собі будь-який менеджер;
+ * керівник (повний доступ) — призначає, як і решту пулу.
+ */
+function ReleasedBlock({ rows, canAssign, managers, myManagerId, claiming, onClaim }: {
+  rows: ReleasedClientRow[]; canAssign: boolean; managers: ManagerOption[]; myManagerId: number | null;
+  claiming: string | null; onClaim: (r: { clientKey: string }, id: number) => void;
+}) {
+  const fmt = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const left = (iso: string) => {
+    const h = Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 3_600_000));
+    return h >= 24 ? `${Math.floor(h / 24)} дн ${h % 24} год` : `${h} год`;
+  };
+  return (
+    <div className="chart-card" style={{ padding: 0, overflow: "hidden", marginBottom: 14, border: "1px solid #fed7aa" }}>
+      <div style={{ padding: "10px 14px", background: "#fff7ed", borderBottom: "1px solid #fed7aa" }}>
+        <b>🧭 Віддали менеджери · {rows.length}</b>
+        <span className="orph-dim"> · не спрацювались із клієнтом. Візьміть, якщо ваш: за робочий день ніхто не взяв — клієнт піде лідгенам.</span>
+      </div>
+      <table className="data-table orph-table">
+        <thead><tr>
+          <th style={{ textAlign: "left" }}>Клієнт</th>
+          <th style={{ textAlign: "left" }}>Хто віддав і чому</th>
+          <th style={{ textAlign: "left" }}>До лідгенів</th>
+          <th style={{ textAlign: "right" }}>Σ 12 міс</th>
+          <th />
+        </tr></thead>
+        <tbody>
+          {rows.map((c) => (
+            <tr key={c.clientKey}>
+              <td style={{ textAlign: "left" }}>
+                <b>{c.name}</b>
+                <div className="orph-dim">{c.segment} · {c.payments} оплат{c.lastPaidAt ? ` · остання ${c.lastPaidAt}` : ""}</div>
+                <div style={{ fontSize: 12, marginTop: 2 }}>
+                  {c.phones.length === 0 ? <span className="orph-dim">телефону в контактах Kommo немає</span>
+                    : c.phones.map((p) => <span key={p} style={{ marginRight: 10, whiteSpace: "nowrap" }}>☎ <a href={`tel:+${p.replace(/^\+/, "")}`}>{fmtPhone(p)}</a></span>)}
+                </div>
+              </td>
+              <td style={{ textAlign: "left", maxWidth: 360 }}>
+                <b>{c.fromManagerName ?? "—"}</b>{c.releasedByName && c.releasedByName !== c.fromManagerName ? <span className="orph-dim"> (віддав {c.releasedByName})</span> : null}
+                <span className="orph-dim"> · {fmt(c.releasedAt)}</span>
+                <div style={{ fontSize: 12 }}>«{c.note}»</div>
+              </td>
+              <td style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                {fmt(c.deadline)}<div className="orph-dim">лишилось {left(c.deadline)}</div>
+              </td>
+              <td style={{ textAlign: "right" }}>{c.revenue12 ? money(c.revenue12) + " ₴" : "—"}</td>
+              <td style={{ textAlign: "right" }}>
+                {c.onlyCarrierPhones
+                  ? <button className="orph-take" disabled title={CARRIER_ONLY_HINT}>лише номери перевізників</button>
+                  : claiming === c.clientKey ? <span className="orph-dim">…</span>
+                  : canAssign ? <ClaimButton row={c} busy={false} managers={managers} onClaim={onClaim} />
+                  : <button className="orph-take" disabled={myManagerId == null}
+                      onClick={() => myManagerId != null && onClaim(c, myManagerId)}>Взяти собі</button>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /** «Взяти в роботу»: спершу вибір виконавця, потім дія — щоб не було випадкових кліків. */
-function ClaimButton({ row, busy, managers, onClaim }: {
-  row: OrphanClientRow; busy: boolean; managers: ManagerOption[];
-  onClaim: (r: OrphanClientRow, id: number) => void;
+function ClaimButton<T extends { clientKey: string }>({ row, busy, managers, onClaim }: {
+  row: T; busy: boolean; managers: ManagerOption[];
+  onClaim: (r: T, id: number) => void;
 }) {
   const [pick, setPick] = useState(false);
   if (busy) return <span className="orph-dim">…</span>;

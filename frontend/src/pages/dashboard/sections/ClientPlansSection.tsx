@@ -769,7 +769,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       {tab === "react" && data.reactRules?.leadgenPool === false && (
         <div style={{ ...S.card, fontSize: 12.5, color: "#4b5563", lineHeight: 1.55, borderLeft: "3px solid #6d28d9" }}>
           <b>Реактивація</b> — клієнти без виставленого рахунку {data.reactRules.quietMonths} повні календарні місяці
-          (з 4-го місяця). Передачу лідгенам вимкнено з 01.11.2026: клієнт лишається за своїм менеджером.
+          (з 4-го місяця). Передачу лідгенам із реактивації вимкнено з 01.11.2026: клієнт лишається за своїм менеджером.
+          Не спрацювались — «🧭 В нічийні» в картці клієнта: його бачать усі менеджери, а за робочий день ніхто не взяв —
+          клієнт іде в пул лідгенів. Віддані й ті, хто в пулі, у цьому списку не показуються.
         </div>
       )}
       {tab === "react" && data.reactRules && data.reactRules.leadgenPool !== false && (

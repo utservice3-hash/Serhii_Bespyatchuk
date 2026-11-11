@@ -111,7 +111,7 @@ import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFor
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
-import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL, ORPHAN_CLOSE_REASON_KEYS, orphanPoolAccess, orphanRowOrder, type OrphanPoolAccess } from "../core/orphanClients.js";
+import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL, ORPHAN_CLOSE_REASON_KEYS, orphanPoolAccess, orphanReason, orphanRowOrder, type OrphanPoolAccess } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as callNorm from "../core/callNorm.js";
@@ -159,6 +159,7 @@ import * as clientLeadRules from "../core/clientLeadRules.js";
 import * as clientLeadFacts from "../core/clientLeadFacts.js";
 import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
+import * as orphanRelease from "../core/orphanRelease.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate, periodNotOver } from "../core/dates.js";
@@ -6584,6 +6585,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     clientsListSql(mgrCond, monthStr),
     mgrParams
   );
+  // 🚪 8349: «передані лідгенам не висять у менеджера і не псують його цифри». Клієнт у «Нічийних» (віддав менеджер,
+  // 8135) або в пулі лідгенів — геть зі списку ДО всіх лічильників (без роботи, без задачі, кольори, реактивація).
+  // Одна множина (`HANDED_OFF_SQL`) на всі читачі; повертається сам, щойно позначку знімуть (взяли / ожив / відкликали).
+  const handedOff = await orphanRelease.handedOffKeys(pool);
+  clientsRes.rows = clientsRes.rows.filter((c) => !handedOff.has(c.client_key));
   const clientKeys = clientsRes.rows.map((c) => c.client_key);
   const keySet = new Set(clientKeys);
   // 📱 Останній РУЧНИЙ контакт по кожному клієнту (Viber/Telegram/…): одним запитом на список.
@@ -7654,9 +7660,13 @@ dashboardRouter.get("/leadgen-pool", async (req, res) => {
   const open = await reactCycle.openPool(pool);
   const keys = open.map((o) => o.clientKey);
   const inv = await money.lastInvoiceByClientKey(keys);
-  const revived = open.filter((o) => !reactCycleRules.inReact(inv.get(o.clientKey) ?? null, nowYm));
+  // 🧭 «Ожив» — за правилом рядка (`poolRevived`): рядок `orphan` (з «Нічийних», 8135) живе від рахунку ПІСЛЯ дня,
+  // коли клієнта поклали в пул, а не від «рахунку за 3 місяці» — інакше він закривався б, не дійшовши до лідгена.
+  const isRevived = (o: (typeof open)[number]) => reactCycleRules.poolRevived(
+    { poolReason: o.poolReason, pooledDay: o.pooledAt, lastInvoice: inv.get(o.clientKey) ?? null }, nowYm);
+  const revived = open.filter(isRevived);
   if (revived.length) await reactCycle.closeRevived(pool, revived);
-  const live = open.filter((o) => reactCycleRules.inReact(inv.get(o.clientKey) ?? null, nowYm));
+  const live = open.filter((o) => !isRevived(o));
   const [names, success] = await Promise.all([
     pool.query<{ client_key: string; client_name: string | null }>(
       `SELECT DISTINCT ON (client_key) client_key, client_name FROM deals
@@ -7697,12 +7707,16 @@ dashboardRouter.post("/leadgen-pool/take", async (req, res) => {
   const lastInvoice = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
   const today = kyivToday();
   const effectiveFrom = effectiveFromFor("fix", today);
-  // 4.4: у клієнта є рахунок за 3 місяці — лідгену його не можна. Рядок пулу закриваємо ДО транзакції,
-  // інакше ROLLBACK відкотив би й закриття, і клієнт лишився б у пулі до ночі.
-  if (!reactCycleRules.inReact(lastInvoice, today.slice(0, 7))) {
+  // 4.4: клієнт ожив — лідгену його не можна. Рядок пулу закриваємо ДО транзакції, інакше ROLLBACK відкотив би й
+  // закриття, і клієнт лишився б у пулі до ночі. «Ожив» — за правилом рядка (`poolRevived`, 8135).
+  const openRow = (await reactCycle.openPool(pool)).find((o) => o.clientKey === clientKey);
+  if (openRow && reactCycleRules.poolRevived(
+    { poolReason: openRow.poolReason, pooledDay: openRow.pooledAt, lastInvoice }, today.slice(0, 7))) {
     await pool.query(`UPDATE client_react_cycles SET closed_at = now(), close_reason = 'invoice'
                        WHERE client_key = $1 AND pooled_at IS NOT NULL AND closed_at IS NULL`, [clientKey]);
-    return res.status(409).json({ error: "Клієнт ожив: є рахунок за останні 3 місяці — він лишається за менеджером" });
+    return res.status(409).json({ error: openRow.poolReason === "orphan"
+      ? "Клієнт ожив: після передачі в пул зʼявився рахунок — він лишається за менеджером"
+      : "Клієнт ожив: є рахунок за останні 3 місяці — він лишається за менеджером" });
   }
   const client = await pool.connect();
   try {
@@ -7899,6 +7913,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
     months.push({ month: ym, revenue: Math.round(b?.revenue ?? 0), deals: b?.deals ?? 0 });
   }
   const h = head.rows[0];
+  // 🧭 «В нічийні» / пул лідгенів (8135 + 8349) — стан для блоку в картці.
+  const handoff = await orphanRelease.handoffState(pool, clientKey);
   const [cardStep, cardPhones, cardLastCall, cardTodayRes] = await Promise.all([
     pool.query<{ id: number; text: string; due_date: string | null; author: string | null }>(
       `SELECT s.id, s.text, to_char(s.due_date, 'YYYY-MM-DD') AS due_date, COALESCE(m.name, u.full_name, u.email) AS author
@@ -8050,6 +8066,12 @@ dashboardRouter.get("/client-card", async (req, res) => {
     canForceRegular: isAdminScope(auth),
     // 🌙 Сезонність (8351): ставить лише КВП / ОД / адмін — та сама межа, що в `/client-seasonal`.
     canSeason: isAdminScope(auth),
+    // 🧭 «В нічийні» (8135): та сама межа, що роут, — `canSeeClient`, а він уже пройдений, щоб відкрити картку.
+    // Тому кнопку бачить кожен, хто бачить картку; не пропонуємо, коли клієнт уже в пулі лідгенів чи в архіві.
+    canRelease: handoff.inLeadgenPool == null && !isArchived(h?.archived_at ?? null, h?.last_paid ?? null),
+    released: handoff.released,
+    inLeadgenPool: handoff.inLeadgenPool,
+    releaseNoteMin: orphanRelease.RELEASE_NOTE_MIN,
     seasonal: h?.seasonal ?? false,
     seasonMonths: (h?.season_months ?? []).map(Number),
     seasonNote: h?.season_note ?? null,
@@ -8106,7 +8128,19 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
   if (access === "none") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
   const all = String(req.query.scope ?? "") === "all";
   const months = all ? 600 : ORPHAN_DEFAULT_MONTHS;
-  const rows = await metrics.orphanClients(months);
+  const found = await metrics.orphanClients(months);
+  // 🧭 «Віддали менеджери» (задача 8135) — окремою групою вгорі, а не серед груп «за відповідальним»: їх треба взяти
+  // за робочий день, інакше вони підуть лідгенам. Менеджер без прапорця (`released`) бачить ЛИШЕ цю групу.
+  const releasedFound = found.filter((r) => r.releasedAt != null);
+  const rows = access === "released" ? [] : found.filter((r) => r.releasedAt == null);
+  const relInfo = new Map((await orphanRelease.releasedRows(pool, releasedFound.map((r) => r.clientKey))).map((r) => [r.clientKey, r]));
+  const released = releasedFound.map((r) => {
+    const i = relInfo.get(r.clientKey);
+    return { clientKey: r.clientKey, name: r.name, segment: r.segment, payments: r.payments, lastPaidAt: r.lastPaidAt,
+      revenue12: r.revenue12, revenueAll: r.revenueAll, kind: r.kind, phones: r.phones,
+      releasedAt: r.releasedAt!, deadline: orphanRelease.releaseDeadline(r.releasedAt!),
+      note: i?.note ?? "", releasedByName: i?.releasedByName ?? null, fromManagerName: i?.fromManagerName ?? r.manager };
+  }).sort((a, b) => a.deadline.localeCompare(b.deadline));
   type Row = (typeof rows)[number];
   const groups = new Map<number, { managerId: number; manager: string; reason: string; reasonLabel: string;
     clients: Row[]; sum12: number; sumAll: number }>();
@@ -8121,10 +8155,13 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
   for (const g of list) g.clients.sort(orphanRowOrder);
   // 📵 Задача 7359: клієнт, у якого ВСІ номери перевізницькі, у роботу не береться — кнопку фронт гасить за
   // цим прапорцем, а сервер однаково перевіряє в `/claim` (той самий `verdictOf`).
-  const orphanPhones = await carrierPhones.clientPhones(pool, rows.map((r) => r.clientKey));
-  const onlyCarrier = new Set(rows.map((r) => r.clientKey)
+  const phoneKeys = [...rows, ...releasedFound].map((r) => r.clientKey);
+  const orphanPhones = await carrierPhones.clientPhones(pool, phoneKeys);
+  const onlyCarrier = new Set(phoneKeys
     .filter((k) => carrierPhones.claimBlocked(carrierPhones.verdictOf(orphanPhones.get(k) ?? []))));
   for (const g of list) for (const c of g.clients) Object.assign(c, { onlyCarrierPhones: onlyCarrier.has(c.clientKey) });
+  for (const c of released) Object.assign(c, { onlyCarrierPhones: onlyCarrier.has(c.clientKey) });
+  const shown = [...rows, ...releasedFound];
   res.json({
     scope: all ? "all" : `${ORPHAN_DEFAULT_MONTHS}m`,
     // «self» — менеджер із прапорцем: бачить пул, але закріпити може лише за собою.
@@ -8133,15 +8170,17 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
     closeReasons: reactivationRules.CLOSE_REASONS.filter((r) => ORPHAN_CLOSE_REASON_KEYS.includes(r.key)),
     // Плитки — з тієї самої вибірки, не окремим запитом.
     tiles: {
-      clients: rows.length,
-      money12: rows.reduce((s, r) => s + r.revenue12, 0),
-      regulars: rows.filter((r) => r.isRegular).length,
-      vip: rows.filter((r) => r.segment === "ВІП").length,
-      legal: rows.filter((r) => r.kind === "legal").length,
+      clients: shown.length,
+      money12: shown.reduce((s, r) => s + r.revenue12, 0),
+      regulars: shown.filter((r) => r.isRegular).length,
+      vip: shown.filter((r) => r.segment === "ВІП").length,
+      legal: shown.filter((r) => r.kind === "legal").length,
+      released: released.length,
       claimedThisMonth: await metrics.orphanClaimedThisMonth(),
       totalAllTime: await metrics.orphanTotalAllTime(),
     },
     groups: list,
+    released,
   });
 });
 
@@ -8161,6 +8200,14 @@ dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
   if (access === "self" && managerId !== auth.managerId) {
     return res.status(403).json({ error: "Менеджер може взяти клієнта лише собі" });
   }
+  // 🧭 Менеджер без прапорця (8135) — лише собі і лише з групи «Віддали менеджери».
+  if (access === "released" && managerId !== auth.managerId) {
+    return res.status(403).json({ error: "Менеджер може взяти клієнта лише собі" });
+  }
+  const wasReleased = (await orphanRelease.releasedRows(pool, [clientKey]))[0] ?? null;
+  if (access === "released" && !wasReleased) {
+    return res.status(403).json({ error: "Без доступу до «Нічийних» можна брати лише клієнтів, яких віддали менеджери" });
+  }
   // Тімлід призначає ЛИШЕ свою команду; КВП/ОД/адмін — будь-кого.
   if (auth.role === "team_lead") {
     const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
@@ -8172,19 +8219,36 @@ dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
     return res.status(409).json({ error: carrierPhones.CLAIM_BLOCKED_ERROR });
   }
   // Атомарно: закріплюємо лише якщо ще НЕ закріплений. Нуль рядків = хтось устиг раніше.
+  // 🧭 Відданого менеджером (8135) можна взяти й попри закріплення — позначку ставив той, хто вів; беремо одним
+  // запитом і знімаємо позначку, і закріплення діє з поточного місяця (`fix`), як «Взяти» з пулу лідгенів.
+  // Прочитали «відданий», а позначку тим часом зняли (взяв інший / пішов лідгенам) — нуль рядків, 409.
   const up = await pool.query(
     `INSERT INTO loyalty_overrides (client_key, pinned_manager_id, updated_by, updated_at)
      VALUES ($1, $2, $3, now())
      ON CONFLICT (client_key) DO UPDATE SET pinned_manager_id = EXCLUDED.pinned_manager_id,
+       pinned_from_month = CASE WHEN loyalty_overrides.released_at IS NOT NULL
+                                THEN date_trunc('month', now() AT TIME ZONE 'Europe/Kyiv')::date
+                                ELSE loyalty_overrides.pinned_from_month END,
+       released_at = NULL, released_by = NULL, released_note = NULL, released_from_manager_id = NULL,
        updated_by = EXCLUDED.updated_by, updated_at = now()
-     WHERE loyalty_overrides.pinned_manager_id IS NULL
+     WHERE (loyalty_overrides.pinned_manager_id IS NULL OR loyalty_overrides.released_at IS NOT NULL)
+       AND (loyalty_overrides.released_at IS NOT NULL OR NOT $4::boolean)
      RETURNING client_key`,
-    [clientKey, managerId, auth.userId]);
+    [clientKey, managerId, auth.userId, wasReleased != null]);
   if (up.rowCount === 0) {
     const who = await pool.query<{ name: string }>(
       `SELECT m.name FROM loyalty_overrides lo JOIN managers m ON m.id = lo.pinned_manager_id
         WHERE lo.client_key = $1`, [clientKey]);
     return res.status(409).json({ error: `Клієнта вже взяв ${who.rows[0]?.name ?? "інший менеджер"}` });
+  }
+  if (wasReleased) {
+    await pool.query(
+      `INSERT INTO client_manager_history (client_key, from_manager_id, to_manager_id, effective_from, reason, changed_by, kind)
+       VALUES ($1, $2, $3, date_trunc('month', now() AT TIME ZONE 'Europe/Kyiv')::date, $4, $5, 'fix')`,
+      [clientKey, wasReleased.fromManagerId, managerId, "Взято з нічийних (віддав менеджер)", auth.userId]);
+    await logClientAdmin("manager_change", clientKey, auth.userId,
+      { fromManagerId: wasReleased.fromManagerId, toManagerId: managerId, kind: "fix", reason: "Взято з нічийних (віддав менеджер)" });
+    await orphanRelease.closeReleaseNotices(pool, clientKey);
   }
   res.json({ ok: true, clientKey, managerId });
 });
@@ -8198,7 +8262,7 @@ dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
 dashboardRouter.post("/orphan-clients/close", async (req, res) => {
   const auth = req.auth!;
   const access = await poolAccessOf(auth);
-  if (access === "none") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  if (access === "none" || access === "released") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   const reason = String(req.body?.reason ?? "").trim();
   const comment = String(req.body?.comment ?? "").trim().slice(0, 2000);
@@ -8208,9 +8272,66 @@ dashboardRouter.post("/orphan-clients/close", async (req, res) => {
   const inPool = (await metrics.orphanClients(600)).some((c) => c.clientKey === clientKey);
   if (!inPool) return res.status(409).json({ error: "Клієнта вже немає в нічийних — його взяли або закрили" });
   await pool.query(ARCHIVE_UPSERT_SQL, [clientKey, reason, auth.userId]);
+  // 🧭 Відданий менеджером і розібраний — позначка й сповіщення «візьміть» більше не потрібні (8135).
+  if (await orphanRelease.clearRelease(pool, clientKey)) await orphanRelease.closeReleaseNotices(pool, clientKey);
   if (comment) await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`, [clientKey, auth.userId, comment]);
   await logClientAdmin("archive", clientKey, auth.userId, { reason, from: "orphan", ...(comment ? { comment } : {}) });
   res.json({ ok: true, clientKey, reason });
+});
+
+/**
+ * 🧭 «В НІЧИЙНІ» (задача 8135; Роман 11.11.2026). Віддати може той, хто бачить клієнта (`canSeeClient` ПЕРШИМ
+ * оператором — менеджер свого, тімлід своєї команди, керівництво будь-якого). Коментар ОБОВʼЯЗКОВИЙ. Клієнт одразу
+ * зникає зі списку й лічильників менеджера (8349), стає в «Нічийні» групою «Віддали менеджери», усім менеджерам іде
+ * сповіщення; не взяли за робочий день — джоба `orphanToLeadgen` кладе його в пул лідгенів. Kommo не чіпаємо.
+ * Не віддається: уже нічийний із Kommo (службовий акаунт / звільнений), уже в нічийних, уже в пулі, в архіві.
+ */
+dashboardRouter.post("/orphan-clients/release", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const note = orphanRelease.cleanReleaseNote(req.body?.note);
+  if (!note) return res.status(400).json({ error: `Напишіть, чому віддаєте клієнта (від ${orphanRelease.RELEASE_NOTE_MIN} символів)` });
+  const owner = await clientOwnerRow(clientKey);
+  if (!owner) return res.status(404).json({ error: "Клієнта не знайдено" });
+  const om = (await pool.query<{ kommo_user_id: string | null; is_active: boolean; name: string }>(
+    `SELECT kommo_user_id::text AS kommo_user_id, is_active, name FROM managers WHERE id = $1`, [owner.manager_id])).rows[0];
+  if (!om || orphanReason({ kommoUserId: om.kommo_user_id, isActive: om.is_active }) != null) {
+    return res.status(409).json({ error: "Клієнт уже в «Нічийних» — його відповідальний службовий або звільнений" });
+  }
+  const st = await orphanRelease.handoffState(pool, clientKey);
+  if (st.inLeadgenPool) return res.status(409).json({ error: "Клієнт уже в пулі лідгенів" });
+  const arch = await pool.query<{ a: boolean }>(
+    `SELECT (archived_at IS NOT NULL) AS a FROM loyalty_overrides WHERE client_key = $1`, [clientKey]);
+  if (arch.rows[0]?.a) return res.status(409).json({ error: "Клієнт в архіві — спершу поверніть його" });
+  if (!(await orphanRelease.release(pool, { clientKey, userId: auth.userId, fromManagerId: owner.manager_id, note }))) {
+    return res.status(409).json({ error: "Клієнта вже віддали в «Нічийні»" });
+  }
+  // 💬 Причина — і в коментарях клієнта: її побачить той, хто візьме (і лідген, якщо дійде до пулу).
+  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
+    [clientKey, auth.userId, `🧭 Віддано в «Нічийні»: ${note}`]);
+  const nm = await pool.query<{ client_name: string | null }>(
+    `SELECT client_name FROM deals WHERE client_key = $1 AND client_name IS NOT NULL
+      ORDER BY closed_at_kommo DESC NULLS LAST LIMIT 1`, [clientKey]);
+  const at = (await orphanRelease.releasedRows(pool, [clientKey]))[0];
+  const deadline = orphanRelease.releaseDeadline(at.releasedAt);
+  const notified = await orphanRelease.notifyReleased(pool, { clientKey, clientName: nm.rows[0]?.client_name ?? clientKey,
+    fromName: om.name, note, releaserUserId: auth.userId, leadgenTeamId: metrics.LEADGEN_DASH_TEAM_ID, deadline });
+  res.json({ ok: true, clientKey, deadline, notified });
+});
+
+/** Відкликати «В нічийні», поки ніхто не взяв: та сама межа (`canSeeClient` першим), позначка й сповіщення — геть. */
+dashboardRouter.post("/orphan-clients/unrelease", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  if (!(await orphanRelease.clearRelease(pool, clientKey))) {
+    return res.status(409).json({ error: "Клієнта вже немає в нічийних — його взяли або він пішов лідгенам" });
+  }
+  await orphanRelease.closeReleaseNotices(pool, clientKey);
+  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
+    [clientKey, auth.userId, "🧭 Повернуто з «Нічийних» — лишається за менеджером"]);
+  res.json({ ok: true, clientKey });
 });
 
 dashboardRouter.get("/reactivation-list", async (req, res) => {

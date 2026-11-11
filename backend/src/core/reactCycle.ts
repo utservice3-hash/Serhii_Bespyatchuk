@@ -12,7 +12,7 @@
  */
 import {
   type CycleRow, type Decision, type PoolReason,
-  inReact, cycleMonthOf, allowedDecisions, transferMonday, daysLeft,
+  inReact, cycleMonthOf, allowedDecisions, transferMonday, daysLeft, poolRevived,
   LEADGEN_POOL_ENABLED, decisionsNow, statusNow,
 } from "./reactCycleRules.js";
 
@@ -26,7 +26,7 @@ export class ReactCycleError extends Error {
 
 type DbRow = {
   client_key: string; cycle_month: string; decision: Decision | null; decided_date: string | null;
-  pooled: boolean; pool_reason: PoolReason | null; closed: boolean; close_reason: "invoice" | "taken" | null;
+  pooled: boolean; pool_reason: PoolReason | null; closed: boolean; close_reason: "invoice" | "taken" | "pool_off" | null;
 };
 const ROW_COLS = `client_key, to_char(cycle_month, 'YYYY-MM') AS cycle_month, decision,
   to_char(decided_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS decided_date,
@@ -168,12 +168,19 @@ export async function poolAuto(db: Db, items: { clientKey: string; cycleMonth: s
 export async function take(db: Db, a: {
   clientKey: string; managerId: number; userId: number; lastInvoice: string | null; nowYm: string; effectiveFrom: string;
 }): Promise<{ fromManagerId: number | null; cycleMonth: string }> {
-  if (!inReact(a.lastInvoice, a.nowYm)) {
-    // 4.4: у клієнта є рахунок за 3 місяці — лідгену його не можна; рядок пулу закриваємо тут же.
+  // 4.4: клієнт ожив — лідгену його не можна; рядок пулу закриваємо тут же. «Ожив» — за правилом рядка
+  // (`poolRevived`): для `orphan` це рахунок ПІСЛЯ дня, коли клієнта поклали в пул, а не «рахунок за 3 місяці».
+  const open = await db.query<{ pool_reason: PoolReason | null; pooled_day: string | null }>(
+    `SELECT pool_reason, to_char(pooled_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS pooled_day
+       FROM client_react_cycles WHERE client_key = $1 AND pooled_at IS NOT NULL AND closed_at IS NULL`, [a.clientKey]);
+  const o = open.rows[0];
+  if (o && poolRevived({ poolReason: o.pool_reason, pooledDay: o.pooled_day, lastInvoice: a.lastInvoice }, a.nowYm)) {
     await db.query(
       `UPDATE client_react_cycles SET closed_at = now(), close_reason = 'invoice'
         WHERE client_key = $1 AND pooled_at IS NOT NULL AND closed_at IS NULL`, [a.clientKey]);
-    throw new ReactCycleError(409, "Клієнт ожив: є рахунок за останні 3 місяці — він лишається за менеджером");
+    throw new ReactCycleError(409, o.pool_reason === "orphan"
+      ? "Клієнт ожив: після передачі в пул зʼявився рахунок — він лишається за менеджером"
+      : "Клієнт ожив: є рахунок за останні 3 місяці — він лишається за менеджером");
   }
   const r = await db.query<{ cycle_month: string; from_manager_id: number | null }>(
     `UPDATE client_react_cycles SET taken_by_manager_id = $2, taken_at = now(), closed_at = now(), close_reason = 'taken'
@@ -214,7 +221,8 @@ export function cycleView(lastInvoice: string | null, rows: CycleRow[] | undefin
     cycleMonth: cm,
     lastInvoice,
     status: statusNow(row),
-    poolReason: LEADGEN_POOL_ENABLED ? row?.poolReason ?? null : null,
+    // 🧭 Причину пулу показуємо, коли пул справжній: стара передача ввімкнена або рядок прийшов із «Нічийних».
+    poolReason: LEADGEN_POOL_ENABLED || row?.poolReason === "orphan" ? row?.poolReason ?? null : null,
     /** Понеділок, з якого клієнт до передачі (`YYYY-MM-DD`); черга по 100 може відсунути на тиждень-другий. */
     deadline: dl,
     daysLeft: dl ? daysLeft(dl, todayYmd) : null,

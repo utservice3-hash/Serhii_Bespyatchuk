@@ -4123,6 +4123,8 @@ export interface OrphanClient {
   kind: ClientKind; kindWhy: ClientKindWhy;
   /** ☎️ Телефони з контактів Kommo цього клієнта (до 3, основний першим) — щоб не шукати в CRM. */
   phones: string[];
+  /** 🧭 Віддав менеджер кнопкою «В нічийні» (задача 8135): коли (ISO), чий коментар. `null` — нічийний з Kommo. */
+  releasedAt: string | null;
 }
 
 /**
@@ -4164,6 +4166,7 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
             EXTRACT(DAY FROM now()-a.last_dt)::int::text days_paid,
             w.two30::text, w.three30::text, g.med::text,
             m.id::text mid, m.name mgr, m.kommo_user_id::text kuid, m.is_active::text act,
+            to_char(lo.released_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') released_at,
             to_char(rc.last_call AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') last_call,
             EXTRACT(DAY FROM now()-rc.last_call)::int::text days_call
        FROM agg a
@@ -4174,12 +4177,18 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
        LEFT JOIN loyalty_overrides lo ON lo.client_key=a.ck
        LEFT JOIN arch_paid ap ON ap.client_key=a.ck
        LEFT JOIN LATERAL (SELECT max(calldate) last_call FROM ringostat_calls c WHERE c.client_key=a.ck) rc ON true
-      WHERE ${orphanManagerSql("m")}
-        AND lo.pinned_manager_id IS NULL
+      -- 🧭 «Віддав менеджер» (задача 8135): нічийний попри живого відповідального й навіть попри закріплення —
+      -- позначка сильніша за pinned_manager_id, бо її поставив той, хто веде клієнта; «Взяти» її знімає.
+      WHERE (${orphanManagerSql("m")} OR lo.released_at IS NOT NULL)
+        AND (lo.pinned_manager_id IS NULL OR lo.released_at IS NOT NULL)
         -- 🗄 Архівний клієнт (зокрема закритий кнопкою «Закрити», задача 7187) у пул не потрапляє — тим самим
         -- правилом, що й архів: повертається сам, щойно прийде оплата, пізніша за архівацію.
         AND NOT ${archivedSql("lo", "ap")}
-        AND a.last_dt >= now() - ($2 || ' months')::interval`,
+        -- 🧭 Уже в пулі лідгенів — не в нічийних (8349: клієнт в одному місці, а не в двох).
+        AND NOT EXISTS (SELECT 1 FROM client_react_cycles cy
+                         WHERE cy.client_key = a.ck AND cy.pooled_at IS NOT NULL AND cy.closed_at IS NULL)
+        -- Зріз 18 міс — для нічийних із Kommo; відданого менеджером видно завжди (його віддали сьогодні).
+        AND (a.last_dt >= now() - ($2 || ' months')::interval OR lo.released_at IS NOT NULL)`,
     [GENERIC_CLIENT_KEYS, String(months)]);
   // ☎️🏢 Код компанії й телефони — ОКРЕМИМ запитом за ключами пулу, а не підзапитом у великому:
   // дешевий фрагмент уже двічі руйнував план великого запиту (правило «заміряй ендпоінт»).
@@ -4210,7 +4219,8 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
     return {
       clientKey: x.ck!, name: x.nm ?? x.ck!,
       managerId: Number(x.mid), manager: x.mgr!,
-      reason: orphanReason({ kommoUserId: x.kuid, isActive: x.act === "true" })!,
+      reason: x.released_at ? "released" : orphanReason({ kommoUserId: x.kuid, isActive: x.act === "true" })!,
+      releasedAt: x.released_at ?? null,
       segment, isRegular, payments: n,
       lastPaidAt: x.last_paid, lastCallAt: x.last_call,
       daysSincePaid: x.days_paid == null ? null : Number(x.days_paid),
