@@ -4,8 +4,8 @@
  * Вигляд = узгоджений макет v5 (23.10). Стилі — client/counterparty/cp.css (спільні з «Узгодженням»).
  */
 import {
-  LFILTERS, LGROUPS, LIMIT_EVENT_LABEL, LIMIT_EVENT_TONE, canSeeLimit, isNoLimit, limGroup, limIn, limitActions, limitState, limitsBadge, rowRank, shortName, srcText, suspendWhy,
-  type AnyRow, type LimFilter, type LimGroupBy, type LimitRow, type NoLimitRow, type ResetLimit,
+  HIST_KINDS, LFILTERS, LGROUPS, LIMIT_EVENT_LABEL, LIMIT_EVENT_TONE, canSeeLimit, editsLimits, histIn, isNoLimit, limGroup, limIn, limitActions, limitState, limitsBadge, rowRank, shortName, srcText, suspendWhy,
+  type AnyRow, type HistKind, type LimFilter, type LimGroupBy, type LimitHistoryItem, type LimitRow, type NoLimitRow, type ResetLimit,
 } from '../../shared/clientLimits';
 import { ENT_LABEL, FROM_LABEL, PAY_SHORT, canSubmit, diffLines, sideLine, type CpUser, type From } from '../../shared/counterparty';
 import { PLANNED_CYCLE_DAYS } from '../../shared/cpCheck';
@@ -35,7 +35,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
   let me: CpUser | null = null, rows: AnyRow[] = [], resets: ResetLimit[] = [], debtAt: string | null = null, monitor: { last: string | null; next: string } | null = null;
   let loadErr = '', filter: LimFilter = 'all', query = '', openId: string | null = null, decision: Decision = null, busy = false, alive = true;
   let pending: NavTarget | null = o.initial || null;
-  /** «＋ Додати клієнта» (Сергій, задача 7137): пошук по всій базі → та сама форма «Задати ліміт». */
+  /** «＋ Додати клієнта» (Сергій і Дарʼя, задача 7137): пошук по всій базі → та сама форма «Задати ліміт». */
   let adding: { q: string; hits: ClientHitView[] | null; loading: boolean; err: string; pick: ClientHitView | null } | null = null;
   let searchSeq = 0, searchTimer: ReturnType<typeof setTimeout> | undefined;
   /** Групування (Сергій 28.10) — запамʼятовується в браузері; згорнуті групи — до перезавантаження. */
@@ -43,6 +43,11 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
   let groupBy: LimGroupBy = 'none';
   try { const g = localStorage.getItem(GROUP_KEY); if (LGROUPS.some(([k]) => k === g)) groupBy = g as LimGroupBy; } catch { /* приватне вікно — без памʼяті */ }
   const collapsed = new Set<string>();
+  /**
+   * «Історія змін» (Сергій 11.11.2026) — другий вигляд вкладки замість списку: хто, коли і що змінив по всіх лімітах.
+   * Вантажиться при кожному відкритті вигляду і після власної дії, поки він відкритий (інакше показав би вчорашнє).
+   */
+  let view: 'list' | 'hist' = 'list', hist: LimitHistoryItem[] | null = null, histErr = '', histKind: HistKind = 'all';
   /** Щойно заданий ліміт — першим рядком і з позначкою, поки сторінку не перезавантажили: інакше він «пропадав» за фільтром чи внизу списку. */
   let freshId: string | null = null;
 
@@ -54,14 +59,16 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
         <span class="cp-grow"></span>
         <span class="cp-yc" id="${P}at"></span>
         <span id="${P}add"></span>
+        <button type="button" class="cp-btn" id="${P}vbtn" data-view aria-pressed="false">Історія змін</button>
         <label class="cp-grp"><span>Групувати</span><select class="cp-in" id="${P}grp" aria-label="Групувати клієнтів">${LGROUPS.map(([k, t]) => `<option value="${k}"${k === groupBy ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="cp-search">${SEARCH_ICON}<input id="${P}q" placeholder="ЄДРПОУ або назва" aria-label="Пошук клієнта за ЄДРПОУ або назвою" autocomplete="off"></label>
       </div>
-      <div class="cp-tblwrap"><table class="cp-reg">
+      <div class="cp-tblwrap" id="${P}list"><table class="cp-reg">
         <thead><tr><th>Клієнт</th><th>Ліміт</th><th>Відтермінування</th><th>Борг зараз</th><th>Прострочено</th><th>Менеджер</th></tr></thead>
         <tbody id="${P}rows"></tbody>
         <tfoot id="${P}foot"></tfoot>
       </table></div>
+      <div id="${P}hist" hidden></div>
     </section>
   </div>
   <div class="cp-scrim" id="${P}scrim" hidden></div>
@@ -81,11 +88,15 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     const u = me;
     const all = rows.filter(x => canSeeLimit(u, x));
     o.onCount?.(limitsBadge(u, all));
+    const vb = $('vbtn')!;
+    vb.textContent = view === 'hist' ? '← До лімітів' : 'Історія змін'; vb.setAttribute('aria-pressed', String(view === 'hist'));
+    $('list')!.hidden = view === 'hist'; $('hist')!.hidden = view !== 'hist';
+    if (view === 'hist') { renderHist(); return; }
     // «Скинуто» — окремий список (скинутий ліміт не є рядком реєстру); кнопку видно, лише коли є що показати
     $('filters')!.innerHTML = LFILTERS.filter(([k]) => k !== 'reset' || resets.length || filter === 'reset')
       .map(([k, t]) => `<button type="button" data-lf="${k}" aria-pressed="${filter === k}">${t} <span class="cp-c">${k === 'reset' ? resets.length : all.filter(x => limIn(x, k)).length}</span></button>`).join('');
     $('at')!.textContent = debtAt ? `Борг — з дебіторки на ${dm(debtAt)}` : 'Дебіторка недоступна — борг не показано';
-    $('add')!.innerHTML = u.role === 'approver' ? '<button type="button" class="cp-btn cp-pri" data-add>＋ Додати клієнта</button>' : '';
+    $('add')!.innerHTML = editsLimits(u) ? '<button type="button" class="cp-btn cp-pri" data-add>＋ Додати клієнта</button>' : '';
     const qq = query.trim().toLowerCase();
     const list = all.filter(x => x.id === freshId || (limIn(x, filter) && (!qq || x.name.toLowerCase().includes(qq) || x.members.some(m => m.code.toLowerCase().includes(qq) || m.name.toLowerCase().includes(qq)))))
       .sort((a, b) => Number(b.id === freshId) - Number(a.id === freshId) || rowRank(a) - rowRank(b) || shortName(a.name).localeCompare(shortName(b.name), 'uk'));
@@ -138,6 +149,36 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     const [sl, sd] = sumOf(list);
     f.innerHTML = list.length ? `<tr><td colspan="6">${list.length} ${plural(list.length, 'клієнт', 'клієнти', 'клієнтів')} · ліміти разом ${money(sl)} · борг ${money(sd)}</td></tr>` : '';
   }
+
+  // ---------- «Історія змін» ----------
+  function renderHist() {
+    $('add')!.innerHTML = '';
+    $('filters')!.innerHTML = HIST_KINDS.map(([k, t]) => `<button type="button" data-hk="${k}" aria-pressed="${histKind === k}">${t}${hist ? ` <span class="cp-c">${hist.filter(e => histIn(e, k)).length}</span>` : ''}</button>`).join('');
+    $('at')!.textContent = hist ? 'Свіжі першими · до 1000 останніх подій' : '';
+    const box = $('hist')!;
+    if (histErr) { box.innerHTML = `<div class="cp-empty">${esc(histErr)}</div>`; return; }
+    if (!hist) { box.innerHTML = '<div class="cp-empty">Завантаження…</div>'; return; }
+    const qq = query.trim().toLowerCase();
+    const list = hist.filter(e => histIn(e, histKind) && (!qq || e.name.toLowerCase().includes(qq) || e.code.toLowerCase().includes(qq) || (e.byName || '').toLowerCase().includes(qq)));
+    const open = (e: LimitHistoryItem) => e.active && rows.some(x => x.id === e.limitId);
+    box.innerHTML = `<div class="cp-tblwrap"><table class="cp-reg cp-hist"><thead><tr><th>Коли</th><th>Клієнт</th><th>Що змінилось</th><th>Хто</th></tr></thead><tbody>${list.map(e => `
+      <tr${open(e) ? ` data-hlid="${esc(e.limitId)}" tabindex="0"` : ''} aria-label="${esc(shortName(e.name))}">
+        <td class="cp-c-hw"><b>${dt(e.at)}</b><div class="cp-sub">${dm(e.at).slice(6)}</div></td>
+        <td class="cp-c-cl"><div class="cp-who">${esc(shortName(e.name))}</div><div class="cp-sub"><span class="cp-code">${esc(e.code || '—')}</span> · ${esc(e.managerName)}${e.active ? '' : ' · ліміт знято'}</div></td>
+        <td><div class="cp-hev" style="--pc:var(--${LIMIT_EVENT_TONE[e.type] === 'mut' ? 'muted' : LIMIT_EVENT_TONE[e.type] || 'ink'})">${esc(LIMIT_EVENT_LABEL[e.type] || e.type)}</div>${e.note ? `<div class="cp-hnote">${esc(e.note)}</div>` : ''}</td>
+        <td class="cp-c-mg">${e.by ? `<div class="cp-mgr">${esc(e.byName || '—')}</div>` : '<span class="cp-sub">автоматично</span>'}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="cp-empty">Порожньо</td></tr>'}</tbody></table></div>${list.length ? `<div class="cp-hint">${list.length} ${plural(list.length, 'подія', 'події', 'подій')}</div>` : ''}`;
+  }
+  async function loadHist() {
+    try {
+      const j = await o.api.history();
+      if (!alive) return;
+      hist = j.events; histErr = '';
+    } catch (e) { if (alive) histErr = 'Не вдалося завантажити історію. ' + errText(e); }
+    render();
+  }
+  /** Після власної дії: відкрита історія — перечитати зараз, закрита — при наступному відкритті. */
+  const histStale = () => { if (view === 'hist') void loadHist(); else hist = null; };
 
   // ---------- панель ----------
   function openPanel(id: string) { adding = null; openId = id; decision = null; $('scrim')!.hidden = false; $('drawer')!.hidden = false; renderPanel(); render(); $('drawer')!.querySelector<HTMLElement>('[data-close]')?.focus(); }
@@ -216,7 +257,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
       const r = await o.api.add(h.key, v);
       busy = false;
       rows = rows.filter(y => !(isNoLimit(y) && y.debtorKey === h.key));
-      replace(r); showFresh(r.id); openPanel(r.id);
+      replace(r); showFresh(r.id); openPanel(r.id); histStale();
       toast.show(h.debtor ? 'Ліміт задано — зʼявиться в колонці «Ліміти» активної дебіторки' : 'Ліміт задано — дебіторка підхопить його з першим рахунком');
     } catch (e) {
       busy = false; btns(true);
@@ -298,7 +339,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
         : hintFoot('Коду ЄДРПОУ в дебіторці немає — подайте запит з вкладки «Узгодження роботи з новим контрагентом».');
       return u.role === 'lead' && x.managerId !== u.id ? teamHint : '';
     }
-    if (u.role === 'approver') {
+    if (editsLimits(u)) {
       if (decision === 'edit') return foot(`<button type="button" class="cp-btn cp-okb" data-act="lim-edit-go" disabled>Зберегти ліміт</button><button type="button" class="cp-btn" data-act="cancel">Скасувати</button>`, 'Нові ліміт і дні одразу підуть у дебіторку.');
       if (acts.includes('openReq')) return foot('<button type="button" class="cp-btn cp-pri" data-act="open-req">Відкрити запит</button>', 'Погодження призупинено — рішення в запиті.');
       if (acts.includes('keep')) return foot(`<button type="button" class="cp-btn cp-okb" data-act="lim-keep"${dis}>Лишити ліміт</button><button type="button" class="cp-btn" data-act="lim-edit"${dis}>Змінити ліміт</button>`, `${x.flag?.kind === 'people' ? 'Змінився власник / директор' : 'Нова справа в суді'} — вирішіть, чи лишати ліміт.`);
@@ -324,7 +365,7 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     busy = true; renderPanel();
     try {
       const r = await p();
-      busy = false; decision = null; replace(r); afterId?.(r);
+      busy = false; decision = null; replace(r); afterId?.(r); histStale();
       renderPanel(); render(); toast.show(ok);
     } catch (e) {
       busy = false;
@@ -364,6 +405,11 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     const t = e.target as HTMLElement;
     const fb = t.closest<HTMLElement>('[data-lf]');
     if (fb && $('filters')!.contains(fb)) { filter = fb.dataset.lf as LimFilter; render(); return; }
+    const hk = t.closest<HTMLElement>('[data-hk]');
+    if (hk && $('filters')!.contains(hk)) { histKind = hk.dataset.hk as HistKind; render(); return; }
+    if (t.closest('[data-view]') && t.closest(`#${P}vbtn`)) { view = view === 'hist' ? 'list' : 'hist'; render(); if (view === 'hist') void loadHist(); return; }
+    const hr = t.closest<HTMLElement>('tr[data-hlid]');
+    if (hr && $('hist')!.contains(hr)) { openPanel(hr.dataset.hlid!); return; }
     if (t.closest('[data-add]') && $('add')!.contains(t)) { openAdd(); return; }
     const ra = t.closest<HTMLElement>('[data-reset-apply]');
     if (ra && $('rows')!.contains(ra)) {
@@ -396,6 +442,8 @@ export function mountClientLimits(root: HTMLElement, o: LimitsOptions): LimitsHa
     if (gh && $('rows')!.contains(gh)) { toggleGroup(gh.dataset.grp!); return; }
     const hit = (e.target as HTMLElement).closest<HTMLElement>('tr[data-hit]');
     if (hit && adding) { pickHit(Number(hit.dataset.hit)); return; }
+    const hr = (e.target as HTMLElement).closest<HTMLElement>('tr[data-hlid]');
+    if (hr && $('hist')!.contains(hr)) { openPanel(hr.dataset.hlid!); return; }
     const tr = (e.target as HTMLElement).closest<HTMLElement>('tr[data-lid]');
     if (tr && $('rows')!.contains(tr)) openPanel(tr.dataset.lid!);
   };

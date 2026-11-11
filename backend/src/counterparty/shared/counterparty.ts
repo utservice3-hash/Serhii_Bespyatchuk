@@ -44,8 +44,12 @@ export type CpRole = 'manager' | 'lead' | 'approver' | 'accounting' | 'viewer' |
 //  accounting     — бачить усі запити й ліміти, без дій;
 //  viewer         — керівники (admin, ceo, finance): бачать усе, без дій;
 //  staff          — інші співробітники (логісти, КВП…): лише «Перевірка контрагента».
-/** team — users.id менеджерів команди тім-ліда (лише для role 'lead'; задає сервер через опцію teamOf). */
-export interface CpUser { id: string; name: string; role: CpRole; team?: string[] }
+/**
+ * team — users.id менеджерів команди тім-ліда (лише для role 'lead'; задає сервер через опцію teamOf).
+ * limitEditor — змінює «Ліміти клієнтів», не будучи погоджувачем (Сергій 11.11.2026: «може робити Дар'я»); задає сервер
+ * опцією limitEditorIds. Погоджувати запити «Узгодження» це НЕ дає.
+ */
+export interface CpUser { id: string; name: string; role: CpRole; team?: string[]; limitEditor?: boolean }
 
 // ---------- запит ----------
 export type ReqStatus = 'checking' | 'pending' | 'returned' | 'approved' | 'rejected';

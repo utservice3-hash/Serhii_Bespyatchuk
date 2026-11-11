@@ -8,13 +8,14 @@
  *   }));
  *   startCourtMonitor({ pool, youscore: ys });                       // server/courtMonitor.ts — раз на місяць
  *
- * Права: Сергій — змінює ліміт (з причиною), задає ліміт боржнику без ліміту або клієнту з бази (/search, /add), «лишає» ліміт після нової справи в суді;
+ * Права: Сергій і limitEditorIds (Дарʼя, Сергій 11.11.2026) — змінюють ліміт (з причиною), задають ліміт боржнику без ліміту або клієнту
+ * з бази (/search, /add), «лишають» ліміт після нової справи в суді; /import — лише Сергій;
  * менеджер бачить своїх клієнтів, тім-лід — ще й команди (лише перегляд), бухгалтерія й керівники — усіх (без дій).
  * Нові умови менеджер подає через «Узгодження» (/api/counterparty) — тут лише читання.
  */
 import express, { Router } from 'express';
 import type { Pool } from 'pg';
-import { buildRows, canSeeLimit, cellsFor, clientQuery, isNoLimit, limitOfClient, limitsBadge, parseLimitInput, type AnyRow, type ClientLimit, type Debtor, type LimitRow, type ResetLimit } from '../../shared/clientLimits.js';
+import { buildRows, canSeeLimit, cellsFor, clientQuery, editsLimits, isNoLimit, limitOfClient, limitsBadge, parseLimitInput, type AnyRow, type ClientLimit, type Debtor, type LimitRow, type ResetLimit } from '../../shared/clientLimits.js';
 import { FROM_LABEL, diffLines, seesRequests, sideLine, type CpRole, type CpUser, type Terms } from '../../shared/counterparty.js';
 import { DEFAULT_LAG, type Lag } from '../../shared/cpCalc.js';
 import { dayW, money } from '../../shared/cpFormat.js';
@@ -23,7 +24,7 @@ import { HttpError, defaultCpRoleOf, errorHandler, meOf, type AuthedRequest, typ
 import { addEvent, tx } from '../cpStore.js';
 import type { ClientDirectory } from '../clientDirectory.js';
 import type { DebtSource } from '../debtSource.js';
-import { addLimitEvent, getLimit, importLimit, insertSetLimit, listLimits, type ImportRow } from '../limitsStore.js';
+import { addLimitEvent, getLimit, importLimit, insertSetLimit, listLimitHistory, listLimits, type ImportRow } from '../limitsStore.js';
 
 export interface ClientLimitsOptions {
   /** Борг і прострочка з дебіторки. */
@@ -35,6 +36,8 @@ export interface ClientLimitsOptions {
   /** Скинуті за неактивністю (фільтр «Скинуто»). */
   resets?: () => Promise<ResetLimit[]>;
   approverIds?: string[];
+  /** users.id тих, хто змінює ліміти, не будучи погоджувачем (Дарʼя — Сергій 11.11.2026). Погоджувати запити це не дає. */
+  limitEditorIds?: () => string[];
   roleOf?: (u: ReqUser) => CpRole | null;
   teamOf?: (u: ReqUser) => string[] | Promise<string[]>;
   lag?: Lag;
@@ -46,7 +49,11 @@ export interface ClientLimitsOptions {
 
 export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Router {
   const roleOf = opts.roleOf || defaultCpRoleOf(opts.approverIds || []);
-  const me = (req: AuthedRequest) => meOf(req, { roleOf, teamOf: opts.teamOf });
+  const me = async (req: AuthedRequest) => {
+    const u = await meOf(req, { roleOf, teamOf: opts.teamOf });
+    if (u.role !== 'approver' && seesRequests(u.role) && (opts.limitEditorIds?.() ?? []).includes(u.id)) u.limitEditor = true;
+    return u;
+  };
   const now = opts.now || (() => new Date());
   const r = Router();
   r.use(express.json({ limit: '2mb' }));
@@ -63,7 +70,9 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
   }
   const visible = (u: CpUser, list: AnyRow[]) => list.filter(x => canSeeLimit(u, x));
   const need = (u: CpUser) => { if (!seesRequests(u.role)) throw new HttpError(403, 'Немає доступу до лімітів клієнтів.'); };
-  const approver = (u: CpUser) => { if (u.role !== 'approver') throw new HttpError(403, 'Змінювати ліміти може лише Сергій.'); };
+  const approver = (u: CpUser) => { if (u.role !== 'approver') throw new HttpError(403, 'Це може лише Сергій.'); };
+  /** Змінити / задати / лишити ліміт, «＋ Додати клієнта»: погоджувач і limitEditor (Дарʼя). */
+  const editor = (u: CpUser) => { if (!editsLimits(u)) throw new HttpError(403, 'Немає права змінювати ліміти.'); };
   async function rowOf(id: string): Promise<LimitRow> {
     const all = await rows();
     const x = all.rows.find(y => !isNoLimit(y) && y.id === id);
@@ -83,18 +92,26 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
     res.json({ count: limitsBadge(u, (await rows()).rows) });
   });
   /**
+   * «Історія змін» (Сергій 11.11.2026): хто, коли і що змінив — по всіх лімітах, свіжі першими (до 1000). Видно рівно ті
+   * ліміти, що й у списку: керівники й бухгалтерія — усі, менеджер — свої, тім-лід — ще й команди.
+   */
+  r.get('/history', async (req: AuthedRequest, res) => {
+    const u = await me(req); need(u);
+    res.json({ events: (await listLimitHistory(pool)).filter(e => canSeeLimit(u, e)) });
+  });
+  /**
    * Для колонки «Ліміти» активної дебіторки: ключ боржника → ліміт і стан («у межах» / «переліміт» / «не узгоджено»).
-   * canEdit — олівці (лише Сергій); cells[*].canRequest — «Запросити зміну» (свій клієнт менеджера / тім-ліда).
+   * canEdit — олівці (Сергій і Дарʼя); cells[*].canRequest — «Запросити зміну» (свій клієнт менеджера / тім-ліда).
    */
   r.get('/by-debtor', async (req: AuthedRequest, res) => {
     const u = await me(req); need(u);
     const all = await rows();
-    res.json({ at: all.at, cells: cellsFor(u, all.cells), canEdit: u.role === 'approver' });
+    res.json({ at: all.at, cells: cellsFor(u, all.cells), canEdit: editsLimits(u) });
   });
 
-  // ---------- Сергій: змінити ліміт ----------
+  // ---------- Сергій і Дарʼя: змінити ліміт ----------
   r.post('/:id/edit', async (req: AuthedRequest, res) => {
-    const u = await me(req); approver(u);
+    const u = await me(req); editor(u);
     const p = parseLimitInput(req.body); if ('error' in p) throw new HttpError(400, p.error);
     const id = String(req.params.id);
     const l = await getLimit(pool, id, now()); if (!l) throw new HttpError(404, 'Ліміт не знайдено.');
@@ -118,9 +135,9 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
     });
     res.json(await rowOf(id));
   });
-  /** Нова справа в суді по перенесеному / заданому ліміту — Сергій вирішив лишити. */
+  /** Нова справа в суді по перенесеному / заданому ліміту — вирішили лишити. */
   r.post('/:id/keep', async (req: AuthedRequest, res) => {
-    const u = await me(req); approver(u);
+    const u = await me(req); editor(u);
     const id = String(req.params.id);
     const l = await getLimit(pool, id, now()); if (!l) throw new HttpError(404, 'Ліміт не знайдено.');
     if (l.src === 'req') throw new HttpError(409, 'Погодження призупинено — рішення в самому запиті.');
@@ -132,9 +149,9 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
     });
     res.json(await rowOf(id));
   });
-  /** Боржник без ліміту — Сергій задає ліміт напряму (одразу йде в колонку «Ліміти» дебіторки). */
+  /** Боржник без ліміту — ліміт задається напряму (одразу йде в колонку «Ліміти» дебіторки). */
   r.post('/set', async (req: AuthedRequest, res) => {
-    const u = await me(req); approver(u);
+    const u = await me(req); editor(u);
     const p = parseLimitInput(req.body); if ('error' in p) throw new HttpError(400, p.error);
     const key = typeof (req.body || {}).debtorKey === 'string' ? req.body.debtorKey : '';
     const all = await rows();
@@ -157,11 +174,11 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
     res.status(201).json(await rowOf(id));
   });
 
-  // ---------- Сергій: клієнт із бази, якого немає в дебіторці (задача 7137) ----------
+  // ---------- Сергій і Дарʼя: клієнт із бази, якого немає в дебіторці (задача 7137) ----------
   const directory = () => { if (!opts.clients) throw new HttpError(503, 'Пошук по базі клієнтів недоступний.'); return opts.clients; };
   /** Пошук по всій базі за назвою або ЄДРПОУ / ІПН; limitId — уже діючий ліміт цього клієнта (за ключем або кодом). */
   r.get('/search', async (req: AuthedRequest, res) => {
-    const u = await me(req); approver(u);
+    const u = await me(req); editor(u);
     const q = clientQuery(String(req.query.q ?? ''));
     if (!q) { res.json({ hits: [] }); return; }
     const [hits, limits] = await Promise.all([directory().search(q), listLimits(pool, now())]);
@@ -170,7 +187,7 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
   });
   /** Ліміт клієнту з бази: ключ — його client_key, юрособи — його коди; коли стане боржником, дебіторка підхопить ліміт сама. */
   r.post('/add', async (req: AuthedRequest, res) => {
-    const u = await me(req); approver(u);
+    const u = await me(req); editor(u);
     const p = parseLimitInput(req.body); if ('error' in p) throw new HttpError(400, p.error);
     const key = typeof (req.body || {}).clientKey === 'string' ? req.body.clientKey : '';
     const h = key ? await directory().get(key) : null;

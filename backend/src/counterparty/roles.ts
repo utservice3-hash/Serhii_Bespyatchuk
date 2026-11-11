@@ -25,6 +25,18 @@ export function cpRoleOf(a: { userId: number; roleKey: string }, approvers: read
 }
 export const cpApproverIds = () => approverIds(process.env.CP_APPROVER_IDS || process.env.MINUS_APPROVER_IDS);
 
+/**
+ * `users.id` тих, хто ЗМІНЮЄ «Ліміти клієнтів», не будучи погоджувачем. Сергій 11.11.2026 у відповідь на «Сергій, коли давав
+ * це ДЗ, написав, що тільки він може змінювати ліміти»: «може робити Дар'я, додати у вкладку Ліміти клієнтів — історію змін».
+ * 52 — Дарʼя Протас. Окремий список, а не `CP_APPROVER_IDS`: той самий список погоджує й контрагентів в «Узгодженні», а цього
+ * не просили. `CP_LIMIT_EDITOR_IDS` у .env замінює список (через кому); погоджувачі змінюють ліміти й без нього.
+ */
+export const DEFAULT_LIMIT_EDITOR_IDS = ["52"];
+export function cpLimitEditorIds(env: string | undefined = process.env.CP_LIMIT_EDITOR_IDS): string[] {
+  const list = (env ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return list.length ? list : DEFAULT_LIMIT_EDITOR_IDS;
+}
+
 /** YouScore на нашому ключі; немає ключа — null (перевірки відповідають 503 з поясненням, решта працює). */
 export function youScoreFromOurEnv(env: NodeJS.ProcessEnv = process.env): YouScore | null {
   const key = (env.YOUCONTROL_API_KEY || env.YOUSCORE_API_KEY || "").trim();

@@ -2008,8 +2008,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "POST", path: "/api/counterparty/files", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr"] },
-  // 💳 Ліміти клієнтів (вкладка «Дебіторської заборгованості»): бачать ті, хто бачить запити (не staff); змінює лише Сергій.
+  // 💳 Ліміти клієнтів (вкладка «Дебіторської заборгованості»): бачать ті, хто бачить запити (не staff); змінюють Сергій і
+  // Дарʼя — за users.id, не за роллю, тож рольові проби тут не зрушуються (#3830 тримає саме id).
   { method: "GET", path: "/api/client-limits", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "financier", "team_lead", "manager"], deny: ["kvp", "hr"] },
+  // «Історія змін» (Сергій 11.11.2026) — ті самі, хто бачить список; менеджер — події своїх клієнтів (#3831).
+  { method: "GET", path: "/api/client-limits/history", cls: "GET",
     allow: ["admin", "ceo", "opdir", "financier", "team_lead", "manager"], deny: ["kvp", "hr"] },
   { method: "GET", path: "/api/client-limits/counter", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },

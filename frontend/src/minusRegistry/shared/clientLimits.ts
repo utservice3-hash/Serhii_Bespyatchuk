@@ -67,6 +67,15 @@ export interface ClientLimit {
   /** Угоди клієнта в CRM (Роман 03.11.2026): matched=false — клієнта не зіставлено з CRM, ліміт за неактивністю не скидається. */
   crm?: { matched: boolean; lastDealAt: string | null };
 }
+/**
+ * «Історія змін» вкладки (Сергій 11.11.2026: «додати у вкладку Ліміти клієнтів — історію змін»): усі події всіх лімітів, свіжі
+ * першими — і ручні (by — хто), і автоматичні (by = null: перенос, планова перевірка, призупинення, скидання). Клієнт і
+ * менеджер — з самого ліміту, тож знятий ліміт лишається в історії.
+ */
+export interface LimitHistoryItem extends LimitEvent { limitId: string; name: string; code: string; managerId: string; managerName: string; active: boolean }
+export type HistKind = 'all' | 'manual' | 'auto';
+export const HIST_KINDS: Array<[HistKind, string]> = [['all', 'Усі'], ['manual', 'Зміни людей'], ['auto', 'Автоматичні']];
+export const histIn = (e: Pick<LimitEvent, 'by'>, k: HistKind) => k === 'all' || (k === 'manual') === !!e.by;
 /** Ліміт, скинутий через 3 місяці без угод (Роман 03.11.2026): потрібен новий запит; старі умови — підказкою. */
 export interface ResetLimit {
   id: string; name: string; kind: string; members: Member[];
@@ -217,25 +226,27 @@ export function srcText(x: AnyRow): string {
 }
 
 // ---------- права ----------
+/** Хто змінює ліміти: погоджувач (Сергій) і ті, кому сервер поставив limitEditor (Дарʼя — Сергій 11.11.2026). */
+export const editsLimits = (u: CpUser) => u.role === 'approver' || !!u.limitEditor;
 export const canSeeLimit = (u: CpUser, x: Pick<AnyRow, 'managerId'>) => seesAll(u.role) || x.managerId === u.id || inMyTeam(u, x.managerId);
 /** Лічильник на вкладці: перевищено + прострочено + нова справа. Бухгалтерії й керівникам без дій — не показуємо. */
 export const limitsBadge = (u: CpUser, rows: AnyRow[]) =>
-  u.role === 'approver' || canSubmit(u.role) ? rows.filter(x => !isNoLimit(x) && canSeeLimit(u, x) && x.alert).length : 0;
+  editsLimits(u) || canSubmit(u.role) ? rows.filter(x => !isNoLimit(x) && canSeeLimit(u, x) && x.alert).length : 0;
 
 export type LimitAction = 'edit' | 'keep' | 'set' | 'openReq' | 'applyNew' | 'apply' | 'requestChange';
 /**
  * Хто що може (сервер перевіряє edit / keep / set; решта — переходи в «Узгодження»):
- *   Сергій — «Змінити ліміт» (з причиною), «Задати ліміт» боржнику без ліміту, «Лишити ліміт» після нової справи;
+ *   Сергій і Дарʼя (editsLimits) — «Змінити ліміт» (з причиною), «Задати ліміт» боржнику без ліміту, «Лишити ліміт» після нової справи;
  *            призупинене погодження (req) — рішення в самому запиті;
  *   менеджер (свій клієнт) — «Подати запит на ліміт» / «на нові умови» (перенесений чи заданий ліміт) / «Запросити зміну умов» (req);
  *   тім-лід — клієнти команди лише переглядає.
  */
 export function limitActions(u: CpUser, x: AnyRow): LimitAction[] {
   if (isNoLimit(x)) {
-    if (u.role === 'approver') return ['set'];
+    if (editsLimits(u)) return ['set'];
     return canSubmit(u.role) && x.managerId === u.id ? ['applyNew'] : [];
   }
-  if (u.role === 'approver') return x.suspended ? (x.src === 'req' ? ['openReq'] : ['keep', 'edit']) : ['edit'];
+  if (editsLimits(u)) return x.suspended ? (x.src === 'req' ? ['openReq'] : ['keep', 'edit']) : ['edit'];
   if (canSubmit(u.role) && x.managerId === u.id) {
     if (x.src !== 'req') return ['apply'];
     return x.change || x.suspended ? [] : ['requestChange'];
