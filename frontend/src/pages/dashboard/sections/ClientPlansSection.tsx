@@ -358,7 +358,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   };
   const sorted = [...rows].sort(byRow);
   const noWorkRows = sorted.filter((c) => c.work.noWork);
-  const workRows = sorted.filter((c) => !c.work.noWork);
+  // ⚠️ Проблемні (8350) — окремою групою внизу; «Немає роботи» на них не горить (сервер), а «В роботі» вони не є.
+  const problemRows = sorted.filter((c) => !c.work.noWork && c.lead.problem);
+  const workRows = sorted.filter((c) => !c.work.noWork && !c.lead.problem);
   const pickSort = (k: SortKey) => setSort((s) => (s.key === k ? { key: k, dir: (s.dir === 1 ? -1 : 1) as 1 | -1 } : { key: k, dir: (COLS.find((c) => c.key === k)?.num ? -1 : 1) as 1 | -1 }));
   const resetFilters = () => { setQ(""); setFTeam(auth.role === "team_lead" && auth.teamId != null ? auth.teamId : ""); setFMgr(""); setFSeg(""); setFSt(""); setFPay(""); setQuick(new Set()); setCard("all"); };
   const ddmmOf = (iso: string | null | undefined) => (iso ?? "").slice(5, 10).split("-").reverse().join(".");
@@ -393,7 +395,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       <tr style={{ background: risk ? "#fffbeb" : undefined, cursor: "pointer" }} onClick={toggle}>
         {/* 📌 «Робота» і назва клієнта закріплені зліва (ТЗ 5609, п.6). «Без роботи» — червона смуга (макет). */}
         <td style={{ ...S.td, ...STICKY_COL(0, W_WORK), background: bg, boxShadow: c.work.noWork ? "inset 4px 0 0 #dc2626" : undefined }}>
-          {c.work.noWork
+          {c.lead.problem
+            ? <><span style={S.chip("#b45309", "#fff")} title={`«${c.lead.problem.note}» — ${c.lead.problem.byName ?? ""}`}>⚠️ Проблемний</span>
+                <div style={{ fontSize: 10.5, marginTop: 3, color: "#6b7280" }}>{c.lead.problem.label}</div></>
+            : c.work.noWork
             ? <span style={S.chip("#dc2626", "#fff")} title="За ритм клієнта (ВІП 14, регулярний 30, решта 60 днів) немає ні розмови від 10 с, ні нової угоди чи руху угоди, ні рахунку чи оплати, ні коментаря чи контакту — і немає відкритої задачі чи кроку">Немає роботи</span>
             : <span style={S.chip("#dcfce7", "#166534")} title={c.lead.works.yes ? `Роботу підтверджує: ${WORK_BY_TEXT[c.lead.works.by ?? ""] ?? ""} ${c.lead.works.at ? dm(c.lead.works.at) : ""}${workProofText(c) ? `; ${workProofText(c)}` : ""}` : "відкрита задача чи крок по клієнту"}>В роботі</span>}
           {/* 🧾 Чим підтверджено роботу (задача 6455): угода з посиланням у Kommo або оплата. */}
@@ -804,8 +809,11 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             {/* «Без роботи» — окремим блоком зверху, «В роботі» — під ним (макет 5609). */}
             {noWorkRows.length > 0 && groupHead("Без роботи", noWorkRows.length, `за ритм клієнта (ВІП 14, регулярний 30, решта 60 днів) ні розмови від 10 с, ні угоди, ні замовлення, ні коментаря чи контакту, і немає відкритої задачі`, true)}
             {noWorkRows.map(renderRow)}
-            {workRows.length > 0 && groupHead("В роботі", workRows.length, `за ${data.compare.noWorkDays} днів є угода з рахунком (або в роботі після рахунку) чи оплата від клієнта`, false)}
+            {workRows.length > 0 && groupHead("В роботі", workRows.length, "за ритм клієнта є робота — розмова від 10 с, угода чи її рух, рахунок чи оплата, коментар чи контакт — або відкрита задача чи крок", false)}
             {workRows.map(renderRow)}
+            {/* ⚠️ Проблемні (8350) — видно, але в «Немає роботи», «Без задачі», сплячі й реактивацію не входять. */}
+            {problemRows.length > 0 && groupHead("⚠️ Проблемні", problemRows.length, "з ними неможливо працювати — видно, але не рахуються в «Немає роботи», «Без задачі», сплячих і реактивації", false)}
+            {problemRows.map(renderRow)}
             {rows.length === 0 && (
               <tr><td colSpan={colCount} style={{ ...S.td, color: "#9ca3af", textAlign: "center", padding: 24 }}>
                 немає клієнтів під цей фільтр
@@ -850,9 +858,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         розходяться свідомо. Рахує ядро, не цей екран. <b>Історія</b> — ті самі гроші з рахунку по місяцях за пів року;
         <b> середнє/міс</b> — за {monLong(data.compare.before.from)}–{monLong(data.compare.before.to)}. <b>Плюс / мінус до
         середнього</b> — факт з 1-го до сьогодні проти середнього за ті самі дні трьох попередніх місяців. <b>Не замовили</b> —
-        замовляли в трьох попередніх місяцях, цього — ще ні. <b>Без роботи</b> — за {data.compare.noWorkDays} днів немає ні угоди
-        на «Виставленні рахунку» чи далі (або такої, що зараз у роботі після рахунку), ні оплати від клієнта у Виписці; розмови,
-        кроки й задачі роботу не підтверджують. Період — у Налаштуваннях. У картці — разом із клієнтами без жодної задачі. <b>Всього грошей</b> — маржа успішних угод за весь час. Планів по клієнтах немає (регламент ред. 2). Клієнт =
+        замовляли в трьох попередніх місяцях, цього — ще ні. <b>Без роботи</b> — за ритм клієнта (ВІП 14, регулярний 30, решта 60 днів) немає ні розмови
+        від 10 с, ні угоди чи її руху, ні рахунку чи оплати, ні коментаря чи контакту — і немає відкритої задачі чи кроку.
+        <b> ⚠️ Проблемні</b> — позначені в картці клієнта (конфлікт, контакт втрачено, відмовився працювати): видно окремо, у ці
+        цифри не входять, позначка знімається сама, якщо клієнт знову замовить. <b>Всього грошей</b> — маржа успішних угод за весь час. Планів по клієнтах немає (регламент ред. 2). Клієнт =
         канонічний ключ: злиті телефони й назви рахуються разом.
       </div>
 

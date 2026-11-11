@@ -4732,6 +4732,8 @@ export interface CategoryRules {
   text: string[];
 }
 /** 🚦 Екран тімліда «з ким з постійних говорити» (задача 7360) — усе рахує сервер (`core/clientLeadRules.ts`). */
+/** ⚠️ «Проблемний клієнт» (8350): причина (ключ і підпис), коментар, день позначки, хто поставив. */
+export interface ProblemMark { reason: string; label: string; note: string; day: string; byName: string | null }
 export interface ClientLead {
   /** Колір — лише від замовлення (рахунок або оплата) і ритму сегмента: 🟢 у ритмі · 🟡 мав замовити · 🔴 180+ днів. */
   color: "green" | "yellow" | "red";
@@ -4747,6 +4749,8 @@ export interface ClientLead {
   newRepeat: boolean; source: "leadgen" | "ad" | "manager"; lostThisMonth: boolean;
   /** 🌙 Сезонний клієнт не в сезоні (8351) — зелений, дзвонити не треба. */
   offSeason: boolean;
+  /** ⚠️ Діюча позначка «Проблемний клієнт» (8350); `null` — звичайний клієнт. */
+  problem?: ProblemMark | null;
 }
 
 export interface ClientPlanRow {
@@ -5050,6 +5054,8 @@ export interface ClientCard {
   canForceRegular: boolean; forcedRegular: boolean; forceNote: string | null;
   /** 🌙 Сезонний клієнт (8351): право (КВП / ОД / адмін), позначка, місяці сезону (1–12), примітка, чи зараз не сезон. */
   canSeason: boolean; seasonal: boolean; seasonMonths: number[]; seasonNote: string | null; offSeason: boolean;
+  /** ⚠️ «Проблемний клієнт» (8350): право (та сама межа, що картка), діюча позначка, причини, мінімум коментаря. */
+  canProblem?: boolean; problem?: ProblemMark | null; problemReasons?: { key: string; label: string }[]; problemNoteMin?: number;
   /**
    * 🧭 «В нічийні» (8135 + 8349): чи можна віддати зараз; у нічийних (коли, до коли, чий коментар); у пулі лідгенів.
    * Право — та сама межа, що картка; сервер не пропонує, коли клієнт уже в пулі лідгенів чи в архіві.
@@ -5286,6 +5292,13 @@ export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {
 /** 409 = клієнта вже взяли; текст помилки називає, хто саме. */
 export async function claimOrphanClient(clientKey: string, managerId: number): Promise<void> {
   await api.post("/dashboard/orphan-clients/claim", { clientKey, managerId });
+}
+/** ⚠️ «Проблемний клієнт» (8350): причина зі словника, коментар обовʼязковий. */
+export async function setClientProblem(clientKey: string, reason: string, note: string): Promise<void> {
+  await api.post("/dashboard/client-problem", { clientKey, reason, note });
+}
+export async function clearClientProblem(clientKey: string): Promise<void> {
+  await api.post("/dashboard/client-problem/clear", { clientKey });
 }
 /** 🧭 «В нічийні» (8135): коментар обовʼязковий; 409 — уже в нічийних / у пулі / в архіві. */
 export async function releaseOrphanClient(clientKey: string, note: string): Promise<{ deadline: string; notified: number }> {
