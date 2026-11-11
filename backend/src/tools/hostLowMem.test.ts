@@ -139,8 +139,11 @@ test("#3883 🪞 ВИРОК ЧАСТИН: убита частина, непов�
   assert.deepEqual(j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3), rep(3, 5)]), { ok: true, problems: [], diagnostics: [] });
   const hole = j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3)]);
   assert.equal(hole.ok, false, "🔴 частину вбито — а вирок зелений"); assert.match(hole.problems.join(), /3…4 не перевірила жодна частина/);
-  assert.equal(j({ "a.json": { roots: 5, parts: 2 } }, [rep(3, 5)]).ok, false, "🔴 діра НА ПОЧАТКУ пройшла");
-  assert.equal(j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3), rep(2, 5)]).ok, false, "🔴 перекриття пройшло");
+  // Діагноз мусить НАЗВАТИ файли, а не лише почервоніти: «сума ≠ кореням» ловить і діру, і перекриття, але не каже, де.
+  const head = j({ "a.json": { roots: 5, parts: 2 } }, [rep(3, 5)]);
+  assert.equal(head.ok, false, "🔴 діра НА ПОЧАТКУ пройшла"); assert.match(head.problems.join(), /0…2 не перевірила жодна частина/, "🔴 діру на початку не названо");
+  const lap = j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3), rep(2, 5)]);
+  assert.equal(lap.ok, false, "🔴 перекриття пройшло"); assert.match(lap.problems.join(), /перекриваються на 2…2/, "🔴 перекриття не назване");
   assert.equal(j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3, 2), rep(3, 5)]).ok, false, "🔴 файл без перевірки пройшов");
   assert.equal(j({ "a.json": { roots: 0, parts: 1 } }, []).ok, false, "🔴 нуль коренів = «перевірено»");
   const dup = j({ "a.json": { roots: 2, parts: 2 } }, [rep(0, 1, 1, ["E1"]), rep(1, 2, 1, ["E1"])]);
