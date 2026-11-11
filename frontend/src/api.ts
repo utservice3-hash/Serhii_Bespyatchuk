@@ -4995,13 +4995,34 @@ export interface ClientCall {
 export interface ClientContact {
   id: number; channel: string; note: string | null; fileName: string | null; hasFile: boolean;
   fileUrl: string | null; createdAt: string; createdById: number | null; author: string | null;
+  /** 📎 8347: `kommo` — скрін, прикріплений в угоду Kommo (підтягнуто синком); `manual` — «＋ Контакт». */
+  source?: "kommo" | "manual";
+  kommoDealId?: number | null;
+  kommoUrl?: string | null;
+  /** Стан читання AI: queued / capped — у черзі, done — прочитано, failed — не вдалось. */
+  aiStatus?: string | null;
+  /** chat — переписка (рахується контактом); document / photo / other — видно, але контактом не є. */
+  aiKind?: string | null;
+  aiSummary?: string | null;
+  countsAsContact?: boolean;
 }
 export const CONTACT_CHANNELS: { key: string; label: string }[] = [
   { key: "viber", label: "Viber" }, { key: "telegram", label: "Telegram" }, { key: "email", label: "Email" },
   { key: "call", label: "Дзвінок з особистого" }, { key: "other", label: "Інше" },
 ];
 export function contactChannelLabel(key: string | null): string {
+  // 📎 8347: канал скріна з угоди Kommo — не в переліку «＋ Контакт» (руками такий не створюється), але назву має.
+  if (key === "kommo") return "Скрін у Kommo";
   return CONTACT_CHANNELS.find((c) => c.key === key)?.label ?? (key ?? "");
+}
+/** 📎 8347: що AI сказав про скрін з Kommo — одним рядком для картки й перегляду. */
+export const SCREEN_KIND_UA: Record<string, string> = { chat: "переписка", document: "документ", photo: "фото", other: "інше" };
+export function screenAiLine(c: ClientContact): string | null {
+  if (c.source !== "kommo") return null;
+  if (c.aiStatus === "queued" || c.aiStatus === "capped") return "🤖 AI ще не прочитав скрін — контактом рахується після прочитання, якщо це переписка";
+  if (c.aiStatus === "failed") return "🤖 AI не зміг прочитати скрін — контактом не рахується";
+  if (c.aiKind === "chat") return `🤖 ${c.aiSummary ?? ""}`;
+  return `🤖 ${SCREEN_KIND_UA[c.aiKind ?? ""] ?? "не переписка"} — контактом не рахується`;
 }
 export async function fetchClientContacts(clientKey: string): Promise<ClientContact[]> {
   const { data } = await api.get<{ contacts: ClientContact[] }>("/dashboard/client-contacts", { params: { clientKey } });

@@ -3,6 +3,8 @@ import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { UPLOAD_DIR } from "./uploads.js";
 import { lastContactOf, contactFileVerdict, canDeleteContact, CONTACT_CHANNEL_KEYS } from "../core/clientContacts.js";
+import { countsAsContactSql, KOMMO_CHANNEL, SCREEN_MAX_BYTES } from "../core/kommoScreens.js";
+import { kommoDriveFile, KommoFileError } from "../kommo/client.js";
 import * as carrierPhones from "../core/carrierPhones.js";
 import { stepState, stepVerdict, phoneState } from "../core/clientNextStep.js";
 import { isReturned, RETURN_GAP_DAYS } from "../core/reactivationFilters.js";
@@ -6624,10 +6626,12 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const clientKeys = clientsRes.rows.map((c) => c.client_key);
   const keySet = new Set(clientKeys);
   // 📱 Останній РУЧНИЙ контакт по кожному клієнту (Viber/Telegram/…): одним запитом на список.
+  // 📎 8347: скрін з угоди Kommo — теж контакт, але ЛИШЕ переписка (`countsAsContactSql`; рішення Романа 11.11, п.1).
   const manualRes = await pool.query<{ client_key: string; at: string; channel: string; has_file: boolean }>(
-    `SELECT DISTINCT ON (client_key) client_key, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
-            channel, (stored_name IS NOT NULL) AS has_file
-       FROM client_contacts WHERE client_key = ANY($1) ORDER BY client_key, created_at DESC`, [clientKeys]);
+    `SELECT DISTINCT ON (cc.client_key) cc.client_key, to_char(cc.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
+            cc.channel, (cc.stored_name IS NOT NULL OR cc.kommo_file_uuid IS NOT NULL) AS has_file
+       FROM client_contacts cc WHERE cc.client_key = ANY($1) AND ${countsAsContactSql("cc")}
+      ORDER BY cc.client_key, cc.created_at DESC`, [clientKeys]);
   const manualByKey = new Map(manualRes.rows.map((r) => [r.client_key, r]));
   // 📌 НАСТУПНИЙ КРОК і «нема номера» (ТЗ реактивації 23.09.2026, п.1–2) — окремим запитом по
   // тих самих ключах, щоб не чіпати ядро реактивації. Стан кроку рахується від київського
@@ -7591,15 +7595,25 @@ dashboardRouter.get("/client-search", async (req, res) => {
 const CONTACT_FILES_DIR = path.join(UPLOAD_DIR, "..", "contact-files");
 
 function shapeContact(r: { id: number; channel: string; note: string | null; file_name: string | null; mime: string | null;
-  created_at: string; created_by: number | null; author: string | null }) {
+  created_at: string; created_by: number | null; author: string | null;
+  kommo_deal_id: string | null; ai_status: string | null; ai_kind: string | null; ai_summary: string | null }) {
+  const fromKommo = r.channel === KOMMO_CHANNEL;
   return { id: r.id, channel: r.channel, note: r.note, fileName: r.file_name, hasFile: !!r.file_name,
     fileUrl: r.file_name ? `/api/dashboard/client-contacts/${r.id}/file` : null,
-    createdAt: r.created_at, createdById: r.created_by, author: r.author };
+    createdAt: r.created_at, createdById: r.created_by, author: r.author,
+    // 📎 8347: скрін з угоди Kommo — звідки він, що прочитав AI, і чи рахується контактом (лише переписка).
+    source: fromKommo ? "kommo" as const : "manual" as const,
+    kommoDealId: fromKommo && r.kommo_deal_id ? Number(r.kommo_deal_id) : null,
+    kommoUrl: fromKommo && r.kommo_deal_id ? kommoLeadUrl(Number(r.kommo_deal_id)) : null,
+    aiStatus: fromKommo ? r.ai_status : null, aiKind: fromKommo ? r.ai_kind : null, aiSummary: fromKommo ? r.ai_summary : null,
+    countsAsContact: !fromKommo || r.ai_kind === "chat" };
 }
 const CONTACT_SELECT = `SELECT c.id, c.channel, c.note, c.file_name, c.mime, c.stored_name, c.created_by,
          to_char(c.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-         COALESCE(m.name, u.full_name, u.email) AS author
-    FROM client_contacts c LEFT JOIN users u ON u.id = c.created_by LEFT JOIN managers m ON m.id = u.manager_id`;
+         COALESCE(m.name, u.full_name, u.email, km.name) AS author,
+         c.kommo_deal_id::text AS kommo_deal_id, c.ai_status, c.ai_kind, c.ai_summary
+    FROM client_contacts c LEFT JOIN users u ON u.id = c.created_by LEFT JOIN managers m ON m.id = u.manager_id
+    LEFT JOIN managers km ON km.kommo_user_id = c.kommo_author_id`;
 
 /**
  * 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1). Один живий крок: новий
@@ -7841,11 +7855,24 @@ dashboardRouter.post("/client-contacts", async (req, res) => {
 /** Скрин контакту — лише тим, хто бачить клієнта. `inline`, без токена в URL не віддається. */
 dashboardRouter.get("/client-contacts/:id/file", async (req, res) => {
   const id = Number(req.params.id);
-  const r = await pool.query<{ client_key: string; stored_name: string | null; file_name: string | null; mime: string | null }>(
-    `SELECT client_key, stored_name, file_name, mime FROM client_contacts WHERE id = $1`, [id]);
+  const r = await pool.query<{ client_key: string; stored_name: string | null; file_name: string | null; mime: string | null; kommo_file_uuid: string | null }>(
+    `SELECT client_key, stored_name, file_name, mime, kommo_file_uuid FROM client_contacts WHERE id = $1`, [id]);
   const row = r.rows[0];
-  if (!row?.stored_name) return res.status(404).json({ error: "Файл не знайдено" });
+  if (!row || (!row.stored_name && !row.kommo_file_uuid)) return res.status(404).json({ error: "Файл не знайдено" });
   if (!(await canSeeClient(req.auth!, row.client_key))) return res.status(403).json({ error: "Forbidden" });
+  // 📎 8347: скрін з угоди Kommo не копіюємо — віддаємо з файлів Kommo на запит, тим самим скоупом.
+  if (!row.stored_name) {
+    try {
+      const f = await kommoDriveFile(row.kommo_file_uuid!, SCREEN_MAX_BYTES);
+      res.type(row.mime ?? f.contentType ?? "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(row.file_name ?? "skrin")}`);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      return res.send(Buffer.from(f.bytes));
+    } catch (e) {
+      const gone = e instanceof KommoFileError && e.final;
+      return res.status(gone ? 404 : 502).json({ error: gone ? `Скрін у Kommo недоступний: ${(e as Error).message}` : "Kommo не віддав файл — спробуйте ще раз" });
+    }
+  }
   if (row.mime) res.type(row.mime);
   res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(row.file_name ?? "contact")}`);
   res.sendFile(path.join(CONTACT_FILES_DIR, row.stored_name), (err) => {
@@ -7857,11 +7884,13 @@ dashboardRouter.get("/client-contacts/:id/file", async (req, res) => {
 dashboardRouter.delete("/client-contacts/:id", async (req, res) => {
   const auth = req.auth!;
   const id = Number(req.params.id);
-  const r = await pool.query<{ client_key: string; stored_name: string | null; created_by: number | null; created_at: string }>(
-    `SELECT client_key, stored_name, created_by, created_at FROM client_contacts WHERE id = $1`, [id]);
+  const r = await pool.query<{ client_key: string; stored_name: string | null; created_by: number | null; created_at: string; channel: string }>(
+    `SELECT client_key, stored_name, created_by, created_at, channel FROM client_contacts WHERE id = $1`, [id]);
   const row = r.rows[0];
   if (!row) return res.status(404).json({ error: "Запис не знайдено" });
   if (!(await canSeeClient(auth, row.client_key))) return res.status(403).json({ error: "Forbidden" });
+  // 📎 8347: скрін з угоди Kommo живе в Kommo — прибраний тут, він або повернувся б синком, або розвів би дашборд із CRM.
+  if (row.channel === KOMMO_CHANNEL) return res.status(403).json({ error: "Скрін з угоди Kommo видаляється в самій угоді Kommo" });
   if (!canDeleteContact(isAdminScope(auth), row.created_by, auth.userId, row.created_at, new Date()))
     return res.status(403).json({ error: "Свій запис можна прибрати протягом доби; далі — керівництво" });
   await pool.query(`DELETE FROM client_contacts WHERE id = $1`, [id]);

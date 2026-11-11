@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, saveClientNextStep, doneClientNextStep, pinPlanBasis, clearPlanBasis, type ClientCard } from "../../../api";
+import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, screenAiLine, saveClientNextStep, doneClientNextStep, pinPlanBasis, clearPlanBasis, type ClientCard } from "../../../api";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { ReactCycleStatus, ReactCycleButtons } from "./ReactivationCycle";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
@@ -427,12 +427,19 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                   <button style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
                     onClick={() => setFileId(k.id)}>📎 скрин</button>
                 )}
-                {k.hasFile && (card.planBasis?.contactId === k.id
+                {/* 📎 8347: скрін з угоди Kommo — посилання на саму угоду; закріпити обґрунтуванням його не можна (файл не в нас). */}
+                {k.source === "kommo" && k.kommoUrl && (
+                  <a href={k.kommoUrl} target="_blank" rel="noreferrer" style={{ marginLeft: 8, fontSize: 11 }}>угода ↗</a>
+                )}
+                {k.hasFile && k.source !== "kommo" && (card.planBasis?.contactId === k.id
                   ? <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#1e3a8a" }}>📌 обґрунтування</span>
                   : <button type="button" disabled={busy} onClick={() => pin({ contactId: k.id })} title="Закріпити цей скрин як обґрунтування плану"
                       style={{ marginLeft: 6, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>📌</button>)}
               </div>
               {k.note && <div style={{ color: "#374151", marginTop: 2, whiteSpace: "pre-wrap" }}>{k.note}</div>}
+              {screenAiLine(k) && (
+                <div style={{ marginTop: 2, whiteSpace: "pre-wrap", color: k.aiKind === "chat" ? "#374151" : "#6b7280" }}>{screenAiLine(k)}</div>
+              )}
             </div>
           ))}
         </>

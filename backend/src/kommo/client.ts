@@ -1122,3 +1122,108 @@ export async function forEachLeadNotePageByIds(
 ): Promise<number> {
   return forEachNotePageByIds("leads", ids, onPage);
 }
+
+// ─── 📎 Вкладення угод і файли Kommo (задача 8347) ───────────────────────────
+
+interface KommoAttachmentRaw {
+  id: number;
+  entity_id: number;
+  created_by: number;
+  created_at: number;
+  note_type: string;
+  params?: { is_drive_attachment?: boolean; file_uuid?: string; original_name?: string } | null;
+}
+
+/** Нотатка-вкладення угоди — лише поля, що потрібні скрінам (`core/kommoScreens.ts`). */
+export interface KommoAttachmentNote {
+  id: number; entityId: number; createdBy: number; createdAt: number; noteType: string;
+  isDrive: boolean; fileUuid: string | null; originalName: string | null;
+}
+
+/**
+ * Нотатки-ВКЛАДЕННЯ угод, оновлені в [fromUnix, toUnix], посторінково. Фільтр типу — на боці Kommo
+ * (`filter[note_type]=attachment`): за день це десятки нотаток, а не тисячі всіх типів.
+ */
+export async function forEachLeadAttachmentPage(
+  fromUnix: number,
+  toUnix: number,
+  onPage: (notes: KommoAttachmentNote[]) => Promise<void>
+): Promise<number> {
+  const limit = 250;
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const data = await kommoRequest<KommoListResponse<KommoAttachmentRaw>>(
+      `/api/v4/leads/notes?limit=${limit}&page=${page}` +
+        `&${encodeURIComponent("filter[note_type][]")}=attachment` +
+        `&${encodeURIComponent("filter[updated_at][from]")}=${fromUnix}` +
+        `&${encodeURIComponent("filter[updated_at][to]")}=${toUnix}`
+    );
+    const raw = data._embedded?.notes ?? [];
+    const notes = raw.map((n): KommoAttachmentNote => ({
+      id: n.id, entityId: n.entity_id, createdBy: n.created_by, createdAt: n.created_at, noteType: n.note_type,
+      isDrive: n.params?.is_drive_attachment === true,
+      fileUuid: typeof n.params?.file_uuid === "string" ? n.params.file_uuid : null,
+      originalName: typeof n.params?.original_name === "string" ? n.params.original_name : null,
+    }));
+    if (notes.length) {
+      await onPage(notes);
+      total += notes.length;
+    }
+    if (raw.length < limit || !data._links?.next) break;
+    page += 1;
+  }
+  return total;
+}
+
+let driveUrlCache: string | null = null;
+async function driveUrl(): Promise<string> {
+  if (driveUrlCache) return driveUrlCache;
+  const acc = await kommoRequest<{ drive_url?: string }>("/api/v4/account?with=drive_url");
+  const u = String(acc.drive_url ?? "").replace(/\/+$/, "");
+  if (!u) throw new Error("Kommo не віддав адресу файлового сховища (drive_url)");
+  driveUrlCache = u;
+  return u;
+}
+
+/** GET до файлового сховища Kommo (інший хост) — через ТОЙ САМИЙ обмежувач темпу, що й решта запитів. */
+async function driveFetch(url: string): Promise<Response> {
+  await throttle();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      headers: { Authorization: `Bearer ${config.kommo.token}`, ...KOMMO_HEADERS, Accept: "*/*" },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export class KommoFileError extends Error {
+  constructor(message: string, readonly status: number | null, readonly final: boolean) { super(message); }
+}
+
+/**
+ * 📥 Файл зі сховища Kommo за `file_uuid`: інформація про файл → посилання на скачування → байти. Два запити, обидва
+ * під обмежувачем. Файл у кошику / видалений → `final` (повтор не допоможе); більший за `maxBytes` → `final`, байти не
+ * тягнемо. Перевірено на проді 11.11.2026: токен дашборда скачує скрін (HTTP 200, 341 688 байт).
+ */
+export async function kommoDriveFile(fileUuid: string, maxBytes: number): Promise<{ bytes: Uint8Array; contentType: string | null; name: string | null }> {
+  const drive = await driveUrl();
+  const info = await driveFetch(`${drive}/v1.0/files/${encodeURIComponent(fileUuid)}`);
+  if (info.status === 404 || info.status === 410) throw new KommoFileError("файл у Kommo не знайдено", info.status, true);
+  if (!info.ok) throw new KommoFileError(`Kommo: інформація про файл — ${String(info.status)}`, info.status, false);
+  const j = await info.json() as { size?: number; name?: string; is_trashed?: boolean; deleted_at?: unknown; _links?: { download?: { href?: string } } };
+  if (j.is_trashed || j.deleted_at) throw new KommoFileError("файл у Kommo видалено", null, true);
+  if (typeof j.size === "number" && j.size > maxBytes) throw new KommoFileError(`файл завеликий (${String(j.size)} байт)`, null, true);
+  const href = j._links?.download?.href;
+  if (!href) throw new KommoFileError("Kommo не дав посилання на скачування", null, false);
+  const r = await driveFetch(href);
+  if (r.status === 404 || r.status === 410) throw new KommoFileError("файл у Kommo не знайдено", r.status, true);
+  if (!r.ok) throw new KommoFileError(`Kommo: скачування файлу — ${String(r.status)}`, r.status, false);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  if (bytes.length > maxBytes) throw new KommoFileError(`файл завеликий (${String(bytes.length)} байт)`, null, true);
+  return { bytes, contentType: r.headers.get("content-type"), name: typeof j.name === "string" ? j.name : null };
+}

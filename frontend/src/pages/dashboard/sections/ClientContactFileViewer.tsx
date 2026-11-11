@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchClientContacts, fetchContactFileBlobUrl, contactChannelLabel, type ClientContact } from "../../../api";
+import { fetchClientContacts, fetchContactFileBlobUrl, contactChannelLabel, screenAiLine, type ClientContact } from "../../../api";
 
 /**
  * 📎 ПЕРЕГЛЯД СКРИНУ КОНТАКТУ — НА МІСЦІ, А НЕ В НОВІЙ ВКЛАДЦІ (задача 4310, п.1.3).
@@ -95,6 +95,11 @@ export function ClientContactFileViewer({ clientKey, clientName, initialId, cont
           <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
             {cur.author && <>{cur.author} · </>}{cur.fileName ?? "скрин"}
             {cur.note && <div style={{ color: "var(--text)", marginTop: 4, whiteSpace: "pre-wrap" }}>{cur.note}</div>}
+            {/* 📎 8347: скрін з угоди Kommo — що прочитав AI і посилання на угоду. */}
+            {screenAiLine(cur) && <div style={{ color: "var(--text)", marginTop: 4, whiteSpace: "pre-wrap" }}>{screenAiLine(cur)}</div>}
+            {cur.source === "kommo" && cur.kommoUrl && (
+              <a href={cur.kommoUrl} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 4 }}>Відкрити угоду в Kommo ↗</a>
+            )}
           </div>
         )}
         {pick != null && !blobUrl && !err && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>завантаження скрину…</div>}
