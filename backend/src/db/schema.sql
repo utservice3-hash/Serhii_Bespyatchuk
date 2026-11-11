@@ -742,6 +742,21 @@ ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal_note TEXT;
 -- 🌙 Місяці сезону (1–12) сезонного клієнта — задача 8351 (Юля 06.11, Роман 10.11 «роби»). Поза ними клієнт «не в
 -- сезоні»: не сплячий, не в реактивації, не «Немає роботи». NULL / порожньо = позначка без дії (як до 8351).
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal_months SMALLINT[];
+-- ⚠️ «ПРОБЛЕМНИЙ КЛІЄНТ» — задача 8350 (Віка 06.11: Integral System після конфлікту кидає трубку; логіст звільнився,
+-- нового контакту не дають). Позначка з причиною і ОБОВʼЯЗКОВИМ коментарем; ставить менеджер свого клієнта, тімлід —
+-- своєї команди, КВП — будь-якого. Клієнт видно окремою групою, але він не рахується в «Немає роботи», «Без задачі»,
+-- сплячих і реактивації; позначка перестає діяти сама, щойно клієнт знову замовить (рахунок чи оплата після неї).
+-- Роман 11.11.2026: «викочуй» на макет. Причина, дата, автор і коментар — ОДНИМ запитом (CHECK крос-колонковий).
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS problem_at TIMESTAMPTZ;
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS problem_by INTEGER REFERENCES users(id);
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS problem_reason TEXT;
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS problem_note TEXT;
+DO $$ BEGIN
+  ALTER TABLE loyalty_overrides ADD CONSTRAINT loyalty_overrides_problem_chk
+    CHECK (problem_at IS NULL OR (problem_by IS NOT NULL AND problem_reason IS NOT NULL
+           AND problem_reason IN ('conflict', 'contact_lost', 'refused', 'other')
+           AND problem_note IS NOT NULL AND btrim(problem_note) <> ''));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- Місяць, З ЯКОГО діє нове закріплення менеджера. Правило власника: поточний
 -- місяць лишається за старим (план і факт не рухаються посеред місяця), новий
 -- планує з наступного. NULL = діє одразу (закріплення, зроблені до цього правила).

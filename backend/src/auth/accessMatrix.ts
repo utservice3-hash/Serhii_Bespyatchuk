@@ -900,6 +900,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/orphan-clients/unrelease", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // ⚠️ «Проблемний клієнт» (8350): межа — `canSeeClient` ПЕРШИМ оператором, як `/react-decision` і «В нічийні».
+  { method: "POST", path: "/api/dashboard/client-problem", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/client-problem/clear", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   // 🚫 «Закрити» в «Нічийних» (задача 7187) — той самий допуск, що «Взяти в роботу»: менеджер без прапорця — 403.
   { method: "POST", path: "/api/dashboard/orphan-clients/close", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },

@@ -161,6 +161,7 @@ import * as clientLeadFacts from "../core/clientLeadFacts.js";
 import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as orphanRelease from "../core/orphanRelease.js";
+import * as problemClient from "../core/problemClient.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate, periodNotOver } from "../core/dates.js";
@@ -6634,7 +6635,17 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   ]);
   const nowYm = kyivToday().slice(0, 7);
   // 🌙 Сезонний не в сезоні — не в реактивації (задача 8351): ні вкладки, ні циклу.
-  const inReactNow = (key: string) => !factsFor(seg, key).offSeason && reactCycleRules.inReact(lastInvByKey.get(key) ?? null, nowYm);
+  // ⚠️ Проблемний клієнт (8350): діюча позначка — до першого замовлення ПІСЛЯ неї (рахунок чи оплата).
+  const problemMarks = await problemClient.problemsFor(pool, clientKeys);
+  const activeProblem = new Map<string, problemClient.ProblemMark>();
+  for (const c of clientsRes.rows) {
+    const m = problemMarks.get(c.client_key);
+    if (m && problemClient.problemActive(m.day, clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null))) {
+      activeProblem.set(c.client_key, m);
+    }
+  }
+  const inReactNow = (key: string) => !factsFor(seg, key).offSeason && !activeProblem.has(key)
+    && reactCycleRules.inReact(lastInvByKey.get(key) ?? null, nowYm);
   // 🔗 Хто приєднаний до кожного рядка (ТЗ 22.09, п.2.3) — лише назви, у гроші не входить.
   const aliasByKey = await clientAliasNames.aliasNamesFor(clientKeys);
   // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
@@ -6885,12 +6896,15 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       }, segment, todayKyiv),
       talk10: f?.talk10 ?? null,
       summary: f?.summary ?? null,
-      handOver: clientLeadRules.handOverDue({ color, taskOpen, taskDeadline: rt?.taskDeadline ?? null,
+      // ⚠️ Проблемного не «передають іншому» (8350) — з ним неможливо працювати нікому.
+      handOver: !activeProblem.has(c.client_key) && clientLeadRules.handOverDue({ color, taskOpen, taskDeadline: rt?.taskDeadline ?? null,
         taskCreated: rt?.taskId != null ? leadTaskCreated.get(rt.taskId) ?? null : null, talk10: f?.talk10 ?? null, today: todayKyiv }),
       newRepeat: clientLeadRules.becameRepeatIn(f?.secondPaid ?? null, leadYm),
       source: clientLeadRules.repeatSource(f?.leadgen ?? false, f?.firstPaidChannel ?? null),
       lostThisMonth: !off && clientLeadRules.lostIn(lastOrder, leadYm),
       offSeason: off,
+      // ⚠️ Діюча позначка «Проблемний» (8350): причина, коментар, коли й хто. `null` — звичайний клієнт.
+      problem: activeProblem.get(c.client_key) ?? null,
     };
   };
   const leadByKey = new Map(rosterRows.map((c) => [c.client_key, leadOf(c)]));
@@ -7000,6 +7014,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         taskOpen: (reactByKey.get(c.client_key)?.taskId ?? null) != null && !["done", "cancelled"].includes(reactByKey.get(c.client_key)?.taskStatus ?? ""),
         taskDue: reactByKey.get(c.client_key)?.taskDeadline ?? null,
         today: todayKyiv,
+        problem: activeProblem.has(c.client_key),
       }),
       /** 🧾 Чим підтверджено роботу за період (задача 6455): угода «від рахунку» і / або оплата. Обидва `null` — «без роботи». */
       workProof: (() => {
@@ -7916,6 +7931,10 @@ dashboardRouter.get("/client-card", async (req, res) => {
   const h = head.rows[0];
   // 🧭 «В нічийні» / пул лідгенів (8135 + 8349) — стан для блоку в картці.
   const handoff = await orphanRelease.handoffState(pool, clientKey);
+  // ⚠️ «Проблемний» (8350): позначка діє до першого замовлення ПІСЛЯ неї — та сама дата, що в списку.
+  const problemMark = (await problemClient.problemsFor(pool, [clientKey])).get(clientKey) ?? null;
+  const cardLastInv = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
+  const problemOn = problemMark != null && problemClient.problemActive(problemMark.day, clientLeadRules.lastOrderDate(h?.last_paid ?? null, cardLastInv));
   const [cardStep, cardPhones, cardLastCall, cardTodayRes] = await Promise.all([
     pool.query<{ id: number; text: string; due_date: string | null; author: string | null }>(
       `SELECT s.id, s.text, to_char(s.due_date, 'YYYY-MM-DD') AS due_date, COALESCE(m.name, u.full_name, u.email) AS author
@@ -8073,6 +8092,11 @@ dashboardRouter.get("/client-card", async (req, res) => {
     released: handoff.released,
     inLeadgenPool: handoff.inLeadgenPool,
     releaseNoteMin: orphanRelease.RELEASE_NOTE_MIN,
+    // ⚠️ «Проблемний клієнт» (8350): та сама межа, що роут (`canSeeClient` уже пройдено). Позначка — лише діюча.
+    canProblem: true,
+    problem: problemOn ? problemMark : null,
+    problemReasons: problemClient.PROBLEM_REASONS,
+    problemNoteMin: problemClient.PROBLEM_NOTE_MIN,
     seasonal: h?.seasonal ?? false,
     seasonMonths: (h?.season_months ?? []).map(Number),
     seasonNote: h?.season_note ?? null,
@@ -8332,6 +8356,40 @@ dashboardRouter.post("/orphan-clients/unrelease", async (req, res) => {
   await orphanRelease.closeReleaseNotices(pool, clientKey);
   await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
     [clientKey, auth.userId, "🧭 Повернуто з «Нічийних» — лишається за менеджером"]);
+  res.json({ ok: true, clientKey });
+});
+
+/**
+ * ⚠️ «ПРОБЛЕМНИЙ КЛІЄНТ» (задача 8350; Роман 11.11.2026 «викочуй»). Ставить той, хто бачить клієнта (`canSeeClient`
+ * ПЕРШИМ оператором): менеджер свого, тімлід своєї команди, КВП / ОД / адмін — будь-якого. Причина — зі словника,
+ * коментар обовʼязковий. Клієнт лишається на екрані групою «⚠️ Проблемні», але не рахується в «Немає роботи»,
+ * «Без задачі», сплячих і реактивації; позначка перестає діяти сама, щойно клієнт знову замовить.
+ */
+dashboardRouter.post("/client-problem", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const reason = String(req.body?.reason ?? "").trim();
+  if (!problemClient.PROBLEM_REASON_KEYS.includes(reason)) {
+    return res.status(400).json({ error: `Оберіть причину: ${problemClient.PROBLEM_REASONS.map((r) => r.label).join(" / ")}` });
+  }
+  const note = problemClient.cleanProblemNote(req.body?.note);
+  if (!note) return res.status(400).json({ error: `Напишіть, що сталось і чому з клієнтом не працюємо (від ${problemClient.PROBLEM_NOTE_MIN} символів)` });
+  await problemClient.markProblem(pool, { clientKey, userId: auth.userId, reason, note });
+  // 💬 Причина — і в коментарях клієнта, щоб через місяць було видно, хто і чому.
+  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
+    [clientKey, auth.userId, `⚠️ Проблемний клієнт — ${problemClient.problemLabel(reason)}: ${note}`]);
+  res.json({ ok: true, clientKey, reason });
+});
+
+/** Зняти позначку «Проблемний» руками — та сама межа. */
+dashboardRouter.post("/client-problem/clear", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  if (!(await problemClient.clearProblem(pool, clientKey))) return res.status(409).json({ error: "Позначки «Проблемний» на клієнті немає" });
+  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
+    [clientKey, auth.userId, "⚠️ Позначку «Проблемний клієнт» знято"]);
   res.json({ ok: true, clientKey });
 });
 

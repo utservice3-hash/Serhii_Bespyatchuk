@@ -27,7 +27,11 @@ const COLOR = {
   green: { dot: "🟢", title: "Зелені", sub: "замовляють у своєму звичному ритмі", bg: "#f0fdf4", fg: "#166534", line: "#86efac" },
   yellow: { dot: "🟡", title: "Жовті", sub: "мали замовити за своїм ритмом, але не замовили", bg: "#fffbeb", fg: "#92400e", line: "#fcd34d" },
   red: { dot: "🔴", title: "Червоні", sub: "втрачені — 180+ днів без замовлення", bg: "#fef2f2", fg: "#991b1b", line: "#fca5a5" },
+  // ⚠️ Задача 8350: з ними неможливо працювати — видно окремо, у лічильники менеджера не йдуть.
+  problem: { dot: "⚠️", title: "Проблемні", sub: "з ними неможливо працювати — не рахуються в лічильниках менеджера, «Немає роботи» і «передати»", bg: "#fff7ed", fg: "#b45309", line: "#fdba74" },
 } as const;
+/** Група рядка: діюча позначка «Проблемний» (8350) переважає колір. */
+const groupOf = (r: Row): keyof typeof COLOR => (r.lead.problem ? "problem" : r.lead.color);
 const WORK_BY: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці", season: "не сезон (сезонний)" };
 const SOURCE: Record<string, string> = { leadgen: "лідогенерація", ad: "реклама", manager: "менеджер" };
 
@@ -42,9 +46,11 @@ const S = {
 
 /** Підсумок набору рядків — одне місце для команди, менеджера й шапки. */
 function stats(rows: Row[]) {
-  const s = { all: rows.length, green: 0, yellow: 0, red: 0, working: 0, handOver: 0, newRepeat: 0, lost: 0,
+  const s = { all: rows.length, green: 0, yellow: 0, red: 0, problem: 0, working: 0, handOver: 0, newRepeat: 0, lost: 0,
     bySource: { leadgen: 0, ad: 0, manager: 0 } as Record<string, number> };
   for (const r of rows) {
+    // ⚠️ Проблемний (8350) — лише своїм числом: не в кольорах, не в «працюють», не в «передати», не у «втратили».
+    if (r.lead.problem) { s.problem++; continue; }
     s[r.lead.color]++;
     if (r.lead.color !== "green" && r.lead.works.yes) s.working++;
     if (r.lead.handOver) s.handOver++;
@@ -66,7 +72,7 @@ function Counters({ rows, month }: { rows: Row[]; month: string }) {
   );
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
-      {box(s.all, "постійних", `🟢 ${s.green} · 🟡 ${s.yellow} · 🔴 ${s.red}`)}
+      {box(s.all, "постійних", `🟢 ${s.green} · 🟡 ${s.yellow} · 🔴 ${s.red}${s.problem ? ` · ⚠️ ${s.problem}` : ""}`)}
       {box(s.newRepeat, `нових постійних за ${monthName(month)}`, src ? `звідки: ${src}` : "друга оплата припала на цей місяць", "#166534")}
       {box(s.lost, `втратили за ${monthName(month)}`, "цього місяця минуло 180 днів без замовлення", s.lost ? "#b91c1c" : undefined)}
       {box(s.handOver, "передати іншому менеджеру", "дедлайн задачі минув, розмови не було", s.handOver ? "#b91c1c" : undefined)}
@@ -82,6 +88,7 @@ function LevelTable({ title, groups, onPick }: { title: string; groups: { id: nu
         <thead><tr>
           <th style={S.th}>{title}</th><th style={{ ...S.th, textAlign: "right" }}>Постійних</th>
           <th style={{ ...S.th, textAlign: "right" }}>🟢</th><th style={{ ...S.th, textAlign: "right" }}>🟡</th><th style={{ ...S.th, textAlign: "right" }}>🔴</th>
+          <th style={{ ...S.th, textAlign: "right" }} title="проблемні — з ними неможливо працювати; у цифри менеджера не йдуть">⚠️</th>
           <th style={{ ...S.th, textAlign: "right" }} title="з жовтих і червоних — тих, з ким працюють за вікно сегмента">Працюють з 🟡+🔴</th>
           <th style={{ ...S.th, textAlign: "right" }}>Передати</th>
         </tr></thead>
@@ -95,6 +102,7 @@ function LevelTable({ title, groups, onPick }: { title: string; groups: { id: nu
                 <td style={{ ...S.td, textAlign: "right", color: COLOR.green.fg }}>{s.green}</td>
                 <td style={{ ...S.td, textAlign: "right", color: COLOR.yellow.fg, fontWeight: 700 }}>{s.yellow}</td>
                 <td style={{ ...S.td, textAlign: "right", color: COLOR.red.fg, fontWeight: 700 }}>{s.red}</td>
+                <td style={{ ...S.td, textAlign: "right", color: s.problem ? COLOR.problem.fg : "#9ca3af" }}>{s.problem}</td>
                 <td style={{ ...S.td, textAlign: "right" }}>{s.working} з {s.yellow + s.red}</td>
                 <td style={{ ...S.td, textAlign: "right", color: s.handOver ? "#b91c1c" : "#9ca3af", fontWeight: s.handOver ? 700 : 400 }}>{s.handOver}</td>
               </tr>
@@ -167,12 +175,13 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
     const toggle = (e: React.MouseEvent) => { if ((e.target as HTMLElement).closest("button, a, input, textarea, select")) return; setOpen(isOpen ? null : c.clientKey); };
     return (
       <Fragment key={c.clientKey}>
-        <tr onClick={toggle} style={{ cursor: "pointer", background: isOpen ? "#eff6ff" : undefined, boxShadow: `inset 4px 0 0 ${COLOR[L.color].line}` }}>
+        <tr onClick={toggle} style={{ cursor: "pointer", background: isOpen ? "#eff6ff" : undefined, boxShadow: `inset 4px 0 0 ${COLOR[groupOf(c)].line}` }}>
           <td style={{ ...S.td, minWidth: 220 }}>
             <div style={{ fontWeight: 700 }}>{c.clientName}</div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, flexWrap: "wrap" }}>
               <SegmentBadge segment={c.segment} tip={data.categoryRules?.segmentTips[c.segment]} />
               {L.handOver && <span style={S.chip("#dc2626", "#fff")} title="дедлайн задачі на дзвінок минув, а розмови від 10 с після неї не було (правило Сергія). Передає тімлід.">⚠️ передати іншому менеджеру</span>}
+              {L.problem && <span style={S.chip("#b45309", "#fff")} title={`«${L.problem.note}» — ${L.problem.byName ?? ""}, ${dm(L.problem.day)}`}>⚠️ Проблемний · {L.problem.label}</span>}
               {L.offSeason && <span style={S.chip("#eef2ff", "#4338ca")} title={`сезонний клієнт: возить ${monthsLabel(c.seasonMonths)} — зараз не сезон, дзвонити не треба`}>🌙 не сезон</span>}
               {L.newRepeat && <span style={S.chip("#dcfce7", "#166534")} title={`друга оплата — цього місяця · звідки: ${SOURCE[L.source]}`}>новий постійний</span>}
             </div>
@@ -183,7 +192,9 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
             <div style={grey} title="замовлення = рахунок («Виставлення рахунку» і далі) або оплата — що свіжіше">{L.lastOrder ? `останнє ${dm(L.lastOrder)}.${L.lastOrder.slice(2, 4)}` : ""}</div>
           </td>
           <td style={S.td}>
-            {L.works.yes
+            {L.problem
+              ? <div style={{ fontSize: 12, maxWidth: 320 }}><b style={{ color: "#b45309" }}>{L.problem.label}</b>: «{L.problem.note}»<div style={grey}>{L.problem.byName ?? "—"}, {dm(L.problem.day)} · знімається сама, якщо клієнт знову замовить</div></div>
+              : L.works.yes
               ? <span style={S.chip("#dcfce7", "#166534")} title={`за ${L.works.windowDays} дн. (ритм сегмента) є робота`}>✅ працюють · {WORK_BY[L.works.by ?? ""]} {dm(L.works.at)}</span>
               : <span style={S.chip("#fef2f2", "#b91c1c")} title="розмова від 10 с, нова угода чи рух угоди, замовлення, коментар, контакт або оплата у Виписці — нічого">роботи немає за {L.works.windowDays} дн.</span>}
           </td>
@@ -226,7 +237,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
     );
   };
 
-  const group = (color: "green" | "yellow" | "red", rows: Row[]) => {
+  const group = (color: keyof typeof COLOR, rows: Row[]) => {
     const m = COLOR[color];
     const sorted = [...rows].sort((a, b) => Number(b.lead.handOver) - Number(a.lead.handOver) || b.lifetimeRevenue - a.lifetimeRevenue);
     const hidden = color === "green" && !showGreen;
@@ -235,7 +246,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
         <div style={{ padding: "10px 14px", background: m.bg, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <b style={{ color: m.fg, fontSize: 15 }}>{m.dot} {m.title} · {rows.length}</b>
           <span style={{ fontSize: 12, color: "#6b7280" }}>{m.sub}</span>
-          {color !== "green" && <span style={{ fontSize: 12, color: "#374151" }}>· працюють: {rows.filter((r) => r.lead.works.yes).length} з {rows.length}</span>}
+          {color !== "green" && color !== "problem" && <span style={{ fontSize: 12, color: "#374151" }}>· працюють: {rows.filter((r) => r.lead.works.yes).length} з {rows.length}</span>}
           {color === "green" && rows.length > 0 && (
             <button type="button" onClick={() => setShowGreen((v) => !v)} style={{ ...S.btn(), marginLeft: "auto" }}>{showGreen ? "Сховати" : "Показати"}</button>
           )}
@@ -269,7 +280,10 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
       {actErr && <div role="alert" style={{ ...S.card, color: "#b91c1c", fontWeight: 600 }}>⚠️ {actErr}</div>}
       {!isManager && team == null && <LevelTable title="Команда" groups={teams} onPick={(id) => { setTeam(id); setMgr(null); }} />}
       {!isManager && team != null && mgr == null && <LevelTable title="Менеджер" groups={managers} onPick={setMgr} />}
-      {showClients && (["yellow", "red", "green"] as const).map((k) => group(k, (mgrRows ?? []).filter((c) => c.lead.color === k)))}
+      {/* ⚠️ «Проблемні» (8350) — між червоними й зеленими, і лише коли вони є (порожня група нічого не каже). */}
+      {showClients && (["yellow", "red", "problem", "green"] as const)
+        .filter((k) => k !== "problem" || (mgrRows ?? []).some((c) => groupOf(c) === "problem"))
+        .map((k) => group(k, (mgrRows ?? []).filter((c) => (k === "problem" ? c.lead.problem != null : !c.lead.problem && c.lead.color === k))))}
       {creating && (
         <CreateTaskDialog client={creating} busy={busy} error={actErr}
           onCancel={() => { setCreating(null); setActErr(null); }}

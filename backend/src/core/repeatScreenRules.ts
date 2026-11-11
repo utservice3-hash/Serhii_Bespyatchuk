@@ -68,6 +68,8 @@ export interface WorkInput {
   /** Відкрита задача по клієнту в Задачнику і її строк. */
   taskOpen: boolean; taskDue: string | null;
   today: string;
+  /** ⚠️ Діюча позначка «Проблемний клієнт» (8350): не «Немає роботи» і не «Без задачі» — з ним неможливо працювати. */
+  problem?: boolean;
 }
 
 /**
@@ -81,8 +83,8 @@ export interface WorkInput {
 export function workFlags(w: WorkInput): { noWork: boolean; noTask: boolean; overdue: boolean } {
   const late = (open: boolean, due: string | null) => open && due != null && due.slice(0, 10) < w.today;
   return {
-    noWork: !w.works && !w.stepOpen && !w.taskOpen,
-    noTask: !w.stepOpen && !w.taskOpen,
+    noWork: !w.problem && !w.works && !w.stepOpen && !w.taskOpen,
+    noTask: !w.problem && !w.stepOpen && !w.taskOpen,
     overdue: late(w.stepOpen, w.stepDue) || late(w.taskOpen, w.taskDue),
   };
 }
