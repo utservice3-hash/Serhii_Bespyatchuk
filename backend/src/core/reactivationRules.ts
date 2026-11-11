@@ -220,6 +220,17 @@ export function inReactivationTab(f: {
  * написати ДРУГУ копію поруч — рівно те, проти чого стоїть увесь цей прохід.
  * `clientSegments` її ре-експортує, тож жоден виклик не змінився.
  */
+/**
+ * 🚶 ФІЗОСОБА З МЕНШ НІЖ 3 ПОЇЗДКАМИ — НЕ В РЕАКТИВАЦІЇ (задача 8339; Дмитро Яцик 06.11: переїзд, разова доставка —
+ * повторного вантажу не буде, менеджер дзвонить впусту; Роман 11.11 «роби»). Як і телефонні дженерики: правило діє
+ * лише на сплячих і втрачених — активна фізособа (замовляла нещодавно) лишається, поки не засне (Роман 11.11, п.1 «так»).
+ * Поїздка = успішна оплачена угода. Компанії й ФОП — лишаються завжди; фізособа з 3+ поїздками — теж.
+ */
+export const FEW_TRIPS_MIN = 3;
+export function fewTripsPerson(c: { kind: "legal" | "person"; orders: number }): boolean {
+  return c.kind === "person" && c.orders < FEW_TRIPS_MIN;
+}
+
 export function keepInReactivation(f: { phoneKey: boolean; paymentType: string | null }): boolean {
   return !f.phoneKey || (f.paymentType ?? "").toLowerCase().includes("езнал");
 }
