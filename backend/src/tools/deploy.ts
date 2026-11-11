@@ -19,6 +19,7 @@ import {
   standToRefusal,
   MARK_REPORT, MARK_STOP,
   holdsLockAfter,
+  npmTestArgs, heavyForeign, TEST_RUNNER,
   shouldRerunAccept, acceptAfterRerun, shouldAlertOnStop, stopAlertText, alertDelivery,
   type AcceptRound,
   type Mode, type Phase, type Step, type Artifact,
@@ -65,6 +66,9 @@ const API_BASE = HEALTH.replace(/\/api\/health$/, "");
 const WARM_MS = 16 * 60 * 1000;
 /** Пауза перед повторним колом приймання: шум Neon і синку живе хвилинами, а не секундами. */
 const RERUN_PAUSE_MS = 2 * 60 * 1000;
+/** Скільки `quietHost` чекає, поки чужі важкі процеси закінчаться: довше за найдовший `test:matrix` (~12 хв). */
+const QUIET_WAIT_MS = 15 * 60 * 1000;
+const QUIET_POLL_MS = 15 * 1000;
 
 const sh = (cmd: string, args: string[], cwd?: string): string =>
   execFileSync(cmd, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
@@ -349,8 +353,33 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
           + `   Найчастіша причина: у стенді немає гілки origin/${c.branch} — прожени git fetch origin.` };
     }
   },
+  /**
+   * 🏋 ТИША НА ХОСТИНГУ ПЕРЕД ЗБІРКОЮ (11.11.2026, #3886). Чужий прогін тестів / `tsc` / `vite` поруч зі збіркою — це
+   * рівно та сума, на якій ядро вбивало прод (48 із 52 аварій під замком — у перші 300 с фази check). Досі це тримали
+   * ~40 ручних `wait-<sha>.sh`; тепер — крок. Чекаємо до `QUIET_WAIT_MS`, далі гучна відмова з переліком процесів.
+   * Поза хостингом (немає `/proc/lve`) — не застосовується, і крок каже це вголос.
+   */
+  quietHost: async () => {
+    if (!existsSync("/proc/lve")) return { id: "quietHost", ok: true, detail: "не хостинг (немає /proc/lve) — перевірка тиші не застосовується" };
+    const self = new Set<number>([process.pid, process.ppid]);
+    const started = Date.now();
+    for (;;) {
+      const heavy = heavyForeign(sh("ps", ["-u", String(process.getuid?.() ?? ""), "-o", "pid=,args="]).split("\n"), self);
+      if (!heavy.length) return { id: "quietHost", ok: true, detail: `тихо (чекали ${Math.round((Date.now() - started) / 1000)} с)` };
+      if (Date.now() - started > QUIET_WAIT_MS) return { id: "quietHost", ok: false,
+        detail: `🔴 ${Math.round(QUIET_WAIT_MS / 60_000)} хв на хостингу живуть чужі важкі процеси — збірка поруч із ними вбиває прод:\n`
+          + heavy.map((h) => `   ${h}`).join("\n") + "\n   Дочекайся, поки вони закінчаться (або спитай власника сесії), і повтори check." };
+      await new Promise((r) => setTimeout(r, QUIET_POLL_MS));
+    }
+  },
   buildBack: (c) => run("buildBack", () => { needDeps(c.be, "backend"); sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
-  tscFront: (c) => run("tscFront", () => sh("npx", ["tsc", "-b"], c.fe), "tsc -b фронту (НЕ --noEmit: він там нічого не перевіряє)"),
+  /**
+   * 🧩 ТИПИ ФРОНТУ ЧАСТИНАМИ (11.11.2026, #3883–#3885). Не `npx tsc -b` (одна програма ~850–930 МБ — хостинг убивав її
+   * «через раз»), а драйвер `frontend/scripts/typecheckParts.mjs`: частини — окремі процеси ПО ЧЕРЗІ, сума перевірених
+   * файлів == кількість коренів (інакше червоне), убита частина — провал із назвою. Кличемо `node` напряму: `npx` — це ще
+   * один процес ~70 МБ поруч. Як і раніше — НЕ `--noEmit` у корені: він там нічого не перевіряє.
+   */
+  tscFront: (c) => run("tscFront", () => { needDeps(c.fe, "frontend"); sh("node", ["scripts/typecheckParts.mjs"], c.fe); }, "типи фронту частинами (typecheckParts.mjs)"),
   /**
    * 🔴 БАНДЛ ФРОНТУ. `tscFront` поруч — це ТИПИ (`tsc -b`), він нічого не емітить;
    * `vite build` типів не перевіряє. Два різні кроки, і жоден не заміняє іншого.
@@ -359,7 +388,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * 🧱 11.11.2026: ЛИШЕ `vite build`, а не `npm run build` (= `tsc -b && vite build`). Типи щойно перевірив `tscFront`,
    * а другий `tsc -b` (~900 МБ) хостинг убивав за лімітом памʼяті акаунта — викат падав на цьому кроці (#3821).
    */
-  buildFront: (c) => run("buildFront", () => { needDeps(c.fe, "frontend"); sh("npx", ["vite", "build"], c.fe); }, "бандл фронту (vite) — у СТЕНДІ"),
+  buildFront: (c) => run("buildFront", () => { needDeps(c.fe, "frontend"); sh("node", ["node_modules/vite/bin/vite.js", "build"], c.fe); }, "бандл фронту (vite) — у СТЕНДІ"),
   /**
    * 🔴 КРИТЕРІЙ — ПРИРІСТ, А НЕ КОД 0. Розгорнуто в `testDelta.ts`; тут — механіка
    * двох прогонів. Ціна заміряна: +78 с (worktree+збірка 12.4 с, прогін бази 65.8 с).
@@ -424,8 +453,11 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
 
       // ⚠️ `npm test` віддає ненульовий код за будь-якого падіння — це НОРМА тут,
       // тож вивід ЛОВИМО, а не даємо йому обірвати крок.
+      // 🧪 Обидва прогони — обгорткою СТЕНДА з аргументами скрипта `test` стенда (`npmTestArgs`, #3882): база — старий
+      // код, і її власний `npm test` біг би без стелі паралельності (47 процесів на хостингу вбивали прод). Без `npm`.
+      const testArgs = npmTestArgs((JSON.parse(readFileSync(`${c.be}/package.json`, "utf8")) as { scripts: Record<string, string> }).scripts.test);
       const runTests = (cwd: string): string => {
-        try { return sh("npm", ["test"], cwd); }
+        try { return sh("node", [`${c.be}/${TEST_RUNNER}`, ...testArgs], cwd); }
         catch (e) { return String((e as { stdout?: string }).stdout ?? ""); }
       };
       const baseTap = parseTap(runTests(beBase));
