@@ -6907,7 +6907,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     const orderDays = lastOrder ? clientLeadRules.daysBetween(lastOrder, todayKyiv) : null;
     // 🌙 Сезонний не в сезоні (8351) — зелений: дзвонити не треба, і «Немає роботи» на ньому не горить.
     const off = factsFor(seg, c.client_key).offSeason;
-    const color = off ? "green" as const : clientLeadRules.colorOf(segment, orderDays);
+    // ⏱ Особистий ритм (8348): вийшов звичний інтервал клієнта — жовтий, як і стан «Сплячий».
+    const color = off ? "green" as const : clientLeadRules.colorOf(segment, orderDays, factsFor(seg, c.client_key).medianGapDays);
     const rt = reactByKey.get(c.client_key);
     const taskOpen = (rt?.taskId ?? null) != null && !["done", "cancelled"].includes(rt?.taskStatus ?? "");
     const manualAt = manualByKey.get(c.client_key)?.at ?? null;

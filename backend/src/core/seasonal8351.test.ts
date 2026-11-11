@@ -39,7 +39,8 @@ test("#3453 🪞 СЕЗОН: не в сезоні — лише з місяцям
 test("#3454 ПРОВОДКА СЕЗОННОСТІ: ядро, реактивація, «З ким говорити», права КВП, картка, кнопка", () => {
   const seg = codeOnly(read("backend/src/core/clientSegments.ts"));
   assert.match(seg, /lo\.seasonal_months AS season_months/, "🔴 ядро не читає місяці сезону");
-  assert.match(seg, /state: offSeason\(r\.seasonal, r\.season_months, monthNum\) \? "active" : stateOf\(daysSince, segment\)/, "🔴 сезонний не в сезоні досі сплячий / втрачений");
+  // ⏱ З 11.11.2026 (8348) у `stateOf` третій аргумент — інтервал клієнта; твердження гейта про сезонність те саме.
+  assert.match(seg, /state: offSeason\(r\.seasonal, r\.season_months, monthNum\) \? "active" : stateOf\(daysSince, segment(, medianGapDays)?\)/, "🔴 сезонний не в сезоні досі сплячий / втрачений");
   const dash = codeOnly(read("backend/src/routes/dashboard.ts"));
   assert.match(dash, /const off = factsFor\(seg, c\.client_key\)\.offSeason;\s*const color = off \? "green" as const : clientLeadRules\.colorOf/, "🔴 на «З ким говорити» сезонний не в сезоні — не зелений");
   assert.match(dash, /works: off \? \{ yes: true, by: "season" as const/, "🔴 на сезонному не в сезоні горить «Немає роботи»");

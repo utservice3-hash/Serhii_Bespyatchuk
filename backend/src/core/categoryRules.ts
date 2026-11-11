@@ -13,7 +13,7 @@
  */
 import {
   QUALIFY_MIN_PAYMENTS, SEGMENT_MIN_PAYMENTS, VIP_MAX_GAP_DAYS,
-  REGULAR_MAX_GAP_DAYS, SEGMENT_SLEEPING_DAYS, LOST_DAYS, LONG_LAPSED_DAYS,
+  REGULAR_MAX_GAP_DAYS, SEGMENT_SLEEPING_DAYS, LOST_DAYS, LONG_LAPSED_DAYS, OWN_RHYTHM_FLOOR_DAYS,
   type ClientSegment,
 } from "./reactivationRules.js";
 
@@ -23,6 +23,8 @@ export interface CategoryRuleNumbers {
   vipMaxGapDays: number;
   regularMaxGapDays: number;
   sleepingDays: Record<ClientSegment, number>;
+  /** ⏱ Особистий ритм (8348): сплячий і тоді, коли минув звичний інтервал клієнта, але не раніше цих днів. */
+  ownRhythmFloorDays: number;
   lostDays: number;
   longLapsedDays: number;
 }
@@ -35,6 +37,7 @@ export function ruleNumbers(): CategoryRuleNumbers {
     vipMaxGapDays: VIP_MAX_GAP_DAYS,
     regularMaxGapDays: REGULAR_MAX_GAP_DAYS,
     sleepingDays: { ...SEGMENT_SLEEPING_DAYS },
+    ownRhythmFloorDays: OWN_RHYTHM_FLOOR_DAYS,
     lostDays: LOST_DAYS,
     longLapsedDays: LONG_LAPSED_DAYS,
   };
@@ -55,7 +58,8 @@ function frequency(n: CategoryRuleNumbers, s: ClientSegment): string {
 /** Підказка на бейджі сегмента: частота + коли стає сплячим і втраченим. */
 export function segmentTip(n: CategoryRuleNumbers, s: ClientSegment): string {
   return `${SEGMENT_LABEL[s]}: ${frequency(n, s)}. `
-    + `Сплячий після ${n.sleepingDays[s]} днів без оплати, втрачений після ${n.lostDays}.`;
+    + `Сплячий після ${n.sleepingDays[s]} днів без оплати (або раніше — коли минув його звичний інтервал між оплатами, `
+    + `але не раніше ${n.ownRhythmFloorDays} днів), втрачений після ${n.lostDays}.`;
 }
 
 /** Підказки на чипах стану. */
@@ -63,7 +67,8 @@ export function stateTips(n: CategoryRuleNumbers): { sleeping: string; lost: str
   const sl = n.sleepingDays;
   return {
     sleeping: `💤 Сплячий: немає оплати ${sl.vip} днів у ВІП, ${sl.regular} у регулярного, `
-      + `${sl.episodic} в епізодичного й без історії.`,
+      + `${sl.episodic} в епізодичного й без історії — або раніше, коли минув звичний інтервал клієнта між оплатами `
+      + `(не раніше ${n.ownRhythmFloorDays} днів).`,
     lost: `❌ Втрачений: немає оплати ${n.lostDays} днів, для всіх сегментів. `
       + `Понад ${n.longLapsedDays} днів — «давно втрачений».`,
   };

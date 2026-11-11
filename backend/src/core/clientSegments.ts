@@ -182,7 +182,7 @@ export async function loadClientSegments(): Promise<Map<string, ClientSegmentRow
       clientKey: r.client_key, payments, paymentsDated, medianGapDays, minGapDays, daysSince,
       paymentType: r.payment_type, payMode, phoneKey: r.phone_key,
       // 🌙 Не в сезоні — не сплячий і не втрачений (8351); у сезоні — звичайне правило.
-      segment, state: offSeason(r.seasonal, r.season_months, monthNum) ? "active" : stateOf(daysSince, segment),
+      segment, state: offSeason(r.seasonal, r.season_months, monthNum) ? "active" : stateOf(daysSince, segment, medianGapDays),
       longLapsed: daysSince >= LONG_LAPSED_DAYS,
       forcedRegular: r.forced_regular, forceNote: r.force_note,
       seasonal: r.seasonal, seasonMonths: (r.season_months ?? []).map(Number), seasonNote: r.season_note,

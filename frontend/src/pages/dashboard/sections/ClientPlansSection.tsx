@@ -537,7 +537,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
               <div style={{ fontSize: 11 }}>{c.nextStep.due ? `до ${ddmmOf(c.nextStep.due)}` : "без дати"}{c.nextStep.state === "overdue" ? " · прострочено" : ""}</div>
             </div>
           )}
-          {/* 🔁 Задача реактивації в Задачнику: активним її не ставлять (збережено правило з колишньої вкладки). */}
+          {/* 🔁 Задача по клієнту в Задачнику — на БУДЬ-ЯКОГО клієнта (задача 8348, Сергій 06.11: «дати можливість ставити
+              задачу на кожного клієнта, незалежно від сегмента»). До 11.11 «активним» і сезонним її не ставили. */}
           {c.taskId && c.taskStatus !== "done" ? (
             <div style={{ fontSize: 12, marginTop: c.nextStep ? 4 : 0 }}>
               <b>{c.taskAssignee ?? "—"}</b>
@@ -547,15 +548,13 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
                   onClick={() => setClosing({ taskId: c.taskId!, name: c.clientName })}>Закрити…</button>
               </div>
             </div>
-          ) : c.state !== "active" && !c.seasonal ? (
+          ) : (
             <button disabled={busy} style={{ ...S.btn(true), fontSize: 11, padding: "5px 10px", marginTop: c.nextStep ? 4 : 0,
                 background: vipSleeping(c) && c.work.noTask ? "#dc2626" : "#111827" }}
               onClick={() => setCreating({ clientKey: c.clientKey, name: c.clientName })}>
               {vipSleeping(c) && c.work.noTask ? `Потрібна задача: ВІП ${c.daysSince ?? ""} дн.` : "＋ Задача"}
             </button>
-          ) : !c.nextStep ? (
-            <span style={{ color: "#9ca3af", fontSize: 12 }} title="наступний крок ставиться в картці клієнта (клік по рядку)">немає</span>
-          ) : null}
+          )}
         </td>
       </tr>
       {isOpen && (

@@ -41,10 +41,13 @@ export function lastOrderDate(lastPaid: string | null, lastInvoice: string | nul
   return a > b ? a : b;
 }
 
-/** Колір за днями без замовлення й сегментом — тим самим `stateOf`, що стан клієнта. Без замовлень — червоний. */
-export function colorOf(segment: ClientSegment, orderDays: number | null): LeadColor {
+/**
+ * Колір за днями без замовлення й сегментом — тим самим `stateOf`, що стан клієнта (з 11.11.2026 — і з особистим
+ * ритмом, 8348: вийшов звичний інтервал — жовтий). Без замовлень — червоний.
+ */
+export function colorOf(segment: ClientSegment, orderDays: number | null, medianGapDays?: number | null): LeadColor {
   if (orderDays == null) return "red";
-  const st = stateOf(orderDays, segment);
+  const st = stateOf(orderDays, segment, medianGapDays);
   return st === "active" ? "green" : st === "sleeping" ? "yellow" : "red";
 }
 

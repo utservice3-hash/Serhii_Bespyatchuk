@@ -106,11 +106,26 @@ export const LONG_LAPSED_DAYS = 365;
  * `segment` не обовʼязковий — без нього поводиться як раніше (60/180), тож старі
  * виклики й гейт #23 лишаються чинними без правок.
  */
-export function stateOf(daysSinceLastOrder: number, segment?: ClientSegment): ClientState {
+export function stateOf(daysSinceLastOrder: number, segment?: ClientSegment, medianGapDays?: number | null): ClientState {
   if (daysSinceLastOrder >= LOST_DAYS) return "lost";
   const sleep = segment ? SEGMENT_SLEEPING_DAYS[segment] : SLEEPING_DAYS;
   if (daysSinceLastOrder >= sleep) return "sleeping";
+  if (pastOwnRhythm(daysSinceLastOrder, medianGapDays)) return "sleeping";
   return "active";
+}
+
+/**
+ * ⏱ ОСОБИСТИЙ РИТМ (задача 8348; Юля 06.11: «клієнт, у якого вийшов звичний інтервал між замовленнями, не світиться
+ * «активним»»; Роман 11.11.2026 — варіант «А»). Сплячий — ще й тоді, коли днів без оплати БІЛЬШЕ за звичайний інтервал
+ * клієнта (медіана між оплатами), але не раніше ніж через `OWN_RHYTHM_FLOOR_DAYS`. Поріг сегмента лишається: що
+ * спрацює раніше, те й рахується. Випадок, через який це зʼявилось: Marvic SRL — 2 оплати з інтервалом 30 днів,
+ * сегмент «без історії» з порогом 60, тож на 42-й день він був «Активним».
+ * 🔴 Мінімум потрібен: у ВІП буває кілька оплат на день (медіана 0), і без нього вони ставали б сплячими наступного дня.
+ * Заміряно 11.11.2026: з 243 «Активних» зачіпає 32 (19 без історії, 8 епізодичних, 5 регулярних, ВІП — 0).
+ */
+export const OWN_RHYTHM_FLOOR_DAYS = 14;
+export function pastOwnRhythm(daysSinceLastOrder: number, medianGapDays?: number | null): boolean {
+  return medianGapDays != null && daysSinceLastOrder > Math.max(medianGapDays, OWN_RHYTHM_FLOOR_DAYS);
 }
 
 /**
