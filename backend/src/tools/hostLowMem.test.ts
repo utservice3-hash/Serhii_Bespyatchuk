@@ -128,26 +128,50 @@ test("#3882 🪞 КРОК test: база й дерево — обгорткою 
 });
 
 /**
- * #3883 🪞 ВИРОК ЧАСТИН: «перевірив нуль» І «частину вбито» — ПРОВАЛ, а не «помилок 0». Зелене — лише коли кожна частина
- * відзвітувала, перевірила всі свої файли, сума == кореням і діагностики немає. Діагностика, що прийшла з двох частин
- * (глобальна), — одна.
- * 🧨 Червоніє, якщо вирок пропустить відсутню частину (убита памʼяттю → «0 помилок»), неповне покриття або нуль коренів.
+ * #3883 🪞 ВИРОК ЧАСТИН: «перевірив нуль» І «частину вбито» — ПРОВАЛ, а не «помилок 0». Частини мусять РІВНО розбити
+ * корені — без дір і перекриттів, кожна — перевірити всі свої файли, і діагностики немає. Глобальна діагностика з двох
+ * частин — одна.
+ * 🧨 Червоніє, якщо вирок пропустить діру (частину вбито → «0 помилок»), перекриття, неповну частину або нуль коренів.
  */
 test("#3883 🪞 ВИРОК ЧАСТИН: убита частина, неповне покриття й нуль коренів — провал; чисте — зелене", async () => {
-  const { judgeParts: j, splitParts, partsFor, SPLIT_FROM } = await parts();
-  const rep = (part: number, files: number, checked = files, diagnostics: string[] = []) => ({ config: "a.json", part, files, checked, diagnostics });
-  assert.deepEqual(j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3), rep(1, 2)]), { ok: true, problems: [], diagnostics: [] });
-  const dead = j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3)]);
-  assert.equal(dead.ok, false, "🔴 частину вбито — а вирок зелений"); assert.match(dead.problems.join(), /частина 2\/2 не відзвітувала/);
-  assert.equal(j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3, 2), rep(1, 2)]).ok, false, "🔴 файл без перевірки пройшов");
-  assert.equal(j({ "a.json": { roots: 6, parts: 2 } }, [rep(0, 3), rep(1, 2)]).ok, false, "🔴 сума ≠ кореням пройшла");
-  assert.equal(j({ "a.json": { roots: 0, parts: 1 } }, [rep(0, 0)]).ok, false, "🔴 нуль коренів = «перевірено»");
-  const dup = j({ "a.json": { roots: 2, parts: 2 } }, [rep(0, 1, 1, ["E1"]), rep(1, 1, 1, ["E1"])]);
+  const { judgeParts: j, splitParts, partsFor, SPLIT_FROM, partRanges } = await parts() as Parts & { partRanges: (c: number, n: number) => [number, number][] };
+  const rep = (from: number, to: number, checked = to - from, diagnostics: string[] = []) => ({ config: "a.json", part: 0, from, to, files: to - from, checked, diagnostics });
+  assert.deepEqual(j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3), rep(3, 5)]), { ok: true, problems: [], diagnostics: [] });
+  const hole = j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3)]);
+  assert.equal(hole.ok, false, "🔴 частину вбито — а вирок зелений"); assert.match(hole.problems.join(), /3…4 не перевірила жодна частина/);
+  assert.equal(j({ "a.json": { roots: 5, parts: 2 } }, [rep(3, 5)]).ok, false, "🔴 діра НА ПОЧАТКУ пройшла");
+  assert.equal(j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3), rep(2, 5)]).ok, false, "🔴 перекриття пройшло");
+  assert.equal(j({ "a.json": { roots: 5, parts: 2 } }, [rep(0, 3, 2), rep(3, 5)]).ok, false, "🔴 файл без перевірки пройшов");
+  assert.equal(j({ "a.json": { roots: 0, parts: 1 } }, []).ok, false, "🔴 нуль коренів = «перевірено»");
+  const dup = j({ "a.json": { roots: 2, parts: 2 } }, [rep(0, 1, 1, ["E1"]), rep(1, 2, 1, ["E1"])]);
   assert.deepEqual([dup.ok, dup.diagnostics], [false, ["E1"]], "🔴 глобальна діагностика задвоїлась або загубилась");
-  const sp = splitParts(["c", "a", "d", "b", "e"], 2);
-  assert.deepEqual(sp, [["a", "b", "c"], ["d", "e"]], "🔴 частини не неперервні або не покривають усе");
-  assert.deepEqual(splitParts(["a"], 4), [["a"]]);
+  assert.deepEqual(splitParts(["c", "a", "d", "b", "e"], 2), [["a", "b", "c"], ["d", "e"]], "🔴 частини не неперервні або не покривають усе");
+  assert.deepEqual(partRanges(5, 2), [[0, 3], [3, 5]]); assert.deepEqual(partRanges(1, 4), [[0, 1]]);
   assert.equal(partsFor(SPLIT_FROM, 4), 1); assert.equal(partsFor(SPLIT_FROM + 1, 4), 4);
+});
+
+/**
+ * #3888 🪞 ЧАСТИНА, УБИТА ПАМʼЯТТЮ, ДІЛИТЬСЯ НАВПІЛ — А НЕ ВАЛИТЬ КРОК «ЧЕРЕЗ РАЗ». Код 134 / SIGABRT (стеля хіпа V8) і
+ * SIGKILL (ядро) → дві половини, що рівно покривають частину; вичерпано поділи або один файл → смерть із причиною.
+ * Помилка типів (код 1 зі звітом) — НЕ памʼять, її не ділять. Замір 11.11: зі стелею 380 МБ драйвер сам поділив три
+ * частини й пройшов із повним покриттям.
+ * 🧨 Червоніє, якщо драйвер почне ділити безкінечно, ділити помилку типів, губити файли на поділі або здаватись на
+ * першій же нестачі памʼяті (і крок знову падатиме «через раз»).
+ */
+test("#3888 🪞 УБИТА ПАМʼЯТТЮ ЧАСТИНА ДІЛИТЬСЯ НАВПІЛ; помилка типів і вичерпаний поділ — не діляться", async () => {
+  const m = await parts() as Parts & { afterPart: (q: { from: number; to: number; splits: number }, status: number | null, signal: string | null, reported: boolean) => { ok?: true; split?: { from: number; to: number; splits: number }[]; dead?: string }; MAX_SPLITS: number };
+  const q = { from: 10, to: 15, splits: 0 };
+  assert.deepEqual(m.afterPart(q, 0, null, true), { ok: true });
+  for (const [st, sig] of [[134, null], [null, "SIGKILL"], [null, "SIGABRT"]] as const) {
+    const r = m.afterPart(q, st, sig, false);
+    assert.deepEqual(r.split, [{ from: 10, to: 13, splits: 1 }, { from: 13, to: 15, splits: 1 }], `🔴 ${st ?? sig}: частина не поділилась рівно навпіл`);
+  }
+  assert.ok(m.afterPart({ ...q, splits: m.MAX_SPLITS }, null, "SIGKILL", false).dead, "🔴 поділ безкінечний");
+  assert.ok(m.afterPart({ from: 3, to: 4, splits: 0 }, 134, null, false).dead, "🔴 один файл «ділять» далі");
+  assert.ok(m.afterPart(q, 1, null, false).dead, "🔴 звичайний збій частини прийнято за памʼять");
+  assert.ok(m.afterPart(q, 0, null, false).dead, "🔴 частина без звіту прийнята як перевірена");
+  const deep = m.afterPart(q, null, "SIGKILL", false).split!;
+  assert.equal(deep[0].from, q.from); assert.equal(deep[1].to, q.to); assert.equal(deep[0].to, deep[1].from, "🔴 поділ лишив діру або перекриття");
 });
 
 /**
