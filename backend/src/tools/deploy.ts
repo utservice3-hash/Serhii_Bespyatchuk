@@ -415,7 +415,12 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
 
       const beBase = `${base}/backend`;
       sh("rm", ["-rf", "dist"], beBase);
-      sh("npm", ["run", "build"], beBase);
+      // 🧱 БАЗУ збираємо скриптами НОВОЇ версії (зі стенда), по файлу — а не її власним `npm run build`. База = поточний
+      // прод, її типи вже перевірено; а стара збірка (`tsc -p`, ~1 ГБ) на хостингу гине за лімітом памʼяті акаунта —
+      // 11.11.2026 крок `test` падав саме тут, хоча нова версія вже збиралась легко (#3822).
+      sh("node", [`${c.be}/scripts/transpileBuild.mjs`, beBase], c.be);
+      sh("node", [`${c.be}/scripts/copyAssets.mjs`, beBase], c.be);
+      sh("node", ["scripts/writeVersion.mjs"], beBase);
 
       // ⚠️ `npm test` віддає ненульовий код за будь-якого падіння — це НОРМА тут,
       // тож вивід ЛОВИМО, а не даємо йому обірвати крок.

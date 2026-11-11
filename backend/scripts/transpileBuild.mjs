@@ -6,7 +6,7 @@
  * (`ts.transpileModule`) бере ~360 МБ і дає ТІ САМІ байти, що `tsc` (звірено: 1037 із 1037). Типи тут НЕ перевіряються —
  * це окремий крок `typecheck` (робочий код без тестів, ~730 МБ); тести перевіряє повний `tsc` у кожній сесії перед пушем.
  *
- *   node scripts/transpileBuild.mjs            — src → dist
+ *   node scripts/transpileBuild.mjs [корінь бекенда]   — src → dist (за замовчуванням корінь — каталог над scripts/)
  */
 import ts from "typescript";
 import fs from "node:fs";
@@ -24,7 +24,8 @@ export const TRANSPILE_OPTIONS = {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
 
 function main() {
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Корінь бекенда — аргументом (так ланцюг викату збирає БАЗУ), або каталог над scripts/.
+const root = process.argv[2] ? path.resolve(process.argv[2]) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = path.join(root, "src"), out = path.join(root, "dist");
 const files = [];
 const walk = (d) => {
