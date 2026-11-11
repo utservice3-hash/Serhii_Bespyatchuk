@@ -25,7 +25,8 @@
  */
 export const SERVICE_KOMMO_USER_IDS: readonly string[] = ["904923"];
 
-export type OrphanReason = "service" | "inactive";
+/** `released` — віддав менеджер кнопкою «В нічийні» (задача 8135); не з Kommo, а з `loyalty_overrides.released_at`. */
+export type OrphanReason = "service" | "inactive" | "released";
 
 /**
  * SQL-предикат «основний відповідальний робить клієнта нічийним».
@@ -46,6 +47,7 @@ export function orphanReason(m: { kommoUserId: string | number | null; isActive:
 export const ORPHAN_REASON_LABEL: Record<OrphanReason, string> = {
   service: "службовий акаунт",
   inactive: "звільнений менеджер",
+  released: "віддав менеджер",
 };
 
 /**
@@ -60,7 +62,9 @@ export const ORPHAN_DEFAULT_MONTHS = 18;
  * Закритий клієнт іде в АРХІВ — той самий запис, що ручна «🗄 в архів», — і з пулу зникає; повертається сам,
  * якщо прийде нова оплата (правило архіву). На кнопці — лише чотири причини із задачі; словник — спільний.
  */
-export const ORPHAN_CLOSE_REASON_KEYS: readonly string[] = ["carrier", "not_interested", "not_relevant", "duplicate"];
+export const ORPHAN_CLOSE_REASON_KEYS: readonly string[] = ["carrier", "one_off", "closed_down", "not_interested", "not_relevant", "duplicate"];
+// ⤴️ «Разове перевезення» і «Закрились» додано 11.11.2026 (задача 8135: «Розібрано» з причиною — разовий, закрились,
+// перевізник). Обидві вже були в спільному словнику (10.09.2026) і в CHECK архіву — нова лише їхня поява на кнопці.
 
 /**
  * 🏢 ВИД КЛІЄНТА ДЛЯ ПОРЯДКУ В ПУЛІ (05.10.2026, Роман): «юр особи та ФОПи зверху, фіз особи знизу».
@@ -105,8 +109,14 @@ export function orphanRowOrder<T extends { kind: ClientKind; revenueAll: number 
  * прапорцем `users.orphan_pool`, і лише «взяти собі»: пул для нього — пошук клієнта, а не розподіл.
  * Без прапорця менеджер пулу не бачить (рішення власника 05.08.2026 лишається правилом за замовчуванням).
  */
-export type OrphanPoolAccess = "full" | "self" | "none";
+export type OrphanPoolAccess = "full" | "self" | "released" | "none";
+/**
+ * 🧭 З 11.11.2026 (задача 8135, Роман: «так» на «групу бачать і беруть собі всі менеджери») менеджер БЕЗ прапорця не
+ * «none», а `released`: бачить лише групу «Віддали менеджери» і бере звідти лише собі; решта пулу (службовий
+ * акаунт, звільнені) — як і була, тільки з прапорцем. «Закрити» йому недоступне — розбирає пул той, хто його веде.
+ * `none` лишається в типі для ролей, яким сервер пулу не дає (межу вкладки тримає `ROUTE_TAB`).
+ */
 export function orphanPoolAccess(a: { role: string; orphanPoolFlag: boolean }): OrphanPoolAccess {
   if (a.role !== "manager") return "full";
-  return a.orphanPoolFlag ? "self" : "none";
+  return a.orphanPoolFlag ? "self" : "released";
 }

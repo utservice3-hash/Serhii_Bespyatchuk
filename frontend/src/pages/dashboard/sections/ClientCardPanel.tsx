@@ -7,6 +7,7 @@ import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { ReactCycleStatus, ReactCycleButtons } from "./ReactivationCycle";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { ClientSeasonBlock } from "./ClientSeasonBlock";
+import { ClientReleaseBlock } from "./ClientReleaseBlock";
 import { formatAmountFull } from "../format";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 
@@ -128,6 +129,9 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
 
           🔴 ПРАВА ВІДДАЄ СЕРВЕР (`canArchive`/`canMerge`/`canAssign`) тими самими
           функціями, що гейтять роути: кнопка не може розійтись із дозволом. */}
+      {/* 🧭 «В нічийні» (задача 8135) — окремо від «Керування клієнтом»: кнопку тисне МЕНЕДЖЕР свого клієнта, а блок
+          керування менеджеру не показується. Право й стан — із сервера (`canRelease`, `released`, `inLeadgenPool`). */}
+      <ClientReleaseBlock card={card} onSaved={() => { load(); onChanged?.(); }} />
       {(card.canArchive || card.canMerge || card.canAssign) && (
         <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fafafa" }}>
           <div style={{ fontSize: 11, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 8 }}>

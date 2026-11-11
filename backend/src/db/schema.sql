@@ -4246,6 +4246,39 @@ CREATE TABLE IF NOT EXISTS client_react_cycles (
 CREATE UNIQUE INDEX IF NOT EXISTS client_react_cycles_one_open_pool
   ON client_react_cycles(client_key) WHERE pooled_at IS NOT NULL AND closed_at IS NULL;
 
+-- 🧭 «В НІЧИЙНІ» → ПУЛ ЛІДГЕНІВ (задачі 8135 + 8349, ТЗ Юлі 06.11/09.11 у 8850; Роман 11.11.2026 «так»).
+-- Менеджер віддає клієнта, з яким не спрацювався, в «Нічийні» з ОБОВʼЯЗКОВИМ коментарем; усім менеджерам іде
+-- сповіщення; ніхто не взяв за 1 робочий день — клієнт іде в пул лідгенів з причиною `orphan`. Поки клієнт у
+-- нічийних або в пулі — у списку й лічильниках менеджера його немає (8349). Kommo не чіпаємо.
+-- ⚠️ revert коду ці колонки й рядки пулу `orphan` не прибирає — їх видно за `pool_reason = 'orphan'`.
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS released_by INTEGER REFERENCES users(id);
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS released_note TEXT;
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS released_from_manager_id INTEGER;
+-- Коментар обовʼязковий (Роман 11.11: «так, обовʼязково»). Ставиться й знімається ОДНИМ запитом разом із датою,
+-- тож частковий upsert тут неможливий (правило db-sql: крос-колонковий CHECK + частковий upsert несумісні).
+DO $$ BEGIN
+  ALTER TABLE loyalty_overrides ADD CONSTRAINT loyalty_overrides_released_note_chk
+    CHECK (released_at IS NULL OR (released_by IS NOT NULL AND released_note IS NOT NULL AND btrim(released_note) <> ''));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS loyalty_overrides_released ON loyalty_overrides (released_at) WHERE released_at IS NOT NULL;
+-- Нова причина пулу `orphan` і нова причина закриття `pool_off`. Перевірки перебудовуються щоразу: інакше
+-- `duplicate_object` лишив би СТАРИЙ перелік (той самий клас, що «міграція пройшла ≠ зміна застосувалась»).
+ALTER TABLE client_react_cycles DROP CONSTRAINT IF EXISTS client_react_cycles_pool_reason_check;
+ALTER TABLE client_react_cycles ADD CONSTRAINT client_react_cycles_pool_reason_check
+  CHECK (pool_reason IN ('manager', 'auto', 'self_expired', 'orphan'));
+ALTER TABLE client_react_cycles DROP CONSTRAINT IF EXISTS client_react_cycles_close_reason_check;
+ALTER TABLE client_react_cycles ADD CONSTRAINT client_react_cycles_close_reason_check
+  CHECK (close_reason IN ('invoice', 'taken', 'pool_off'));
+-- 🚫 СТАРИЙ ПУЛ ЗАКРИВАЄТЬСЯ (Роман 11.11.2026, п.4 «окей»): 545 рядків, покладених до вимкнення передачі 06.11
+-- (автопередача й «Передати лідгенам»), лідгенам більше не показуються — лідгени з реактивацією не працюють (7535),
+-- клієнти лишаються за своїми менеджерами, як і є з 06.11. Межа за датою — щоб повторний старт не закривав
+-- нічого нового, навіть якщо стару передачу колись увімкнуть знову. Відкат даних:
+--   UPDATE client_react_cycles SET closed_at = NULL, close_reason = NULL WHERE close_reason = 'pool_off';
+UPDATE client_react_cycles SET closed_at = now(), close_reason = 'pool_off'
+ WHERE pooled_at IS NOT NULL AND closed_at IS NULL AND pool_reason IN ('manager', 'auto', 'self_expired')
+   AND pooled_at < TIMESTAMPTZ '2026-11-07 00:00:00+02';
+
 -- 🎓 ОДНОРАЗОВИЙ ПЕРЕНОС АКАДЕМІЇ SEREDA (23.09.2026, рішення Романа: «переносимо все, далі навчання живе
 -- на нашому сервері»). `external_id` — ключ ідемпотентності імпорту: повторний прогін ОНОВЛЮЄ той самий
 -- рядок, а не створює другий. Після переносу Sereda не потрібна; колонки лишаються слідом походження.
@@ -7995,6 +8028,11 @@ ON CONFLICT (type) DO NOTHING;
 -- «Нагадати» в кабінеті (04.11.2026): у день, коли відкриваються заявки на аванс, — тому, хто просив.
 INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
  ('adv.open', 'Аванс', false, 'Відкрито заявки на аванс (на прохання «Нагадати»)', 'працівник, що просив нагадати')
+ON CONFLICT (type) DO NOTHING;
+-- 🧭 «В нічийні» (задача 8135): менеджер віддав клієнта — усім менеджерам «візьміть, якщо ваш». Закривається, щойно
+-- клієнта взяли, відкликали або він пішов лідгенам (`core/orphanRelease.ts`).
+INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
+ ('client.orphan', 'Клієнти', true, 'Менеджер віддав клієнта в «Нічийні»', 'усі менеджери відділу продажів, крім того, хто віддав, і лідгенів')
 ON CONFLICT (type) DO NOTHING;
 CREATE TABLE IF NOT EXISTS payroll_reminders (
   id         BIGSERIAL PRIMARY KEY,

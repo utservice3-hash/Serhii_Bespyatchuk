@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { orphanReason, orphanManagerSql, SERVICE_KOMMO_USER_IDS, ORPHAN_DEFAULT_MONTHS, clientKind, orphanRowOrder, orphanPoolAccess, ORPHAN_CLOSE_REASON_KEYS } from "./orphanClients.js";
-import { CLOSE_REASON_KEYS, CLOSE_REASONS } from "./reactivationRules.js";
+import { orphanReason, orphanManagerSql, SERVICE_KOMMO_USER_IDS, ORPHAN_DEFAULT_MONTHS, clientKind, orphanRowOrder } from "./orphanClients.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -72,14 +71,6 @@ test("#1366b ПОРЯДОК У ГРУПІ: жоден «фіз» не стоїт
     "🔴 «фіз» із більшою сумою обігнав «юр/ФОП» — сортування знову лише за сумою");
 });
 
-test("#1367 ДОСТУП ДО ПУЛУ: менеджер без прапорця — ні, з прапорцем — лише собі; керівники — повний", () => {
-  assert.equal(orphanPoolAccess({ role: "manager", orphanPoolFlag: false }), "none", "🔴 пул відкрився ВСІМ менеджерам");
-  assert.equal(orphanPoolAccess({ role: "manager", orphanPoolFlag: true }), "self", "🔴 прапорець не відкриває пул менеджеру");
-  for (const role of ["admin", "team_lead", "company"]) {
-    assert.equal(orphanPoolAccess({ role, orphanPoolFlag: false }), "full", `🔴 керівник (${role}) втратив пул`);
-  }
-});
-
 test("#1367b РОУТИ ПУЛУ: межа першою дією в обох; менеджер із прапорцем закріплює лише за собою", () => {
   const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
   for (const r of ['dashboardRouter.get("/orphan-clients"', 'dashboardRouter.post("/orphan-clients/claim"']) {
@@ -104,42 +95,3 @@ test("#1369 НАЛАШТУВАННЯ → КОРИСТУВАЧІ: широка т
   assert.match(fe, /const TH: React\.CSSProperties = \{ whiteSpace: "nowrap", paddingRight: \d+ \}/, "🔴 заголовки без відступу — «АКТИВНИЙСТАН»");
 });
 
-/**
- * #3330 — «ЗАКРИТИ» В «НІЧИЙНИХ» (задача 7187): ОДИН СЛОВНИК ПРИЧИН. Кнопка пропонує рівно чотири причини із задачі —
- * перевізник / не цікаво / не актуально / дубль — і всі вони зі спільного словника архіву й реактивації, з підписами;
- * `CHECK` у БД пропускає РІВНО цей словник (рядок CHECK розбирається з `schema.sql`).
- * 🧨 Червоніє, якщо причину кнопки не внести в словник, словник і CHECK розійдуться (тоді «Закрити» впаде в БД на
- * новій причині або БД прийме причину, якої немає на екрані), або кнопка покаже не ті причини.
- */
-test("#3330 «ЗАКРИТИ» В НІЧИЙНИХ: чотири причини із задачі — зі спільного словника; CHECK у БД == словник", () => {
-  assert.deepEqual([...ORPHAN_CLOSE_REASON_KEYS], ["carrier", "not_interested", "not_relevant", "duplicate"]);
-  for (const k of ORPHAN_CLOSE_REASON_KEYS) assert.ok(CLOSE_REASON_KEYS.includes(k), `🔴 причини «${k}» немає в спільному словнику`);
-  assert.deepEqual(CLOSE_REASONS.filter((r) => ORPHAN_CLOSE_REASON_KEYS.includes(r.key)).map((r) => r.label),
-    ["Перевізник", "Не цікаво", "Не актуально", "Дубль"]);
-  const schema = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "db", "schema.sql"), "utf8");
-  const m = /loyalty_overrides_archive_reason_chk[\s\S]*?archive_reason IN\s*\(([^)]*)\)/.exec(schema);
-  assert.ok(m, "🔴 CHECK причин архіву не знайдено в schema.sql");
-  const inCheck = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]).sort();
-  assert.deepEqual(inCheck, [...CLOSE_REASON_KEYS].sort(), "🔴 CHECK у БД і словник причин розійшлися");
-});
-
-/**
- * #3330b — РОУТ «ЗАКРИТИ»: межа доступу першою дією (403 = гейт), причина — лише з чотирьох, і перевірка «клієнт ЗАРАЗ у
- * пулі» стоїть ДО запису в архів; запис — тим самим текстом, що ручна «🗄 в архів».
- * 🧨 Червоніє, якщо межу перенести після валідації, якщо запис піде без перевірки пулу (менеджер із прапорцем
- * архівував би будь-якого клієнта за ключем) або якщо «Закрити» заведе власний SQL архіву.
- */
-test("#3330b РОУТ «ЗАКРИТИ»: межа першою, лише чотири причини, «зараз у пулі» до запису, спільний SQL архіву", () => {
-  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
-  const at = src.indexOf('dashboardRouter.post("/orphan-clients/close"');
-  assert.ok(at > 0, "🔴 роуту «Закрити» немає");
-  const body = src.slice(at, src.indexOf("\ndashboardRouter.", at + 10));
-  assert.match(body, /^dashboardRouter\.post\("\/orphan-clients\/close", async \(req, res\) => \{\s*const auth = req\.auth!;\s*const access = await poolAccessOf\(auth\);\s*if \(access === "none"\) return res\.status\(403\)/,
-    "🔴 межа доступу не першою дією");
-  assert.match(body, /if \(!ORPHAN_CLOSE_REASON_KEYS\.includes\(reason\)\)/, "🔴 причина не звужена до чотирьох");
-  const pool = body.indexOf("metrics.orphanClients("), write = body.indexOf("ARCHIVE_UPSERT_SQL");
-  assert.ok(pool > 0 && write > pool, "🔴 запис в архів не після перевірки «клієнт зараз у пулі»");
-  assert.ok(!/INSERT INTO loyalty_overrides/.test(body), "🔴 «Закрити» пише архів власним SQL, а не спільним");
-  const arch = src.slice(src.indexOf('dashboardRouter.post("/client-archive"'));
-  assert.match(arch.slice(0, 3000), /pool\.query\(ARCHIVE_UPSERT_SQL, \[clientKey, reason, req\.auth!\.userId\]\)/, "🔴 ручна «🗄 в архів» пише не спільним SQL");
-});

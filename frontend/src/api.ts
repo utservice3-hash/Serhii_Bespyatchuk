@@ -5010,7 +5010,8 @@ export async function reactDecision(p: { clientKey: string; decision: "self" | "
 }
 export interface LeadgenPoolRow {
   clientKey: string; clientName: string; pooledAt: string;
-  poolReason: "manager" | "auto" | "self_expired";
+  /** `orphan` — прийшов із «Нічийних»: менеджер віддав, ніхто не взяв за робочий день (8135). */
+  poolReason: "manager" | "auto" | "self_expired" | "orphan";
   fromManagerName: string | null; lastInvoice: string | null;
   /** ① за весь час — щоб лідген бачив, кого брати першим. */
   successRevenue: number; successDeals: number;
@@ -5060,6 +5061,14 @@ export interface ClientCard {
   canForceRegular: boolean; forcedRegular: boolean; forceNote: string | null;
   /** 🌙 Сезонний клієнт (8351): право (КВП / ОД / адмін), позначка, місяці сезону (1–12), примітка, чи зараз не сезон. */
   canSeason: boolean; seasonal: boolean; seasonMonths: number[]; seasonNote: string | null; offSeason: boolean;
+  /**
+   * 🧭 «В нічийні» (8135 + 8349): чи можна віддати зараз; у нічийних (коли, до коли, чий коментар); у пулі лідгенів.
+   * Право — та сама межа, що картка; сервер не пропонує, коли клієнт уже в пулі лідгенів чи в архіві.
+   */
+  canRelease?: boolean;
+  released?: { at: string; deadline: string; note: string; byName: string | null; fromManagerName: string | null } | null;
+  inLeadgenPool?: { pooledDay: string; reason: string } | null;
+  releaseNoteMin?: number;
   /** Клієнт ЗАРАЗ в архіві (з автоповерненням) — тоді дія зворотна. */
   archived: boolean;
   archiveReason: string | null;
@@ -5245,7 +5254,7 @@ export async function closeReactivationTask(body: { taskId: number; reason: stri
 // ── ПУЛ НІЧИЙНИХ КЛІЄНТІВ (рішення власника 05.08.2026) ──────────────────────
 export interface OrphanClientRow {
   clientKey: string; name: string; managerId: number; manager: string;
-  reason: "service" | "inactive"; segment: string; isRegular: boolean;
+  reason: "service" | "inactive" | "released"; segment: string; isRegular: boolean;
   payments: number; lastPaidAt: string | null; lastCallAt: string | null;
   daysSincePaid: number | null; daysSinceCall: number | null;
   revenue12: number; revenueAll: number; paymentType: string | null;
@@ -5260,11 +5269,23 @@ export interface OrphanGroup {
   managerId: number; manager: string; reason: string; reasonLabel: string;
   clients: OrphanClientRow[]; sum12: number; sumAll: number;
 }
+/** 🧭 Віддав менеджер кнопкою «В нічийні» (8135): чекає робочий день, далі — лідгенам. */
+export interface ReleasedClientRow {
+  clientKey: string; name: string; segment: string; payments: number; lastPaidAt: string | null;
+  revenue12: number; revenueAll: number; kind: "legal" | "person"; phones: string[];
+  releasedAt: string; deadline: string; note: string; releasedByName: string | null; fromManagerName: string | null;
+  onlyCarrierPhones?: boolean;
+}
 export interface OrphanPool {
   scope: string;
-  tiles: { clients: number; money12: number; regulars: number; vip: number; claimedThisMonth: number; totalAllTime: number; legal: number };
-  /** «self» — менеджер із прапорцем «Нічийні клієнти»: бачить пул, бере клієнта лише собі. */
-  access: "full" | "self";
+  tiles: { clients: number; money12: number; regulars: number; vip: number; claimedThisMonth: number; totalAllTime: number; legal: number; released?: number };
+  /**
+   * «self» — менеджер із прапорцем «Нічийні клієнти»: бачить пул, бере клієнта лише собі.
+   * «released» — менеджер без прапорця (8135): бачить лише «Віддали менеджери» і бере звідти собі.
+   */
+  access: "full" | "self" | "released";
+  /** 🧭 Група «Віддали менеджери» (8135) — найближчий строк першим. */
+  released?: ReleasedClientRow[];
   /** Причини кнопки «Закрити» (задача 7187), з підписами зі спільного словника. */
   closeReasons: { key: string; label: string }[];
   groups: OrphanGroup[];
@@ -5276,6 +5297,15 @@ export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {
 /** 409 = клієнта вже взяли; текст помилки називає, хто саме. */
 export async function claimOrphanClient(clientKey: string, managerId: number): Promise<void> {
   await api.post("/dashboard/orphan-clients/claim", { clientKey, managerId });
+}
+/** 🧭 «В нічийні» (8135): коментар обовʼязковий; 409 — уже в нічийних / у пулі / в архіві. */
+export async function releaseOrphanClient(clientKey: string, note: string): Promise<{ deadline: string; notified: number }> {
+  const { data } = await api.post("/dashboard/orphan-clients/release", { clientKey, note });
+  return data;
+}
+/** Відкликати «В нічийні», поки ніхто не взяв. */
+export async function unreleaseOrphanClient(clientKey: string): Promise<void> {
+  await api.post("/dashboard/orphan-clients/unrelease", { clientKey });
 }
 /** «Закрити» нічийного клієнта (задача 7187): в архів з причиною; 409 = його вже взяли або закрили. */
 export async function closeOrphanClient(clientKey: string, reason: string, comment: string): Promise<void> {

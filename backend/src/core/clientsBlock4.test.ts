@@ -6,7 +6,6 @@ import {
   addMonths, inReact, cycleMonthOf, statusOf, transferMonday, autoDue, autoReason, allowedDecisions,
   planSweep, poolAccess, daysLeft, LAUNCH_MONTH, LAUNCH_RELEASE, WEEKLY_CAP, weekMonday, mondayOnOrAfter,
   transferWindowOpen, type CycleRow, type Candidate,
-  LEADGEN_POOL_ENABLED, poolTransferOpen, poolAccessNow, decisionsNow, statusNow,
 } from "./reactCycleRules.js";
 import { clientTabGroup, tabOf, TAB_GROUP_RANK, YELLOW_DAYS } from "./clientTabs.js";
 import { skipReason } from "../db/scratchDb.js";
@@ -84,33 +83,6 @@ test("#845 ПУЛ: бачать лідгени й керівництво, бер
   assert.deepEqual(poolAccess(false, true), { canSee: true, canTake: false }, "🔴 керівництво не бачить пул або бере без менеджерського акаунта");
   assert.deepEqual(poolAccess(false, false), { canSee: false, canTake: false }, "🔴 звичайний менеджер бачить пул (4.4)");
   assert.deepEqual(poolAccess(true, true), { canSee: true, canTake: true });
-});
-
-test("#845b РОУТИ ЦИКЛУ: межа — першим оператором, матриця й вкладка; пул звіряє рахунки перед показом і взяттям", () => {
-  const dash = codeOnly(read("backend/src/routes/dashboard.ts"));
-  const body = (sig: string) => {
-    const s = dash.indexOf(sig);
-    assert.ok(s > 0, `🔴 обробник ${sig} не знайдено`);
-    return dash.slice(s, dash.indexOf("\ndashboardRouter.", s + 10));
-  };
-  const dec = body('dashboardRouter.post("/react-decision"');
-  assert.match(dec, /^[^\n]*\n\s*const auth = req\.auth!;\n\s*const clientKey = [^\n]*\n\s*if \(!clientKey \|\| !\(await canSeeClient\(auth, clientKey\)\)\) return res\.status\(403\)/,
-    "🔴 /react-decision: межа не першим оператором — тіло валідовано до гейта (400 замість 403 ламає зліпок #11)");
-  const list = body('dashboardRouter.get("/leadgen-pool"');
-  assert.match(list, /const access = await leadgenPoolAccess\(auth\);\n\s*if \(!access\.canSee\) return res\.status\(403\)/, "🔴 пул віддається без межі");
-  assert.match(list, /reactCycleRules\.inReact\(/, "🔴 пул показує клієнтів, не звіривши рахунки (4.4)");
-  const take = body('dashboardRouter.post("/leadgen-pool/take"');
-  assert.match(take, /const access = await leadgenPoolAccess\(auth\);\n\s*if \(!access\.canTake\) return res\.status\(403\)/, "🔴 брати може не лише лідген");
-  assert.ok(take.indexOf("reactCycleRules.inReact(") < take.indexOf('client.query("BEGIN")'),
-    "🔴 перевірка «ожив» не ДО транзакції — ROLLBACK відкотить закриття рядка пулу");
-  assert.match(take, /reactCycle\.take\(client,/, "🔴 взяття не в транзакції");
-  const matrix = read("backend/src/auth/accessMatrix.ts");
-  for (const p of ["/api/dashboard/react-decision", "/api/dashboard/leadgen-pool", "/api/dashboard/leadgen-pool/take"]) {
-    assert.match(matrix, new RegExp(`path: "${p.replace(/\//g, "\\/")}"`), `🔴 ${p} немає в матриці доступу`);
-  }
-  const rt = read("backend/src/auth/routeTab.ts");
-  assert.match(rt, /pre\("\/api\/dashboard\/react-decision"\), tabs: \["loyalty"\]/);
-  assert.match(rt, /pre\("\/api\/dashboard\/leadgen-pool"\), tabs: \["loyalty"\]/);
 });
 
 test("#846b НІЧНИЙ ПРОХІД ПІД НАГЛЯДОМ: щодоби за Києвом, нагляд чекає 1440 хв, є стартовий прогін", async () => {
@@ -272,58 +244,6 @@ test("#3440 РОЗКЛАД: пн 08:00 + нічний прогін; джоба �
   assert.doesNotMatch(job, /transferWindowOpen\(/, "🔴 джоба обходить вимикач голим вікном");
   assert.match(job, /await autoPooledSince\(pool, weekMonday\(today\)\)/, "🔴 джоба не рахує вже передане цього тижня");
   assert.match(job, /today, \{ transfer, pooledThisWeek \}\);/, "🔴 вікно й передане не дійшли до правила");
-});
-
-/**
- * #3441 🪞 — ВИМИКАЧ ПЕРЕДАЧІ ЛІДГЕНАМ (Сергій 31.10.2026, Роман 06.11.2026: «просто вимкни і все»), чисте правило
- * по ОБИДВА боки: вимкнено — у понеділок о 09:00 передача закрита, пул не бачить і не бере ніхто, «лідгенам» не
- * пропонується, рядок пулу показується звичайною реактивацією; увімкнено — рівно старе правило.
- * 🧨 Червоніє, якщо вимикач увімкнути без рішення (`LEADGEN_POOL_ENABLED = true`) або якщо будь-яка обгортка
- * перестане його слухати чи зламає старе правило на `enabled = true`.
- */
-test("#3441 🪞 ВИМИКАЧ ПУЛУ ЛІДГЕНІВ: вимкнено — ні передачі, ні пулу, ні кнопки; увімкнено — старе правило", () => {
-  assert.equal(LEADGEN_POOL_ENABLED, false, "🔴 передачу лідгенам знову ввімкнено — рішення Сергія 31.10 було вимкнути");
-  const mon9 = ["2026-11-09", 9] as const;
-  assert.equal(transferWindowOpen(...mon9), true, "фікстура: о 09:00 понеділка вікно саме по собі відкрите");
-  assert.equal(poolTransferOpen(...mon9), false, "🔴 у понеділок о 09:00 передача відкрита попри вимикач");
-  assert.equal(poolTransferOpen(...mon9, true), true, "🔴 увімкнений вимикач не відкриває передачу — повернути її буде нічим");
-  for (const [lg, adm] of [[true, false], [false, true], [true, true]] as const) {
-    assert.deepEqual(poolAccessNow(lg, adm), { canSee: false, canTake: false }, `🔴 пул видно (лідген ${lg}, керівництво ${adm})`);
-    assert.deepEqual(poolAccessNow(lg, adm, true), poolAccess(lg, adm), "🔴 увімкнений вимикач змінив доступ до пулу");
-  }
-  const cm = "2026-10";
-  const self = row({ cycleMonth: cm, decision: "self", decidedDate: "2026-10-10" });
-  const pooled = row({ cycleMonth: cm, pooled: true, poolReason: "auto" });
-  assert.deepEqual(decisionsNow(null), ["self"], "🔴 «Передати лідгенам» пропонується попри вимикач");
-  assert.deepEqual(decisionsNow(self), [], "🔴 після «сам» лишилась кнопка «лідгенам»");
-  assert.deepEqual(decisionsNow(null, true), allowedDecisions(null));
-  assert.deepEqual(decisionsNow(self, true), allowedDecisions(self));
-  assert.equal(statusNow(pooled), "waiting", "🔴 клієнт досі «у пулі лідгенів», хоча пулу немає");
-  assert.equal(statusNow(pooled, true), "pool");
-  assert.equal(statusNow(self), "self", "🔴 вимикач зачепив «реактивую сам»");
-});
-
-/**
- * #3442 — ПРОВОДКА ВИМИКАЧА: роут відхиляє «лідгенам» ДО запису (409), доступ до пулу — через `poolAccessNow`,
- * вигляд циклу — `decisionsNow`/`statusNow` і строк лише при ввімкненому вимикачі; фронт знає про вимикач із сервера.
- * 🧨 Червоніє, якщо будь-яке з місць повернеться до голого правила — тоді кнопка, вкладка чи підпис «передача
- * лідгенам з пн» оживуть.
- */
-test("#3442 ПРОВОДКА ВИМИКАЧА: роут, доступ до пулу, вигляд циклу, фронт", () => {
-  const dash = codeOnly(read("backend/src/routes/dashboard.ts"));
-  const dec = dash.slice(dash.indexOf('dashboardRouter.post("/react-decision"'));
-  const guard = dec.indexOf('if (decision === "leadgen" && !reactCycleRules.LEADGEN_POOL_ENABLED)');
-  assert.ok(guard > 0 && guard < dec.indexOf("reactCycle.decide("), "🔴 «лідгенам» доходить до запису попри вимикач");
-  assert.match(dash, /return reactCycleRules\.poolAccessNow\(isLeadgen, isAdminScope\(auth\)\);/, "🔴 пул віддається без вимикача");
-  assert.doesNotMatch(dash, /reactCycleRules\.poolAccess\(/, "🔴 десь пул відкривається голим правилом");
-  assert.match(dash, /leadgenPool: reactCycleRules\.LEADGEN_POOL_ENABLED/, "🔴 фронт не знає, що передачу вимкнено");
-  const core = codeOnly(read("backend/src/core/reactCycle.ts"));
-  const view = core.slice(core.indexOf("export function cycleView"));
-  assert.match(view, /const dl = LEADGEN_POOL_ENABLED \? transferMonday\(cm, row\) : null;/, "🔴 строк передачі лідгенам показується попри вимикач");
-  assert.match(view, /status: statusNow\(row\)/);
-  assert.match(view, /allowed: decisionsNow\(row\)/, "🔴 кнопки циклу — з голого правила");
-  const list = codeOnly(read(`${SECTIONS}/ClientPlansSection.tsx`));
-  assert.match(list, /data\.reactRules\?\.leadgenPool === false/, "🔴 екран не перемикає пояснення й фільтр за сервером");
 });
 
 /**

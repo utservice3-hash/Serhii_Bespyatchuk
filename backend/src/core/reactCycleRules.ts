@@ -51,7 +51,8 @@ export const LAUNCH_RELEASE = "2026-10-05";
 export const TRANSFER_HOUR = 8;
 
 export type Decision = "self" | "leadgen";
-export type PoolReason = "manager" | "auto" | "self_expired";
+/** `orphan` — клієнт прийшов із «Нічийних»: менеджер віддав, ніхто не взяв за робочий день (задача 8135). */
+export type PoolReason = "manager" | "auto" | "self_expired" | "orphan";
 export type CycleStatus = "waiting" | "self" | "pool" | "taken";
 
 /** Рядок `client_react_cycles` у формі, потрібній правилу. Місяці — `YYYY-MM`. */
@@ -63,7 +64,7 @@ export interface CycleRow {
   pooled: boolean;
   poolReason: PoolReason | null;
   closed: boolean;
-  closeReason: "invoice" | "taken" | null;
+  closeReason: "invoice" | "taken" | "pool_off" | null;
 }
 
 /** `YYYY-MM` + n місяців. Анкер на 1-ше число — 31-ше не перескакує місяць (борг 19 у CLAUDE.md). */
@@ -114,6 +115,18 @@ export function inReact(lastInvoice: string | null, nowYm: string): boolean {
   return addMonths(lastInvoice.slice(0, 7), QUIET_MONTHS + 1) <= nowYm;
 }
 
+/**
+ * 🧭 ЧИ ОЖИВ КЛІЄНТ У ПУЛІ — рядок пулу закривається (`invoice`) і лідгену не дістається.
+ * Звичайний рядок (реактивація) — за правилом реактивації: є рахунок за 3 місяці → ожив (4.4).
+ * Рядок `orphan` (з «Нічийних», 8135) — інакше: такий клієнт міг мати рахунок і місяць тому (віддають
+ * «не спрацювались», а не «заснув»), тож ожилим він стає лише від рахунку ПІЗНІШЕ за день, коли його поклали.
+ * Інакше нічний прохід закривав би рядок `orphan` тієї ж ночі, і клієнт зникав би з пулу, не дійшовши до лідгена.
+ */
+export function poolRevived(p: { poolReason: PoolReason | null; pooledDay: string | null; lastInvoice: string | null }, nowYm: string): boolean {
+  if (p.poolReason === "orphan") return p.lastInvoice != null && p.pooledDay != null && p.lastInvoice > p.pooledDay;
+  return !inReact(p.lastInvoice, nowYm);
+}
+
 /** Місяць циклу: «4-й місяць» без рахунку, але не раніше за старт механізму. */
 export function cycleMonthOf(lastInvoice: string | null): string {
   if (!lastInvoice) return LAUNCH_MONTH;
@@ -161,6 +174,9 @@ export function daysLeft(transferYmd: string, todayYmd: string): number {
 
 /** Які кнопки дозволені зараз. «Сам» — лише раз за цикл; «лідгенам» — доки клієнт не в пулі. */
 export function allowedDecisions(row: CycleRow | null): Decision[] {
+  // 🚫 Рядок старого пулу, закритий 11.11.2026 (`pool_off`): рішення в цьому циклі вже було — повторний запис
+  // відхилив би ON CONFLICT, тож кнопку не пропонуємо, щоб не вести в 409.
+  if (row?.closeReason === "pool_off") return [];
   const st = statusOf(row);
   if (st === "waiting") return ["self", "leadgen"];
   if (st === "self") return ["leadgen"];
@@ -192,13 +208,17 @@ export interface SweepActions {
  */
 export function planSweep(
   candidates: Candidate[], rows: Map<string, CycleRow[]>,
-  openPools: { clientKey: string; cycleMonth: string; lastInvoice: string | null }[], todayYmd: string,
+  openPools: { clientKey: string; cycleMonth: string; lastInvoice: string | null; poolReason?: PoolReason | null; pooledDay?: string | null }[],
+  todayYmd: string,
   opts: { transfer: boolean; pooledThisWeek: number } = { transfer: true, pooledThisWeek: 0 },
 ): SweepActions {
   const nowYm = todayYmd.slice(0, 7);
   const actions: SweepActions = { pool: [], close: [], deferred: 0 };
   for (const p of openPools) {
-    if (!inReact(p.lastInvoice, nowYm)) actions.close.push({ clientKey: p.clientKey, cycleMonth: p.cycleMonth });
+    // 🧭 Рядок `orphan` живе за власним правилом «ожив» (`poolRevived`), інакше закрився б тієї ж ночі.
+    if (poolRevived({ poolReason: p.poolReason ?? null, pooledDay: p.pooledDay ?? null, lastInvoice: p.lastInvoice }, nowYm)) {
+      actions.close.push({ clientKey: p.clientKey, cycleMonth: p.cycleMonth });
+    }
   }
   const due: { c: Candidate; cm: string; row: CycleRow | null }[] = [];
   for (const c of candidates) {
@@ -247,14 +267,23 @@ export function poolAccess(isLeadgen: boolean, isAdminScope: boolean): { canSee:
  */
 export const LEADGEN_POOL_ENABLED = false;
 
+/**
+ * 🧭 ЕКРАН «ПУЛ ЛІДГЕНІВ» — ЗНОВУ ВИДНО (задачі 8135 + 8349, ТЗ Юлі 09.11.2026 у 8850; Роман 11.11.2026).
+ * Пул повертається ІНШИМ шляхом: не передачею з реактивації (вона лишається вимкненою — `LEADGEN_POOL_ENABLED`),
+ * а з «Нічийних» — клієнт, якого менеджер віддав і ніхто не взяв за робочий день (`pool_reason = 'orphan'`).
+ * Тому вимикачів ДВА: що кладе клієнтів у пул (старе — вимкнено) і чи видно сам пул (так — лідгенам і керівництву).
+ * Старі 545 рядків закрито `pool_off` (Роман 11.11, п.4) — у пулі лише ті, хто прийшов із нічийних.
+ */
+export const LEADGEN_POOL_SCREEN = true;
+
 /** Чи відкрита передача зараз — з урахуванням вимикача. Джоба питає саме це, а не голе вікно. */
 export function poolTransferOpen(todayYmd: string, kyivHour: number, enabled = LEADGEN_POOL_ENABLED): boolean {
   return enabled && transferWindowOpen(todayYmd, kyivHour);
 }
 
-/** Доступ до пулу з урахуванням вимикача: вимкнено — не бачить і не бере ніхто. */
-export function poolAccessNow(isLeadgen: boolean, isAdminScope: boolean, enabled = LEADGEN_POOL_ENABLED): { canSee: boolean; canTake: boolean } {
-  return enabled ? poolAccess(isLeadgen, isAdminScope) : { canSee: false, canTake: false };
+/** Доступ до пулу з урахуванням вимикача ЕКРАНА (`LEADGEN_POOL_SCREEN`): вимкнено — не бачить і не бере ніхто. */
+export function poolAccessNow(isLeadgen: boolean, isAdminScope: boolean, screen = LEADGEN_POOL_SCREEN): { canSee: boolean; canTake: boolean } {
+  return screen ? poolAccess(isLeadgen, isAdminScope) : { canSee: false, canTake: false };
 }
 
 /** Кнопки циклу з урахуванням вимикача: вимкнено — «Передати лідгенам» не пропонується. */
@@ -263,8 +292,11 @@ export function decisionsNow(row: CycleRow | null, enabled = LEADGEN_POOL_ENABLE
   return enabled ? d : d.filter((x) => x !== "leadgen");
 }
 
-/** Стан для показу з урахуванням вимикача: вимкнено — рядок пулу показується як звичайна реактивація. */
+/**
+ * Стан для показу з урахуванням вимикача: передачу вимкнено — рядок пулу зі СТАРОЇ передачі показується як звичайна
+ * реактивація; рядок `orphan` (з «Нічийних», 8135) — це справжній пул, і він лишається «у пулі».
+ */
 export function statusNow(row: CycleRow | null, enabled = LEADGEN_POOL_ENABLED): CycleStatus {
   const st = statusOf(row);
-  return !enabled && st === "pool" ? "waiting" : st;
+  return !enabled && st === "pool" && row?.poolReason !== "orphan" ? "waiting" : st;
 }
