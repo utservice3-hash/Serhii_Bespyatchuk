@@ -1583,6 +1583,10 @@ export interface FirstTouchCell extends FirstTouchCounts { state: "measured" | "
 export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";
+  /** 🎚 Рівень з «Найму»: `null` — не продажник; "unlinked" — менеджер не привʼязаний до людини реєстру (невідомо). */
+  level: "start" | "pro" | null | "unlinked";
+  /** 📵 Пропущені за період — ті самі числа, що вкладка «Пропущені дзвінки». `medianMin` — медіана передзвону. */
+  missed: ReportMissedCell;
   plan: number; fact: number; expect: number; pct: number | null;
   factSuccess: number; factPaid: number; // #1 круг оплати: факт = успішно ⊎ оплачено
   // К-сть угод у кожній половині факту — банер має називати ЧИСЛО, а не лише суму.
@@ -1683,7 +1687,14 @@ export interface ReportPlan {
   dismissed: ReportPlanDismissed[];
   /** Про ДЖЕРЕЛО «першого дотику»: розмови без менеджера, останній AI-розбір, чи розбір існував у періоді (задача 7237). */
   firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; covered: boolean };
+  /**
+   * 📵 Пропущені ВСЬОГО в скоупі (як на вкладці, включно з «без відповідального» й людьми поза таблицею),
+   * медіана передзвону скоупу одним запитом і медіани команд. `total − Σ рядків` = дзвінки поза таблицею.
+   */
+  missedMeta: { total: number; totalNoCallback: number; medianMin: number | null;
+    byTeam: { teamId: number; missed: number; noCallback: number; medianMin: number | null }[] };
 }
+export interface ReportMissedCell { missed: number; noCallback: number; medianMin: number | null }
 export interface ReportPlanDismissed {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   fact: number; factSuccess: number; factPaid: number;

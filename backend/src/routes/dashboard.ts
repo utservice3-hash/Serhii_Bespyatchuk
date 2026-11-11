@@ -58,6 +58,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
+import { levelByManager } from "../core/employeeLevel.js";
 import { canAssignMissedTask, LEADERSHIP_ROLES, hoursSince, taskState, buttonTaskTitle, buttonTaskDescription, mondayOf, canSetCallbackNorm, callbackNormVerdict, clientNameOf } from "../core/missedNoCallbackRules.js";
 import { missedPeriod, missedScopeFor, ownerlessInScope, dealInWindowLateral, NO_DEAL_STATES, SERIES_GRANULARITIES, type NoDealState, type SeriesGranularity } from "../core/missedCallsRules.js";
 import * as reactivation from "../core/reactivation.js";
@@ -9950,6 +9951,25 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // за період) — signed Σ÷count per manager; команда/відділ = Σsum÷Σcount (glance нижче).
   // 🤝 «Прийнято лідоген» — угоди, які Kommo створила менеджеру з передачі лідгена (рішення 05.10.2026, `#1259`).
   // Стартує паралельно з рештою запитів; чекаємо там, де він потрібен.
+  /**
+   * 📵 ПРОПУЩЕНІ Й ПЕРЕДЗВІН У ТАБЛИЦІ ЗВІТУ + РІВЕНЬ «СТАРТ / ПРОФІ» (зустріч 10.11.2026, правки 3–4).
+   *
+   * 🔴 ТІ САМІ ФУНКЦІЇ ЯДРА, ЩО ВКЛАДКА «ПРОПУЩЕНІ ДЗВІНКИ» (`missedByManager` / `missedByTeam` /
+   * `missedSummary`), і той самий скоуп за роллю, що в Звіту. Свого SQL тут немає: число в клітинці мусить
+   * збігатися з вкладкою байт-у-байт, інакше на двох екранах житимуть дві відповіді (тримає `#7703`).
+   * Чому НЕ окремим запитом із фронту: `/missed-calls` закритий межею своєї вкладки, а Звіт бачать і ті,
+   * кому вкладку не відкрито, — вони отримали б 403 замість колонки.
+   *
+   * Дзвінки «поза таблицею» (без відповідального, лідогенерація, не-комерційні команди) НЕ розмазуються по
+   * рядках: вони йдуть одним числом у `missedMeta.total`, і екран пише різницю підписом під таблицею.
+   */
+  const missedScope = { managerId, teamId };
+  const missedP = Promise.all([
+    missedCalls.missedByManager(from, to, missedScope),
+    missedCalls.missedByTeam(from, to, missedScope),
+    missedCalls.missedSummary(from, to, missedScope),
+    levelByManager(pool, roster.map((m) => m.id)),
+  ]);
   const lgAcceptedP = metrics.leadgenAcceptedByManager(scope);
   const [recv, succ, paid, disp, ads, conv, avgc, expZone, split, expDays, convAd, convLg, recvKl, expKl] = await Promise.all([
     money.receivedByMgr(scope), money.successByMgr(scope), money.paidOnlyByMgr(scope),
@@ -10203,6 +10223,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     e.awaitDatedSum += r.awaitDatedSum; e.awaitNoDateSum += r.awaitNoDateSum;
     cohortByMgr.set(r.managerId, e);
   }
+  const [missedMgr, missedTeams, missedSum, levelOf] = await missedP;
+  const missedOf = new Map(missedMgr.rows.filter((r) => r.managerId != null).map((r) => [r.managerId as number, r]));
   const managers = roster.map((m) => {
     const fact = Math.round(recvM.get(m.id)?.revenue ?? 0);
     const pl = planByMgr.get(m.id) ?? {};
@@ -10214,6 +10236,12 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     return {
       managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
       tag: kind === "leadgen" ? "self" : kind, // self=самостійні/лідоген у макеті — зелений тег
+      // 🎚 «Старт» / «Профі» з реєстру «Найму»; `null` — людина не продажник; "unlinked" — не привʼязана до реєстру
+      // (невідоме пишемо як невідоме, а не «Старт»).
+      level: levelOf.has(m.id) ? levelOf.get(m.id) ?? null : "unlinked",
+      // 📵 Немає рядка у вкладці = пропущених за період не було: це справжній нуль, а не «невідомо».
+      missed: { missed: missedOf.get(m.id)?.missed ?? 0, noCallback: missedOf.get(m.id)?.noCallback ?? 0,
+        medianMin: missedOf.get(m.id)?.medianMin ?? null },
       plan, fact, expect: Math.round(expM.get(m.id) ?? 0),
       // #1 круг оплати: розклад факту (received) = успішно(142) + оплачено(етап 9).
       factSuccess: Math.round(succM.get(m.id)?.revenue ?? 0), factPaid: Math.round(paidM.get(m.id)?.revenue ?? 0),
@@ -10452,6 +10480,12 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     // Окремим масивом, а не серед `managers`: у них немає плану, %, світлофора й темпу,
     // тож змішувати їх у той самий список означало б рахувати статуси по людях, яких немає.
     dismissed,
+    // 📵 Пропущені всього в скоупі (як на вкладці) + медіана скоупу ОДНИМ запитом (медіани не складаються) +
+    // медіани команд для підсумків груп. Різниця `total − Σ рядків` — це дзвінки поза таблицею.
+    missedMeta: {
+      total: missedMgr.total.missed, totalNoCallback: missedMgr.total.noCallback, medianMin: missedSum.medianMin,
+      byTeam: missedTeams.filter((t) => t.teamId != null).map((t) => ({ teamId: t.teamId as number, missed: t.missed, noCallback: t.noCallback, medianMin: t.medianMin })),
+    },
     // 🎯 Про ДЖЕРЕЛО «першого дотику», а не про скоуп: скільки розмов без менеджера, коли AI розібрав
     // останню, чи розбір узагалі існував у періоді. Від ролі не залежить.
     firstTouchMeta: { unmapped: ft.unmapped, lastAnalyzedAt: ft.lastAnalyzedAt, covered: ft.covered },

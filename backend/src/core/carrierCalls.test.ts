@@ -1143,7 +1143,11 @@ test("#1068 МІГРАЦІЯ ДВІЧІ · ЖИВА СХЕМА: вкладка �
  * «Клієнти / Перевізники / Інше / На перевірці», усе нерозсортоване — у «На перевірці»; підтипи й кнопки = бекенду.
  * 🧨 Червоніє, якщо від'єднати будь-що з цього, розвести підтипи чи кнопки з бекендом або загубити «Помилку».
  */
-test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка угоди, блок у «Звіті»; підтипи й кнопки = бекенду", async () => {
+/**
+ * #7702 — замінив `#1069` 11.11.2026: блок «Дзвінки на мобільні» зі «Звіту» прибрано (зустріч 10.11.2026, правка 7).
+ * Відсутність блоку і «де тепер» тримає `#7700`; тут — проводка вкладки, картки угоди й дані для мітки в Звіті.
+ */
+test("#7702 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка угоди, мітка у «Звіті» з даних звіту; підтипи й кнопки = бекенду", async () => {
   const layout = readFileSync(FE("components/Layout.tsx"), "utf8");
   assert.match(layout, /label: "Продаж",[\s\S]{0,400}\{ key: "carrier-calls"/, "🔴 пункту «Перевізники за розмовою» у групі «Продаж» немає");
   const dash = readFileSync(FE("pages/Dashboard.tsx"), "utf8");
@@ -1153,17 +1157,12 @@ test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка у�
   for (const fn of ["fetchCarrierCalls(", "fetchCarrierCallsMeta(", "fetchCarrierPending(", "<CarrierDealPanel "]) assert.ok(sec.includes(fn), `🔴 секція не має ${fn}`);
   const panel = readFileSync(FE("pages/dashboard/sections/CarrierDealPanel.tsx"), "utf8");
   for (const fn of ["fetchCarrierCallCard(", "fetchCarrierAudio(", "postCarrierDecision(", "revertCarrierClose("]) assert.ok(panel.includes(fn), `🔴 картка не кличе ${fn}`);
-  // Ланцюжок ДО ЕКРАНА, а не «блок є в якомусь файлі» (правило 10): меню «Звіт» рендерить `ReportPlanSection`, і саме
-  // в ньому блок. 📐 Куплено 30.09.2026: блок стояв у `ReportSection`, який «Звіт» не рендерить, — гейт був зелений,
-  // а на екрані блоку не було.
-  assert.match(dash, /section === "report" && auth && \(\s*<ReportPlanSection/, "🔴 меню «Звіт» рендерить не ReportPlanSection — блок треба шукати в іншому файлі");
+  // Ланцюжок ДО ЕКРАНА (правило 10): меню «Звіт» рендерить `ReportPlanSection`, і мітка «чекають рішення» живе в ньому.
+  assert.match(dash, /section === "report" && auth && \(\s*<ReportPlanSection/, "🔴 меню «Звіт» рендерить не ReportPlanSection");
   const report = readFileSync(FE("pages/dashboard/sections/ReportPlanSection.tsx"), "utf8");
-  assert.match(report, /<CarrierReportCard from=\{selectedPeriod\.from\} to=\{selectedPeriod\.to\}/, "🔴 блоку «Дзвінки на мобільні» у «Звіті» немає");
-  const card = readFileSync(FE("pages/dashboard/sections/CarrierReportCard.tsx"), "utf8");
-  // 5968: звіт тягне екран (`useCarrierReport` → `fetchCarrierReport`), блок отримує його готовим; список — сам блок.
-  assert.ok(card.includes("fetchCarrierCalls("), "🔴 блок звіту не кличе fetchCarrierCalls(");
-  assert.ok(readFileSync(FE("pages/dashboard/carrierReportData.ts"), "utf8").includes("fetchCarrierReport("), "🔴 звіт блоку ніхто не тягне");
-  assert.match(report, /<CarrierReportCard [^>]*data=\{carrier\} \/>/, "🔴 блок звіту не отримує даних");
+  // 5968: мітку в картці менеджера живить звіт перевізників (`useCarrierReport` → `fetchCarrierReport`).
+  assert.ok(readFileSync(FE("pages/dashboard/carrierReportData.ts"), "utf8").includes("fetchCarrierReport("), "🔴 звіт для мітки ніхто не тягне");
+  assert.match(report, /const awaitMap = useMemo\(\(\) => awaitingByManager\(carrier\.rep\)/, "🔴 мітка «чекають рішення» не отримує даних");
   const api = readFileSync(FE("api.ts"), "utf8");
   for (const p of ['"/dashboard/carrier-calls"', '"/dashboard/carrier-calls/report"', '"/dashboard/carrier-calls/pending"', "`/dashboard/carrier-calls/deals/${String(kommoId)}/decision`, { decision, note, otherType }"])
     assert.ok(api.includes(p), `🔴 api не ходить на ${p}`);
@@ -1993,7 +1992,11 @@ test("#1776 ЧЕКАЮТЬ РІШЕННЯ ЗАРАЗ: лише ті, що дос
  * екрана), клік по «чекають рішення зараз» показує угоди з `rep.awaiting`, а не з періодного списку.
  * 🧨 Червоніє, якщо мітка чи блок почнуть тягнути звіт окремо або клік показуватиме інший набір, ніж число.
  */
-test("#1777 ЗВІТ · ФРОНТ: мітка «чекають рішення» і блок — один запит; клік — ті самі угоди", () => {
+/**
+ * #7708 — замінив `#1777` 11.11.2026: нижнього блоку «Дзвінки на мобільні» у Звіті більше немає (зустріч 10.11.2026,
+ * правка 7), тож «блок з того самого запиту» зняте. Мітка в картці менеджера — і далі з ОДНОГО запиту на екран.
+ */
+test("#7708 ЗВІТ · ФРОНТ: мітка «чекають рішення» — один запит на екран, з поля «зараз»; картка показує ті самі угоди", () => {
   const read = (rel: string) => readFileSync(FE(rel), "utf8");
   const sec = read("pages/dashboard/sections/ReportPlanSection.tsx");
   const card = read("pages/dashboard/sections/CarrierReportCard.tsx");
@@ -2002,7 +2005,6 @@ test("#1777 ЗВІТ · ФРОНТ: мітка «чекають рішення»
   assert.equal((sec.match(/fetchCarrierReport\(/g) ?? []).length + (card.match(/fetchCarrierReport\(/g) ?? []).length, 0,
     "🔴 блок або рядок тягнуть звіт окремо — два запити можуть показати різне число про ту саму людину");
   assert.match(sec, /const carrier = useCarrierReport\(selectedPeriod\.from, selectedPeriod\.to,/);
-  assert.match(sec, /<CarrierReportCard [^>]*data=\{carrier\} \/>/, "🔴 нижній блок не з того самого запиту");
   assert.match(sec, /awaitingByManager\(carrier\.rep\)/, "🔴 мітка в рядку не з того самого запиту");
   assert.match(sec, /const aw = useContext\(AwaitCtx\)\.get\(m\.managerId\);/);
   assert.match(data, /x\.awaitingNow > 0\) m\.set\(x\.managerId, \{ awaitingNow: x\.awaitingNow, overdueNow: x\.overdueNow \}\)/, "🔴 мітка не з поля «чекають рішення зараз»");

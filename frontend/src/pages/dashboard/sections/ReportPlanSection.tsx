@@ -1,5 +1,4 @@
-import { CarrierReportCard } from "./CarrierReportCard";
-import { FirstTouchReportCard } from "./FirstTouchReportCard";
+import { useNavigate } from "react-router-dom";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
@@ -14,8 +13,7 @@ import {
   periodOf, periodLabelOf, type PeriodMode, type PeriodState,
 } from "../periodRules";
 import { InfoHint } from "../widgets";
-import { LeadTakeCard } from "./LeadTakeCard";
-import { ReportTableSection } from "./ReportTableSection";
+import { ReportTableSection, LevelChip } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
 import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#213`.
@@ -122,7 +120,6 @@ function DealName({ name, url }: { name: string; url: string | null }) {
 }
 
 const SICON: Record<string, string> = { g: "🟢", a: "🟠", r: "🔴" };
-const TAGCOL: Record<string, string> = { rpk: BAR, rnk: "#7a52c7", self: GREEN };
 
 // Комерційний скоуп (A1): у перемикачі команд не показуємо некомерційні команди — фінанси й лідогенерацію
 // (= бекенд KVP_FINANCE/LEADGEN). Список один на фронт — pages/dashboard/teamSets.ts.
@@ -204,7 +201,8 @@ export function ReportPlanSection({ auth, teams }: {
   const selectedPeriod = useMemo(() => periodOf({ mode, anchor, focusDay, rangeFrom, rangeTo }),
     [mode, anchor, focusDay, rangeFrom, rangeTo]);
   const periodLabel = periodLabelOf(navState);
-  // 🚚 «Дзвінки на мобільні» — один запит на екран: нижній блок і мітка «чекають рішення» в рядку менеджера (5968).
+  // 🚚 «Дзвінки на мобільні» — мітка «чекають рішення» в картці менеджера (5968). Нижнього блоку з 11.11.2026 немає
+  //    (зустріч 10.11, правка 7): мітка веде на вкладку «Перевізники за розмовою».
   const carrier = useCarrierReport(selectedPeriod.from, selectedPeriod.to, teamIds.length === 1 ? teamIds[0] : undefined);
   const awaitMap = useMemo(() => awaitingByManager(carrier.rep), [carrier.rep]);
   /** Патч від навігатора → сеттери. Розкладено поіменно: `mode` тут не «одне з полів»,
@@ -416,8 +414,10 @@ export function ReportPlanSection({ auth, teams }: {
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
               бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
-          {/* ⏱ «Час опрацювання заявки» (ТЗ 24.09.2026) — стартує з ОБРАНОГО періоду, далі має власні кнопки тижня. */}
-          <LeadTakeCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
+          {/* 🗑 «Час опрацювання заявки», «Перший дотик · звіт по менеджерах» і «Дзвінки на мобільні» зі Звіту
+              ПРИБРАНО (зустріч 10.11.2026, правки 3, 6, 7 — погодили Саша, Юля, Сергій). Пропущені й передзвін
+              стали колонками таблиці; «Перший дотик» живе на своїй вкладці (колонка «Ціну названо» лишилась);
+              дзвінки на мобільні — вкладка «Перевізники за розмовою». Компоненти блоків НЕ видалено. */}
           {view === "table" ? (
             <ReportTableSection
               data={data} teams={teams} auth={auth}
@@ -484,18 +484,6 @@ export function ReportPlanSection({ auth, teams }: {
           <Legend />
         </AwaitCtx.Provider></SliceCtx.Provider>
       )}
-      {/* 🚚 Дзвінки на мобільні — хто це виявився (ТЗ Романа 30.09.2026). Окремий блок із НОВИМИ числами (жодне не
-          дублює карток вище); той самий період і та сама команда, що й звіт; рядки — ті самі, що вкладка «Перевізники».
-          Ролі без вкладки блок не бачать (сервер 403 → блок ховається). */}
-      {/* 🎧 Перший дотик · звіт по менеджерах (ТЗ «звіт тімліда» 30.09.2026): ціна, домовленості, «не передзвонив» —
-          той самий період і та сама команда, що й звіт; рядки — ті самі, що вкладка «Перший дотик». Нових чисел, що
-          дублювали б картки вище, тут немає. Ролі без вкладки блок не бачать (403 → ховається). */}
-      <div style={{ marginTop: 18 }}>
-        <FirstTouchReportCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamIds.length === 1 ? teamIds[0] : undefined} />
-      </div>
-      <div id="carrier-report" style={{ marginTop: 18 }}>
-        <CarrierReportCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamIds.length === 1 ? teamIds[0] : undefined} data={carrier} />
-      </div>
     </div>
   );
 }
@@ -694,6 +682,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
 }) {
   const s = m.status; // статус за ОБРАНИМ періодом
   const aw = useContext(AwaitCtx).get(m.managerId);
+  const navigate = useNavigate();
   const pct = m.plan > 0 ? Math.round((m.fact / m.plan) * 100) : 0;
   const smax = Math.max(...m.spark, 1);
   const showWhy = s !== "g";
@@ -709,13 +698,14 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
         {/* who + status */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            {m.name}<span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: TAGCOL[m.tag] + "22", color: TAGCOL[m.tag] }}>{m.tag.toUpperCase()}</span>
+            {/* 🎚 «Старт / Профі» з «Найму» замість РНК/РПК (зустріч 10.11.2026, правка 4). */}
+            {m.name}<LevelChip level={m.level} />
             {isSelf && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: BAR + "22", color: BAR }}>ТИ</span>}
             <VacationMark managerId={m.managerId} />
           </span>
           {aw && (
-            <button type="button" title="Дзвінки на мобільні: угоди менеджера, що зараз чекають рішення людини (стан на зараз, не за періодом). Клік — до блоку «Дзвінки на мобільні» внизу Звіту."
-              onClick={(e) => { e.stopPropagation(); document.getElementById("carrier-report")?.scrollIntoView({ behavior: "smooth" }); }}
+            <button type="button" title="Дзвінки на мобільні: угоди менеджера, що зараз чекають рішення людини (стан на зараз, не за періодом). Клік — вкладка «Перевізники за розмовою»."
+              onClick={(e) => { e.stopPropagation(); navigate("/carrier-calls"); }}
               style={{ fontSize: 11.5, fontWeight: 650, padding: "2px 9px", borderRadius: 20, width: "max-content", cursor: "pointer",
                 border: `1px solid ${aw.overdueNow > 0 ? "#dc262655" : "var(--border)"}`, background: aw.overdueNow > 0 ? "rgba(220,38,38,.08)" : "var(--card-bg)",
                 color: aw.overdueNow > 0 ? "#dc2626" : "var(--text)" }}>

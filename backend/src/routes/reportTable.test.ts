@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { needsApi, API_BASE, monthStartSkip } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #81…#88 — ТАБЛИЧНИЙ ВИГЛЯД ЗВІТУ (19.08.2026).
@@ -927,6 +929,12 @@ const DEFAULT_SHOWN_BEFORE_7087 = [
   "rank", "name", "status", "created", "ads", "leadgen", "conv", "dispatch", "avgCheck", "fact", "plan", "pct",
   "projected", "needPerDay", "expectThisMonth", "awaitNoDate", "jamDeals", "responseTime", "firstTouch",
 ];
+/**
+ * Свідомо ДОДАНІ до типового набору рішенням зустрічі 10.11.2026 (правка 3): «Пропущені» і «Передзвін» стоять
+ * поруч із «Викон.» у кожного, хто нічого не чіпав. Окремим літералом, щоб зміна набору лишалась видимою, а не
+ * розчинялась у старому списку.
+ */
+const ADDED_DEFAULT_1110 = ["missed", "callbackMin"];
 
 /**
  * #2465 — БУДЬ-ЯКУ КОЛОНКУ, КРІМ «МЕНЕДЖЕР», МОЖНА ВИМКНУТИ (задача 7087).
@@ -968,11 +976,11 @@ test("#2465 БУДЬ-ЯКУ КОЛОНКУ, КРІМ «МЕНЕДЖЕР», МО�
  *
  * 🧨 САБОТАЖ: прибрати core-колонки з `DEFAULT_OPT_ON` → червоніє.
  */
-test("#2466 СТАРИЙ ВИБІР (лише опційні) ДАЄ CORE УВІМКНЕНИМИ, а типовий набір той самий, що до рішення", async () => {
+test("#7712 СТАРИЙ ВИБІР (лише опційні) ДАЄ CORE УВІМКНЕНИМИ; типовий набір = до 7087 + «Пропущені» і «Передзвін»", async () => {
   const { REPORT_COLS, readColPrefs, DEFAULT_OPT_ON, colVisible } = await loadCols();
   const shownBy = (prefs: Record<string, boolean>) =>
     REPORT_COLS.filter((c: any) => c.key !== "factUndef" && colVisible(c.key, prefs)).map((c: any) => c.key);
-  assert.deepEqual(shownBy(DEFAULT_OPT_ON).sort(), [...DEFAULT_SHOWN_BEFORE_7087].sort(),
+  assert.deepEqual(shownBy(DEFAULT_OPT_ON).sort(), [...DEFAULT_SHOWN_BEFORE_7087, ...ADDED_DEFAULT_1110].sort(),
     "🔴 типовий набір колонок змінився — людина, що нічого не чіпала, побачить іншу таблицю");
 
   const coreKeys = REPORT_COLS.filter((c: any) => c.core && c.key !== "name").map((c: any) => c.key);
@@ -1001,14 +1009,14 @@ test("#2466 СТАРИЙ ВИБІР (лише опційні) ДАЄ CORE УВІ
  *
  * 🧨 САБОТАЖ: `allColPrefs` бере лише `!c.core` колонки → червоніє.
  */
-test("#2467 «УСІ» ВМИКАЄ КОЖНУ КОЛОНКУ, «СКИНУТИ» ПОВЕРТАЄ ТИПОВИЙ НАБІР І ПОРЯДОК", async () => {
+test("#7713 «УСІ» ВМИКАЄ КОЖНУ КОЛОНКУ, «СКИНУТИ» ПОВЕРТАЄ ТИПОВИЙ НАБІР (з «Пропущені»/«Передзвін») І ПОРЯДОК", async () => {
   const { REPORT_COLS, allColPrefs, resetColPrefs, resetColOrder, defaultColOrder, colVisible } = await loadCols();
   const all = allColPrefs();
   const hidden = REPORT_COLS.filter((c: any) => !colVisible(c.key, all)).map((c: any) => c.key);
   assert.deepEqual(hidden, [], "🔴 «Усі» лишає вимкненими: " + hidden.join(", "));
   const r = resetColPrefs();
   const shown = REPORT_COLS.filter((c: any) => c.key !== "factUndef" && colVisible(c.key, r)).map((c: any) => c.key);
-  assert.deepEqual(shown.sort(), [...DEFAULT_SHOWN_BEFORE_7087].sort(), "🔴 «Скинути до типових» дає не типовий набір");
+  assert.deepEqual(shown.sort(), [...DEFAULT_SHOWN_BEFORE_7087, ...ADDED_DEFAULT_1110].sort(), "🔴 «Скинути до типових» дає не типовий набір");
   assert.deepEqual(resetColOrder(), defaultColOrder(), "🔴 «Скинути до типових» дає не типовий порядок");
   // Дзеркало: «Скинути» вимикає те, що поза типовим набором (інакше це «Усі» під іншою назвою).
   assert.equal(colVisible("jam", r), false, "🔴 «Скинути» лишає увімкненою колонку поза типовим набором");
@@ -1050,4 +1058,148 @@ test("#2468 ВИМКНЕНА КОЛОНКА ЗНИКАЄ З ШАПКИ, РЯДК
     assert.ok(body.length > 0, `🔴 ${fn} не знайдено — розбір зламався`);
     assert.equal(/optOn|colVisible|isLockedCol/.test(body), false, `🔴 ${fn} має власну логіку видимості колонок`);
   }
+});
+
+// ─────────────── #7703…#7711 · правки «Звіту» 3–7 (зустріч 10.11.2026) ───────────────
+
+/**
+ * #7703 — ПРОПУЩЕНІ В ЗВІТІ = ВКЛАДЦІ «ПРОПУЩЕНІ ДЗВІНКИ», ЖИВИЙ API. Для кожного менеджера таблиці число, «без
+ * передзвону» й медіана збігаються з `/missed-calls` на тому самому періоді й скоупі, одним моментом.
+ * 🧨 Червоніє, якщо Звіт рахує пропущені своїм виразом (інший період, інший скоуп, свій SQL).
+ */
+test("#7703 ПРОПУЩЕНІ Й ПЕРЕДЗВІН У ЗВІТІ == ВКЛАДЦІ «ПРОПУЩЕНІ ДЗВІНКИ» на тому самому періоді й скоупі", needsApi(), async (t) => {
+  const { signToken } = await import("../auth/auth.js");
+  const H = { Authorization: `Bearer ${signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null })}` };
+  const { from, to } = kyivMonthBounds();
+  const [rp, mc] = await Promise.all([
+    fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, { headers: H }),
+    fetch(`${API_BASE}/api/dashboard/missed-calls?from=${from}&to=${to}`, { headers: H }),
+  ]);
+  assert.equal(rp.status, 200, `🔴 /report-plan віддав ${rp.status}`);
+  assert.equal(mc.status, 200, `🔴 /missed-calls віддав ${mc.status}`);
+  const r = await rp.json() as { managers: { managerId: number; name: string; missed?: { missed: number; noCallback: number; medianMin: number | null } }[] };
+  const m = await mc.json() as { managers: { managerId: number | null; missed: number; noCallback: number; medianMin: number | null }[] };
+  const tab = new Map(m.managers.filter((x) => x.managerId != null).map((x) => [x.managerId as number, x]));
+  // Перевірці мусить БУТИ що звіряти: хоч один менеджер таблиці з пропущеними.
+  const withMissed = r.managers.filter((x) => (x.missed?.missed ?? 0) > 0).length;
+  const early = monthStartSkip("менеджерів таблиці з пропущеними", withMissed, 1, kyivMonthBounds().ym);
+  if (early) return t.skip(early);
+  for (const x of r.managers) {
+    assert.ok(x.missed, `🔴 у рядку ${x.name} немає поля missed — колонка порожня`);
+    const v = tab.get(x.managerId);
+    assert.deepEqual([x.missed.missed, x.missed.noCallback, x.missed.medianMin], [v?.missed ?? 0, v?.noCallback ?? 0, v?.medianMin ?? null],
+      `🔴 ${x.name}: Звіт ≠ вкладці «Пропущені дзвінки»`);
+  }
+});
+
+/**
+ * #7704 — НІЧОГО НЕ ГУБИТЬСЯ МІЖ ТАБЛИЦЕЮ І ПІДПИСОМ. `missedMeta.total` == загальне число вкладки, а
+ * Σ рядків ≤ total (різниця — «поза таблицею» в підписі). Дзеркало: total не менший за Σ рядків.
+ * 🧨 Червоніє, якщо total узяти з рядків таблиці (підпис завжди казав би «0 поза таблицею») або з іншого скоупу.
+ */
+test("#7704 Σ ПРОПУЩЕНИХ У ТАБЛИЦІ + «ПОЗА ТАБЛИЦЕЮ» == ВСЬОГО НА ВКЛАДЦІ", needsApi(), async () => {
+  const { signToken } = await import("../auth/auth.js");
+  const H = { Authorization: `Bearer ${signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null })}` };
+  const { from, to } = kyivMonthBounds();
+  const [r, m] = await Promise.all([
+    fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, { headers: H }).then((x) => x.json()),
+    fetch(`${API_BASE}/api/dashboard/missed-calls?from=${from}&to=${to}`, { headers: H }).then((x) => x.json()),
+  ]) as [{ managers: { missed: { missed: number } }[]; missedMeta: { total: number } }, { total: { missed: number } }];
+  assert.ok(r.missedMeta, "🔴 /report-plan не віддає missedMeta — підпис «поза таблицею» нема з чого рахувати");
+  assert.equal(r.missedMeta.total, m.total.missed, "🔴 «всього пропущених» у Звіті ≠ вкладці");
+  const inTable = r.managers.reduce((s, x) => s + x.missed.missed, 0);
+  assert.ok(inTable <= r.missedMeta.total, `🔴 Σ рядків ${inTable} > всього ${r.missedMeta.total} — дзвінок пораховано двічі`);
+});
+
+/**
+ * #7706 — У КОЖНОЇ КОЛОНКИ Є КОРОТКЕ ПОЯСНЕННЯ, І ВІКНО «?» ПОКАЗУЄ ЙОГО ПЕРШИМ. Технічне `help` — під
+ * «Звідки береться ▸», не замість. 🧨 Червоніє, якщо колонка без `COL_SHORT`, коротке = технічному, або
+ * шапка перестане передавати `short` у `HelpDot`.
+ */
+test("#7706 КОРОТКЕ ПОЯСНЕННЯ: у кожної колонки, крім # і ПІБ; вікно «?» показує його, технічне — під «Звідки береться»", async () => {
+  const { REPORT_COLS, COL_SHORT, NO_HELP_COLS } = await loadCols();
+  const need = REPORT_COLS.filter((c: any) => !NO_HELP_COLS.includes(c.key)).map((c: any) => c.key);
+  const missing = need.filter((k: string) => !(typeof COL_SHORT[k] === "string" && COL_SHORT[k].length >= 15));
+  assert.deepEqual(missing, [], `🔴 без короткого пояснення: ${missing.join(", ")}`);
+  const same = REPORT_COLS.filter((c: any) => c.help && COL_SHORT[c.key] === c.help).map((c: any) => c.key);
+  assert.deepEqual(same, [], `🔴 коротке пояснення = технічному: ${same.join(", ")}`);
+  // Дзеркало: зайвих ключів (колонки, якої вже немає) теж не буває.
+  const extra = Object.keys(COL_SHORT).filter((k) => !need.includes(k));
+  assert.deepEqual(extra, [], `🔴 пояснення для неіснуючих колонок: ${extra.join(", ")}`);
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(s, /<HelpDot text=\{c\.help\} short=\{/, "🔴 шапка не передає коротке пояснення у вікно «?»");
+  const dot = s.split("function HelpDot(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.ok(dot.includes("Звідки береться") && /\{short \? \(/.test(dot), "🔴 вікно «?» не показує коротке першим / не ховає технічне");
+});
+
+/**
+ * #7707 — ШИРИНА «МЕНЕДЖЕР»: межі 70…480, особистий ключ, «як було» = відсутність запису (не нуль).
+ * 🧨 Червоніє, якщо ширину не обмежити (колонка 0 px або на весь екран), писати спільним ключем або
+ * читати сміття як число.
+ */
+test("#7707 ШИРИНА «МЕНЕДЖЕР»: межі 70…480, ключ rptMgrWidth:<userId>, скидання прибирає запис, сміття — null", async () => {
+  const { readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_MIN, MGR_W_MAX } = await loadCols();
+  assert.deepEqual([clampMgrWidth(5), clampMgrWidth(200.4), clampMgrWidth(5000)], [MGR_W_MIN, 200, MGR_W_MAX]);
+  const st: any = { ...memStore(), removeItem(k: string) { st.data.delete(k); } };
+  assert.equal(readMgrWidth(st, 42), null, "🔴 без запису ширина не «природна»");
+  writeMgrWidth(st, 42, 30);
+  assert.equal(st.getItem("rptMgrWidth:42"), "70", "🔴 ширина пишеться не особистим ключем або без межі");
+  assert.equal(readMgrWidth(st, 7), null, "🔴 ширина одного користувача дісталась іншому");
+  writeMgrWidth(st, 42, 1000);
+  assert.equal(readMgrWidth(st, 42), MGR_W_MAX);
+  writeMgrWidth(st, 42, null);
+  assert.equal(st.getItem("rptMgrWidth:42"), null, "🔴 «як було» лишило запис — ширина повернеться після перезавантаження");
+  assert.equal(readMgrWidth({ getItem: () => "abc", setItem() {} }, 1), null, "🔴 сміття у сховищі прочитано як ширину");
+  assert.equal(readMgrWidth({ getItem: () => { throw new Error("private"); }, setItem() {} }, 1), null, "🔴 недоступне сховище ламає таблицю");
+});
+
+/**
+ * #7709 — «СТАРТ / ПРОФІ» ЗАМІСТЬ РНК/РПК — у таблиці й у картці, з поля сервера; невідоме — «?», а не «Старт».
+ * 🧨 Червоніє, якщо повернути `m.tag.toUpperCase()` або малювати «Старт» менеджеру без привʼязки.
+ */
+test("#7709 РІВЕНЬ «СТАРТ/ПРОФІ» ЗАМІСТЬ РНК/РПК: таблиця й картка, з поля level; «unlinked» — «?»", () => {
+  const t = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  const r = codeOnly(readFileSync(REPORT_TSX, "utf8"));
+  for (const [name, s] of [["таблиця", t], ["картка", r]] as const) {
+    assert.ok(!/m\.tag\.toUpperCase\(\)/.test(s), `🔴 ${name}: знову РНК/РПК`);
+    assert.match(s, /<LevelChip level=\{m\.level\} \/>/, `🔴 ${name}: немає позначки рівня`);
+  }
+  const chip = t.split("export function LevelChip(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.match(chip, /unk \? "\?" : pro \? "Профі" : "Старт"/, "🔴 невідомий рівень показано як конкретний");
+  assert.match(chip, /if \(level == null\) return null;/, "🔴 не-продажнику малюється рівень");
+});
+
+/**
+ * #7710 — «НА ВЕСЬ ЕКРАН» І КРАЙ «МЕНЕДЖЕР»: кнопка є, Esc і «Згорнути» повертають; край тягнеться
+ * вказівником (миша і тач), подвійний клік — як було, клік по краю не сортує.
+ * 🧨 Червоніє, якщо прибрати кнопку/Esc, або край почне сортувати таблицю.
+ */
+test("#7710 НА ВЕСЬ ЕКРАН (Esc/«Згорнути») І КРАЙ «МЕНЕДЖЕР» (тягнеться, подвійний клік — як було, не сортує)", () => {
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(s, /onClick=\{\(\) => setFs\(true\)\}[^>]*>⤢ На весь екран</, "🔴 кнопки «На весь екран» немає");
+  assert.match(s, /onClick=\{\(\) => setFs\(false\)\}[^>]*>✕ Згорнути \(Esc\)</, "🔴 немає «Згорнути»");
+  assert.match(s, /e\.key === "Escape"[^\n]*setFs\(false\)/, "🔴 Esc не згортає");
+  const h = s.split('role="separator"')[1]?.split("/>")[0] ?? "";
+  assert.ok(h.includes("onPointerDown={startResize}"), "🔴 край не тягнеться вказівником");
+  assert.ok(h.includes("onDoubleClick=") && h.includes("resetWidth()"), "🔴 подвійний клік не повертає ширину");
+  assert.ok(h.includes("onClick={(e) => e.stopPropagation()}"), "🔴 клік по краю сортує таблицю");
+  assert.match(readFileSync(CSS, "utf8"), /\.rpt-resize \{[^}]*cursor: col-resize/, "🔴 у краю немає курсора ↔");
+});
+
+/**
+ * #7711 — ПРОПУЩЕНІ В `/report-plan` — ФУНКЦІЇ ЯДРА ВКЛАДКИ І СКОУП ЗВІТУ ЗА РОЛЛЮ. Свого SQL по `ringostat_calls`
+ * у роуті немає; скоуп — ті самі `managerId`/`teamId`, що вже обрізані роллю (менеджер не побачить чужу команду).
+ * 🧨 Червоніє, якщо підставити `missedScopeFor(req…)` (параметри з запиту) або написати свій SQL.
+ */
+test("#7711 ПРОПУЩЕНІ В /report-plan — ФУНКЦІЇ ЯДРА ВКЛАДКИ, СКОУП РОЛІ ЗВІТУ, БЕЗ СВОГО SQL", () => {
+  const s = readFileSync(path.join(ROOT, "backend", "src", "routes", "dashboard.ts"), "utf8");
+  const body = s.split('dashboardRouter.get("/report-plan", ')[1]?.split("\ndashboardRouter.")[0] ?? "";
+  assert.ok(body.length > 1000, "🔴 роут /report-plan не знайдено");
+  assert.match(body, /const missedScope = \{ managerId, teamId \};/);
+  for (const fn of ["missedByManager", "missedByTeam", "missedSummary"])
+    assert.match(body, new RegExp(`missedCalls\\.${fn}\\(from, to, missedScope\\)`), `🔴 ${fn} не з тим самим скоупом`);
+  assert.ok(!/ringostat_calls/.test(body), "🔴 у /report-plan свій SQL по дзвінках — дві відповіді на одне питання");
+  assert.ok(!/missedScopeFor\(/.test(body), "🔴 скоуп пропущених з параметрів запиту, а не з ролі Звіту");
+  // Скоуп оголошено ПІСЛЯ рольової обрізки.
+  assert.ok(body.indexOf("const missedScope") > body.indexOf('auth.role === "manager"'), "🔴 скоуп пропущених узято до рольової обрізки");
 });
