@@ -76,6 +76,7 @@ import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays, mergeAdMonths } from "../ga4/report.js";
+import { adClients } from "../core/adClients.js";
 import { dateParam } from "../core/queryParams.js";
 import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
@@ -6141,14 +6142,16 @@ dashboardRouter.get("/ads", async (req, res) => {
     yearReceived,
   );
   // Кампанія = ліди (популяція «Узято») ∪ гроші (за датою ліда); `null` — органіка й без мітки.
-  const campaignLeads = new Map<string | null, { campaign: string | null; leads: number; earned: number; earnedDeals: number }>();
+  const campaignLeads = new Map<string | null, { campaign: string | null; leads: number; earned: number; earnedDeals: number; earnedInherited: number }>();
   const campOf = (c: string | null) => {
-    const e = campaignLeads.get(c) ?? { campaign: c, leads: 0, earned: 0, earnedDeals: 0 };
+    const e = campaignLeads.get(c) ?? { campaign: c, leads: 0, earned: 0, earnedDeals: 0, earnedInherited: 0 };
     campaignLeads.set(c, e);
     return e;
   };
   for (const l of campLeads) campOf(l.campaign).leads += l.leads;
-  for (const r of campEarned) { const e = campOf(r.key); e.earned += r.earned; e.earnedDeals += r.deals; }
+  for (const r of campEarned) { const e = campOf(r.key); e.earned += r.earned; e.earnedDeals += r.deals; e.earnedInherited += r.inherited; }
+  // 👥 #8709 — клієнти по кампаніях за той самий період (перший рекламний лід у періоді; LTV — до сьогодні).
+  const campaignClients = from && to ? (await adClients(from, to, adSources)).campaigns : [];
 
   const leadsByDay = new Map(leads.map((l) => [l.day, l]));
   const sheetByDay = new Map(sheet.rows.map((r) => [r.day, Number(r.budget_fact)]));
@@ -6194,6 +6197,29 @@ dashboardRouter.get("/ads", async (req, res) => {
     elogist: { leads: elogistLeads, revenue: revenue.elogist.revenue, revenueDeals: revenue.elogist.deals },
     months,
     campaignLeads: [...campaignLeads.values()],
+    campaignClients,
+  });
+});
+
+/**
+ * 👥 ПОСТІЙНІ КЛІЄНТИ З РЕКЛАМИ (#8709) — вкладка «Постійні клієнти з реклами». `from`/`to` — коли прийшов ПЕРШИЙ
+ * рекламний лід клієнта (за замовчуванням з Нового року до сьогодні); маржа — до сьогодні. Межа доступу — як у
+ * складу дня: рекламна аналітика не менеджерська.
+ */
+dashboardRouter.get("/ads/clients", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const today = kyivToday();
+  const from = dateParam(req.query.from) ?? `${today.slice(0, 4)}-01-01`;
+  const to = dateParam(req.query.to) ?? today;
+  const { adSources } = await getSettings();
+  const r = await adClients(from, to, adSources);
+  res.json({
+    from: r.from, to: r.to, campaigns: r.campaigns, totals: r.totals,
+    regulars: r.regulars.map((c) => ({
+      clientKey: c.clientKey, name: c.name, campaign: c.campaign, firstLead: c.firstLead,
+      segment: c.segment, deals: c.deals, margin: c.margin,
+    })),
   });
 });
 

@@ -246,3 +246,24 @@ test("#3314c ЖИВА БД: кампанії (з «без мітки») == дн�
   assert.equal(leadsCamp.reduce((x, r) => x + r.leads, 0), leadsDay.reduce((x, d) => x + d.entered, 0),
     "🔴 ліди по кампаніях не сходяться з «Узято»");
 });
+
+/**
+ * #3316 — КЛІЄНТИ З РЕКЛАМИ НА ЖИВІЙ БАЗІ (#8709): Σ по кампаніях == плитці, постійні в списку == Σ постійних кампаній,
+ * типи не більші за постійних, маржа постійних == Σ маржі списку. 🧨 Червоніє, якщо клієнт подвоїться між кампаніями
+ * (не DISTINCT ON першого ліда) чи список постійних піде своїм правилом.
+ */
+test("#3316 ЖИВА БД: клієнти з реклами — кампанії == плитці, список постійних == Σ постійних", needsBackendEnv(), async (t) => {
+  const { getSettings } = await import("../routes/settings.js");
+  const { adClients } = await import("./adClients.js");
+  const { emptyPeriodSkip } = await import("../testMode.js");
+  const { adSources } = await getSettings();
+  const r = await adClients(FROM, TO, adSources);
+  const skip = emptyPeriodSkip("клієнтів з першим рекламним лідом у вікні заміру", r.totals.clients, `${FROM}..${TO}`);
+  if (skip) return t.skip(skip);
+  const sum = (k: "clients" | "regular" | "regularMargin") => r.campaigns.reduce((s, c) => s + c[k], 0);
+  assert.equal(sum("clients"), r.totals.clients, "🔴 клієнти по кампаніях ≠ плитці — клієнт подвоївся чи загубився");
+  assert.equal(sum("regular"), r.regulars.length, "🔴 постійні по кампаніях ≠ списку постійних");
+  assert.equal(Math.round(sum("regularMargin") * 100), Math.round(r.regulars.reduce((s, c) => s + c.margin, 0) * 100), "🔴 маржа постійних не сходиться");
+  assert.ok(r.campaigns.every((c) => c.vip + c.regularSeg + c.episodic <= c.regular), "🔴 типів більше, ніж постійних");
+  assert.equal(new Set(r.regulars.map((c) => c.clientKey)).size, r.regulars.length, "🔴 клієнт двічі в списку постійних");
+});

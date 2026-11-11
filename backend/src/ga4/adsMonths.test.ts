@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mergeAdDays, mergeAdMonths } from "./report.js";
-import { adCampaignTagSql, LEAD_PARENT_JOIN, NOT_A_CAMPAIGN } from "../core/adCampaign.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { adCampaignTagSql, dealCampaignSql, GENERIC_CLIENT_KEYS_SQL, LEAD_PARENT_JOIN, NOT_A_CAMPAIGN } from "../core/adCampaign.js";
+import { foldAdClients } from "../core/adClientsFold.js";
 
 /**
  * #3315 — ОКУПНІСТЬ ПО МІСЯЦЯХ І «ЗАРОБИЛИ ЛІДИ ДНЯ» (задача #8702, зустріч 09.11.2026).
@@ -36,4 +39,40 @@ test("#3315b МІТКА КАМПАНІЇ: не-кампанії → NULL, спе
   for (const v of NOT_A_CAMPAIGN) assert.ok(tag.includes(`'${v}'`), `🔴 ${v} рахується кампанією`);
   assert.ok(tag.indexOf("par.utm_campaign") < tag.indexOf("d.utm_campaign"), "🔴 мітка копії перебиває мітку батька");
   assert.match(LEAD_PARENT_JOIN("d"), /LEFT JOIN LATERAL[\s\S]*LIMIT 1\) par ON true/, "🔴 батько приєднується без LIMIT 1 — гроші подвояться");
+});
+
+/**
+ * #3316b — ЗГОРТКА КЛІЄНТІВ З РЕКЛАМИ (#8709): постійний — `qualified` ядра, тип — `segment` ядра; маржа й лічильники
+ * не губляться між кампаніями й плитками. 🧨 Червоніє, якщо постійних почнуть рахувати своїм правилом (не `qualified`),
+ * «ще без типу» потрапить у ВІП/регулярні/епізодичні, або Σ кампаній розійдеться з плиткою.
+ */
+test("#3316b КЛІЄНТИ З РЕКЛАМИ: постійний = qualified ядра, типи — segment ядра, Σ кампаній == плитці", () => {
+  const c = (key: string, campaign: string | null, qualified: boolean, segment: "vip" | "regular" | "episodic" | "unknown", margin: number) =>
+    ({ clientKey: key, name: key, campaign, firstLead: "2026-10-01", segment, qualified, deals: qualified ? 3 : 1, margin });
+  const r = foldAdClients([
+    c("a", "S", true, "vip", 50000), c("b", "S", true, "unknown", 7000), c("c", "S", false, "unknown", 2000),
+    c("d", null, true, "episodic", 9000), c("e", "P", false, "regular", 4000),
+  ], "2026-01-01", "2026-11-11");
+  const S = r.campaigns.find((x) => x.campaign === "S")!;
+  assert.deepEqual([S.clients, S.regular, S.vip, S.regularSeg, S.episodic, S.margin, S.regularMargin], [3, 2, 1, 0, 0, 59000, 57000],
+    "🔴 кампанія S: лічильники чи маржа не ті («ще без типу» не має йти в типи)");
+  const P = r.campaigns.find((x) => x.campaign === "P")!;
+  assert.equal(P.regular, 0, "🔴 непостійний (qualified=false) з сегментом «regular» зарахований у постійні");
+  assert.deepEqual([r.totals.clients, r.totals.margin, r.regulars.length], [5, 72000, 3], "🔴 плитки не сходяться з кампаніями");
+  assert.equal(r.campaigns.reduce((s, x) => s + x.clients, 0), r.totals.clients);
+});
+
+/**
+ * #3316c — КАМПАНІЯ КЛІЄНТА. 🧨 Червоніє, якщо «(referral)» знову стане кампанією, власна мітка угоди перестане
+ * перебивати кампанію клієнта, або копія ключів-заглушок розійдеться з `metrics.GENERIC_CLIENT_KEYS`.
+ */
+test("#3316c КАМПАНІЯ КЛІЄНТА: (referral) не кампанія, власна мітка перша, заглушки клієнтів = metrics", () => {
+  assert.ok(NOT_A_CAMPAIGN.includes("(referral)"), "🔴 «(referral)» рахується кампанією");
+  const sql = dealCampaignSql("d");
+  assert.ok(sql.indexOf("par.utm_campaign") < sql.indexOf("FROM deals cd"), "🔴 кампанія клієнта перебиває власну мітку угоди");
+  const metricsSrc = readFileSync(path.join(import.meta.dirname, "..", "core", "metrics.js"), "utf8");
+  const m = metricsSrc.match(/GENERIC_CLIENT_KEYS = \[([^\]]*)\]/);
+  assert.ok(m, "🔴 не знайдено GENERIC_CLIENT_KEYS у metrics.js");
+  const keys = m![1].split(",").map((x) => x.trim().replace(/^"|"$/g, ""));
+  assert.equal(GENERIC_CLIENT_KEYS_SQL, `ARRAY[${keys.map((k) => `'${k}'`).join(",")}]`, "🔴 копія ключів-заглушок розійшлась із metrics");
 });

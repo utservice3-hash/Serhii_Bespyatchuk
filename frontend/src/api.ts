@@ -1346,7 +1346,41 @@ export interface AdsReport {
    * Замір 10.11.2026: справжню кампанію мають ~80% рекламних угод і ~80% грошей. `campaign: null` — органіка й угоди
    * без мітки, щоб «Разом» сходилось із плиткою. Відсутнє — старий сервер: колонки доходу не показуємо.
    */
-  campaignLeads?: { campaign: string | null; leads: number; earned: number; earnedDeals: number }[];
+  campaignLeads?: { campaign: string | null; leads: number; earned: number; earnedDeals: number;
+    /** #8709 (Сергій 09.11): з `earned` — угоди БЕЗ мітки, віднесені до кампанії, з якої клієнт прийшов уперше (ручні угоди менеджера). */
+    earnedInherited?: number }[];
+  /**
+   * 👥 КЛІЄНТИ ПО КАМПАНІЯХ (задача #8709): клієнт належить кампанії ПЕРШОГО свого рекламного ліда в періоді.
+   * `regular` — постійні за ядром (2+ успішні угоди, `QUALIFY_MIN_PAYMENTS`), з них сегменти ядра (`segmentOf`):
+   * ВІП / регулярні / епізодичні; решта постійних — ще без сегмента (менше 3 оплат). `margin` — уся маржа цих
+   * клієнтів за весь час (і не з реклами теж) — з неї LTV. Відсутнє — старий сервер: колонок клієнтів немає.
+   */
+  campaignClients?: { campaign: string | null; clients: number; regular: number; vip: number; regularSeg: number; episodic: number;
+                      margin: number; regularMargin: number }[];
+}
+
+/** 👥 Постійний клієнт з реклами (вкладка «Постійні клієнти з реклами», #8709). */
+export interface AdsRegularClient {
+  clientKey: string; name: string;
+  /** Кампанія ПЕРШОГО рекламного ліда клієнта; null — прийшов без мітки (органіка/дзвінок). */
+  campaign: string | null;
+  firstLead: string;              // YYYY-MM-DD
+  segment: "vip" | "regular" | "episodic" | "unknown";
+  deals: number;                  // успішних угод від першого ліда
+  margin: number;                 // маржа від першого ліда до сьогодні — і не з реклами теж
+}
+export interface AdsClientsReport {
+  from: string; to: string;
+  /** Ті самі рядки, що `campaignClients`, для клієнтів із першим лідом у [from, to] — зведення по кампаніях. */
+  campaigns: NonNullable<AdsReport["campaignClients"]>;
+  /** Усі клієнти з реклами з першим лідом у [from, to] (не лише постійні) — для плиток. */
+  totals: { clients: number; margin: number };
+  regulars: AdsRegularClient[];
+}
+/** `from`/`to` — коли прийшов ПЕРШИЙ рекламний лід клієнта; маржа (LTV) — від першого ліда до сьогодні. */
+export async function fetchAdsClients(from: string, to: string): Promise<AdsClientsReport> {
+  const { data } = await api.get<AdsClientsReport>("/dashboard/ads/clients", { params: { from, to } });
+  return data;
 }
 
 /** Одна угода рекламної когорти дня — для розкриття. */
