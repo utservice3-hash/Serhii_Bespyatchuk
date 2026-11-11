@@ -10,7 +10,9 @@ export type { AdClient, AdClientsCampaign, AdClientsReport } from "./adClientsFo
  * постійних, LTV… VIP, епізодичних»; Роман 11.11: постійний — 2+ успішні, як у ядрі).
  *
  *  • Клієнт з реклами — `client_key`, у якого є хоч одна рекламна угода (`adDealSql`, той самий предикат, що в
- *    плитках). Заглушки «Название не указано» відкинуто (`GENERIC_CLIENT_KEYS_SQL`).
+ *    плитках) І хоч одна оплачена угода від першого ліда. Лід, що жодного разу не заплатив, — не клієнт: на проді
+ *    11.11 без цієї умови «клієнтів» було 12 580 при 164 постійних, і % постійних та LTV втрачали зміст.
+ *    Заглушки «Название не указано» відкинуто (`GENERIC_CLIENT_KEYS_SQL`).
  *  • ПЕРШИЙ рекламний лід — найраніша з цих угод (копія → дата батька). Кампанія клієнта — кампанія цієї угоди
  *    (`dealCampaignSql`); `null` — клієнт без жодної рекламної мітки.
  *  • Період відбирає клієнтів за датою першого ліда; маржа (LTV) — УСІ оплачені угоди клієнта (етап «paid» карти
@@ -46,7 +48,8 @@ export const AD_CLIENTS_SQL = `
        WHERE p.client_key = f.client_key AND psm.funnel_stage = 'paid'
          AND COALESCE(p.closed_at_kommo, p.created_at_kommo) >= f.lead_at
     ) pm ON true
-   WHERE (f.lead_at AT TIME ZONE 'Europe/Kyiv')::date >= $2::date
+   WHERE pm.deals > 0
+     AND (f.lead_at AT TIME ZONE 'Europe/Kyiv')::date >= $2::date
      AND (f.lead_at AT TIME ZONE 'Europe/Kyiv')::date <= $3::date`;
 
 export async function adClients(from: string, to: string, adSources: string[]): Promise<AdClientsReport> {
