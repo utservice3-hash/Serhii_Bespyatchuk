@@ -951,7 +951,9 @@ test("#1753 БЛАНКИ ТТН/CMR: порожні, автор «UTS», коп�
   }
   const ttn = readZip(readFileSync(TTN_TEMPLATE)).get("xl/worksheets/sheet1.xml")!().toString("utf8");
   assert.ok(!ttn.includes("inlineStr"), "🔴 бланк ТТН уже заповнений");
-  assert.match(readFileSync(path.join(REPO, "backend", "package.json"), "utf8"), /src\/constructor\/data\/waybill/, "🔴 збірка не копіює бланки в dist");
+  // 🧱 З 11.11.2026 ресурси копіює `scripts/copyAssets.mjs`, який кличе `npm run build` (раніше — рядок `node -e` у package.json).
+  assert.match(readFileSync(path.join(REPO, "backend", "package.json"), "utf8"), /node scripts\/copyAssets\.mjs/, "🔴 збірка не кличе копіювання ресурсів");
+  assert.match(readFileSync(path.join(REPO, "backend", "scripts", "copyAssets.mjs"), "utf8"), /src\/constructor\/data\/waybill/, "🔴 збірка не копіює бланки в dist");
   assert.ok(ttnCells(WB_STATE()).D15, "🔴 ттн без перевізника");
 });
 

@@ -92,3 +92,31 @@ test("#3821 ФРОНТ НА СТЕНДІ: типи один раз (tscFront), �
   const check = planSteps("check", "full").map((x) => x.id);
   assert.ok(check.indexOf("tscFront") >= 0 && check.indexOf("tscFront") < check.indexOf("buildFront"), "🔴 типи фронту перевіряються не перед бандлом");
 });
+
+/**
+ * #3822 🪞 — БАЗУ ЛАНЦЮГ ЗБИРАЄ СКРИПТАМИ СТЕНДА, ПО ФАЙЛУ. Крок `test` порівнює набір нової версії з базою (поточним
+ * продом); база збиралась власним `npm run build` (до 11.11 — `tsc -p`, ~1 ГБ), і хостинг убивав саме цей крок, хоча
+ * нова версія вже збиралась легко. Тепер: `node <стенд>/scripts/transpileBuild.mjs <база>` + `copyAssets.mjs <база>` +
+ * базовий `writeVersion`. Скрипт перекладу з коренем аргументом справді збирає ЧУЖИЙ каталог (фікстура).
+ * 🧨 Червоніє, якщо базу знову збиратимуть `npm run build`, або скрипт перестане приймати корінь (тоді він перезбере
+ * стенд замість бази — і порівняння піде «нове з новим»).
+ */
+test("#3822 🪞 БАЗА В КРОЦІ test — скриптами стенда по файлу; скрипт збирає саме переданий корінь", async () => {
+  const deploy = read("backend/src/tools/deploy.ts");
+  const at = deploy.indexOf("const beBase = `${base}/backend`;");
+  assert.ok(at > 0, "🔴 збірку бази в кроці test не знайдено");
+  const body = deploy.slice(at, deploy.indexOf("const runTests", at));
+  assert.doesNotMatch(body.replace(/\/\/.*$/gm, ""), /sh\("npm", \["run", "build"\], beBase\)/, "🔴 базу знову збирає її власний npm run build (повний tsc)");
+  assert.match(body, /sh\("node", \[`\$\{c\.be\}\/scripts\/transpileBuild\.mjs`, beBase\], c\.be\);/, "🔴 базу перекладає не скрипт стенда");
+  assert.match(body, /sh\("node", \[`\$\{c\.be\}\/scripts\/copyAssets\.mjs`, beBase\], c\.be\);/, "🔴 у базі немає SQL і ресурсів");
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(path.join(tmpdir(), "uts-base-"));
+  try {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(path.join(dir, "src", "core"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "core", "a.ts"), "export const a: number = 1;\n");
+    const r = spawnSync(process.execPath, [path.join(ROOT, "backend/scripts/transpileBuild.mjs"), dir], { encoding: "utf8" });
+    assert.equal(r.status, 0, `🔴 скрипт перекладу впав на чужому корені: ${r.stderr}`);
+    assert.equal(readFileSync(path.join(dir, "dist", "core", "a.js"), "utf8"), "export const a = 1;\n", "🔴 скрипт зібрав не переданий корінь");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
