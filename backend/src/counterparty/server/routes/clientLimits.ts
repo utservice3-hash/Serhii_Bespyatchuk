@@ -24,7 +24,7 @@ import { HttpError, defaultCpRoleOf, errorHandler, meOf, type AuthedRequest, typ
 import { addEvent, tx } from '../cpStore.js';
 import type { ClientDirectory } from '../clientDirectory.js';
 import type { DebtSource } from '../debtSource.js';
-import { addLimitEvent, getLimit, importLimit, insertSetLimit, listLimits, type ImportRow } from '../limitsStore.js';
+import { addLimitEvent, getLimit, importLimit, insertSetLimit, listLimitHistory, listLimits, type ImportRow } from '../limitsStore.js';
 
 export interface ClientLimitsOptions {
   /** Борг і прострочка з дебіторки. */
@@ -90,6 +90,14 @@ export function clientLimitsRouter(pool: Pool, opts: ClientLimitsOptions): Route
     const u = await me(req);
     if (!seesRequests(u.role)) { res.json({ count: 0 }); return; }
     res.json({ count: limitsBadge(u, (await rows()).rows) });
+  });
+  /**
+   * «Історія змін» (Сергій 11.11.2026): хто, коли і що змінив — по всіх лімітах, свіжі першими (до 1000). Видно рівно ті
+   * ліміти, що й у списку: керівники й бухгалтерія — усі, менеджер — свої, тім-лід — ще й команди.
+   */
+  r.get('/history', async (req: AuthedRequest, res) => {
+    const u = await me(req); need(u);
+    res.json({ events: (await listLimitHistory(pool)).filter(e => canSeeLimit(u, e)) });
   });
   /**
    * Для колонки «Ліміти» активної дебіторки: ключ боржника → ліміт і стан («у межах» / «переліміт» / «не узгоджено»).

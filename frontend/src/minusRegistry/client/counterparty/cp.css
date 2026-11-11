@@ -165,6 +165,10 @@
 .cpx .cp-tl .cp-dot{width:10px;height:10px;border-radius:50%;margin-top:5px;background:var(--pc, var(--muted))}
 .cpx .cp-tl .cp-t{font-weight:600}
 .cpx .cp-tl .cp-tr{color:var(--ink-2);white-space:pre-wrap}
+.cpx .cp-hist td{vertical-align:top}
+.cpx .cp-hist .cp-c-hw{white-space:nowrap}
+.cpx .cp-hev{font-weight:600;color:var(--pc, var(--ink))}
+.cpx .cp-hnote{color:var(--ink-2);white-space:pre-wrap;font-size:12.5px;margin-top:2px;max-width:520px}
 .cpx .cp-f{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--ink-2);margin:0}
 .cpx .cp-f em{font-style:normal;color:var(--brand)}
 .cpx textarea.cp-in,.cpx input.cp-in,.cpx select.cp-in{width:100%;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:9px 11px;font-size:13.5px;color:var(--ink);resize:vertical;margin:0}

@@ -12,6 +12,7 @@ import { editsLimits, limitActions, type AnyRow } from "./shared/clientLimits.js
  * піднімає свою scratch-БД, а пул `db/pool.js` — один на процес (так само, як `addClient.test.ts`).
  */
 const SRC = (p: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", p), "utf8");
+const FRONT = (p: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", p), "utf8");
 
 /**
  * #3833 — СПИСОК «ХТО ЗМІНЮЄ ЛІМІТИ» ОКРЕМИЙ ВІД ПОГОДЖУВАЧІВ. За замовчуванням — Дарʼя (users.id 52); `.env` замінює список.
@@ -73,12 +74,13 @@ test("#3830 🪞 ДАРʼЯ ЗМІНЮЄ ЛІМІТИ НАСКРІЗНО: зад
   try {
     await c.query(SRC("db/schema.sql"));
     await c.query(`INSERT INTO teams (id, name) VALUES (1, 'Команда Ірини') ON CONFLICT DO NOTHING`);
-    await c.query(`INSERT INTO managers (id, name, team_id) VALUES (10, 'Марина Коваль', 1)`);
+    await c.query(`INSERT INTO managers (id, name, team_id) VALUES (10, 'Марина Коваль', 1), (11, 'Олег Ткачук', 1)`);
     await c.query(`INSERT INTO users (id, email, password_hash, role, role_override, full_name, is_active, manager_id) VALUES
       (1, 'utservice3@gmail.com', 'x', 'admin', 'opdir', 'Сергій', true, NULL),
       (52, 'darya@t', 'x', 'admin', 'admin', 'Дарʼя Протас', true, NULL),
       (5, 'admin2@t', 'x', 'admin', NULL, 'Інший адмін', true, NULL),
-      (2, 'marina@t', 'x', 'manager', NULL, 'Марина Коваль', true, 10)`);
+      (2, 'marina@t', 'x', 'manager', NULL, 'Марина Коваль', true, 10), (3, 'oleh@t', 'x', 'manager', NULL, 'Олег Ткачук', true, 11),
+      (4, 'hr@t', 'x', 'manager', 'hr', 'HR', true, NULL)`);
     await c.query(`INSERT INTO receivables (client_key, client_name, manager_id, amount, overdue_days) VALUES ('k-rivne', 'ТОВ Рівне Агро', 10, 120000, 5)`);
     await c.query(`INSERT INTO receivable_invoices (client_key, client_name, manager_id, invoice_no, invoice_date, amount, edrpou) VALUES
       ('k-rivne', 'ТОВ Рівне Агро', 10, 'R-1', CURRENT_DATE - 5, 120000, '41234567')`);
@@ -100,6 +102,7 @@ test("#3830 🪞 ДАРʼЯ ЗМІНЮЄ ЛІМІТИ НАСКРІЗНО: зад
       darya: signToken({ userId: 52, role: "admin", roleKey: "admin", managerId: null, teamId: null } as never),
       admin2: signToken({ userId: 5, role: "admin", roleKey: "admin", managerId: null, teamId: null } as never),
       marina: signToken({ userId: 2, role: "manager", roleKey: "manager", managerId: 10, teamId: 1 } as never),
+      hr: signToken({ userId: 4, role: "company", roleKey: "hr", managerId: null, teamId: null } as never),
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const call = async (who: string, method: string, p: string, body?: unknown): Promise<{ s: number; j: any }> => {
@@ -159,6 +162,41 @@ test("#3830 🪞 ДАРʼЯ ЗМІНЮЄ ЛІМІТИ НАСКРІЗНО: зад
     assert.equal((await call("serhii", "POST", "/import", { rows: [] })).s, 200, "Сергій втратив імпорт");
     // Сергій — як і був
     assert.equal((await call("serhii", "POST", `/${id}/edit`, { ...body, limit: 160000, reason: "Сергій" })).s, 200, "Сергій більше не змінює ліміти");
+
+    /**
+     * #3831 — 🪞 «ІСТОРІЯ ЗМІН» (Сергій 11.11.2026: «додати у вкладку Ліміти клієнтів — історію змін»). Події всіх лімітів
+     * свіжими першими: хто (Дарʼя / Сергій), «було → стало» з причиною; автоматична подія — без імені; знятий ліміт лишається в
+     * історії. Менеджер бачить події лише своїх клієнтів (тих самих, що в списку), HR — 403. 🧨 Червоніє, якщо віддати
+     * менеджеру всі події, загубити автоматичні чи знятий ліміт, переставити порядок або втратити імʼя.
+     */
+    await t.test("#3831 🪞 ІСТОРІЯ ЗМІН: усі події всіх лімітів свіжими першими — хто, «було → стало», автоматичні без імені, знятий ліміт лишається; менеджер — лише свої", async () => {
+      const yumo = (await c.query(`SELECT id::text FROM client_limits WHERE debtor_key = 'юмо'`)).rows[0].id;
+      await c.query(`UPDATE client_limits SET active = false WHERE id = $1`, [yumo]);
+      await c.query(`INSERT INTO client_limits (src, debtor_key, name, limit_sum, days, manager_id, manager_name) VALUES ('set', 'k-oleh', 'ТОВ Олегів', 50000, 7, '3', 'Олег Ткачук')`);
+      const oleh = (await c.query(`SELECT id::text FROM client_limits WHERE debtor_key = 'k-oleh'`)).rows[0].id;
+      await c.query(`INSERT INTO client_limit_events (limit_id, type, by_id, by_name, note, at) VALUES ($1, 'planned', NULL, NULL, 'Планова перевірка: змін немає', now() + interval '1 minute')`, [oleh]);
+      let h = await call("serhii", "GET", "/history");
+      assert.equal(h.s, 200, JSON.stringify(h.j));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ev: any[] = h.j.events;
+      assert.deepEqual(ev.map((e) => e.at), [...ev.map((e) => e.at)].sort().reverse(), "не свіжі першими");
+      assert.deepEqual([ev[0].limitId, ev[0].type, ev[0].by, ev[0].byName, ev[0].managerId], [oleh, "planned", null, null, "3"], "автоматична подія з імʼям або не першою");
+      const mine = ev.filter((e) => e.limitId === id);
+      assert.deepEqual(mine.map((e) => [e.type, e.byName]), [
+        ["limitChanged", "Сергій"], ["kept", "Дарʼя Протас"], ["limitChanged", "Дарʼя Протас"], ["limitSet", "Дарʼя Протас"],
+      ], "історія ліміту не та або без імен");
+      assert.match(mine[2].note, /→ 150 000 грн, 14 днів від дати рахунку\nПричина: обсяги зросли/, "немає «було → стало»");
+      assert.deepEqual([mine[0].name, mine[0].code, mine[0].managerName], ["ТОВ Рівне Агро", "41234567", "Марина Коваль"]);
+      const gone = ev.filter((e) => e.limitId === yumo);
+      assert.ok(gone.length === 1 && gone[0].active === false, "знятий ліміт зник з історії або позначений діючим");
+      // менеджер — лише свої; HR — немає доступу; інший адмін бачить усе
+      h = await call("marina", "GET", "/history");
+      assert.equal(h.s, 200);
+      assert.ok(h.j.events.length > 0 && h.j.events.every((e: { managerId: string }) => e.managerId === "2"), "менеджер бачить події чужих клієнтів");
+      assert.ok(h.j.events.some((e: { limitId: string }) => e.limitId === id), "менеджер не бачить подій свого клієнта");
+      assert.equal((await call("admin2", "GET", "/history")).j.events.length, ev.length, "інший адмін бачить не все");
+      assert.equal((await call("hr", "GET", "/history")).s, 403, "HR бачить історію лімітів");
+    });
   } finally {
     await new Promise((res) => (server ? server.close(() => res(null)) : res(null)));
     await c.end();
@@ -166,4 +204,25 @@ test("#3830 🪞 ДАРʼЯ ЗМІНЮЄ ЛІМІТИ НАСКРІЗНО: зад
     await pool.end().catch(() => undefined);
     scratch.dispose();
   }
+});
+
+/**
+ * #3834 ФРОНТ ІСТОРІЯ ЗМІН — ФРОНТ «ІСТОРІЇ ЗМІН»: кнопка «Історія змін» перемикає вкладку на другий вигляд (і назад), дані — через
+ * наш api (`/client-limits/history`), у рядку — хто змінив або «автоматично» і текст «було → стало»; фільтр «Усі / Зміни людей /
+ * Автоматичні»; після власної дії історія перечитується (інакше Дарʼя не побачила б щойно зробленого). 🧨 Червоніє на кожному
+ * з цих відступів.
+ */
+test("#3834 ФРОНТ ІСТОРІЯ ЗМІН: другий вигляд вкладки через наш api, хто / «автоматично», фільтр ручні-автоматичні, свіжа після власної дії", () => {
+  const f = FRONT("minusRegistry/client/clientLimits/limits.ts");
+  assert.match(FRONT("minusRegistry/client/counterparty/api.ts"), /history: \(\) => call\(api\.get\(`\$\{CL\}\/history`\)\),/, "історія не через наш api");
+  assert.match(f, /id="\$\{P\}vbtn" data-view aria-pressed="false">Історія змін<\/button>/, "немає кнопки «Історія змін»");
+  assert.match(f, /view = view === 'hist' \? 'list' : 'hist'; render\(\); if \(view === 'hist'\) void loadHist\(\);/, "перемикач не вантажить свіжу історію");
+  assert.match(f, /if \(view === 'hist'\) \{ renderHist\(\); return; \}/);
+  const r = f.slice(f.indexOf("function renderHist()"), f.indexOf("async function loadHist()"));
+  assert.ok(r.length > 300, "renderHist не знайдено — гейт нічого не перевіряє");
+  assert.match(r, /e\.by \? `<div class="cp-mgr">\$\{esc\(e\.byName \|\| '—'\)\}<\/div>` : '<span class="cp-sub">автоматично<\/span>'/, "не видно, хто змінив");
+  assert.match(r, /e\.note \? `<div class="cp-hnote">\$\{esc\(e\.note\)\}<\/div>`/, "не видно, що змінилось");
+  assert.match(r, /hist\.filter\(e => histIn\(e, histKind\)/, "фільтр ручні / автоматичні не застосовується");
+  assert.match(f, /replace\(r\); afterId\?\.\(r\); histStale\(\);/, "після зміни ліміту історія не оновлюється");
+  assert.match(f, /replace\(r\); showFresh\(r\.id\); openPanel\(r\.id\); histStale\(\);/, "після «＋ Додати клієнта» історія не оновлюється");
 });

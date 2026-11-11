@@ -1,5 +1,5 @@
 /** «Ліміти клієнтів» — читання й запис у Postgres (migrations/004_client_limits.sql). */
-import type { ClientLimit, LimitEvent, LimitEventType, Member } from '../shared/clientLimits.js';
+import type { ClientLimit, LimitEvent, LimitEventType, LimitHistoryItem, Member } from '../shared/clientLimits.js';
 import { NOTICE_DAYS } from '../shared/cpCheck.js';
 import type { CpRequest, From, Terms } from '../shared/counterparty.js';
 import type { Db } from './cpStore.js';
@@ -54,6 +54,24 @@ const SELECT_LIM = `SELECT l.*,
       AND c.code = (SELECT m.code FROM client_limit_members m WHERE m.limit_id = l.id ORDER BY m.pos, m.code LIMIT 1)
     ORDER BY c.done_at DESC, c.id DESC LIMIT 1) AS last_check
   FROM client_limits l LEFT JOIN cp_requests r ON r.id = l.request_id`;
+
+/**
+ * «Історія змін» (Сергій 11.11.2026): події лімітів + події запитів, що входять в історію ліміту (ті самі REQ_LIMIT_EVENTS, що
+ * й у панелі), свіжі першими, не більше max. Знятий ліміт теж тут — його клієнт і менеджер беруться з самого ліміту.
+ */
+export async function listLimitHistory(db: Db, max = 1000): Promise<LimitHistoryItem[]> {
+  const q = await db.query(`
+    WITH ev AS (
+      SELECT e.id, 0 AS src, e.limit_id, e.type, e.by_id, e.by_name, e.note, e.at FROM client_limit_events e
+      UNION ALL
+      SELECT e.id, 1 AS src, l.id, e.type, e.by_id, e.by_name, e.note, e.at FROM cp_events e JOIN client_limits l ON l.request_id = e.request_id
+       WHERE e.type = ANY($1::text[]))
+    SELECT ev.type, ev.by_id, ev.by_name, ev.note, ev.at, l.id AS limit_id, l.name, l.manager_id, l.manager_name, l.active,
+      (SELECT m.code FROM client_limit_members m WHERE m.limit_id = l.id ORDER BY m.pos, m.code LIMIT 1) AS code
+    FROM ev JOIN client_limits l ON l.id = ev.limit_id
+    ORDER BY ev.at DESC, ev.src DESC, ev.id DESC LIMIT $2`, [REQ_LIMIT_EVENTS, max]);
+  return q.rows.map(r => ({ ...ev(r), limitId: String(r.limit_id), name: r.name, code: r.code || '', managerId: String(r.manager_id), managerName: r.manager_name || '', active: !!r.active }));
+}
 
 export async function listLimits(db: Db, now: Date = new Date()): Promise<ClientLimit[]> {
   const q = await db.query(`${SELECT_LIM} WHERE l.active ORDER BY l.name, l.id`, [REQ_LIMIT_EVENTS]);
