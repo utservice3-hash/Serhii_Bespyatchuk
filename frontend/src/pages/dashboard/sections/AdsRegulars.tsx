@@ -90,7 +90,7 @@ export function AdsRegulars({ from, to }: { from: string; to: string }) {
           <div style={LAB}>Постійних клієнтів з реклами</div>
           <div style={BIGN}>{regs.length}</div>
           <div style={{ ...DIM, fontSize: 12.5, marginTop: 6 }}>
-            із {rep.totals.clients} клієнтів, що прийшли з реклами · {rep.totals.clients > 0 ? Math.round((regs.length / rep.totals.clients) * 100) : 0}% стали постійними
+            із {rep.totals.clients} клієнтів з реклами, що заплатили хоч раз · {rep.totals.clients > 0 ? Math.round((regs.length / rep.totals.clients) * 100) : 0}% стали постійними
           </div>
         </div>
         <div style={{ ...CARD, padding: "18px 20px", borderColor: "var(--rpt-ink, #16181d)" }}>
