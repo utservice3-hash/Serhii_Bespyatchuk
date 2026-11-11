@@ -402,6 +402,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
      відмова в обробнику) з власним прийманням, а не вибір при резолюції мержу. */
   { method: "GET", path: "/api/dashboard/ads/deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
+  /* 👥 #8709 (11.11.2026) — постійні клієнти з реклами: та сама межа, що й склад дня (рекламна аналітика не менеджерська). */
+  { method: "GET", path: "/api/dashboard/ads/clients", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
   /* 💳 Баланс рекламного кабінету (30.10.2026): «тільки адміни» — tab-гейт «ads» + requireRole("admin"),
      тож тімлід, у якого вкладка «Реклама» є, отримує 403. POST — звірка числом із кабінету (запис). */
   { method: "GET", path: "/api/dashboard/ads/balance", cls: "GET",

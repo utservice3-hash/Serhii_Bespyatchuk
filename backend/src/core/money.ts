@@ -4,7 +4,7 @@ import { pool } from "../db/pool.js";
 // одне одного лише всередині функцій (не на рівні модуля), тож ESM-live-binding резолвиться
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
 import { adDealSql } from "./metrics.js";
-import { adCampaignTagSql, LEAD_PARENT_JOIN } from "./adCampaign.js";
+import { adCampaignTagSql, dealCampaignSql, LEAD_PARENT_JOIN } from "./adCampaign.js";
 import { ELOGIST_CHANNEL } from "./elogist.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { managerDealClass, moneyCameIn, splitInvoicesOf, splitIsEachCar, type DealState, type ClientSuccess, type PendDay, type ExtraCar } from "./leadgenHandoffRules.js";
@@ -1088,9 +1088,23 @@ export const adEarnedByDay = (s: MoneyScope, adSources: string[]) =>
 /** По місяцях ліда (YYYY-MM) — таблиця «Окупність по місяцях». */
 export const adEarnedByMonth = (s: MoneyScope, adSources: string[]) =>
   adEarnedGrouped(s, adSources, `to_char(${LEAD_DAY}, 'YYYY-MM')`);
-/** По мітці кампанії ліда; `key: null` — органіка й угоди без мітки (рядок «без мітки»). */
-export const adEarnedByCampaign = (s: MoneyScope, adSources: string[]) =>
-  adEarnedGrouped(s, adSources, adCampaignTagSql("d"));
+/**
+ * По кампанії угоди (#8709): власна мітка, а без неї — кампанія КЛІЄНТА (`dealCampaignSql`); `key: null` — клієнти без
+ * жодної рекламної мітки. `inherited` — та частина, що прийшла від угод без власної мітки (ручні угоди менеджера).
+ * Ті самі рядки, що й по днях, лише інший ключ — тож Σ == Σ по днях (`#3314c`).
+ */
+export async function adEarnedByCampaign(s: MoneyScope, adSources: string[]): Promise<(AdEarnedRow & { inherited: number })[]> {
+  const q = adEarnedFrom(s, adSources);
+  const r = await pool.query<{ key: string | null; earned: string; deals: string; inherited: string }>(
+    `SELECT x.key, COALESCE(SUM(x.price),0) AS earned, COUNT(*) AS deals,
+            COALESCE(SUM(x.price) FILTER (WHERE x.own IS NULL AND x.key IS NOT NULL),0) AS inherited
+       FROM (SELECT src.price, ${dealCampaignSql("d")} AS key, ${adCampaignTagSql("d")} AS own
+               ${q.from}) x
+      GROUP BY 1 ORDER BY 1`,
+    q.p
+  );
+  return r.rows.map((x) => ({ key: x.key, earned: Number(x.earned), deals: Number(x.deals), inherited: Number(x.inherited) }));
+}
 
 export interface AdEarnedDeal {
   kommoId: number; name: string; price: number;

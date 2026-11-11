@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { TH, TH_L, TD, TD_L, LAB, BIG, UNIT, DIM, CARD, STRIP, money, dayLabel, times, HINT_EARNED } from "./adsUi";
+import { AdsCampaigns } from "./AdsCampaigns";
+import { AdsRegulars } from "./AdsRegulars";
 import { fetchAds, fetchAdsDeals, saveAdPlan, type AdsReport, type AdsDeal, type AdsReceivedDeal, type AdsEarnedDeal } from "../../../api";
 
 /**
@@ -33,43 +36,7 @@ import { fetchAds, fetchAdsDeals, saveAdPlan, type AdsReport, type AdsDeal, type
  * а не одні всередині одних; на екрані це сказано словами.
  */
 
-/* Числа ПРАВОРУЧ — не смак: числа різної довжини, вирівняні ліворуч, неможливо
-   порівнювати оком по стовпчику. */
-const TH: React.CSSProperties = {
-  fontSize: 11, fontWeight: 700, letterSpacing: ".9px", textTransform: "uppercase",
-  color: "var(--rpt-muted, #8a8f98)", textAlign: "right", padding: "0 14px 10px", whiteSpace: "nowrap",
-};
-const TH_L: React.CSSProperties = { ...TH, textAlign: "left" };
-const TD: React.CSSProperties = {
-  textAlign: "right", padding: "12px 14px",
-  borderTop: "1px solid var(--rpt-line, #e8e6e3)", whiteSpace: "nowrap",
-};
-const TD_L: React.CSSProperties = { ...TD, textAlign: "left" };
-const LAB: React.CSSProperties = {
-  fontSize: 11, fontWeight: 700, letterSpacing: ".9px", textTransform: "uppercase",
-  color: "var(--rpt-muted, #8a8f98)",
-};
-const BIG: React.CSSProperties = { fontSize: 38, fontWeight: 800, letterSpacing: "-1.4px", lineHeight: 1.05, marginTop: 10 };
-const UNIT: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: "var(--rpt-ink-soft, #3f434b)", letterSpacing: 0 };
-const DIM: React.CSSProperties = { color: "var(--rpt-muted, #8a8f98)" };
-const CARD: React.CSSProperties = {
-  background: "var(--rpt-card, #fff)", border: "1px solid var(--rpt-line, #e8e6e3)", borderRadius: 14,
-};
-const STRIP: React.CSSProperties = {
-  fontSize: 12, color: "var(--rpt-muted, #8a8f98)", background: "var(--rpt-soft, #f6f5f3)",
-  padding: "10px 20px", borderTop: "1px solid var(--rpt-line, #e8e6e3)",
-  borderBottom: "1px solid var(--rpt-line, #e8e6e3)",
-};
-
-const money = (n: number) => n.toLocaleString("uk-UA", { maximumFractionDigits: 0 });
-/** `2026-07-14` → `14.07`. Рік зайвий: період обрано зверху. */
-const dayLabel = (iso: string) => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-  return m ? `${m[3]}.${m[2]}` : iso;
-};
 const WD = ["нд", "пн", "вт", "ср", "чт", "пт", "сб"];
-/** «× до витрат» — у скільки разів маржа більша за витрати; без витрат — нічого не ділимо. */
-const times = (earned: number, cost: number) => (cost > 0 ? `×${(earned / cost).toLocaleString("uk-UA", { maximumFractionDigits: 1 })}` : null);
 const HINT_RECEIVED = "Надійшло цього дня: маржа угод із реклами, закритих або оплачених саме цього дня, хоч би коли прийшов лід. "
   + "Сума днів дорівнює плитці «Заробили». З витратами цього ж дня майже не повʼязана — угоди закриваються тижнями.";
 const weekday = (iso: string) => WD[new Date(`${iso}T00:00:00`).getDay()] ?? "";
@@ -80,21 +47,12 @@ const STATE: Record<AdsDeal["state"], { text: string; bg: string; fg: string }> 
   lost: { text: "Не реалізовано", bg: "var(--rpt-bad-bg, #fdecea)", fg: "var(--rpt-bad, #b4231d)" },
 };
 const RECEIVED_STATE: Record<AdsReceivedDeal["state"], string> = { success: "Успішно", paid: "Оплата отримана" };
-/**
- * 💰 #8702 (зустріч 09.11.2026, Сергій: «надходження грошей привʼязуємо до місяця створення угоди»). Гроші ліда йдуть
- * у день, коли лід ПРИЙШОВ, а не коли закрилась угода — тож число минулого місяця ще росте, поки його угоди в роботі.
- */
-const HINT_EARNED = "Заробили ліди: маржа угод з реклами, створених у цей день/період, які вже оплачені («Успішно» або «Оплата отримана»), "
-  + "хоч би коли надійшли гроші. Показує, чи окупилась реклама саме цього періоду. Число росте, поки угоди в роботі — "
-  + "«дозріло» каже, по скількох лідах уже є результат.";
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthLabel = (ym: string) => MONTHS[Number(ym.slice(5, 7)) - 1] ?? ym;
 /** Частка лідів із результатом. Порожній місяць — null («—»), а не 100%. */
 const ripe = (settled: number, leads: number) => (leads > 0 ? Math.round((settled / leads) * 100) : null);
 /** Місяць «дозріває» ~3 місяці (Олександр, 09.11): нижче 90% позначаємо, щоб свіже число не читали як остаточне. */
 const RIPE_OK = 90;
-/** Ключ кампанії: без хвоста дати перейменування («…_TochkaB 19/06») і без регістру — так сходяться GA4 і мітка угоди. */
-const campKey = (name: string) => name.trim().replace(/\s+\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?$/, "").toLowerCase();
 
 export function AdsSection({ from, to, canEditPlan }: { from: string; to: string; canEditPlan?: boolean }) {
   const [data, setData] = useState<AdsReport | null>(null);
@@ -109,7 +67,7 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
   const [earnedOnly, setEarnedOnly] = useState(false);
   const [earnedList, setEarnedList] = useState<AdsEarnedDeal[] | null>(null);
   // 🗂 Вкладки замість довгої стрічки (Роман 10.11): дні / окупність по місяцях / кампанії за період.
-  const [view, setView] = useState<"days" | "months" | "campaigns">("days");
+  const [view, setView] = useState<"days" | "months" | "campaigns" | "clients">("days");
   const [planDraft, setPlanDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -155,30 +113,6 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
   const totalEarnedDeals = data.days.reduce((s, d) => s + dayEarnedDeals(d), 0);
   const totalRipe = ripe(totalLeads - totalInWork, totalLeads);
   const periodMonths = new Set(data.days.map((d) => d.day.slice(0, 7)));
-  // 📊 Кампанії за період — згортка рядків день × кампанія; лише платні (органіку з 0 ₴ рахувати нема чого).
-  // 🔗 Витрати (GA4) і ліди/гроші (мітка кампанії в угоді) зводяться за НОРМАЛІЗОВАНОЮ назвою: у Google кампанію
-  // перейменовують з хвостом дати («…_TochkaB 19/06»), а в мітці угоди назва без нього (замір 10.11.2026).
-  type CampRow = { key: string; campaign: string; channelGroup: string | null; cost: number; clicks: number;
-                   leads: number; earned: number; earnedDeals: number };
-  const campRows = new Map<string, CampRow>();
-  const campRow = (name: string, channelGroup: string | null) => {
-    const key = campKey(name);
-    const r = campRows.get(key) ?? { key, campaign: name, channelGroup, cost: 0, clicks: 0, leads: 0, earned: 0, earnedDeals: 0 };
-    campRows.set(key, r);
-    return r;
-  };
-  for (const c of data.campaigns) {
-    if (c.cost <= 0) continue;
-    const r = campRow(c.campaign, c.channelGroup);
-    r.cost += c.cost; r.clicks += c.clicks;
-  }
-  const untagged = { leads: 0, earned: 0, earnedDeals: 0 };
-  for (const l of data.campaignLeads ?? []) {
-    const r = l.campaign === null ? untagged : campRow(l.campaign, null);
-    r.leads += l.leads; r.earned += l.earned; r.earnedDeals += l.earnedDeals;
-  }
-  const periodCampaigns = [...campRows.values()].sort((a, b) => b.cost - a.cost || b.earned - a.earned);
-  const hasCampLeads = !!data.campaignLeads;
   const maxCost = Math.max(1, ...data.days.map((d) => d.cost));
   const cpl = totalLeads > 0 ? Math.round(totalCost / totalLeads) : null;
   const wonPct = totalLeads > 0 ? Math.round((totalWon / totalLeads) * 100) : null;
@@ -307,7 +241,7 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
 
       {/* 🗂 Вкладки (Роман 10.11.2026): замість довгої стрічки — три окремі погляди. */}
       <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {([["days", "По днях"], ["months", "Окупність по місяцях"], ["campaigns", "Кампанії за період"]] as const).map(([k, label]) => (
+        {([["days", "По днях"], ["months", "Окупність по місяцях"], ["campaigns", "Кампанії"], ["clients", "Постійні клієнти з реклами"]] as const).map(([k, label]) => (
           <button key={k} type="button" role="tab" aria-selected={view === k} onClick={() => setView(k)}
             style={{ padding: "9px 16px", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer",
                      border: `1px solid ${view === k ? "var(--rpt-ink, #16181d)" : "var(--rpt-line, #e8e6e3)"}`,
@@ -381,120 +315,10 @@ export function AdsSection({ from, to, canEditPlan }: { from: string; to: string
         </div>
       )}
 
-      {/* 📊 Кампанії за ВЕСЬ обраний період (Роман 10.11: «за місяць скільки на яку кампанію» і «а тут дохід можемо?»).
-          Ліди й гроші — за міткою кампанії в угоді (перший захід на сайт); решта — рядок «Органіка / без мітки»,
-          щоб «Разом» сходилось із плиткою «Заробили ліди періоду». */}
-      {view === "campaigns" && (() => {
-        const campLeads = periodCampaigns.reduce((s, c) => s + c.leads, 0) + untagged.leads;
-        const campEarned = periodCampaigns.reduce((s, c) => s + c.earned, 0) + untagged.earned;
-        const taggedPct = campEarned > 0 ? Math.round(((campEarned - untagged.earned) / campEarned) * 100) : null;
-        const cplOf = (cost: number, leads: number) => (leads > 0 && cost > 0 ? `${money(cost / leads)} ₴` : "—");
-        return (
-        <div style={{ ...CARD, padding: "20px 8px 8px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "0 14px 14px" }}>
-            <div style={LAB}>Кампанії за період · {dayLabel(from)}–{dayLabel(to)}</div>
-            <div style={{ ...DIM, fontSize: 12.5 }}>
-              {hasCampLeads
-                ? <>ліди й гроші — за міткою кампанії в угоді{taggedPct !== null && <> · з міткою {taggedPct}% заробленого</>}</>
-                : "ліди й дохід по кампаніях сервер ще не віддає"}
-            </div>
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontVariantNumeric: "tabular-nums", minWidth: 900 }}>
-              <thead>
-                <tr>
-                  <th style={TH_L}>Кампанія</th>
-                  <th style={TH}>Частка</th>
-                  <th style={TH}>Витрати</th>
-                  <th style={TH}>Кліки</th>
-                  <th style={TH}>Ціна кліку</th>
-                  {hasCampLeads && <>
-                    <th style={TH}>Лідів</th>
-                    <th style={TH}>Ціна ліда</th>
-                    <th style={TH} title={HINT_EARNED}>Заробили ліди ⓘ</th>
-                    <th style={TH}>× до витрат</th>
-                  </>}
-                </tr>
-              </thead>
-              <tbody>
-                {periodCampaigns.map((c) => {
-                  const share = totalCost > 0 ? Math.round((c.cost / totalCost) * 100) : 0;
-                  const x = times(c.earned, c.cost);
-                  return (
-                    <tr key={c.key}>
-                      <td style={{ ...TD_L, whiteSpace: "normal", wordBreak: "break-word", maxWidth: 280, lineHeight: 1.3 }}>
-                        {c.campaign}
-                        <div style={{ ...DIM, fontSize: 11.5 }}>
-                          {c.cost === 0 ? "у періоді не крутилась" : c.channelGroup ?? ""}
-                        </div>
-                      </td>
-                      <td style={TD}>
-                        {c.cost > 0 ? (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ width: 56, height: 5, borderRadius: 999, background: "var(--rpt-line, #e8e6e3)", overflow: "hidden" }}>
-                              <span style={{ display: "block", height: "100%", width: `${share}%`, background: "var(--brand, #c5141c)" }} />
-                            </span>
-                            {share}%
-                          </span>
-                        ) : "—"}
-                      </td>
-                      <td style={TD}><b>{c.cost > 0 ? `${money(c.cost)} ₴` : "—"}</b></td>
-                      <td style={TD}>{c.clicks || "—"}</td>
-                      <td style={TD}>{c.clicks > 0 ? `${(c.cost / c.clicks).toLocaleString("uk-UA", { maximumFractionDigits: 1 })} ₴` : "—"}</td>
-                      {hasCampLeads && <>
-                        <td style={TD}>{c.leads}</td>
-                        <td style={TD}>{cplOf(c.cost, c.leads)}</td>
-                        <td style={{ ...TD, lineHeight: 1.3 }}><b style={{ color: c.earned > 0 ? "var(--rpt-ok, #1a7f4b)" : undefined }}>{money(c.earned)} ₴</b>
-                          <div style={{ ...DIM, fontSize: 11.5 }}>{c.earnedDeals} угод</div></td>
-                        <td style={TD}>
-                          {x === null ? "—" : (
-                            <b style={{ color: c.earned >= c.cost ? "var(--rpt-ok, #1a7f4b)" : "var(--rpt-bad, #b4231d)" }}>{x}</b>
-                          )}
-                        </td>
-                      </>}
-                    </tr>
-                  );
-                })}
-                {hasCampLeads && (untagged.leads > 0 || untagged.earned > 0) && (
-                  <tr>
-                    <td style={{ ...TD_L, ...DIM }} title="Угоди без мітки кампанії, а також «(organic)», «(direct)», «(not set)»">
-                      Органіка / без мітки кампанії ⓘ
-                    </td>
-                    <td style={TD}>—</td><td style={TD}>—</td><td style={TD}>—</td><td style={TD}>—</td>
-                    <td style={TD}>{untagged.leads}</td>
-                    <td style={TD}>—</td>
-                    <td style={{ ...TD, lineHeight: 1.3 }}><b>{money(untagged.earned)} ₴</b><div style={{ ...DIM, fontSize: 11.5 }}>{untagged.earnedDeals} угод</div></td>
-                    <td style={TD}>—</td>
-                  </tr>
-                )}
-                {periodCampaigns.length === 0 && (
-                  <tr><td style={{ ...TD_L, ...DIM }} colSpan={hasCampLeads ? 9 : 5}>За період платних кампаній не було.</td></tr>
-                )}
-                <tr style={{ background: "var(--rpt-soft, #f6f5f3)" }}>
-                  <td style={TD_L}><b>Разом</b></td>
-                  <td style={TD} />
-                  <td style={TD}><b>{money(totalCost)} ₴</b></td>
-                  <td style={TD}><b>{periodCampaigns.reduce((s, c) => s + c.clicks, 0)}</b></td>
-                  <td style={TD} />
-                  {hasCampLeads && <>
-                    <td style={TD}><b>{campLeads}</b></td>
-                    <td style={TD}>{cplOf(totalCost, campLeads)}</td>
-                    <td style={TD} title="= плитці «Заробили ліди періоду»"><b style={{ color: "var(--rpt-ok, #1a7f4b)" }}>{money(campEarned)} ₴</b></td>
-                    <td style={TD}><b>{times(campEarned, totalCost) ?? "—"}</b></td>
-                  </>}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          {hasCampLeads && (
-            <div style={{ ...DIM, fontSize: 12, padding: "10px 14px 6px" }}>
-              Кампанію бере мітка першого заходу на сайт (utm_campaign / ADV_CAMP). Дзвінки й угоди, створені вручну, мітки часто не мають —
-              вони в рядку «Органіка / без мітки». Назви зведені без хвоста дати («… 19/06»).
-            </div>
-          )}
-        </div>
-        );
-      })()}
+      {/* 📊 Кампанії (#8709): витрати, ліди, конверсія, чек, заробили, клієнти й LTV — за період або за весь час. */}
+      {view === "campaigns" && <AdsCampaigns data={data} from={from} to={to} />}
+      {/* 👥 #8709 — постійні з реклами (окрема вкладка — Сергій 09.11): за замовчуванням з Нового року, або обраний період. */}
+      {view === "clients" && <AdsRegulars from={from} to={to} />}
 
       {view === "days" && (<>
       {/* Один день у періоді (режим «День») — смуга з однієї кнопки нічого не вибирає; день обрано шкалою вгорі. */}
