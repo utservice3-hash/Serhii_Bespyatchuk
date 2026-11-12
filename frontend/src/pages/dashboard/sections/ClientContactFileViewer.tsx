@@ -58,7 +58,7 @@ export function ClientContactFileViewer({ clientKey, clientName, initialId, cont
     setErr(null);
     fetchContactFileBlobUrl(pick)
       .then((url) => { u = url; if (alive) setBlobUrl(url); else URL.revokeObjectURL(url); })
-      .catch((e) => { if (alive) setErr(errText(e, "скрин не відкрився")); });
+      .catch((e) => { if (alive) setErr(errText(e, "скрін не відкрився")); });
     return () => { alive = false; if (u) URL.revokeObjectURL(u); };
   }, [pick]);
 
@@ -71,7 +71,7 @@ export function ClientContactFileViewer({ clientKey, clientName, initialId, cont
       <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)",
         borderRadius: "var(--r-lg)", padding: "var(--sp-5)", width: "92vw", maxWidth: 920, maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
-          <h2 className="chart-title" style={{ marginBottom: 0 }}>📎 Скрини · {clientName || clientKey}</h2>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>📎 Скріни · {clientName || clientKey}</h2>
           <button onClick={onClose} style={{ border: "1px solid var(--border)", background: "var(--card-bg)",
             color: "var(--text)", borderRadius: "var(--r-md)", padding: "4px 12px", cursor: "pointer" }}>✕</button>
         </div>
@@ -89,11 +89,11 @@ export function ClientContactFileViewer({ clientKey, clientName, initialId, cont
         )}
         {err && <div style={{ color: "#b91c1c", fontSize: 13, marginBottom: 8 }}>🔴 {err}</div>}
         {list && list.length === 0 && !err && (
-          <div style={{ color: "var(--text-muted)", fontSize: 13 }}>У контактах цього клієнта скринів немає.</div>
+          <div style={{ color: "var(--text-muted)", fontSize: 13 }}>У контактах цього клієнта скрінів немає.</div>
         )}
         {cur && (
           <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
-            {cur.author && <>{cur.author} · </>}{cur.fileName ?? "скрин"}
+            {cur.author && <>{cur.author} · </>}{cur.fileName ?? "скрін"}
             {cur.note && <div style={{ color: "var(--text)", marginTop: 4, whiteSpace: "pre-wrap" }}>{cur.note}</div>}
             {/* 📎 8347: скрін з угоди Kommo — що прочитав AI і посилання на угоду. */}
             {screenAiLine(cur) && <div style={{ color: "var(--text)", marginTop: 4, whiteSpace: "pre-wrap" }}>{screenAiLine(cur)}</div>}
@@ -102,11 +102,11 @@ export function ClientContactFileViewer({ clientKey, clientName, initialId, cont
             )}
           </div>
         )}
-        {pick != null && !blobUrl && !err && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>завантаження скрину…</div>}
+        {pick != null && !blobUrl && !err && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>завантаження скріну…</div>}
         {isImage && (
           <>
-            <img src={blobUrl!} alt={cur?.fileName ?? "скрин"} style={{ maxWidth: "100%", borderRadius: 8, display: "block" }} />
-            <a href={blobUrl!} download={cur?.fileName ?? "скрин"}
+            <img src={blobUrl!} alt={cur?.fileName ?? "скрін"} style={{ maxWidth: "100%", borderRadius: 8, display: "block" }} />
+            <a href={blobUrl!} download={cur?.fileName ?? "скрін"}
               style={{ display: "inline-block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>⬇️ Завантажити</a>
           </>
         )}

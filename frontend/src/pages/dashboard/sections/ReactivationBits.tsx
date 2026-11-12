@@ -114,7 +114,7 @@ export function ContactDialog({ client, busy, error, onCancel, onSubmit }: {
     setErr(null);
     if (!f) { setFile(null); return; }
     if (!f.type.startsWith("image/")) { setErr("Приймаються лише зображення (JPG, PNG, WebP)"); return; }
-    if (f.size > 5 * 1024 * 1024) { setErr("Скрин завеликий (макс. 5 МБ)"); return; }
+    if (f.size > 5 * 1024 * 1024) { setErr("Скрін завеликий (макс. 5 МБ)"); return; }
     setFile(f);
   };
   return (
@@ -130,14 +130,14 @@ export function ContactDialog({ client, busy, error, onCancel, onSubmit }: {
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Про що домовились</div>
       <textarea value={note} onChange={(e) => setNote(e.target.value.slice(0, 1000))} rows={3}
         placeholder="написав у Viber, обіцяли замовлення після 20-го" style={{ ...S.input, resize: "vertical" }} />
-      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Скрин переписки (до 5 МБ)</div>
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Скрін переписки (до 5 МБ)</div>
       <input type="file" accept="image/*" onChange={(e) => pick(e.target.files?.[0] ?? null)} style={{ fontSize: 12 }} />
       {file && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>{file.name} · {Math.round(file.size / 1024)} КБ</div>}
       {err && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{err}</div>}
       <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
         <button style={S.btn(true)} disabled={busy || (!note.trim() && !file)} onClick={() => onSubmit(channel, note.trim(), file)}>Записати</button>
         <button style={S.btn()} disabled={busy} onClick={onCancel}>Скасувати</button>
-        {!note.trim() && !file && <span style={{ fontSize: 11, color: "#9ca3af" }}>додайте текст або скрин</span>}
+        {!note.trim() && !file && <span style={{ fontSize: 11, color: "#9ca3af" }}>додайте текст або скрін</span>}
       </div>
     </Modal>
   );

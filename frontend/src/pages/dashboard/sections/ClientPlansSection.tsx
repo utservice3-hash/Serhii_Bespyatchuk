@@ -474,7 +474,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
               📱 {c.lastContact.at.slice(0, 10).split("-").reverse().slice(0, 2).join(".")} · {contactChannelLabel(c.lastContact.channel)}
               {/* 📎 КНОПКА, А НЕ ПОЗНАЧКА (задача 4310, п.1.3): скрин відкривається з рядка. */}
               {c.lastContactHasFile && (
-                <button type="button" title="Переглянути скрин"
+                <button type="button" title="Переглянути скрін"
                   onClick={() => setViewingFiles({ clientKey: c.clientKey, name: c.clientName ?? c.clientKey })}
                   style={{ marginLeft: 4, border: "none", background: "transparent", cursor: "pointer", fontSize: 12, padding: 0 }}>📎</button>
               )}
@@ -483,7 +483,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           {c.phone === "none" && <div style={{ fontSize: 11, color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</div>}
           {(c.attempts ?? 0) > 0 && <div style={{ color: "#b45309", fontSize: 11 }} title="дзвінки без відповіді після останньої розмови">недодзвонів {c.attempts}</div>}
           <button disabled={busy} style={{ ...S.btn(), marginTop: 4, fontSize: 11, padding: "2px 8px" }}
-            title="Записати контакт у Viber/Telegram/email зі скрином"
+            title="Записати контакт у Viber/Telegram/email зі скріном"
             onClick={() => setContacting({ clientKey: c.clientKey, name: c.clientName })}>＋ Контакт</button>
         </td>
         <td style={{ ...S.td, textAlign: "right" }}>

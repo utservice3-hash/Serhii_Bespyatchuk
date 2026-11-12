@@ -24,14 +24,14 @@ test("#711 СКРИН У КАРТЦІ: перегляд на місці, без 
   const card = read(`${SECTIONS}/ClientCardPanel.tsx`);
   assert.doesNotMatch(codeOnly(card), /window\.open\(/,
     "🔴 картка знову відкриває скрин новою вкладкою — після await блокувальник її мовчки гасить (так «не клікалось» у Юлі й Дмитрука)");
-  assert.match(card, /onClick=\{\(\) => setFileId\(k\.id\)\}>📎 скрин<\/button>/,
+  assert.match(card, /onClick=\{\(\) => setFileId\(k\.id\)\}>📎 скрін<\/button>/,
     "🔴 кнопка «📎 скрин» у картці не відкриває перегляд на місці");
   assert.match(card, /<ClientContactFileViewer [^>]*initialId=\{fileId\}/, "🔴 перегляд у картці не рендериться для обраного скрину");
   const viewer = read(`${SECTIONS}/ClientContactFileViewer.tsx`);
   assert.doesNotMatch(codeOnly(viewer), /window\.open\(/, "🔴 перегляд сам відкриває вкладку — повернули той самий блокувальник");
   assert.match(viewer, /URL\.revokeObjectURL\(/, "🔴 blob скрину не відкликається — кожне відкриття лишає копію в памʼяті вкладки");
   assert.match(viewer, /<a href=\{blobUrl!\} download=/, "🔴 немає «Завантажити» — ТЗ вимагає «відкривається й качається»");
-  assert.match(viewer, /setErr\(errText\(e, "скрин не відкрився"\)\)/, "🔴 відмова сервера не показується — порожнє вікно читалось би як «скрину немає»");
+  assert.match(viewer, /setErr\(errText\(e, "скрін не відкрився"\)\)/, "🔴 відмова сервера не показується — порожнє вікно читалось би як «скрину немає»");
 });
 
 test("#711b 🪞 СКРИН ІЗ РЯДКА: 📎 — кнопка, що відкриває той самий перегляд, а не мертва позначка", () => {

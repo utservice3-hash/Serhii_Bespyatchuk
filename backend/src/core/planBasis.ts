@@ -23,10 +23,10 @@ export function basisTarget(body: { callId?: unknown; contactId?: unknown }): Ba
   const call = typeof body.callId === "string" && body.callId.trim() ? body.callId.trim() : null;
   const cid = Number(body.contactId);
   const contact = body.contactId != null && Number.isInteger(cid) && cid > 0 ? cid : null;
-  if (call && contact) return { error: "Обґрунтування — АБО дзвінок, АБО скрин, не обидва" };
+  if (call && contact) return { error: "Обґрунтування — АБО дзвінок, АБО скрін, не обидва" };
   if (call) return { kind: "call", callId: call };
   if (contact) return { kind: "contact", contactId: contact };
-  return { error: "Вкажіть дзвінок або скрин" };
+  return { error: "Вкажіть дзвінок або скрін" };
 }
 
 /** `YYYY-MM` → перше число місяця; сміття — `null`. */

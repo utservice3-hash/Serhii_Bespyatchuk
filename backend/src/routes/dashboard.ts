@@ -7665,7 +7665,7 @@ dashboardRouter.post("/client-plan-basis", async (req, res) => {
   const callId = t.kind === "call" ? t.callId : null;
   const contactId = t.kind === "contact" ? t.contactId : null;
   const own = await pool.query<{ ok: boolean }>(planBasis.BASIS_BELONGS_SQL, [clientKey, callId, contactId]);
-  if (!own.rows[0]?.ok) return res.status(400).json({ error: t.kind === "call" ? "Цей дзвінок не цього клієнта" : "Це не скрин цього клієнта" });
+  if (!own.rows[0]?.ok) return res.status(400).json({ error: t.kind === "call" ? "Цей дзвінок не цього клієнта" : "Це не скрін цього клієнта" });
   await pool.query(planBasis.BASIS_UPSERT_SQL, [clientKey, month, callId, contactId, auth.userId]);
   const b = (await planBasis.basisForMonth([clientKey], month)).get(clientKey) ?? null;
   res.json({ ok: true, planBasis: b });
@@ -7837,14 +7837,14 @@ dashboardRouter.post("/client-contacts", async (req, res) => {
     mime = req.body?.mime ? String(req.body.mime) : null;
     const v = contactFileVerdict(mime, buffer.length);
     if (!v.ok) return res.status(413).json({ error: v.error });
-    fileName = (String(req.body?.filename ?? "скрин").trim() || "скрин").slice(0, 120);
+    fileName = (String(req.body?.filename ?? "скрін").trim() || "скрін").slice(0, 120);
     const ext = path.extname(fileName).slice(0, 8).replace(/[^.\w]/g, "") || ".jpg";
     storedName = `${randomUUID()}${ext}`;
     await mkdir(CONTACT_FILES_DIR, { recursive: true });
     await writeFile(path.join(CONTACT_FILES_DIR, storedName), buffer);
     size = buffer.length;
   }
-  if (!note && !storedName) return res.status(400).json({ error: "Додайте текст або скрин — порожній контакт нічого не доводить" });
+  if (!note && !storedName) return res.status(400).json({ error: "Додайте текст або скрін — порожній контакт нічого не доводить" });
   const ins = await pool.query<{ id: number }>(
     `INSERT INTO client_contacts (client_key, channel, note, stored_name, file_name, mime, size_bytes, created_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, [clientKey, channel, note, storedName, fileName, mime, size, auth.userId]);

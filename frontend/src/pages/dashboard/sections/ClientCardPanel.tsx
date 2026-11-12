@@ -344,7 +344,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
         <div style={{ fontSize: 12, margin: "12px 0 4px", color: "#1e3a8a" }}>
           📌 Обґрунтування плану на {card.basisMonth}: {card.planBasis.kind === "call"
             ? `розмова ${card.planBasis.at ?? ""}${card.planBasis.sec != null ? ` · ${Math.floor(card.planBasis.sec / 60)}:${String(card.planBasis.sec % 60).padStart(2, "0")}` : ""}${card.planBasis.by ? ` · ${card.planBasis.by}` : ""}`
-            : `скрин ${card.planBasis.at ?? ""}${card.planBasis.fileName ? ` · ${card.planBasis.fileName}` : ""}`}
+            : `скрін ${card.planBasis.at ?? ""}${card.planBasis.fileName ? ` · ${card.planBasis.fileName}` : ""}`}
           <button type="button" disabled={busy} onClick={unpin}
             style={{ marginLeft: 8, fontSize: 11, border: "none", background: "transparent", color: "#6b7280", cursor: "pointer", textDecoration: "underline" }}>зняти</button>
         </div>
@@ -425,7 +425,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                 {k.author && <span style={{ color: "#6b7280" }}> · {k.author}</span>}
                 {k.hasFile && (
                   <button style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
-                    onClick={() => setFileId(k.id)}>📎 скрин</button>
+                    onClick={() => setFileId(k.id)}>📎 скрін</button>
                 )}
                 {/* 📎 8347: скрін з угоди Kommo — посилання на саму угоду; закріпити обґрунтуванням його не можна (файл не в нас). */}
                 {k.source === "kommo" && k.kommoUrl && (
@@ -433,7 +433,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                 )}
                 {k.hasFile && k.source !== "kommo" && (card.planBasis?.contactId === k.id
                   ? <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#1e3a8a" }}>📌 обґрунтування</span>
-                  : <button type="button" disabled={busy} onClick={() => pin({ contactId: k.id })} title="Закріпити цей скрин як обґрунтування плану"
+                  : <button type="button" disabled={busy} onClick={() => pin({ contactId: k.id })} title="Закріпити цей скрін як обґрунтування плану"
                       style={{ marginLeft: 6, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>📌</button>)}
               </div>
               {k.note && <div style={{ color: "#374151", marginTop: 2, whiteSpace: "pre-wrap" }}>{k.note}</div>}

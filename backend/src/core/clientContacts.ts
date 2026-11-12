@@ -34,7 +34,7 @@ export function lastContactOf(
 /** Чи можна прийняти файл: лише зображення, не більше 5 МБ, не порожній. */
 export function contactFileVerdict(mime: string | null, size: number): { ok: true } | { ok: false; error: string } {
   if (size <= 0) return { ok: false, error: "Файл порожній" };
-  if (size > CONTACT_FILE_MAX_BYTES) return { ok: false, error: "Скрин завеликий (макс. 5 МБ)" };
+  if (size > CONTACT_FILE_MAX_BYTES) return { ok: false, error: "Скрін завеликий (макс. 5 МБ)" };
   if (!mime || !CONTACT_IMAGE_MIMES.includes(mime)) return { ok: false, error: "Приймаються лише зображення (JPG, PNG, WebP, GIF)" };
   return { ok: true };
 }
