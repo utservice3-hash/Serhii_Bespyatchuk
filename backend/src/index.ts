@@ -101,6 +101,7 @@ import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
 import { runOrphanToLeadgen } from "./jobs/orphanToLeadgen.js";
+import { syncKommoScreens } from "./jobs/syncKommoScreens.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncTldv } from "./jobs/syncTldv.js";
 import { syncWorkua } from "./jobs/syncWorkua.js";
@@ -506,6 +507,14 @@ cron.schedule("0 8 * * 1", () => {
  */
 cron.schedule("10 * * * *", () => {
   void runJob("orphanToLeadgen", () => runOrphanToLeadgen());
+}, { timezone: "Europe/Kyiv" });
+/**
+ * 📎 Скріни з угод Kommo → контакти клієнта + AI-коментар (задача 8347): двічі на годину о :20 і :50 за Києвом —
+ * повз тіки `syncKommo` (:00/:30) і `syncDealActivity` (:40). everyMin == 30 у нагляді.
+ */
+cron.schedule("20,50 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("syncKommoScreens", () => syncKommoScreens());
 }, { timezone: "Europe/Kyiv" });
 
 // КРОК 4 (Звірка) + AUTO-HEAL. ЩОНОЧІ 03:35 — лише ОСТАННІ 2 МІСЯЦІ: швидко/дешево,

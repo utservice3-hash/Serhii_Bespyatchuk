@@ -8159,3 +8159,36 @@ CREATE TABLE IF NOT EXISTS leadgen_ltv_months (
   built_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 REVOKE ALL ON leadgen_handoff_actors, leadgen_ltv_clients, leadgen_ltv_pool, leadgen_ltv_months FROM ai_readonly;
+
+-- 📎 СКРІНИ З УГОД KOMMO → КОНТАКТИ КЛІЄНТА (задача 8347; Роман 11.11.2026 «1 так 2 ТІЛЬКИ З СЬОГОДНІ 3 так 4 так»).
+-- Скрін, прикріплений в угоду Kommo, стає рядком контакту з каналом `kommo`; файл НЕ копіюємо (показ — з Kommo на запит),
+-- у нас лише текст AI. Контактом рахується ЛИШЕ переписка (`ai_kind = 'chat'`) — правило `core/kommoScreens.ts`.
+-- Канал і нотатка Kommo їдуть ОДНИМ оператором вставки (CHECK між колонками — db-sql.md), часткових upsert тут немає.
+-- ⚠️ ВІДКАТ КОДУ НЕ ВІДКОЧУЄ ЦІ РЯДКИ: стара версія не знає правила «лише переписка» і зарахувала б контактом кожну
+-- картинку. Тому відкат = `DELETE FROM client_contacts WHERE channel = 'kommo'` + повернення переліку каналів.
+ALTER TABLE client_contacts DROP CONSTRAINT IF EXISTS client_contacts_channel_check;
+ALTER TABLE client_contacts ADD CONSTRAINT client_contacts_channel_check
+  CHECK (channel IN ('viber','telegram','email','call','other','kommo'));
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS kommo_note_id   BIGINT;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS kommo_deal_id   BIGINT;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS kommo_file_uuid TEXT;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS kommo_author_id BIGINT;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS ai_status   TEXT;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS ai_kind     TEXT;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS ai_summary  TEXT;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS ai_failure  TEXT;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS ai_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS ai_at       TIMESTAMPTZ;
+ALTER TABLE client_contacts DROP CONSTRAINT IF EXISTS client_contacts_kommo_shape;
+ALTER TABLE client_contacts ADD CONSTRAINT client_contacts_kommo_shape CHECK (
+  (channel = 'kommo') = (kommo_note_id IS NOT NULL AND kommo_deal_id IS NOT NULL AND kommo_file_uuid IS NOT NULL AND ai_status IS NOT NULL));
+ALTER TABLE client_contacts DROP CONSTRAINT IF EXISTS client_contacts_ai_status_check;
+ALTER TABLE client_contacts ADD CONSTRAINT client_contacts_ai_status_check
+  CHECK (ai_status IS NULL OR ai_status IN ('queued','capped','done','failed'));
+ALTER TABLE client_contacts DROP CONSTRAINT IF EXISTS client_contacts_ai_kind_check;
+ALTER TABLE client_contacts ADD CONSTRAINT client_contacts_ai_kind_check
+  CHECK (ai_kind IS NULL OR ai_kind IN ('chat','document','photo','other'));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_client_contacts_kommo_note ON client_contacts(kommo_note_id) WHERE kommo_note_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_client_contacts_ai_queue ON client_contacts(created_at) WHERE channel = 'kommo' AND ai_status IN ('queued','capped');
+-- Вотермарк синку скрінів. NULL = ще не було проходу → джоба починає з 11.11.2026 00:00 за Києвом.
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS kommo_screens_note_at TIMESTAMPTZ;
