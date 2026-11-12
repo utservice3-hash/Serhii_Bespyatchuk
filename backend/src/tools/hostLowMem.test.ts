@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
-import { planSteps, npmTestArgs, baseTestArgs, heavyForeign, TEST_RUNNER } from "./deployPlan.js";
+import { planSteps, npmTestArgs, baseTestArgs, heavyForeign, TEST_RUNNER, contentTypeScript, DEPLOY_UA } from "./deployPlan.js";
 
 /**
  * 🧠 ВИКАТ НА ПОТУЖНОСТЯХ, ЯКІ Є (11.11.2026, Роман: «ні ліміт ми не підіймаємо … оптимізуй»).
@@ -393,4 +393,37 @@ test("#3887 ФРОНТ НА СТЕНДІ: типи частинами один �
   assert.doesNotMatch(vite, /\bnpx\b|"run", "build"/, "🔴 buildFront знову через npx або npm run build (другий tsc)");
   const check = planSteps("check", "full").map((x) => x.id);
   assert.ok(check.indexOf("tscFront") >= 0 && check.indexOf("tscFront") < check.indexOf("buildFront"), "🔴 типи фронту перевіряються не перед бандлом");
+});
+
+/**
+ * #3892 🪞 ПЕРЕВІРКА ТИПУ АСЕТІВ ШЛЕ ВЛАСНИЙ USER-AGENT — І ВСЕ ЩЕ ЛОВИТЬ НЕПРАВИЛЬНИЙ ТИП. З 12.11.2026 nginx хостингу
+ * віддає 403 на дефолтний UA `curl` (заміряно на сервері: `curl/7.61.1` → 403 text/html, будь-який інший → 200), і крок
+ * `contentType` обривав би кожен викат ПІСЛЯ доставки асетів і ДО рестарту. Гейт ВИКОНУЄ справжній скрипт кроку з
+ * підставним `curl`, який поводиться як цей nginx: без `-A` — 403, з ним — тип за розширенням. Дзеркало: асет із
+ * типом text/html (SPA-фолбек замість файла) — червоне.
+ * 🧨 Червоніє, якщо прибрати `-A` (403 → крок падає на живому прийманні), або якщо перевірка типу перестане валити
+ * асет, що віддається як html.
+ */
+test("#3892 🪞 contentType: свій User-Agent проходить фільтр хостингу; асет, що віддається як html, — червоне", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "uts-ctype-"));
+  try {
+    const bin = path.join(dir, "bin"); mkdirSync(bin); mkdirSync(path.join(dir, "root", "assets"), { recursive: true });
+    writeFileSync(path.join(dir, "root", "index.html"), '<script src="/assets/index-Ab1.js"></script><link href="/assets/index-Cd2.css">');
+    // Підставний curl: як nginx хостингу — дефолтний UA = 403; MODE=html — сервер віддає html замість файла.
+    writeFileSync(path.join(bin, "curl"), `#!/bin/bash
+ua=""; url=""; while [ $# -gt 0 ]; do case "$1" in -A) ua="$2"; shift 2;; -o|-w) shift 2;; -s) shift;; *) url="$1"; shift;; esac; done
+echo "$ua" >> "${dir}/ua.log"
+[ -z "$ua" ] && { printf '403 text/html'; exit 0; }
+[ "$MODE" = html ] && { printf '200 text/html'; exit 0; }
+case "$url" in *.js*) printf '200 application/javascript';; *.css*) printf '200 text/css';; esac
+`, { mode: 0o755 });
+    const run = (mode: string) => spawnSync("bash", ["-c", contentTypeScript(path.join(dir, "root"), "https://example.test")],
+      { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MODE: mode } });
+    const ok = run("");
+    assert.equal(ok.status, 0, `🔴 крок упав на фільтрі хостингу: ${ok.stdout}`);
+    assert.deepEqual(readFileSync(path.join(dir, "ua.log"), "utf8").trim().split("\n"), [DEPLOY_UA, DEPLOY_UA], "🔴 не кожен асет перевірено власним User-Agent");
+    const bad = run("html");
+    assert.notEqual(bad.status, 0, "🔴 асет, що віддається як html, пройшов — перевірка типу беззуба");
+    assert.match(bad.stdout, /🔴 assets\/index-Ab1\.js → 200 text\/html/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

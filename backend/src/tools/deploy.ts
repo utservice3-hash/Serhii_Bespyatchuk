@@ -19,7 +19,7 @@ import {
   standToRefusal,
   MARK_REPORT, MARK_STOP,
   holdsLockAfter,
-  npmTestArgs, baseTestArgs, heavyForeign, TEST_RUNNER,
+  npmTestArgs, baseTestArgs, heavyForeign, TEST_RUNNER, contentTypeScript,
   shouldRerunAccept, acceptAfterRerun, shouldAlertOnStop, stopAlertText, alertDelivery,
   type AcceptRound,
   type Mode, type Phase, type Step, type Artifact,
@@ -824,7 +824,8 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const out = sh("bash", ["-lc", `cd ${c.docRoot} && for f in assets/index-*.js assets/index-*.css; do if grep -q "$(basename "$f")" index.html; then echo "ЛИШАЮ $(basename "$f")"; else echo "ВИДАЛЯЮ $(basename "$f")"; rm -f "$f"; fi; done`]);
     return { id: "cssGuard", ok: true, detail: out.replace(/\n/g, " · ") };
   },
-  contentType: (c) => run("contentType", () => sh("bash", ["-lc", `cd ${c.docRoot} && for a in $(grep -o "assets/index-[A-Za-z0-9_-]*\\.\\(js\\|css\\)" index.html); do t=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "https://dashboard.uts.ua/$a?cb=$(date +%s)"); case "$t" in 200*javascript*|200*css*) ;; *) echo "🔴 $a → $t"; exit 1;; esac; done`]), "усі асети віддають свій тип"),
+  /** 🌐 Скрипт — `contentTypeScript` (deployPlan.ts): з 12.11.2026 nginx хостингу віддає 403 на дефолтний User-Agent `curl` (#3892). */
+  contentType: (c) => run("contentType", () => sh("bash", ["-lc", contentTypeScript(c.docRoot)]), "усі асети віддають свій тип"),
   migrate: (c) => {
     // 🔴 ДИВИМОСЬ У ДІФ, а не в прапорець: інакше звіт стверджує факт, якого ніхто не перевіряв.
     c.changed = sh("git", ["diff", "--name-only", `${c.prod}..HEAD`], c.buildRepo).split("\n").filter(Boolean);

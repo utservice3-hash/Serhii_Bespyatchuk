@@ -638,3 +638,19 @@ export function heavyForeign(psLines: readonly string[], self: ReadonlySet<numbe
   }
   return out;
 }
+
+/**
+ * 🌐 ПЕРЕВІРКА ТИПУ АСЕТІВ ПІСЛЯ ДОСТАВКИ — ЗІ СВОЇМ USER-AGENT (12.11.2026, #3892).
+ *
+ * 📐 Заміряно 12.11.2026 на сервері: nginx хостингу віддає **403 text/html** на дефолтний User-Agent `curl/7.61.1` (і на
+ * асети, і на `/api/health`); з будь-яким іншим — 200. 11.11 о 15:2x UTC крок ще проходив, тобто фільтр — новий і не наш.
+ * Крок стоїть ПІСЛЯ доставки асетів у докрут і ДО рестарту: без власного UA кожен викат обривався б саме там.
+ * Скрипт — тут, а не літералом у кроці, щоб гейт міг його ВИКОНАТИ з підставним `curl`, а не читати регуляркою.
+ */
+export const DEPLOY_UA = "uts-deploy/1.0 (contentType)";
+export const SITE = "https://dashboard.uts.ua";
+export function contentTypeScript(docRoot: string, site: string = SITE): string {
+  return `cd ${docRoot} && for a in $(grep -o "assets/index-[A-Za-z0-9_-]*\\.\\(js\\|css\\)" index.html); do `
+    + `t=$(curl -s -A '${DEPLOY_UA}' -o /dev/null -w '%{http_code} %{content_type}' "${site}/$a?cb=$(date +%s)"); `
+    + `case "$t" in 200*javascript*|200*css*) ;; *) echo "🔴 $a → $t"; exit 1;; esac; done`;
+}
