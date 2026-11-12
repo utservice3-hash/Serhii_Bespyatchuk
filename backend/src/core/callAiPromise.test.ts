@@ -36,12 +36,12 @@ const MADE = END, DL = new Date("2026-09-25T09:20:00Z");
 const call = (min: number, callType: string, billsec: number): CallFact => ({ at: new Date(MADE.getTime() + min * 60_000), callType, billsec });
 
 /**
- * #790 — СТАН: вихідний із розмовою до терміну — «передзвонив» (чий саме — `#850`); лише спроби — окремо;
+ * #3910 (до 12.11.2026 — #790) — СТАН: вихідний із розмовою до терміну — «передзвонив» (чий саме — `#850`); лише спроби — окремо;
  * клієнт подзвонив сам — окремий стан, а не «передзвонив»; дзвінок після терміну не рятує; до терміну — «чекає»;
  * месенджер — «не перевіряється», навіть без жодного дзвінка. Рядок бере найгірший стан.
  * 🧨 Червоніє, якщо зарахувати дзвінок клієнта нашим, дзвінок після терміну, чи ставити прапорець на месенджер.
  */
-test("#790 СТАН ОБІЦЯНКИ: передзвонив / лише спроби / клієнт сам / не передзвонив / чекає / месенджер не перевіряється", () => {
+test("#3910 СТАН ОБІЦЯНКИ: передзвонив / лише спроби / клієнт сам / не передзвонив / чекає; «напишу» — за слідом у CRM, «інше» не перевіряється", () => {
   const later = new Date("2026-09-26T00:00:00Z");
   const st = (channel: "call" | "message", calls: CallFact[], now = later) => promiseState({ channel }, MADE, DL, calls, now);
   assert.equal(st("call", [call(10, "out", 40)]), "kept_talk", "🔴 наш вихідний із розмовою до терміну не зараховано");
@@ -50,7 +50,8 @@ test("#790 СТАН ОБІЦЯНКИ: передзвонив / лише спро
   assert.equal(st("call", [call(200, "out", 60)]), "late", "🔴 дзвінок ПІСЛЯ терміну зараховано як вчасний");
   assert.equal(st("call", []), "broken");
   assert.equal(st("call", [], new Date(MADE.getTime() + 5 * 60_000)), "pending", "🔴 до терміну вже «не передзвонив»");
-  assert.equal(st("message", []), "unverifiable", "🔴 обіцянку в месенджер позначено як невиконаний дзвінок");
+  assert.equal(st("message", []), "no_trace", "🔴 обіцянка «напишу» без жодного сліду після терміну не «немає сліду в CRM»");
+  assert.equal(promiseState({ channel: "other" }, MADE, DL, [], later), "unverifiable", "🔴 «інша дія» стала перевірятись — її перевірити нічим");
   assert.equal(worstPromiseState(["kept_talk", "unverifiable", "broken"]), "broken");
   assert.equal(worstPromiseState(["unverifiable", "kept_talk"]), "kept_talk");
   assert.equal(worstPromiseState([]), null);

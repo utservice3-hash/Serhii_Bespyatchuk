@@ -599,6 +599,8 @@ export interface AiManagerLineT {
   agreements: number; done: number; late: number; missed: number;
   /** Втрачені ліди (тип `lead_lost`) і медіана хвилин від заявки до першого нашого вихідного по них. */
   lost: number; lostReactionMedianMin: number | null;
+  /** ✍️ Задача 7240: обіцянок усього, з них «написати / інша дія», частка і розмови без сліду в CRM. */
+  promises?: number; writePromises?: number; writePct?: number | null; noTrace?: number;
 }
 export interface AiPoolRowT {
   uniqueid: string; calledAt: string; managerId: number | null; managerName: string | null; teamName: string | null;
@@ -606,7 +608,7 @@ export interface AiPoolRowT {
   priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
   promiseState: PromiseStateT | null; objections: number; typeCheck: boolean;
   conversationType: ConversationTypeT | null; reactionMin: number | null; reactionOffHours: boolean;
-  flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean; lost: boolean };
+  flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean; lost: boolean; noTrace?: boolean };
 }
 export interface AiTeamReportResp {
   period: { from: string; to: string }; truncated: boolean;

@@ -1227,3 +1227,27 @@ export async function kommoDriveFile(fileUuid: string, maxBytes: number): Promis
   if (bytes.length > maxBytes) throw new KommoFileError(`файл завеликий (${String(bytes.length)} байт)`, null, true);
   return { bytes, contentType: r.headers.get("content-type"), name: typeof j.name === "string" ? j.name : null };
 }
+
+/**
+ * ✍️ Події «додано нотатку в угоду» за вікно (задача 7240) — лише хто й коли, без тексту. Kommo віддає події від
+ * найновіших; вікно гортаємо до неповної сторінки. Понад `maxPages` — помилка, а не тихо обрізане вікно.
+ */
+export interface KommoNoteEvent { id: string; leadId: number; createdBy: number; createdAt: number }
+export async function forEachLeadNoteEventPage(
+  fromUnix: number, toUnix: number, onPage: (events: KommoNoteEvent[]) => Promise<void>, maxPages = 80,
+): Promise<number> {
+  const limit = 100;
+  let total = 0;
+  for (let page = 1; page <= maxPages; page++) {
+    const data = await kommoRequest<KommoListResponse<{ id: string; entity_id: number; entity_type: string; created_by: number; created_at: number }> | Record<string, never>>(
+      `/api/v4/events?limit=${String(limit)}&page=${String(page)}` +
+        `&${encodeURIComponent("filter[type]")}=common_note_added&${encodeURIComponent("filter[entity]")}=lead` +
+        `&${encodeURIComponent("filter[created_at][from]")}=${String(fromUnix)}&${encodeURIComponent("filter[created_at][to]")}=${String(toUnix)}`);
+    const raw = ("_embedded" in data ? data._embedded?.events : undefined) ?? [];
+    const events = raw.filter((e) => e.entity_type === "lead")
+      .map((e): KommoNoteEvent => ({ id: String(e.id), leadId: e.entity_id, createdBy: e.created_by ?? 0, createdAt: e.created_at }));
+    if (events.length) { await onPage(events); total += events.length; }
+    if (raw.length < limit) return total;
+  }
+  throw new Error(`Kommo: події нотаток за вікно ${String(fromUnix)}–${String(toUnix)} дали понад ${String(maxPages)} сторінок — зупинено, щоб не обрізати мовчки`);
+}

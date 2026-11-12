@@ -240,7 +240,7 @@ function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) 
   const needPrice = c.result != null && c.result.price.discussed === false;
   const needMissed = c.row.promiseState === "broken";
   // 📞 01.10.2026: Ringostat не бачить мобільного й месенджера — передзвін поза телефонією позначає людина.
-  const needOffline = c.row.promiseState === "broken" || c.row.promiseState === "late" || c.row.offlineNote != null;
+  const needOffline = c.row.promiseState === "broken" || c.row.promiseState === "late" || c.row.promiseState === "no_trace" || c.row.offlineNote != null;
   // 💬 Задача 7183: розмова в черзі розбору — менеджер пояснює, тімлід погоджує.
   const needExplain = c.reviewReason != null || c.row.explainNote != null;
   if (!needPrice && !needMissed && !needOffline && !needExplain) return null;

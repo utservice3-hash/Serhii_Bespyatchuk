@@ -104,6 +104,7 @@ import { runOrphanToLeadgen } from "./jobs/orphanToLeadgen.js";
 import { syncKommoScreens } from "./jobs/syncKommoScreens.js";
 import { syncQuoteRatings } from "./jobs/syncQuoteRatings.js";
 import { syncClientKommoTasks } from "./jobs/syncClientKommoTasks.js";
+import { syncKommoNoteEvents } from "./jobs/syncKommoNoteEvents.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncTldv } from "./jobs/syncTldv.js";
 import { syncWorkua } from "./jobs/syncWorkua.js";
@@ -523,6 +524,12 @@ cron.schedule("20,50 * * * *", () => {
 cron.schedule("5,15,25,35,45,55 * * * *", () => {
   if (isKommoPaused()) return;
   void runJob("syncClientKommoTasks", () => syncClientKommoTasks());
+}, { timezone: "Europe/Kyiv" });
+
+// ✍️ Нотатки менеджерів в угодах Kommo — слід для обіцянок «напишу» (задача 7240) — двічі на годину.
+cron.schedule("12,42 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("syncKommoNoteEvents", () => syncKommoNoteEvents());
 }, { timezone: "Europe/Kyiv" });
 
 // ⭐ Оцінки прорахунків лідгенів з Kommo (задача 7537) — щогодини о :40; і дозаповнення, і оновлення.

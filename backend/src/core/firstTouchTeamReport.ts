@@ -32,6 +32,9 @@ export interface ReportRowIn {
   state: string;
   priceDiscussed: boolean | null;
   promiseState: PromiseState | null;
+  /** ✍️ Обіцянки менеджера в розмові: усі й з них «написати / інша дія» (задача 7240). */
+  managerPromises?: number;
+  managerWritePromises?: number;
   typeCheck: boolean;
   priceNote: { text: string } | null;
   missedNote: { text: string; at?: string } | null;
@@ -69,7 +72,16 @@ export interface ManagerLine {
   lost: number;
   /** Медіана хвилин від заявки до першого вихідного по втрачених; `null` — втрачених немає чи дзвінків не знайдено. */
   lostReactionMedianMin: number | null;
+  /** ✍️ Задача 7240: обіцянок менеджера всього; з них «написати / інша дія»; частка, % (`null` — обіцянок немає). */
+  promises: number;
+  writePromises: number;
+  writePct: number | null;
+  /** Розмов, де обіцяв написати, термін минув, а сліду в CRM немає. */
+  noTrace: number;
 }
+
+/** ✍️ Обіцяв написати — сліду в CRM немає (задача 7240): та сама умова для клітинки, фільтра пулу й прапорця рядка. */
+export const isNoTrace = (r: ReportRowIn): boolean => isAnalysed(r) && r.promiseState === "no_trace";
 
 const CALL_PROMISE: ReadonlySet<PromiseState> = new Set(["kept_talk", "kept_attempt_only", "kept_offline", "client_called", "late", "pending", "broken"]);
 
@@ -84,6 +96,13 @@ export const noPriceNoComment = (r: ReportRowIn): boolean => noPrice(r) && !r.pr
 export const hasAgreement = (r: ReportRowIn): boolean => isAnalysed(r) && r.promiseState != null && CALL_PROMISE.has(r.promiseState);
 /** Банер (п.6.3): лише «не передзвонив», і лише поки тімлід не написав «Опрацьовано». */
 export const inBanner = (r: ReportRowIn): boolean => r.inReport && r.promiseState === "broken" && !r.missedNote;
+
+/** Частка обіцянок «написати / не перевіряється» від усіх обіцянок менеджера в розібраних розмовах. */
+export function writeShare(analysed: readonly ReportRowIn[]): { promises: number; writePromises: number; writePct: number | null } {
+  const promises = analysed.reduce((n, r) => n + (r.managerPromises ?? 0), 0);
+  const writePromises = analysed.reduce((n, r) => n + (r.managerWritePromises ?? 0), 0);
+  return { promises, writePromises, writePct: promises ? Math.round((writePromises / promises) * 1000) / 10 : null };
+}
 
 function line(rows: readonly ReportRowIn[], managerId: number | null, managerName: string, teamName: string | null): ManagerLine {
   const mine = rows.filter((r) => r.inReport);
@@ -104,6 +123,8 @@ function line(rows: readonly ReportRowIn[], managerId: number | null, managerNam
     missed: mine.filter((r) => hasAgreement(r) && r.promiseState === "broken").length,
     lost: lost.length,
     lostReactionMedianMin: median(lost.map((r) => r.reactionMin).filter((m): m is number => typeof m === "number")),
+    ...writeShare(analysed),
+    noTrace: mine.filter(isNoTrace).length,
   };
 }
 
@@ -144,12 +165,12 @@ export function teamReport(rows: readonly ReportRowIn[]): TeamReport {
     banner: { total: bannerRows.length, byManager } };
 }
 
-export type PoolFilter = "all" | "noPrice" | "noComment" | "missed" | "typeCheck" | "lost";
+export type PoolFilter = "all" | "noPrice" | "noComment" | "missed" | "typeCheck" | "lost" | "noTrace";
 /** Пул заявок менеджера (п.6.2) і його швидкі фільтри — ті самі предикати, що й клітинки таблиці. */
 export function poolRows<T extends ReportRowIn>(rows: readonly T[], managerId: number | null | "all", f: PoolFilter): T[] {
   return rows.filter((r) => r.inReport && (managerId === "all" || r.managerId === managerId)
     && (f === "all" || (f === "noPrice" && noPrice(r)) || (f === "noComment" && noPriceNoComment(r))
-      || (f === "missed" && hasAgreement(r) && r.promiseState === "broken") || (f === "typeCheck" && r.typeCheck) || (f === "lost" && isLost(r))));
+      || (f === "missed" && hasAgreement(r) && r.promiseState === "broken") || (f === "typeCheck" && r.typeCheck) || (f === "lost" && isLost(r)) || (f === "noTrace" && isNoTrace(r))));
 }
 
 /**
@@ -168,8 +189,8 @@ export function poolRows<T extends ReportRowIn>(rows: readonly T[], managerId: n
 export type CheckMark = "y" | "n" | "o";
 export interface Checklist { request: CheckMark; price: CheckMark; promise: CheckMark; objection: CheckMark }
 
-const PROMISE_YES: ReadonlySet<PromiseState> = new Set(["kept_talk", "kept_attempt_only", "kept_offline", "client_called"]);
-const PROMISE_NO: ReadonlySet<PromiseState> = new Set(["late", "broken"]);
+const PROMISE_YES: ReadonlySet<PromiseState> = new Set(["kept_talk", "kept_attempt_only", "kept_offline", "client_called", "kept_trace"]);
+const PROMISE_NO: ReadonlySet<PromiseState> = new Set(["late", "broken", "no_trace"]);
 
 export function checklist(r: ReportRowIn): Checklist | null {
   if (!isAnalysed(r)) return null;

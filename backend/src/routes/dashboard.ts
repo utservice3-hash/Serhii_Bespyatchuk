@@ -1,3 +1,4 @@
+import { isNoTrace as ftNoTrace } from "../core/firstTouchTeamReport.js";
 import { pushStepNow } from "../jobs/syncClientKommoTasks.js";
 import { ratingView } from "../core/leadgenRatings.js";
 import path from "node:path";
@@ -11908,7 +11909,8 @@ dashboardRouter.get("/ai-calls/team-report", async (req, res) => {
       promiseState: r.promiseState, objections: r.objections, typeCheck: r.typeCheck,
       conversationType: r.conversationType, reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
       flags: { analysed: isAnalysed(r), noPrice: noPrice(r), noComment: noPriceNoComment(r), lost: isLost(r),
-        missed: hasAgreement(r) && r.promiseState === "broken", banner: r.promiseState === "broken" && !r.missedNote },
+        missed: hasAgreement(r) && r.promiseState === "broken", banner: r.promiseState === "broken" && !r.missedNote,
+        noTrace: ftNoTrace(r) },
     })),
   });
 });

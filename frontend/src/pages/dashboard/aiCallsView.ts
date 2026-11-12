@@ -32,11 +32,12 @@ export const TONE_COLOR: Readonly<Record<Tone, { bg: string; fg: string }>> = {
   muted: { bg: "var(--muted-bg, #f0f1f3)", fg: "var(--text-muted, #5a6676)" },
 };
 
-export type AiFilter = "all" | "done" | "broken" | "price" | "objection" | "noDeadline" | "notDone";
+export type AiFilter = "all" | "done" | "broken" | "noTrace" | "price" | "objection" | "noDeadline" | "notDone";
 export const FILTERS: readonly { key: AiFilter; label: string }[] = [
   { key: "all", label: "Усі" },
   { key: "done", label: "Проаналізовано" },
   { key: "broken", label: "Немає дзвінка в телефонії" },
+  { key: "noTrace", label: "Немає сліду в CRM" },
   { key: "price", label: "Обговорили ціну" },
   { key: "objection", label: "Є заперечення" },
   { key: "noDeadline", label: "Обіцянка без строку" },
@@ -55,6 +56,7 @@ export interface FilterableRow {
 export function matchesFilter(r: FilterableRow, f: AiFilter): boolean {
   if (f === "done") return r.state === "done";
   if (f === "broken") return r.promiseState === "broken";
+  if (f === "noTrace") return r.promiseState === "no_trace";
   if (f === "price") return r.priceDiscussed === true;
   if (f === "objection") return r.objections > 0;
   if (f === "noDeadline") return r.promises > r.promisesWithDeadline;
@@ -142,7 +144,8 @@ export function promisesLabel(promises: number, withDeadline: number): string {
 }
 
 /** Стан обіцянки менеджера — дзеркало `PromiseState` у `core/callAiPromise.ts`. */
-export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "kept_offline" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
+export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "kept_offline" | "client_called" | "late" | "pending" | "broken" | "unverifiable"
+  | "kept_trace" | "no_trace";
 export type PipelineGroupT = "full" | "qualification" | "other";
 
 /**
@@ -161,7 +164,9 @@ export const PROMISE_UI: Readonly<Record<PromiseStateT, { label: string; tone: T
   client_called: { label: "Клієнт подзвонив сам", tone: "wait", hint: "До терміну клієнт подзвонив нам і поговорив; нашого вихідного не було." },
   kept_offline: { label: "Передзвонив поза телефонією", tone: "ok", hint: "Позначено вручну в картці: передзвін з мобільного, у месенджер чи з іншого номера. Рахується виконаним." },
   kept_talk: { label: "Передзвонив", tone: "ok", hint: "До терміну менеджер, що обіцяв, набрав клієнта й поговорив." },
-  unverifiable: { label: "Не перевіряється", tone: "muted", hint: "Обіцянка в месенджер або інша дія — Ringostat цього не бачить, прапорця немає." },
+  kept_trace: { label: "Є слід у CRM", tone: "ok", hint: "Обіцяв написати — і до терміну в угоді є слід: нотатка того, хто обіцяв, зміна етапу, його вихідний дзвінок або скрін переписки." },
+  no_trace: { label: "Немає сліду в CRM", tone: "warn", hint: "Обіцяв написати, термін минув, а в угоді нічого: ні нотатки, ні зміни етапу, ні дзвінка, ні скріна переписки. Якщо написав — прикріпіть скрін в угоду Kommo або позначте «поза телефонією»." },
+  unverifiable: { label: "Не перевіряється", tone: "muted", hint: "Обіцянка — не дзвінок і не повідомлення (інша дія): перевірити її система не може." },
 };
 
 export const GROUP_LABEL: Readonly<Record<PipelineGroupT, string>> = { full: "Повний цикл", qualification: "Кваліфікація", other: "Інші воронки" };

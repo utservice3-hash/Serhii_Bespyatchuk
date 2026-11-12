@@ -122,7 +122,28 @@ export function countingDeadline(deadline: Date, basis: DeadlineBasis, callEnd: 
  * терміну — виконано; клієнт подзвонив сам — окремий стан, а не «передзвонив»; його ж вихідний після терміну —
  * «запізнився»; далі — чекає строку або не передзвонив.
  */
-export type PromiseState = "kept_talk" | "kept_attempt_only" | "kept_offline" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
+export type PromiseState = "kept_talk" | "kept_attempt_only" | "kept_offline" | "client_called" | "late" | "pending" | "broken" | "unverifiable"
+  | "kept_trace" | "no_trace";
+
+/**
+ * ✍️ ОБІЦЯНКА «НАПИШУ» ПЕРЕВІРЯЄТЬСЯ ЗА СЛІДОМ У CRM (задача 7240, ТЗ Юлі 30.10.2026). Досі «напишу у Viber» було завжди
+ * «не перевіряється» — найпростіший спосіб піти з-під контролю. Тепер обіцянка в месенджер виконана, якщо від кінця
+ * розмови до терміну в угоді є слід:
+ *   • нотатка в угоді Kommo від того, хто обіцяв;
+ *   • зміна етапу угоди (хто зрушив, Kommo не передає — рахується будь-яка, як у ТЗ);
+ *   • вихідний дзвінок того, хто обіцяв (будь-який, і без розмови: спроба — теж слід);
+ *   • скрін переписки, прикріплений в угоду Kommo (8347), або контакт у месенджері, записаний у картці клієнта.
+ * «Вихідне повідомлення в чаті Kommo» з ТЗ тут немає свідомо: замір 12.11.2026 — таких подій у Kommo нуль за добу,
+ * менеджери пишуть клієнтам поза Kommo; скрін переписки — це і є слід того повідомлення.
+ * Сліду немає, а термін минув — «немає сліду в CRM». «Не перевіряється» лишається лише для каналу «інше».
+ */
+export type TraceKind = "note" | "stage" | "screen";
+/** `managerId` — автор нотатки (менеджер дашборда); у зміни етапу й скріна автора для звірки немає (`undefined`). */
+export interface TraceFact { at: Date; kind: TraceKind; managerId?: number | null }
+
+/** Чи рахується слід цій обіцянці: нотатка — лише того, хто обіцяв (невідомий обіцяльник — будь-чия); решта — будь-яка. */
+export const traceCounts = (t: TraceFact, promiserId: number | null): boolean =>
+  t.kind !== "note" || promiserId == null || t.managerId === promiserId;
 
 /** Хто дзвонив — менеджер Ringostat (`null` — лінія без привʼязаного менеджера). */
 export interface CallFact { at: Date; billsec: number; callType: string; managerId?: number | null }
@@ -136,10 +157,15 @@ const IN_TYPES = new Set(["in", "transitin"]);
  * (`null`) — приписати дзвінок нікому не можна, тож рахується будь-який наш вихідний.
  */
 export function promiseState(p: Pick<ModelPromise, "channel">, madeAt: Date, deadline: Date, calls: readonly CallFact[], knownUntil: Date,
-  promiserId: number | null = null): PromiseState {
-  if (p.channel !== "call") return "unverifiable";
+  promiserId: number | null = null, traces: readonly TraceFact[] = []): PromiseState {
+  if (p.channel !== "call" && p.channel !== "message") return "unverifiable";
   const outbound: OutboundCall[] = calls.filter((c) => (OUTBOUND_TYPES_FOR_PROMISE as readonly string[]).includes(c.callType)
     && (promiserId == null || c.managerId === promiserId));
+  if (p.channel === "message") {
+    const inWindow = (at: Date) => at.getTime() > madeAt.getTime() && at.getTime() <= deadline.getTime();
+    if (traces.some((t) => inWindow(t.at) && traceCounts(t, promiserId)) || outbound.some((c) => inWindow(c.at))) return "kept_trace";
+    return knownUntil.getTime() < deadline.getTime() ? "pending" : "no_trace";
+  }
   const ours = promiseOutcome({ madeAt, deadline }, outbound, knownUntil);
   if (ours === "kept_talk" || ours === "kept_attempt_only") return ours;
   const clientTalk = calls.some((c) => IN_TYPES.has(c.callType) && c.billsec > 0
@@ -156,11 +182,11 @@ export function promiseState(p: Pick<ModelPromise, "channel">, madeAt: Date, dea
  */
 export function withOfflineMark(state: PromiseState | null, offlineMarked: boolean): PromiseState | null {
   if (!offlineMarked || state == null) return state;
-  return state === "broken" || state === "late" || state === "pending" ? "kept_offline" : state;
+  return state === "broken" || state === "late" || state === "pending" || state === "no_trace" ? "kept_offline" : state;
 }
 
 /** Стан рядка — найгірший серед обіцянок менеджера. `null` — обіцянок менеджера немає. */
-const RANK: PromiseState[] = ["broken", "late", "pending", "kept_attempt_only", "client_called", "kept_offline", "kept_talk", "unverifiable"];
+const RANK: PromiseState[] = ["broken", "no_trace", "late", "pending", "kept_attempt_only", "client_called", "kept_offline", "kept_trace", "kept_talk", "unverifiable"];
 export function worstPromiseState(states: readonly PromiseState[]): PromiseState | null {
   for (const s of RANK) if (states.includes(s)) return s;
   return null;

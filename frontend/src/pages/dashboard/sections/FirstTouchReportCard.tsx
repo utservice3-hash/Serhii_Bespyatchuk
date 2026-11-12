@@ -17,26 +17,29 @@ import { AiCallDrawer } from "./AiCallDrawer";
  * лише невиконані домовленості без «Опрацьовано». Ролі без вкладки блок не бачать (403 → ховається).
  */
 
-type SortKey = keyof Pick<AiManagerLineT, "managerName" | "accepted" | "priceVoiced" | "pricePct" | "noPriceNoComment" | "agreements" | "done" | "late" | "missed" | "lost">;
+type SortKey = keyof Pick<AiManagerLineT, "managerName" | "accepted" | "priceVoiced" | "pricePct" | "noPriceNoComment" | "agreements" | "done" | "late" | "missed" | "lost" | "writePct" | "noTrace">;
 const COLS: readonly { key: SortKey; label: string; hint?: string }[] = [
   { key: "managerName", label: "Менеджер" },
   { key: "accepted", label: "Прийнято заявок з реклами", hint: "Перші розмови рекламних угод, які модель визнала запитом на перевезення (або непевні — з «Перевірити тип»). Лідген і повторні контакти не рахуються." },
   { key: "priceVoiced", label: "Озвучено ціну" },
   { key: "pricePct", label: "%", hint: "Від розібраних розмов, крім втрачених лідів: ще не розібрана розмова не читається як «ціну не назвали», а втраченому ліду ціну називати нікому." },
   { key: "noPriceNoComment", label: "Без ціни й коментаря", hint: "Ціни не було, а «Чому не озвучено ціну» ще ніхто не написав." },
-  { key: "agreements", label: "Домовленостей", hint: "Менеджер пообіцяв передзвонити. Обіцянки в месенджер не перевіряються й сюди не входять." },
+  { key: "agreements", label: "Домовленостей", hint: "Менеджер пообіцяв передзвонити. Обіцянки написати — в окремих колонках праворуч." },
   { key: "done", label: "Виконано", hint: "Той, хто обіцяв, передзвонив до терміну." },
   { key: "late", label: "Запізнився", hint: "Передзвонив, але пізніше терміну." },
   { key: "missed", label: "Немає дзвінка в телефонії", hint: "У Ringostat немає дзвінка того, хто обіцяв, хоч дзвінки вже синхронізовано за термін. Передзвін з мобільного чи в месенджер система не бачить — це не вирок, а привід перевірити." },
+  { key: "writePct", label: "Обіцяв написати, %", hint: "Частка обіцянок «напишу» та іншої дії (не дзвінок) від усіх обіцянок менеджера в розібраних розмовах. Хто масово йде в месенджер — видно тут." },
+  { key: "noTrace", label: "Немає сліду в CRM", hint: "Розмови, де менеджер обіцяв написати, термін минув, а в угоді немає ні нотатки, ні зміни етапу, ні дзвінка, ні скріна переписки." },
   { key: "lost", label: "Втрачені ліди", hint: "Клієнт звертався, але запит уже неактуальний: вирішив сам чи пішов до інших. Поруч — медіана: через скільки після заявки ми вперше набрали (будь-хто з менеджерів, навіть без відповіді)." },
 ];
 
-type PoolKey = "all" | "noPrice" | "noComment" | "missed" | "typeCheck" | "lost";
+type PoolKey = "all" | "noPrice" | "noComment" | "missed" | "noTrace" | "typeCheck" | "lost";
 const POOL: readonly { key: PoolKey; label: string; match: (r: AiPoolRowT) => boolean }[] = [
   { key: "all", label: "Усі", match: () => true },
   { key: "noPrice", label: "Без ціни", match: (r) => r.flags.noPrice },
   { key: "noComment", label: "Без коментаря", match: (r) => r.flags.noComment },
   { key: "missed", label: "Немає дзвінка в телефонії", match: (r) => r.flags.missed },
+  { key: "noTrace", label: "Немає сліду в CRM", match: (r) => r.flags.noTrace === true },
   { key: "typeCheck", label: "Перевірити тип", match: (r) => r.typeCheck },
   { key: "lost", label: "Втрачені ліди", match: (r) => r.flags.lost },
 ];
@@ -90,6 +93,8 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
   const alert = rep.bannerTone === "alert";
   const poolRows = pool ? rep.rows.filter((r) => (pool.managerId === "all" || r.managerId === pool.managerId) && POOL.find((p) => p.key === poolKey)!.match(r)) : [];
   const cell = (l: AiManagerLineT, k: SortKey) => k === "pricePct" ? (l.pricePct == null ? "—" : `${String(l.pricePct)}%`)
+    : k === "writePct" ? (l.writePct == null ? "—" : `${String(l.writePct).replace(".", ",")}% · ${String(l.writePromises ?? 0)} з ${String(l.promises ?? 0)}`)
+    : k === "noTrace" ? String(l.noTrace ?? 0)
     : k === "lost" ? (l.lost === 0 ? "0" : `${String(l.lost)}${l.lostReactionMedianMin == null ? "" : ` · ${fmtMinutes(l.lostReactionMedianMin)}`}`) : String(l[k]);
 
   return (

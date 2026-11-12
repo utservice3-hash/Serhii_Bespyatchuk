@@ -20,7 +20,7 @@ import { typeVerdict, type TypeOverride } from "./callAiType.js";
 import type { ConversationType } from "./callAiProviders.js";
 import { loadTunables, type FirstTouchTunables } from "./firstTouchTunables.js";
 import { offHours, reactionMinutes } from "./leadReaction.js";
-import { countingDeadline, promiseDeadline, promiseState, worstPromiseState, withOfflineMark, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState } from "./callAiPromise.js";
+import { countingDeadline, promiseDeadline, promiseState, worstPromiseState, withOfflineMark, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState, type TraceFact } from "./callAiPromise.js";
 
 /**
  * 🤫 «ТИША ПЕРЕД ЗАКРИТТЯМ» (П3, рішення Романа 29.09.2026): угоду закрито «не реалізовано» пізніше ніж
@@ -155,6 +155,8 @@ export interface AiCallRow {
   promiseState: PromiseState | null;
   /** Обіцянок менеджера в розмові. */
   managerPromises: number;
+  /** ✍️ З них — не дзвінком: «напишу» або інша дія (задача 7240, колонка «частка обіцянок написати»). */
+  managerWritePromises?: number;
   /** П3: `true` — тиша перед закриттям; `null` — не застосовно (угода не програна або без розмов). */
   silentBeforeClose: boolean | null;
   /** Тип розмови від моделі (рубрика v2) — `null`, поки не розібрано. */
@@ -297,6 +299,7 @@ export function foldRow(r: RawRow): AiCallRow {
     rejectReason: r.reject_reason ?? null,
     promiseState: null,
     managerPromises: res ? managerPromisesOf(res).length : 0,
+    managerWritePromises: res ? managerPromisesOf(res).filter((p) => p.channel !== "call").length : 0,
     silentBeforeClose: null,
     ...tf, inReport: tf.inReport && transportKind == null, transportKind,
     requestKind: requestKindOf(transportKind, state === "done" && r.tr_result != null),
@@ -401,6 +404,47 @@ async function callsKnownUntil(db: Db, now: Date): Promise<Date> {
   return at && at.getTime() < now.getTime() ? at : now;
 }
 
+/**
+ * ✍️ Сліди в CRM для обіцянок «напишу» (задача 7240) — по угодах, ОДНИМ заходом: нотатки менеджерів в угоді Kommo
+ * (`kommo_note_events`, без роботів), зміни етапу, скріни переписки з угоди (8347) і контакти в месенджерах із картки
+ * клієнта. Що з цього зараховується якій обіцянці — вирішує чисте `promiseState`.
+ */
+export async function tracesByDeal(db: Db, dealIds: readonly number[], since: Date): Promise<Map<number, TraceFact[]>> {
+  const out = new Map<number, TraceFact[]>();
+  const ids = [...new Set(dealIds)].filter((x) => x > 0);
+  if (!ids.length) return out;
+  const r = await db.query<{ deal_id: string; at: Date; kind: TraceFact["kind"]; manager_id: number | null }>(
+    `SELECT e.lead_id::text AS deal_id, e.created_at AS at, 'note' AS kind, m.id AS manager_id
+       FROM kommo_note_events e LEFT JOIN managers m ON m.kommo_user_id = e.created_by
+      WHERE e.lead_id = ANY($1::bigint[]) AND e.created_at >= $2 AND e.created_by <> 0
+     UNION ALL
+     SELECT s.kommo_id::text, s.changed_at, 'stage', NULL FROM deal_stage_events s
+      WHERE s.kommo_id = ANY($1::bigint[]) AND s.changed_at >= $2
+     UNION ALL
+     SELECT c.kommo_deal_id::text, c.created_at, 'screen', NULL FROM client_contacts c
+      WHERE c.kommo_deal_id = ANY($1::bigint[]) AND c.channel = 'kommo' AND c.ai_kind = 'chat' AND c.created_at >= $2
+     UNION ALL
+     SELECT d.kommo_id::text, c.created_at, 'screen', NULL FROM deals d JOIN client_contacts c ON c.client_key = d.client_key
+      WHERE d.kommo_id = ANY($1::bigint[]) AND c.channel <> 'kommo' AND c.created_at >= $2`, [ids, since.toISOString()]);
+  for (const x of r.rows) {
+    const k = Number(x.deal_id);
+    const list = out.get(k) ?? [];
+    list.push({ at: new Date(x.at), kind: x.kind, managerId: x.manager_id == null ? null : Number(x.manager_id) });
+    out.set(k, list);
+  }
+  return out;
+}
+
+/**
+ * До якої миті сліди вже в базі: найраніше з «дзвінки синхронізовано» і «нотатки Kommo синхронізовано». Синку нотаток
+ * ще не було — нічого не відомо: обіцянка «чекає», а не «немає сліду» (порожня таблиця не доводить, що нотаток не писали).
+ */
+export async function tracesKnownUntil(db: Db, callsKnown: Date): Promise<Date> {
+  const r = await db.query<{ at: Date | null }>("SELECT kommo_note_events_at AS at FROM sync_state WHERE id = 1");
+  const at = r.rows[0]?.at ? new Date(r.rows[0].at) : new Date(0);
+  return at.getTime() < callsKnown.getTime() ? at : callsKnown;
+}
+
 /** Дзвінки на номери рядків від найранішої розмови — ОДНИМ запитом, а не по запиту на рядок. */
 async function callsByPhone(db: Db, phones: readonly string[], since: Date): Promise<Map<string, (CallFact & { managerName: string | null })[]>> {
   const out = new Map<string, (CallFact & { managerName: string | null })[]>();
@@ -423,15 +467,17 @@ export interface PromiseCheck { deadline: string; countUntil: string; basis: Dea
 
 /** Термін і стан кожної обіцянки менеджера рядка — у порядку `result.promises` (клієнтські → `null`). */
 function checkPromises(res: AnalysisResult, calledAt: string, billsec: number, calls: readonly CallFact[], knownUntil: Date,
-  promiserId: number | null, t: FirstTouchTunables): (PromiseCheck | null)[] {
+  promiserId: number | null, t: FirstTouchTunables, traces: readonly TraceFact[] = [], tracesKnown: Date = knownUntil): (PromiseCheck | null)[] {
   const end = callEndOf(calledAt, billsec);
   const after = calls.filter((c) => c.at.getTime() > end.getTime());
   return res.promises.map((p) => {
     if (p.who !== "manager" || !p.channel || !p.deadline_kind) return null;
     const mp = managerPromisesOf({ ...res, promises: [p] })[0];
     const { deadline, basis } = promiseDeadline(mp, end);
+    // Обіцянка «напишу»: слід може лежати в нотатках Kommo, тож «відомо до» для неї — раніший із двох синків.
+    const known = mp.channel === "message" ? tracesKnown : knownUntil;
     const until = countingDeadline(deadline, basis, end, t);
-    return { deadline: deadline.toISOString(), countUntil: until.toISOString(), basis, state: promiseState(mp, end, until, after, knownUntil, promiserId) };
+    return { deadline: deadline.toISOString(), countUntil: until.toISOString(), basis, state: promiseState(mp, end, until, after, known, promiserId, traces) };
   });
 }
 
@@ -521,10 +567,13 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
     const since = new Date(Math.min(...withPromises.map((x) => new Date(x.calldate).getTime())));
     const calls = await callsByPhone(db, [...new Set(withPromises.map((x) => x.client_phone!))], since);
     const known = await callsKnownUntil(db, now);
+    const traces = await tracesByDeal(db, withPromises.map((x) => Number(x.kommo_id)), since);
+    const tracesKnown = await tracesKnownUntil(db, known);
     raw.forEach((x, i) => {
       if (rows[i].managerPromises === 0 || !x.result) return;
       const phone = phoneOf.get(x.uniqueid);
-      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], known, rows[i].managerId, tun);
+      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], known, rows[i].managerId, tun,
+        traces.get(Number(x.kommo_id)) ?? [], tracesKnown);
       rows[i].promiseState = withOfflineMark(worstPromiseState(checks.filter((c): c is PromiseCheck => c != null).map((c) => c.state)), rows[i].offlineNote != null);
     });
   }
@@ -651,7 +700,10 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
   const after = raw.client_phone
     ? (await callsByPhone(db, [raw.client_phone], end)).get(raw.client_phone) ?? [] : [];
   const nowD = new Date();
-  const promiseChecks = (done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, await callsKnownUntil(db, nowD), row.managerId, await loadTunables(db)) : [])
+  const callsKnown = await callsKnownUntil(db, nowD);
+  const dealTraces = done && raw.result ? [...(await tracesByDeal(db, deals, end)).values()].flat() : [];
+  const promiseChecks = (done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, callsKnown, row.managerId, await loadTunables(db),
+    dealTraces, await tracesKnownUntil(db, callsKnown)) : [])
     .map((c) => (c ? { ...c, state: withOfflineMark(c.state, row.offlineNote != null) ?? c.state } : c));
   const callsAfter = after.filter((c) => c.at.getTime() > end.getTime() && c.at.getTime() <= end.getTime() + 7 * 86_400_000)
     .slice(0, 12).map((c) => ({ at: c.at.toISOString(), billsec: c.billsec, direction: IN_TYPES.has(c.callType) ? "in" as const : "out" as const,

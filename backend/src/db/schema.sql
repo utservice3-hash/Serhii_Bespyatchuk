@@ -8224,3 +8224,16 @@ ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_task_closed_at TIME
 ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_error TEXT;
 CREATE INDEX IF NOT EXISTS idx_client_next_steps_kommo_lead ON client_next_steps(kommo_lead_id) WHERE kommo_lead_created;
+
+-- ✍️ НОТАТКИ МЕНЕДЖЕРІВ В УГОДАХ KOMMO — слід для обіцянок «напишу» (задача 7240). Лише ФАКТ нотатки: хто й коли;
+-- тексту тут немає й не треба. Пише джоба `syncKommoNoteEvents` з подій Kommo `common_note_added`.
+-- Відкат коду таблицю не прибирає (вона нікому не заважає).
+CREATE TABLE IF NOT EXISTS kommo_note_events (
+  event_id   TEXT PRIMARY KEY,
+  lead_id    BIGINT NOT NULL,
+  created_by BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kommo_note_events_lead ON kommo_note_events(lead_id, created_at);
+-- Вотермарк синку нотаток. NULL = синку ще не було → обіцянки «напишу» чекають, а не «немає сліду».
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS kommo_note_events_at TIMESTAMPTZ;

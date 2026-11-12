@@ -1188,7 +1188,7 @@ test("#900 ПОЗА ТЕЛЕФОНІЄЮ: позначка = виконано, �
   assert.match(drw0, /обіцяв до \{fmtFull\(chk\.deadline\)\}[\s\S]{0,160}chk\.countUntil !== chk\.deadline && <> · <b>зараховуємо до \{fmtFull\(chk\.countUntil\)\}/, "🔴 картка не показує обидва терміни");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /<NoteField c=\{c\} kind="offline"/, "🔴 у картці немає позначки «Передзвонив поза телефонією»");
-  assert.match(drw, /const needOffline = c\.row\.promiseState === "broken" \|\| c\.row\.promiseState === "late" \|\| c\.row\.offlineNote != null;/, "🔴 позначку не видно там, де вона потрібна");
+  assert.match(drw, /const needOffline = c\.row\.promiseState === "broken" \|\| c\.row\.promiseState === "late" \|\| c\.row\.promiseState === "no_trace" \|\| c\.row\.offlineNote != null;/, "🔴 позначку не видно там, де вона потрібна");
 });
 
 /**
