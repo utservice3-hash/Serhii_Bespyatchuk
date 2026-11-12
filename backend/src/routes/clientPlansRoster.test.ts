@@ -680,24 +680,30 @@ test("#359d 🪞 наявний власник виграє, менеджер л
 });
 
 /**
- * #840b — ЖИВИЙ: група вкладки кожного рядка рахується тим самим правилом ядра від полів, що бачить
+ * #3847 (було #840b) — ЖИВИЙ: група вкладки кожного рядка рахується тим самим правилом ядра від полів, що бачить
  * екран (`lastInvoice` → 3 повні місяці без рахунку; `lastOrderDays` → «жовтий»), цикл є рівно в
  * рядків реактивації, а три групи разом дають увесь ростер. Рівність, а не «≥N» (календарні гейти).
+ * 🧩 З 8351/8350: сезонний не в сезоні (`lead.offSeason`) і діючий «Проблемний» (`lead.problem`) у реактивацію не йдуть —
+ * гейт бере ці дві умови з ТОГО САМОГО рядка. 12.11.2026 перша справжня позначка «Проблемний» (Гержик О. Й., рахунок
+ * 11.07.2025) дала «yellow» замість «react», і старий #840b почервонів на правильному екрані.
  */
-test("#840b ЖИВИЙ: tabGroup кожного рядка == правилу рахунку; цикл рівно в реактивації; Постійні + Реактивація == Всі", needsApi(), async () => {
+test("#3847 ЖИВИЙ: tabGroup кожного рядка == правилу рахунку з сезоном і «Проблемним»; цикл рівно в реактивації; Постійні + Реактивація == Всі", needsApi(), async () => {
   const { clientTabGroup, tabOf } = await import("../core/clientTabs.js");
   const { inReact } = await import("../core/reactCycleRules.js");
   const m = await monthWithPlans();
   assert.ok(m, "🔴 планів немає взагалі");
   const token = await adminToken();
   const b = await (await get(`/api/dashboard/client-plans?month=${m.month}`, token)).json() as {
-    clients: { clientKey: string; lastInvoice?: string | null; lastOrderDays: number | null; tabGroup?: string; reactCycle?: unknown }[];
+    clients: { clientKey: string; lastInvoice?: string | null; lastOrderDays: number | null; tabGroup?: string; reactCycle?: unknown;
+      lead?: { offSeason?: boolean; problem?: unknown } }[];
     tabGroupRank?: Record<string, number>;
   };
   assert.ok(b.clients.length > 0, "🔴 ростер порожній — гейт нічого не перевіряє");
   assert.ok(b.clients.every((c) => "lastInvoice" in c), "🔴 рядок не несе дати останнього рахунку — правило не перевірити");
   const nowYm = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7);
-  const wrong = b.clients.filter((c) => c.tabGroup !== clientTabGroup(inReact(c.lastInvoice ?? null, nowYm), c.lastOrderDays));
+  assert.ok(b.clients.every((c) => c.lead && "offSeason" in c.lead && "problem" in c.lead), "🔴 рядок не несе сезон і «Проблемний» — правило не перевірити");
+  const inReactRow = (c: (typeof b.clients)[number]) => !c.lead?.offSeason && c.lead?.problem == null && inReact(c.lastInvoice ?? null, nowYm);
+  const wrong = b.clients.filter((c) => c.tabGroup !== clientTabGroup(inReactRow(c), c.lastOrderDays));
   assert.deepEqual(wrong.slice(0, 5).map((c) => `${c.clientKey}: ${c.tabGroup} при рахунку ${c.lastInvoice}/${c.lastOrderDays}`), [],
     `🔴 ${wrong.length} рядків мають групу вкладки не за правилом рахунку`);
   const cycleMismatch = b.clients.filter((c) => (c.tabGroup === "react") !== (c.reactCycle != null));
