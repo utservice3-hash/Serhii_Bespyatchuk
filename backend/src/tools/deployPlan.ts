@@ -74,17 +74,23 @@ export const REQUIRED_STEPS: readonly Step[] = [
        + "під СВОЮ зміну, тож чужу він не накриває — приймання буде зелене, а частина того, що поїхало, "
        + "неперевіреною. У картині, де деплоїть людина, це лікується памʼяттю («не деплой, коли не знаєш, "
        + "що зараз у main»); у нас деплоїть ланцюг, а він памʼяті не має" },
+  { id: "quietHost", phase: "check", title: "на хостингу немає ЧУЖИХ важких процесів (тести, tsc, vite) — інакше чекати, потім відмова",
+    why: "📐 11.11.2026: із 52 аварій прода під замком за 45 днів 48 — у перші 300 с фази check, коли поруч зі збіркою жили чужі "
+       + "або власні важкі процеси; кожна сесія лікувала це своїм wait-<sha>.sh (на сервері їх ~40), тобто дисципліною, яка не "
+       + "стереже сесію без такого скрипта. Тепер умова — крок ланцюга (#3886)" },
   { id: "buildBack", phase: "check", title: "rm -rf dist && npm run build (бекенд)",
     why: "інкрементальний tsc після revert/rename несе сміття — привиди падінь і фальшиве зелене на саботажі" },
-  { id: "tscFront", phase: "check", title: "npx tsc -b (фронт)",
-    why: "`tsc --noEmit` на фронті не бере В РОБОТУ ЖОДНОГО файлу і завжди дає 0; за 4 викати цей крок не зробили жодного разу" },
-  { id: "buildFront", phase: "check", title: "npm run build (фронт) — БАНДЛ, а не типи",
+  { id: "tscFront", phase: "check", title: "типи фронту частинами (frontend/scripts/typecheckParts.mjs), послідовно, без npx",
+    why: "`tsc --noEmit` на фронті не бере В РОБОТУ ЖОДНОГО файлу і завжди дає 0; за 4 викати цей крок не зробили жодного разу. "
+       + "🧩 11.11.2026: замість одного `tsc -b` (~850–930 МБ, хостинг убивав його «через раз») — частини в окремих процесах "
+       + "по черзі; драйвер сам доводить, що перевірено рівно стільки файлів, скільки коренів (#3883–#3885)" },
+  { id: "buildFront", phase: "check", title: "vite build (фронт) напряму через node — БАНДЛ, а не типи",
     why: "🔴 крок відновлено 27.08.2026 після того, як його не стало ніде. Виносячи збірку з докрута, "
        + "я прибрав buildFront із фази run і НЕ додав у check — тож vite build не кликав ніхто, а "
        + "`tscFront` лише типізує. Перший же викат обірвався б на distNotEmpty, тобто ОДРАЗУ ПІСЛЯ "
        + "deliver: бекенд прода вже підмінений, фронт старий. Гейт #250b цього не бачив, бо стверджував "
        + "ВІДСУТНІСТЬ збірки в run — а відсутності однаково задовольняє і переїзд, і зникнення" },
-  { id: "test", phase: "check", title: "npm test — ПРИРІСТ падінь нуль, виконане не звузилось, гейти на місці",
+  { id: "test", phase: "check", title: "набір `npm test` (через scripts/testRun.mjs, стеля паралельності на хостингу) — ПРИРІСТ падінь нуль, виконане не звузилось, гейти на місці",
     why: "вимога «код 0» невиконувана в ЖОДНОМУ середовищі (контейнер: 104 падіння без .env; сервер: скіпи "
        + "scratch-гейтів), тому інструмент обходили запасним шляхом. Критерій трискладовий: приріст падінь по "
        + "НОРМАЛІЗОВАНИХ іменах, множина виконаних не звузилась, жоден гейт не зник — одне без одного пропускає "
@@ -572,4 +578,79 @@ export function alertDelivery(out: string | null, err?: string): string {
   if (/не налаштовані/.test(out)) return "📣 сповіщення НЕ надіслано: у .env прода немає TELEGRAM_BOT_TOKEN / TELEGRAM_ADMIN_IDS";
   if (/sendAdminAlert(: TG| failed)/.test(out)) return `📣 сповіщення НЕ дійшло: ${out.split("\n")[0]}`;
   return "📣 сповіщення адміну надіслано в Telegram";
+}
+
+/**
+ * 🧪 АРГУМЕНТИ НАБОРУ — ЗІ СКРИПТА `test` СТЕНДА, А НЕ З ПАМʼЯТІ (11.11.2026, #3882).
+ *
+ * Крок `test` ганяє набір ДВІЧІ: у базі (worktree на sha прода) і в дереві. База — це СТАРИЙ код, і її власний
+ * `npm test` до першого викату цієї зміни біг би без стелі паралельності (47 процесів на хостингу — рівно те, що
+ * вбивало прод). Тому обидва прогони йдуть обгорткою СТЕНДА (`<стенд>/scripts/testRun.mjs`) з аргументами, узятими
+ * зі скрипта `test` стенда; відносні шляхи (`./dist/testRunGate.js`, глоб) розвʼязуються в каталозі прогону, тобто
+ * кожне дерево, як і раніше, звітує власним вартовим. І без обгортки `npm` (~70 МБ на процес).
+ *
+ * 🔴 FAIL-CLOSED: скрипт, що не починається з `node scripts/testRun.mjs`, — помилка, а не «запустимо як вийде»:
+ * інакше крок мовчки повернувся б до прогону без стелі.
+ */
+export const TEST_RUNNER = "scripts/testRun.mjs";
+export function npmTestArgs(script: string): string[] {
+  const tokens = (script.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((t) => t.replace(/^(["'])(.*)\1$/, "$2"));
+  if (tokens[0] !== "node" || tokens[1] !== TEST_RUNNER) {
+    throw new Error(`скрипт \`test\` має починатися з \`node ${TEST_RUNNER}\`, а починається з «${tokens.slice(0, 2).join(" ")}» — `
+      + "без обгортки набір на хостингу біжить без стелі паралельності");
+  }
+  if (!tokens.includes("--test")) throw new Error("у скрипті `test` немає `--test` — це не прогін набору");
+  return tokens.slice(2);
+}
+
+/**
+ * 🧪 АРГУМЕНТИ НАБОРУ БАЗИ — З ЇЇ ВЛАСНОГО СКРИПТА `test` (знахідка рецензії 11.11). База — старий код (прод), і
+ * аргументи дерева можуть називати файли, яких у базі ще немає (новий репортер, новий preload): node впав би до першого
+ * тесту, TAP вийшов би порожнім, і будь-яка зміна скрипта `test` назавжди застрягла б на кроці. Тож база бере СВОЇ
+ * аргументи — і в новому форматі (`node scripts/testRun.mjs …`), і в старому (`node --test-reporter… --test …`), — а
+ * стелю паралельності однаково дає обгортка стенда, якою прогін запускається.
+ */
+export function baseTestArgs(script: string): string[] {
+  const tokens = (script.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((t) => t.replace(/^(["'])(.*)\1$/, "$2"));
+  if (tokens[0] !== "node") throw new Error(`скрипт \`test\` бази не починається з \`node\` («${tokens.slice(0, 2).join(" ")}») — не знаю, як його запустити обгорткою`);
+  const args = tokens[1] === TEST_RUNNER ? tokens.slice(2) : tokens.slice(1);
+  if (!args.includes("--test")) throw new Error("у скрипті `test` бази немає `--test` — це не прогін набору");
+  return args;
+}
+
+/**
+ * 🏋 ЧУЖІ ВАЖКІ ПРОЦЕСИ НА ХОСТИНГУ (11.11.2026, #3886) — те, що кожна сесія досі перевіряла власним `wait-<sha>.sh`.
+ * Вхід — рядки `ps -o pid=,args=`; `self` — pid-и цього ланцюга і його предків (їх не рахуємо).
+ * Важкі: прогін набору (`--test`, `*.test.js`, `test:prod|ai|matrix`), компілятор TypeScript, `vite build`,
+ * драйвер типів частинами, переклад бекенда. 🪞 Не важкі: сам `deploy.js`, `pgrep`/`grep` з цими ж словами у
+ * шаблоні (waiter-и пишуть `node --tes[t]`, щоб не знайти себе), семплери памʼяті.
+ */
+const HEAVY = /(^|[\s/])node(\s|$).*(\s--test(\s|=|$)|\.test\.js\b|typescript\/bin\/tsc|\.bin\/tsc\b|vite(\.js)?\s+build\b|typecheckParts\.mjs|transpileBuild\.mjs)|\bnpm (run )?test:(prod|ai|matrix)\b|(^|[\s/])tsc\s+-[bp]\b/;
+export function heavyForeign(psLines: readonly string[], self: ReadonlySet<number>): string[] {
+  const out: string[] = [];
+  for (const raw of psLines) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(raw);
+    if (!m) continue;
+    const pid = Number(m[1]); const args = m[2];
+    if (self.has(pid)) continue;
+    if (/^(\S*\/)?(pgrep|grep|ps)\s/.test(args)) continue;
+    if (HEAVY.test(args)) out.push(`${pid} ${args.slice(0, 120)}`);
+  }
+  return out;
+}
+
+/**
+ * 🌐 ПЕРЕВІРКА ТИПУ АСЕТІВ ПІСЛЯ ДОСТАВКИ — ЗІ СВОЇМ USER-AGENT (12.11.2026, #3892).
+ *
+ * 📐 Заміряно 12.11.2026 на сервері: nginx хостингу віддає **403 text/html** на дефолтний User-Agent `curl/7.61.1` (і на
+ * асети, і на `/api/health`); з будь-яким іншим — 200. 11.11 о 15:2x UTC крок ще проходив, тобто фільтр — новий і не наш.
+ * Крок стоїть ПІСЛЯ доставки асетів у докрут і ДО рестарту: без власного UA кожен викат обривався б саме там.
+ * Скрипт — тут, а не літералом у кроці, щоб гейт міг його ВИКОНАТИ з підставним `curl`, а не читати регуляркою.
+ */
+export const DEPLOY_UA = "uts-deploy/1.0 (contentType)";
+export const SITE = "https://dashboard.uts.ua";
+export function contentTypeScript(docRoot: string, site: string = SITE): string {
+  return `cd ${docRoot} && for a in $(grep -o "assets/index-[A-Za-z0-9_-]*\\.\\(js\\|css\\)" index.html); do `
+    + `t=$(curl -s -A '${DEPLOY_UA}' -o /dev/null -w '%{http_code} %{content_type}' "${site}/$a?cb=$(date +%s)"); `
+    + `case "$t" in 200*javascript*|200*css*) ;; *) echo "🔴 $a → $t"; exit 1;; esac; done`;
 }

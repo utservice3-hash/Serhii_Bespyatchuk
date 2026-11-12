@@ -1,0 +1,10 @@
+{"cmd":"node --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test dist/**/*.test.js","wall_s":134.4,"code":0,"sig":null,"peak_tree_mb":1621,"peak_procs":62,"peak_user_mb":7625,"killed_by_guard":false,"samples":668}
+c=default pg_left=       0
+{"cmd":"node --test-concurrency=8 --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test dist/**/*.test.js","wall_s":137,"code":0,"sig":null,"peak_tree_mb":955,"peak_procs":33,"peak_user_mb":8327,"killed_by_guard":false,"samples":682}
+c=8 pg_left=       0
+{"cmd":"node --test-concurrency=4 --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test dist/**/*.test.js","wall_s":166,"code":0,"sig":null,"peak_tree_mb":614,"peak_procs":22,"peak_user_mb":6996,"killed_by_guard":false,"samples":826}
+c=4 pg_left=       0
+{"cmd":"node --test-concurrency=2 --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test dist/**/*.test.js","wall_s":263,"code":0,"sig":null,"peak_tree_mb":421,"peak_procs":17,"peak_user_mb":7948,"killed_by_guard":false,"samples":1308}
+c=2 pg_left=       0
+{"cmd":"node --test-concurrency=1 --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test dist/**/*.test.js","wall_s":484.2,"code":0,"sig":null,"peak_tree_mb":406,"peak_procs":9,"peak_user_mb":8131,"killed_by_guard":false,"samples":2409}
+c=1 pg_left=       0
