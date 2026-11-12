@@ -407,18 +407,18 @@ test("#3887 ФРОНТ НА СТЕНДІ: типи частинами один �
 test("#3892 🪞 contentType: свій User-Agent проходить фільтр хостингу; асет, що віддається як html, — червоне", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "uts-ctype-"));
   try {
-    const bin = path.join(dir, "bin"); mkdirSync(bin); mkdirSync(path.join(dir, "root", "assets"), { recursive: true });
+    mkdirSync(path.join(dir, "root", "assets"), { recursive: true });
     writeFileSync(path.join(dir, "root", "index.html"), '<script src="/assets/index-Ab1.js"></script><link href="/assets/index-Cd2.css">');
-    // Підставний curl: як nginx хостингу — дефолтний UA = 403; MODE=html — сервер віддає html замість файла.
-    writeFileSync(path.join(bin, "curl"), `#!/bin/bash
-ua=""; url=""; while [ $# -gt 0 ]; do case "$1" in -A) ua="$2"; shift 2;; -o|-w) shift 2;; -s) shift;; *) url="$1"; shift;; esac; done
-echo "$ua" >> "${dir}/ua.log"
-[ -z "$ua" ] && { printf '403 text/html'; exit 0; }
-[ "$MODE" = html ] && { printf '200 text/html'; exit 0; }
-case "$url" in *.js*) printf '200 application/javascript';; *.css*) printf '200 text/css';; esac
-`, { mode: 0o755 });
-    const run = (mode: string) => spawnSync("bash", ["-c", contentTypeScript(path.join(dir, "root"), "https://example.test")],
-      { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MODE: mode } });
+    // Підставний curl — ФУНКЦІЯ bash, а не файл: на хостингу /tmp змонтовано noexec (файл там не запускається; так цей
+    // гейт і впав на стенді 12.11). Поводиться як nginx хостингу: дефолтний UA = 403; MODE=html — html замість файла.
+    const fake = `curl() { local ua="" url=""; while [ $# -gt 0 ]; do case "$1" in -A) ua="$2"; shift 2;; -o|-w) shift 2;; -s) shift;; *) url="$1"; shift;; esac; done
+echo "$ua" >> '${dir}/ua.log'
+[ -z "$ua" ] && { printf '403 text/html'; return 0; }
+[ "$MODE" = html ] && { printf '200 text/html'; return 0; }
+case "$url" in *.js*) printf '200 application/javascript';; *.css*) printf '200 text/css';; esac; }
+`;
+    const run = (mode: string) => spawnSync("bash", ["-c", fake + contentTypeScript(path.join(dir, "root"), "https://example.test")],
+      { encoding: "utf8", env: { ...process.env, MODE: mode } });
     const ok = run("");
     assert.equal(ok.status, 0, `🔴 крок упав на фільтрі хостингу: ${ok.stdout}`);
     assert.deepEqual(readFileSync(path.join(dir, "ua.log"), "utf8").trim().split("\n"), [DEPLOY_UA, DEPLOY_UA], "🔴 не кожен асет перевірено власним User-Agent");
