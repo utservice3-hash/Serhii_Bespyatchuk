@@ -90,6 +90,8 @@ export const MONITORED_JOBS: { name: string; everyMin: number; why: string }[] =
   { name: "reactCycleSweep", everyMin: 1440, why: "цикл реактивації: мовчання = клієнти без рахунку й без дії не йдуть у пул лідгенів, а ожилі висять у пулі" },
   // 🧭 «Нічийні» → пул лідгенів (задача 8135). everyMin == крону «10 * * * *» в index.ts.
   // 📎 Скріни з угод Kommo (задача 8347). everyMin == крону «20,50 * * * *» в index.ts.
+  // 📌 Задачі клієнтам ↔ Kommo (задача 8345). everyMin == крону «5,15,…,55 * * * *» в index.ts.
+  { name: "syncClientKommoTasks", everyMin: 10, why: "задачі клієнтам ↔ Kommo: мовчання = задача з дашборда не доходить до Kommo, а закрита в Kommo висить відкритою в картці" },
   // ⭐ Оцінки прорахунків (задача 7537). everyMin == крону «40 * * * *» в index.ts.
   { name: "syncQuoteRatings", everyMin: 60, why: "оцінки прорахунків: мовчання = оцінка, яку менеджер поставив у Kommo, не доходить до екрана «Лідогенерація»" },
   { name: "syncKommoScreens", everyMin: 30, why: "скріни з угод Kommo: мовчання = скрін переписки в угоді не доходить до картки клієнта і не рахується контактом" },

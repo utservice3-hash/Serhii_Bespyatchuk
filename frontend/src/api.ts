@@ -5104,7 +5104,9 @@ export interface ClientCard {
   /** 📱 Контакти з клієнтом поза дзвінками (Viber/Telegram/…), зі скринами. */
   contacts?: ClientContact[];
   /** 📌 ТЗ реактивації: крок з датою, стан номера, останній дзвінок (дата, хто, скільки). */
-  nextStep?: { id: number; text: string; due: string | null; author: string | null; state: "none" | "planned" | "today" | "overdue" | "done" } | null;
+  nextStep?: { id: number; text: string; due: string | null; author: string | null; state: "none" | "planned" | "today" | "overdue" | "done";
+    /** 📌 8345: де задача в Kommo. `waiting` — ще не там (повтор іде сам), `error` — причина, якщо Kommo відмовила. */
+    kommo?: { state: "done"; url: string } | { state: "waiting"; error: string | null } } | null;
   phone?: "has" | "none";
   phonesCount?: number;
   lastCall?: { at: string; manager: string | null; billsec: number; direction: "in" | "out" } | null;

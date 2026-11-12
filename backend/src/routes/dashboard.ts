@@ -1,3 +1,4 @@
+import { pushStepNow } from "../jobs/syncClientKommoTasks.js";
 import { ratingView } from "../core/leadgenRatings.js";
 import path from "node:path";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
@@ -7631,6 +7632,7 @@ dashboardRouter.post("/client-next-step", async (req, res) => {
   const v = stepVerdict(req.body?.text, req.body?.due);
   if (!v.ok) return res.status(400).json({ error: v.error });
   const client = await pool.connect();
+  let stepId: number;
   try {
     await client.query("BEGIN");
     await client.query(`UPDATE client_next_steps SET done_at = now(), done_by = $2 WHERE client_key = $1 AND done_at IS NULL`, [clientKey, auth.userId]);
@@ -7638,8 +7640,16 @@ dashboardRouter.post("/client-next-step", async (req, res) => {
       `INSERT INTO client_next_steps (client_key, text, due_date, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
       [clientKey, v.text, v.due, auth.userId]);
     await client.query("COMMIT");
-    res.status(201).json({ ok: true, id: ins.rows[0].id });
+    stepId = ins.rows[0].id;
   } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
+  // 📌 8345: задача одразу йде в Kommo (угода + задача). Kommo недоступна — крок збережено, джоба повторить;
+  // відповідь каже правду про те, що вийшло, щоб екран не обіцяв задачі, якої в Kommo ще немає.
+  const pushed = await pushStepNow(stepId).catch((e: unknown) => ({ ok: false as const, error: (e as Error).message.slice(0, 300) }));
+  const kommo = pushed == null ? { state: "off" as const }
+    : !pushed.ok ? { state: "waiting" as const, error: pushed.error }
+    : "skipped" in pushed ? { state: "waiting" as const }
+    : { state: "done" as const, leadId: pushed.leadId, url: kommoLeadUrl(pushed.leadId), created: pushed.created };
+  res.status(201).json({ ok: true, id: stepId, kommo });
 });
 
 /** Крок виконано: закриває живий крок клієнта. Той самий скоуп. */
@@ -8011,8 +8021,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
   const cardLastInv = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
   const problemOn = problemMark != null && problemClient.problemActive(problemMark.day, clientLeadRules.lastOrderDate(h?.last_paid ?? null, cardLastInv));
   const [cardStep, cardPhones, cardLastCall, cardTodayRes] = await Promise.all([
-    pool.query<{ id: number; text: string; due_date: string | null; author: string | null }>(
-      `SELECT s.id, s.text, to_char(s.due_date, 'YYYY-MM-DD') AS due_date, COALESCE(m.name, u.full_name, u.email) AS author
+    pool.query<{ id: number; text: string; due_date: string | null; author: string | null; kommo_lead_id: string | null; kommo_task_id: string | null; kommo_error: string | null }>(
+      `SELECT s.id, s.text, to_char(s.due_date, 'YYYY-MM-DD') AS due_date, COALESCE(m.name, u.full_name, u.email) AS author,
+              s.kommo_lead_id::text, s.kommo_task_id::text, s.kommo_error
          FROM client_next_steps s LEFT JOIN users u ON u.id = s.created_by LEFT JOIN managers m ON m.id = u.manager_id
         WHERE s.client_key = $1 AND s.done_at IS NULL ORDER BY s.created_at DESC LIMIT 1`, [clientKey]),
     pool.query<{ n: string }>(
@@ -8130,7 +8141,11 @@ dashboardRouter.get("/client-card", async (req, res) => {
     // останній дзвінок (дата, хто, скільки) — окремими запитами нижче.
     nextStep: cardStep.rows[0]
       ? { id: cardStep.rows[0].id, text: cardStep.rows[0].text, due: cardStep.rows[0].due_date,
-          author: cardStep.rows[0].author, state: stepState(cardStep.rows[0].due_date, null, cardToday) }
+          author: cardStep.rows[0].author, state: stepState(cardStep.rows[0].due_date, null, cardToday),
+          // 📌 8345: де ця задача в Kommo. `waiting` — ще не перенесена (джоба повторить); причина — як є.
+          kommo: cardStep.rows[0].kommo_task_id && cardStep.rows[0].kommo_lead_id
+            ? { state: "done" as const, url: kommoLeadUrl(Number(cardStep.rows[0].kommo_lead_id)) }
+            : { state: "waiting" as const, error: cardStep.rows[0].kommo_error } }
       : null,
     phone: phoneState(Number(cardPhones.rows[0]?.n ?? 0)),
     phonesCount: Number(cardPhones.rows[0]?.n ?? 0),

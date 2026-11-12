@@ -103,6 +103,7 @@ import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
 import { runOrphanToLeadgen } from "./jobs/orphanToLeadgen.js";
 import { syncKommoScreens } from "./jobs/syncKommoScreens.js";
 import { syncQuoteRatings } from "./jobs/syncQuoteRatings.js";
+import { syncClientKommoTasks } from "./jobs/syncClientKommoTasks.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncTldv } from "./jobs/syncTldv.js";
 import { syncWorkua } from "./jobs/syncWorkua.js";
@@ -516,6 +517,12 @@ cron.schedule("10 * * * *", () => {
 cron.schedule("20,50 * * * *", () => {
   if (isKommoPaused()) return;
   void runJob("syncKommoScreens", () => syncKommoScreens());
+}, { timezone: "Europe/Kyiv" });
+
+// 📌 Задачі клієнтам ↔ Kommo (задача 8345) — кожні 10 хв: повтор невдалих і статус «виконано» в обидва боки.
+cron.schedule("5,15,25,35,45,55 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("syncClientKommoTasks", () => syncClientKommoTasks());
 }, { timezone: "Europe/Kyiv" });
 
 // ⭐ Оцінки прорахунків лідгенів з Kommo (задача 7537) — щогодини о :40; і дозаповнення, і оновлення.

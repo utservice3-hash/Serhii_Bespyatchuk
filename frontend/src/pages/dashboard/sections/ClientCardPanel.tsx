@@ -322,6 +322,16 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
             </span>
             <span>{card.nextStep.text}</span>
             {card.nextStep.author && <span style={{ color: "#6b7280" }}>· {card.nextStep.author}</span>}
+            {card.nextStep.kommo?.state === "done" && (
+              <a href={card.nextStep.kommo.url} target="_blank" rel="noreferrer" title="Задача стоїть в угоді Kommo — працюйте з нею там"
+                style={{ fontSize: 12 }}>в Kommo ↗</a>
+            )}
+            {card.nextStep.kommo?.state === "waiting" && (
+              <span title={card.nextStep.kommo.error ?? "Задача ще передається в Kommo — зазвичай до 10 хвилин"}
+                style={{ fontSize: 12, color: card.nextStep.kommo.error ? "#b91c1c" : "#6b7280" }}>
+                {card.nextStep.kommo.error ? "⚠️ у Kommo не передано" : "передається в Kommo…"}
+              </span>
+            )}
             <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
               onClick={async () => { setBusy(true); try { await doneClientNextStep(clientKey); load(); onChanged?.(); } finally { setBusy(false); } }}>✓ виконано</button>
             <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}

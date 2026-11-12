@@ -8212,3 +8212,15 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS quote_rating SMALLINT;
 DO $$ BEGIN
   ALTER TABLE deals ADD CONSTRAINT deals_quote_rating_check CHECK (quote_rating IS NULL OR quote_rating BETWEEN 1 AND 5);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- 📌 ЗАДАЧА КЛІЄНТУ → KOMMO (задача 8345): де крок живе в Kommo. Живий крок без kommo_task_id = ще не перенесений
+-- (черга джоби `syncClientKommoTasks`). kommo_lead_created = угоду створив дашборд (а не знайшов відкриту).
+-- Відкат коду колонки не прибирає; створені в Kommo угоди й задачі лишаються в Kommo.
+ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_lead_id BIGINT;
+ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_lead_created BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_task_id BIGINT;
+ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_pushed_at TIMESTAMPTZ;
+ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_task_closed_at TIMESTAMPTZ;
+ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE client_next_steps ADD COLUMN IF NOT EXISTS kommo_error TEXT;
+CREATE INDEX IF NOT EXISTS idx_client_next_steps_kommo_lead ON client_next_steps(kommo_lead_id) WHERE kommo_lead_created;

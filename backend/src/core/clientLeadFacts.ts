@@ -6,6 +6,7 @@
  * Усі дати — київські `YYYY-MM-DD`. Кожен запит — один на весь список (стеля роуту 20 с), по індексах:
  * `idx_rc_client_key`, `uniq_deal_stage_event`, `call_transcripts(uniqueid, …)`.
  */
+import { REACT_STATUS_ID } from "./clientKommoTaskRules.js";
 import { notCarrierCallSql } from "./carrierPhones.js";
 import { TALK_MIN_SEC } from "./clientLeadRules.js";
 
@@ -52,6 +53,7 @@ export async function leadFactsFor(db: Db, keys: string[], stageSinceDays = 200)
       `SELECT d.client_key, ${KYIV_DAY("max(e.changed_at)")} AS d
          FROM deal_stage_events e JOIN deals d ON d.kommo_id = e.kommo_id
         WHERE d.client_key = ANY($1) AND e.changed_at >= now() - make_interval(days => $2)
+          AND e.status_id <> ${String(REACT_STATUS_ID)}
         GROUP BY d.client_key`, [keys, stageSinceDays]),
     db.query<{ client_key: string; rn: string; d: string; ch: string | null }>(
       `SELECT client_key, rn, d, ch FROM (
@@ -64,6 +66,7 @@ export async function leadFactsFor(db: Db, keys: string[], stageSinceDays = 200)
     db.query<{ client_key: string; d: string }>(
       `SELECT d.client_key, ${KYIV_DAY("max(d.created_at_kommo)")} AS d FROM deals d
         WHERE d.client_key = ANY($1) AND d.created_at_kommo >= now() - make_interval(days => $2)
+          AND NOT EXISTS (SELECT 1 FROM client_next_steps ns WHERE ns.kommo_lead_id = d.kommo_id AND ns.kommo_lead_created)
         GROUP BY d.client_key`, [keys, stageSinceDays]),
   ]);
   const get = (k: string): LeadFacts => {
