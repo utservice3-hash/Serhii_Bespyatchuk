@@ -1,3 +1,4 @@
+import { ratingView } from "../core/leadgenRatings.js";
 import path from "node:path";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -528,6 +529,8 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
      * 💰 Гроші з переданих лідів: анкер — дата ПЕРЕДАЧІ, стан угоди менеджера — ЗАРАЗ.
      * Це свідомо не дохід ядра (там — дата входу в етап), і екран так і підписує.
      */
+    // ⭐ Оцінки прорахунків (7537) — з ТИХ САМИХ передач, що гроші (`hm.deals`); скоуп уже застосовано в `hm`.
+    quoteRatings: ratingView(hm.deals),
     handoffMoney: {
       totals: handoffMoneyWire(hm.totals),
       byPerson: hm.byPerson.map((p) => personMoneyWire(p.managerId, p.money)),

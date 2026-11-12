@@ -7,8 +7,9 @@ const REPEAT_GROUP = "Повний цикл";
 import { teamAtSql } from "./teamAt.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import { elogistMarkSql } from "./elogist.js";
+import { INBOUND_TYPES } from "./missedCallsRules.js";
 import {
-  takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost, statsByBucket,
+  takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost, statsByBucket, TAKE_IN_MIN_TALK_SEC,
   type DealTake, type TakeRowInput, type TakeStats, type TakeColumn, type TakeTarget, type TakeGran,
 } from "./leadTakeRules.js";
 
@@ -94,7 +95,7 @@ async function loadRows(q: TakeQuery): Promise<Row[]> {
   const { conds, params: p, teamSql: TEAM } = leadSelection(q);
   const r = await pool.query<{
     kommo_id: string; name: string | null; manager_id: number | null; manager: string | null; team_id: number | null; team: string | null;
-    created: Date; stage_at: Date | null; call_at: Date | null; field_at: Date | null;
+    created: Date; stage_at: Date | null; call_at: Date | null; field_at: Date | null; in_at: Date | null; in_end_at: Date | null;
     status_id: string; reject_reason: string | null; client_source: string | null; utm_campaign: string | null;
   }>(
     `SELECT d.kommo_id, d.name, d.manager_id, m.name AS manager, ${TEAM} AS team_id, t.name AS team,
@@ -107,10 +108,19 @@ async function loadRows(q: TakeQuery): Promise<Row[]> {
                 WHERE d.client_key IS NOT NULL AND rc.client_key = d.client_key
                   AND rc.call_type IN ('out', 'transitout') AND rc.calldate >= d.created_at_kommo)) AS call_at,
             d.taken_field_at AS field_at,
+            -- Прийнятий вхідний дзвінок (8705): найперший, що ще тривав у мить створення угоди або почався пізніше.
+            inc.calldate AS in_at, inc.ended AS in_end_at,
             d.status_id, d.reject_reason, d.client_source, d.utm_campaign
        FROM deals d
        LEFT JOIN managers m ON m.id = d.manager_id
        LEFT JOIN teams t ON t.id = ${TEAM}
+       LEFT JOIN LATERAL (
+         SELECT rc.calldate, rc.calldate + make_interval(secs => GREATEST(COALESCE(rc.duration, 0), COALESCE(rc.billsec, 0))) AS ended
+           FROM ringostat_calls rc
+          WHERE d.client_key IS NOT NULL AND rc.client_key = d.client_key
+            AND rc.call_type IN (${INBOUND_TYPES.map((x) => `'${x}'`).join(", ")}) AND rc.billsec >= ${String(TAKE_IN_MIN_TALK_SEC)}
+            AND rc.calldate + make_interval(secs => GREATEST(COALESCE(rc.duration, 0), COALESCE(rc.billsec, 0))) >= d.created_at_kommo
+          ORDER BY rc.calldate LIMIT 1) inc ON true
       WHERE ${conds.join(" AND ")}
       ORDER BY d.created_at_kommo`, p);
   const rnk = new Set(RNK_TEAM_IDS), nonCom = new Set(NON_COMMERCIAL_TEAM_IDS);
@@ -120,7 +130,7 @@ async function loadRows(q: TakeQuery): Promise<Row[]> {
     const created = x.created.getTime();
     if (q.time === "work" && !isWorkTime(created)) continue;
     if (q.time === "off" && isWorkTime(created)) continue;
-    const take = takeOf({ createdAt: created, stageAt: ms(x.stage_at), callAt: ms(x.call_at), fieldAt: ms(x.field_at),
+    const take = takeOf({ createdAt: created, stageAt: ms(x.stage_at), callAt: ms(x.call_at), fieldAt: ms(x.field_at), inAt: ms(x.in_at), inEndAt: ms(x.in_end_at),
       duplicate: isDuplicateLost(x.status_id, x.reject_reason) });
     const status = x.status_id === "142" ? "won" : x.status_id === "143" ? "lost" : "open";
     const group = x.team_id != null && rnk.has(x.team_id) ? (x.team ?? `Команда #${x.team_id}`)

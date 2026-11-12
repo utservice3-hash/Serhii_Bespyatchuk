@@ -8205,3 +8205,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_client_contacts_kommo_note ON client_contac
 CREATE INDEX IF NOT EXISTS idx_client_contacts_ai_queue ON client_contacts(created_at) WHERE channel = 'kommo' AND ai_status IN ('queued','capped');
 -- Вотермарк синку скрінів. NULL = ще не було проходу → джоба починає з 11.11.2026 00:00 за Києвом.
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS kommo_screens_note_at TIMESTAMPTZ;
+
+-- ⭐ «Оцінка прорахунку» (задача 7537): менеджер ставить 1–5 в угоді з передачі лідгена (поле Kommo 2100177).
+-- Пише ЛИШЕ джоба `syncQuoteRatings`; NULL = не оцінено. Відкат коду колонку не прибирає (вона нікому не заважає).
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS quote_rating SMALLINT;
+DO $$ BEGIN
+  ALTER TABLE deals ADD CONSTRAINT deals_quote_rating_check CHECK (quote_rating IS NULL OR quote_rating BETWEEN 1 AND 5);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

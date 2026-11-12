@@ -370,6 +370,12 @@ export async function leadgenHandoffMoney(
   const view = handoffView(links, states, scope, history, inP);
   const deals = view.rows.map((h) =>
     handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));
+  // ⭐ Оцінка прорахунку (7537) — з угоди менеджера; один запит на всі угоди відповіді.
+  const rated = await pool.query<{ kommo_id: string; quote_rating: number }>(
+    `SELECT kommo_id, quote_rating FROM deals WHERE kommo_id = ANY($1::bigint[]) AND quote_rating IS NOT NULL`,
+    [deals.flatMap((d) => (d.dealId == null ? [] : [d.dealId]))]);
+  const ratingOf = new Map(rated.rows.map((r) => [Number(r.kommo_id), r.quote_rating]));
+  for (const d of deals) d.rating = d.dealId == null ? null : ratingOf.get(d.dealId) ?? null;
   // Тиждень — той самий `handoffView` над тим самим доменом, лише з межами тижня: «та сама угода» й постійні — як у періоді.
   const wk = reportWeekPeriod(to, kyivToday());
   const wv = handoffView(links, states, scope, history, wk);

@@ -162,6 +162,11 @@ export interface LeadgenPersonRow {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   isActive: boolean; leads: number; opr: number; quotes: number; warming: number; calls: number;
 }
+/** ⭐ Оцінки прорахунків лідгена (задача 7537): рахує сервер із передач періоду, де є угода менеджера. */
+export interface LeadgenQuoteRating {
+  deals: number; rated: number; unrated: number; noDeal: number; avg: number | null;
+  dist: [number, number, number, number, number]; machines: number; machinesPct: number | null;
+}
 /** Одиниця розбивки: «день» у режимі Тиждень, «тиждень» у режимах Місяць і Період. */
 export type LeadgenGrain = "day" | "week";
 export interface LeadgenBucket { bucket: string; calls: number; leads: number; opr: number; quotes: number; warming: number }
@@ -212,6 +217,8 @@ export interface LeadgenHandoffDeal {
   minus?: boolean;
   /** «Дата загрузки» угоди менеджера: є — машина за правилом КВП (задача 7363). */
   loadDay?: string | null;
+  /** ⭐ «Оцінка прорахунку» 1–5 з угоди менеджера (7537); `null` — не оцінено. */
+  rating?: number | null;
   /** Рахунки, виділені з угоди менеджера: їхній бюджет уже в `price`, машина одна (30.10.2026). */
   split?: { dealId: number; url: string; loadDay?: string | null }[];
 }
@@ -286,6 +293,7 @@ export interface LeadgenStatsResp {
   grain?: LeadgenGrain;
   buckets?: LeadgenBucket[];
   bucketsByPerson?: LeadgenPersonBucket[];
+  quoteRatings?: { totals: LeadgenQuoteRating; byPerson: (LeadgenQuoteRating & { managerId: number })[] };
   handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[];
     week?: { from: string; to: string; totals: LeadgenWeekCars; byPerson: (LeadgenWeekCars & { managerId: number })[] } };
   /** Гроші з передач по тих самих одиницях, що `buckets` (лише з `grain`); Σ одиниць == `handoffMoney`. */

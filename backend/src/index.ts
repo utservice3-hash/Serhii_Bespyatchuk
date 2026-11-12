@@ -102,6 +102,7 @@ import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
 import { runOrphanToLeadgen } from "./jobs/orphanToLeadgen.js";
 import { syncKommoScreens } from "./jobs/syncKommoScreens.js";
+import { syncQuoteRatings } from "./jobs/syncQuoteRatings.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncTldv } from "./jobs/syncTldv.js";
 import { syncWorkua } from "./jobs/syncWorkua.js";
@@ -515,6 +516,12 @@ cron.schedule("10 * * * *", () => {
 cron.schedule("20,50 * * * *", () => {
   if (isKommoPaused()) return;
   void runJob("syncKommoScreens", () => syncKommoScreens());
+}, { timezone: "Europe/Kyiv" });
+
+// ⭐ Оцінки прорахунків лідгенів з Kommo (задача 7537) — щогодини о :40; і дозаповнення, і оновлення.
+cron.schedule("40 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("syncQuoteRatings", () => syncQuoteRatings());
 }, { timezone: "Europe/Kyiv" });
 
 // КРОК 4 (Звірка) + AUTO-HEAL. ЩОНОЧІ 03:35 — лише ОСТАННІ 2 МІСЯЦІ: швидко/дешево,

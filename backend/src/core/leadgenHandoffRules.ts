@@ -538,6 +538,8 @@ export interface LeadgenHandoffDeal {
   carried: boolean;
   /** Угода менеджера мінусова: сума лідгену не рахується (`leadgenPrice`), машина — так. */
   minus: boolean;
+  /** ⭐ «Оцінка прорахунку» 1–5 з угоди менеджера (7537); `null` — не оцінено або угоди немає. Дописує `leadgenHandoffMoney`. */
+  rating?: number | null;
   /** «Дата загрузки» угоди менеджера — машина за правилом КВП (`isMachineIn`); `null` — авто ще не загружене. */
   loadDay: string | null;
   /**
@@ -643,12 +645,14 @@ function onlySelf(v: unknown, selfId: number): unknown[] {
 export function ownLeadgenStatsBody(body: Record<string, unknown>, selfId: number): Record<string, unknown> {
   const plans = body.plans as { elapsed?: unknown; byPerson?: unknown; team?: unknown } | undefined;
   const hm = body.handoffMoney as { totals?: unknown; byPerson?: unknown; week?: { from?: unknown; to?: unknown; totals?: unknown; byPerson?: unknown } } | undefined;
+  const qr = body.quoteRatings as { totals?: unknown; byPerson?: unknown } | undefined;
   const out: Record<string, unknown> = {
     viewer: "own", selfId,
     from: body.from, to: body.to, totals: body.totals, conversions: body.conversions, callRule: body.callRule,
     scopedTo: body.scopedTo,
     rows: onlySelf(body.rows, selfId), teamMembers: onlySelf(body.teamMembers, selfId),
     plans: plans ? { elapsed: plans.elapsed, byPerson: onlySelf(plans.byPerson, selfId), team: plans.team } : undefined,
+    quoteRatings: qr ? { totals: qr.totals, byPerson: onlySelf(qr.byPerson, selfId) } : undefined,
     handoffMoney: hm ? { totals: hm.totals, byPerson: onlySelf(hm.byPerson, selfId),
       week: hm.week ? { from: hm.week.from, to: hm.week.to, totals: hm.week.totals, byPerson: onlySelf(hm.week.byPerson, selfId) } : undefined } : undefined,
     others: [], othersTotals: null, bySource: [], weeks: [], closures: [], handoffs: [], handoffsLimit: 0,

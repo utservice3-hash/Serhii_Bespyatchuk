@@ -6,7 +6,12 @@
  * ЩО ТАКЕ «ВЗЯТО В РОБОТУ» (ТЗ, дослівно за змістом): час від створення заявки до ПЕРШОЇ з подій —
  *   1. зміна етапу угоди (перехід у закриття — 142/143 — не рахується);
  *   2. перший вихідний дзвінок по угоді в Ringostat;
- *   3. заповнене поле «Взято в работу» в Kommo.
+ *   3. заповнене поле «Взято в работу» в Kommo;
+ *   4. ПРИЙНЯТИЙ ВХІДНИЙ ДЗВІНОК клієнта з розмовою від 10 с (задача 8705, ТЗ Юлі 09.11.2026): менеджер узяв слухавку —
+ *      заявку взято. Дзвінок, що САМ СТВОРИВ угоду, починається на кілька секунд РАНІШЕ за її створення (заміряно на
+ *      #62834779: дзвінок 13:56:06, угода 13:56:22), тож рахується дзвінок, який ще ТРИВАВ у мить створення або
+ *      почався пізніше; мить взяття для нього — не раніше створення (0 хв). Розмова, що скінчилась ДО створення
+ *      угоди, — це минула розмова, а не взяття цієї заявки.
  * Жодної події — «не взято», навіть якщо угоду закрили за 2 хв: саме так ховаються «Дублі» без дзвінка.
  *
  * НОРМАТИВ (ТЗ): «до 1 хв» ≥ 90%, «до 5 хв» = 100%, «не взято» = 0. Гірше — клітинка червона.
@@ -27,11 +32,15 @@ export const OFFHOURS_GRACE_MIN = 15;
 /** Норматив ТЗ — і для підсвічування, і для рядка «Норматив» під таблицею. */
 export const NORM = { m1Pct: 90, m5Pct: 100, notTaken: 0 } as const;
 
-export type TakeEvent = "stage" | "call" | "field";
+/** Найкоротша розмова на вхідному дзвінку, що рахується як «взято» (ТЗ 8705: «розмова від 10 с»). */
+export const TAKE_IN_MIN_TALK_SEC = 10;
+
+export type TakeEvent = "stage" | "call" | "field" | "callIn";
 export const TAKE_EVENT_LABEL: Record<TakeEvent, string> = {
   stage: "зміна етапу",
   call: "вихідний дзвінок",
   field: "поле «Взято в работу»",
+  callIn: "прийнятий вхідний дзвінок",
 };
 
 /** Кошики часу взяття. `m1`/`m5` на екрані кумулятивні («до 5 хв» включає «до 1 хв») — так вимагає норматив 100%. */
@@ -42,6 +51,10 @@ export interface DealTakeInput {
   stageAt: number | null;         // перша зміна етапу (не в закриття), ms
   callAt: number | null;          // перший вихідний дзвінок, ms
   fieldAt: number | null;         // поле «Взято в работу», ms
+  /** Прийнятий вхідний дзвінок (розмова від `TAKE_IN_MIN_TALK_SEC`), що тривав у мить створення або почався пізніше: початок, ms. */
+  inAt?: number | null;
+  /** Кінець того самого дзвінка, ms — ним відсікається розмова, що скінчилась до створення угоди. */
+  inEndAt?: number | null;
   /** Закрита з причиною «Дубль» — зміна етапу для неї НЕ «взято» (див. `isDuplicateLost`). */
   duplicate?: boolean;
 }
@@ -114,9 +127,20 @@ export function bucketOf(minutes: number | null): TakeBucket {
   return "h1";
 }
 
-/** Перша з трьох подій (не раніше створення) і час до неї. */
+/**
+ * Мить взяття за вхідним дзвінком: дзвінок, що почався до створення угоди, але ще тривав, — це мить створення
+ * (0 хв); що скінчився до створення — не подія. Кінець невідомий — судимо лише за початком.
+ */
+export function inTakeAt(createdAt: number, inAt: number | null | undefined, inEndAt: number | null | undefined): number | null {
+  if (inAt == null) return null;
+  if (inAt >= createdAt) return inAt;
+  return inEndAt != null && inEndAt >= createdAt ? createdAt : null;
+}
+
+/** Перша з чотирьох подій (не раніше створення) і час до неї. */
 export function takeOf(x: DealTakeInput): DealTake {
-  const cands: [TakeEvent, number | null][] = [["stage", x.duplicate ? null : x.stageAt], ["call", x.callAt], ["field", x.fieldAt]];
+  const cands: [TakeEvent, number | null][] = [["stage", x.duplicate ? null : x.stageAt], ["call", x.callAt], ["field", x.fieldAt],
+    ["callIn", inTakeAt(x.createdAt, x.inAt, x.inEndAt)]];
   let best: [TakeEvent, number] | null = null;
   for (const [ev, at] of cands) {
     if (at == null || at < x.createdAt) continue;

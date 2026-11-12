@@ -15,6 +15,7 @@ import { LeadgenPlanFormation } from "./LeadgenPlanFormation";
 import { LeadgenCharts } from "./LeadgenCharts";
 import { LeadgenCountedDeals } from "./LeadgenCountedDeals";
 import { LeadgenLtvBlock } from "./LeadgenLtvBlock";
+import { LeadgenRatingsBlock } from "./LeadgenRatingsBlock";
 import { plural } from "../receivablesView";
 
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", MUTED = "var(--text-muted)";
@@ -378,6 +379,8 @@ export function LeadgenSection() {
           {/* Лідгену «Інших» і рівня відділу сервер не віддає (білий список) — і блоків під них немає. */}
           {!own && <Others d={d} who={who} />}
           {!own && <Details d={d} grain={grain} period={period} today={today} open={detailsOpen} onToggle={setDetailsOpen} />}
+          {/* ⭐ Оцінки прорахунків (задача 7537): лідгену — свій рядок і підсумок команди (білий список сервера). */}
+          <LeadgenRatingsBlock d={d} who={who} periodLabel={periodLabel} />
           {/* 💎 LTV (ТЗ 28.10.2026): після «Деталей», перед «Планами лідгенів»; лідгену — лише свої клієнти (межа на сервері). */}
           <LeadgenLtvBlock from={period.from} to={period.to} periodLabel={periodLabel} who={who} own={own}
             onShowClients={(id) => { if (id != null) pickWho(String(id)); setDealsTab((x) => ({ tab: "ltv", n: x.n + 1 })); setView("deals"); }} />
