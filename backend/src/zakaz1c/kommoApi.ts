@@ -11,6 +11,7 @@
  * має `uuid` → `PUT /api/v4/leads/{id}/files [{file_uuid}]` (202 без тіла).
  */
 import { zakaz1cKommoBase, zakaz1cKommoToken } from "./env.js";
+import { kyivDateOfUnix, kyivMidnightUnix } from "./invoice.js";
 
 /** Поля Kommo, звідки вікно бере підстановку (заміряно через API 26.10.2026). */
 export const KOMMO_FIELDS = {
@@ -19,6 +20,10 @@ export const KOMMO_FIELDS = {
   leadCar: 2096383, // «Марка і Номер автомобіля»
   leadCityFrom: 481280, // «Откуда город»
   leadCityTo: 481286, // «Куда город»
+  // «Дата выгрузки (Дата акта)» (date, юнікс-секунди півночі за Києвом). З 0.6.0 — джерело дати акту рахунку віджета:
+  // менеджер вписує її, коли перевізник надішле документи, а сервер переносить у 1С (`setActDate`). Те саме поле — фінансовий
+  // якір дашборда (`deals.unload_at`), тож пишемо його лише в угодах віджета.
+  leadActDate: 463253,
   // ⬇ Поля, які зараз пише Genesis (лише API). Ми пишемо їх тільки при ZAKAZ1C_FIELDS_MODE=live.
   leadOrderNo: 2096315, // «Номер заказа» (text) — номер рахунку 1С, як «000008587»
   leadPaid1c: 2096323, // «Оплачено 1с» (text) — сума оплат, як «28000»
@@ -65,11 +70,15 @@ export interface LeadForInvoice {
   pipelineId: number | null;
   statusId: number | null;
   company: { id: number; name: string; edrpou: string } | null;
+  /** «Дата выгрузки (Дата акта)» по-київськи `YYYY-MM-DD`; порожньо — не вказано. */
+  actDate: string;
+  /** Основний контакт угоди — підстановка ПІБ і телефону для клієнта-фізособи (0.6.0). */
+  contact: { id: number; name: string; phone: string } | null;
 }
 
 /** Угода + головна компанія. ЄДРПОУ — з поля компанії; для ФОП без ЄДРПОУ — «ИНН» (10 цифр). */
 export async function loadLead(leadId: number): Promise<LeadForInvoice> {
-  const l = await kommoJson<any>(`/api/v4/leads/${leadId}?with=companies`);
+  const l = await kommoJson<any>(`/api/v4/leads/${leadId}?with=companies,contacts`);
   const companyId = Number(l?._embedded?.companies?.[0]?.id) || 0;
   let company: LeadForInvoice["company"] = null;
   if (companyId) {
@@ -77,6 +86,17 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
     const edrpou = cfText(c.custom_fields_values, KOMMO_FIELDS.companyEdrpou).replace(/\D/g, "")
       || cfText(c.custom_fields_values, KOMMO_FIELDS.companyInn).replace(/\D/g, "");
     company = { id: companyId, name: String(c.name ?? ""), edrpou };
+  }
+  // Основний контакт (is_main), інакше перший. Збій контакту не ламає вікно: фізособу тоді вписують руками.
+  const contacts: any[] = Array.isArray(l?._embedded?.contacts) ? l._embedded.contacts : [];
+  const contactId = Number((contacts.find((c) => c?.is_main) ?? contacts[0])?.id) || 0;
+  let contact: LeadForInvoice["contact"] = null;
+  if (contactId) {
+    try {
+      const c = await kommoJson<any>(`/api/v4/contacts/${contactId}`);
+      const phones = (c.custom_fields_values ?? []).find((f: any) => f?.field_code === "PHONE")?.values ?? [];
+      contact = { id: contactId, name: String(c.name ?? "").trim(), phone: String(phones[0]?.value ?? "").trim() };
+    } catch { contact = null; }
   }
   return {
     id: Number(l.id), name: String(l.name ?? ""), price: Number(l.price) || 0,
@@ -89,6 +109,8 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
     pipelineId: Number(l.pipeline_id) || null,
     statusId: Number(l.status_id) || null,
     company,
+    actDate: kyivDateOfUnix(Number(cfText(l.custom_fields_values, KOMMO_FIELDS.leadActDate)) || 0),
+    contact,
   };
 }
 
@@ -153,12 +175,18 @@ export async function attachPdfToLead(leadId: number, fileName: string, bytes: B
 
 export interface LeadPatch {
   id: number;
-  custom_fields_values?: { field_id: number; values: { value: string | boolean }[] }[];
+  /** `values: null` — очистити поле (Kommo v4). */
+  custom_fields_values?: { field_id: number; values: { value: string | boolean | number }[] | null }[];
   status_id?: number;
   pipeline_id?: number;
   /** Додати теги, не чіпаючи наявних (Kommo v4: `tags_to_add`; `_embedded.tags` замінив би всі). */
   tags_to_add?: { name: string }[];
   tags_to_delete?: { name: string }[];
+}
+
+/** Поле угоди «Дата выгрузки (Дата акта)»: дата → північ за Києвом; `null` — очистити. */
+export function actDatePatch(leadId: number, date: string | null): LeadPatch {
+  return { id: leadId, custom_fields_values: [{ field_id: KOMMO_FIELDS.leadActDate, values: date ? [{ value: kyivMidnightUnix(date) }] : null }] };
 }
 
 /** Пакетне оновлення угод (до 50 за запит, як дозволяє Kommo). Помилка — разом із відповіддю Kommo. */

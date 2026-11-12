@@ -6932,6 +6932,19 @@ CREATE TABLE IF NOT EXISTS zakaz_onec_pay_plan (
   written_text TEXT, written_paid BOOLEAN, written_status BIGINT, written_at TIMESTAMPTZ, write_error TEXT
 );
 REVOKE ALL ON zakaz_onec_pay_plan FROM ai_readonly;
+-- Версія 0.6.0 (12.11.2026, доробки 1С від 11.11): дата акту з поля угоди «Дата выгрузки (Дата акта)» → 1С (`setActDate`)
+-- — коли востаннє переносили і чим закінчилось (текст відмови 1С показує вкладка); клієнт-фізособа без коду для угоди.
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_synced_at TIMESTAMPTZ;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_sync_error TEXT;
+-- 👤 Клієнт-фізособа угоди (`createCustomer` з `person: true`). Тримаємо uid, а не шукаємо щоразу за телефоном: один номер
+-- буває на родину чи диспетчера, і 1С за телефоном віддає «першого». ПІБ і телефон — як записала 1С. Персональні дані:
+-- закрито від ШІ, як і решта журналу.
+CREATE TABLE IF NOT EXISTS zakaz_onec_customers (
+  lead_id BIGINT PRIMARY KEY, customer_uid TEXT NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL, code TEXT,
+  existed BOOLEAN NOT NULL DEFAULT false, warnings JSONB NOT NULL DEFAULT '[]'::jsonb, kommo_user_id BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+REVOKE ALL ON zakaz_onec_customers FROM ai_readonly;
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🔑 КЛЮЧ РУХУ — У МЕЖАХ РАХУНКУ (задача 6458, 26.10.2026; знайдено оглядом перед ЄЛОГІСТ).
 --  Переказ між двома НАШИМИ рахунками Привату має однаковий REF#NUM_DOC в обох виписках. Поки `external_tx_id` був унікальним

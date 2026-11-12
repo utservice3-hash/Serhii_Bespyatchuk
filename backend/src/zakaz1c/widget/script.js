@@ -9,6 +9,9 @@
  * Версія 0.4 (доробки 1С від 29.10.2026): кілька рахунків в угоді (кожна форма — свій `requestId`), «Змінити» в день
  * виставлення без оплати, ФОП Беспятчук з вибором банку з 1С, акт з реалізації. В угоді, яку веде Genesis, вікно рахунку
  * не виставляє (одна угода — одна система). ТТН у вікні немає: її формують у Конструкторі дашборда (Роман, 30.10.2026).
+ * Версія 0.6.0 (доробки 1С від 11.11.2026): «Фізособа без коду» — ПІБ і телефон з контакту угоди, 1С шукає клієнта за
+ * телефоном; дата акту — з поля угоди «Дата выгрузки (Дата акта)» і з плитки «Документи», коли завгодно, навіть після
+ * оплати (у формі рахунку її більше немає).
  *
  * Вкладка — прийом Genesis (розібрано 23.10.2026): `card_sdk` + `lcard-0`, `loadPreloadedData` повертає ОБʼЄКТ `{}`
  * (тоді Kommo тримає вкладку постійно), а вміст малюємо в контейнер `#<widget_code>`. Кому не можна — повертаємо `[]`,
@@ -18,7 +21,7 @@ define(["jquery"], function ($) {
   return function () {
     var self = this;
     var NS = "z1c";
-    var state = { data: null, form: null, busy: false, msg: null, modal: null };
+    var state = { data: null, form: null, busy: false, msg: null, modal: null, kind: null, personEdit: false, pname: null, pphone: null, actDraft: null };
 
     function settings() { return self.get_settings() || {}; }
     function apiBase() { return String(settings().api_url || "https://dashboard.uts.ua/api/zakaz1c").replace(/\/+$/, ""); }
@@ -119,6 +122,25 @@ define(["jquery"], function ($) {
       + "@media (max-width:760px){" + P + " .steps," + P + " .grid{grid-template-columns:minmax(0,1fr)}" + P + " .grid>*{grid-column:auto!important}}";
 
     /* ——— дані ——— */
+
+    /**
+     * Хто клієнт: «company» — компанія угоди з ЄДРПОУ/ІПН; «person» — фізособа без коду. Менеджер обирає сам (кнопки
+     * в шапці); без вибору — фізособа, якщо її вже знайдено для угоди, інакше компанія.
+     */
+    function kind() {
+      var d = state.data;
+      if (state.kind) return state.kind;
+      return d.person && !(d.lead.company && d.lead.company.edrpou) ? "person" : "company";
+    }
+    /** Клієнт у 1С для обраного виду: чи знайдено, договори, чи можна виставляти і чому ні. */
+    function cust() {
+      var d = state.data;
+      if (kind() === "person") {
+        var p = d.person;
+        return { found: !!(p && p.found), agreements: (p && p.agreements) || [], can: !!d.canCreatePerson, why: d.blockedWhyPerson };
+      }
+      return { found: !!d.onec.found, agreements: d.onec.agreements || [], can: !!d.canCreate, why: d.blockedWhy };
+    }
 
     function orgOf(key) { return state.data.orgs.filter(function (o) { return o.key === key; })[0]; }
     function invoices() { return state.data.invoices || []; }
@@ -251,15 +273,43 @@ define(["jquery"], function ($) {
     /* ——— шматки вікна ——— */
 
     function head() {
-      var d = state.data, c = d.lead.company || {}, o = d.onec;
-      var where = !c.edrpou ? "<b>у компанії немає ЄДРПОУ / ІПН</b>"
-        : o.found ? "<span style='color:var(--okt)'>знайдено в 1С</span>"
-          : o.error ? "<b>1С: " + esc(o.error) + "</b>"
-            : "<b>у 1С немає</b> <button class='btn sm' data-z1c='customer'" + (d.canCreate && !state.busy ? "" : " disabled") + ">Створити контрагента в 1С</button>";
-      return "<div class='row between' style='margin-bottom:12px'><span class='mut'>Контрагент <b style='color:var(--txt);font-weight:400'>"
-        + esc(c.name || "компанію не привʼязано") + "</b>" + (c.edrpou ? " · " + (c.edrpou.length === 10 ? "ІПН " : "ЄДРПОУ ") + esc(c.edrpou) : "")
-        + " · " + where + "</span>" + (d.mode === "test" ? "<span class='chip test' title='Лише тестовий контрагент ЄДРПОУ " + esc(d.testEdrpou) + "'>ТЕСТ</span>" : "") + "</div>"
-        + (d.canCreate ? "" : "<div class='msg warn' style='margin:0 0 12px'>" + esc(d.blockedWhy) + "</div>");
+      var d = state.data, c = d.lead.company || {}, o = d.onec, k = kind(), cu = cust();
+      // Перемикач — коли в компанії немає коду або фізособу вже обрано: з кодом компанія — завжди юрособа/ФОП.
+      var toggle = !c.edrpou || d.person
+        ? "<div style='margin-bottom:10px'>" + seg("kind", [{ v: "company", t: "Юрособа / ФОП" }, { v: "person", t: "Фізособа без коду" }], k) + "</div>" : "";
+      var line;
+      if (k === "person") line = personHtml();
+      else {
+        var where = !c.edrpou ? "<b>у компанії немає ЄДРПОУ / ІПН</b>"
+          : o.found ? "<span style='color:var(--okt)'>знайдено в 1С</span>"
+            : o.error ? "<b>1С: " + esc(o.error) + "</b>"
+              : "<b>у 1С немає</b> <button class='btn sm' data-z1c='customer'" + (d.canCreate && !state.busy ? "" : " disabled") + ">Створити контрагента в 1С</button>";
+        line = "<span class='mut'>Контрагент <b style='color:var(--txt);font-weight:400'>"
+          + esc(c.name || "компанію не привʼязано") + "</b>" + (c.edrpou ? " · " + (c.edrpou.length === 10 ? "ІПН " : "ЄДРПОУ ") + esc(c.edrpou) : "")
+          + " · " + where + "</span>";
+      }
+      return toggle + "<div class='row between' style='margin-bottom:12px'>" + line
+        + (d.mode === "test" ? "<span class='chip test' title='Лише тестовий контрагент ЄДРПОУ " + esc(d.testEdrpou) + "'>ТЕСТ</span>" : "") + "</div>"
+        + (cu.can ? "" : "<div class='msg warn' style='margin:0 0 12px'>" + esc(cu.why) + "</div>");
+    }
+    /** Фізособа: знайдений клієнт або поля ПІБ і телефону (з контакту угоди) і «Знайти / створити в 1С». */
+    function personHtml() {
+      var d = state.data, p = d.person, ct = d.lead.contact || {};
+      if (p && !state.personEdit) {
+        return "<span class='mut'>Клієнт-фізособа <b style='color:var(--txt);font-weight:400'>" + esc(p.name) + "</b> · " + esc(p.phone)
+          + (p.code ? " · код 1С " + esc(p.code) : "") + " · "
+          + (p.found ? "<span style='color:var(--okt)'>знайдено в 1С</span>" : "<b>1С: " + esc(p.error || "клієнта не знайдено") + "</b>")
+          + (p.warnings && p.warnings.length ? "<span class='hint'>" + esc(p.warnings.join("; ")) + "</span>" : "")
+          + "</span><button class='btn sm link' data-z1c='pedit'>інший клієнт</button>";
+      }
+      var name = state.pname != null ? state.pname : (p ? p.name : ct.name || "");
+      var phone = state.pphone != null ? state.pphone : (p ? p.phone : ct.phone || "");
+      return "<div class='grid' style='flex:1'>"
+        + "<label style='grid-column:span 2'><span class='lbl'>ПІБ клієнта</span><input class='in' data-p='name' value='" + esc(name) + "' placeholder='Шевченко Тарас Григорович'>"
+        + "<span class='hint'>" + esc(d.waits.person) + "</span></label>"
+        + "<label><span class='lbl'>Телефон</span><input class='in' data-p='phone' value='" + esc(phone) + "' placeholder='+380XXXXXXXXX'><span class='hint'>за ним 1С шукає клієнта</span></label>"
+        + "<div><span class='lbl'>&nbsp;</span><button class='btn' data-z1c='person'" + (d.canCreatePerson && !state.busy ? "" : " disabled") + ">Знайти / створити в 1С</button>"
+        + (p ? " <button class='btn sm link' data-z1c='pcancel'>скасувати</button>" : "") + "</div></div>";
     }
 
     function pdfBtns(inv) {
@@ -283,9 +333,9 @@ define(["jquery"], function ($) {
           + "<div class='mut'>" + esc(dmy(inv.invoice_date)) + " · " + esc(inv.organization) + " · " + money(inv.total) + " " + esc(inv.currency) + "</div>"
           + (inv.attach_error ? "<div class='mut'>PDF у файлах угоди немає — візьміть тут</div>" : "")
           + "<div class='row'>" + pdfBtns(inv) + "</div><div class='row'>" + editBtn(inv) + "</div>"
-          + "<button class='btn link' data-z1c='open'" + (d.canCreate && d.onec.found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button></div>"
+          + "<button class='btn link' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button></div>"
         : "<div class='step next'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "wait", t: "немає" }) + "</div><div class='big'>—</div>"
-          + "<div class='mut'>Маршрут і суму підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (d.canCreate && d.onec.found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
+          + "<div class='mut'>Маршрут і суму підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
       var dp = inv ? dealPay() : null;
       var s2 = "<div class='step " + (dp && dp.all ? "done" : inv ? "next" : "") + "'><div class='h'><span>2 · Оплата</span>" + (inv ? chip(dp.chip) : chip({ k: "wait", t: "чекає рахунок" })) + "</div>"
         + (inv ? "<div class='big'>" + esc(dp.paidText) + "</div><div class='mut'>із " + esc(dp.totalText) + (invoices().length > 1 ? " · " + invoices().length + " рахунки" : "") + "</div>"
@@ -293,8 +343,25 @@ define(["jquery"], function ($) {
           : "<div class='big'>—</div><div class='mut'>зʼявиться після рахунку</div>") + "</div>";
       var s3 = "<div class='step'><div class='h'><span>3 · Документи</span>" + chip({ k: "wait", t: inv ? "після реалізації" : "потім" }) + "</div>"
         + "<div class='mut'>" + esc(d.waits.docs) + "</div>"
-        + (inv ? "<div class='row'>" + actBtns(inv) + "</div>" : "") + "</div>";
+        + (inv ? actDateHtml() + "<div class='row'>" + actBtns(inv) + "</div>" : "") + "</div>";
       return "<div class='steps'>" + s1 + s2 + s3 + "</div>";
+    }
+    /**
+     * Дата акту угоди: з поля «Дата выгрузки (Дата акта)»; змінити можна будь-коли — сервер пише її в поле угоди і в
+     * рахунки 1С (і в оплачені). Відмову 1С (реалізація вже є) показуємо її словами під полем.
+     */
+    function actDateHtml() {
+      var d = state.data, cur = d.lead.actDate || "", v = state.actDraft != null ? state.actDraft : cur;
+      var errs = invoices().filter(function (i) { return i.act_sync_error; }).map(function (i) { return "№" + i.number_print + ": " + i.act_sync_error; });
+      var off = invoices().filter(function (i) { return cur && !i.realized && i.act_date !== cur && !i.act_sync_error; })
+        .map(function (i) { return "№" + i.number_print + (i.act_date ? " — " + dmy(i.act_date) : " — без дати"); });
+      var can = d.fieldsWrite && d.owner !== "genesis";
+      return "<div><span class='lbl'>Дата акту</span><div class='row' style='gap:6px'>"
+        + "<input class='in' type='date' data-z1c-act value='" + esc(v) + "' style='width:auto'" + (can ? "" : " disabled") + ">"
+        + (can ? "<button class='btn sm' data-z1c='actsave'" + (state.busy || v === cur ? " disabled" : "") + ">Зберегти</button>" : "") + "</div>"
+        + "<span class='hint'>" + (cur ? "у полі угоди: <b>" + esc(dmy(cur)) + "</b>" : "ще не вказано") + " · " + esc(d.waits.actDate) + "</span>"
+        + (off.length ? "<span class='hint'>ще не в 1С: " + esc(off.join(", ")) + "</span>" : "")
+        + (errs.length ? "<div class='msg warn' style='margin:6px 0 0'>" + esc(errs.join(" · ")) + "</div>" : "") + "</div>";
     }
 
     function seg(act, list, cur) {
@@ -306,7 +373,7 @@ define(["jquery"], function ($) {
 
     function agreementsFor(f) {
       var o = orgOf(f.org);
-      return state.data.onec.agreements.filter(function (a) {
+      return cust().agreements.filter(function (a) {
         return String(a.organization).toLowerCase().indexOf(o.match) !== -1 && (!a.currency || a.currency === f.currency);
       });
     }
@@ -347,8 +414,7 @@ define(["jquery"], function ($) {
         + "<label><span class='lbl'>Оплатити до</span><input class='in' type='date' min='" + esc(d.today) + "' data-k='dueDate' value='" + esc(f.dueDate) + "'></label></div>"
         + items + "<div class='row'><button class='btn sm' data-z1c='add'>+ позиція</button></div>"
         + "<div class='grid'>"
-        + "<label><span class='lbl'>Дата акту</span><input class='in' type='date' data-k='actDate' value='" + esc(f.actDate) + "'><span class='hint'>лише якщо впевнені, інакше порожньо</span></label>"
-        + "<label style='grid-column:span 3'><span class='lbl'>Коментар для бухгалтерії</span><input class='in' data-k='crmComment' value='" + esc(f.crmComment) + "' placeholder='необовʼязково, у 1С піде в «Коментар СРМ»'></label></div>"
+        + "<label style='grid-column:span 4'><span class='lbl'>Коментар для бухгалтерії</span><input class='in' data-k='crmComment' value='" + esc(f.crmComment) + "' placeholder='необовʼязково, у 1С піде в «Коментар СРМ»'></label></div>"
         + "<div class='hint'>" + esc(d.waits.fields) + "</div>"
         + "<label class='row' style='gap:8px'><input type='checkbox' data-k='stamp'" + (f.stamp ? " checked" : "") + "> PDF з печаткою</label>"
         + "<div class='prev'><span class='lbl' style='margin:0'>Так піде в 1С, як зараз із Genesis:</span><span>Комментарий: <b>" + esc(d.managerName ? d.managerName + ", " : "")
@@ -435,7 +501,7 @@ define(["jquery"], function ($) {
       if (f.dueDate && f.dueDate < state.data.today) { say("err", "«Оплатити до» не може бути в минулому."); render(); return; }
       state.busy = true; state.msg = null; render();
       var edit = !!f.editUid;
-      api("POST", "/lead/" + leadId() + "/invoice" + (edit ? "/" + f.editUid + "/update" : ""), f).then(function (r) {
+      api("POST", "/lead/" + leadId() + "/invoice" + (edit ? "/" + f.editUid + "/update" : ""), $.extend({}, f, { customerKind: kind() })).then(function (r) {
         var inv = r.invoice;
         say(inv.existed && !edit || !r.attached || (inv.warnings && inv.warnings.length) ? "warn" : "ok",
           (edit ? "Рахунок змінено: " : inv.existed ? "Цей рахунок уже виставлено: " : "Рахунок ") + "№" + inv.number + (inv.organization ? " · " + inv.organization : "")
@@ -454,6 +520,37 @@ define(["jquery"], function ($) {
       api("POST", "/lead/" + leadId() + "/customer", {}).then(function (r) {
         say(r.warnings && r.warnings.length ? "warn" : "ok", (r.existed ? "Контрагент у 1С уже був." : "Контрагента створено в 1С.")
           + (r.warnings && r.warnings.length ? " " + r.warnings.join("; ") : ""));
+        return load();
+      }).catch(function (e) { say("err", e.message); })
+        .then(function () { state.busy = false; render(); });
+    }
+
+    /** Фізособа: 1С шукає за телефоном, інакше створює; той самий клієнт — «уже був» з попередженням про назву в 1С. */
+    function createPerson() {
+      if (state.busy) return;
+      var d = state.data, p = d.person, ct = d.lead.contact || {};
+      var name = state.pname != null ? state.pname : (p ? p.name : ct.name || "");
+      var phone = state.pphone != null ? state.pphone : (p ? p.phone : ct.phone || "");
+      state.busy = true; state.msg = null; render();
+      api("POST", "/lead/" + leadId() + "/person", { name: name, phone: phone }).then(function (r) {
+        say(r.warnings && r.warnings.length ? "warn" : "ok", (r.existed ? "Клієнт у 1С уже був: " : "Клієнта створено в 1С: ") + r.name
+          + (r.warnings && r.warnings.length ? ". " + r.warnings.join("; ") : ""));
+        state.personEdit = false; state.pname = null; state.pphone = null; state.kind = "person"; state.form = null;
+        return load();
+      }).catch(function (e) { say("err", e.message); })
+        .then(function () { state.busy = false; render(); });
+    }
+
+    function saveActDate() {
+      if (state.busy) return;
+      var v = String(state.actDraft == null ? state.data.lead.actDate || "" : state.actDraft);
+      state.busy = true; state.msg = null; render();
+      api("POST", "/lead/" + leadId() + "/act-date", { date: v || null }).then(function (r) {
+        var bad = (r.invoices || []).filter(function (x) { return !x.ok; }), done = (r.invoices || []).filter(function (x) { return x.ok; });
+        say(bad.length ? "warn" : "ok", (v ? "Дату акту " + dmy(v) + " записано в угоду" : "Дату акту прибрано з угоди")
+          + (done.length ? " і в рахунок 1С №" + done.map(function (x) { return x.number; }).join(", №") : "")
+          + (bad.length ? ". Не змінено: " + bad.map(function (x) { return "№" + x.number + " — " + x.why; }).join("; ") : "."));
+        state.actDraft = null;
         return load();
       }).catch(function (e) { say("err", e.message); })
         .then(function () { state.busy = false; render(); });
@@ -524,6 +621,11 @@ define(["jquery"], function ($) {
       else if (a === "rm") f.items.splice(Number(b.data("i")), 1);
       else if (a === "submit") { submit(); return; }
       else if (a === "customer") { createCustomer(); return; }
+      else if (a === "kind") { var nk = String(b.data("v")); if (nk !== kind()) { state.kind = nk; state.form = null; state.msg = null; } }
+      else if (a === "person") { createPerson(); return; }
+      else if (a === "pedit") { state.personEdit = true; state.form = null; }
+      else if (a === "pcancel") { state.personEdit = false; state.pname = null; state.pphone = null; }
+      else if (a === "actsave") { saveActDate(); return; }
       else if (a === "pdf") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/pdf?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "act") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/act?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "req") state.modal = { uid: String(b.data("uid")), text: "" };
@@ -539,6 +641,12 @@ define(["jquery"], function ($) {
         state.modal.text = el.val();
         var inv = invoices().filter(function (x) { return x.invoice_uid === state.modal.uid; })[0];
         root().find("[data-z1c-prev]").text(reqText(inv, String(el.val()).trim()));
+        return;
+      }
+      if (el.data("p")) { state[el.data("p") === "name" ? "pname" : "pphone"] = el.val(); return; }
+      if (el.is("[data-z1c-act]")) {
+        state.actDraft = el.val();
+        root().find("[data-z1c='actsave']").prop("disabled", state.busy || state.actDraft === (state.data.lead.actDate || ""));
         return;
       }
       if (!f) return;

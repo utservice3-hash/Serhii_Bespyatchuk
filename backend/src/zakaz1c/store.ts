@@ -37,6 +37,9 @@ export interface InvoiceRow {
   created_at: string;
   pay: PayState;
   can_edit: boolean;
+  realized: boolean;
+  /** Остання відмова 1С при переносі дати акту з угоди (`setActDate`); `null` — перенесено або не треба. */
+  act_sync_error: string | null;
 }
 
 export async function saveInvoice(pool: Pool, r: {
@@ -74,6 +77,7 @@ export async function listInvoices(pool: Pool, leadId: number, today: string): P
     pool.query<Record<string, any>>(
       `SELECT i.invoice_uid, i.number, i.number_print, i.invoice_date, i.organization, i.org_key, i.currency, i.vat_type,
               i.total::float8 AS total, i.existed, i.attach_error, i.items, i.agreement_uid, i.bank_uid, i.crm_comment, i.stamp, i.edits,
+              i.realized, i.act_sync_error,
               to_char(i.due_date, 'YYYY-MM-DD') AS due_date, to_char(i.act_date, 'YYYY-MM-DD') AS act_date,
               i.created_at AS created_ts, to_char(i.created_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS created_day,
               to_char(i.created_at AT TIME ZONE 'Europe/Kyiv', 'DD.MM.YYYY HH24:MI') AS created_at,
@@ -100,7 +104,7 @@ export async function listInvoices(pool: Pool, leadId: number, today: string): P
       org_key: r.org_key, currency: r.currency, vat_type: r.vat_type, total: Number(r.total) || 0, existed: r.existed,
       attach_error: r.attach_error, items: r.items, agreement_uid: r.agreement_uid, bank_uid: r.bank_uid, due_date: r.due_date,
       act_date: r.act_date, crm_comment: r.crm_comment, stamp: r.stamp !== false, edits: Number(r.edits) || 0, created_at: r.created_at,
-      pay, can_edit: canEdit(r.created_day, pay, today),
+      pay, can_edit: canEdit(r.created_day, pay, today), realized: r.realized === true, act_sync_error: r.act_sync_error ?? null,
     };
   });
 }
@@ -180,4 +184,54 @@ export async function saveWritten(pool: Pool, r: { dealId: number; paidText: str
        written_status = COALESCE(EXCLUDED.written_status, t.written_status), written_at = COALESCE(EXCLUDED.written_at, t.written_at),
        write_error = EXCLUDED.write_error`,
     [r.dealId, r.paidText, r.fullyPaid, r.status, r.error]);
+}
+
+/* ——— дата акту з поля угоди → 1С (0.6.0) ——— */
+
+/** Результат `setActDate`: успіх — нова дата в журналі й помилку знято; відмова — текст 1С, дата лишається, як була. */
+export async function saveActSync(pool: Pool, uid: string, r: { ok: true; date: string | null } | { ok: false; why: string }): Promise<void> {
+  if (r.ok) {
+    await pool.query(`UPDATE zakaz_onec_invoices SET act_date = $2::date, act_sync_error = NULL, act_synced_at = now(), updated_at = now() WHERE invoice_uid = $1`,
+      [uid, r.date]);
+  } else {
+    await pool.query(`UPDATE zakaz_onec_invoices SET act_sync_error = $2, act_synced_at = now(), updated_at = now() WHERE invoice_uid = $1`, [uid, r.why.slice(0, 300)]);
+  }
+}
+
+/**
+ * Угоди для щогодинного переносу дати акту: угода віджета (є наш рахунок і немає чужих рахунків 1С — та сама ознака, що
+ * `OWN_DEALS_SQL`), у полі угоди дата є (`deals.unload_at`, синк Kommo щопівгодини) і хоч один НЕпроведений рахунок має
+ * іншу дату. Відмову 1С на ту саму дату не повторюємо щогодини: лише коли змінилась дата в угоді або минула доба.
+ */
+export const ACT_SYNC_SQL = `
+  SELECT i.invoice_uid, i.lead_id::text AS lead_id, i.number_print,
+         to_char(d.unload_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS deal_date, to_char(i.act_date, 'YYYY-MM-DD') AS act_date
+    FROM zakaz_onec_invoices i JOIN deals d ON d.kommo_id = i.lead_id
+   WHERE d.unload_at IS NOT NULL AND COALESCE(i.realized, false) = false
+     AND i.act_date IS DISTINCT FROM (d.unload_at AT TIME ZONE 'Europe/Kyiv')::date
+     AND (i.act_sync_error IS NULL OR i.act_synced_at < now() - interval '1 day' OR i.act_synced_at < d.updated_at_kommo)
+     AND NOT EXISTS (SELECT 1 FROM onec_deal_invoices di WHERE di.deal_id = i.lead_id
+           AND ltrim(COALESCE(di.number, ''), '0') <> ''
+           AND ltrim(di.number, '0') NOT IN (SELECT ltrim(z.number, '0') FROM zakaz_onec_invoices z WHERE z.lead_id = i.lead_id))
+   ORDER BY i.created_at DESC LIMIT 200`;
+
+/* ——— клієнт-фізособа угоди ——— */
+
+export interface PersonCustomer { uid: string; name: string; phone: string; code: string | null; warnings: string[] }
+
+export async function personOfLead(pool: Pool, leadId: number): Promise<PersonCustomer | null> {
+  const q = await pool.query<{ customer_uid: string; name: string; phone: string; code: string | null; warnings: unknown }>(
+    `SELECT customer_uid, name, phone, code, warnings FROM zakaz_onec_customers WHERE lead_id = $1`, [leadId]);
+  const r = q.rows[0];
+  return r ? { uid: r.customer_uid, name: r.name, phone: r.phone, code: r.code, warnings: Array.isArray(r.warnings) ? r.warnings.map(String) : [] } : null;
+}
+
+export async function savePerson(pool: Pool, r: { leadId: number; uid: string; name: string; phone: string; code: string | null; existed: boolean;
+  warnings: string[]; kommoUserId: number }): Promise<void> {
+  await pool.query(
+    `INSERT INTO zakaz_onec_customers (lead_id, customer_uid, name, phone, code, existed, warnings, kommo_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+     ON CONFLICT (lead_id) DO UPDATE SET customer_uid = EXCLUDED.customer_uid, name = EXCLUDED.name, phone = EXCLUDED.phone, code = EXCLUDED.code,
+       existed = EXCLUDED.existed, warnings = EXCLUDED.warnings, kommo_user_id = EXCLUDED.kommo_user_id, updated_at = now()`,
+    [r.leadId, r.uid, r.name, r.phone, r.code, r.existed, JSON.stringify(r.warnings), r.kommoUserId]);
 }

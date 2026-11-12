@@ -178,14 +178,18 @@ export function parseInvoiceForm(body: unknown, ctx: { today: string; orgs: OrgR
   };
 }
 
-/** Режим + хто + який контрагент → можна чи ні. Окрема чиста функція, бо це головна межа тестового режиму. */
-export function invoiceAllowed(mode: Zakaz1cMode, a: { edrpou: string; testEdrpou: string; userId: number; testers: Set<number> }):
+/**
+ * Режим + хто + який контрагент → можна чи ні. Окрема чиста функція, бо це головна межа тестового режиму.
+ * `person` — клієнт-фізособа без коду (0.6.0): коду не треба, але в режимі test — ніколи (там лише тестовий ЄДРПОУ).
+ */
+export function invoiceAllowed(mode: Zakaz1cMode, a: { edrpou: string; testEdrpou: string; userId: number; testers: Set<number>; person?: boolean }):
   { ok: true } | { ok: false; why: string } {
   if (mode === "off") return { ok: false, why: "Виставлення рахунків вимкнено (ZAKAZ1C_MODE=off)." };
-  if (!a.edrpou) return { ok: false, why: "У компанії угоди немає ЄДРПОУ / ІПН — заповніть поле в компанії." };
+  if (!a.person && !a.edrpou) return { ok: false, why: "У компанії угоди немає ЄДРПОУ / ІПН — заповніть поле в компанії або оберіть «Фізособа без коду»." };
   if (mode === "test") {
     // Порожній список — будь-хто (Роман, 28.10.2026: вкладка всім); межу тримає тестовий ЄДРПОУ нижче.
     if (a.testers.size > 0 && !a.testers.has(a.userId)) return { ok: false, why: "Тестовий режим: рахунки створюють лише тестувальники." };
+    if (a.person) return { ok: false, why: `Тестовий режим: фізособу не виставляємо — лише тестовому контрагенту (ЄДРПОУ ${a.testEdrpou}).` };
     if (a.edrpou !== a.testEdrpou) {
       return { ok: false, why: `Тестовий режим: рахунок можна виставити лише тестовому контрагенту (ЄДРПОУ ${a.testEdrpou}).` };
     }
@@ -389,11 +393,24 @@ export interface CustomerInfo {
 
 /** `customerInfo` за кодом компанії угоди. Помилка 1С не ламає вікно: показуємо її словами. */
 export async function customerInfoFrom1c(base: string, code: string, doFetch: FetchLike = fetch): Promise<CustomerInfo> {
-  const none: CustomerInfo = { found: false, uid: "", name: "", agreements: [] };
   const kind = codeKind(code);
-  if (!kind) return code ? { ...none, error: "код компанії не 8 і не 10 цифр" } : none;
+  if (!kind) return code ? { found: false, uid: "", name: "", agreements: [], error: "код компанії не 8 і не 10 цифр" } : { found: false, uid: "", name: "", agreements: [] };
+  return customerInfoQuery(base, `${kind}=${encodeURIComponent(code)}`, doFetch);
+}
+
+/**
+ * `customerInfo?uid=` — клієнт-фізособа, якого віджет уже створив/знайшов для цієї угоди (`zakaz_onec_customers`).
+ * Саме за uid, а НЕ за телефоном: один номер буває на родину чи диспетчера, і 1С за телефоном віддала б «першого».
+ */
+export async function customerInfoByUid(base: string, uid: string, doFetch: FetchLike = fetch): Promise<CustomerInfo> {
+  if (!uid) return { found: false, uid: "", name: "", agreements: [] };
+  return customerInfoQuery(base, `uid=${encodeURIComponent(uid)}`, doFetch);
+}
+
+async function customerInfoQuery(base: string, qs: string, doFetch: FetchLike): Promise<CustomerInfo> {
+  const none: CustomerInfo = { found: false, uid: "", name: "", agreements: [] };
   try {
-    const r = await doFetch(`${base}/customerInfo?${kind}=${encodeURIComponent(code)}`, { signal: AbortSignal.timeout(10_000) });
+    const r = await doFetch(`${base}/customerInfo?${qs}`, { signal: AbortSignal.timeout(10_000) });
     const j: any = r.status === 200 ? await r.json().catch(() => null) : null;
     if (!j) return { ...none, error: `1С відповіла ${r.status}` };
     if (j.state !== true || !j.uid) return none;
@@ -425,7 +442,7 @@ export function buildCreateCustomerBody(company: { name: string; code: string },
 }
 
 export async function createCustomerIn1c(base: string, body: unknown, doFetch: FetchLike = fetch):
-  Promise<{ ok: true; uid: string; existed: boolean; warnings: string[] } | { ok: false; why: string }> {
+  Promise<{ ok: true; uid: string; existed: boolean; name: string; code: string | null; warnings: string[] } | { ok: false; why: string }> {
   try {
     const r = await doFetch(`${base}/createCustomer`, {
       method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body),
@@ -434,10 +451,116 @@ export async function createCustomerIn1c(base: string, body: unknown, doFetch: F
     if (r.status !== 200) return { ok: false, why: `1С відповіла ${r.status}.` };
     const j: any = await r.json().catch(() => null);
     if (!j || j.state !== true || !j.uid) return { ok: false, why: `1С: ${String(j?.message ?? "контрагента не створено").slice(0, 300)}` };
-    return { ok: true, uid: String(j.uid), existed: j.existed === true, warnings: Array.isArray(j.warnings) ? j.warnings.map(String) : [] };
+    return { ok: true, uid: String(j.uid), existed: j.existed === true, name: String(j.name ?? ""), code: j.code ? String(j.code) : null,
+      warnings: Array.isArray(j.warnings) ? j.warnings.map(String) : [] };
   } catch (e) {
     return { ok: false, why: (e as Error)?.name === "TimeoutError" ? "1С не відповіла за 30 с." : "1С недоступна." };
   }
+}
+
+/* ——— клієнт-фізособа без коду (ТЗ 10.11, зроблено в 1С 11.11.2026) ——— */
+
+/**
+ * ПІБ фізособи — те саме правило, що в 1С (лист 1С 11.11.2026), щоб менеджер побачив відмову ДО запиту:
+ *   «Прізвище Ім'я По батькові» — рівно три слова, або «Прізвище І. П.» / «Прізвище І.» — прізвище й 1–2 ініціали;
+ *   лише літери, дефіс і апостроф; «Шевченко Тарас» (два повні слова), цифри, ініціал перед прізвищем — відмова.
+ * Вимога Сергія (10.11.2026): ПІБ обовʼязкове, без цифр. Регістр, пробіли, крапки ініціалів і типографський апостроф
+ * (’ ʼ ‘ `) правимо самі — як і 1С, щоб у нас і в 1С був той самий запис.
+ */
+export const PIB_RULE = "ПІБ має бути повним («Шевченко Тарас Григорович») або «Шевченко Т. Г.», без цифр.";
+const LETTERS = "A-Za-zА-ЯЁҐЄІЇа-яёґєії"; // і російські літери (ё, ы, э, ъ входять у А-Я/а-я): клієнти бувають і з Росії/Казахстану
+const WORD_RE = new RegExp(`^[${LETTERS}]+(?:['-][${LETTERS}]+)*$`);
+const INITIAL_RE = new RegExp(`^[${LETTERS}]$`);
+const capWord = (w: string) => w.toLowerCase().split("-")
+  .map((p) => p.split("'").map((q, i) => (i === 0 ? q.charAt(0).toUpperCase() + q.slice(1) : q)).join("'")).join("-");
+
+export function normalizePib(raw: string): { ok: true; name: string } | { ok: false; why: string } {
+  const s = String(raw ?? "").replace(/[’ʼ‘`]/g, "'").replace(/\s+/g, " ").trim();
+  if (!s) return { ok: false, why: "Вкажіть ПІБ клієнта." };
+  if (/\d/.test(s)) return { ok: false, why: PIB_RULE };
+  // Ініціали: «коваль і.п.», «Коваль І. П.», «Коваль І», «Коваль І.» — після прізвища 1–2 окремі літери (крапки допишемо самі).
+  const m = s.match(new RegExp(`^(\\S+)\\s+((?:[${LETTERS}]\\s*\\.?\\s*){1,2})$`));
+  if (m && WORD_RE.test(m[1])) {
+    const ini = m[2].split(/[.\s]+/).filter(Boolean); // «І.П.», «І. П.», «І П» — однаково
+    if (ini.every((x) => INITIAL_RE.test(x))) return { ok: true, name: `${capWord(m[1])} ${ini.map((x) => `${x.toUpperCase()}.`).join(" ")}` };
+  }
+  const words = s.split(" ");
+  if (words.length === 3 && words.every((w) => WORD_RE.test(w) && w.replace(/['-]/g, "").length > 1)) {
+    return { ok: true, name: words.map(capWord).join(" ") };
+  }
+  return { ok: false, why: PIB_RULE };
+}
+
+/** Телефон → `+380XXXXXXXXX` (так його записує й шукає 1С). Приймаємо `+380…`, `380…`, `0…` з пробілами, дужками й дефісами. */
+export function normalizePhone(raw: string): { ok: true; phone: string } | { ok: false; why: string } {
+  const d = String(raw ?? "").replace(/[\s()\-.]/g, "").replace(/^\+/, "");
+  if (/^380\d{9}$/.test(d)) return { ok: true, phone: `+${d}` };
+  if (/^0\d{9}$/.test(d)) return { ok: true, phone: `+38${d}` };
+  return { ok: false, why: `Телефон має бути у форматі +380XXXXXXXXX, зараз: «${String(raw ?? "").trim().slice(0, 40) || "порожньо"}».` };
+}
+
+/** Тіло `POST /createCustomer` для фізособи: `person: true`, ПІБ і телефон; коду НЕ шлемо (1С тоді відмовляє). */
+export function buildPersonCustomerBody(p: { name: string; phone: string }, manager: string):
+  { ok: true; body: Record<string, string | boolean> } | { ok: false; why: string } {
+  const n = normalizePib(p.name);
+  if (!n.ok) return n;
+  const ph = normalizePhone(p.phone);
+  if (!ph.ok) return ph;
+  return { ok: true, body: { person: true, name: n.name, phone: ph.phone, ...(manager ? { manager } : {}) } };
+}
+
+/* ——— дата акту після виставлення (`POST /setActDate`, 1С 11.11.2026) ——— */
+
+export type SetActResult = { ok: true; changed: boolean; actDate: string | null } | { ok: false; why: string };
+
+/**
+ * Лише «Дата акта» і «Дата акта от менеджера» — у тому числі в ОПЛАЧЕНОМУ рахунку (`updateInvoice` там відмовляє).
+ * Ключ `act_date` шлемо завжди (без нього 1С відмовляє — захист від випадкового стирання); `null` — очистити.
+ * Повтор з тим самим значенням 1С не записує (`changed: false`), тож слати можна щоразу, коли змінилось поле угоди.
+ */
+export async function setActDateIn1c(base: string, invoiceUid: string, actDate: string | null, doFetch: FetchLike = fetch): Promise<SetActResult> {
+  if (actDate !== null && !DATE_RE.test(actDate)) return { ok: false, why: "Дата акта має бути у форматі РРРР-ММ-ДД." };
+  try {
+    const r = await doFetch(`${base}/setActDate`, {
+      method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ invoice_uid: invoiceUid, act_date: actDate, act_date_by_manager: actDate !== null }),
+      signal: AbortSignal.timeout(ONEC_TIMEOUT_MS),
+    });
+    if (r.status !== 200) return { ok: false, why: `1С відповіла ${r.status}.` };
+    const j: any = await r.json().catch(() => null);
+    if (!j || j.state !== true) return { ok: false, why: `1С: ${String(j?.message ?? "дату акта не змінено").slice(0, 300)}` };
+    const got = typeof j.act_date === "string" && j.act_date ? j.act_date.slice(0, 10) : null;
+    return { ok: true, changed: j.changed !== false, actDate: got };
+  } catch (e) {
+    return { ok: false, why: (e as Error)?.name === "TimeoutError" ? "1С не відповіла за 30 с." : "1С недоступна." };
+  }
+}
+
+/**
+ * Дата поля угоди «Дата выгрузки (Дата акта)» ↔ `YYYY-MM-DD`. Kommo тримає дату як юнікс-секунди ПІВНОЧІ ЗА КИЄВОМ
+ * (заміряно на проді 12.11.2026: 8 133 з 8 133 значень — 00:00 Київ, 21:00/22:00 UTC), тож читаємо по-київськи, а
+ * пишемо північ за Києвом — інакше дата зʼїде на день.
+ */
+export const kyivDateOfUnix = (sec: number) => (sec > 0 ? kyivIso(new Date(sec * 1000)) : "");
+export function kyivMidnightUnix(iso: string): number {
+  const [y, m, d] = iso.split("-").map(Number);
+  for (const h of [3, 2]) { // літній час — UTC+3, зимовий — UTC+2
+    const t = Date.UTC(y, m - 1, d) - h * 3600_000;
+    const hh = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Kyiv", hour: "2-digit", hourCycle: "h23" }).format(new Date(t));
+    if (hh === "00" && kyivIso(new Date(t)) === iso) return t / 1000;
+  }
+  throw new Error(`не вдалося перевести ${iso} у північ за Києвом`);
+}
+
+/**
+ * Що слати в 1С за датою з поля угоди. Правило (Роман, 12.11.2026, 0.6.0): джерело — поле угоди, як було в Genesis.
+ *   поле заповнене і в рахунку інша дата → `setActDate`;
+ *   поле ПОРОЖНЄ → нічого: рахунки до 0.6.0 мали дату з форми (№9398), і порожнє поле не має її стерти;
+ *   реалізацію вже проведено → нічого: дату тоді змінює бухгалтерія (1С і так відмовить).
+ */
+export function actDatePlan(dealDate: string, invoices: { uid: string; actDate: string | null; realized: boolean }[]): { uid: string; date: string }[] {
+  if (!DATE_RE.test(dealDate)) return [];
+  return invoices.filter((i) => !i.realized && i.actDate !== dealDate).map((i) => ({ uid: i.uid, date: dealDate }));
 }
 
 /* ——— оплата рахунку і «Змінити» ——— */

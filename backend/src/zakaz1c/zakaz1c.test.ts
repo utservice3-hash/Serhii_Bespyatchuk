@@ -16,7 +16,9 @@ import { isNetError, withNetRetry } from "./kommoApi.js";
 import { zakaz1cFieldsMode, zakaz1cMode, zakaz1cTesters } from "./env.js";
 import { BEFORE_PAID, PAID_STAGE, patchOf, planPayment, runPayments } from "./payments.js";
 import { invoiceCaption, noteInvoice } from "./notes.js";
-import { SERVICES } from "./invoice.js";
+import { SERVICES, actDatePlan, buildPersonCustomerBody, customerInfoByUid, kyivDateOfUnix, kyivMidnightUnix, normalizePhone, normalizePib,
+  setActDateIn1c } from "./invoice.js";
+import { actDatePatch } from "./kommoApi.js";
 
 /**
  * 🧾 «ТЕСТ ЗАКАЗ 1С» (26.10.2026, `zakaz1c/`). Без БД і мережі: межі модуля — чисті функції, і гейти ганяють рівно їх.
@@ -511,7 +513,7 @@ test("#7127 СТАН УГОДИ З ПОДІЙ: «Оплачено 1с» — ус
   assert.equal(dealPayState([{ currency: "EUR", paidTotal: 100, fullyPaid: true }, { currency: "UAH", paidTotal: 800, fullyPaid: true }]).paidText, "100 EUR + 800 UAH");
   assert.deepEqual(dealPayState([]), { paidText: "0", fullyPaid: false }, "угода без рахунків «оплачена»");
   const full = decidePayment(ev(), { ...CTX, invoices: [{ currency: "UAH", paidTotal: 1200, fullyPaid: true }] });
-  assert.deepEqual(full.patch?.custom_fields_values?.map((f) => [f.field_id, f.values[0].value]), [[2096323, "1200"], [2096325, true]]);
+  assert.deepEqual(full.patch?.custom_fields_values?.map((f) => [f.field_id, f.values?.[0]?.value]), [[2096323, "1200"], [2096325, true]]);
   assert.deepEqual(full.patch?.tags_to_add, [{ name: PAID_TAG }], "тег «полная оплата» не ставиться");
   assert.equal(full.patch?.status_id, 69716460, "повна оплата не переводить на «Оплата отримана»");
   assert.match(full.note ?? "", /Оплата 1200 UAH за рахунком 1С №9070 · рахунок оплачено повністю · угоду оплачено повністю/);
@@ -540,7 +542,7 @@ test("#7128 МЕЖІ ВЕБХУКА: чужий рахунок, угода Genes
 test("#7129 СКАСУВАННЯ ОПЛАТИ: угода вже не оплачена повністю → галочку «Оплачено из 1с» і тег «полная оплата» знято; етап назад не рухаємо", () => {
   const c = decidePayment(ev({ event: "payment_cancelled", paid_total: 0, remaining: 1200, fully_paid: false, payment: { sum: 1200 } }),
     { ...CTX, wasFull: true, tags: [PAID_TAG], statusId: 69716460, invoices: [{ currency: "UAH", paidTotal: 0, fullyPaid: false }] });
-  assert.deepEqual(c.patch?.custom_fields_values?.map((f) => [f.field_id, f.values[0].value]), [[2096323, "0"], [2096325, false]],
+  assert.deepEqual(c.patch?.custom_fields_values?.map((f) => [f.field_id, f.values?.[0]?.value]), [[2096323, "0"], [2096325, false]],
     "після скасування «Оплачено из 1с» лишилась — в угоді неправда");
   assert.deepEqual(c.patch?.tags_to_delete, [{ name: PAID_TAG }], "тег «полная оплата» не знято");
   assert.equal(c.patch?.status_id, undefined, "скасування рухає етап");
@@ -694,3 +696,86 @@ test("#7136 ВІКНО: ОДНЕ ПОЛЕ «РЯДОК У РАХУНКУ» — �
   assert.match(MOUNT(), /servicesEn: Object\.fromEntries\(servicesFor\(o\.key\)\.filter\(\(x\) => x\.en\)/, "вікно не отримує англійські назви");
 });
 
+
+test("#7138 ФІЗОСОБА БЕЗ КОДУ: ПІБ і телефон — як перевіряє 1С; createCustomer з person і без коду; рахунок — лише на клієнта з журналу угоди", async () => {
+  // Формат ПІБ (вимога Сергія 10.11, правило 1С 11.11): три слова або прізвище + 1–2 ініціали; регістр і крапки правимо самі.
+  for (const [raw, want] of [["шевченко  тарас ГРИГОРОВИЧ", "Шевченко Тарас Григорович"], ["коваль і.п.", "Коваль І. П."], ["Коваль І", "Коваль І."],
+    ["о’коннор-ковальчук ш. т.", "О'коннор-Ковальчук Ш. Т."], ["Ковалёв Пётр Ильич", "Ковалёв Пётр Ильич"]] as const) {
+    const r = normalizePib(raw);
+    assert.deepEqual(r, { ok: true, name: want }, `«${raw}» мав стати «${want}»`);
+  }
+  // Пара-заборона: те, що 1С відкидає, ми відкидаємо ДО запиту — інакше менеджер дізнається лише з відповіді 1С.
+  for (const bad of ["Шевченко Тарас", "Максим 380950976171", "+380936047680", "І. П. Шевченко", "Шевченко", "", "Шевченко Тарас Григорович Молодший"]) {
+    assert.equal(normalizePib(bad).ok, false, `«${bad}» пройшов як ПІБ`);
+  }
+  assert.deepEqual([normalizePhone("+380 93 604 7680"), normalizePhone("(093) 604-76-80"), normalizePhone("380936047680")].map((x) => x.ok && x.phone),
+    ["+380936047680", "+380936047680", "+380936047680"]);
+  for (const bad of ["93 604 7680", "+48 600 000 000", ""]) assert.equal(normalizePhone(bad).ok, false, `телефон «${bad}» пройшов`);
+  const b = buildPersonCustomerBody({ name: "шевченко т. г.", phone: "0936047680" }, "Авраменко Нікіта");
+  assert.deepEqual(b, { ok: true, body: { person: true, name: "Шевченко Т. Г.", phone: "+380936047680", manager: "Авраменко Нікіта" } });
+  assert.ok(b.ok && !("edrpou" in b.body) && !("inn" in b.body), "з person пішов код — 1С тоді відмовляє");
+  // Межа режиму: фізособа без коду — лише в live (у test — тільки тестовий ЄДРПОУ); список пілоту діє і для неї.
+  const who = { edrpou: "", testEdrpou: "00100110", userId: 1, testers: new Set([1]) };
+  assert.equal(invoiceAllowed("live", { ...who, person: true }).ok, true, "фізособа без коду не пройшла в live");
+  assert.equal(invoiceAllowed("live", who).ok, false, "компанія без коду пройшла");
+  assert.equal(invoiceAllowed("test", { ...who, person: true }).ok, false, "у тестовому режимі виставили справжній фізособі");
+  assert.equal(invoiceAllowed("live", { ...who, userId: 2, person: true }).ok, false, "фізособа обійшла список пілоту");
+  // customerInfo для фізособи — за uid з журналу, а не за телефоном (на номері буває кілька людей).
+  const urls: string[] = [];
+  await customerInfoByUid("http://1c", "U-1", (async (u: string) => { urls.push(u); return new Response(JSON.stringify({ state: true, uid: "U-1" }), { status: 200 }); }) as never);
+  assert.match(urls[0], /customerInfo\?uid=U-1$/);
+  const m = MOUNT();
+  const person = routeSrc(m, 'r.post("/lead/:leadId/person"', "r.post(");
+  const guard = person.indexOf('=== "genesis") return res.status(409)');
+  assert.ok(guard > 0 && guard < person.indexOf("createCustomerIn1c("), "угода Genesis не відсікається до створення фізособи в 1С");
+  assert.ok(person.indexOf("buildPersonCustomerBody(") < person.indexOf("createCustomerIn1c("), "ПІБ не перевіряється до запиту в 1С");
+  const create = routeSrc(m, 'r.post("/lead/:leadId/invoice"', "r.post(");
+  assert.match(create, /if \(isPerson\) \{\s*const p = await personOfLead\(pool, leadId\);/, "uid фізособи береться не з журналу угоди");
+  assert.doesNotMatch(create, /req\.body\??\.customerUid|body\.customer_uid/, "uid клієнта прийшов з браузера — можна підставити будь-кого");
+});
+
+test("#7139 ДАТА АКТУ З ПОЛЯ УГОДИ → 1С (setActDate): порожнє поле не стирає, проведений не чіпаємо; північ за Києвом; спершу поле угоди, потім 1С", async () => {
+  const inv = [{ uid: "a", actDate: null, realized: false }, { uid: "b", actDate: "2026-11-13", realized: false }, { uid: "c", actDate: "2026-11-01", realized: true }];
+  assert.deepEqual(actDatePlan("2026-11-13", inv), [{ uid: "a", date: "2026-11-13" }], "перенос: зайве або не те (проведений чи вже з тією датою)");
+  assert.deepEqual(actDatePlan("", [{ uid: "x", actDate: "2026-11-11", realized: false }]), [], "порожнє поле угоди стерло б дату з форми (№9398)");
+  // Kommo тримає дату як північ за Києвом (заміряно 12.11.2026) — і взимку (UTC+2), і влітку (UTC+3).
+  for (const d of ["2026-11-13", "2026-07-01", "2026-03-29", "2026-10-25"]) {
+    assert.equal(kyivDateOfUnix(kyivMidnightUnix(d)), d, `дата ${d} зʼїхала на день`);
+    assert.equal(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Kyiv", hour: "2-digit", hourCycle: "h23" }).format(new Date(kyivMidnightUnix(d) * 1000)), "00");
+  }
+  assert.equal(kyivMidnightUnix("2026-11-13"), Date.UTC(2026, 10, 12, 22) / 1000, "13.11.2026 00:00 Київ — не та мітка");
+  assert.deepEqual(actDatePatch(5, null).custom_fields_values, [{ field_id: 463253, values: null }], "очистити поле — values: null");
+  assert.deepEqual(actDatePatch(5, "2026-11-13").custom_fields_values?.[0]?.values, [{ value: kyivMidnightUnix("2026-11-13") }]);
+  // Запит: ключ act_date є завжди (без нього 1С відмовляє), null — очистити; відмову 1С показуємо її словами.
+  const sent: any[] = [];
+  const fake = (reply: unknown) => (async (_u: string, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(reply), { status: 200 }); }) as never;
+  const ok = await setActDateIn1c("http://1c", "u1", "2026-11-12", fake({ state: true, act_date: "2026-11-12", changed: false }));
+  assert.deepEqual(ok, { ok: true, changed: false, actDate: "2026-11-12" });
+  await setActDateIn1c("http://1c", "u1", null, fake({ state: true, act_date: null, changed: true }));
+  assert.deepEqual(sent, [{ invoice_uid: "u1", act_date: "2026-11-12", act_date_by_manager: true }, { invoice_uid: "u1", act_date: null, act_date_by_manager: false }]);
+  const no = await setActDateIn1c("http://1c", "u1", "2026-11-12", fake({ state: false, message: "Рахунок має реалізацію № 6647 від 11.11.2026, дату акта змінює бухгалтерія" }));
+  assert.ok(!no.ok && /реалізацію № 6647/.test(no.why), "відмову 1С проковтнуто або переписано");
+  assert.equal((await setActDateIn1c("http://1c", "u1", "12.11.2026")).ok, false, "дата не в РРРР-ММ-ДД пішла в 1С");
+  const m = MOUNT();
+  const act = routeSrc(m, 'r.post("/lead/:leadId/act-date"', "return r;");
+  assert.ok(act.indexOf("patchLeads([actDatePatch(") > 0 && act.indexOf("patchLeads([actDatePatch(") < act.indexOf("pushActDate("),
+    "у 1С пишемо раніше за поле угоди — наступне відкриття вкладки повернуло б стару дату");
+  assert.ok(act.indexOf('zakaz1cFieldsMode() === "off"') > 0 && act.indexOf('=== "genesis") return res.status(409)') < act.indexOf("patchLeads("),
+    "кнопка дати пише в угоду Genesis або при вимкненому записі полів");
+  assert.match(routeSrc(m, 'r.post("/lead/:leadId/invoice"', "r.post("), /form\.actDate = lead\.actDate \|\| form\.actDate;/, "новий рахунок не бере дату з поля угоди");
+  assert.match(routeSrc(m, 'r.post("/lead/:leadId/invoice/:uid/update"', "r.get("), /form\.actDate = lead\.actDate \|\| form\.actDate \|\| row\.act_date \|\| "";/,
+    "«Змінити» стерло б дату акту, якої немає в полі угоди");
+  assert.match(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "paymentsJob.ts"), "utf8"), /runActDateSync\(pool\)/,
+    "щогодинної звірки дати акту немає — без відкриття вкладки дата не дійде в 1С");
+});
+
+test("#7141 ВІКНО 0.6.0: дати акту у формі рахунку немає — вона в плитці «Документи»; «Фізособа без коду» шле вид клієнта; версія архіву 0.6.0", () => {
+  const js = WIDGET("script.js");
+  assert.doesNotMatch(js, /data-k='actDate'/, "у формі рахунку лишилось поле «Дата акту» — дві різні дати в двох місцях");
+  assert.match(js, /data-z1c-act/, "у плитці «Документи» немає дати акту");
+  assert.match(js, /"\/lead\/" \+ leadId\(\) \+ "\/act-date", \{ date: v \|\| null \}/, "порожня дата не очищає, а шле порожній рядок");
+  assert.match(js, /\$\.extend\(\{\}, f, \{ customerKind: kind\(\) \}\)/, "рахунок не каже серверу, на кого виставляти");
+  assert.match(js, /seg\("kind", \[\{ v: "company", t: "Юрособа \/ ФОП" \}, \{ v: "person", t: "Фізособа без коду" \}\]/, "немає перемикача виду клієнта");
+  assert.match(js, /"\/lead\/" \+ leadId\(\) \+ "\/person", \{ name: name, phone: phone \}/);
+  assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.0");
+});
