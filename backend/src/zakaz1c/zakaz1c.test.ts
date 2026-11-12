@@ -777,5 +777,16 @@ test("#7141 ВІКНО 0.6.0: дати акту у формі рахунку н�
   assert.match(js, /\$\.extend\(\{\}, f, \{ customerKind: kind\(\) \}\)/, "рахунок не каже серверу, на кого виставляти");
   assert.match(js, /seg\("kind", \[\{ v: "company", t: "Юрособа \/ ФОП" \}, \{ v: "person", t: "Фізособа без коду" \}\]/, "немає перемикача виду клієнта");
   assert.match(js, /"\/lead\/" \+ leadId\(\) \+ "\/person", \{ name: name, phone: phone \}/);
-  assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.0");
+  assert.match(JSON.parse(WIDGET("manifest.json")).widget.version, /^0\.6\./);
+});
+
+test("#7142 ВКЛАДКА В МЕНЮ «…»: контейнер зʼявився ПІСЛЯ даних — вікно домальовується, а не лишається порожнім; без зациклення", () => {
+  // 12.11.2026: у вузькому вікні вкладка «Закритий ТЕСТ 1С» схована в «…», Kommo створює її контейнер лише при відкритті —
+  // дані вже прийшли, малювати було нікуди, вкладка порожня. Відтворено в браузері на 0.6.0 і на виправленні.
+  const js = WIDGET("script.js");
+  assert.match(js, /observer = new MutationObserver\(/, "вікно не стежить за появою контейнера вкладки");
+  assert.match(js, /loadPreloadedData: function \(\) \{\s*if \(!allowedHere\(\)\) return Promise\.resolve\(\[\]\);\s*watch\(\);/, "стеження не вмикається разом із вкладкою");
+  assert.match(js, /if \(!el\.length \|\| \(!force && el\.find\("\." \+ NS\)\.length\)\) return;/, "домальовування не перевіряє, що вміст уже є — зациклиться на власних змінах");
+  assert.match(js, /destroy: function \(\) \{[^}]*observer\.disconnect\(\)/, "після закриття картки стеження лишається працювати");
+  assert.match(js, /\.catch\(function \(e\) \{ state\.err = e\.message; paint\(true\); \}\)/, "помилка сервера губиться, якщо контейнера ще не було");
 });

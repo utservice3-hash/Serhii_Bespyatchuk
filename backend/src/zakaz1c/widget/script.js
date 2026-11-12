@@ -21,7 +21,8 @@ define(["jquery"], function ($) {
   return function () {
     var self = this;
     var NS = "z1c";
-    var state = { data: null, form: null, busy: false, msg: null, modal: null, kind: null, personEdit: false, pname: null, pphone: null, actDraft: null };
+    var state = { data: null, err: null, form: null, busy: false, msg: null, modal: null, kind: null, personEdit: false, pname: null, pphone: null, actDraft: null };
+    var observer = null;
 
     function settings() { return self.get_settings() || {}; }
     function apiBase() { return String(settings().api_url || "https://dashboard.uts.ua/api/zakaz1c").replace(/\/+$/, ""); }
@@ -489,8 +490,31 @@ define(["jquery"], function ($) {
       if (!id) return Promise.resolve();
       if (!state.data) root().html("<div class='" + NS + "'>Завантаження…</div>");
       return api("GET", "/lead/" + id).then(function (d) {
-        state.data = d; render();
-      }).catch(function (e) { root().html("<div class='" + NS + "' style='color:#a12626'>" + esc(e.message) + "</div>"); });
+        state.data = d; state.err = null; render();
+      }).catch(function (e) { state.err = e.message; paint(true); });
+    }
+
+    /**
+     * Контейнер вкладки Kommo створює НЕ одразу: вкладку, сховану в меню «…», — лише коли її відкрили (12.11.2026: у вузькому
+     * вікні вкладка порожня, бо дані прийшли, а малювати було нікуди). Тому малюємо й тоді, коли контейнер зʼявився пізніше:
+     * стежимо за сторінкою і домальовуємо, якщо в контейнері ще немає нашого вмісту. Свій же render нового не викликає.
+     */
+    function paint(force) {
+      var el = root();
+      if (!el.length || (!force && el.find("." + NS).length)) return;
+      if (state.err) el.html("<div class='" + NS + "' style='color:#a12626'>" + esc(state.err) + "</div>");
+      else if (state.data) render();
+      else el.html("<div class='" + NS + "'>Завантаження…</div>");
+    }
+    function watch() {
+      if (observer || !window.MutationObserver) return;
+      var queued = false;
+      observer = new MutationObserver(function () {
+        if (queued) return;
+        queued = true;
+        setTimeout(function () { queued = false; paint(false); }, 50);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
     }
 
     function submit() {
@@ -673,10 +697,11 @@ define(["jquery"], function ($) {
       },
       settings: function () { return true; },
       onSave: function () { return true; },
-      destroy: function () { $(document).off("." + NS); },
+      destroy: function () { $(document).off("." + NS); if (observer) { observer.disconnect(); observer = null; } },
       /** Вкладка: `{}` — постійна вкладка (прийом Genesis); `[]` — вкладки немає. */
       loadPreloadedData: function () {
         if (!allowedHere()) return Promise.resolve([]);
+        watch();
         setTimeout(load, 0);
         return Promise.resolve({});
       },
