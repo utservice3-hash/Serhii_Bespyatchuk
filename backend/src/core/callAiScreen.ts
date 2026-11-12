@@ -1,3 +1,4 @@
+import { countsAsContactSql } from "./kommoScreens.js";
 import type { Db } from "./adCallFacts.js";
 import { adDealFirstTalksSql } from "./adCallFactsRules.js";
 import { OUTBOUND_TYPES } from "./missedCallsRules.js";
@@ -421,11 +422,9 @@ export async function tracesByDeal(db: Db, dealIds: readonly number[], since: Da
      SELECT s.kommo_id::text, s.changed_at, 'stage', NULL FROM deal_stage_events s
       WHERE s.kommo_id = ANY($1::bigint[]) AND s.changed_at >= $2
      UNION ALL
-     SELECT c.kommo_deal_id::text, c.created_at, 'screen', NULL FROM client_contacts c
-      WHERE c.kommo_deal_id = ANY($1::bigint[]) AND c.channel = 'kommo' AND c.ai_kind = 'chat' AND c.created_at >= $2
-     UNION ALL
+     -- Контакт клієнта угоди — за тим самим правилом «лише переписка», що «Останній контакт» (8347): фото ТТН не слід.
      SELECT d.kommo_id::text, c.created_at, 'screen', NULL FROM deals d JOIN client_contacts c ON c.client_key = d.client_key
-      WHERE d.kommo_id = ANY($1::bigint[]) AND c.channel <> 'kommo' AND c.created_at >= $2`, [ids, since.toISOString()]);
+      WHERE d.kommo_id = ANY($1::bigint[]) AND ${countsAsContactSql("c")} AND c.created_at >= $2`, [ids, since.toISOString()]);
   for (const x of r.rows) {
     const k = Number(x.deal_id);
     const list = out.get(k) ?? [];

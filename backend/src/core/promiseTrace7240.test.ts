@@ -78,7 +78,7 @@ test("#3914 ПРОВОДКА 7240: сліди доходять до списку
   assert.match(scr, /dealTraces, await tracesKnownUntil\(db, callsKnown\)\)/, "🔴 картка рахує обіцянки без слідів — розійдеться зі списком");
   assert.match(scr, /const known = mp\.channel === "message" \? tracesKnown : knownUntil;/, "🔴 «відомо до» для «напишу» — не за синком нотаток");
   assert.match(scr, /e\.created_by <> 0/, "🔴 нотатки роботів рахуються слідом менеджера");
-  assert.match(scr, /c\.channel = 'kommo' AND c\.ai_kind = 'chat'/, "🔴 слідом рахується будь-яке фото з угоди, а не лише переписка");
+  assert.match(scr, /AND \$\{countsAsContactSql\("c"\)\} AND c\.created_at >= \$2/, "🔴 слідом рахується будь-яке фото з угоди, а не лише переписка");
   assert.match(src("backend/src/index.ts"), /cron\.schedule\("12,42 \* \* \* \*", \(\) => \{\s+if \(isKommoPaused\(\)\) return;\s+void runJob\("syncKommoNoteEvents"/, "🔴 джоба нотаток не в розкладі");
   assert.equal(MONITORED_JOBS.find((j) => j.name === "syncKommoNoteEvents")?.everyMin, 30, "🔴 нагляд за джобою нотаток не збігається з кроном");
   const job = src("backend/src/jobs/syncKommoNoteEvents.ts");
