@@ -1209,3 +1209,37 @@ test("#3740e ЖИВИЙ SQL: у черзі тендерів — менеджер
   assert.match(route, /loadSettingsView\(pool, MAX_PUSH_ATTEMPTS, PEOPLE_SCOPE\)/, "🔴 список черги на екрані не за правилом");
   assert.match(route, /saveConfig\(pool, parsed\.value, \{[^}]*\}, PEOPLE_SCOPE\)/, "🔴 збереження черги перевіряє не тим правилом");
 });
+
+/**
+ * #3750b — ЖИВИЙ SQL: УГОДИ PROZORRO ЗА ПЕРІОД ЗІ СТАНОМ ЗАРАЗ. У період — за `pushed_at` за Києвом (23:30 UTC 09.11 — це вже 10.11);
+ * угода менеджера з «Авто працює» — стан «авто поїхало» (з `money.handoffDealStates`); розмова — вихідний > 8 с після створення
+ * (8 с — ні); причина — лише закритої; поза періодом — немає.
+ * 🧨 САБОТАЖ: у `prozorroDeals` прибрати `AT TIME ZONE 'Europe/Kyiv'` з фільтра періоду → червоніє (угода 10.11 за Києвом випала).
+ */
+test("#3750b ЖИВИЙ SQL: угоди Prozorro за період (Київ) — стан зараз, авто з угоди менеджера, розмова > 8 с, поза періодом — ні", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  await core();
+  const { prozorroDeals } = await import("./prozorroDeals.js");
+  await client.query(`INSERT INTO prozorro_tenders (ua_id) VALUES ('UA-3750-1'),('UA-3750-2'),('UA-3750-3') ON CONFLICT DO NOTHING`);
+  const pz = async (status: number, reason: string | null) => { const id = nextId++;
+    await client!.query(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, reject_reason, created_at_kommo) VALUES ($1,'тендер',1,8921936,$2,$3,now())`, [id, status, reason]); return id; };
+  const lead = async (ua: string, kommo: number, phone: string, pushed: string) => client!.query(
+    `INSERT INTO prozorro_leads (edrpou, ua_id, company_name, phone, amount, niches, card_text, mode, kommo_lead_id, pushed_at)
+     VALUES ('37500001', $1, 'ТОВ Тест '||$1, $2, 900000, '{Енергетика/електрика}', 'к', 'live', $3, $4)`, [ua, phone, kommo, pushed]);
+  const passed = await pz(142, null), closed = await pz(143, "Дубль"), outside = await pz(113258624, null);
+  const child = nextId++;
+  await client.query(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, created_at_kommo) VALUES ($1,'менеджер',3,8921932,69716300,now())`, [child]);
+  await client.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1,$2,now())`, [passed, child]);
+  await client.query(`INSERT INTO deal_stage_events (kommo_id, status_id, pipeline_id, changed_at) VALUES ($1,69716300,8921932,'2026-11-11T09:00:00Z')`, [child]);
+  await lead("UA-3750-1", passed, "067 375 00 01", "2026-11-09T23:30:00Z");
+  await lead("UA-3750-2", closed, "067 375 00 02", "2026-11-10T08:00:00Z");
+  await lead("UA-3750-3", outside, "067 375 00 03", "2026-11-12T08:00:00Z");
+  await client.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, client_phone) VALUES
+    ('c3750-1','2026-11-10T10:00:00Z','out',9,'380673750001'),('c3750-2','2026-11-10T10:00:00Z','out',8,'380673750002')`);
+  const r = await prozorroDeals(client as never, "2026-11-10", "2026-11-10", new Date("2026-11-13T10:00:00Z"));
+  const by = new Map(r.rows.map((x) => [x.leadId, x]));
+  assert.deepEqual([...by.keys()].sort(), [passed, closed].sort(), "🔴 у період потрапила не та множина (Київ: 23:30 UTC 09.11 = 10.11; 12.11 — поза)");
+  assert.deepEqual([by.get(passed)?.state, by.get(passed)?.talk, by.get(passed)?.reason], ["auto", true, null], "🔴 передана з авто: не «авто поїхало» або розмова 9 с не врахована");
+  assert.deepEqual([by.get(closed)?.state, by.get(closed)?.talk, by.get(closed)?.reason], ["closed", false, "Дубль"], "🔴 закрита: стан, розмова 8 с чи причина");
+  assert.equal(r.summary.total, 2, "🔴 підсумок не з тих самих рядків");
+});

@@ -684,6 +684,22 @@ export async function fetchProzorroStats(from: string, to: string): Promise<Proz
   const { data } = await api.get<ProzorroStatsResp>("/prozorro/stats", { params: { from, to } });
   return data;
 }
+/** 📋 Угоди, які бот записав у Kommo за період, зі станом ЗАРАЗ (TOP Weekly 12.11.2026). */
+export type PzDealStateT = "new" | "taken" | "opr" | "passed" | "auto" | "paid" | "closed";
+export interface PzDealRowT { leadId: number; url: string; day: string; company: string; amount: number | null; niche: string | null;
+  manager: string | null; team: string | null; state: PzDealStateT; reason: string | null; talk: boolean; ageDays: number }
+export interface PzDealsResp {
+  from: string; to: string; rows: PzDealRowT[];
+  summary: { total: number; fresh: number; work: number; passed: number; closed: number; talk: number;
+    funnel: { step: string; n: number }[];
+    people: { manager: string; team: string | null; total: number; fresh: number; stale: number; work: number; passed: number; closed: number; talk: number }[];
+    reasons: { reason: string; n: number }[];
+    niches: { niche: string; total: number; worked: number; closed: number }[] };
+}
+export async function fetchProzorroDeals(from: string, to: string): Promise<PzDealsResp> {
+  const { data } = await api.get<PzDealsResp>("/prozorro/deals", { params: { from, to } });
+  return data;
+}
 export async function fetchProzorroSettings(): Promise<ProzorroSettingsResp> {
   const { data } = await api.get<ProzorroSettingsResp>("/prozorro/settings");
   return data;

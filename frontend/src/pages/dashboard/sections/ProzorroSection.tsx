@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { fetchProzorroSettings, fetchProzorroStats, hiringError, saveProzorroSettings,
+import { fetchProzorroDeals, fetchProzorroSettings, fetchProzorroStats, hiringError, saveProzorroSettings, type PzDealsResp,
   type ProzorroSettingsResp, type ProzorroStatsResp, type PzConfigT, type PzModeT, type PzAssignModeT } from "../../../api";
 import { todayKyiv } from "../periodRules";
 import { useDialogs } from "../../../components/Dialogs";
+import { EMPTY_FILTER, ProzorroDealsPool, ProzorroDealsStats, type PoolFilter } from "./ProzorroDeals";
 
 /**
  * 🏛 «ТЕНДЕРИ PROZORRO» — екран у групі «Клієнти» (задача #5299). Дві вкладки:
@@ -29,6 +30,7 @@ export function ProzorroSection({ roleKey }: { roleKey: string | null }) {
   const [custom, setCustom] = useState({ from: addDays(today, -13), to: today });
   const period = presetPeriod(preset, today, custom);
   const [stats, setStats] = useState<ProzorroStatsResp | null>(null);
+  const [deals, setDeals] = useState<PzDealsResp | null>(null);
   const [settings, setSettings] = useState<ProzorroSettingsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   // Дзеркало серверного `SETTINGS_ROLES` (core/prozorroSettings.ts): адмін і ОД (у Сергія роль opdir).
@@ -36,10 +38,12 @@ export function ProzorroSection({ roleKey }: { roleKey: string | null }) {
   useEffect(() => {
     setErr(null);
     fetchProzorroStats(period.from, period.to).then(setStats).catch((e) => setErr(hiringError(e)));
+    setDeals(null);
+    fetchProzorroDeals(period.from, period.to).then(setDeals).catch((e) => setErr(hiringError(e)));
   }, [period.from, period.to]);
   useEffect(() => { if (isAdmin) fetchProzorroSettings().then(setSettings).catch((e) => setErr(hiringError(e))); }, [isAdmin]);
   return (
-    <ProzorroScreen stats={stats} settings={settings} canEdit={isAdmin} err={err}
+    <ProzorroScreen stats={stats} deals={deals} settings={settings} canEdit={isAdmin} err={err}
       preset={preset} onPreset={setPreset} custom={custom} onCustom={setCustom}
       onSave={async (c) => { const r = await saveProzorroSettings(c); setSettings(r); }} />
   );
@@ -47,6 +51,8 @@ export function ProzorroSection({ roleKey }: { roleKey: string | null }) {
 
 export interface ProzorroScreenProps {
   stats: ProzorroStatsResp | null;
+  /** Угоди, записані в Kommo за період, зі станом зараз (детальна статистика й пул, TOP Weekly 12.11.2026). */
+  deals?: PzDealsResp | null;
   settings: ProzorroSettingsResp | null;
   canEdit: boolean;
   err: string | null;
@@ -58,7 +64,9 @@ export interface ProzorroScreenProps {
 }
 
 export function ProzorroScreen(p: ProzorroScreenProps) {
-  const [tab, setTab] = useState<"stats" | "settings">("stats");
+  const [tab, setTab] = useState<"stats" | "pool" | "settings">("stats");
+  const [pool, setPool] = useState<PoolFilter>(EMPTY_FILTER);
+  const openPool = (f: Partial<PoolFilter>) => { setPool({ ...EMPTY_FILTER, ...f }); setTab("pool"); };
   const min = p.settings?.config.minAmount;
   return (
     <div>
@@ -71,11 +79,14 @@ export function ProzorroScreen(p: ProzorroScreenProps) {
         </div>
         <div className="cl-tabs">
           <button type="button" className="cl-tab" aria-pressed={tab === "stats"} onClick={() => setTab("stats")}>Статистика</button>
+          <button type="button" className="cl-tab" aria-pressed={tab === "pool"} onClick={() => setTab("pool")}>Угоди</button>
           {p.canEdit && <button type="button" className="cl-tab" aria-pressed={tab === "settings"} onClick={() => setTab("settings")}>Налаштування</button>}
         </div>
       </div>
       {p.err && <p className="loading-text" style={{ color: "#b3261e" }}>{p.err}</p>}
-      {tab === "stats" || !p.canEdit ? <StatsTab {...p} /> : p.settings ? <SettingsTab view={p.settings} onSave={p.onSave} /> : <p className="loading-text">Завантаження…</p>}
+      {tab === "settings" && p.canEdit
+        ? (p.settings ? <SettingsTab view={p.settings} onSave={p.onSave} /> : <p className="loading-text">Завантаження…</p>)
+        : <StatsTab {...p} tab={tab === "pool" ? "pool" : "stats"} pool={pool} onPool={setPool} onOpenPool={openPool} />}
     </div>
   );
 }
@@ -84,7 +95,7 @@ const PRESETS: { key: Preset; label: string }[] = [{ key: "week", label: "Тиж
 const ddmm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 const fmtAt = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
-function StatsTab(p: ProzorroScreenProps) {
+function StatsTab(p: ProzorroScreenProps & { tab: "stats" | "pool"; pool: PoolFilter; onPool: (f: PoolFilter) => void; onOpenPool: (f: Partial<PoolFilter>) => void }) {
   const s = p.stats;
   const dayCount = s ? s.days.length : 0;
   return (
@@ -99,6 +110,9 @@ function StatsTab(p: ProzorroScreenProps) {
           <input type="date" value={p.custom.to} min={p.custom.from} onChange={(e) => p.onCustom({ ...p.custom, to: e.target.value })} aria-label="по" />
         </>}
       </div>
+      {p.tab === "pool" ? (p.deals ? <ProzorroDealsPool data={p.deals} filter={p.pool} onFilter={p.onPool} /> : <p className="loading-text">Завантаження…</p>) : <>
+      {p.deals ? <ProzorroDealsStats data={p.deals} onOpen={p.onOpenPool} /> : <p className="loading-text">Завантаження угод…</p>}
+      <h2 className="section-heading">Збір з Prozorro</h2>
       {!s ? <p className="loading-text">Завантаження…</p> : (
         <>
           <div className="kpi-grid">
@@ -142,6 +156,7 @@ function StatsTab(p: ProzorroScreenProps) {
           </div>
         </>
       )}
+      </>}
     </div>
   );
 }
@@ -152,14 +167,14 @@ const MODE_UI: { key: PzModeT; label: string; hint: string }[] = [
   { key: "live", label: "Бойовий", hint: "Нові переможці щоранку йдуть у Kommo — кому, вибирається нижче." },
 ];
 const ASSIGN_UI: { key: PzAssignModeT; label: string; hint: string }[] = [
-  { key: "opdir", label: "На «Операційного директора»", hint: "Усі угоди — на акаунт «Операційний директор» у Kommo, далі їх розбирають вручну. Задачу «зв'язатися» не ставимо." },
+  { key: "opdir", label: "На адміна", hint: "Усі угоди — на адмін-акаунт Kommo («Операційний директор»), далі їх розбирають вручну. Задачу «зв'язатися» не ставимо." },
   { key: "one", label: "Одна людина", hint: "Усі угоди — на вибраного лідогена. Йому ж — задача «зв'язатися» на сьогодні." },
   { key: "rotation", label: "По черзі по днях", hint: "Усі угоди одного дня — одній людині, наступного дня — наступній, по колу (вихідні теж). Кожному — задача «зв'язатися» на сьогодні." },
 ];
 
 /** Кому підуть угоди за формою: текст для «Що буде далі» й підтвердження. `null` — нікому (не вибрано). */
 export function assigneeText(c: PzConfigT, v: ProzorroSettingsResp): string | null {
-  if (c.assignMode === "opdir") return "акаунт «Операційний директор» (розбирають вручну, без задачі)";
+  if (c.assignMode === "opdir") return "адміна (акаунт «Операційний директор»; розбирають вручну, без задачі)";
   if (c.assignMode === "one") return v.options.find((o) => o.id === c.responsibleManagerId)?.name ?? null;
   const names = c.rotationIds.map((id) => v.people.find((p) => p.id === id)?.name ?? `#${String(id)}`);
   if (!names.length) return null;

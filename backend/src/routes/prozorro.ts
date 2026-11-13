@@ -4,6 +4,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { MAX_PUSH_ATTEMPTS } from "../core/prozorroPush.js";
 import { canEditSettings, loadSettingsView, parseConfig, saveConfig } from "../core/prozorroSettings.js";
 import { parsePeriod, prozorroStats } from "../core/prozorroStats.js";
+import { prozorroDeals } from "../core/prozorroDeals.js";
 import { cachedKommoCheck, loadReadiness } from "../core/prozorroReadiness.js";
 import { kommoGet } from "../kommo/client.js";
 import { commercialManagerSql, LEADGEN_DASH_TEAM_ID } from "../core/metrics.js";
@@ -26,6 +27,14 @@ prozorroRouter.get("/stats", async (req, res) => {
   const p = parsePeriod(req.query.from, req.query.to);
   if (!p.ok) { res.status(400).json({ error: p.error }); return; }
   res.json(await prozorroStats(pool, p.from, p.to));
+});
+
+// 📋 Угоди, які бот записав у Kommo за період, зі станом зараз і підсумками (TOP Weekly 12.11.2026). Межа — та сама вкладка.
+prozorroRouter.get("/deals", async (req, res) => {
+  const p = parsePeriod(req.query.from, req.query.to);
+  if (!p.ok) { res.status(400).json({ error: p.error }); return; }
+  const r = await prozorroDeals(pool, p.from, p.to);
+  res.json({ from: p.from, to: p.to, summary: r.summary, rows: r.rows });
 });
 
 prozorroRouter.get("/settings", async (req, res) => {

@@ -1941,6 +1941,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🏛 «Тендери Prozorro» (#5299): екран — адмін, СЕО, ОД, КВП (вкладка `prozorro`); налаштування — адмін і ОД (`SETTINGS_ROLES`).
   { method: "GET", path: "/api/prozorro/stats", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/prozorro/deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/prozorro/settings", cls: "GET",
     allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/prozorro/settings", cls: "deny-only",

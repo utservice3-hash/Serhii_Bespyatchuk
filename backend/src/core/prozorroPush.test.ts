@@ -9,6 +9,7 @@ import {
 import { activeNiches, canEditSettings, parseConfig, saveConfig, type PzConfig } from "./prozorroSettings.js";
 import { parsePeriod } from "./prozorroStats.js";
 import { assignTarget, callClosesTask, rotationPick, OPDIR_KOMMO_USER_ID } from "./prozorroAssign.js";
+import { pzDealState, summarizeDeals, type PzDealRow } from "./prozorroDealRules.js";
 import type { Db } from "./adCallFacts.js";
 
 const SRC = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
@@ -377,4 +378,32 @@ test("#3740c НАЛАШТУВАННЯ ЧЕРГИ: межі, лише актив�
   assert.equal(f.state.cfg.rotationFrom, "2026-11-11", "🔴 зміна іншого поля перезапустила чергу");
   await saveConfig(db, { ...f.state.cfg, rotationIds: [13, 12, 14] }, who, "true", "2026-11-13");
   assert.equal(f.state.cfg.rotationFrom, "2026-11-13", "🔴 зміна складу черги не перезапустила відлік");
+});
+
+/**
+ * #3750 — ТЕНДЕРНІ УГОДИ: СТАН І ПІДСУМКИ (TOP Weekly 12.11.2026, макет 13.11). Стан угоди Продзвону зараз: «Тендер AI» — не взято;
+ * ОПР; 143 — закрито; 142 — передано, а далі за угодою менеджера: авто поїхало / оплата; решта робочих — «взято». Воронка накопичена
+ * (ОПР уже «взято», передано — уже ОПР); «довше доби» — лише серед не взятих; причини — лише закритих; Σ людей == усього.
+ * 🧨 САБОТАЖ: у `summarizeDeals` прибрати накопичення (`reach[REACHED[r.state]]++` замість циклу) → червоніє (воронка не накопичена).
+ */
+test("#3750 ТЕНДЕРНІ УГОДИ: стан зараз за етапом і угодою менеджера; воронка накопичена; «довше доби» лише серед не взятих", () => {
+  const ids = { tender: 113258624, opr: 69716492, qualified: 142, lost: 143 };
+  assert.equal(pzDealState(113258624, null, ids), "new", "🔴 «Тендер AI» — не «не взято»");
+  assert.equal(pzDealState(69693696, null, ids), "taken", "🔴 «Взято в роботу» — не «взято»");
+  assert.equal(pzDealState(69716492, null, ids), "opr", "🔴 ОПР");
+  assert.equal(pzDealState(143, { cls: "success", autoDay: "2026-11-10" }, ids), "closed", "🔴 закрита угода Продзвону — не «закрито»");
+  assert.equal(pzDealState(142, null, ids), "passed", "🔴 кваліфікована без угоди менеджера — не «передано»");
+  assert.equal(pzDealState(142, { cls: "expect", autoDay: "2026-11-10" }, ids), "auto", "🔴 авто поїхало не видно");
+  assert.equal(pzDealState(142, { cls: "work", autoDay: null }, ids), "passed", "🔴 угода менеджера в роботі — не «передано»");
+  assert.equal(pzDealState(142, { cls: "paid", autoDay: "2026-11-10" }, ids), "paid", "🔴 оплата не видна");
+  const R = (state: PzDealRow["state"], manager: string, extra: Partial<PzDealRow> = {}): PzDealRow =>
+    ({ leadId: 1, url: "u", day: "2026-11-10", company: "К", amount: 1, niche: "Н", manager, team: "Т", state, reason: null, talk: false, ageDays: 0, ...extra });
+  const s = summarizeDeals([R("new", "А", { ageDays: 2 }), R("new", "А", { ageDays: 0 }), R("taken", "Б", { talk: true }), R("opr", "Б"),
+    R("passed", "В"), R("auto", "В"), R("closed", "В", { reason: "Дубль", ageDays: 5 }), R("closed", "Б", { reason: "" })]);
+  assert.deepEqual(s.funnel.map((f) => f.n), [8, 4, 3, 2, 1, 0], "🔴 воронка не накопичена або не з того стану");
+  assert.deepEqual([s.fresh, s.work, s.passed, s.closed, s.talk], [2, 2, 2, 2, 1], "🔴 плитки не сходяться");
+  const a = s.people.find((p) => p.manager === "А")!;
+  assert.deepEqual([a.fresh, a.stale], [2, 1], "🔴 «довше доби» — не лише серед не взятих або межа доби");
+  assert.equal(s.people.reduce((x, p) => x + p.total, 0), s.total, "🔴 Σ людей ≠ усього");
+  assert.deepEqual(s.reasons, [{ reason: "Дубль", n: 1 }, { reason: "причину не вказано", n: 1 }], "🔴 причини — не лише закритих або порожня не названа");
 });
