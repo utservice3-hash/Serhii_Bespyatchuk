@@ -373,24 +373,54 @@ test("#84 ПРОГНОЗ ІСНУЄ ЛИШЕ ДЛЯ ПОВНОГО ПОТОЧН�
 
 // ──────────────────────────── #86 · статус ────────────────────────────
 
-test("#86 СВІТЛОФОР — ВІД ТЕМПУ (m.status), А НЕ ВІД ВІДСОТКА", async () => {
+/**
+ * #7732 — СВІТЛОФОР ВІД ТЕМПУ (`m.status`), І «ВИКОНАНО» ФАРБУЄТЬСЯ ТИМ САМИМ СТАНОМ. Наступник `#86`
+ * (13.11.2026, «щоб все було як на макеті»): бейдж «Виконано» більше не нейтральний — він у
+ * кольорі стану, як на макеті. Твердження, заради якого `#86` існував, лишається: ДВОХ вердиктів
+ * у рядку немає, бо колір бейджа береться з того самого `m.status`, що смужка біля імені, а не
+ * з відсотка. 20% плану на початку місяця — «у нормі», і бейдж мусить бути зеленим, а не червоним.
+ * 🧨 Червоніє, якщо бейдж фарбувати за `pct` (пороги) або смужку — не за `m.status`.
+ */
+test("#7732 СВІТЛОФОР — ВІД ТЕМПУ (m.status); бейдж «Виконано» фарбується ТИМ САМИМ станом, а не відсотком", async () => {
   const { REPORT_COLS } = await loadCols();
   const col = REPORT_COLS.find((c: any) => c.key === "status");
-  // 20% плану на початку місяця — це «в нормі» за темпом. Якби колонка читала pct,
-  // такий рядок став би «зривом», і екран сперечався б сам із собою.
   const early = mgr({ pct: 20, status: "g" });
   const late = mgr({ pct: 95, status: "r" });
-  assert.ok(col.val(early) > col.val(late),
-    "🔴 порядок статусів більше не відповідає m.status — колонку перевели на відсоток");
-  const s = readFileSync(TABLE_TSX, "utf8");
-  assert.ok(/background: `var\(\$\{TOKEN\[m\.status\]\}\)`/.test(s),
-    "🔴 крапка фарбується не за m.status");
-  // Бейдж «Викон.%» мусить лишатись нейтральним — інакше два різні вердикти в рядку.
-  const badge = s.split("function pctBadge")[1]?.slice(0, 420) ?? "";
-  for (const tok of ["--ok", "--danger", "--warn"])
-    assert.equal(badge.includes(tok), false,
-      `🔴 бейдж «Викон.%» фарбується статусним токеном (${tok}) — поруч із крапкою від темпу `
-      + "це два вердикти про одну людину в одному рядку");
+  assert.ok(col.val(early) > col.val(late), "🔴 порядок статусів більше не відповідає m.status — колонку перевели на відсоток");
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(s, /\["--sc" as string\]: `var\(\$\{TOKEN\[m\.status\]\}\)`/, "🔴 смужка біля імені фарбується не за m.status");
+  const badge = s.split("function pctBadge(")[1]?.split("\nfunction ")[0]?.split("const badge")[0] ?? "";
+  assert.ok(badge.length > 0, "🔴 бейджа «Виконано» немає — розбір зламався");
+  assert.match(badge, /pct: number \| null, status: string/, "🔴 бейдж не отримує стан — колір з нізвідки");
+  assert.match(badge, /var\(\$\{TOKEN\[status\]\}-bg\)/, "🔴 фон бейджа не з токена стану");
+  assert.equal(/pct\s*[<>]=?\s*\d/.test(badge), false, "🔴 колір бейджа залежить від порогів відсотка — другий вердикт у рядку");
+  assert.match(s, /pctBadge\(m\.pct, m\.status\)/, "🔴 у бейдж іде не стан рядка");
+});
+
+/**
+ * #7733 — ОДИН РАЗ НА ЛЮДИНУ КОЛОНКИ СКИДАЮТЬСЯ ДО МАКЕТА, ДАЛІ ВИБІР НЕ ГУБИТЬСЯ.
+ * Рішення Романа 13.11.2026 («щоб все було як на макеті»): старі вибори колонок робили таблицю
+ * не такою, як макет. Скидання пише ТИПОВІ значення в особисті ключі (інакше читання впало б на
+ * старий спільний ключ), ставить позначку, і на другий раз нічого не чіпає. Чужі ключі не зачіпає.
+ * 🧨 Червоніє, якщо скидання повторюється, стирає особистий ключ замість запису або чіпає чужого.
+ */
+test("#7733 ОДИН РАЗ НА ЛЮДИНУ — КОЛОНКИ ЯК У МАКЕТІ; ДРУГИЙ РАЗ НІЧОГО НЕ ЧІПАЄ; ЧУЖІ НЕ ЗАЧЕПЛЕНІ", async () => {
+  const { remakeResetOnce, readColPrefs, readColOrder, readMgrWidth, defaultColOrder, DEFAULT_OPT_ON } = await loadCols();
+  const st = memStore({ rptTableCols: { created: true, status: true }, "rptTableCols:42": { created: true, status: true, fact: false },
+    "rptTableColOrder:42": ["rank", "name", "created", "fact"], "rptMgrWidth:42": 120, "rptTableCols:7": { convAd: true } });
+  assert.equal(remakeResetOnce(st, 42), true, "🔴 перше відкриття не скинуло колонки до макета");
+  assert.deepEqual(readColPrefs(st, 42), { ...DEFAULT_OPT_ON }, "🔴 після скидання — не типовий набір (або прочитався старий спільний ключ)");
+  assert.deepEqual(readColOrder(st, 42), defaultColOrder(), "🔴 після скидання — не типовий порядок");
+  assert.equal(readMgrWidth(st, 42), null, "🔴 ширина «Менеджер» не повернулась до природної");
+  assert.equal(st.data.get("rptTableCols:7"), JSON.stringify({ convAd: true }), "🔴 скидання зачепило чужий вибір");
+  // Далі людина налаштовує сама — і її вибір живе.
+  st.data.set("rptTableCols:42", JSON.stringify({ ...DEFAULT_OPT_ON, created: true }));
+  assert.equal(remakeResetOnce(st, 42), false, "🔴 скидання повторилось — вибір людини губитиметься щоразу");
+  assert.equal(readColPrefs(st, 42).created, true, "🔴 вибір після скидання загубився");
+  assert.equal(remakeResetOnce(null, 42), false, "🔴 без сховища скидання «сталось»");
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  const iReset = s.indexOf("remakeResetOnce(colStore(), userId)"), iRead = s.indexOf("readColPrefs(colStore(), userId)");
+  assert.ok(iReset > 0 && iRead > iReset, "🔴 скидання стоїть ПІСЛЯ читання вибору — таблиця відмалюється зі старим");
 });
 
 // ──────────────────────────── #87 · дзвінки ────────────────────────────
