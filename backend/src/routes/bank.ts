@@ -34,7 +34,7 @@ const audit = (req: import("express").Request) => ({ actorUserId: req.auth!.user
 // Вхідні — усі ролі. Стрічка гортається по всій історії (keyset); ПІДСУМКИ (агрегати) — лише за
 // правом view_bank_totals і лише на 1-й сторінці. Без права блок summary у payload ВІДСУТНІЙ узагалі.
 bankRouter.get("/incoming", async (req, res) => {
-  const f = { ...filterFrom(req.query as Record<string, unknown>), canSeePrivate: roleHasPerm(req.auth!.roleKey, "view_private_finance") };
+  const f = { ...filterFrom(req.query as Record<string, unknown>), canSeePrivate: roleHasPerm(req.auth!.roleKey, "view_private_finance"), userId: req.auth!.userId };
   const page = await feedPage("in", f, [], true);
   const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor };
   if (!f.cursor && roleHasPerm(req.auth!.roleKey, "view_bank_totals")) body.summary = await periodSummary("in", f, [], true);
@@ -46,7 +46,7 @@ bankRouter.get("/incoming", async (req, res) => {
 bankRouter.get("/outgoing", async (req, res) => {
   const canSeeHidden = roleHasPerm(req.auth!.roleKey, "view_hidden_payments");
   const payees = await getHiddenPayees();
-  const f = { ...filterFrom(req.query as Record<string, unknown>), canSeePrivate: roleHasPerm(req.auth!.roleKey, "view_private_finance") };
+  const f = { ...filterFrom(req.query as Record<string, unknown>), canSeePrivate: roleHasPerm(req.auth!.roleKey, "view_private_finance"), userId: req.auth!.userId };
   const page = await feedPage("out", f, payees, canSeeHidden);
   const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor, canSeeHidden };
   if (!f.cursor && roleHasPerm(req.auth!.roleKey, "view_bank_totals")) body.summary = await periodSummary("out", f, payees, canSeeHidden);
@@ -208,21 +208,33 @@ bankRouter.get("/accounts", async (req, res) => {
   const r = await pool.query(
     `SELECT id, company, bank, label, currency, external_account_id, is_active,
             legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou,
-            legal_address, director, purpose, env_key_name, finance_only, out_private, mono_pan_last4
+            legal_address, director, purpose, env_key_name, finance_only, out_private, mono_pan_last4,
+            out_editors, (SELECT array_agg(COALESCE(NULLIF(btrim(u.full_name), ''), split_part(u.email, '@', 1)) ORDER BY u.id)
+                            FROM users u WHERE u.id = ANY(bank_accounts.out_editors)) AS out_editor_names
        FROM bank_accounts WHERE $1::boolean OR NOT finance_only ORDER BY is_active DESC, label`, [canSeePrivate]);
   const accounts = r.rows.map((a) => {
     const out: Record<string, unknown> = {
       api_connected: a.bank === "manual" || !!tokenFor(a.env_key_name),
       finance_only: a.finance_only,
       out_private: a.out_private,
+      // «Люди картки» (13.11.2026): хто вносить розшифровку витрат цієї картки — імена бачать усі, кому видно рахунок.
+      out_editor_names: a.out_editor_names ?? [],
     };
     for (const f of ACCOUNT_PUBLIC_FIELDS) out[f] = a[f];
     if (canSeeFinance) for (const f of ACCOUNT_FINANCE_FIELDS) out[f] = a[f];
     // Назва env-змінної — лише для панелі керування. ЗНАЧЕННЯ ключа — ніколи й нікому.
-    if (canManage) { out.env_key_name = a.env_key_name; out.mono_pan_last4 = a.mono_pan_last4; }
+    if (canManage) { out.env_key_name = a.env_key_name; out.mono_pan_last4 = a.mono_pan_last4; out.out_editors = a.out_editors ?? []; }
     return out;
   });
   res.json({ accounts });
+});
+
+// 💳 Кандидати в «людей картки» (13.11.2026): активні люди, чия роль має право вносити розшифровку вихідних.
+bankRouter.get("/accounts/editor-candidates", requirePerm("manage_bank_accounts"), async (_req, res) => {
+  const r = await pool.query<{ id: number; name: string; role: string }>(
+    `SELECT id, COALESCE(NULLIF(btrim(full_name), ''), split_part(email, '@', 1)) AS name, COALESCE(role_override, role) AS role
+       FROM users WHERE is_active ORDER BY 2`);
+  res.json({ users: r.rows.filter((u) => roleHasPerm(u.role, "edit_bank_out_breakdown")).map((u) => ({ id: u.id, name: u.name })) });
 });
 
 // --- Мутації реквізитів (право manage_bank_accounts) ---

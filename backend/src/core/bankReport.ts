@@ -1,5 +1,6 @@
 // Звіт по виписці + СЕРВЕРНЕ приховування. Підсумки — у UAH (amount_uah).
 import { pool } from "../db/pool.js";
+import { FOP_TOPUP_TEXT } from "../bankIdent/bankIdent.js";
 
 export interface HiddenPayee { pattern: string; match_type: "exact" | "glob" }
 export interface BankFilter {
@@ -11,7 +12,15 @@ export interface BankFilter {
    * замовчуванням — ні.
    */
   canSeePrivate?: boolean;
+  /** Хто дивиться: «люди картки» (`bank_accounts.out_editors`) бачать її витрати й без `view_private_finance`. Ставить сервер. */
+  userId?: number;
 }
+
+/**
+ * Поповнення картки з гривневого рахунку ФОП (Тетяна 13.11.2026) — без `view_private_finance` не видно ні в списку, ні в Σ.
+ * Той самий текст, що `isFopTopUp` (`bankIdent/bankIdent.ts`); пробіли нормалізуються однаково — тримає #3700.
+ */
+export const FOP_TOPUP_LIKE = `(regexp_replace(COALESCE(t.counterparty_name, '') || ' ' || COALESCE(t.purpose, ''), '\\s+', ' ', 'g') LIKE '%${FOP_TOPUP_TEXT}%')`;
 
 interface Cursor { b: string; id: number } // booked_at ISO + id останнього рядка сторінки
 export function parseCursor(s?: string): Cursor | null {
@@ -66,7 +75,11 @@ function whereClause(dir: "in" | "out", f: BankFilter, params: unknown[], opts: 
   const c = [`t.direction = '${dir}'`, `a.is_active = true`, `t.deleted_at IS NULL`];
   if (!f.canSeePrivate) c.push(`NOT a.finance_only`);
   // Робоча картка: надходження бачать усі, витрати — лише з правом (і в списку, і в Σ — одна умова на обидва).
-  if (!f.canSeePrivate && dir === "out") c.push(`NOT a.out_private`);
+  if (!f.canSeePrivate && dir === "out") {
+    if (f.userId != null) { params.push(f.userId); c.push(`(NOT a.out_private OR $${params.length}::int = ANY(a.out_editors))`); }
+    else c.push(`NOT a.out_private`);
+  }
+  if (!f.canSeePrivate && dir === "in") c.push(`NOT ${FOP_TOPUP_LIKE}`);
   if (dir === "out") c.push(`NOT COALESCE(t.is_bank_fee, false)`); // комісії банку не показуємо у вихідних (ні в списку, ні в Σ)
   if (opts.period && f.from) { params.push(f.from); c.push(`(t.booked_at AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`); }
   if (opts.period && f.to) { params.push(f.to); c.push(`(t.booked_at AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`); }

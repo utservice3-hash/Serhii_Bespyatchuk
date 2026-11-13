@@ -11,7 +11,7 @@
  * «Зʼявився у виписці» = `created_at` (момент запису синком): строк рахується від пізнішого з «банк» і «у нас».
  */
 import type { Pool } from 'pg';
-import type { TxLite } from './bankIdent.js';
+import { isFopTopUp, type TxLite } from './bankIdent.js';
 import { isHidden, type HiddenPayee } from '../core/bankReport.js';
 
 /** Рядок виписки — поля стрічки «Виписки» + службові для правила й видимості. */
@@ -27,6 +27,8 @@ export interface BankTx {
   amount?: string | number | null;
   finance_only?: boolean;
   out_private?: boolean;
+  /** Хто, крім ролей з `view_private_finance`, бачить витрати цієї картки й один вносить їх розшифровку. */
+  out_editors?: number[] | null;
   account_active?: boolean;
   [k: string]: unknown;
 }
@@ -39,7 +41,7 @@ export interface TxSource {
 
 const COLS = `t.id, t.account_id, a.company, a.label AS account_label, t.direction, t.booked_at, t.processed_at,
   t.counterparty_name, t.counterparty_iban, t.purpose, t.amount, t.currency, t.fx_rate, t.amount_uah, t.external_tx_id,
-  t.unmatched_account, t.created_at AS seen_at, a.finance_only, a.out_private, a.is_active AS account_active`;
+  t.unmatched_account, t.created_at AS seen_at, a.finance_only, a.out_private, a.out_editors, a.is_active AS account_active`;
 
 export function ourTxSource(pool: Pool): TxSource {
   return {
@@ -66,11 +68,21 @@ export function ourTxSource(pool: Pool): TxSource {
   };
 }
 
+/**
+ * «Люди картки» (Тетяна 13.11.2026: «розшифровку витрат вносимо лише ми»): `bank_accounts.out_editors` — хто, крім ролей
+ * з `view_private_finance`, бачить витрати робочої картки і хто ЄДИНИЙ вносить їх розшифровку. Порожньо — правила ролей.
+ */
+export const outEditorsOf = (t: Pick<BankTx, 'out_editors'>): number[] => (Array.isArray(t.out_editors) ? t.out_editors.map(Number) : []);
+export const isOutEditor = (t: Pick<BankTx, 'out_editors'>, userId: number | string | null | undefined): boolean =>
+  userId != null && outEditorsOf(t).includes(Number(userId));
+
 /** Межа видимості рядка — та сама, що у стрічці «Виписки» (чиста функція, гейт ганяє саме її). */
-export function canSeeTxRow(t: BankTx, p: { privateFinance: boolean; hiddenPayments: boolean }, payees: HiddenPayee[]): boolean {
+export function canSeeTxRow(t: BankTx, p: { privateFinance: boolean; hiddenPayments: boolean; userId?: number | string | null }, payees: HiddenPayee[]): boolean {
   if (!p.privateFinance && (t.account_active === false || t.finance_only)) return false;
   const out = String(t.direction) === 'out';
-  if (out && !p.privateFinance && t.out_private) return false;
+  // Поповнення з ФОП — лише з правом (Тетяна 13.11.2026: «менеджери бачать надходження усі, окрім з гривневого рахунку ФОП»).
+  if (!out && !p.privateFinance && isFopTopUp(t.counterparty_name ?? null, t.purpose ?? null)) return false;
+  if (out && !p.privateFinance && t.out_private && !isOutEditor(t, p.userId)) return false;
   if (out && !p.hiddenPayments && isHidden((t.counterparty_name as string | null) ?? null, payees)) return false;
   return true;
 }

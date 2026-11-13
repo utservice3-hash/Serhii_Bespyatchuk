@@ -14,6 +14,8 @@ export interface OutLineRaw { kind: OutKind; ref: string; amount: number; note?:
 export interface OutLineView extends OutLineRaw { name: string | null; manager: string | null; known: boolean }
 export interface OutState {
   txId: number; own: boolean; status: OutStatus; amount: number;
+  /** Чи може саме ця людина вносити розшифровку цього платежу (на картці з «людьми картки» — лише вони). */
+  editable?: boolean;
   lines: OutLineView[]; sum: number; text: string;
   corrected: boolean; by: string | null; at: string | null; reason: string | null;
 }

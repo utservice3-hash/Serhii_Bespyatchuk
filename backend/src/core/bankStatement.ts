@@ -1,3 +1,4 @@
+import { isFopTopUp } from "../bankIdent/bankIdent.js";
 import { pool } from "../db/pool.js";
 import { isHidden, type HiddenPayee } from "./bankReport.js";
 import { excludeHidden, type RawTx, type StatementBank } from "./bankStatementCsv.js";
@@ -34,6 +35,8 @@ export async function statementData(
     [accountId, from, to]);
   const { visible, hiddenExcluded } = excludeHidden(r.rows, (n) => isHidden(n, payees), canSeeHidden);
   // Витрати робочої картки без права — як приховані отримувачі: у файл не йдуть, але їх кількість названа.
-  const shown = a.out_private && !canSeePrivate ? visible.filter((x) => x.direction !== "out") : visible;
+  const noOut = a.out_private && !canSeePrivate ? visible.filter((x) => x.direction !== "out") : visible;
+  // Поповнення з ФОП — як у стрічці: без права у файл не йде (Тетяна 13.11.2026).
+  const shown = canSeePrivate ? noOut : noOut.filter((x) => !(x.direction === "in" && isFopTopUp(x.counterparty_name, null)));
   return { bank: a.bank, label: a.label, iban: a.iban, rows: shown.map((x) => x.raw_json ?? {}), hiddenExcluded: hiddenExcluded + (visible.length - shown.length) };
 }

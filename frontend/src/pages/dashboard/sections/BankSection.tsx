@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchBankAccounts, downloadBankStatement, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites, fetchBankCashflow,
+  fetchBankAccounts, downloadBankStatement, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankEditorCandidates, fetchBankBalances, fetchBankRequisites, fetchBankCashflow,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
   fetchBankManual, fetchSafeStatus, syncSafeNow, type BankManualRow, type SafeSyncStatus,
   type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance, type BankRequisite, type CashflowMonth,
@@ -205,7 +205,7 @@ export default function BankSection() {
   }, [outKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const outListRows = outList && outList.key === outKey ? outList.rows : null;
   const onOutChange = useCallback((s: OutState) => { setOutStates((p) => ({ ...p, [s.txId]: s })); reloadOutCounts(); }, [reloadOutCounts]);
-  const outFor = (r: BankTx) => (canSeeOut && outStates[r.id] ? { state: outStates[r.id], canEdit: outCanEdit, onChange: onOutChange } : undefined);
+  const outFor = (r: BankTx) => (canSeeOut && outStates[r.id] ? { state: outStates[r.id], canEdit: outCanEdit && outStates[r.id].editable !== false, onChange: onOutChange } : undefined);
 
   // Перша сторінка (скидання): підсумки за період + перша порція історії.
   const loadFirst = useCallback(() => {
@@ -423,7 +423,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
   const toast = useToast();
   const startEdit = (a: BankAccount) => { setEditId(a.id); setDraft({ ...a }); };
   const save = async () => {
-    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined, ...(draft.bank === "mono" ? { monoPanLast4: draft.mono_pan_last4 ?? "" } : {}) } as never); setEditId(null); await onChange(); toast(`Збережено: «${draft.label ?? "рахунок"}»`, { tone: "ok" }); }
+    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined, ...(draft.bank === "mono" ? { monoPanLast4: draft.mono_pan_last4 ?? "" } : {}), ...(draft.out_private ? { outEditors: draft.out_editors ?? [] } : {}) } as never); setEditId(null); await onChange(); toast(`Збережено: «${draft.label ?? "рахунок"}»`, { tone: "ok" }); }
     catch (e) { toast(`Не збережено: ${err(e)}`, { error: true }); }
   };
   const toggleActive = async (a: BankAccount) => {
@@ -456,6 +456,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
                   <label key={k} style={{ fontSize: 12 }}>{lbl}<input value={(draft[k] as string) ?? ""} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} style={{ ...inp, width: "100%", boxSizing: "border-box", marginTop: 2 }} /></label>
                 ))}
                 {a.bank === "mono" && <label style={{ fontSize: 12 }}>Останні 4 цифри картки (моно){a.company === "staff" ? " — обовʼязково" : ""}<input inputMode="numeric" maxLength={4} placeholder="1234" value={draft.mono_pan_last4 ?? ""} onChange={(e) => setDraft({ ...draft, mono_pan_last4: e.target.value.replace(/\D/g, "") })} style={{ ...inp, width: "100%", boxSizing: "border-box", marginTop: 2 }} /></label>}
+                {a.out_private && <EditorsPicker value={draft.out_editors ?? []} onChange={(v) => setDraft({ ...draft, out_editors: v })} />}
                 <div style={{ display: "flex", gap: 8 }}>
                   <button onClick={save} style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: "#16a34a", color: "#fff", fontWeight: 700, cursor: "pointer" }}>Зберегти</button>
                   <button onClick={() => setEditId(null)} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: MUTED, cursor: "pointer" }}>Скасувати</button>
@@ -464,6 +465,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
             ) : (
               <div style={{ fontSize: 13, lineHeight: 1.9 }}>
                 <Req label="ЄДРПОУ" v={a.edrpou_ipn} /><Req label="ІПН (ПДВ)" v={a.vat_ipn ?? null} /><Req label="IBAN" v={a.iban} /><Req label="Ключ-карта" v={a.key_card ?? null} /><Req label="Банк · МФО" v={a.bank_name ? `${a.bank_name}${a.mfo ? " · " + a.mfo : ""}${a.bank_edrpou ? " · ЄДРПОУ банку " + a.bank_edrpou : ""}` : null} /><Req label="Юр. адреса" v={a.legal_address ?? null} /><Req label="Директор" v={a.director ?? null} /><Req label="Призначення" v={a.purpose} />
+                {a.out_private && <Req label="Розшифровку витрат вносять" v={a.out_editor_names?.length ? a.out_editor_names.join(", ") : "усі з правом (як у ФОП)"} />}
                 {a.bank === "mono" && <Req label="Картка (моно)" v={a.mono_pan_last4 ? `•••• ${a.mono_pan_last4}` : a.company === "staff" ? "цифри не вказано — картку не буде привʼязано" : null} />}
                 <button onClick={() => startEdit(a)} style={{ marginTop: 8, padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5 }}>✎ Редагувати</button>
               </div>
@@ -991,6 +993,28 @@ function SafeRow({ r }: { r: BankManualRow }) {
             : <span style={{ flexShrink: 0, fontSize: 11.5, whiteSpace: "nowrap" }}>кому: {r.deal_ref}</span>)}
           <span style={{ flexShrink: 0, fontSize: 11.5, whiteSpace: "nowrap" }}>{who}</span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+
+/**
+ * 💳 «Люди картки» (Тетяна 13.11.2026: «розшифровку витрат вносимо лише ми»): хто бачить витрати робочої картки й ЄДИНИЙ
+ * вносить їх розшифровку. Кандидати — люди, чия роль має право вносити розшифровку. Порожньо — як у ФОП (за ролями).
+ */
+function EditorsPicker({ value, onChange }: { value: number[]; onChange: (v: number[]) => void }) {
+  const [users, setUsers] = useState<{ id: number; name: string }[] | null>(null);
+  useEffect(() => { let live = true; fetchBankEditorCandidates().then((u) => { if (live) setUsers(u); }).catch(() => { if (live) setUsers([]); }); return () => { live = false; }; }, []);
+  return (
+    <div style={{ fontSize: 12 }}>
+      Розшифровку витрат вносять (бачать витрати картки; порожньо — усі з правом, як у ФОП)
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", marginTop: 4 }}>
+        {users === null ? <span style={{ color: MUTED }}>Завантаження…</span> : users.map((u) => (
+          <label key={u.id} style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
+            <input type="checkbox" checked={value.includes(u.id)} onChange={(e) => onChange(e.target.checked ? [...value, u.id] : value.filter((x) => x !== u.id))} /> {u.name}
+          </label>
+        ))}
       </div>
     </div>
   );

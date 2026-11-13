@@ -28,7 +28,7 @@ import {
 } from "../bankIdent/bankIdentStore.js";
 import { bankIdentConfigFromEnv, identEngine, type BankIdentOptions, type FullRights } from "../bankIdent/identEngine.js";
 import { HttpError, errorHandler, personOf, type AuthedRequest, type ReqUser } from "../bankIdent/rights.js";
-import { canSeeTxRow, ourTxSource, publicRow, toLite, type BankTx } from "../bankIdent/txSource.js";
+import { canSeeTxRow, isOutEditor, outEditorsOf, ourTxSource, publicRow, toLite, type BankTx } from "../bankIdent/txSource.js";
 import { jobSkip, type JobSkip } from "../jobs/jobRuns.js";
 import {
   EDIT_PERM as OUT_EDIT_PERM, VIEW_PERM as OUT_VIEW_PERM, OUT_FILTERS, OUT_FROM, checkReason as checkOutReason, formatBreakdown,
@@ -54,6 +54,7 @@ export const bankIdentOptions: BankIdentOptions = {
   canSeeTx: async (u: ReqUser, t: BankTx) => canSeeTxRow(t, {
     privateFinance: roleHasPerm(String(u.role || ""), "view_private_finance"),
     hiddenPayments: roleHasPerm(String(u.role || ""), "view_hidden_payments"),
+    userId: u.id,
   }, await payees()),
   accountIds: env.accountIds, outCommentAccountIds: env.outCommentAccountIds, hours: env.hours, holidays: env.holidays, identFrom: env.identFrom,
 };
@@ -349,14 +350,16 @@ async function outCandidates(req: AuthedRequest): Promise<Array<{ t: BankTx; own
   return txs.filter(isOutTx).sort((a, b) => Date.parse(String(b.booked_at)) - Date.parse(String(a.booked_at)))
     .map((t) => ({ t, own: isOutOwn(toLite(t), rules) }));
 }
-async function outStates(ids: number[], txs: BankTx[], own: Set<number>) {
+/** Вносити розшифровку цього платежу: право ролі, а на картці з «людьми картки» — лише вони (Тетяна 13.11.2026). */
+const outEditable = (t: BankTx, userId: number | string | undefined) => !outEditorsOf(t).length || isOutEditor(t, userId);
+async function outStates(ids: number[], txs: BankTx[], own: Set<number>, userId?: number | string) {
   const rows = await outRowsByIds(pool, ids);
   const labels = await dealLabels(pool, [...new Set([...rows.values()].flatMap((x) => x.lines.filter((l) => l.kind === "deal").map((l) => Number(l.ref))))]);
   const out: Record<number, unknown> = {};
   for (const t of txs) {
     const id = Number(t.id), row = rows.get(id) ?? null, amount = Math.abs(Number(t.amount));
     out[id] = {
-      txId: id, own: own.has(id) && !row, status: own.has(id) && !row ? "own" : outStatus(row, amount), amount,
+      txId: id, editable: outEditable(t, userId), own: own.has(id) && !row, status: own.has(id) && !row ? "own" : outStatus(row, amount), amount,
       lines: (row?.lines ?? []).map((l) => {
         const d = l.kind === "deal" ? labels.get(Number(l.ref)) : undefined;
         return { kind: l.kind, ref: l.ref, amount: l.amount, note: l.note, name: d?.name ?? null, manager: d?.manager ?? null, known: l.kind !== "deal" || !!d };
@@ -373,7 +376,7 @@ r.post("/out/state", async (req: AuthedRequest, res) => {
   const txs = (await visible(req.user!, await bankIdentOptions.txs.byIds(ids))).filter(isOutTx);
   const rules = await engine.rules();
   const own = new Set(txs.filter((t) => isOutOwn(toLite(t), rules)).map((t) => Number(t.id)));
-  res.json({ states: await outStates(txs.map((t) => Number(t.id)), txs, own), canEdit: outCan(req, OUT_EDIT_PERM) });
+  res.json({ states: await outStates(txs.map((t) => Number(t.id)), txs, own, req.user!.id), canEdit: outCan(req, OUT_EDIT_PERM) });
 });
 r.get("/out/counts", async (req: AuthedRequest, res) => {
   outNeed(req, OUT_VIEW_PERM);
@@ -393,7 +396,7 @@ r.get("/out/list", async (req: AuthedRequest, res) => {
   const hit = cands.filter((c) => inFilter(f, rows.get(Number(c.t.id)) ?? null, Math.abs(Number(c.t.amount))));
   const page = hit.slice(0, limit).map((c) => c.t);
   res.json({ rows: page.map(publicRow), total: hit.length,
-    states: await outStates(page.map((t) => Number(t.id)), page, new Set()), canEdit: outCan(req, OUT_EDIT_PERM) });
+    states: await outStates(page.map((t) => Number(t.id)), page, new Set(), req.user!.id), canEdit: outCan(req, OUT_EDIT_PERM) });
 });
 r.get("/out/:txId/history", async (req: AuthedRequest, res) => {
   outNeed(req, OUT_VIEW_PERM);
@@ -409,6 +412,7 @@ async function outWrite(req: AuthedRequest, kind: "lines" | "unidentify") {
   const id = txIdOf(String(req.params.txId));
   const t = await oneTx(req.user!, id);
   if (!isOutTx(t)) throw new HttpError(400, OUT_NOT_IN_SCOPE);
+  if (!outEditable(t, req.user!.id)) throw new HttpError(403, "Розшифровку витрат цієї картки вносять лише визначені люди (налаштування рахунку).");
   let lines: OutLine[] = [];
   if (kind === "lines") {
     const p = parseBreakdown(req.body?.text);
@@ -424,7 +428,7 @@ async function outWrite(req: AuthedRequest, kind: "lines" | "unidentify") {
       status: kind === "lines" ? "identified" : "unidentified", lines, corrected: step.corrected || !!before?.corrected,
       act: step.act, before, reason: reason || null, me });
   });
-  return (await outStates([id], [t], new Set()))[id];
+  return (await outStates([id], [t], new Set(), req.user!.id))[id];
 }
 r.post("/out/:txId", async (req: AuthedRequest, res) => { res.status(201).json({ state: await outWrite(req, "lines") }); });
 r.post("/out/:txId/unidentify", async (req: AuthedRequest, res) => { res.status(201).json({ state: await outWrite(req, "unidentify") }); });

@@ -307,6 +307,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/bank/accounts/:id", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 💳 Кандидати в «людей картки» (13.11.2026): лише ті, хто керує рахунками (як PATCH/DELETE рахунку).
+  { method: "GET", path: "/api/bank/accounts/editor-candidates", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/bank/balances", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/bank/cashflow", cls: "GET",

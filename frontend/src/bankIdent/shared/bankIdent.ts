@@ -138,7 +138,8 @@ export const roleLabel = (r: string | null | undefined) => (r ? ROLE_LABEL[r] ||
 // ───────────── налаштування правила ─────────────
 
 /** Рахунки, звірені з дашбордом 27.10: 3 — ФОП Беспятчук (Приват), 4 — ФОП Беспятчук (Моно), 11 — Oleksandr Stupakivskyi робоча моно. */
-export const DEFAULT_ACCOUNT_IDS = [3, 4, 11];
+// 9 — «Беспятчук white (Моно)», робоча картка замість картки Ступаківського (Тетяна 13.11.2026: «так само, як з картою Саші»).
+export const DEFAULT_ACCOUNT_IDS = [3, 4, 9, 11];
 /** Коментарі до вихідних — лише ФОП (рішення Сергія: «на вихідних платежах по ФОПу»). */
 export const DEFAULT_OUT_COMMENT_ACCOUNT_IDS = [3, 4];
 /** «Горить» — лишилось менше 12 робочих годин. */
@@ -162,12 +163,22 @@ export interface IdentRules {
 export const normIban = (s: string | null | undefined) => String(s || '').replace(/\s+/g, '').toUpperCase();
 const OWN_PURPOSE = /між\s+власними\s+рахунками/i;
 
+/**
+ * 💳 Поповнення картки з гривневого рахунку ФОП (Тетяна 13.11.2026): монобанк пише контрагентом «З гривневого рахунку
+ * ФОП» — без IBAN і без імені. Це свій переказ (№ рахунку не потрібен), і менеджери його не бачать. Той самий текст —
+ * у SQL стрічки (`core/bankReport.ts`, FOP_TOPUP_LIKE) і в AI-вью; збіг тримає #3700.
+ */
+export const FOP_TOPUP_TEXT = 'гривневого рахунку ФОП';
+export const isFopTopUp = (name: string | null | undefined, purpose: string | null | undefined): boolean =>
+  `${name ?? ''} ${purpose ?? ''}`.replace(/\s+/g, ' ').includes(FOP_TOPUP_TEXT);
+
 /** Свій переказ: з нашого IBAN, від власника ФОП або «між власними рахунками». */
 export function isOwnTransfer(tx: TxLite, r: Pick<IdentRules, 'ownIbans' | 'ownNames'>): boolean {
   const iban = normIban(tx.counterpartyIban);
   if (iban && r.ownIbans.has(iban)) return true;
   const name = String(tx.counterpartyName || '').toLowerCase();
   if (name && r.ownNames.some(n => n && name.includes(n))) return true;
+  if (isFopTopUp(tx.counterpartyName, tx.purpose)) return true;
   return OWN_PURPOSE.test(String(tx.purpose || ''));
 }
 

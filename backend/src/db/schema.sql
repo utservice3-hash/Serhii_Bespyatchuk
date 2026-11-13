@@ -5966,7 +5966,8 @@ UPDATE roles SET permissions = permissions - 'view_private_finance' WHERE key IN
 CREATE OR REPLACE VIEW ai_bank_transactions AS
   SELECT t.id, t.account_id, t.direction, t.booked_at, t.counterparty_name, t.purpose, t.amount, t.currency, t.amount_uah, t.is_bank_fee
     FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
-   WHERE NOT a.finance_only AND NOT (a.out_private AND t.direction = 'out') AND t.deleted_at IS NULL;
+   WHERE NOT a.finance_only AND NOT (a.out_private AND t.direction = 'out') AND t.deleted_at IS NULL
+     AND NOT (t.direction = 'in' AND regexp_replace(COALESCE(t.counterparty_name, '') || ' ' || COALESCE(t.purpose, ''), '\s+', ' ', 'g') LIKE '%гривневого рахунку ФОП%');
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🔄 СЕЙФ — ДЗЕРКАЛО GOOGLE-ТАБЛИЦІ (Роман 12.10.2026: «Сергій більше не вносить у дашборд, тільки в таблицю»).
@@ -8237,3 +8238,13 @@ CREATE TABLE IF NOT EXISTS kommo_note_events (
 CREATE INDEX IF NOT EXISTS idx_kommo_note_events_lead ON kommo_note_events(lead_id, created_at);
 -- Вотермарк синку нотаток. NULL = синку ще не було → обіцянки «напишу» чекають, а не «немає сліду».
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS kommo_note_events_at TIMESTAMPTZ;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💳 «ЛЮДИ КАРТКИ» (Тетяна 13.11.2026, робоча картка «Беспятчук white (Моно)» замість картки Ступаківського):
+--   «розшифровка витрат — вносимо лише ми (Тетяна й Яцик), обовʼязково бачить бухгалтерія».
+--  · `out_editors` — users.id, які, крім ролей з `view_private_finance`, БАЧАТЬ витрати робочої картки (`out_private`)
+--    і ЄДИНІ вносять їх розшифровку. Порожньо — як було: правила ролей (розшифровка ФОП не змінюється).
+--  · Значення ставить людина в «Налаштуваннях виписки» (`PATCH /api/bank/accounts/:id`, поле outEditors).
+-- Відкат даних (код їх не прибирає): ALTER TABLE bank_accounts DROP COLUMN out_editors;
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS out_editors INTEGER[] NOT NULL DEFAULT '{}';

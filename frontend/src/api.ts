@@ -4593,6 +4593,8 @@ export interface BankAccount {
   out_private?: boolean;
   /** Моно: останні 4 цифри картки — за ними синк обирає рахунок під токеном (лише для панелі керування). */
   mono_pan_last4?: string | null;
+  /** «Люди картки» (13.11.2026): хто бачить витрати робочої картки й один вносить їх розшифровку; id — лише панелі керування. */
+  out_editors?: number[]; out_editor_names?: string[];
   external_account_id: string | null; is_active: boolean;
   legal_name: string | null; edrpou_ipn: string | null; iban: string | null;
   key_card?: string | null; // ключ-карта ФОП (звичайні реквізити, як IBAN)
@@ -4648,7 +4650,8 @@ export async function fetchBankOutgoing(p: BankQuery): Promise<BankFeed> {
   const { data } = await api.get<BankFeed>("/bank/outgoing", { params: bankParams(p) });
   return data;
 }
-export async function saveBankAccount(id: number | null, patch: Partial<BankAccount> & { envKeyName?: string; legalName?: string; edrpouIpn?: string; bankName?: string; isActive?: boolean; vatIpn?: string; legalAddress?: string; director?: string; bankEdrpou?: string; keyCard?: string }): Promise<void> {
+export const fetchBankEditorCandidates = async () => (await api.get<{ users: { id: number; name: string }[] }>("/bank/accounts/editor-candidates")).data.users;
+export async function saveBankAccount(id: number | null, patch: Partial<BankAccount> & { outEditors?: number[]; envKeyName?: string; legalName?: string; edrpouIpn?: string; bankName?: string; isActive?: boolean; vatIpn?: string; legalAddress?: string; director?: string; bankEdrpou?: string; keyCard?: string }): Promise<void> {
   if (id == null) await api.post("/bank/accounts", patch); else await api.patch(`/bank/accounts/${id}`, patch);
 }
 export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null; balance_uah?: number | null; fx_gain_period?: number | null }

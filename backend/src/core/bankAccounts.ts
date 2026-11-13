@@ -96,6 +96,13 @@ export function buildAccountUpdate(b: Record<string, unknown>, cur: { bank: stri
     params.push(last4); sets.push(`mono_pan_last4 = $${params.length}`);
     rebind.push(`mono_pan_last4 IS DISTINCT FROM $${params.length}`);
   }
+  // «Люди картки» (13.11.2026): список users.id — цілі додатні, без повторів, не більше 10. Порожній — правила ролей.
+  if ("outEditors" in v) {
+    const raw = v.outEditors;
+    if (!Array.isArray(raw) || raw.length > 10 || raw.some((x) => !Number.isInteger(Number(x)) || Number(x) <= 0))
+      throw new FinError(400, "«Хто вносить розшифровку» — список людей (до 10)");
+    params.push([...new Set(raw.map(Number))]); sets.push(`out_editors = $${params.length}::int[]`);
+  }
   if (rebind.length && !("externalAccountId" in v))
     sets.push(`external_account_id = CASE WHEN ${rebind.join(" OR ")} THEN NULL ELSE external_account_id END`);
   return { sets, params };
