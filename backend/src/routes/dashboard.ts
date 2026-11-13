@@ -110,6 +110,8 @@ import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWi
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam,
   leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, addDays, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
 import { ltvAccess } from "../core/leadgenLtvRules.js";
+import { phone9 } from "../core/lardiCheckRules.js";
+import { lardiCheck } from "../core/lardiCheck.js";
 import { leadgenLtvView, leadgenLtvClients } from "../core/leadgenLtv.js";
 import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
   mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, planPace, isCurrentFullMonth, PACE_METRICS,
@@ -641,6 +643,17 @@ dashboardRouter.get("/leadgen-ltv-clients", async (req, res) => {
   const access = ltvAccess(await leadgenViewerAuth(req.auth!), pick);
   if (!access.ok) return res.status(access.status).json({ error: access.error });
   res.json(await leadgenLtvClients(access.scope, access.pick));
+});
+
+// 🔎 «ПЕРЕВІРИТИ НОМЕР НА ЛАРДІ» (задача 8136): лідген вводить номер і бачить, що про нього відомо на Ларді, — щоб не
+// передавати менеджеру прорахунок від експедиції. Межа — як у решти вкладки (`leadgenViewer`), першим оператором;
+// номер перевіряється ПІСЛЯ межі (403 раніше за 400). Нічого не пишемо. Правила — `core/lardiCheckRules.ts`.
+dashboardRouter.get("/leadgen-lardi-check", async (req, res) => {
+  const viewer = leadgenViewer(await leadgenViewerAuth(req.auth!));
+  if (viewer.kind === "deny") return res.status(403).json({ error: viewer.error });
+  const p9 = phone9(req.query.phone);
+  if (!p9) return res.status(400).json({ error: "Введіть номер телефону повністю — щонайменше 9 цифр" });
+  res.json(await lardiCheck(p9));
 });
 
 // 🔎 «ЯКІ УГОДИ РАХУЄМО» (рішення власника 16.10.2026, регламент лідгенів §14, §16): угоди ОДНОГО лідгена за період,

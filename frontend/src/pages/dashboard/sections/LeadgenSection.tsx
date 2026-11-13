@@ -16,6 +16,7 @@ import { LeadgenCharts } from "./LeadgenCharts";
 import { LeadgenCountedDeals } from "./LeadgenCountedDeals";
 import { LeadgenLtvBlock } from "./LeadgenLtvBlock";
 import { LeadgenRatingsBlock } from "./LeadgenRatingsBlock";
+import { LeadgenLardiCheck } from "./LeadgenLardiCheck";
 import { plural } from "../receivablesView";
 
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", MUTED = "var(--text-muted)";
@@ -347,6 +348,8 @@ export function LeadgenSection() {
           onPick={(id) => pickWho(String(id))} />
       )}
       {view === "stats" && <>
+      {/* 🔎 Перевірка номера на Ларді (задача 8136) — робочий інструмент лідгена, тому зверху й незалежно від періоду. */}
+      {!denied && <LeadgenLardiCheck />}
       {denied && (
         <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
           <div style={{ fontSize: 30, marginBottom: 6 }}>🔒</div>

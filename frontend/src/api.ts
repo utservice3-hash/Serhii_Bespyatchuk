@@ -260,6 +260,19 @@ export async function fetchLeadgenLtv(params: { from: string; to: string; manage
   const { data } = await api.get<LeadgenLtvResp>("/dashboard/leadgen-ltv", { params });
   return data;
 }
+/** 🔎 «Перевірити номер на Ларді» (задача 8136): усе рахує сервер (`core/lardiCheckRules.ts`). */
+export interface LardiCheckOffer { side: "cargo" | "lorry"; offerId: string; company: string | null; face: string | null; from: string | null; to: string | null;
+  cargo: string | null; mass: number | null; total: number | null; currency: string | null; negotiable: boolean; seenAt: string }
+export interface LardiCheckResp {
+  phone: string; days: number;
+  verdict: { kind: "cargo" | "carrier" | "known" | "none"; title: string; advice: string; pass: boolean | null };
+  lardi: { ok: boolean; status: number; users: { refId: number; name: string; town: string | null; positive: number; negative: number; since: string | null }[] };
+  archive: { cargo: number; lorry: number; routes: number; withPrice: number; companies: string[]; last: LardiCheckOffer[]; lastLorry: LardiCheckOffer[] };
+}
+export async function fetchLardiCheck(phone: string): Promise<LardiCheckResp> {
+  const { data } = await api.get<LardiCheckResp>("/dashboard/leadgen-lardi-check", { params: { phone } });
+  return data;
+}
 export interface LeadgenLtvClientsResp { clients: LtvClient[]; pool: { clientKey: string; name: string; takenAt: string; ltv: number; deals: number; handedBy: string }[] }
 export async function fetchLeadgenLtvClients(params: { managerId?: number }): Promise<LeadgenLtvClientsResp> {
   const { data } = await api.get<LeadgenLtvClientsResp>("/dashboard/leadgen-ltv-clients", { params });

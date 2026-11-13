@@ -794,6 +794,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/leadgen-ltv-clients", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 🔎 «Перевірити номер на Ларді» (задача 8136): та сама межа, що решта вкладки; менеджер продажу — 403 (`#3953`).
+  { method: "GET", path: "/api/dashboard/leadgen-lardi-check", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   // 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) — дзеркало формування плану продажів:
   // перегляд — як `/leadgen-stats`; подає тімлід (своя команда) і адмін-рівень, менеджер — 403
   // першим оператором; затверджує й повертає ЛИШЕ адмін-рівень (`requireRole("admin")`, як
