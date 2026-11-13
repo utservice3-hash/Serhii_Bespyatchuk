@@ -7,15 +7,15 @@ import {
   type DayItemKind, type DayItems, type DealSource, type DealKlass,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
-import { PeriodNav, navBtn } from "../PeriodNav";
+import { PeriodStepper } from "../PeriodStepper";
 import {
-  addDays, ddmm, dow, mondayOf, monthEnd, monthStart, sundayOf, todayKyiv,
+  ddmm, dow, mondayOf, monthEnd, monthStart, sundayOf, todayKyiv,
   periodOf, periodLabelOf, type PeriodMode, type PeriodState,
 } from "../periodRules";
 import { InfoHint } from "../widgets";
 import { ReportTableSection, LevelChip } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
-import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
+import { firstTouchLabel, firstTouchStale, fmtCallback } from "../reportTableCols";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#213`.
 import { NON_COMMERCIAL_TEAM_IDS } from "../teamSets";
 import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
@@ -215,7 +215,6 @@ export function ReportPlanSection({ auth, teams }: {
     if (patch.rangeTo !== undefined) setRangeTo(patch.rangeTo);
   };
 
-  const weekOfFocus = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(mondayOf(focusDay), i)), [focusDay]);
   /**
    * 🔴 ОДИН ШЛЯХ ЗАВАНТАЖЕННЯ НА ВСІ ЧОТИРИ ЗАПИТИ (місяць, тиждень, фокус-день,
    * діапазон). Розвилка «одна команда / кілька» стоїть ТУТ і ніде більше —
@@ -328,73 +327,58 @@ export function ReportPlanSection({ auth, teams }: {
   const busy = loading || rangeLoading;
   const weekByMgr = useMemo(() => new Map((weekData?.managers ?? []).map((m) => [m.managerId, m])), [weekData]);
   const viewerId = data?.viewerManagerId ?? auth.managerId;
-  const selfRow = data?.managers.find((m) => m.managerId === viewerId) ?? null;
-  const roleChip = auth.role === "admin" ? "усі команди" : "свою команду";
   const teamName = teamId ? teams.find((t) => t.id === Number(teamId))?.name : "";
 
   // Навігація ←/→ живе в `navBy` (../periodRules) — те саме правило кроку тепер
   // виконує й «Реклама». Тіло не мінялось.
 
-  return (
-    <div style={{ maxWidth: 1120, margin: "0 auto" }}>
-      {/* Хедер */}
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
-        <div>
-          <h1 style={{ fontSize: 21, margin: 0 }}>Звіт{teamName ? ` — ${teamName}` : ""}</h1>
-          {/* 🔴 Підпис — за ОБРАНИМ періодом. Заголовок «серпень» над тижневими цифрами
-              це рівно той клас поломки, який ми вже ловили: підпис правдивий, величина
-              за ним інша. */}
-          <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>Грошовий план — вкладка «Плани» (2.7 млн) · KPI-активність — задачник · <b style={{ color: "var(--text)" }}>{periodLabel}</b></div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {/* Картки / Таблиця — той самий вигляд сегмента, що й перемикач періоду нижче. */}
-          <div style={{ display: "flex", gap: 4, background: "var(--surface-2)", border: "1px solid var(--border)", padding: 3, borderRadius: 9 }}>
-            {(["cards", "table"] as const).map((v) => (
-              <button key={v} onClick={() => pickView(v)} aria-pressed={view === v} style={{
-                padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600,
-                background: view === v ? "var(--card-bg)" : "transparent",
-                color: view === v ? "var(--brand)" : MUTED,
-                boxShadow: view === v ? "var(--shadow)" : "none",
-              }}>{v === "cards" ? "Картки" : "Таблиця"}</button>
-            ))}
-          </div>
-          <div style={{ fontSize: 12, color: MUTED, background: "var(--card-bg)", border: "1px solid var(--border)", padding: "4px 11px", borderRadius: 20 }}>
-            Ти бачиш: <b style={{ color: "var(--text)" }}>{roleChip}</b>
-          </div>
-        </div>
-      </div>
+  /**
+   * 📅 ДЕНЬ ПЛИТКИ «СЬОГОДНІ» — останній день обраного періоду, але не пізніше сьогодні.
+   * Смуги днів у новому вигляді немає (макет, 13.11.2026): конкретний день дивляться
+   * режимом «День». Тиждень картки рахується від цього ж дня — тобто це тиждень,
+   * у якому лежить показаний день, а не довільний.
+   */
+  const dayShown = selectedPeriod.to > today ? today : selectedPeriod.to;
+  useEffect(() => {
+    if (mode !== "day" && focusDay !== dayShown) setFocusDay(dayShown);
+  }, [mode, dayShown, focusDay]);
 
-      {/* Нав: режим (дрил) + період + календар + команда(admin).
-          Розмітка переїхала в `../PeriodNav` — той самий контрол тепер і на «Рекламі». */}
-      <PeriodNav state={navState} onPatch={applyNav} today={today}>
-        {/* У табличному вигляді цей select замінює селектор «Обсяг» — два контроли
-            з тим самим сенсом на одному екрані читались би як різні фільтри. */}
-        {auth.role === "admin" && view === "cards" && (
-          <select value={teamId} onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")} style={{ ...navBtn, cursor: "pointer" }}>
+  /** Чип стану = фільтр списку в ОБОХ виглядах; підсумок угорі він не звужує. */
+  const [statusFilter, setStatusFilter] = useState<"g" | "a" | "r" | null>(null);
+  const shownManagers = (data?.managers ?? []).filter((m) => !statusFilter || m.status === statusFilter);
+  const listCount = `${shownManagers.length} з ${data?.managers.length ?? 0} менеджерів`;
+  const toolbar = data && (
+    <>
+      <SliceSwitch data={data} slice={slice} onSlice={setSlice} />
+      {statusFilter && (
+        <span className="rv-fpill">лише «{SLBL[statusFilter].toLowerCase()}»
+          <button type="button" aria-label="Скинути фільтр" onClick={() => setStatusFilter(null)}>×</button></span>
+      )}
+      <span className="rv-count">{listCount}</span>
+    </>
+  );
+
+  return (
+    <div className={`rv${busy ? " rv-loading" : ""}`}>
+      {/* Шапка: назва · період (варіант «А») · команда · вигляд. Підзаголовок «план 2.7 млн»,
+          чип «Ти бачиш» і смугу днів прибрано за макетом, погодженим 13.11.2026. */}
+      <header className="rv-head">
+        <h1>Звіт{teamName ? ` — ${teamName}` : ""}</h1>
+        <PeriodStepper state={navState} onPatch={applyNav} today={today} />
+        <div className="rv-grow" />
+        {auth.role === "admin" && (
+          <select className="rv-sel" aria-label="Команда" value={teamId}
+            onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}>
             <option value="">Усі команди</option>
             {teams.filter((t) => !HIDE_TEAMS.has(t.id)).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         )}
-      </PeriodNav>
-
-      {/* День-strip (тиждень фокус-дня, Пн–Нд) — вибір активного тижня/дня */}
-      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 16 }}>
-        {weekOfFocus.map((d, i) => {
-          const isF = d === focusDay, future = d > today;
-          return (
-            <div key={d} onClick={() => !future && setFocusDay(d)} style={{
-              minWidth: 60, textAlign: "center", padding: "7px 10px", borderRadius: 10, cursor: future ? "default" : "pointer",
-              border: `1px solid ${isF ? "var(--text)" : "var(--border)"}`, background: isF ? "var(--text)" : "var(--card-bg)",
-              color: isF ? "var(--card-bg)" : "var(--text)", opacity: future ? 0.4 : 1,
-            }}>
-              <small style={{ display: "block", fontSize: 11, textTransform: "uppercase", letterSpacing: ".4px", color: isF ? "var(--card-bg)" : MUTED }}>
-                {WD[i]}{d === today ? " •" : ""}
-              </small>
-              <b style={{ fontSize: 15, color: i >= 5 && !isF ? MUTED : undefined }}>{d.slice(8)}</b>
-            </div>
-          );
-        })}
-      </div>
+        <div className="rv-seg rv-view" role="group" aria-label="Вигляд">
+          {(["table", "cards"] as const).map((v) => (
+            <button key={v} type="button" aria-pressed={view === v} onClick={() => pickView(v)}>{v === "cards" ? "Картки" : "Таблиця"}</button>
+          ))}
+        </div>
+      </header>
 
       {!data && !busy ? (
         <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
@@ -409,10 +393,9 @@ export function ReportPlanSection({ auth, teams }: {
         </div>
       ) : busy && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
         <SliceCtx.Provider value={slice}><AwaitCtx.Provider value={awaitMap}>
-          <Glance data={data} focus={focus} focusDay={focusDay} today={today} periodLabel={periodLabel} />
-          <SliceSwitch data={data} slice={slice} onSlice={setSlice} />
-          {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
-              бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
+          <Glance data={data} focus={focus} focusDay={dayShown} today={today} periodLabel={periodLabel}
+            statusFilter={statusFilter} onStatus={setStatusFilter} />
+          {/* Застряглі — один рядок, розкривається на місці. Стан на зараз, не за періодом. */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
           {/* 🗑 «Час опрацювання заявки», «Перший дотик · звіт по менеджерах» і «Дзвінки на мобільні» зі Звіту
               ПРИБРАНО (зустріч 10.11.2026, правки 3, 6, 7 — погодили Саша, Юля, Сергій). Пропущені й передзвін
@@ -420,68 +403,30 @@ export function ReportPlanSection({ auth, teams }: {
               дзвінки на мобільні — вкладка «Перевізники за розмовою». Компоненти блоків НЕ видалено. */}
           {view === "table" ? (
             <ReportTableSection
-              data={data} teams={teams} auth={auth}
-              teamIds={teamIds} onTeamIds={setTeamIds}
-              periodLabel={periodLabel} hideTeams={HIDE_TEAMS}
+              data={data} auth={auth}
+              periodLabel={periodLabel}
               responseByMgr={respByMgr} month={selectedPeriod.from.slice(0, 7)} slice={slice}
-              /**
-               * 🧍 ОДИН МЕНЕДЖЕР — ПОВНА КАРТКА (рішення власника 20.08.2026).
-               * Рендерить КОНТЕЙНЕР і віддає готовий вузол: `MgrStrip` лишається
-               * тут, тож циклу модулів немає, а картка — ТА САМА, що в картковому
-               * вигляді, а не її копія (копія розійшлась би мовчки, див. #81).
-               * Стан `open` не ділиться: вибір одного менеджера і Є «покажи все»,
-               * тож картка завжди розгорнута.
-               *
-               * 🔴 `m` ІДЕ БЕЗ ЗМІН — І ЦЕ НЕ ПРОПУЩЕНЕ ЗВУЖЕННЯ (Е3, 25.08.2026).
-               * Таблиця кличе `renderCard(rows[0])`, а `rows` уже пройшли
-               * `narrowToSlice`. Обгорнути вдруге означало б віддати КОПІЮ рядка —
-               * саме на цьому почервонів `#92b` після мого ж фіксу картки. І сам
-               * `<MgrStrip` мусить стояти ОДРАЗУ за `(`: `#92` звіряє це регуляркою
-               * `renderCard=\{\(m\) => \(\s*<MgrStrip`, тож коментар між ними — теж червоне.
-               */
-              renderCard={(m) => (
-                <MgrStrip
-                  m={m} mWeek={weekByMgr.get(m.managerId)}
-                  focusDay={focusDay} today={today}
-                  elapsed={data.elapsed} remWd={data.remainingWorkdays}
-                  weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`}
-                  weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
-                  periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"}
-                  role={auth.role} isSelf={m.managerId === viewerId}
-                  open onToggle={() => {}}
-                />
-              )}
+              statusFilter={statusFilter} toolbar={toolbar}
             />
           ) : (<>
-          {auth.role === "manager" && selfRow && (
-            <MgrStrip m={narrowToSlice(selfRow, slice)} mWeek={weekByMgr.get(selfRow.managerId)}
-              focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
-              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
-              periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"} role={auth.role} isSelf
-              open={openMgr === selfRow.managerId} onToggle={() => setOpenMgr(openMgr === selfRow.managerId ? null : selfRow.managerId)} />
-          )}
-          <div style={{ fontSize: 12, color: MUTED, margin: "0 2px 10px" }}>
-            ↓ {auth.role === "manager" ? "Твоя команда" : "Відсортовано"} за станом <b>{periodLabel}</b> — хто відстає, той угорі
-          </div>
-          {/* 🔴 ЗРІЗ ДІЄ Й НА КАРТКУ, А НЕ ЛИШЕ НА ТАБЛИЦЮ (знайдено скріншотом
-              приймання 25.08.2026). Перемикач стояв на «лише нові», підпис казав
-              «1539 із 2182», а картка менеджера показувала «77 створено · 25нов ·
-              51пост» — повне число під звуженим підписом. Розкриття дня всередині
-              картки при цьому ВЖЕ було звужене (воно читає контекст), тобто число
-              й склад сперечались усередині однієї картки. Жоден гейт цього не
-              бачив: вони дивились на таблицю й на ядро. */}
-          {data.managers.map((m) => (
-            <MgrStrip key={m.managerId} m={narrowToSlice(m, slice)} mWeek={weekByMgr.get(m.managerId)}
-              focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
-              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
-              periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"} role={auth.role}
-              isSelf={m.managerId === viewerId}
-              open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
-          ))}
-          {data.managers.length === 0 && <div style={{ color: MUTED, padding: 20 }}>Немає менеджерів у цьому розрізі.</div>}
-          <DismissedRows rows={data.dismissed ?? []} />
+            <div className="rv-bar">{toolbar}</div>
+            {/* 🔴 ЗРІЗ ДІЄ Й НА КАРТКУ, А НЕ ЛИШЕ НА ТАБЛИЦЮ (знайдено скріншотом
+                приймання 25.08.2026): картка показувала повне «створено» під звуженим
+                підписом. Тому кожна картка отримує `narrowToSlice(m, slice)`. */}
+            <div className="rv-cards">
+              {/* Менеджер бачить свою картку першою — решта за станом, хто відстає, той угорі. */}
+              {[...shownManagers].sort((a, b) => Number(b.managerId === viewerId) - Number(a.managerId === viewerId)).map((m) => (
+                <MgrStrip key={m.managerId} m={narrowToSlice(m, slice)} mWeek={weekByMgr.get(m.managerId)}
+                  focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
+                  weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
+                  periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"} role={auth.role}
+                  isSelf={m.managerId === viewerId}
+                  open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
+              ))}
+            </div>
+            {shownManagers.length === 0 && <div style={{ color: MUTED, padding: 20 }}>Немає менеджерів у цьому розрізі.</div>}
+            <DismissedRows rows={data.dismissed ?? []} />
           </>)}
-          <Legend />
         </AwaitCtx.Provider></SliceCtx.Provider>
       )}
     </div>
@@ -565,31 +510,40 @@ function SliceSwitch({ data, slice, onSlice }: { data: ReportPlan; slice: Slice;
   const inSlice = slice === "all" ? total
     : data.managers.reduce((a, m) => a + (m.srcByKlass?.[slice].created ?? 0), 0);
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
-      <span style={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }}>Створені угоди:</span>
-      {shown.map((s) => (
-        <button key={s} type="button" onClick={() => onSlice(s)}
-          title={s === "undef" ? SLICE_LABEL.undef : undefined}
-          style={{ padding: "5px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 650,
-            border: `1px solid ${slice === s ? BAR : "var(--border)"}`,
-            background: slice === s ? BAR + "18" : "transparent",
-            color: slice === s ? BAR : "var(--text)" }}>
-          {s === "undef" ? "невизначено" : SLICE_LABEL[s]}
-          {s === "undef" && <span style={{ color: MUTED, fontWeight: 500 }}> · {undefCount}</span>}
-        </button>
-      ))}
+    <>
+      <span className="lab">Створені угоди:</span>
+      <div className="rv-seg" role="group" aria-label="Створені угоди">
+        {shown.map((s) => (
+          <button key={s} type="button" aria-pressed={slice === s} onClick={() => onSlice(s)}
+            title={s === "undef" ? SLICE_LABEL.undef : undefined}>
+            {s === "undef" ? `невизначено · ${undefCount}` : SLICE_LABEL[s]}
+          </button>
+        ))}
+      </div>
       {slice !== "all" && (
-        <span style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8, background: AMBER + "14",
-          border: `1px solid ${AMBER}44` }}>
+        <span className="rv-slicewarn">
           ⚠️ показано <b>{SLICE_LABEL[slice]}</b> — {inSlice} із {total} створених;
           <span style={{ color: MUTED }}> звужено і числа, і склад розкриття дня. Гроші, дзвінки й відправлені авто НЕ звужуються.</span>
         </span>
       )}
-    </div>
+    </>
   );
 }
 
-function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string; periodLabel: string }) {
+/** Колір виконання — те саме правило, що в `Donut` (≥100 / ≥70 / решта): одне правило на кільце й смугу. */
+const pctColor = (pct: number) => (pct >= 100 ? "var(--rv-ok)" : pct >= 70 ? "var(--rv-warn)" : "var(--rv-bad)");
+const WD_FULL = ["понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота", "неділя"];
+
+/**
+ * 🧭 ПІДСУМОК — ЧОТИРИ ПЛИТКИ (макет, погоджено 13.11.2026). Числа — ті самі поля
+ * `glance`, що й раніше; змінилось лише розташування. Розклад «успішно + оплачено ·
+ * чек» переїхав у підказку кільця, «поза ростером» і кількість нерозібраних розмов —
+ * у підказку «ціну названо».
+ */
+function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onStatus }: {
+  data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string; periodLabel: string;
+  statusFilter: "g" | "a" | "r" | null; onStatus: (s: "g" | "a" | "r" | null) => void;
+}) {
   const g = data.glance;
   const pct = g.plan > 0 ? Math.round((g.fact / g.plan) * 100) : 0;
   const fg = focus?.glance;
@@ -597,61 +551,74 @@ function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPla
   const futureFocus = focusDay > today;
   const ftGlance = firstTouchLabel(g.firstTouch);
   const ftOutside = (g.firstTouch?.outside.analyzed ?? 0) + (g.firstTouch?.outside.noRecord ?? 0);
+  const col = pctColor(pct);
+  const pace = Math.round(Math.min(1, Math.max(0, data.elapsed)) * 100);
+  const dayHead = focusDay === today ? "Сьогодні" : WD_FULL[dow(focusDay) - 1].replace(/^./, (c) => c.toUpperCase());
+  const ringTitle = `Круг оплати — факт (отримані кошти): ${fmt(g.fact)} ₴\n= успішно реалізовано (виграно 142): ${fmt(g.factSuccess)} ₴\n+ оплачено: ${fmt(g.factPaid)} ₴\nчек: ${g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"}`;
   return (
-    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 15, padding: "16px 18px", marginBottom: 16, display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 20, alignItems: "center" }}>
-      <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-        <Donut pct={pct} title={`Круг оплати — факт (отримані кошти): ${fmt(g.fact)} ₴\n= успішно реалізовано (виграно 142): ${fmt(g.factSuccess)} ₴\n+ оплачено (етап 9, ще не закрито): ${fmt(g.factPaid)} ₴\nКільце — % виконання плану.`} />
-        <div>
-          <div style={lab}>Команда · {periodLabel} <InfoHint text="Грошовий план — стратегічна ціль із вкладки «Плани» (відділ 2.7 млн). Факт — отримані кошти (успішно 142 ⊎ оплачено етап 9). Наведи на круг — розклад факту." /></div>
-          <div style={val}>{fmt(g.fact)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>/ {fmt(g.plan)} ₴</small></div>
-          <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>= успішно {k(g.factSuccess)} + оплачено {k(g.factPaid)} · чек {g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"} <InfoHint text="Ср. чек Звіту = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період»; Σ суми ÷ Σ угод (не середнє середніх)." /></div>
-          <div style={{ display: "flex", gap: 6, marginTop: 5 }}>
-            <Pill c={RED}>{st.r} зрив</Pill>
-            <Pill c={AMBER}>{st.a} відстає</Pill>
-            <Pill c={GREEN}>{st.g} у нормі</Pill>
+    <section className="rv-kpis">
+      <div className="rv-tile">
+        <div className="rv-team">
+          <div className="rv-ring" title={ringTitle} style={{ background: `conic-gradient(${col} ${Math.min(100, pct) * 3.6}deg, var(--rv-soft) 0)` }}>
+            <span>{pct}%</span>
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div className="lab">Команда · {periodLabel} {data.scope.isCurrent && <span className="rv-cur">поточний</span>}
+              <InfoHint text="Грошовий план — стратегічна ціль із вкладки «Плани». Факт — отримані кошти ② з ядра: угоди, що увійшли в «Успішно» чи «Оплачено» в обраному періоді, без повторів. Вертикальна риска — де мав би бути факт, якщо йти рівно по плану." />
+            </div>
+            <div className="val">{fmt(g.fact)} <small>з {fmt(g.plan)} ₴</small></div>
+            <div className="rv-pace">
+              <i style={{ width: `${Math.min(100, pct)}%`, background: col }} />
+              {data.scope.isCurrent && <em style={{ left: `${pace}%` }} title={`темп: ${pace}% робочих днів минуло`} />}
+            </div>
           </div>
         </div>
+        {/* 🔵 Три стани покривають УСІХ: Σ чипів = кількість менеджерів (рішення власника 07.08.2026). */}
+        <div className="rv-chips">
+          {(["r", "a", "g"] as const).map((s) => (
+            <button key={s} type="button" className={`rv-schip ${s}`} aria-pressed={statusFilter === s}
+              title="Клік — показати лише їх у списку" onClick={() => onStatus(statusFilter === s ? null : s)}>
+              {st[s]} {s === "r" ? "зрив" : s === "a" ? "відстає" : "у нормі"}
+            </button>
+          ))}
+        </div>
       </div>
-      <div>
-        <div style={lab}>💰 Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. Цей / наступний КАЛЕНДАРНИЙ місяць, знімок «зараз». Σ per-manager == КВП. Окремо — «з минулих міс»: планова дата у МИНУЛИХ місяцях; у прогноз не входить і не дорівнює «прострочено» на КВП (там межа — сьогодні)." /></div>
-        <div style={{ ...val, color: g.expectThisMonth > 0 ? GREEN : MUTED }}>{fmt(g.expectThisMonth)} <small style={{ fontSize: 12, color: MUTED }}>₴ цей міс</small></div>
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>наст. міс: {fmt(g.expectNextMonth)} ₴</div>
-        {/* 🔴 «З минулих місяців» — НЕ те саме, що «прострочено» на плитці КВП: там межа
-            «сьогодні», тут — початок місяця. Тому й підпис інший (рішення власника 07.09.2026). */}
-        {g.expectPastMonths !== 0 && <div style={{ fontSize: 12, color: AMBER, marginTop: 2 }}>з минулих міс: {fmt(g.expectPastMonths)} ₴</div>}
-        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто · {periodLabel}: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
-        {/* 🎯 ТЗ-3 «перший дотик» по команді: відсоток із СУМ (Σ названих ÷ Σ оцінених), не середнє відсотків. */}
-        {/* Стан підсумку — з бекенду: «не вимірюється» (розбору в періоді не було) ≠ «оцінок немає». */}
-        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
-          ціну названо в 1-й дотик: <b>{ftGlance.main}</b>{ftGlance.sub ? ` · ${ftGlance.sub}` : ""}
-          {ftOutside > 0 ? ` · ще ${ftOutside} оцінок у людей поза ростером (у відсоток не входять)` : ""}
-          {" "}<InfoHint text={"AI-розбір перших розмов із рекламними лідами — ті самі розмови й те саме правило, що плитка «Ціна озвучена» на екрані «Перший дотик · AI»; розмова зараховується тому, хто дзвонив. "
-            + "Відсоток — по людях ростеру; «поза ростером» — ті, хто в періоді дзвонив, а зараз завершує роботу чи звільнений. "
-            + "Розбір діє для угод, створених з 20.09.2026. Розмов без менеджера за період: "
-            + `${String((data.firstTouchMeta?.unmapped.analyzed ?? 0) + (data.firstTouchMeta?.unmapped.noRecord ?? 0))}.`} />
+      <div className="rv-tile">
+        <div className="lab">Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. «Цей міс» входить у прогноз; без дати — ні. Календарні місяці — від обраного періоду НЕ залежить." /></div>
+        <div className="val" style={{ color: g.expectThisMonth > 0 ? "var(--rv-ok)" : MUTED }}>{fmt(g.expectThisMonth)} <small>₴ цей міс</small></div>
+        <div className="rv-mini">
+          <span>наступний місяць</span><b>{fmt(g.expectNextMonth)} ₴</b>
+          {/* 🔴 «З минулих місяців» — НЕ «прострочено» з плитки КВП: там межа «сьогодні», тут — початок місяця. */}
+          <span>з минулих місяців</span><b style={{ color: g.expectPastMonths !== 0 ? "var(--rv-warn)" : undefined }}>{fmt(g.expectPastMonths)} ₴</b>
+        </div>
+      </div>
+      <div className="rv-tile">
+        <div className="lab">Авто й ціна · {periodLabel}</div>
+        <div className="val">{g.dispatched} <small>авто</small></div>
+        <div className="rv-mini">
+          <span>на суму</span><b>{fmt(g.dispatchedRevenue)} ₴</b>
+          <span>ціну названо в 1-й дотик
+            <InfoHint text={"AI-розбір перших розмов із рекламними лідами — ті самі розмови й те саме правило, що плитка «Ціна озвучена» на екрані «Перший дотик · AI». Відсоток — із сум (Σ названих ÷ Σ оцінених), по людях ростеру. "
+              + (ftOutside > 0 ? `Ще ${ftOutside} оцінок у людей поза ростером — у відсоток не входять. ` : "")
+              + "Розбір діє для угод, створених з 20.09.2026. Розмов без менеджера за період: "
+              + `${String((data.firstTouchMeta?.unmapped.analyzed ?? 0) + (data.firstTouchMeta?.unmapped.noRecord ?? 0))}.`} />
+          </span><b>{ftGlance.main}{ftGlance.sub ? <span style={{ color: MUTED, fontWeight: 500 }}> · {ftGlance.sub}</span> : null}</b>
         </div>
         {g.firstTouch?.state === "measured" && firstTouchStale(data.firstTouchMeta?.lastAnalyzedAt ?? null, today, data.scope.to) && (
-          <div style={{ fontSize: 11, color: AMBER, marginTop: 2 }}>
-            ⚠ AI не розбирав розмов з {data.firstTouchMeta?.lastAnalyzedAt ? ddmm(data.firstTouchMeta.lastAnalyzedAt) : "—"} — число неповне
-          </div>
+          <div className="warnline">⚠ AI не розбирав розмов з {data.firstTouchMeta?.lastAnalyzedAt ? ddmm(data.firstTouchMeta.lastAnalyzedAt) : "—"} — число неповне</div>
         )}
       </div>
-      <div>
-        <div style={lab}>Фокус-день {ddmm(focusDay)}</div>
+      <div className="rv-tile">
+        <div className="lab">{dayHead}, {ddmm(focusDay)}</div>
         {futureFocus ? (
-          <div style={{ ...val, color: MUTED }}>— <small style={{ fontSize: 12, fontWeight: 600 }}>ще попереду</small></div>
+          <div className="val" style={{ color: MUTED }}>— <small>ще попереду</small></div>
         ) : (
-          <div style={val}>{fg?.dispatched ?? 0} <small style={{ fontSize: 12, color: MUTED }}>авто · </small>{k(fg?.fact ?? 0)}<small style={{ fontSize: 12, color: MUTED }}> отримано</small></div>
+          <div className="val">{fg?.dispatched ?? 0} <small>авто · {k(fg?.fact ?? 0)} отримано</small></div>
         )}
-        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>{futureFocus ? "день ще не настав" : `створено ${fg?.created ?? 0} угод`}</div>
+        <div className="sub">{futureFocus ? "день ще не настав" : <>створено <b>{fg?.created ?? 0}</b> угод</>}</div>
       </div>
-    </div>
+    </section>
   );
-}
-const lab: React.CSSProperties = { fontSize: 11.5, color: MUTED, textTransform: "uppercase", letterSpacing: ".4px" };
-const val: React.CSSProperties = { fontSize: 19, fontWeight: 750, letterSpacing: "-.3px" };
-function Pill({ c, children }: { c: string; children: React.ReactNode }) {
-  return <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: c + "22", color: c }}>{children}</span>;
 }
 export function Donut({ pct, title }: { pct: number; title?: string }) {
   const col = pct >= 100 ? GREEN : pct >= 70 ? AMBER : RED;
@@ -665,7 +632,16 @@ export function Donut({ pct, title }: { pct: number; title?: string }) {
 }
 
 // Смуга менеджера: МІСЯЦЬ (головна траєкторія, статус+сортування) + ТИЖДЕНЬ (поточний), обидва завжди (#11).
-function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPeriod, drillPeriod, periodLabel, isMonthMode, weeksFirst, role, isSelf, open, onToggle }: {
+/**
+ * 🃏 КАРТКА МЕНЕДЖЕРА — НОВИЙ ВИГЛЯД (макет, погоджено 13.11.2026).
+ *
+ * Згорнута — один рядок: хто · смуга періоду з рискою темпу · смуга тижня · чотири
+ * числа. Розкрита — «чому», три блоки (задача тижня із Задачника · гроші тижня ·
+ * дзвінки) і розкриття по тижнях/днях. Числа — ті самі поля рядка, що й раніше:
+ * змінилась верстка, не розрахунок. Імʼя `MgrStrip` лишено навмисно — його ж
+ * малює таблиця для одного менеджера, і гейти читають саме цю назву.
+ */
+function MgrStrip({ m, mWeek, focusDay, today, elapsed, weekLabel, weekPeriod, drillPeriod, periodLabel, isMonthMode, weeksFirst, role, isSelf, open, onToggle }: {
   m: ReportPlanManager; mWeek: ReportPlanManager | undefined;
   focusDay: string; today: string; elapsed: number; remWd: number; weekLabel: string;
   weekPeriod: { from: string; to: string };
@@ -684,7 +660,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
   const aw = useContext(AwaitCtx).get(m.managerId);
   const navigate = useNavigate();
   const pct = m.plan > 0 ? Math.round((m.fact / m.plan) * 100) : 0;
-  const smax = Math.max(...m.spark, 1);
+  const wPct = m.week.target > 0 ? Math.round((m.week.fact / m.week.target) * 100) : 0;
   const showWhy = s !== "g";
   // Сер.чек: виграно_дохід÷виграно_угод (==КВП); нема виграних, а є відправлені авто →
   // Σ сума відправлених÷авто (load_at, signed) з поміткою «*відпр.»; нема й авто → «—».
@@ -692,337 +668,91 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
   const chekAlt = m.kpi.avgCheck.fact == null && dispCnt > 0;
   const chekFact = m.kpi.avgCheck.fact != null ? m.kpi.avgCheck.fact
     : (chekAlt ? Math.round((m.kpi.dispatch.revenue ?? 0) / dispCnt) : null);
+  const ft = firstTouchLabel(m.firstTouch);
+  const sc = SCOL[s];
   return (
-    <div style={{ background: isSelf ? BAR + "0d" : "var(--card-bg)", border: `1px solid ${isSelf ? BAR + "88" : "var(--border)"}`, borderLeft: `4px solid ${SCOL[s]}`, borderRadius: 14, marginBottom: 11, overflow: "hidden" }}>
-      <div onClick={onToggle} style={{ display: "grid", gridTemplateColumns: "196px 1.1fr 1.1fr 300px 30px", gap: 14, alignItems: "center", padding: "15px 17px", cursor: "pointer" }}>
-        {/* who + status */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            {/* 🎚 «Старт / Профі» з «Найму» замість РНК/РПК (зустріч 10.11.2026, правка 4). */}
-            {m.name}<LevelChip level={m.level} />
-            {isSelf && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: BAR + "22", color: BAR }}>ТИ</span>}
-            <VacationMark managerId={m.managerId} />
-          </span>
+    <article className={`rv-mc${open ? " open" : ""}${isSelf ? " self" : ""}`} style={{ ["--sc" as string]: sc }}>
+      <div className="hd" role="button" tabIndex={0} aria-expanded={open} onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}>
+        <div className="who">
+          {/* 🎚 «Старт / Профі» з «Найму» замість РНК/РПК (зустріч 10.11.2026, правка 4). */}
+          <b>{m.name}</b> <LevelChip level={m.level} /> <VacationMark managerId={m.managerId} />
+          <div className="ln2">{m.teamName ?? "без команди"} · <span style={{ color: sc, fontWeight: 700 }}>{SLBL[s].toLowerCase()}</span>{isSelf ? " · ти" : ""}</div>
           {aw && (
-            <button type="button" title="Дзвінки на мобільні: угоди менеджера, що зараз чекають рішення людини (стан на зараз, не за періодом). Клік — вкладка «Перевізники за розмовою»."
-              onClick={(e) => { e.stopPropagation(); navigate("/carrier-calls"); }}
-              style={{ fontSize: 11.5, fontWeight: 650, padding: "2px 9px", borderRadius: 20, width: "max-content", cursor: "pointer",
-                border: `1px solid ${aw.overdueNow > 0 ? "#dc262655" : "var(--border)"}`, background: aw.overdueNow > 0 ? "rgba(220,38,38,.08)" : "var(--card-bg)",
-                color: aw.overdueNow > 0 ? "#dc2626" : "var(--text)" }}>
+            <button type="button" className={`rv-await${aw.overdueNow > 0 ? " hot" : ""}`}
+              title="Дзвінки на мобільні: угоди менеджера, що зараз чекають рішення людини (стан на зараз, не за періодом). Клік — вкладка «Перевізники за розмовою»."
+              onClick={(e) => { e.stopPropagation(); navigate("/carrier-calls"); }}>
               🚚 чекають рішення: {aw.awaitingNow}{aw.overdueNow > 0 ? ` · прострочено ${String(aw.overdueNow)}` : ""}
             </button>
           )}
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 750, fontSize: 12, padding: "3px 10px", borderRadius: 20, width: "max-content", background: SCOL[s] + "22", color: SCOL[s] }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: SCOL[s] }} />{SLBL[s]} · {isMonthMode ? "міс" : periodLabel}
-          </span>
         </div>
-        {/* ТИЖДЕНЬ — ДИНАМІЧНА ціль (Variant A: manual ?? dynamic) */}
-        <TrajBlock title={`Тиждень ${weekLabel}`} fact={m.week.fact} plan={m.week.target}
-          extraBar={m.cohort && m.cohort.sum > 0 ? {
-            label: "Відправлено", value: m.cohort.sum,
-            pct: m.week.target > 0 ? Math.round((m.cohort.sum / m.week.target) * 100) : 0,
-            color: AMBER,
-            note: `${m.cohort.deals} ${m.cohort.deals === 1 ? "машина" : m.cohort.deals < 5 ? "машини" : "машин"} · роботи зроблено на ${m.week.target > 0 ? Math.round((m.cohort.sum / m.week.target) * 100) : 0}% тижневого плану`,
-          } : null}
-          pct={m.week.target > 0 ? Math.round((m.week.fact / m.week.target) * 100) : 0}
-          status={m.week.target <= 0 ? "g" : m.week.fact >= m.week.target ? "g" : m.week.fact >= m.week.target * (elapsed || 1) ? "a" : "r"}
-          footer={<div title="Динамічна тижнева ціль = (місячний план − факт місяця) ÷ тижнів, що лишились. Присутні робочі дні враховують погоджені відсутності.">
-            {m.week.isManual ? <>вручну задано у Задачнику · <b style={{ color: AMBER }}>вручну</b></> : <>динамічний план тижня · залишок ÷ тижнів, що лишились</>}
-          </div>} />
-        {/* МІСЯЦЬ — план-бар (сирий план) + #16 очікуємо + #17 прогноз */}
-        <TrajBlock title={isMonthMode ? "Місяць" : periodLabel} fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
-          {...(() => {
-            /**
-             * 🔴 ТРИ ВЗАЄМОВИКЛЮЧНІ СЕГМЕНТИ (рішення власника 07.08.2026).
-             *
-             * Третій — «чекає БЕЗ дати» — у першій редакції був відсутній, і місяць
-             * через це суперечив тижню: у Ворошилової тиждень показував 109% роботи,
-             * а місяць 7% плану. Заміряно: її 10 141 ₴ відправлені й неоплачені, але
-             * планової дати не мають, тож у `projected` не входять узагалі.
-             * З третім сегментом місяць став 27,3% — учетверо ближче до правди.
-             *
-             * ⚠️ Множини не перетинаються ЗА ПОБУДОВОЮ: (1) статус — гроші вже
-             * прийшли; (2) дата оплати є і вона в цьому місяці; (3) дати немає.
-             * Угода не може одночасно мати й не мати дату. Перевірено заміром:
-             * «чекає без дати» в зоні визнання = 0 в обох, бо ці гроші стоять на
-             * стадіях ПОЗА зоною — саме тому сегмент 3 береться з когорти.
-             *
-             * 🚫 CARRYOVER окремим сегментом НЕ малюємо: доведено, що він перетинає
-             * очікуване на 69%. За цим поділом він уже розподілений між трьома.
-             * ⏭ Очікування з датою в НАСТУПНОМУ місяці в цей місяць не входить.
-             */
-            if (m.plan <= 0) return {};
-            const s1 = m.fact, s2 = m.expectThisMonth, s3 = m.cohort?.awaitNoDateSum ?? 0;
-            const p = (v: number) => Math.min(100, (v / m.plan) * 100);
-            const covered = s1 + s2 + s3;
-            return {
-              segments: [
-                { from: 0, to: p(s1), color: GREEN, title: `отримано ${fmt(s1)} ₴` },
-                { from: p(s1), to: p(s1 + s2), color: AMBER, hatch: true,
-                  title: `чекає, дата оплати в цьому місяці — ${fmt(s2)} ₴` },
-                { from: p(s1 + s2), to: p(covered), color: AMBER, hatch: true,
-                  title: `чекає БЕЗ планової дати — ${fmt(s3)} ₴ · у прогноз не входить` },
-              ],
-              // 🔴 РИСКА ПРОГНОЗУ — ЛИШЕ ДЛЯ ПОВНОГО ПОТОЧНОГО МІСЯЦЯ. Бек рахує прогноз
-              // саме так (`projected = факт + очікування` лише при `monthInProgress`);
-              // за тиждень/діапазон/завершений місяць він дорівнює ФАКТУ, і риска на
-              // місці факту читалась би як «прогноз = стільки й буде». Це не прогноз.
-              forecastPct: m.monthInProgress ? Math.min(100, (m.projected / m.plan) * 100) : null,
-              legend: [
-                { color: GREEN, label: "отримано", value: s1 },
-                { color: AMBER, hatch: true, label: "чекає, дата є", value: s2 },
-                { color: AMBER, hatch: true, label: "чекає без дати", value: s3 },
-              ],
-              uncovered: { sum: Math.max(0, m.plan - covered), pct: Math.round(Math.max(0, m.plan - covered) / m.plan * 100) },
-            };
-          })()}
-          footer={<>
-            <div>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.)
-              {m.monthInProgress
-                ? <> · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</>
-                : <span style={{ color: MUTED }}> · прогноз — лише для повного поточного місяця</span>}
-            </div>
-            {/* 🔴 ФОРВАРД-БЛОК ПОЗА ОБРАНИМ ПЕРІОДОМ, і це підписано. Він рахується за
-                ПЛАНОВОЮ датою оплати в календарних місяцях і не залежить від того, який
-                період обрано вгорі — інакше його читали б як частину факту періоду. */}
-            <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати, календарні місяці. НЕ залежить від обраного періоду.">
-              💰 очікуємо <b style={{ color: GREEN }}>{k(m.expectThisMonth)}</b> цей · <b style={{ color: "var(--text)" }}>{k(m.expectNextMonth)}</b> наст. міс
-              {/* 🗓 Третє число, додане 07.09.2026. До нього планові дати МИНУЛИХ місяців не
-                  показував жоден екран: у Яцика так ховались 37 угод на 67 274 ₴ при видимих
-                  18 453 ₴, і він читав це як розходження дашборду з CRM. Показуємо ЛИШЕ коли
-                  ≠ 0 — у більшості рядків це нуль, і постійний підпис став би шумом. */}
-              {Math.abs(m.expectPastMonths) >= 500 && <> · <b style={{ color: AMBER }}>{k(m.expectPastMonths)}</b> з минулих міс</>}
-              {/* 🔴 Межа 500, а не 0: рядок рахує в тисячних (`k`), тож 1…499 ₴ надрукувались
-                  би як «0к з минулих міс» — нуль під підписом читається як помилка розрахунку.
-                  І по МОДУЛЮ: сторно (`is_minus`) робить суму законно відʼємною, а `> 0`
-                  ховало б її мовчки — те саме зникнення, яке цей рядок і лікує. */}
-              <span style={{ color: MUTED }}> · поза обраним періодом</span>
-            </div>
-          </>} showTempo />
-        {/* місячні стати + spark */}
-        <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "flex-end" }}>
-          <Stat v={m.created} l="створено" sub={`${m.new}нов · ${m.rep}пост`} />
-          <Stat v={m.kpi.dispatch.fact ?? 0} l="авто ₴" sub={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`} />
-          <Stat v={chekFact ?? 0} l="ср. чек" money />
-          <Stat v={m.fact} l="отримано ₴" money />
-          <div title="отримано по тижнях (5)" style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 34 }}>
-            {m.spark.map((v, ix) => (
-              <div key={ix} style={{ width: 6, borderRadius: 2, background: ix === m.spark.length - 1 ? BAR : "var(--border)", height: Math.max(3, (v / smax) * 34) }} />
-            ))}
+        <div className="rv-trk">
+          <div className="tl"><span>{isMonthMode ? "Місяць" : periodLabel} · <b>{fmt(m.fact)}</b> з {fmt(m.plan)} ₴</span><span className="p" style={{ color: sc }}>{pct}%</span></div>
+          <div className="rv-track">
+            <i style={{ width: `${Math.min(100, pct)}%`, background: sc }} />
+            {m.monthInProgress && <em style={{ left: `${Math.round(Math.min(1, Math.max(0, elapsed)) * 100)}%` }} title="де мав би бути факт, якщо йти рівно по плану" />}
           </div>
         </div>
-        <div style={{ color: MUTED, textAlign: "center", fontSize: 13, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</div>
+        <div className="rv-trk">
+          <div className="tl"><span>Тиждень {weekLabel} · <b>{fmt(m.week.fact)}</b> з {fmt(m.week.target)}{m.week.isManual ? " ✎" : ""}</span><span className="p">{wPct}%</span></div>
+          <div className="rv-track"><i style={{ width: `${Math.min(100, wPct)}%`, background: "var(--rv-ink)", opacity: .55 }} /></div>
+        </div>
+        <div className="rv-nums">
+          <div title={`${m.new} нових · ${m.rep} постійних`}><b>{m.created}</b>створено</div>
+          <div title={`на ${fmt(m.kpi.dispatch.revenue ?? 0)} ₴`}><b>{dispCnt}</b>авто</div>
+          <div title={chekAlt ? "по відправлених авто, ще не закриті (сума÷авто)" : undefined}><b>{chekFact == null ? "—" : fmt(chekFact)}{chekAlt ? "*" : ""}</b>сер. чек</div>
+          <div title="пропущені вхідні за період; червоним — скільки досі без передзвону">
+            <b>{m.missed.missed}{m.missed.noCallback > 0 && <small> ({m.missed.noCallback})</small>}</b>пропущені</div>
+        </div>
+        <span className="rv-chev">▸</span>
       </div>
-      {/* Розвантаження картки: активність РОЗДІЛЕНО на 🗓 Тиждень·задача і 📅 Місяць.
-          ⚠️ ПОРЯДОК КОЛОНОК ДЗЕРКАЛИТЬ ВЕРХНІЙ РЯД: тиждень ЛІВОРУЧ, місяць ПРАВОРУЧ —
-          кожен нижній блок стоїть рівно під своїм зведенням (було навхрест).
-          auto-fit/minmax(420px): на вузькому екрані колонка одна — блоки лягають
-          ОДИН ПІД ОДНИМ у тій самій послідовності (спершу Тиждень, тоді Місяць),
-          замість стискатись і рвати KPI переносами. НЕ повертати фіксовані "1fr 1fr". */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(420px,1fr))", gap: 12, padding: "0 17px 13px" }}>
-        {/* 🗓 Тиждень · задача з Задачника — дзеркалить РЕАЛЬНІ метрики задачника (тижнева ціль) */}
-        <div style={{ border: `1px solid ${BAR}44`, borderRadius: 10, padding: "10px 12px", background: BAR + "08" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-            <b style={{ fontSize: 12 }}>🗓 Тиждень · задача з Задачника</b>
-            {/* 🔴 ПІДПИС МУСИТЬ ЛИШАТИСЬ ЧЕСНИМ. Тут стояло «↔ синхронізовано із
-                Задачником» — і це неправда: живої синхронізації немає, Звіт лише
-                ЧИТАЄ `tasks` (доведено `#56c`: у тілі `/report-plan` нуль записів).
-                Стрілка «↔» обіцяла двосторонність, якої не існує. Старий текст назад
-                не повертаємо навіть у відкаті вигляду — гейт `#56` його забороняє. */}
-            <span title="Тижнева ціль = задачник (вручну) або динамічна ціль. Одна цифра у Звіті й Задачнику." style={{ fontSize: 10, fontWeight: 700, color: BAR, background: BAR + "1a", padding: "2px 8px", borderRadius: 12, whiteSpace: "nowrap" }}>дані з Задачника · лише читання</span>
+      {open && (
+        <div className="more">
+          {showWhy && <WhyBox m={m} role={role} isSelf={!!isSelf} />}
+          <div className="rv-panes">
+            <div className="rv-pane">
+              {/* 🔴 ПІДПИС ЧЕСНИЙ: Звіт лише ЧИТАЄ задачник (`#56c`), «↔ синхронізовано» не повертаємо (`#56`). */}
+              <h4>Тиждень · задача із Задачника <small title="Тижнева ціль = задачник (вручну) або динамічна ціль. Одна цифра у Звіті й Задачнику.">лише читання</small></h4>
+              {mWeek ? (<>
+                <KpiRow lbl="реклама" k={mWeek.kpi.ads} />
+                <KpiRow lbl="лідоген" k={mWeek.kpi.leadgen} />
+                <KpiRow lbl="авто" k={mWeek.kpi.dispatch} />
+                <KpiRow lbl="сер. чек" k={mWeek.kpi.avgCheck} money />
+                <KpiRow lbl="конверсія" k={mWeek.kpi.conversion} pctUnit />
+              </>) : <div className="note">тижнева задача не задана</div>}
+              <KpiRow lbl="гроші тижня" k={{ fact: m.week.fact, target: m.week.target }} money />
+              {/* 🔴 РУЧНА ЦІЛЬ МУСИТЬ ВИГЛЯДАТИ РУЧНОЮ (рішення власника 07.08.2026). */}
+              {m.week.isManual && m.week.manual != null ? (
+                <div className="note">ціль <b>задана вручну</b> у Задачнику
+                  {m.week.dynamic > 0 && m.week.dynamic !== m.week.manual ? ` — не рахувалась (динамічна була б ${fmt(m.week.dynamic)})` : ""}</div>
+              ) : <div className="note">динамічний план тижня · залишок ÷ тижнів, що лишились</div>}
+            </div>
+            <WeekMoney mWeek={mWeek} managerId={m.managerId} period={weekPeriod} />
+            <div className="rv-pane">
+              <h4>Дзвінки й реакція <small>{isMonthMode ? "місяць" : periodLabel}</small></h4>
+              <div className="kv"><span>пропущені (без передзвону)</span><b>{m.missed.missed} ({m.missed.noCallback})</b></div>
+              <div className="kv"><span>передзвін, медіана</span><b>{fmtCallback(m.missed.medianMin)}</b></div>
+              <div className="kv"><span>розмов / спроб</span><b>{m.talks} / {m.attempts}</b></div>
+              <div className="kv" title="Ціну названо в першій розмові з рекламним лідом: названо ÷ оцінено. «Не вимірюється» — період до 20.09.2026."><span>ціну названо в 1-й дотик</span><b>{ft.main}{ft.sub ? ` · ${ft.sub}` : ""}</b></div>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            {mWeek ? (
-              <>
-                <Kpi lbl="реклама" fact={mWeek.kpi.ads.fact} target={mWeek.kpi.ads.target} />
-                <Kpi lbl="лідоген" fact={mWeek.kpi.leadgen.fact} target={mWeek.kpi.leadgen.target} />
-                <Kpi lbl="авто" fact={mWeek.kpi.dispatch.fact} target={mWeek.kpi.dispatch.target} />
-                <Kpi lbl="чек" fact={mWeek.kpi.avgCheck.fact} target={mWeek.kpi.avgCheck.target} money />
-                <Kpi lbl="конв" fact={mWeek.kpi.conversion.fact} target={mWeek.kpi.conversion.target} pctUnit />
-              </>
-            ) : <span style={{ fontSize: 11.5, color: MUTED }}>тижнева задача не задана</span>}
-            <Kpi lbl="гроші тижня" fact={m.week.fact} target={m.week.target} money hintTitle="Тижнева грошова ціль = вручну (Задачник) або динамічна (залишок місяця ÷ тижнів). Факт — отримано за цей тиждень." />
-            {/**
-             * 🔴 РУЧНА ЦІЛЬ МУСИТЬ ВИГЛЯДАТИ РУЧНОЮ (рішення власника 07.08.2026).
-             *
-             * `week.target` = `manual ?? dynamic` — одне поле, два різні походження.
-             * Без підпису число, яке тімлід увів пальцями, читається як пораховане
-             * системою, і питання «звідки 135 000, якщо динамічна дає 32 143» не
-             * виникає взагалі — а воно й є найважливіше. Заміряно 06.08: ручна ціль
-             * стоїть у 17 із 31 менеджера, і в них числа розходяться в РАЗИ
-             * (Андрусенко 135 000 проти 32 143, Ворошилова 50 000 проти 11 905).
-             *
-             * Це не вигляд, а чесність числа — тому підпис їде разом із відкатом,
-             * а не після нього.
-             */}
-            {m.week.isManual && m.week.manual != null && (
-              <span style={{ fontSize: 10.5, color: MUTED, alignSelf: "center" }}>
-                ціль <b>задана вручну</b> у Задачнику
-                {m.week.dynamic > 0 && m.week.dynamic !== m.week.manual
-                  ? ` — не рахувалась (динамічна була б ${fmt(m.week.dynamic)})` : ""}
-              </span>
-            )}
-          </div>
+          <DayDrill managerId={m.managerId} period={drillPeriod} focusDay={focusDay} today={today} weeksFirst={weeksFirst} />
         </div>
-        <WeekMoney mWeek={mWeek} managerId={m.managerId} period={weekPeriod} />
-        {/* 📅 Місяць — показники факт/план за місяць */}
-        <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            {/* 🔴 ЗАГОЛОВОК ЗА ОБРАНИМ ПЕРІОДОМ. Тут стояло жорстке «Місяць · показники»,
-                і при виборі тижня блок обіцяв місяць над тижневими цифрами. Ціль-показник
-                тепер береться ЛИШЕ з тижневих парасольок (`core/kpiTargets`), тож у
-                місячному вигляді частина метрик буде «план не задано» — і це чесно:
-                місячної цілі по показниках більше немає. ФАКТ показується завжди. */}
-            <b style={{ fontSize: 12 }}>📅 Показники{isMonthMode ? "" : ` · ${periodLabel}`}</b>
-            <span style={{ fontSize: 10.5, color: MUTED }}>факт за {isMonthMode ? "місяць" : periodLabel} · ціль — з тижневої задачі</span>
-          </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
-            <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
-            <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target} extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`}
-              hintTitle={`Авто за джерелом: ${autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.elogist ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}`} />
-            <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
-              hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період». Σ signed ÷ Σ угод."} />
-            <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
-            <FirstTouchKpi c={m.firstTouch} />
-          </div>
-        </div>
-      </div>
-      {showWhy && <WhyBox m={m} role={role} isSelf={!!isSelf} />}
-      {open && <DayDrill managerId={m.managerId} period={drillPeriod} focusDay={focusDay} today={today} weeksFirst={weeksFirst} />}
-    </div>
+      )}
+    </article>
   );
 }
 
-// План-бар одного контексту (місяць або тиждень).
-interface BarSeg { from: number; to: number; color: string; hatch?: boolean; title: string }
-function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo, segments, forecastPct, extraBar, legend, uncovered }: {
-  title: string; fact: number; plan: number; pct: number; status: string; elapsed?: number;
-  footer: React.ReactNode; showTempo?: boolean;
-  /** Накопичувальні сегменти у відсотках ТІЄЇ САМОЇ шкали (100% = план). */
-  segments?: BarSeg[];
-  /** Риска прогнозу у відсотках шкали. */
-  forecastPct?: number | null;
-  /** Друга НЕЗАЛЕЖНА смужка (тиждень: «відправлено»). НЕ складається з першою. */
-  extraBar?: { label: string; value: number; pct: number; color: string; note: string } | null;
-  /** Легенда сегментів під смугою + підпис порожнього хвоста. */
-  legend?: { color: string; hatch?: boolean; label: string; value: number }[];
-  /** «Не покрито» — головне число місячної смуги. */
-  uncovered?: { sum: number; pct: number } | null;
-}) {
+/** Рядок «показник: факт / ціль» у блоці задачі тижня. Ціль грішми — тим самим форматером, що й факт. */
+function KpiRow({ lbl, k: x, money, pctUnit }: { lbl: string; k: { fact: number | null; target: number }; money?: boolean; pctUnit?: boolean }) {
+  const has = x.target > 0;
+  const ok = has && x.fact != null && x.fact >= x.target;
+  const f = (v: number | null) => (v == null ? "—" : money ? fmt(v) : pctUnit ? `${v}%` : String(v));
   return (
-    <div>
-      <div style={{ fontSize: 10.5, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginBottom: 3 }}>{title}</div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5 }}>
-        <span style={{ fontWeight: 750, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{fmt(fact)} <small style={{ color: MUTED, fontWeight: 600, fontSize: 11.5 }}>/ {plan > 0 ? fmt(plan) : "—"} ₴</small></span>
-        <span style={{ fontWeight: 750, fontSize: 14, color: SCOL[status] }}>{plan > 0 ? `${pct}%` : "—"}</span>
-      </div>
-      <div style={{ height: 8, background: "var(--border)", borderRadius: 6, overflow: "hidden", position: "relative" }}>
-        {/**
-         * 🟩🟧 СЕГМЕНТИ (рішення власника 07.08.2026). `segments` — накопичувальні
-         * частки ТІЄЇ САМОЇ шкали (100% = план). Без них смуга показувала лише
-         * гроші на рахунку й читалась як «нічого не зроблено» у людини, що
-         * відправила роботи більше за план.
-         */}
-        {segments?.length
-          ? segments.map((sg, i) => (
-              <div key={i} title={sg.title} style={{ position: "absolute", top: 0, bottom: 0,
-                left: `${Math.min(100, sg.from)}%`, width: `${Math.max(0, Math.min(100, sg.to) - Math.min(100, sg.from))}%`,
-                background: sg.hatch
-                  ? `repeating-linear-gradient(135deg, ${sg.color} 0 5px, transparent 5px 10px)`
-                  : sg.color,
-                backgroundColor: sg.hatch ? sg.color + "22" : sg.color }} />
-            ))
-          : <div style={{ height: "100%", borderRadius: 6, width: `${Math.min(100, pct)}%`, background: SCOL[status] }} />}
-        {/* 🔻 Прогноз — риска в кінці покритого, а НЕ ще один сегмент. */}
-        {forecastPct != null && forecastPct > 0 && (
-          <div title={`прогноз ${fmt(Math.round((forecastPct / 100) * plan))} ₴ — факт + очікування з датою оплати`}
-               style={{ position: "absolute", top: -4, bottom: -4, width: 2,
-                 left: `${Math.min(100, forecastPct)}%`, background: "var(--text)", opacity: 0.85 }} />
-        )}
-        {showTempo && elapsed != null && <div title="темп «сьогодні»" style={{ position: "absolute", top: -3, bottom: -3, width: 2, left: `${Math.min(100, elapsed * 100)}%`, background: "var(--text)", opacity: 0.55 }} />}
-      </div>
-      {/**
-        * 🔴 ЛЕГЕНДА Й «НЕ ПОКРИТО» — БЕЗ НИХ СМУГА НЕ ПОЯСНЮЄ НІЧОГО.
-        * Після викату 91b60e9 місячна смуга була двома кольоровими плямами без
-        * жодного слова: кольори не підписані, хвіст німий. Тижнева при цьому
-        * читалась — саме тому, що мала підпис. Головне число тут — «не покрито»:
-        * скільки плану не забезпечено НІЧИМ (ані грішми, ані очікуваннями).
-        */}
-      {(legend?.length || uncovered) && (
-        <div style={{ fontSize: 10.5, color: MUTED, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          {legend?.filter((l) => l.value > 0).map((l, i) => (
-            <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <span style={{ width: 9, height: 9, borderRadius: 2, display: "inline-block",
-                background: l.hatch ? `repeating-linear-gradient(135deg, ${l.color} 0 3px, ${l.color}33 3px 6px)` : l.color }} />
-              {l.label} <b style={{ color: "var(--text)" }}>{fmt(l.value)} ₴</b>
-            </span>
-          ))}
-          {uncovered && uncovered.sum > 0 && (
-            <span style={{ color: RED, fontWeight: 700 }}>не покрито {fmt(uncovered.sum)} ₴ — {uncovered.pct}% плану</span>
-          )}
-        </div>
-      )}
-      {/**
-        * 🔴 ДРУГА СМУЖКА НЕ СКЛАДАЄТЬСЯ З ПЕРШОЮ (рішення власника 07.08.2026).
-        * «Отримано» — гроші, що зайшли; «відправлено» — робота тижня. Заміряно:
-        * у 13 із 25 менеджерів ці числа різні, і так і має бути. Вони стоять на
-        * одній лінійці плану лише для порівняння, інваріанту між ними НЕМАЄ.
-        */}
-      {extraBar && (
-        <div style={{ marginTop: 6 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 11.5 }}>
-            <span style={{ color: MUTED }}>{extraBar.label} <b style={{ color: "var(--text)" }}>{fmt(extraBar.value)} ₴</b></span>
-            <span style={{ fontWeight: 700, color: extraBar.color }}>{plan > 0 ? `${extraBar.pct}%` : "—"}</span>
-          </div>
-          <div style={{ height: 6, background: "var(--border)", borderRadius: 5, overflow: "hidden", marginTop: 3 }}>
-            <div style={{ height: "100%", width: `${Math.min(100, extraBar.pct)}%`,
-              background: `repeating-linear-gradient(135deg, ${extraBar.color} 0 5px, ${extraBar.color}55 5px 10px)` }} />
-          </div>
-          <div style={{ fontSize: 10.5, color: MUTED, marginTop: 2 }}>{extraBar.note}</div>
-        </div>
-      )}
-      <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>{footer}</div>
-    </div>
-  );
-}
-
-// C4/#13: усі KPI «факт/ціль»; де цілі нема → «план не задано» (не ховаємо факт). extra = ₴ авто (#12).
-function Kpi({ lbl, fact, target, money, pctUnit, extra, altMark, altTitle, hintTitle }: { lbl: string; fact: number | null; target: number; money?: boolean; pctUnit?: boolean; extra?: string; altMark?: string; altTitle?: string; hintTitle?: string }) {
-  const ok = target > 0 && fact != null && fact >= target;
-  const has = target > 0;
-  const col = !has ? MUTED : ok ? GREEN : AMBER;
-  const f = fact == null ? "—" : money ? fmt(fact) : pctUnit ? `${fact}%` : String(fact);
-  return (
-    <span style={{ fontSize: 11.5, color: MUTED, cursor: hintTitle ? "help" : undefined }} title={altMark ? altTitle : hintTitle ?? `${lbl}: факт ${f} / ${has ? "ціль " + (money ? fmt(target) : pctUnit ? target + "%" : target) : "план не задано"}`}>
-      {lbl} <b style={{ color: altMark ? AMBER : col }}>{f}</b>{altMark ? <sup style={{ fontSize: 8.5, color: AMBER, marginLeft: 1 }}>{altMark}</sup> : null}{extra ? <span style={{ color: MUTED }}> · {extra}</span> : null}
-      {/* 🔴 Ціль грішми — ТИМ САМИМ форматером, що факт: «2 500 / 13к» читалось як два різні плани. */}
-      {has ? <span style={{ color: MUTED }}> / {money ? fmt(target) : pctUnit ? target + "%" : target}{ok ? " ✓" : ""}</span>
-           : <span style={{ color: MUTED, fontStyle: "italic" }}> · план не задано</span>}
-    </span>
-  );
-}
-/**
- * 🎯 ТЗ-3 «ціну названо в перший дотик» — рядок картки менеджера (рішення власника 17.09.2026).
- * Цілі в цього показника немає, тож не `Kpi` (той малює «план не задано» і світлофор від цілі).
- * Текст і стани — з `firstTouchLabel`, того самого правила, що в таблиці: дві верстки, одне правило.
- */
-function FirstTouchKpi({ c }: { c: ReportPlanManager["firstTouch"] | undefined }) {
-  const l = firstTouchLabel(c);
-  return (
-    <span style={{ fontSize: 11.5, color: MUTED, cursor: "help" }}
-      title={"Ціну названо в першій розмові з рекламним лідом: названо ÷ оцінено — так само, як плитка «Ціна озвучена» на екрані «Перший дотик · AI»; розмова зараховується тому, хто дзвонив. "
-        + "«Не вимірюється» — період до 20.09.2026, розбору тоді не було. «Не розібрано» — AI ще не розібрав розмову, у відсоток не входить."}>
-      ціну названо <b style={{ color: l.muted ? MUTED : "var(--text)" }}>{l.main}</b>{l.sub ? <span style={{ color: MUTED }}> · {l.sub}</span> : null}
-    </span>
-  );
-}
-function Stat({ v, l, sub, money }: { v: number; l: string; sub?: string; money?: boolean }) {
-  return (
-    <div style={{ textAlign: "center", minWidth: 52 }}>
-      <div style={{ fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: v ? "var(--text)" : MUTED }}>{money ? (v ? fmt(v) : "0") : v}</div>
-      <div style={{ fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>{l}</div>
-      {sub && <div style={{ fontSize: 10.5, color: MUTED, marginTop: 1 }}>{sub}</div>}
+    <div className="kv"><span>{lbl}</span>
+      <b style={{ color: !has ? undefined : ok ? "var(--rv-ok)" : "var(--rv-warn)" }}>
+        {f(x.fact)}<span style={{ color: MUTED, fontWeight: 500 }}>{has ? ` / ${f(x.target)}${ok ? " ✓" : ""}` : " · план не задано"}</span>
+      </b>
     </div>
   );
 }
@@ -1053,7 +783,7 @@ function WhyBox({ m, role, isSelf }: { m: ReportPlanManager; role: string; isSel
         : `Пайплайну бракує (очікуємо лише ${k(m.expect)}). Дія: наростити ліди + прискорити закриття. Треба ${fmt(m.needPerDay)} ₴/день.`);
   const c = m.status === "r" ? RED : AMBER;
   return (
-    <div style={{ padding: "0 17px 15px" }}>
+    <div style={{ padding: "0 0 12px" }}>
       <div style={{ borderRadius: 10, padding: "11px 14px", fontSize: 13, display: "flex", gap: 12, alignItems: "flex-start", background: c + "18" }}>
         <span style={{ fontSize: 15 }}>{SICON[m.status]}</span>
         <div><b>{why}</b><div style={{ marginTop: 3, color: "var(--text)" }}>{act}</div></div>
@@ -1105,7 +835,7 @@ function WeekMoney({ mWeek, managerId, period }: {
   };
   const r = open ? items[open] : undefined;
   return (
-    <div>
+    <>
         {/**
           * 💰 ГРОШІ ТИЖНЯ — ЛАНЦЮГ ІЗ ТРЬОХ ЛАНОК (макет `zvit-6`, 07.08.2026).
           *
@@ -1120,50 +850,36 @@ function WeekMoney({ mWeek, managerId, period }: {
           * 🔗 Кожне число розкривається ТИМ САМИМ `day-items`, що й розгортка по днях,
           * лише з періодом замість дня — другого механізму не заводимо.
           */}
-        <div style={{ border: `1px solid ${GREEN}44`, borderRadius: 10, padding: "10px 12px", background: GREEN + "08" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-            <b style={{ fontSize: 12 }}>💰 Гроші тижня</b>
-            <span style={{ fontSize: 10.5, color: MUTED }}>з власної роботи за {ddmm(period.from)}–{ddmm(period.to)}</span>
-          </div>
+        <div className="rv-pane">
+          <h4>Гроші тижня <small>з власної роботи · {ddmm(period.from)}–{ddmm(period.to)}</small></h4>
           {(mWeek?.cohort.deals ?? 0) === 0 ? (
             /* 🔴 Дзеркало: порожній період КАЖЕ про себе, а не малює три нулі як досягнення. */
             <div style={{ fontSize: 12, color: MUTED }}>За цей тиждень не відправлено жодного авто — ланцюга ще немає.</div>
           ) : (() => {
             const c = mWeek!.cohort;
-            const pct = (v: number) => c.sum > 0 ? `${Math.round((v / c.sum) * 100)}% від відправленого` : "";
-            const Link = ({ kind, val, sub, color }: { kind: DayItemKind; val: string; sub: string; color?: string }) => (
-              <div onClick={() => onChainDrill(kind)} title="клік → ці самі машини списком"
-                   style={{ cursor: "pointer", minWidth: 108 }}>
-                <div style={{ fontSize: 17, fontWeight: 800, color: color ?? "var(--text)",
-                  textDecoration: "underline dotted 1px", textUnderlineOffset: 3 }}>{val}</div>
-                <div style={{ fontSize: 10.5, color: MUTED, marginTop: 2 }}>{sub}</div>
+            const pct = (v: number) => c.sum > 0 ? `${Math.round((v / c.sum) * 100)}%` : "";
+            // Ланцюг тими самими рядками «ключ — значення», що й сусідні блоки; кожне число клікабельне.
+            const Link = ({ kind, lbl, val, color }: { kind: DayItemKind; lbl: string; val: string; color?: string }) => (
+              <div className="kv" onClick={() => onChainDrill(kind)} title="клік → ці самі машини списком" style={{ cursor: "pointer" }}>
+                <span>{lbl}</span>
+                <b style={{ color, textDecoration: "underline dotted 1px", textUnderlineOffset: 3 }}>{val}</b>
               </div>
             );
             return (
               <>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
-                  <Link kind="dispatched" val={`${fmt(c.sum)} ₴`} sub={`${c.deals} ${c.deals === 1 ? "машина" : c.deals < 5 ? "машини" : "машин"}`} />
-                  <span style={{ color: MUTED, fontSize: 18, lineHeight: "24px" }}>→</span>
-                  <Link kind="dispatched_awaiting" val={`${fmt(c.awaitSum)} ₴`} sub={`очікує оплати · ${pct(c.awaitSum)}`} color={BAR} />
-                  <span style={{ color: MUTED, fontSize: 18, lineHeight: "24px" }}>→</span>
-                  <Link kind="dispatched_paid" val={`${fmt(c.paidSum)} ₴`} sub={`оплачено · ${pct(c.paidSum)}`} color={GREEN} />
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 11.5, padding: "6px 10px", borderRadius: 8, background: "var(--card-bg)", border: "1px solid var(--border)" }}>
-                    <b>{fmt(c.awaitDatedSum)} ₴</b> з плановою датою оплати <span style={{ color: MUTED }}>· входить у прогноз</span>
-                  </div>
-                  {c.awaitNoDateSum > 0 && (
-                    <div style={{ fontSize: 11.5, padding: "6px 10px", borderRadius: 8, background: AMBER + "14", border: `1px solid ${AMBER}44` }}>
-                      <b>{fmt(c.awaitNoDateSum)} ₴</b> без планової дати <span style={{ color: MUTED }}>· у прогноз не входить</span>
-                    </div>
-                  )}
-                </div>
+                <Link kind="dispatched" lbl={`відправлено · ${c.deals} ${c.deals === 1 ? "машина" : c.deals < 5 ? "машини" : "машин"}`} val={`${fmt(c.sum)} ₴`} />
+                <Link kind="dispatched_awaiting" lbl={`чекає оплати · ${pct(c.awaitSum)}`} val={`${fmt(c.awaitSum)} ₴`} color={BAR} />
+                <Link kind="dispatched_paid" lbl={`оплачено · ${pct(c.paidSum)}`} val={`${fmt(c.paidSum)} ₴`} color={GREEN} />
+                <div className="kv" title="входить у прогноз"><span>з плановою датою оплати</span><b>{fmt(c.awaitDatedSum)} ₴</b></div>
+                {c.awaitNoDateSum > 0 && (
+                  <div className="kv" title="у прогноз не входить"><span>без планової дати</span><b style={{ color: AMBER }}>{fmt(c.awaitNoDateSum)} ₴</b></div>
+                )}
               </>
             );
           })()}
         </div>
       {open && (
-        <div style={{ marginTop: 8, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ gridColumn: "1 / -1", order: 1, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
           <div style={{ padding: "7px 12px", fontSize: 10.5, fontWeight: 700, color: BAR, textTransform: "uppercase", letterSpacing: ".4px", background: BAR + "0e" }}>
             ↳ {ddmm(period.from)}–{ddmm(period.to)} · {open === "dispatched" ? "відправлені авто" : open === "dispatched_paid" ? "з них уже оплачено" : "з них чекає оплати"}
           </div>
@@ -1186,7 +902,7 @@ function WeekMoney({ mWeek, managerId, period }: {
               </>}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -1510,7 +1226,6 @@ const STUCK_TAG: Record<string, { label: string; c: string }> = { rpk: { label: 
 // Стадія → чип-колір.
 const STUCK_STAGE_C = (s: string) => s === "Авто працює" ? GREEN : s === "Взято в роботу" ? BAR : AMBER;
 const idleColor = (d: number) => d >= 90 ? RED : d >= 21 ? AMBER : MUTED;
-const scopeLbl: Record<string, string> = { company: "вся компанія", team: "свій відділ", own: "свої угоди" };
 
 /**
  * #18 — Застряглі угоди, ЗГРУПОВАНІ по менеджерах (переробка, без «стелі 50»): справжня
@@ -1541,63 +1256,46 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
   }, [teamId]);
 
   const toggleMgr = (id: number) => setOpenMgr((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const stat = (v: React.ReactNode, l: string, color?: string) => (
-    <div style={{ minWidth: 78 }}>
-      <div style={{ fontWeight: 800, fontSize: 20, lineHeight: 1.1, color: color ?? "var(--text)" }}>{v}</div>
-      <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{l}</div>
-    </div>
-  );
+
 
   return (
-    <div style={{ marginTop: 18 }}>
-      <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
-        {/* Шапка — клікабельна кнопка згортання ВСІЄЇ секції (обгортка над per-manager акордеоном) */}
-        <div onClick={() => setSectionOpen((o) => !o)} role="button" aria-expanded={sectionOpen}
-             style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "15px 18px", flexWrap: "wrap", cursor: "pointer", userSelect: "none" }}>
-          <span style={{ fontWeight: 750, fontSize: 16, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: MUTED, fontSize: 13, width: 12, display: "inline-block" }}>{sectionOpen ? "▾" : "▸"}</span>
-            🕐 Застряглі угоди {data && <span style={{ color: data.total ? RED : GREEN, fontWeight: 800 }}>· {data.total}</span>}
-            {data && data.total > 0 && <span style={{ color: MUTED, fontWeight: 700, fontSize: 14 }}>· {k(data.sumRisk)} ₴ в ризику</span>}
-            {data && data.over90 > 0 && <span style={{ fontSize: 11.5, fontWeight: 800, color: "#fff", background: RED, padding: "2px 9px", borderRadius: 20 }}>⚠️ {data.over90} &gt;90 дн</span>}
-            <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}>
-              <InfoHint text={`Критерій — ВІДСУТНІСТЬ РУХУ: угоди від «взято на прорахунок» до «Виставлення рахунку» ВКЛЮЧНО, у яких понад ${data?.minDays ?? "—"} дн. не було ЖОДНОГО сигналу. Сигнали (рішення власника 14.08.2026): нотатка/чат людини · дзвінок ≥10 c · ЗМІНА ЕТАПУ. Далі «Виставлення рахунку» угоду веде логістика й оплата — там мовчання означає інше, і в список вона не входить. Анкер — найсвіжіший із сигналів (нотатки людини, не Salesbot); ДЗВІНОК КОРОТШИЙ ЗА 10 c активністю не вважається — недодзвон не є контактом. Розмова з Ringostat теж рахується рухом, але лише коли у клієнта РІВНО ОДНА відкрита угода: інакше невідомо, про яку з них говорили. Вік рахується від часу останнього успішного синку, а не від годинника — поки дані не оновлюються, лічильник не росте. Сума в ризику — signed (сторно нетиться). Вікно створення 180 днів. ⚠️ Зміну етапу, зроблену ботом, ми поки не відрізняємо від людської — у подіях Kommo ми не зберігаємо, хто саме її зробив.`} />
-            </span>
-          </span>
-          {sectionOpen && (
-            <div style={{ textAlign: "right", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
-              без руху ≥{data?.minDays ?? "—"} дн. · чат · дзвінок від 10 c · зміна етапу<br />
-              до «Виставлення рахунку» включно · дата = останній сигнал<br />
-              <b style={{ color: data?.asOfStale ? AMBER : "var(--text)" }}>дані станом на {asOfLabel(data?.asOf, data?.asOfStale, data?.asOfAgeMin)}</b>
-              {data && data.talkAmbiguousCount > 0 && <> · ⚠️ {data.talkAmbiguousCount} з розмовою, але угода не одна</>}
-            </div>
+    <div>
+      {/* 🧱 ОДИН РЯДОК (макет, 13.11.2026): лічильники в шапці, решта — по кліку. Авто-розкриття
+          для критичних РНК (рішення власника 24.07) лишається. */}
+      <section className="rv-stuck">
+        <div className="hd" onClick={() => setSectionOpen((o) => !o)} role="button" tabIndex={0} aria-expanded={sectionOpen}
+             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSectionOpen((o) => !o); } }}>
+          <span className="rv-chev" style={{ transform: sectionOpen ? "rotate(90deg)" : "none" }}>▸</span>
+          <span className="t">Застряглі угоди</span>
+          {data == null ? <span className="m">завантаження…</span> : (
+            <span className="m"><b style={{ color: data.total ? RED : GREEN }}>{data.total}</b> угод
+              {data.total > 0 && <> · <b>{k(data.sumRisk)}</b> ₴ в ризику · <b>{data.managers}</b> менеджерів</>}</span>
           )}
+          {data && data.over90 > 0 && <span className="rv-badge">⚠️ {data.over90} &gt;90 дн</span>}
+          <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}>
+            <InfoHint text={`Критерій — ВІДСУТНІСТЬ РУХУ: угоди від «взято на прорахунок» до «Виставлення рахунку» ВКЛЮЧНО, у яких понад ${data?.minDays ?? "—"} дн. не було ЖОДНОГО сигналу. Сигнали (рішення власника 14.08.2026): нотатка/чат людини · дзвінок ≥10 c · ЗМІНА ЕТАПУ. Далі «Виставлення рахунку» угоду веде логістика й оплата — там мовчання означає інше, і в список вона не входить. Анкер — найсвіжіший із сигналів (нотатки людини, не Salesbot); ДЗВІНОК КОРОТШИЙ ЗА 10 c активністю не вважається — недодзвон не є контактом. Розмова з Ringostat теж рахується рухом, але лише коли у клієнта РІВНО ОДНА відкрита угода: інакше невідомо, про яку з них говорили. Вік рахується від часу останнього успішного синку, а не від годинника — поки дані не оновлюються, лічильник не росте. Сума в ризику — signed (сторно нетиться). Вікно створення 180 днів. Роль-скоуп: адмін/КВП — вся компанія, тімлід — свій відділ, менеджер — лише свої. Стан на зараз, не за обраним періодом. ⚠️ Зміну етапу, зроблену ботом, ми поки не відрізняємо від людської — у подіях Kommo ми не зберігаємо, хто саме її зробив.`} />
+          </span>
         </div>
+        {sectionOpen && (
+          <div className="rule">
+            без руху ≥{data?.minDays ?? "—"} дн. · чат · дзвінок від 10 c · зміна етапу · до «Виставлення рахунку» включно · стан на зараз, не за обраним періодом ·{" "}
+            <b style={{ color: data?.asOfStale ? AMBER : "var(--text)" }}>дані станом на {asOfLabel(data?.asOf, data?.asOfStale, data?.asOfAgeMin)}</b>
+            {data && data.talkAmbiguousCount > 0 && <> · ⚠️ {data.talkAmbiguousCount} з розмовою, але угода не одна</>}
+            {data && data.scope !== "own" && (
+              <label style={{ marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                Сортувати:
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as StuckSort)}
+                  style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "3px 8px", cursor: "pointer" }}>
+                  <option value="count">за к-стю</option>
+                  <option value="sum">за сумою в ризику</option>
+                  <option value="idle">за простоєм</option>
+                </select>
+              </label>
+            )}
+          </div>
+        )}
         {sectionOpen && (data == null ? <div style={{ padding: "0 18px 18px", color: MUTED }}>Завантаження…</div> : (
           <>
-            {/* Summary-стрічка */}
-            <div style={{ display: "flex", alignItems: "center", gap: 26, flexWrap: "wrap", padding: "0 18px 15px", borderBottom: "1px solid var(--border)" }}>
-              {stat(data.total, "застряглих угод", RED)}
-              {stat(<>{k(data.sumRisk)} <span style={{ fontSize: 13 }}>₴</span></>, "сума в ризику", RED)}
-              {stat(data.managers, "менеджерів")}
-              {stat(data.over90, ">90 днів")}
-              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 12, color: MUTED, background: "var(--bg)", border: "1px solid var(--border)", padding: "5px 11px", borderRadius: 20 }}>
-                  Ти бачиш: <b style={{ color: "var(--text)" }}>{scopeLbl[data.scope]}</b>
-                </span>
-                {data.scope !== "own" && (
-                  <label style={{ fontSize: 12, color: MUTED, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    Сортувати:
-                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value as StuckSort)}
-                      style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 8px", cursor: "pointer" }}>
-                      <option value="count">за к-стю</option>
-                      <option value="sum">за сумою в ризику</option>
-                      <option value="idle">за простоєм</option>
-                    </select>
-                  </label>
-                )}
-              </div>
-            </div>
-
             {data.groups.length === 0 ? (
               <div style={{ padding: 18, color: MUTED, fontSize: 13 }}>Немає застряглих угод ✓</div>
             ) : [...data.groups].sort((a, b) =>
@@ -1607,12 +1305,7 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
             ))}
           </>
         ))}
-      </div>
-
-      {/* Пояснення (макет) — лише коли секція розкрита */}
-      {sectionOpen && <div style={{ background: "rgba(47,111,219,0.06)", border: "1px solid rgba(47,111,219,0.25)", borderRadius: 12, padding: "12px 15px", fontSize: 12, color: "var(--text)", lineHeight: 1.55, marginTop: 10 }}>
-        <b>Що рахуємо:</b> критерій — <b>відсутність руху</b>: угоди <b>до «Виставлення рахунку» включно</b> (доти їх тримає менеджер), у яких понад поріг не було <b>жодного сигналу</b> — чату, дзвінка від 10 c або зміни етапу. Список — по менеджерах (згорнуті), згори — <b>чесний підсумок</b> без «стелі 50»: реальна к-сть, сума в ризику (signed), критичні &gt;90 дн. <b>Роль-скоуп:</b> адмін/КВП — вся компанія, тімлід — свій відділ, менеджер — лише свої. Дата простою — від останньої активності; всередині менеджера сортування від найдовшого.
-      </div>}
+      </section>
     </div>
   );
 }
@@ -1736,11 +1429,3 @@ function StuckMgrRow({ g, open, onToggle, single }: { g: StuckManagerGroup; open
   );
 }
 
-function Legend() {
-  return (
-    <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, color: MUTED, margin: "22px 2px 0", paddingTop: 15, borderTop: "1px solid var(--border)" }}>
-      {(["g", "a", "r"] as const).map((s) => <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: "50%", background: SCOL[s] }} /> {SICON[s]} {SLBL[s]}</span>)}
-      <span>│ смуга: «Місяць» — головна траєкторія (сортування за нею), «Тиждень» — поточний; │ на місяці — позначка «сьогодні»</span>
-    </div>
-  );
-}

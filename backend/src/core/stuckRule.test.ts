@@ -291,7 +291,8 @@ test("#72g ПОРІГ ЄДИНИЙ, ПАРАМЕТРОМ, поділу 7/21 бі
   //    зміни `?minDays=` — рівно як хвіст «(2 год тому)» із зашитими 4 годинами (#74c).
   const fe = readFileSync(path.join(SRC, "..", "..", "frontend", "src", "pages",
     "dashboard", "sections", "ReportPlanSection.tsx"), "utf8");
-  const block = fe.slice(fe.indexOf("🕐 Застряглі угоди"), fe.indexOf("дані станом на"));
+  // 13.11.2026: шапка блоку — один рядок `<span className="t">Застряглі угоди</span>` (макет).
+  const block = fe.slice(fe.indexOf('<span className="t">Застряглі угоди</span>'), fe.indexOf("дані станом на"));
   assert.ok(block.length > 200, "🔴 блок підпису критерію зник — перевіряти нема чого");
   assert.ok(/data\?\.minDays/.test(block),
     "🔴 підпис не бере поріг із відповіді сервера — отже називає своє число");

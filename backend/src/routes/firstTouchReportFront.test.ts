@@ -62,7 +62,9 @@ test("#477 ПЕРШИЙ ДОТИК · ФРОНТ: підсумок — част�
   assert.equal(S.mergeReportPlans([plan(0, 0, 0, "not_covered", 0), plan(0, 0, 0, "not_covered", 0)]).glance.firstTouch.state, "not_covered");
 
   const rp = readFileSync(FE("pages/dashboard/sections/ReportPlanSection.tsx"), "utf8");
-  assert.match(rp, /<FirstTouchKpi c=\{m\.firstTouch\} \/>/, "🔴 картка менеджера без рядка «ціну названо»");
+  // 13.11.2026: рядок картки — у блоці «Дзвінки й реакція», з того самого `firstTouchLabel`.
+  assert.match(rp, /const ft = firstTouchLabel\(m\.firstTouch\)/, "🔴 картка менеджера рахує «ціну названо» повз спільне правило");
+  assert.match(rp, /ціну названо в 1-й дотик<\/span><b>\{ft\.main\}/, "🔴 картка менеджера без рядка «ціну названо»");
   assert.match(rp, /g\.firstTouch\?\.state === "measured" && firstTouchStale\(data\.firstTouchMeta\?\.lastAnalyzedAt \?\? null, today, data\.scope\.to\)/,
     "🔴 «бот мовчить» не від кінця періоду або малюється команді, яку бот не слухає");
   assert.match(rp, /const ftGlance = firstTouchLabel\(g\.firstTouch\)/, "🔴 підсумок команди підмінює стан, а не бере його з бекенду");

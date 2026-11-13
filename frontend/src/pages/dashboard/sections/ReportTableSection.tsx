@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { cloneElement, Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanManager, type Team } from "../../../api";
+import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanManager } from "../../../api";
 import {
   REPORT_COLS, OPTIONAL_COLS, sortRows, footValue, firstTouchLabel,
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
@@ -45,16 +45,11 @@ const TOKEN: Record<string, string> = { g: "--ok", a: "--warn", r: "--danger" };
 const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відстає", r: "Зрив" };
 
 export function ReportTableSection({
-  data, teams, auth, teamIds, onTeamIds, periodLabel, hideTeams,
-  responseByMgr, month, renderCard, slice,
+  data, auth, periodLabel, responseByMgr, month, slice, statusFilter, toolbar,
 }: {
   data: ReportPlan;
-  teams: Team[];
   auth: { role: string; managerId: number | null; teamId: number | null };
-  teamIds: number[];
-  onTeamIds: (v: number[]) => void;
   periodLabel: string;
-  hideTeams: Set<number>;
   /** Частка лідів >1 год по менеджеру (%). `undefined` — ще вантажиться, `null` — лідів не було. */
   responseByMgr?: Map<number, number | null>;
   /** Місяць для розкриття тижнів (YYYY-MM) — береться від початку обраного періоду. */
@@ -66,20 +61,17 @@ export function ReportTableSection({
    * підписом «лише нові», хоч гроші за новизною тут узагалі не діляться.
    */
   slice: Slice;
+  /** Чип стану з підсумку — фільтр рядків (той самий, що в картках). Підсумок угорі він не звужує. */
+  statusFilter: "g" | "a" | "r" | null;
   /**
-   * ПОВНА КАРТКА обраного менеджера — рендерить КОНТЕЙНЕР, а не таблиця.
-   *
-   * 🔴 ЧОМУ ПРОПСОМ, А НЕ ІМПОРТОМ. `MgrStrip` живе в `ReportPlanSection`, який сам
-   * імпортує цю таблицю. Прямий імпорт назад замкнув би цикл модулів: у ESM він
-   * зазвичай «якось працює», але лагодити його потім доводиться в рантаймі, а не
-   * на збірці. Виносити `MgrStrip` в окремий файл цим проходом теж не варто — це
-   * потягло б за собою пів карткового вигляду, який ми свідомо не чіпаємо.
+   * Ліва частина панелі над таблицею (зріз «Створені угоди», фільтр, лічильник) — її
+   * малює контейнер, бо та сама панель стоїть і над картками. «Колонки» й «На весь
+   * екран» таблиця додає праворуч у ТОЙ САМИЙ ряд (макет, 13.11.2026).
    */
-  renderCard?: (m: ReportPlanManager) => React.ReactNode;
+  toolbar?: React.ReactNode;
 }) {
   const [sortKey, setSortKey] = useState<ColKey>("fact");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
-  const [mgrFilter, setMgrFilter] = useState<number | "">("");
   const [open, setOpen] = useState<number | null>(null);
   // Видимість колонок переживає перезавантаження — і вона ОСОБИСТА: ключ
   // `rptTableCols:<userId>` з фолбеком на старий спільний (див. reportTableCols.ts).
@@ -134,12 +126,6 @@ export function ReportTableSection({
     const prev = document.body.style.overflow; document.body.style.overflow = "hidden";
     return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
   }, [fs]);
-
-  // Обраний менеджер зник із набору (змінили період/команду) — фільтр знімаємо,
-  // інакше екран лишився б порожнім без пояснення.
-  useEffect(() => {
-    if (mgrFilter !== "" && !data.managers.some((m) => m.managerId === mgrFilter)) setMgrFilter("");
-  }, [data, mgrFilter]);
 
   /**
    * 🔴 «ОТРИМАНО · НЕВИЗНАЧЕНО» — УМОВНА КОЛОНКА (рішення власника 25.08.2026).
@@ -196,7 +182,7 @@ export function ReportTableSection({
     onDragEnd: () => { dragCol.current = null; setDropOn(null); },
   });
   const rows = useMemo(() => {
-    const picked = mgrFilter === "" ? data.managers : data.managers.filter((m) => m.managerId === mgrFilter);
+    const picked = statusFilter ? data.managers.filter((m) => m.status === statusFilter) : data.managers;
     /**
      * 🔀 ЗРІЗ ЗАСТОСОВУЄТЬСЯ ДО РЯДКА ОДИН РАЗ — ТУТ, ПЕРЕД СОРТУВАННЯМ І ПЕРЕД
      * РЕЄСТРОМ КОЛОНОК.
@@ -213,7 +199,7 @@ export function ReportTableSection({
     // лежить у рядку менеджера. Без нього клік по цій колонці нічого не робив би —
     // чип є, сортування мертве.
     return sortRows(base, sortKey, sortDir, { slowByMgr: responseByMgr });
-  }, [data.managers, mgrFilter, sortKey, sortDir, responseByMgr, slice]);
+  }, [data.managers, statusFilter, sortKey, sortDir, responseByMgr, slice]);
 
   const onSort = (k: ColKey) => {
     if (k === "rank") return;
@@ -221,89 +207,36 @@ export function ReportTableSection({
     else { setSortKey(k); setSortDir(k === "name" ? 1 : -1); }
   };
 
-  const scopeLabel = mgrFilter !== "" ? "Менеджер"
-    : teamIds.length >= 2 ? `Обрано команд: ${teamIds.length}`
-      : teamIds.length === 1 ? "Команда" : "Весь відділ";
-  /** 🧩 Групування вмикається САМЕ мультивибором, а не кількістю команд у даних:
-      при одній обраній команді екран мусить лишитись байт-у-байт теперішнім. */
-  const grouped = teamIds.length >= 2 && mgrFilter === "";
-  /**
-   * 🔴 ГРУПИ БУДУЮТЬСЯ З ТИХ САМИХ `rows`, ЩО Й ПЛОСКИЙ СПИСОК, і сортуються тим
-   * самим `sortRows`. Тому Σ груп == Σ рядків за побудовою, а не за домовленістю
-   * (це і стереже `#99`). Порядок груп — як людина їх обрала, а не випадковий.
-   */
-  const groups = useMemo(() => {
-    if (!grouped) return [];
-    const byId = new Map<number, ReportPlanManager[]>(teamIds.map((id) => [id, []]));
-    const rest: ReportPlanManager[] = [];
-    for (const r of rows) {
-      const g = r.teamId != null ? byId.get(r.teamId) : undefined;
-      if (g) g.push(r); else rest.push(r);
+  const scopeLabel = statusFilter ? "Обрані рядки" : auth.role === "manager" ? "Команда" : "Весь відділ";
+  /** Тінь на правому краю — лише коли праворуч справді є сховані колонки (макет, п.4). */
+  const scroller = useRef<HTMLDivElement | null>(null);
+  const [moreRight, setMoreRight] = useState(false);
+  useEffect(() => {
+    const el = scroller.current; if (!el) return;
+    const upd = () => setMoreRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+    upd(); el.addEventListener("scroll", upd); window.addEventListener("resize", upd);
+    return () => { el.removeEventListener("scroll", upd); window.removeEventListener("resize", upd); };
+  }, [cols.length, rows.length, fs]);
+  /** Групи над колонками — суцільні відрізки однакової групи в ПОТОЧНОМУ порядку колонок. */
+  const bands = useMemo(() => {
+    const out: { group: string; span: number; first: ColKey }[] = [];
+    for (const c of cols) {
+      const g = COL_GROUP_OF[c.key];
+      const last = out[out.length - 1];
+      if (last && last.group === g) last.span++;
+      else out.push({ group: g, span: 1, first: c.key });
     }
-    const out = teamIds.map((id) => ({
-      id, name: teams.find((t) => t.id === id)?.name ?? `Команда #${id}`, rows: byId.get(id) ?? [],
-    }));
-    // 🔴 Рядок, що не потрапив у жодну обрану команду, НЕ зникає: він іде окремою
-    // групою з чесною назвою. Мовчазне випадання зробило б Σ груп < Σ рядків, і
-    // помітити це можна було б лише склавши стовпчик очима.
-    if (rest.length) out.push({ id: -1, name: "Поза обраними командами", rows: rest });
-    return out.filter((g) => g.rows.length > 0);
-  }, [grouped, rows, teamIds, teams]);
-
-  /**
-   * 🔢 ЛІЧИЛЬНИКИ В ОПЦІЯХ — З УЖЕ ЗАВАНТАЖЕНОГО НАБОРУ, без жодного запиту.
-   *
-   * 🔴 НАСЛІДОК, ЯКИЙ ТРЕБА ЗНАТИ: коли адмін уже звузив вигляд до однієї команди,
-   * сервер прислав ЛИШЕ її менеджерів — про склад інших ми в цю мить не знаємо.
-   * Тому число стоїть лише там, де воно справді пораховане; решта команд ідуть без
-   * лічильника. Написати їм «· 0» означало б стверджувати, що команда порожня, —
-   * а це не «нуль», це «ми не дивились».
-   */
-  const byTeam = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const r of data.managers) if (r.teamId != null) m.set(r.teamId, (m.get(r.teamId) ?? 0) + 1);
-    return m;
-  }, [data.managers]);
-  const mgrWord = (n: number) => (n === 1 ? "менеджер" : n < 5 ? "менеджери" : "менеджерів");
+    return out;
+  }, [cols]);
+  const bandStart = new Set(bands.slice(1).map((b) => b.first));
+  const groupTitle = (g: string) => (g === "base" ? "" : COL_GROUPS.find((x) => x.key === g)?.title ?? "");
 
   return (
     <div>
-      {/* ── Обсяг: перевикористовує teamId-механізм Звіту (серверний зріз),
-             менеджер фільтрує вже завантажений набір локально. */}
-      <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>Обсяг:</span>
-        <ScopePicker
-          teams={teams.filter((t) => !hideTeams.has(t.id))}
-          isAdmin={auth.role === "admin"}
-          teamIds={teamIds} onTeamIds={onTeamIds}
-          mgrFilter={mgrFilter} onMgrFilter={setMgrFilter}
-          managers={data.managers} byTeam={byTeam}
-          allLabel={`Весь відділ · ${data.managers.length} ${mgrWord(data.managers.length)}`}
-        />
-        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          {rows.length} {rows.length === 1 ? "рядок" : rows.length < 5 ? "рядки" : "рядків"} · {periodLabel}
-        </span>
-      </div>
-
-      {/* 🔴 ПІДПИС ЗВУЖЕННЯ (рішення власника 20.08.2026, варіант «б»).
-             Верхній підсумок (кільце, плитки) рендериться КОНТЕЙНЕРОМ до розвилки
-             вигляду, тож фільтр менеджера його не звужує. Числа там не брешуть —
-             але без цього рядка вони читаються як «підсумок обраного».
-             Перераховувати `glance` на фронті свідомо НЕ стали: це завело б другий
-             обчислювач тих самих чисел, тобто рівно те, від чого береже #81. */}
-      {mgrFilter !== "" && (
-        <div style={{
-          fontSize: 12, color: "var(--text-muted)", marginBottom: 12, padding: "8px 12px",
-          background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--r-lg)",
-        }}>
-          Підсумок угорі — <b style={{ color: "var(--text)" }}>по всьому відділу</b>; нижче — лише
-          обраний менеджер.
-        </div>
-      )}
-
-      {/* ── Вибір колонок: кнопка з меню галочок замість ряду з 22 чипів (26.10.2026).
-             Меню живе ПОЗА скрол-контейнером таблиці, як «Обсяг», тож нічого не обрізається. */}
-      <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+      {/* Панель списку: зріз · фільтр · лічильник (від контейнера) | «Колонки» · «На весь екран». */}
+      <div className="rv-bar">
+        {toolbar}
+        <span style={{ flex: 1 }} />
         <ColumnPicker
           toggleable={OPTIONAL_COLS.filter((c) => c.key !== "factUndef")}
           locked={REPORT_COLS.filter((c) => isLockedCol(c.key))}
@@ -314,25 +247,10 @@ export function ReportTableSection({
           ordered={cols} onStep={moveStep} dnd={dnd} dropOn={dropOn}
           shown={cols.length} total={REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : true)).length}
         />
-        <button type="button" onClick={() => setFs(true)} title="Розгорнути таблицю на все вікно (Esc — згорнути)"
-          style={{ ...selStyle, minWidth: 0 }}>⤢ На весь екран</button>
+        <button type="button" className="rv-btn" onClick={() => setFs(true)} title="Розгорнути таблицю на все вікно (Esc — згорнути)">⤢ На весь екран</button>
       </div>
 
-      {/**
-        * 🧍 ОДИН МЕНЕДЖЕР — ПОВНА КАРТКА (рішення власника 20.08.2026).
-        *
-        * Вибір одного менеджера в «Обсяг» і Є запитом «покажи все про нього», тож
-        * картка стоїть РОЗГОРНУТОЮ і стан `open` таблиці з нею не ділиться: інакше
-        * «розгорнув у таблиці — згорнулось у картці» стало б питанням часу.
-        *
-        * 🔴 Це ТОЙ САМИЙ `MgrStrip`, що в картковому вигляді, а не його копія: копія
-        * розійшлася б із оригіналом мовчки — рівно те, від чого береже #81.
-        */}
-      {mgrFilter !== "" && renderCard && rows[0] && (
-        <div style={{ marginBottom: 14 }}>{renderCard(rows[0])}</div>
-      )}
-
-      <div className="chart-card" style={{ padding: 0, overflow: "hidden",
+      <div className={`rv-tbox${moreRight ? " more" : ""}`} style={{
         ...(fs ? { position: "fixed", inset: 0, zIndex: 50, margin: 0, borderRadius: 0, display: "flex", flexDirection: "column" } : null) }}>
         {fs && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 14px",
@@ -354,29 +272,40 @@ export function ReportTableSection({
           * колонка «Менеджер» (`left: 0`) і загальний підсумок (`bottom: 0`) липнуть
           * в ОДНОМУ контейнері, а кут «Менеджер» має найвищий z-index.
           */}
-        <div style={{ overflow: "auto", maxHeight: "calc(100vh - 120px)", ...(fs ? { maxHeight: "none", flex: 1 } : null) }}>
+        <div ref={scroller} style={{ overflow: "auto", maxHeight: "calc(100vh - 150px)", ...(fs ? { maxHeight: "none", flex: 1 } : null) }}>
           <table className="data-table rpt-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontVariantNumeric: "tabular-nums" }}>
             <thead>
+              {/* Групи над колонками (Гроші · Очікуємо · Дзвінки…) — `<th colSpan>`, щоб назва групи
+                  трималась над своїми колонками при горизонтальному скролі. */}
+              <tr className="g">
+                {bands.map((b) => (
+                  <th key={b.first} colSpan={b.span} className={b.first === "name" || b.first === "rank" ? "sticky-mgr" : bandStart.has(b.first) ? "gl" : undefined}
+                    style={{ position: "sticky", top: 0, zIndex: b.group === "base" ? 5 : 3, background: "var(--rv-head)",
+                      ...(b.group === "base" ? { left: 0 } : null) }}>
+                    {groupTitle(b.group)}
+                  </th>
+                ))}
+              </tr>
               <tr>
                 {cols.map((c, i) => (
                   <th key={c.key} onClick={() => onSort(c.key)} {...dnd(c.key)}
                     ref={c.key === "name" ? mgrTh : undefined}
-                    className={c.key === "name" ? "sticky-mgr" : undefined}
+                    className={[c.key === "name" ? "sticky-mgr" : "", c.key === sortKey ? "on" : "", bandStart.has(c.key) ? "gl" : ""].join(" ").trim() || undefined}
                     title={isPinnedCol(c.key) ? undefined : "Клік — сортування; перетягніть, щоб змінити порядок"}
                     style={{
-                      position: "sticky", top: 0, zIndex: c.key === "name" ? 5 : 3,
+                      position: "sticky", top: 26, zIndex: c.key === "name" ? 5 : 3,
                       // Фон НЕПРОЗОРИЙ (токен теми): без нього рядки просвічують крізь шапку.
-                      background: "var(--surface-2)", cursor: c.key === "rank" ? "default" : "pointer",
+                      background: "var(--rv-head)", cursor: c.key === "rank" ? "default" : "pointer",
                       textAlign: c.left ? "left" : "right",
                       // ↔️ ВУЖЧІ КОЛОНКИ (правка 4): назва переноситься на 2 рядки замість того, щоб розпирати
                       // колонку; «Менеджер» не переноситься — його ширину людина задає сама.
                       whiteSpace: c.key === "name" ? "nowrap" : "normal", verticalAlign: "bottom", lineHeight: 1.2,
                       ...(c.key === "name" ? null : { maxWidth: 92, minWidth: 54 }),
-                      fontSize: 10.5, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase",
-                      color: c.key === sortKey ? "var(--brand)" : "var(--text-muted)",
-                      padding: "10px 7px", borderBottom: "1px solid var(--border-strong)",
+                      fontSize: 12, fontWeight: 650,
+                      color: c.key === sortKey ? "var(--text)" : "var(--text-muted)",
+                      padding: "8px 8px", borderBottom: "1px solid var(--border)",
                       ...(dropOn === c.key ? { boxShadow: "inset 3px 0 0 var(--brand)" } : null),
-                      ...(c.key === "name" ? { left: 0, boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)",
+                      ...(c.key === "name" ? { left: 0, boxShadow: "1px 0 0 var(--border)",
                         ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden" } : null) } : null),
                     }}>
                     {c.title}
@@ -389,35 +318,24 @@ export function ReportTableSection({
                         onDoubleClick={(e) => { e.stopPropagation(); resetWidth(); }}
                         className="rpt-resize" />
                     )}
+                    {/* Стрілка — лише на активній колонці та при наведенні (макет, п.9). */}
                     {c.key !== "rank" && (
-                      <span style={{ marginLeft: 3, fontSize: 9, opacity: c.key === sortKey ? 1 : 0.35 }}>
-                        {c.key === sortKey ? (sortDir === -1 ? "▼" : "▲") : "↕"}
+                      <span className="arrow" style={{ marginLeft: 3, fontSize: 10, color: c.key === sortKey ? "var(--brand)" : "var(--text-muted)" }}>
+                        {c.key === sortKey ? (sortDir === -1 ? "↓" : "↑") : "↕"}
                       </span>
                     )}
                   </th>
                 ))}
               </tr>
             </thead>
-            {(grouped ? groups : [{ id: 0, name: "", rows }]).map((g) => (
-            <tbody key={`g${g.id}`}>
-              {grouped && (
-                <tr>
-                  <td colSpan={cols.length} className="sticky-mgr"
-                      style={{ position: "sticky", left: 0, background: "var(--surface-2)",
-                        padding: "9px 12px", fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em",
-                        textTransform: "uppercase", color: "var(--brand)",
-                        borderTop: "2px solid var(--border-strong)" }}>
-                    {g.name} <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>· {g.rows.length}</span>
-                  </td>
-                </tr>
-              )}
-              {g.rows.map((m, i) => (
+            <tbody>
+              {rows.map((m, i) => (
                 <Fragment key={m.managerId}>
-                  <tr onClick={() => setOpen(open === m.managerId ? null : m.managerId)}
+                  <tr className="row" onClick={() => setOpen(open === m.managerId ? null : m.managerId)}
                       style={{ cursor: "pointer" }}>
                     {cols.map((c) => (
                       <Cell key={c.key} col={c} m={m} idx={i} isOpen={open === m.managerId}
-                            responseByMgr={responseByMgr} mgrW={mgrW} />
+                            responseByMgr={responseByMgr} mgrW={mgrW} gl={bandStart.has(c.key)} />
                     ))}
                   </tr>
                   {open === m.managerId && (
@@ -429,26 +347,17 @@ export function ReportTableSection({
                   )}
                 </Fragment>
               ))}
-              {grouped && (
-                <tr>
-                  {cols.map((c) => (
-                    <FootCell key={c.key} col={c} rows={g.rows} scopeLabel={`Команда · ${g.name}`} count={g.rows.length} group
-                      callbackMedian={data.missedMeta?.byTeam.find((t) => t.teamId === g.id)?.medianMin ?? null} />
-                  ))}
-                </tr>
-              )}
               {rows.length === 0 && (
                 <tr><td colSpan={cols.length} style={{ padding: 20, color: "var(--text-muted)" }}>
                   Немає менеджерів у цьому розрізі.
                 </td></tr>
               )}
             </tbody>
-            ))}
             <tfoot>
               <tr>
                 {cols.map((c) => (
                   <FootCell key={c.key} col={c} rows={rows} scopeLabel={scopeLabel} count={rows.length}
-                    callbackMedian={mgrFilter === "" ? data.missedMeta?.medianMin ?? null : rows[0]?.missed?.medianMin ?? null} />
+                    callbackMedian={statusFilter ? null : data.missedMeta?.medianMin ?? null} />
                 ))}
               </tr>
             </tfoot>
@@ -456,17 +365,19 @@ export function ReportTableSection({
         </div>
       </div>
 
-      <MissedOutside data={data} rows={rows} filtered={mgrFilter !== ""} />
-      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 11, lineHeight: 1.55 }}>
-        <b style={{ color: "var(--text)" }}>Клік по менеджеру</b> розкриває його тижні: план кожного
-        тижня — той, що був <b style={{ color: "var(--text)" }}>зафіксований у понеділок</b>, а не
-        перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу.
-        Заголовок можна <b style={{ color: "var(--text)" }}>перетягнути</b>, щоб змінити порядок колонок
-        («#» і «Менеджер» закріплені); на телефоні — кнопками ↑/↓ у меню «Колонки» → «Порядок». Таблиця прокручується
-        всередині себе: шапка залипає вгорі, загальний підсумок — унизу, колонка «Менеджер» — ліворуч
-        при горизонтальному скролі. <b style={{ color: "var(--text)" }}>Сер. чек, Викон. % і Конв.</b> у
-        підсумку рахуються від сум чисельника й знаменника, а не складанням стовпчика — це частки,
-        і додавати їх не можна.
+      <div className="rv-under">
+        <MissedOutside data={data} rows={rows} filtered={statusFilter != null} />
+        <details className="rv-how">
+          <summary>Як читати таблицю</summary>
+          <p>
+            <b>Клік по менеджеру</b> розкриває його тижні: план кожного тижня — той, що був <b>зафіксований у понеділок</b>,
+            а не перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу. Заголовок можна
+            <b> перетягнути</b>, щоб змінити порядок колонок («Менеджер» закріплений); на телефоні — кнопками ↑/↓ у меню
+            «Колонки» → «Порядок». Шапка залипає вгорі, загальний підсумок — унизу, колонка «Менеджер» — ліворуч.
+            <b> Сер. чек, Викон. % і Конв.</b> у підсумку рахуються від сум чисельника й знаменника, а не складанням
+            стовпчика — це частки, і додавати їх не можна. Смужка й слово біля імені — стан за темпом: зрив · відстає · у нормі.
+          </p>
+        </details>
       </div>
     </div>
   );
@@ -494,7 +405,15 @@ const badge: React.CSSProperties = {
   display: "inline-block", padding: "2px 8px", borderRadius: "var(--r-pill)", fontSize: 12, fontWeight: 600,
 };
 
-function Cell({ col, m, idx, isOpen, responseByMgr, mgrW }: {
+/** Клітинка + межа групи ліворуч (`gl`), не чіпаючи розмітки кожного типу клітинки. */
+function Cell(props: Parameters<typeof CellInner>[0] & { gl?: boolean }) {
+  const { gl, ...rest } = props;
+  const el = CellInner(rest);
+  if (!gl) return el;
+  const prev = (el.props as { className?: string }).className;
+  return cloneElement(el, { className: [prev, "gl"].filter(Boolean).join(" ") });
+}
+function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
   col: ColDef; m: ReportPlanManager; idx: number; isOpen: boolean;
   responseByMgr?: Map<number, number | null>;
   /** ↔️ Ширина «Менеджер», задана людиною; `null` — природна. */
@@ -505,15 +424,23 @@ function Cell({ col, m, idx, isOpen, responseByMgr, mgrW }: {
     case "rank":
       return <td style={{ ...st, color: "var(--text-muted)", width: 26 }}>{idx + 1}</td>;
     case "name":
+      // 🚦 Стан — смужка й слово в клітинці «Менеджер» (макет, п.5): не крапка лише кольором,
+      // і не зникає при скролі вправо, бо клітинка закріплена.
       return (
-        <td className="sticky-mgr" title={mgrW != null ? m.name : undefined}
-          style={{ ...st, position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)",
+        <td className="sticky-mgr rv-mcell" title={mgrW != null ? m.name : undefined}
+          style={{ ...st, position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", boxShadow: "1px 0 0 var(--border)",
+            ["--sc" as string]: `var(${TOKEN[m.status]})`,
             ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden", textOverflow: "ellipsis" } : { minWidth: 210 }) }}>
-          <span style={{ display: "inline-block", width: 12, color: "var(--text-muted)", fontSize: 10, transform: isOpen ? "rotate(90deg)" : "none" }}>▸</span>{" "}
-          <span style={{ fontWeight: 600 }}>{m.name}</span>
-          {(mgrW == null || mgrW >= MGR_W_TIGHT) && <LevelChip level={m.level} />}
-          <VacationMark managerId={m.managerId} />
-          <div style={{ color: "var(--text-muted)", fontSize: 11, paddingLeft: 18, overflow: "hidden", textOverflow: "ellipsis" }}>{m.teamName ?? "Поза командами"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <span style={{ fontWeight: 650 }}>{m.name}</span>
+              {(mgrW == null || mgrW >= MGR_W_TIGHT) && <LevelChip level={m.level} />}
+              <VacationMark managerId={m.managerId} />
+              <div style={{ color: "var(--text-muted)", fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" }}>{m.teamName ?? "Поза командами"}</div>
+            </div>
+            <span className="rv-word">{STATUS_LBL[m.status].toLowerCase()}</span>
+            <span style={{ display: "inline-block", width: 10, color: "var(--text-muted)", fontSize: 10, transform: isOpen ? "rotate(90deg)" : "none" }}>▸</span>
+          </div>
         </td>
       );
     case "status":
@@ -873,79 +800,6 @@ function convCell(pct: number | null, won: number, taken: number) {
   );
 }
 
-function ScopePicker({ teams, isAdmin, teamIds, onTeamIds, mgrFilter, onMgrFilter, managers, byTeam, allLabel }: {
-  teams: Team[]; isAdmin: boolean;
-  teamIds: number[]; onTeamIds: (v: number[]) => void;
-  mgrFilter: number | ""; onMgrFilter: (v: number | "") => void;
-  managers: ReportPlanManager[]; byTeam: Map<number, number>; allLabel: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", away); document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
-  }, [open]);
-
-  const label = mgrFilter !== "" ? (managers.find((m) => m.managerId === mgrFilter)?.name ?? "Менеджер")
-    : teamIds.length === 0 ? allLabel
-      : teamIds.length === 1 ? (teams.find((t) => t.id === teamIds[0])?.name ?? "Команда")
-        : `${teamIds.length} команди · ${managers.length} ${managers.length === 1 ? "менеджер" : managers.length < 5 ? "менеджери" : "менеджерів"}`;
-
-  const toggleTeam = (id: number) => {
-    onMgrFilter("");
-    onTeamIds(teamIds.includes(id) ? teamIds.filter((x) => x !== id) : [...teamIds, id]);
-  };
-  const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "6px 11px", cursor: "pointer", fontSize: 13 };
-
-  return (
-    <div ref={box} style={{ position: "relative" }}>
-      <button type="button" onClick={() => setOpen(!open)} style={{ ...selStyle, cursor: "pointer", textAlign: "left", minWidth: 210 }}>
-        {label} <span style={{ opacity: 0.5, marginLeft: 4 }}>{open ? "▲" : "▼"}</span>
-      </button>
-      {open && (
-        <div style={{
-          position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 60, minWidth: 280, maxHeight: 420,
-          overflowY: "auto", background: "var(--card-bg)", border: "1px solid var(--border-strong)",
-          borderRadius: "var(--r-md)", boxShadow: "var(--shadow)", padding: "5px 0",
-        }}>
-          <div style={{ ...row, fontWeight: teamIds.length === 0 && mgrFilter === "" ? 700 : 400 }}
-               onClick={() => { onMgrFilter(""); onTeamIds([]); setOpen(false); }}>
-            <span style={{ width: 14 }}>{teamIds.length === 0 && mgrFilter === "" ? "•" : ""}</span>{allLabel}
-          </div>
-          {isAdmin && teams.length > 0 && (
-            <>
-              <div style={{ padding: "7px 11px 3px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--text-muted)" }}>
-                Команди — можна кілька
-              </div>
-              {teams.map((t) => {
-                const n = byTeam.get(t.id);
-                return (
-                  <label key={t.id} style={row}>
-                    <input type="checkbox" checked={teamIds.includes(t.id)} onChange={() => toggleTeam(t.id)} />
-                    {t.name}{n != null ? <span style={{ color: "var(--text-muted)" }}> · {n}</span> : null}
-                  </label>
-                );
-              })}
-            </>
-          )}
-          <div style={{ padding: "7px 11px 3px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--text-muted)" }}>
-            Один менеджер
-          </div>
-          {managers.map((m) => (
-            <div key={m.managerId} style={{ ...row, fontWeight: mgrFilter === m.managerId ? 700 : 400 }}
-                 onClick={() => { onTeamIds([]); onMgrFilter(m.managerId); setOpen(false); }}>
-              <span style={{ width: 14 }}>{mgrFilter === m.managerId ? "•" : ""}</span>{m.name}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /**
  * 🗂 «КОЛОНКИ · N з M» — МЕНЮ ГАЛОЧОК ЗАМІСТЬ РЯДУ ЧИПІВ (26.10.2026).
  *
@@ -1192,7 +1046,7 @@ function MissedOutside({ data, rows, filtered }: { data: ReportPlan; rows: Repor
   const inTable = rows.reduce((s, m) => s + (m.missed?.missed ?? 0), 0);
   const rest = meta.total - inTable;
   return (
-    <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
+    <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
       📵 Пропущених усього <b style={{ color: "var(--text)" }}>{meta.total}</b>: {inTable} — у менеджерів таблиці
       {rest > 0 ? <>, ще <b style={{ color: "var(--text)" }}>{rest}</b> — без відповідального або в людей поза Звітом (лідогенерація тощо)</> : null}.
       Детально — вкладка «Пропущені дзвінки».
