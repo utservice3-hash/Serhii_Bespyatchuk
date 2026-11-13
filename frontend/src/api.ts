@@ -243,7 +243,12 @@ export async function fetchLeadgenStageDeals(params: { from: string; to: string;
 export interface LtvAgg {
   clients: number; ltv: number; turnover: number; avg: number | null; repeatPct: number | null; dealsPerClient: number | null;
   growth: number; newClients: number;
+  /** Стали постійними (2+ успішні угоди) і працюють зараз (стан «активний») — задача 8729. */
+  repeat: number; activeNow: number;
+  /** Склад: постійні-працюють / постійні-не замовляють / разові-працюють / разові-не працюють; Σ = clients. */
+  mix: Record<LtvGroup, number>;
 }
+export type LtvGroup = "rw" | "rs" | "ow" | "os";
 export interface LtvClient {
   clientKey: string; name: string; firstDay: string; firstDealId: number; firstDealUrl: string; handoffDay: string;
   handedBy: string; deals: number; ltv: number; turnover: number; ownerName: string | null; segment: string | null; state: string | null;

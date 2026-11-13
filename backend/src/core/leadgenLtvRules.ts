@@ -80,10 +80,31 @@ export interface LtvRow {
   clientKey: string; ltv: number; deals: number; turnover: number; firstDay: string;
   /** Маржа ① угод клієнта з успіхом у вибраному періоді. */
   growth: number;
+  /** Стан клієнта з «Клієнтів» (`clientSegments`): `active` / `sleeping` / `lost`; `null` — невідомо. */
+  state?: string | null;
+}
+
+/**
+ * 🧭 ГРУПА КЛІЄНТА ЛІДГЕНА (задача 8729, Роман 13.11.2026 «роби»): два питання, кожне — НАЯВНИМ правилом, без нового означення.
+ *  • «стали постійними» — 2+ успішні угоди (правило 24.09.2026, те саме, що «повторні» і в «Клієнтах»);
+ *  • «працюють зараз» — стан клієнта `active` (замовляє у ритмі свого сегмента, `clientSegments`). Невідомий стан — НЕ працює.
+ * Чотири групи покривають кожного клієнта рівно раз: Σ = клієнтів (гейт `#3800`).
+ */
+export type LtvGroup = "rw" | "rs" | "ow" | "os";
+export const LTV_GROUPS: readonly LtvGroup[] = ["rw", "rs", "ow", "os"];
+export const isRepeatClient = (deals: number): boolean => deals >= 2;
+export const isActiveNow = (state: string | null | undefined): boolean => state === "active";
+export function ltvGroupOf(deals: number, state: string | null | undefined): LtvGroup {
+  const r = isRepeatClient(deals), w = isActiveNow(state);
+  return r ? (w ? "rw" : "rs") : (w ? "ow" : "os");
 }
 export interface LtvAgg {
   clients: number; ltv: number; turnover: number; avg: number | null; repeatPct: number | null; dealsPerClient: number | null;
   growth: number; newClients: number;
+  /** Стали постійними (2+ успішні угоди) і працюють зараз (стан `active`) — числом, не відсотком (задача 8729). */
+  repeat: number; activeNow: number;
+  /** Склад: постійні-працюють / постійні-не замовляють / разові-працюють / разові-не працюють. Σ = `clients`. */
+  mix: Record<LtvGroup, number>;
 }
 
 /** Підсумок групи клієнтів. `from`/`to` — період «нових» (перша успішна угода в ньому), київські дати включно. */
@@ -94,11 +115,19 @@ export function aggLtv(rows: readonly LtvRow[], from: string, to: string): LtvAg
   return {
     clients: n, ltv: Math.round(ltv), turnover: Math.round(rows.reduce((a, r) => a + r.turnover, 0)),
     avg: n ? Math.round(ltv / n) : null,
-    repeatPct: n ? Math.round((rows.filter((r) => r.deals >= 2).length / n) * 100) : null,
+    repeatPct: n ? Math.round((rows.filter((r) => isRepeatClient(r.deals)).length / n) * 100) : null,
     dealsPerClient: n ? Math.round((deals / n) * 10) / 10 : null,
     growth: Math.round(rows.reduce((a, r) => a + r.growth, 0)),
     newClients: rows.filter((r) => r.firstDay >= from && r.firstDay <= to).length,
+    repeat: rows.filter((r) => isRepeatClient(r.deals)).length,
+    activeNow: rows.filter((r) => isActiveNow(r.state)).length,
+    mix: mixOf(rows),
   };
+}
+function mixOf(rows: readonly LtvRow[]): Record<LtvGroup, number> {
+  const m: Record<LtvGroup, number> = { rw: 0, rs: 0, ow: 0, os: 0 };
+  for (const r of rows) m[ltvGroupOf(r.deals, r.state)]++;
+  return m;
 }
 
 /** Частка передач без угоди менеджера по місяцях передачі — для ⚠ на когортах. */

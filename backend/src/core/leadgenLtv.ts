@@ -217,7 +217,7 @@ export async function leadgenLtvView(scope: LtvScope, from: string, to: string, 
   const memberIds = new Set(members.map((m) => m.managerId));
   const g = new Map(growth.map((x) => [x.key, x.revenue]));
   const rows = all.filter((r) => inScope(r, scope, memberIds) && (pickManagerId == null || r.lg_manager_id === pickManagerId));
-  const toRow = (r: StoredRow): LtvRow => ({ clientKey: r.client_key, ltv: Number(r.ltv), deals: r.deals, turnover: Number(r.turnover), firstDay: r.first_day, growth: g.get(r.client_key) ?? 0 });
+  const toRow = (r: StoredRow): LtvRow => ({ clientKey: r.client_key, ltv: Number(r.ltv), deals: r.deals, turnover: Number(r.turnover), firstDay: r.first_day, growth: g.get(r.client_key) ?? 0, state: r.state });
   const poolIn = poolRows.rows.filter((p) => (scope.kind === "own" ? p.lg_manager_id === scope.managerId
     : scope.kind === "team" ? p.lg_manager_id != null && memberIds.has(p.lg_manager_id) : true)
     && (pickManagerId == null || p.lg_manager_id === pickManagerId));
