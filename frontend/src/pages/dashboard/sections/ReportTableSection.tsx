@@ -432,13 +432,16 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
             ["--sc" as string]: `var(${TOKEN[m.status]})`,
             ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden", textOverflow: "ellipsis" } : { minWidth: 210 }) }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <span style={{ fontWeight: 650 }}>{m.name}</span>
+            <div style={{ minWidth: 0, flex: 1, overflow: "hidden" }}>
+              <span style={{ fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</span>
               {(mgrW == null || mgrW >= MGR_W_TIGHT) && <LevelChip level={m.level} />}
               <VacationMark managerId={m.managerId} />
-              <div style={{ color: "var(--text-muted)", fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" }}>{m.teamName ?? "Поза командами"}</div>
+              {/* Слово стану — у другому рядку, поруч із командою: у вузькій колонці (ширину задає людина)
+                  воно не має налазити на прізвище. */}
+              <div style={{ color: "var(--text-muted)", fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span className="rv-word">{STATUS_LBL[m.status].toLowerCase()}</span> · {m.teamName ?? "Поза командами"}
+              </div>
             </div>
-            <span className="rv-word">{STATUS_LBL[m.status].toLowerCase()}</span>
             <span style={{ display: "inline-block", width: 10, color: "var(--text-muted)", fontSize: 10, transform: isOpen ? "rotate(90deg)" : "none" }}>▸</span>
           </div>
         </td>
