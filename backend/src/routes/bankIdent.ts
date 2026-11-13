@@ -32,7 +32,7 @@ import { canSeeTxRow, isOutEditor, outEditorsOf, ourTxSource, publicRow, toLite,
 import { jobSkip, type JobSkip } from "../jobs/jobRuns.js";
 import {
   EDIT_PERM as OUT_EDIT_PERM, VIEW_PERM as OUT_VIEW_PERM, OUT_FILTERS, OUT_FROM, checkReason as checkOutReason, formatBreakdown,
-  inFilter, isOutOwn, nextAct, outStatus, parseBreakdown, sumLines, type OutFilter, type OutLine,
+  inFilter, isOutOwn, isFopMonoToOwnerCard, nextAct, outStatus, parseBreakdown, sumLines, type OutFilter, type OutLine,
 } from "../bankIdent/outBreakdown.js";
 import { dealLabels, outCandidateIds, outHistory, outRowForUpdate, outRowsByIds, saveOut } from "../bankIdent/outBreakdownStore.js";
 const OUT_NOT_IN_SCOPE = "Розшифровка — лише для вихідних ФОП Приват, ФОП Моно і картки.";
@@ -358,8 +358,10 @@ async function outStates(ids: number[], txs: BankTx[], own: Set<number>, userId?
   const out: Record<number, unknown> = {};
   for (const t of txs) {
     const id = Number(t.id), row = rows.get(id) ?? null, amount = Math.abs(Number(t.amount));
+    // Свій переказ без розшифровки; переказ з ФОП Моно на картку власника — свій і тоді, коли його вже розписали (13.11.2026).
+    const ownNow = own.has(id) && (!row || isFopMonoToOwnerCard(toLite(t)));
     out[id] = {
-      txId: id, editable: outEditable(t, userId), own: own.has(id) && !row, status: own.has(id) && !row ? "own" : outStatus(row, amount), amount,
+      txId: id, editable: outEditable(t, userId), own: ownNow, status: ownNow ? "own" : outStatus(row, amount), amount,
       lines: (row?.lines ?? []).map((l) => {
         const d = l.kind === "deal" ? labels.get(Number(l.ref)) : undefined;
         return { kind: l.kind, ref: l.ref, amount: l.amount, note: l.note, name: d?.name ?? null, manager: d?.manager ?? null, known: l.kind !== "deal" || !!d };

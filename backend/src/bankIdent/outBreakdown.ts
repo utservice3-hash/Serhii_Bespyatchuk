@@ -49,8 +49,19 @@ export function normLine(raw: unknown): OutLine {
   return { kind, ref, amount: Number(x.amount), ...(typeof x.note === "string" && x.note ? { note: x.note } : {}) };
 }
 
-/** Вихідний платіж — свій переказ: на наш рахунок (IBAN) або «між власними рахунками». Імʼя власника НЕ рахується. */
-export const isOutOwn = (tx: TxLite, r: Pick<IdentRules, "ownIbans">): boolean => isOwnTransfer(tx, { ownIbans: r.ownIbans, ownNames: [] });
+/**
+ * 💳 Переказ з ФОП Моно на картку власника (Тетяна 13.11.2026: «фоп моно: прибрати розшифровку таких платежів, зробити
+ * як „переказ між рахунками“, розшифровка по них на карті буде»). Гроші розписуються на робочій картці «Беспятчук white
+ * (Моно)», тож на ФОП — свій переказ, і НАВІТЬ уже розписаний (інакше ті самі гроші розписані двічі). Лише ФОП Моно (id 4).
+ */
+export const FOP_MONO_ACCOUNT_ID = 4;
+const TO_CARD = /переказ\s+на\s+картку/i;
+export const isFopMonoToOwnerCard = (tx: TxLite): boolean => !tx.incoming && Number(tx.accountId) === FOP_MONO_ACCOUNT_ID
+  && String(tx.counterpartyName || "").toLowerCase().includes("беспятчук") && TO_CARD.test(String(tx.purpose || ""));
+
+/** Вихідний платіж — свій переказ: на наш рахунок (IBAN), «між власними рахунками» або з ФОП Моно на картку власника. */
+export const isOutOwn = (tx: TxLite, r: Pick<IdentRules, "ownIbans">): boolean =>
+  isFopMonoToOwnerCard(tx) || isOwnTransfer(tx, { ownIbans: r.ownIbans, ownNames: [] });
 export type ParseResult = { ok: true; lines: OutLine[] } | { ok: false; error: string };
 
 /** Сума «3 000», «3000,50», «3000.5», «3000 грн», «₴3000» → число з копійками; не сума → null. */
