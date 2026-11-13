@@ -497,6 +497,7 @@ function DismissedRows({ rows }: { rows: ReportPlanDismissed[] }) {
  * як повні — це той самий клас, що дві правильні метрики без підпису, які
  * читаються як поломка. Тримає `#214`.
  */
+const SHORT_SLICE: Record<Exclude<Slice, "undef">, string> = { all: "усі", new: "нові", rep: "постійні" };
 function SliceSwitch({ data, slice, onSlice }: { data: ReportPlan; slice: Slice; onSlice: (v: Slice) => void }) {
   // Третій клас існує, якщо він непорожній ХОЧ У КОГОСЬ: ховати положення через
   // те, що в одного менеджера нуль, означало б ховати саме ті угоди, які шукають.
@@ -515,8 +516,9 @@ function SliceSwitch({ data, slice, onSlice }: { data: ReportPlan; slice: Slice;
       <div className="rv-seg" role="group" aria-label="Створені угоди">
         {shown.map((s) => (
           <button key={s} type="button" aria-pressed={slice === s} onClick={() => onSlice(s)}
-            title={s === "undef" ? SLICE_LABEL.undef : undefined}>
-            {s === "undef" ? `невизначено · ${undefCount}` : SLICE_LABEL[s]}
+            title={SLICE_LABEL[s]}>
+            {/* Короткі підписи кнопок — як у макеті; повна назва зрізу (`SLICE_LABEL`) — у плашці нижче й у підказці. */}
+            {s === "undef" ? `невизначено · ${undefCount}` : SHORT_SLICE[s]}
           </button>
         ))}
       </div>
