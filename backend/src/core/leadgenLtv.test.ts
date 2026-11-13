@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  pickHandoffActor, pickLeadgenClients, firstSuccessOf, aggLtv, cohortsOf, unlinkedByMonth, ltvAccess, kyivDay, type LtvRow,
+  pickHandoffActor, pickLeadgenClients, firstSuccessOf, aggLtv, cohortsOf, unlinkedByMonth, ltvAccess, kyivDay, ltvGroupOf, type LtvRow,
 } from "./leadgenLtvRules.js";
 
 /**
@@ -73,7 +73,8 @@ test("#3771 ПОКАЗНИКИ: середній, повторні, угод н�
     { clientKey: "d", ltv: 4500, deals: 2, turnover: 20000, firstDay: "2026-11-01", growth: 0 },
   ];
   const a = aggLtv(rows, "2026-10-01", "2026-10-31");
-  assert.deepEqual(a, { clients: 4, ltv: 16000, turnover: 79000, avg: 4000, repeatPct: 50, dealsPerClient: 1.8, growth: 4000, newClients: 2 },
+  assert.deepEqual(a, { clients: 4, ltv: 16000, turnover: 79000, avg: 4000, repeatPct: 50, dealsPerClient: 1.8, growth: 4000, newClients: 2,
+    repeat: 2, activeNow: 0, mix: { rw: 0, rs: 2, ow: 0, os: 2 } },
     "🔴 підсумок не той (нові — лише з першою угодою в періоді, обидві межі включно)");
   assert.deepEqual(aggLtv([], "2026-10-01", "2026-10-31").avg, null, "дзеркало: без клієнтів — «—», а не 0");
   const months = unlinkedByMonth([
@@ -164,6 +165,24 @@ function liveDb(): Promise<Live | { skip: string }> {
   return live;
 }
 after(async () => { const l = live && await live; if (l && "done" in l) await l.done(); });
+
+/**
+ * #3990 — «СТАЛИ ПОСТІЙНИМИ» І «ПРАЦЮЮТЬ ЗАРАЗ» (задача 8729, Роман 13.11.2026): постійний — 2+ успішні угоди (1 — ні, 2 — так),
+ * працює — лише стан `active` («сплячий», «втрачений» і невідомий — ні). Склад на чотири групи покриває кожного рівно раз:
+ * Σ груп = клієнтів, у тому числі в когортах.
+ * 🧨 САБОТАЖ: у `isRepeatClient` `deals >= 2` → `deals >= 3` → червоніє (клієнт із 2 угодами — разовий).
+ */
+test("#3990 СТАЛИ ПОСТІЙНИМИ Й ПРАЦЮЮТЬ ЗАРАЗ: 2+ угоди, лише стан active; склад покриває кожного рівно раз", () => {
+  const R = (k: string, deals: number, state: string | null, firstDay = "2026-10-05"): LtvRow => ({ clientKey: k, ltv: 1000, deals, turnover: 0, firstDay, growth: 0, state });
+  const rows = [R("a", 2, "active"), R("b", 5, "sleeping"), R("c", 2, "lost"), R("d", 1, "active"), R("e", 1, "sleeping"), R("f", 1, null), R("g", 3, null, "2026-09-01")];
+  const a = aggLtv(rows, "2026-10-01", "2026-10-31");
+  assert.deepEqual([a.repeat, a.activeNow], [4, 2], "🔴 постійних не 4 (a, b, c, g з 2+ угодами) або працюють не 2 (лише active: a, d)");
+  assert.deepEqual(a.mix, { rw: 1, rs: 3, ow: 1, os: 2 }, "🔴 склад: невідомий стан має йти в «не працює», 2 угоди — у постійні");
+  assert.equal(Object.values(a.mix).reduce((x, y) => x + y, 0), a.clients, "🔴 Σ груп ≠ клієнтів");
+  assert.deepEqual([ltvGroupOf(1, "active"), ltvGroupOf(2, "active"), ltvGroupOf(2, undefined), ltvGroupOf(1, "lost")], ["ow", "rw", "rs", "os"], "🔴 межа «1 угода — разовий / 2 — постійний»");
+  for (const c of cohortsOf(rows, new Map(), "2026-10-01", "2026-10-31"))
+    assert.equal(Object.values(c.mix).reduce((x, y) => x + y, 0), c.clients, `🔴 когорта ${c.ym}: Σ груп ≠ клієнтів`);
+});
 
 /**
  * #3775 — ЖИВИЙ SQL БЛОКУ (схема двічі — ті самі таблиці): лідгени команди — своїми рядками, звільнений і «не з команди» — в

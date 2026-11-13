@@ -6,7 +6,7 @@ import {
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
   applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
   isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT,
-  fmtCallback, callbackTone,
+  fmtCallback, callbackTone, remakeResetOnce,
   type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
@@ -76,6 +76,8 @@ export function ReportTableSection({
   // Видимість колонок переживає перезавантаження — і вона ОСОБИСТА: ключ
   // `rptTableCols:<userId>` з фолбеком на старий спільний (див. reportTableCols.ts).
   const [userId] = useState<number | null>(viewerUserId);
+  // Один раз на людину — колонки як на макеті (див. `remakeResetOnce`). Стоїть ДО читання вибору.
+  useState(() => remakeResetOnce(colStore(), userId));
   const [optOn, setOptOn] = useState<Record<string, boolean>>(() => readColPrefs(colStore(), userId));
   const toggleCol = (k: string) => setOptOn((p) => {
     const next = { ...p, [k]: !p[k] };
@@ -299,11 +301,11 @@ export function ReportTableSection({
                       textAlign: c.left ? "left" : "right",
                       // ↔️ ВУЖЧІ КОЛОНКИ (правка 4): назва переноситься на 2 рядки замість того, щоб розпирати
                       // колонку; «Менеджер» не переноситься — його ширину людина задає сама.
-                      whiteSpace: c.key === "name" ? "nowrap" : "normal", verticalAlign: "bottom", lineHeight: 1.2,
-                      ...(c.key === "name" ? null : { maxWidth: 92, minWidth: 54 }),
-                      fontSize: 12, fontWeight: 650,
+                      // Як у макеті: назва в один рядок, без капслоку, 12 px.
+                      whiteSpace: "nowrap", verticalAlign: "middle", lineHeight: 1.2, height: 38,
+                      fontSize: 12, fontWeight: 650, textTransform: "none", letterSpacing: 0,
                       color: c.key === sortKey ? "var(--text)" : "var(--text-muted)",
-                      padding: "8px 8px", borderBottom: "1px solid var(--border)",
+                      padding: "0 10px", borderBottom: "1px solid var(--border)",
                       ...(dropOn === c.key ? { boxShadow: "inset 3px 0 0 var(--brand)" } : null),
                       ...(c.key === "name" ? { left: 0, boxShadow: "1px 0 0 var(--border)",
                         ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden" } : null) } : null),
@@ -389,17 +391,19 @@ const selStyle: React.CSSProperties = {
 };
 const tdBase: React.CSSProperties = {
   // ↔️ Вужчі колонки (зустріч 10.11.2026, правка 4): 8px з боків замість 12 — таблиця вміщує більше чисел.
-  padding: "9px 8px", textAlign: "right", whiteSpace: "nowrap",
+  padding: "0 10px", height: 44, textAlign: "right", whiteSpace: "nowrap",
   borderBottom: "1px solid var(--border)", fontSize: 13,
 };
 const none = <span style={{ color: "var(--text-muted)", opacity: 0.6 }}>—</span>;
 
-/** Бейдж «Викон. %» — НЕЙТРАЛЬНИЙ. Колір стану вже несе крапка статусу, і вона
- *  рахується від темпу; фарбувати бейдж за відсотком означало б показати два різні
- *  вердикти про одну людину в одному рядку. */
-function pctBadge(pct: number | null) {
+/**
+ * Бейдж «Виконано» — у КОЛЬОРІ СТАНУ, як на макеті (13.11.2026). Колір береться з ТОГО САМОГО
+ * `m.status` (темп), що й смужка біля імені, — тобто це один вердикт двічі, а не два різні:
+ * фарбувати за самим відсотком так само заборонено, як і раніше.
+ */
+function pctBadge(pct: number | null, status: string) {
   if (pct == null) return <span style={{ ...badge, background: "var(--surface-2)", color: "var(--text-muted)" }}>—</span>;
-  return <span style={{ ...badge, background: "var(--surface-2)", color: "var(--text)" }}>{pct}%</span>;
+  return <span style={{ ...badge, background: `var(${TOKEN[status]}-bg)`, color: `var(${TOKEN[status]})` }}>{pct}%</span>;
 }
 const badge: React.CSSProperties = {
   display: "inline-block", padding: "2px 8px", borderRadius: "var(--r-pill)", fontSize: 12, fontWeight: 600,
@@ -428,18 +432,22 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
       // і не зникає при скролі вправо, бо клітинка закріплена.
       return (
         <td className="sticky-mgr rv-mcell" title={mgrW != null ? m.name : undefined}
-          style={{ ...st, position: "sticky", left: 0, zIndex: 1, background: "var(--card-bg)", boxShadow: "1px 0 0 var(--border)",
+          aria-expanded={isOpen}
+          style={{ ...st, position: "sticky", left: 0, zIndex: 1, background: isOpen ? "var(--rv-hover)" : "var(--card-bg)", boxShadow: "1px 0 0 var(--border)",
             ["--sc" as string]: `var(${TOKEN[m.status]})`,
             ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden", textOverflow: "ellipsis" } : { minWidth: 210 }) }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <span style={{ fontWeight: 650 }}>{m.name}</span>
-              {(mgrW == null || mgrW >= MGR_W_TIGHT) && <LevelChip level={m.level} />}
-              <VacationMark managerId={m.managerId} />
-              <div style={{ color: "var(--text-muted)", fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" }}>{m.teamName ?? "Поза командами"}</div>
+          {/* Як у макеті: імʼя й команда ліворуч, слово стану праворуч. Імʼя обрізається «…»,
+              слово не стискається — у вузькій колонці воно не налазить на прізвище. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                <span style={{ fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</span>
+                {(mgrW == null || mgrW >= MGR_W_TIGHT) && <LevelChip level={m.level} />}
+                <VacationMark managerId={m.managerId} />
+              </span>
+              <span style={{ color: "var(--text-muted)", fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" }}>{m.teamName ?? "Поза командами"}</span>
             </div>
-            <span className="rv-word">{STATUS_LBL[m.status].toLowerCase()}</span>
-            <span style={{ display: "inline-block", width: 10, color: "var(--text-muted)", fontSize: 10, transform: isOpen ? "rotate(90deg)" : "none" }}>▸</span>
+            <span className="rv-word" style={{ flexShrink: 0 }}>{STATUS_LBL[m.status].toLowerCase()}</span>
           </div>
         </td>
       );
@@ -481,7 +489,7 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
     case "plan":
       return <td style={{ ...st, color: "var(--text-muted)" }}>{m.plan ? `${money(m.plan)} ₴` : none}</td>;
     case "pct":
-      return <td style={st}>{pctBadge(m.pct)}</td>;
+      return <td style={st}>{pctBadge(m.pct, m.status)}</td>;
     case "projected":
       // Поза повним поточним місяцем прогнозу НЕМАЄ: бекенд там віддає факт, і
       // показати його як «прогноз» означало б підписати факт чужим словом.
@@ -862,9 +870,8 @@ function ColumnPicker({ toggleable, locked, optOn, onToggle, onReset: resetCols,
 
   return (
     <div ref={box} style={{ position: "relative" }}>
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true"
-        style={{ ...selStyle, minWidth: 0 }}>
-        Колонки · {shown} з {total} <span style={{ opacity: 0.5, marginLeft: 4 }}>{open ? "▲" : "▼"}</span>
+      <button type="button" className="rv-btn" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true">
+        Колонки · {shown} з {total} <span style={{ opacity: 0.6, marginLeft: 2 }}>{open ? "▴" : "▾"}</span>
       </button>
       {open && (
         <div role="menu" style={{

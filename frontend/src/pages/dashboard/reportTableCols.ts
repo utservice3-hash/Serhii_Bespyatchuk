@@ -169,14 +169,14 @@ export const REPORT_COLS: ColDef[] = [
     help: "Стан за темпом місяця: у нормі / відстає / зрив. Джерело: statusOf(факт,план) з поправкою на пройдені робочі дні (пороги 1.0 / 0.7)." },
   { key: "fact", title: "Отримано", core: true, val: (m) => m.fact, foot: "add",
     help: "Гроші, що надійшли за період (каса ②). Джерело: money.receivedByMgr." },
-  { key: "plan", title: "План міс.", core: true, val: (m) => m.plan, foot: "add",
+  { key: "plan", title: "План", core: true, val: (m) => m.plan, foot: "add",
     help: "Місячний грошовий план, апорт по робочих днях періоду. Джерело: plans.managerPlan." },
-  { key: "pct", title: "Викон.", core: true, val: (m) => m.pct, foot: "ratio:pct",
+  { key: "pct", title: "Виконано", core: true, val: (m) => m.pct, foot: "ratio:pct",
     help: "Отримано ÷ план." },
 
   { key: "projected", title: "Прогноз", core: false, val: (m) => (m.monthInProgress ? m.projected : null), foot: "add",
     help: "Очікуваний підсумок місяця = факт + рахунки з плановою датою. Лише для повного поточного місяця. Джерело: projected." },
-  { key: "needPerDay", title: "Треба ₴/д", core: false, val: (m) => m.needPerDay, foot: "add",
+  { key: "needPerDay", title: "Треба ₴/день", core: false, val: (m) => m.needPerDay, foot: "add",
     help: "Скільки приносити щодня до кінця місяця, щоб дотягти план: (план−факт) ÷ роб. дні, що лишились." },
   { key: "avgCheck", title: "Сер. чек", core: true, val: (m) => numOrNull(m.kpi.avgCheck.fact), foot: "ratio:avgCheck",
     help: "Середній чек. Джерело: money.avgCheckPerManager(reportChain) — знімок «зараз у роботі» + виграні, не чисто за період." },
@@ -201,7 +201,7 @@ export const REPORT_COLS: ColDef[] = [
     help: "Гроші, що не належать ні «новим», ні «постійним»: у клієнта немає ключа, і «Канал продажу» теж не заповнений. 📐 Заміряно 25.08.2026: 6 угод на −18 004 ₴, усі — сторно тендерних угод. Колонка зʼявляється ЛИШЕ коли клас непорожній: порожня колонка з нулем читалась би як «таких грошей не буває». ⚠️ Джерело проблеми лагодиться в CRM/синку (сторно не успадковує клієнта), а не тут." },
   { key: "dobir", title: "Добір", core: false, val: (m) => m.dobir, foot: "add",
     help: "Середній добір за 3 міс; у прогноз НЕ входить. Джерело: money.dobirByManager." },
-  { key: "expectThisMonth", title: "Очікує (дата)", core: false, val: (m) => m.expectThisMonth, foot: "add",
+  { key: "expectThisMonth", title: "Очікує (з датою)", core: false, val: (m) => m.expectThisMonth, foot: "add",
     help: "Гроші з плановою датою оплати цього місяця (входять у прогноз). Джерело: metrics.expectedByManagerDay. Рахується по календарному місяцю і НЕ залежить від обраного періоду." },
   { key: "jam", title: "Затор ₴", core: false, val: (m) => m.jam, foot: "add",
     help: "Сума ₴, що висить у заторі. Те саме джерело." },
@@ -225,7 +225,7 @@ export const REPORT_COLS: ColDef[] = [
   { key: "talks", title: "Дзвінки", core: false, val: (m) => m.talks, foot: "add",
     help: "Розмов / спроб (дві цифри). Джерело: reportCuts.callsByManager." },
   // 🎯 ТЗ-3 «перший дотик»: відсоток — ЧАСТКА, тож у підсумку Σ названих ÷ Σ оцінених, а не Σ відсотків.
-  { key: "firstTouch", title: "Ціну названо (1-й дотик)", core: false,
+  { key: "firstTouch", title: "Ціну названо", core: false,
     val: (m) => (m.firstTouch?.state === "measured" ? firstTouchPct(m.firstTouch.voiced, m.firstTouch.analyzed) : null),
     foot: "ratio:firstTouch",
     help: "Частка перших розмов з рекламним лідом, у яких менеджер назвав ціну: названо ÷ оцінено. Ті самі розмови й те саме правило, що плитка «Ціна озвучена» на екрані «Перший дотик · AI» (задача 7237, з 02.11.2026; до того — лист uts-bot, який замовк 25.09). Втрачений лід і «передзвоніть» у знаменник не входять. Розмова зараховується тому, хто ДЗВОНИВ (рішення власника 17.09.2026), а не поточному відповідальному угоди. «Не вимірюється» — період до 20.09.2026, розбору тоді не було. «Не розібрано» — AI ще не розібрав розмову; у відсоток не входить." },
@@ -422,6 +422,36 @@ export function writeColPrefs(store: ColsStore | null, userId: number | null | u
 
 /** «Скинути до типових» — рівно `DEFAULT_OPT_ON`, копією (щоб стан не ділив обʼєкт із реєстром). */
 export const resetColPrefs = (): Record<string, boolean> => ({ ...DEFAULT_OPT_ON });
+
+/**
+ * 🧭 ОДНОРАЗОВЕ ПОВЕРНЕННЯ ДО МАКЕТА (рішення Романа 13.11.2026: «щоб все було як на макеті»).
+ *
+ * Новий вигляд має свій типовий набір і порядок колонок; збережені раніше вибори
+ * налаштовувались під СТАРУ таблицю (з «#», «Статусом», іншим порядком) і робили
+ * екран не таким, як погоджений макет. Тому ОДИН РАЗ на людину вибір колонок,
+ * порядок і ширина «Менеджер» скидаються до типових, а позначка `rptRemake1311:<id>`
+ * гарантує, що далі людина налаштовує таблицю як хоче — і її вибір більше не губиться.
+ *
+ * Повертає `true`, якщо скидання сталось зараз. Зламане сховище — `false`, нічого не чіпаємо.
+ */
+export const REMAKE_FLAG = "rptRemake1311";
+export function remakeResetOnce(store: ColsStore | null, userId: number | null | undefined): boolean {
+  try {
+    if (!store) return false;
+    const flag = `${REMAKE_FLAG}:${userId ?? "anon"}`;
+    if (store.getItem(flag)) return false;
+    // Типові значення ПИШЕМО в особисті ключі, а не стираємо їх: інакше читання впало б
+    // на старий спільний ключ (`rptTableCols`) і повернуло б той самий старий вибір.
+    store.setItem(colsStorageKey(userId), JSON.stringify(resetColPrefs()));
+    store.setItem(colOrderStorageKey(userId), JSON.stringify(defaultColOrder()));
+    const w = mgrWidthKey(userId);
+    if (store.removeItem) store.removeItem(w); else store.setItem(w, "");
+    store.setItem(flag, "1");
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** «Усі» — кожна опційна колонка увімкнена. */
 export const allColPrefs = (): Record<string, boolean> =>
