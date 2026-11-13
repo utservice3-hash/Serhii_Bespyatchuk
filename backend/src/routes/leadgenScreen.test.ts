@@ -290,7 +290,11 @@ test("#1175 ЕКРАН: план на дзвінки й гроші — у фор
   assert.match(row, /line\("гроші · успішні", extra\.moneyEarned, true/, "🔴 зник рядок «гроші · успішні»");
   assert.match(row, /line\("гроші · успішні \+ очікування", extra\.moneyTotal, true/, "🔴 зник рядок «гроші · успішні + очікування»");
   assert.match(row, /line\("дзвінки", extra\.calls, false/, "🔴 зник рядок «дзвінки»");
-  assert.match(row, /<ExtraPlanLines extra=\{plan\.extra\} \/>/, "🔴 картка людини не показує дзвінки й гроші проти плану");
+  // Картка людини з 13.11.2026 — плитками (`PlanHead`): дзвінки й гроші проти плану, гроші — підписано «успішні + очікування» і «з них успішні».
+  assert.match(row, /const mt = plan\.extra\.moneyTotal, me = plan\.extra\.moneyEarned, calls = plan\.extra\.calls;/, "🔴 картка людини не бере дзвінки й гроші з плану");
+  assert.match(row, /<PlanTile label="Дзвінки" exec=\{calls\.kind === "plan" \? calls : null\}/, "🔴 картка людини не показує дзвінки проти плану");
+  assert.match(row, /<PlanTile label="Гроші · успішні \+ очікування" exec=\{mt\}/, "🔴 картка людини не показує гроші «успішні + очікування»");
+  assert.match(row, /з них успішні \{money\$\(me\.fact\)\}/, "🔴 картка людини не показує гроші «успішні»");
   const sec = readFileSync(path.join(dir, "LeadgenSection.tsx"), "utf8");
   assert.match(sec, /<ExtraPlanLines extra=\{tp\.extra\} \/>/, "🔴 плитка команди не показує дзвінки й гроші проти плану");
   assert.match(sec, /<ExtraPlanLines extra=\{pp\.extra\} \/>/, "🔴 плитка людини не показує дзвінки й гроші проти плану");
@@ -322,7 +326,10 @@ test("#1263 ЕКРАН: «лишилось до плану» на картці �
   const dir = path.join(FE, "src", "pages", "dashboard", "sections");
   const row = readFileSync(path.join(dir, "LeadgenPersonRow.tsx"), "utf8");
   const sec = readFileSync(path.join(dir, "LeadgenSection.tsx"), "utf8");
-  assert.match(row, /<PaceLines pace=\{plan\.pace\} \/>/, "🔴 картка лідгена не показує «лишилось до плану»");
+  // Картка з 13.11.2026 — плитками: норма наздоганяння на кожному показнику (`PlanTile pace=`), гроші — «лишилось … ₴».
+  for (const k of ["quotes", "leads", "opr", "calls"]) assert.match(row, new RegExp(`pace=\\{pace\\?\\.${k}\\}`), `🔴 картка лідгена не показує «лишилось до плану» для ${k}`);
+  assert.match(row, /до кінця місяця ще \{n\(p\.leftMonth\)\}/, "🔴 картка не показує, скільки лишилось до кінця місяця");
+  assert.match(row, /pace\?\.moneyLeft == null \? null : pace\.moneyLeft > 0/, "🔴 картка не показує, скільки грошей лишилось до плану");
   assert.match(sec, /<PaceLines pace=\{pp\.pace\} \/>/, "🔴 плитка людини не показує «лишилось до плану»");
   assert.match(row, /сьогодні треба \$\{n\(p\.normToday\)\}/, "🔴 немає норми на сьогодні");
 });

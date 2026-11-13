@@ -183,61 +183,53 @@ export function LeadgenPersonRow({ row, plan, money, week, dataPeriod, buckets, 
 
   return (
     <div className="lg-card" style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderLeft: `4px solid ${edge}`, borderRadius: 14, marginBottom: 11, overflow: "hidden" }}>
-      <button type="button" onClick={onToggle} aria-expanded={open} className="lg-row-head"
-        style={{ border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", margin: 0,
-          boxSizing: "border-box", width: "100%", cursor: "pointer", display: "grid", gap: 14, alignItems: "center", padding: "14px 17px" }}>
-        <span style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
-          <span style={{ fontWeight: 700, fontSize: 15 }}>{row.name}</span>
-          <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <Chip>{row.teamName ?? "поза командою"}</Chip>
-            {!row.isActive && <Chip>деактивований</Chip>}
-            {plan && plan.exec.kind === "none" && <Chip>плану немає</Chip>}
-            {plan && plan.exec.kind === "zero" && <Chip>план прорахунків 0</Chip>}
-          </span>
-        </span>
-        {pe && plan ? (
-          <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <PlanRing exec={pe} title={`Прорахунки ${n(pe.fact)} з плану ${fmtPlan(pe.plan)} на період — ${pe.pct} %. Колір — за темпом робочих днів, як у Звіті.`} />
-            <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
-              <span><b style={{ fontSize: 16 }}>{factOfPlan(pe.fact, pe.plan)}</b> прорахунки · план</span>
-              <span style={{ color: MUTED }}>ліди {factOfPlan(row.leads, plan.plan.leads)} · ОПР {factOfPlan(row.opr, plan.plan.opr)}</span>
-              <ExtraPlanLines extra={plan.extra} />
-              <PaceLines pace={plan.pace} />
+      {pe && plan ? (
+        <PlanHead row={row} plan={plan} pe={pe} money={money} week={week} open={open} onToggle={onToggle} />
+      ) : (
+        <button type="button" onClick={onToggle} aria-expanded={open} className="lg-row-head"
+          style={{ border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", margin: 0,
+            boxSizing: "border-box", width: "100%", cursor: "pointer", display: "grid", gap: 14, alignItems: "center", padding: "14px 17px" }}>
+          <span style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>{row.name}</span>
+            <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <Chip>{row.teamName ?? "поза командою"}</Chip>
+              {!row.isActive && <Chip>деактивований</Chip>}
+              {plan && plan.exec.kind === "none" && <Chip>плану немає</Chip>}
+              {plan && plan.exec.kind === "zero" && <Chip>план прорахунків 0</Chip>}
             </span>
           </span>
-        ) : (
-        <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <StatusRing st={st} target={targets.oprOfLeads}
-            title={st.overfull ? overfullWhy : st.conv == null ? "Лідів у періоді немає — конверсію рахувати нема з чого"
-              : !OPR_CONV_RATED ? OPR_CONV_NOT_RATED
-              : !statusful ? "Статус — лише за місяць і довше: за день чи тиждень ОПР здебільшого з лідів, узятих раніше." : undefined} />
-          <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }} title={st.overfull ? overfullWhy : undefined}>
-            <span><b style={{ fontSize: 16 }}>{st.conv == null ? "—" : pct1(st.conv)}</b> ліди → ОПР</span>
-            <span style={{ color: MUTED }} title={OPR_CONV_RATED ? undefined : OPR_CONV_NOT_RATED}>ціль {targets.oprOfLeads} %
-              {!OPR_CONV_RATED && st.conv != null && <> · не оцінюється</>}
-              {st.ofTarget != null && <> · {st.ofTarget} % цілі</>}
-              {st.overfull && <> · ⚠ понад 100 %</>}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <StatusRing st={st} target={targets.oprOfLeads}
+              title={st.overfull ? overfullWhy : st.conv == null ? "Лідів у періоді немає — конверсію рахувати нема з чого"
+                : !OPR_CONV_RATED ? OPR_CONV_NOT_RATED
+                : !statusful ? "Статус — лише за місяць і довше: за день чи тиждень ОПР здебільшого з лідів, узятих раніше." : undefined} />
+            <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }} title={st.overfull ? overfullWhy : undefined}>
+              <span><b style={{ fontSize: 16 }}>{st.conv == null ? "—" : pct1(st.conv)}</b> ліди → ОПР</span>
+              <span style={{ color: MUTED }} title={OPR_CONV_RATED ? undefined : OPR_CONV_NOT_RATED}>ціль {targets.oprOfLeads} %
+                {!OPR_CONV_RATED && st.conv != null && <> · не оцінюється</>}
+                {st.ofTarget != null && <> · {st.ofTarget} % цілі</>}
+                {st.overfull && <> · ⚠ понад 100 %</>}</span>
+            </span>
           </span>
-        </span>
-        )}
-        <span style={{ display: "flex", gap: 14, flexWrap: "wrap", justifyContent: "space-between" }}>
-          <Stat v={row.calls} l="Дзвінки" />
-          <Stat v={row.leads} l="Ліди" />
-          <Stat v={row.opr} l="ОПР" />
-          <Stat v={row.quotes} l="Прорахунки" />
-          <Stat v={row.warming} l="Підігрів" />
-          <Cars money={money} week={week} />
-          <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена (будь-коли), що стали «Успішна угода» в цьому періоді; без постійних клієнтів">
-            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmountFull(money.earned.sum) : "—"}</span>
-            <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
+          <span style={{ display: "flex", gap: 14, flexWrap: "wrap", justifyContent: "space-between" }}>
+            <Stat v={row.calls} l="Дзвінки" />
+            <Stat v={row.leads} l="Ліди" />
+            <Stat v={row.opr} l="ОПР" />
+            <Stat v={row.quotes} l="Прорахунки" />
+            <Stat v={row.warming} l="Підігрів" />
+            <Cars money={money} week={week} />
+            <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена (будь-коли), що стали «Успішна угода» в цьому періоді; без постійних клієнтів">
+              <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmountFull(money.earned.sum) : "—"}</span>
+              <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
+            </span>
+            <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена, які на кінець періоду (поточного — зараз) чекали оплати: авто поїхало в цьому чи раніших місяцях, «Успішною» угода ще не стала. Переносяться з місяця в місяць, тож суми різних місяців не складаються">
+              <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.pending.sum ? "var(--warn)" : MUTED }}>{money ? formatAmountFull(money.pending.sum) : "—"}</span>
+              <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Очікування ₴</span>
+            </span>
           </span>
-          <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена, які на кінець періоду (поточного — зараз) чекали оплати: авто поїхало в цьому чи раніших місяцях, «Успішною» угода ще не стала. Переносяться з місяця в місяць, тож суми різних місяців не складаються">
-            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.pending.sum ? "var(--warn)" : MUTED }}>{money ? formatAmountFull(money.pending.sum) : "—"}</span>
-            <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Очікування ₴</span>
-          </span>
-        </span>
-        <span aria-hidden="true" style={{ color: MUTED, fontSize: 14, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
-      </button>
+          <span aria-hidden="true" style={{ color: MUTED, fontSize: 14, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+        </button>
+      )}
 
       {open && (
         <div style={{ borderTop: "1px solid var(--border)", padding: "12px 17px 16px" }}>
@@ -253,6 +245,111 @@ export function LeadgenPersonRow({ row, plan, money, week, dataPeriod, buckets, 
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * 🧩 КАРТКА ЛІДГЕНА З ПЛАНОМ (13.11.2026, Роман: «дуже погано виглядає — перероби»). Було: усі цілі й «лишилось /
+ * сьогодні треба» вузькою колонкою (~190 px) на 25 рядків, а праворуч — ті самі дзвінки/ліди/ОПР/прорахунки вдруге.
+ * Стало: шапка (кільце, імʼя, гроші й машини) + плитка на кожен показник плану: факт / план, смуга, «сьогодні» й
+ * «до кінця місяця». Числа ті самі, що були (`plan.exec`, `plan.extra`, `plan.pace`), — змінилась лише верстка.
+ * Колір смуги — рівень плану з сервера там, де він є (прорахунки, дзвінки, гроші); у лідів і ОПР рівня немає — смуга нейтральна.
+ */
+function PlanHead({ row, plan, pe, money, week, open, onToggle }: {
+  row: Row; plan: LeadgenPersonPlan; pe: Extract<LeadgenPlanExec, { kind: "plan" }>; money?: LeadgenHandoffMoney;
+  week?: { from: string; to: string; cars: LeadgenWeekCars | null }; open: boolean; onToggle: () => void;
+}) {
+  const pace = plan.pace;
+  const plain = (fact: number, planV: number | null): Extract<LeadgenPlanExec, { kind: "plan" }> | null =>
+    planV ? { kind: "plan", fact, plan: planV, pct: Math.round((fact / planV) * 100), level: "g" } : null;
+  const money$ = (v: number) => `${Math.round(v).toLocaleString("uk-UA")} ₴`;
+  const mt = plan.extra.moneyTotal, me = plan.extra.moneyEarned, calls = plan.extra.calls;
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open} className="lg-row-plan"
+      style={{ border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", margin: 0,
+        boxSizing: "border-box", width: "100%", cursor: "pointer", display: "block", padding: "14px 17px 16px" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <PlanRing exec={pe} title={`Прорахунки ${n(pe.fact)} з плану ${fmtPlan(pe.plan)} на період — ${pe.pct} %. Колір — за темпом робочих днів, як у Звіті.`} />
+        <span style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0, flex: "1 1 220px" }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>{row.name}</span>
+          <span style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, color: MUTED }}>
+            <Chip>{row.teamName ?? "поза командою"}</Chip>
+            {!row.isActive && <Chip>деактивований</Chip>}
+            <span>прорахунки {factOfPlan(pe.fact, pe.plan)} за планом</span>
+          </span>
+        </span>
+        <span style={{ display: "flex", gap: 22, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <HeadStat v={money ? formatAmountFull(money.earned.sum) : "—"} l="успішні з передач" color={money?.earned.sum ? "var(--ok)" : MUTED}
+            title="Угоди з передач цього лідгена (будь-коли), що стали «Успішна угода» в цьому періоді; без постійних клієнтів" />
+          <HeadStat v={money ? formatAmountFull(money.pending.sum) : "—"} l="очікування" color={money?.pending.sum ? "var(--warn)" : MUTED}
+            title="Угоди з передач цього лідгена, які на кінець періоду (поточного — зараз) чекали оплати: авто поїхало в цьому чи раніших місяцях, «Успішною» угода ще не стала. Переносяться з місяця в місяць, тож суми різних місяців не складаються" />
+          <Cars money={money} week={week} />
+          <HeadStat v={n(row.warming)} l="підігрів" />
+        </span>
+        <span aria-hidden="true" style={{ color: MUTED, fontSize: 14, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+      </span>
+      <span style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8, marginTop: 12 }}>
+        <PlanTile label="Прорахунки" exec={pe} pace={pace?.quotes} />
+        <PlanTile label="Ліди" exec={plain(row.leads, plan.plan.leads)} pace={pace?.leads} neutral />
+        <PlanTile label="ОПР" exec={plain(row.opr, plan.plan.opr)} pace={pace?.opr} neutral />
+        <PlanTile label="Дзвінки" exec={calls.kind === "plan" ? calls : null} zero={calls.kind === "zero"} pace={pace?.calls} />
+        {mt.kind === "plan" && (
+          <PlanTile label="Гроші · успішні + очікування" exec={mt} money
+            todayLine={pace?.moneyLeft == null ? null : pace.moneyLeft > 0
+              ? <>лишилось <b>{money$(pace.moneyLeft)}</b></> : <span style={{ color: "var(--ok)" }}>✓ план виконано</span>}
+            sub={me.kind === "plan" ? <>з них успішні {money$(me.fact)} · {me.pct}%</> : null} />
+        )}
+      </span>
+    </button>
+  );
+}
+
+function HeadStat({ v, l, color, title }: { v: string; l: string; color?: string; title?: string }) {
+  return (
+    <span title={title} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+      <span style={{ fontWeight: 750, fontSize: 17, fontVariantNumeric: "tabular-nums", lineHeight: 1.15, whiteSpace: "nowrap", color: color ?? "var(--text)" }}>{v}</span>
+      <span style={{ fontSize: 11.5, color: MUTED, whiteSpace: "nowrap" }}>{l}</span>
+    </span>
+  );
+}
+
+/** Плитка показника плану: факт / план і %, смуга, «сьогодні» та «до кінця місяця» з норми наздоганяння (`plan.pace`). */
+function PlanTile({ label, exec, pace, neutral, zero, money, todayLine, sub }: {
+  label: string; exec: Extract<LeadgenPlanExec, { kind: "plan" }> | null; pace?: LeadgenPlanPace; neutral?: boolean; zero?: boolean; money?: boolean;
+  todayLine?: React.ReactNode; sub?: React.ReactNode;
+}) {
+  if (!exec) return zero ? (
+    <span style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: MUTED }}>{label}: план 0 — не оцінюємо</span>
+  ) : null;
+  const f = money ? (v: number) => `${Math.round(v).toLocaleString("uk-UA")}` : n;
+  const col = neutral ? (pace?.kind === "done" ? GREEN : "var(--text-muted)") : planLevelColor(exec.level);
+  const pctCol = exec.pct >= 100 ? GREEN : neutral ? "var(--text)" : col;
+  let today: React.ReactNode = todayLine ?? null, left: React.ReactNode = null;
+  if (!todayLine && pace?.kind === "done") today = <span style={{ color: "var(--ok)" }}>✓ план виконано</span>;
+  else if (!todayLine && pace?.kind === "pace") {
+    const p = pace;
+    today = p.normToday == null ? "робочих днів не лишилось"
+      : !p.todayIsWorking ? `наступного робочого дня треба ${n(p.normToday)}`
+      : (p.leftToday ?? 0) <= 0 ? <span style={{ color: "var(--ok)" }}>✓ {`сьогодні треба ${n(p.normToday)}, зроблено ${n(p.doneToday)}`}</span>
+      : <>{`сьогодні треба ${n(p.normToday)}, зроблено `}<b style={{ color: p.doneToday ? "var(--warn)" : RED }}>{n(p.doneToday)}</b></>;
+    left = <>до кінця місяця ще {n(p.leftMonth)}{p.leftWeek ? ` · на тиждень ~${n(p.leftWeek)}` : ""}</>;
+  }
+  return (
+    <span style={{ display: "block", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", minWidth: 0 }}
+      title={pace ? "Норма з наздоганянням: (план місяця − факт до сьогодні) ÷ робочі дні до кінця місяця" : undefined}>
+      <span style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6, fontSize: 12, color: MUTED }}>
+        <span>{label}</span><b style={{ color: pctCol, fontSize: 12.5 }}>{exec.pct}%</b>
+      </span>
+      <span style={{ display: "block", fontSize: 18, fontWeight: 750, letterSpacing: "-.3px", marginTop: 2, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+        {f(exec.fact)} <span style={{ fontSize: 13, fontWeight: 500, color: MUTED }}>/ {money ? f(exec.plan) : fmtPlan(exec.plan)}{money ? " ₴" : ""}</span>
+      </span>
+      <span style={{ display: "block", height: 5, background: "var(--border)", borderRadius: 3, margin: "7px 0 6px", overflow: "hidden" }}>
+        <span style={{ display: "block", height: "100%", width: `${Math.min(100, Math.max(0, exec.pct))}%`, background: col, borderRadius: 3 }} />
+      </span>
+      <span style={{ display: "block", fontSize: 12, color: MUTED, lineHeight: 1.4 }}>
+        {today}{left && <><br />{left}</>}{sub && <><br />{sub}</>}
+      </span>
+    </span>
   );
 }
 
