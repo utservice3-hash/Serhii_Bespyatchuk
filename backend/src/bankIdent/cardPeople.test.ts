@@ -119,3 +119,32 @@ test("#3930c ПРОВОДКА: id людини в стрічці й розшиф
   assert.match(SRC("auth/accessMatrix.ts"), /method: "GET", path: "\/api\/bank\/accounts\/editor-candidates", cls: "GET",\s*allow: \["admin", "ceo", "opdir", "kvp", "financier"\], deny: \["hr", "team_lead", "manager"\]/,
     "🔴 роут кандидатів не в матриці");
 });
+
+/**
+ * #3930d — ВИТРАТИ Й ПОПОВНЕННЯ РОБОЧОЇ КАРТКИ В УСІХ ВИХОДАХ (наступник `#1245`, змінено 13.11.2026). Стрічка й Σ (одна
+ * умова): витрати — з правом або «людям картки»; поповнення з ФОП — лише з правом. CSV-вивантаження: без права — ні витрат,
+ * ні поповнень. AI-вью: ні витрат, ні поповнень, надходження від людей — так. У зіставлення оплат клієнтів картка не йде.
+ * 🧨 Червоніє, якщо витрата чи поповнення проступить без права хоч в одному місці, або надходження зникне.
+ */
+test("#3930d КАРТКА: надходження — усім, крім поповнень з ФОП; витрати — з правом або «людям картки» (стрічка, CSV, AI); не в зіставленні", async (t) => {
+  const rep = SRC("core/bankReport.ts"), st = SRC("core/bankStatement.ts");
+  assert.match(rep, /if \(f\.userId != null\) \{ params\.push\(f\.userId\); c\.push\(`\(NOT a\.out_private OR \$\$\{params\.length\}::int = ANY\(a\.out_editors\)\)`\); \}\s*else c\.push\(`NOT a\.out_private`\);/,
+    "🔴 стрічка / Σ показують витрати картки без права");
+  assert.match(st, /const noOut = a\.out_private && !canSeePrivate \? visible\.filter\(\(x\) => x\.direction !== "out"\) : visible;/, "🔴 CSV віддає витрати картки без права");
+  assert.match(st, /const shown = canSeePrivate \? noOut : noOut\.filter\(\(x\) => !\(x\.direction === "in" && isFopTopUp\(x\.counterparty_name, null\)\)\);/, "🔴 CSV віддає поповнення з ФОП без права");
+  assert.match(SRC("core/paymentMatch.ts"), /AND NOT a\.finance_only AND a\.company <> 'staff' AND t\.deleted_at IS NULL/, "🔴 картка працівника в зіставленні оплат");
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    const card = (await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, out_private) VALUES ('staff', 'mono', 'Картка · тест', 'UAH', true) RETURNING id`)).rows[0].id;
+    await c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, amount, currency, fx_rate, amount_uah) VALUES
+      ($1, 'in', 'c:in', '2026-10-06T10:00:00Z', 'Поповнення', 3650, 'UAH', 1, 3650), ($1, 'out', 'c:out', '2026-10-06T11:00:00Z', 'АЗС', -400, 'UAH', 1, -400),
+      ($1, 'in', 'c:fop', '2026-10-06T12:00:00Z', 'З гривневого рахунку ФОП', 5000, 'UAH', 1, 5000)`, [card]);
+    const ai = (await c.query(`SELECT direction, counterparty_name AS n FROM ai_bank_transactions WHERE account_id = $1 ORDER BY direction, n`, [card])).rows.map((r: { direction: string; n: string }) => `${r.direction}:${r.n}`);
+    assert.deepEqual(ai, ["in:Поповнення"], "🔴 AI бачить витрати чи поповнення з ФОП, або не бачить надходжень");
+    const pm = await import("../core/paymentMatch.js");
+    const paid = (await c.query(pm.invoicePaymentsSql(1), [3650])).rows.length;
+    assert.equal(paid, 0, "🔴 поповнення робочої картки закрило рахунок клієнта");
+  } finally { await s.dispose(); }
+});

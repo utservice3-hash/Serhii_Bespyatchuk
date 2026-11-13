@@ -945,32 +945,6 @@ test("#1244 ЖИВИЙ SQL: залишок Сейфу = на кінець 30.09 
 });
 
 /**
- * #1245 — ВИТРАТИ РОБОЧОЇ КАРТКИ ЛИШЕ З ПРАВОМ (Таня 08.10.2026: «робоча карта — можуть бачити усі лише надходження,
- * витрати лише я та адмін»). Стрічка й Σ (одна умова), CSV-вивантаження, баланси, AI — без витрат `out_private`;
- * надходження — усім; у зіставлення оплат клієнтів і реквізити картка не йде. Живе: вью для AI на scratch-базі — по
- * обидва боки (надходження є, витрати — ні); зіставлення — картка не закриває рахунок. 🧨 Червоніє, якщо витрата
- * картки проступить без права хоч в одному місці або надходження зникне.
- */
-test("#1245 КАРТКА: надходження — усім, витрати — лише з view_private_finance (стрічка, CSV, AI); не в зіставленні", async (t) => {
-  assert.match(SRC("core/bankReport.ts"), /if \(!f\.canSeePrivate && dir === "out"\) c\.push\(`NOT a\.out_private`\);/, "🔴 стрічка / Σ показують витрати картки без права");
-  assert.match(SRC("core/bankStatement.ts"), /const shown = a\.out_private && !canSeePrivate \? visible\.filter\(\(x\) => x\.direction !== "out"\) : visible;/, "🔴 CSV віддає витрати картки без права");
-  assert.match(SRC("core/paymentMatch.ts"), /AND NOT a\.finance_only AND a\.company <> 'staff' AND t\.deleted_at IS NULL/, "🔴 картка працівника в зіставленні оплат");
-  const s = await scratchDb(t);
-  if (!s) return;
-  const { c } = s;
-  try {
-    const card = (await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, out_private) VALUES ('staff', 'mono', 'Картка · тест', 'UAH', true) RETURNING id`)).rows[0].id;
-    await c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, amount, currency, fx_rate, amount_uah) VALUES
-      ($1, 'in', 'c:in', '2026-10-06T10:00:00Z', 'Поповнення', 3650, 'UAH', 1, 3650), ($1, 'out', 'c:out', '2026-10-06T11:00:00Z', 'АЗС', -400, 'UAH', 1, -400)`, [card]);
-    const ai = (await c.query(`SELECT direction FROM ai_bank_transactions WHERE account_id = $1 ORDER BY direction`, [card])).rows.map((r: any) => r.direction);
-    assert.deepEqual(ai, ["in"], "🔴 AI бачить витрати картки або не бачить надходжень");
-    const pm = await import("./paymentMatch.js");
-    const paid = (await c.query(pm.invoicePaymentsSql(1), [3650])).rows.length;
-    assert.equal(paid, 0, "🔴 поповнення робочої картки закрило рахунок клієнта");
-  } finally { await s.dispose(); }
-});
-
-/**
  * #1246 — ЖИВИЙ SQL: ХТО БАЧИТЬ СЕЙФ І ВИТРАТИ КАРТОК. Разовий крок: `view_private_finance` — Адмін і фінансист, у решти —
  * нічого; права «лише вносити» більше немає (Сейф — дзеркало таблиці, 12.10.2026); робочі картки — «витрати приватні»;
  * залишок Сейфу на 30.09 — UAH 98 278, USD 50. Повторний прогін (кожен викат) синками ролей копіює права адміна — право не
