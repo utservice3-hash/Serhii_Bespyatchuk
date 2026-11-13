@@ -86,7 +86,7 @@ test("#3930b ЖИВИЙ SQL: поповнення з ФОП — однаково
   try {
     const acc = (await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, out_private, out_editors) VALUES ('staff', 'mono', 'Картка', 'UAH', true, '{8,22}') RETURNING id`)).rows[0].id;
     const rows: [string, string, string][] = [["in", "З гривневого рахунку ФОП", "З гривневого рахунку ФОП"], ["in", "З  гривневого\nрахунку ФОП", ""],
-      ["in", "Buleziuk Vadym", "Від: Buleziuk Vadym"], ["in", "ФОП Іваненко", "оплата за перевезення"], ["out", "АЗС", "Пальне"]];
+      ["in", "Buleziuk Vadym", "Від: Buleziuk Vadym"], ["in", "ФОП Іваненко", "оплата за перевезення"], ["in", "Переказ з гривневого рахунку", "картка"], ["out", "АЗС", "Пальне"]];
     for (const [i, [d, n, p]] of rows.entries())
       await c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, purpose, amount, currency, amount_uah)
         VALUES ($1, $2, $3, now(), $4, $5, 100, 'UAH', 100)`, [acc, d, `x${i}`, n, p]);
@@ -94,7 +94,7 @@ test("#3930b ЖИВИЙ SQL: поповнення з ФОП — однаково
     assert.deepEqual(sqlHit, rows.filter(([, n, p]) => isFopTopUp(n, p)).map(([, n]) => n), "🔴 SQL стрічки й isFopTopUp розійшлись");
     assert.equal(sqlHit.length, 2, "🔴 поповнень знайдено не два — фікстурі нічого перевіряти");
     const ai = (await c.query(`SELECT counterparty_name AS n FROM ai_bank_transactions WHERE account_id = $1 AND direction = 'in' ORDER BY id`, [acc])).rows.map((x: { n: string }) => x.n);
-    assert.deepEqual(ai, ["Buleziuk Vadym", "ФОП Іваненко"], "🔴 AI-вью віддає поповнення з ФОП або сховав оплату");
+    assert.deepEqual(ai, ["Buleziuk Vadym", "ФОП Іваненко", "Переказ з гривневого рахунку"], "🔴 AI-вью віддає поповнення з ФОП або сховав оплату");
     const who = (await c.query(`SELECT 22 = ANY(out_editors) AS y, 20 = ANY(out_editors) AS n FROM bank_accounts WHERE id = $1`, [acc])).rows[0];
     assert.deepEqual([who.y, who.n], [true, false], "🔴 «люди картки» не знаходяться за id");
   } finally { await s.dispose(); }
