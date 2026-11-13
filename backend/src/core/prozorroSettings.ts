@@ -102,7 +102,7 @@ export async function rotationOptions(db: Db, scopeSql: string): Promise<PersonO
 }
 
 const MODE_UA: Record<PzMode, string> = { off: "вимкнено", dry: "пробний", live: "бойовий" };
-const ASSIGN_UA: Record<AssignMode, string> = { opdir: "на «Операційного директора»", one: "на одну людину", rotation: "по черзі по днях" };
+const ASSIGN_UA: Record<AssignMode, string> = { opdir: "на адміна", one: "на одну людину", rotation: "по черзі по днях" };
 /** Людські значення для журналу: те, що прочитає людина в історії, а не id. */
 export function describeChanges(prev: PzConfig, next: PzConfig, names: ReadonlyMap<number, string>): { field: string; old: string; neu: string }[] {
   const who = (id: number | null) => (id == null ? "не вибрано" : names.get(id) ?? `#${String(id)}`);
