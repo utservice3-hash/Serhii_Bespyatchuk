@@ -87,7 +87,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   verifyByDay: 6, payByDay: 8, // фінансист перевіряє до 6-го, виплата до 8-го
   start: { rate: 5000, pctLow: 10, pctHigh: 20, minPlanForHigh: 30000 },
   profi: { threshold: 70000, pct1: 25, pct2: 30, pct3: 35 },
-  kpi: { normCalls: 45, missDaysAllowed: 2, waiveFrom: 50000, ladder: [[12, 3000], [15, 5000], [20, 8000], [25, 10000], [30, 12000]] },
+  kpi: { normCalls: 45, missDaysAllowed: 2, waiveFrom: 50000, ladder: [[12, 3000], [15, 5000], [20, 8000], [25, 10000], [30, 12000]],
+    // умови оферу (13.11.2026, «офер — джерело правди»): з місяця offerFrom — норма щодня без пропусків, успішні дзвінки,
+    // поріг цільових лідів, без «маржа від waiveFrom — без дзвінків»; бонус у «зараз» — лише коли КПІ вже виконано. null — як у пакеті
+    offerFrom: null, minSuccessCalls: 990, minLeads: 50 },
   lead: { pctLow: 3, pctHigh: 6 },
   advance: { fromDay: 25, managerPct: 15, leadPct: 15, staffPct: 50 },
   birthday: { each: 100, company: 400, lead: 600, perMonth: 100 },
@@ -151,7 +154,7 @@ export const addDays = (iso, n) => { const t = new Date(iso.slice(0, 10) + 'T12:
 export const luhn = s => { const d = String(s).replace(/\D/g, ''); if (d.length < 16 || d.length > 19) return false; let t = 0; for (let i = 0; i < d.length; i++) { let n = +d[d.length - 1 - i]; if (i % 2) { n *= 2; if (n > 9) n -= 9; } t += n; } return t % 10 === 0; };
 
 const merge = (a, b) => { const o = { ...a }; for (const k of Object.keys(b || {})) o[k] = b[k] && typeof b[k] === 'object' && !Array.isArray(b[k]) && a[k] && typeof a[k] === 'object' ? merge(a[k], b[k]) : b[k]; return o; };
-const EMPTY_KPI = Object.freeze({ normDays: 0, leads: 0, targetDeals: 0 });
+const EMPTY_KPI = Object.freeze({ normDays: 0, leads: 0, targetDeals: 0, successCalls: 0 });
 
 /**
  * Створює рушій над знімком даних.
@@ -218,6 +221,23 @@ export function createPayroll(state) {
   const dealsOf = (id, mk) => allDeals(id, mk).filter(d => d.date <= today);
   const kpiOf = (id, mk) => ((state.kpi || {})[id] && state.kpi[id][mk]) || EMPTY_KPI;
   const kpiStep = conv => S.kpi.ladder.reduce((a, s) => (conv >= s[0] ? s : a), null);
+  /** Умови оферу з КПІ діють для місяця mk (S.kpi.offerFrom — «YYYY-MM» або null) */
+  const offerKpi = mk => !!S.kpi.offerFrom && mk >= S.kpi.offerFrom;
+  /**
+   * Окремий відсоток за своїми клієнтами менеджера (13.11.2026, Сергій: для досвідчених, що приходять зі своїми клієнтами).
+   * e.clientRates = [{client, name, pct, from}], client — ключ клієнта угоди (d.ck). Маржа таких угод іде за своїм відсотком,
+   * решта — за шкалою рівня; поріг відсотка рівня й план рахуються з усієї маржі.
+   */
+  function clientPctOf(e, mk, used) {
+    const rates = (e.clientRates || []).filter(r => r.from <= mk), lines = [];
+    for (const r of rates) {
+      const ds = used.filter(d => d.ck && d.ck === r.client);
+      if (!ds.length) continue;
+      const m = sum(ds.map(d => d.margin));
+      lines.push({ client: r.client, name: r.name || r.client, pct: r.pct, margin: m, amount: m * r.pct / 100, deals: ds.length });
+    }
+    return { margin: sum(lines.map(x => x.margin)), amount: sum(lines.map(x => x.amount)), lines };
+  }
   function managerPct(lv, plan, m) {
     if (lv === 'start') return plan >= S.start.minPlanForHigh && m >= plan ? S.start.pctHigh : S.start.pctLow;
     return plan && m >= plan ? S.profi.pct3 : m >= S.profi.threshold ? S.profi.pct2 : S.profi.pct1;
@@ -260,19 +280,27 @@ export function createPayroll(state) {
     const rate = lv === 'start' && (!lt || lt === 'company') ? Math.round(startRateOf(e) * dy.total / dy.full) : 0;
     let kpi = null;
     if (lv === 'start' && hasKpi(e)) {
-      const k = kpiOf(e.id, mk), need = Math.max(0, dy.total - S.kpi.missDaysAllowed), conv = k.leads ? k.targetDeals / k.leads * 100 : 0, step = kpiStep(conv);
-      const reach = k.normDays + dy.left >= need;                    // норму дзвінків ще можна набрати
+      const strict = offerKpi(mk);
+      const k = kpiOf(e.id, mk), need = Math.max(0, dy.total - (strict ? 0 : S.kpi.missDaysAllowed)), conv = k.leads ? k.targetDeals / k.leads * 100 : 0;
+      const fewLeads = strict && k.leads < S.kpi.minLeads, step = fewLeads ? null : kpiStep(conv);
+      const successCalls = k.successCalls || 0, successOk = !strict || successCalls >= S.kpi.minSuccessCalls;
+      const reach = k.normDays + dy.left >= need && (successOk || dy.left > 0);   // КПІ ще можна виконати
+      const done = k.normDays >= need && successOk;
       const noBonus = lt === 'own' || lt === 'ownNow' || lt === 'gross';
-      const amt = step ? step[1] : 0, ok = m => m >= S.kpi.waiveFrom || reach;
-      kpi = { normDays: k.normDays, leads: k.leads, targetDeals: k.targetDeals, need, conv, step, reach, left: dy.left, done: k.normDays >= need, noBonus, waived: margin >= S.kpi.waiveFrom,
-        bonusNow: !noBonus && ok(margin) ? amt : 0, bonusPlan: !noBonus && ok(marginPlan) ? amt : 0 };
+      const amt = step ? step[1] : 0, ok = m => (!strict && m >= S.kpi.waiveFrom) || reach;
+      // за офером бонус стає доступним лише після виконання КПІ: до того — «умовний» (pending), у «зараз» не входить
+      const bonusNow = noBonus ? 0 : strict ? (done ? amt : 0) : ok(margin) ? amt : 0;
+      kpi = { normDays: k.normDays, leads: k.leads, targetDeals: k.targetDeals, need, conv, step, reach, left: dy.left, done, noBonus, waived: !strict && margin >= S.kpi.waiveFrom,
+        strict, fewLeads, minLeads: S.kpi.minLeads, successCalls, minSuccessCalls: S.kpi.minSuccessCalls, successOk,
+        bonusNow, bonusPending: strict && !noBonus && !done && reach ? amt : 0, bonusPlan: !noBonus && ok(marginPlan) ? amt : 0 };
     }
     const birthdays = birthdayLines(e, mk), bday = sum(birthdays.map(b => b.amount));
     const pctNow = managerPct(lv, plan, margin), pctPlan = managerPct(lv, plan, marginPlan);
-    const nowP = { rate, pct: pctNow, pctAmount: margin * pctNow / 100, bonus: kpi ? kpi.bonusNow : 0, birthday: bday };
-    const planP = { rate, pct: pctPlan, pctAmount: marginPlan * pctPlan / 100, bonus: kpi ? kpi.bonusPlan : 0, birthday: bday };
+    const special = clientPctOf(e, mk, used);   // свої клієнти з окремим відсотком — поза шкалою рівня
+    const nowP = { rate, pct: pctNow, pctAmount: (margin - special.margin) * pctNow / 100 + special.amount, bonus: kpi ? kpi.bonusNow : 0, birthday: bday };
+    const planP = { rate, pct: pctPlan, pctAmount: (marginPlan - special.margin) * pctPlan / 100 + special.amount, bonus: kpi ? kpi.bonusPlan : 0, birthday: bday };
     nowP.total = nowP.rate + nowP.pctAmount + nowP.bonus + bday; planP.total = planP.rate + planP.pctAmount + planP.bonus + bday;
-    return { kind: 'manager', empId: e.id, month: mk, live, level: lv, offer: offerCode(e), days: dy, deals: all, held, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, kpi, birthdays, now: nowP, atPlan: planP };
+    return { kind: 'manager', empId: e.id, month: mk, live, level: lv, offer: offerCode(e), days: dy, deals: all, held, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, kpi, special, birthdays, now: nowP, atPlan: planP };
   }
   function calcLead(e, mk) {
     const live = isLive(mk), dy = days(e, mk);
@@ -374,9 +402,11 @@ export function createPayroll(state) {
     if (r.overrides.margin !== undefined && r.overrides.pct === undefined && c.kind === 'manager') v.pct = managerPct(c.level, c.plan, v.margin);
     if (c.kind === 'lead' && r.overrides.pct === undefined) v.pct = c.plan && v.margin >= c.plan ? S.lead.pctHigh : S.lead.pctLow;
     const extras = sum(r.extras.map(x => EXTRA_KINDS[x.kind][1] * x.amount)), bday = c.now.birthday;
-    const pctAmount = v.margin * v.pct / 100;
+    // свої клієнти з окремим відсотком: їхня маржа — поза шкалою (фінансист правив загальну маржу — правка лягає на решту)
+    const sp = c.kind === 'manager' && c.special ? c.special : { margin: 0, amount: 0 };
+    const pctAmount = (v.margin - sp.margin) * v.pct / 100 + sp.amount;
     const total = v.rate + pctAmount + v.bonus + bday + extras;
-    const autoTotal = auto.rate + auto.margin * auto.pct / 100 + auto.bonus + bday;
+    const autoTotal = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + auto.bonus + bday;
     const advance = advancePaid(e.id, mk), official = officialOf(e, mk), officialDeducted = official && official.deduct ? official.amount : 0;
     const tl = ttnLines(e, mk), ttn = sum(tl.map(x => x.amount));
     return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn, pay: total - advance - officialDeducted + ttn };
@@ -506,12 +536,12 @@ export function createPayroll(state) {
   function salaryAt(lv, plan, M, step, calls, rate) {
     const pct = managerPct(lv, plan, M);
     if (lv === 'profi') return { pct, rate: 0, bonus: 0, total: M * pct / 100 };
-    const bonus = step && (calls || M >= S.kpi.waiveFrom) ? step[1] : 0;
+    const bonus = step && (calls || (!offerKpi(liveMonth) && M >= S.kpi.waiveFrom)) ? step[1] : 0;
     return { pct, rate, bonus, total: rate + bonus + M * pct / 100 };
   }
   /** Найменша маржа, з якою ЗП ≥ цілі: на кожному відрізку між порогами відсоток і бонус сталі */
   function solveMargin(lv, plan, target, step, calls, rate) {
-    const bps = [...new Set([0, plan, S.profi.threshold, S.kpi.waiveFrom, S.start.minPlanForHigh])].filter(x => x >= 0).sort((a, b) => a - b);
+    const bps = [...new Set([0, plan, S.profi.threshold, ...(offerKpi(liveMonth) ? [] : [S.kpi.waiveFrom]), S.start.minPlanForHigh])].filter(x => x >= 0).sort((a, b) => a - b);
     for (let i = 0; i < bps.length; i++) {
       const lo = bps[i], hi = i + 1 < bps.length ? bps[i + 1] : Infinity, s = salaryAt(lv, plan, lo, step, calls, rate);
       if (s.total >= target) return lo;
@@ -559,7 +589,7 @@ export function createPayroll(state) {
     termsOf: W(termsOf), levelOf: W(levelOf), rateOf: W(rateOf), pctRuleOf: W(pctRuleOf), levelChangeAfter: W(levelChangeAfter),
     deptOf: W(deptOf), isSimple: W(isSimple), leadOf: W(leadOf), teamOf: W(teamOf), planOf, workdays, employedIn: W(employedIn), leaveIn: W(leaveIn), days: W(days),
     // угоди, КПІ, відсоток
-    dealsOf, allDeals, kpiOf, kpiStep, managerPct, counts,
+    dealsOf, allDeals, kpiOf, kpiStep, managerPct, counts, offerKpi, clientPctOf: W(clientPctOf),
     // дні народження
     birthdayIn: W(birthdayIn), tenureMonths: W(tenureMonths), birthdayGift: W(birthdayGift), birthdayLines: W(birthdayLines),
     // розрахунок

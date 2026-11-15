@@ -93,8 +93,8 @@ export default function AccrualsTab({ ctx }: { ctx: PayrollCtx }) {
                         {x.role === "manager" && c.level === "profi" && <LevelTag level="profi" />}</td>
                       <td className="r">{flat(x) ? "—" : money(c.margin)}{x.role === "manager" && c.plan ? <div className="zp-hint">план {num(c.plan)}</div> : null}</td>
                       <td className="r">{c.now.rate ? money(c.now.rate) : "—"}</td>
-                      <td className="r">{flat(x) ? "—" : pct(c.now.pct)}</td>
-                      <td className="r">{c.now.bonus ? money(c.now.bonus) : "—"}</td>
+                      <td className="r">{flat(x) ? "—" : pct(c.now.pct)}{c.special?.lines?.length ? <div className="zp-hint">+ свої клієнти</div> : null}</td>
+                      <td className="r">{c.now.bonus ? money(c.now.bonus) : c.kpi?.bonusPending ? <span className="zp-hint" title="бонус за офером — лише після виконання КПІ; у «Зараз» не входить">умовно {money(c.kpi.bonusPending)}</span> : "—"}</td>
                       <td className={`r zp-tone--${signTone(c.now.birthday) ?? "muted"}`}>{signed(c.now.birthday)}</td>
                       {live ? (
                         <>

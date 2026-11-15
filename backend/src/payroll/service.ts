@@ -911,6 +911,7 @@ export async function employeesView(db: Db) {
   const people = (e.zp.employees as Array<Record<string, unknown>>).map((p) => ({ userId: p.id, name: p.name, title: p.title, role: p.role, dept: p.dept, team: p.team, leadsTeam: p.leadsTeam,
     offer: e.zp.offerCode(p), level: e.zp.levelOf(p, live), levelChange: e.zp.levelChangeAfter(p, live), rate: e.zp.rateOf(p, live), pctRule: e.zp.pctRuleOf(p, live),
     official: e.zp.officialOf(p, live), startDate: p.startDate, birthday: p.birthday, isFinance: p.isFinance, leave: p.leave, simple: e.zp.isSimple(p), terms: p.terms,
+    clientRates: p.clientRates ?? [],
     // останній чинний документ оферу: підписано / чекає підпису (анульовані — не показуємо)
     offerDoc: offerDocOf(e, p.id as string) }));
   const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: string | null; birth: string | null; position: string | null; team_id: number | null; level: string | null }>(
@@ -993,6 +994,42 @@ export async function updateEmployee(pool: Pool, v: Viewer, uid: number, body: R
     }
   });
   await after(pool, task ? (e) => e.nt.build.offerTask(id, task) : undefined);
+  return { ok: true };
+}
+// ===================================================================== окремий відсоток за своїми клієнтами
+/** Пошук клієнта для окремого відсотка: ключ і назва з угод (останні — вище). */
+export async function clientSearch(db: Db, q: unknown) {
+  const s = String(q ?? "").trim(); if (s.length < 2) return [];
+  return (await db.query<{ client_key: string; client_name: string; deals: number }>(
+    `SELECT client_key, (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS client_name, COUNT(*)::int AS deals
+       FROM deals WHERE client_key IS NOT NULL AND client_name IS NOT NULL AND (client_name ILIKE $1 OR client_key ILIKE $1)
+      GROUP BY client_key ORDER BY MAX(created_at_kommo) DESC NULLS LAST LIMIT 20`, [`%${s}%`])).rows
+    .map((r) => ({ clientKey: r.client_key, clientName: r.client_name, deals: r.deals }));
+}
+/** Окремий відсоток менеджеру за клієнтом — з поточного місяця («now») або з наступного («next»). */
+export async function addClientRate(pool: Pool, v: Viewer, uid: number, body: Record<string, unknown>) {
+  const key = String(body.clientKey ?? "").trim(), name = String(body.clientName ?? "").trim();
+  if (!key || !name) fail(422, "Оберіть клієнта зі списку.", "clientKey");
+  const pct = Number(body.pct); if (!(pct > 0 && pct <= 100)) fail(422, "Відсоток — від 0 до 100.", "pct");
+  await tx(pool, async (c) => {
+    const e = await engine(c, { fresh: true }); const p = e.zp.person(String(uid));
+    if (!p || p.role !== "manager") fail(404, "Окремий відсоток за клієнтами — лише менеджеру в зарплаті.");
+    const mk = body.from === "next" ? nextMonth(e.zp.liveMonth) : e.zp.liveMonth;
+    await c.query(`INSERT INTO payroll_client_rates (user_id, client_key, client_name, pct, valid_from, created_by) VALUES ($1,$2,$3,$4,$5::date,$6)`,
+      [uid, key, name, pct, monthStart(mk), v.userId]).catch((err: { code?: string }) => { if (err.code === "23505") fail(409, "Для цього клієнта відсоток уже задано — спершу зніміть чинний."); throw err; });
+    await history(c, v.userId, uid, `Окремий відсоток за клієнтом з ${mk}: ${name} — ${pct} %`, "окремі умови за своїми клієнтами");
+  });
+  await after(pool);
+  return { ok: true };
+}
+export async function removeClientRate(pool: Pool, v: Viewer, uid: number, id: number) {
+  await tx(pool, async (c) => {
+    const r = await c.query<{ client_name: string; pct: string }>(
+      `UPDATE payroll_client_rates SET removed_at = now(), removed_by = $3 WHERE id = $1 AND user_id = $2 AND removed_at IS NULL RETURNING client_name, pct`, [id, uid, v.userId]);
+    if (!r.rows.length) fail(404, "Такого відсотка немає або його вже знято.");
+    await history(c, v.userId, uid, `Знято окремий відсоток за клієнтом: ${r.rows[0].client_name} — ${Number(r.rows[0].pct)} %`, "окремі умови за своїми клієнтами");
+  });
+  await after(pool);
   return { ok: true };
 }
 export async function saveDepartment(pool: Pool, v: Viewer, body: Record<string, unknown>) {

@@ -441,7 +441,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "payroll_leaves", "payroll_cards", "payroll_months", "payroll_records", "payroll_record_extras", "payroll_payout_forms", "payroll_payout_lines",
   "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
   "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
-  "notify_rules", "notifications", "notification_recipients", "payroll_reminders",
+  "notify_rules", "notifications", "notification_recipients", "payroll_reminders", "payroll_client_rates",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -3461,6 +3461,8 @@ export const MANIFEST_TESTS: string[] = [
   "#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, закриття, перевірка, незгода й ОД, форма, відомість, виплата, аванс, обхідний лист, сповіщення",
   "#2604 ФРОНТ «ЗАРПЛАТИ»: пункт меню, розділ, дзвіночок у шапці, вкладки за правами з сервера, один чанк, посилання сповіщень",
   "#2605 EMAIL-КАНАЛ СПОВІЩЕНЬ: без SMTP_URL вимкнено; лист — UTF-8 base64, тема encoded-word, відправник з імені",
+  "#2606 БОНУС ЗА ОФЕРОМ: КПІ щодня + 990 успішних + від 50 цільових, без винятку за маржею; до виконання — умовний",
+  "#2607 СВОЇ КЛІЄНТИ: маржа клієнта — за окремим %, решта — за шкалою; не раніше свого місяця; так само в закритті",
   // core/kvpShip.test.ts — Звіт КВП, режим «🚚 Відправлені авто» (задача 7185, макет затверджено 02.11).
   "#3320 тиждень «Відправлених авто»: оплачено + чекаємо + без оплати == відправлено, межі тижня включно",
   "#3321 🪞 когорта «Відправлених»: без оплати = лише 143 всередині «чекає», оплачено = 142 і етап оплати, день за Києвом",

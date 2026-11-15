@@ -53,6 +53,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/payroll/employees/:userId/leave": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/employees": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "PATCH /api/payroll/employees/:userId": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/employees/:userId/client-rates": "право-ключ «Зарплати» payroll_edit (окремий відсоток за своїми клієнтами, 13.11.2026) — у обробнику ДО читання тіла",
   "POST /api/payroll/archive/import": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/settings": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/departments": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",

@@ -73,7 +73,7 @@ export default function Goal({ me }: { me: Obj }) {
   const H = (D.regular?.history ?? { months: [], rows: [] }) as Obj;
   const ls = e.offer === "ls";
   const planShown = st.level === "start" ? `план ${money(res?.main?.plan ?? c.plan)}${ls ? " — за офером" : " — з «Планів»"}` : defs.regularAllowed?.profi ? "«Профі»: власна база й таблиця реактивації" : "«Профі» — лише лідгени";
-  const needDays = Math.max(0, full - (S.kpi?.missDaysAllowed ?? 2));
+  const needDays = Math.max(0, full - (S.kpi?.offerFrom ? 0 : S.kpi?.missDaysAllowed ?? 2));
 
   const R = res?.main;
   const pctNote = !R || R.margin == null ? "" : st.level === "start"
@@ -120,7 +120,7 @@ export default function Goal({ me }: { me: Obj }) {
               <small className="zp-hint">маржа з авто · ваш: {money(src.margin)} ÷ {src.cars} авто, {span}</small>
             </label>
           </div>
-          {kpiOn && <label className="zp-check"><input type="checkbox" checked={st.calls} onChange={(x) => set({ calls: x.target.checked })} /><span>Норму дзвінків виконаю — {S.kpi.normCalls}+ щонайменше {needDays} з {full} робочих днів</span></label>}
+          {kpiOn && <label className="zp-check"><input type="checkbox" checked={st.calls} onChange={(x) => set({ calls: x.target.checked })} /><span>{S.kpi.offerFrom ? <>КПІ виконаю — {S.kpi.normCalls}+ дзвінків щодня ({full} з {full} робочих днів) і від {S.kpi.minSuccessCalls} успішних за місяць</> : <>Норму дзвінків виконаю — {S.kpi.normCalls}+ щонайменше {needDays} з {full} робочих днів</>}</span></label>}
           {ls && <p className="zp-hint">Офер команди Лілії Шаврової: бонусу за КПІ немає; «Профі» — автоматично після двох місяців поспіль понад {nf(e.offerInfo?.autoProfiFrom ?? 0)} ₴.</p>}
           {regAllowed && (
             <div className="zc-reg">
@@ -173,7 +173,7 @@ export default function Goal({ me }: { me: Obj }) {
                 <ul className="zc-slip">
                   {st.level === "start" && <li><span>Ставка «Старт»{ls ? " · офер Лілії" : ""}</span><b className="zp-num">{money(R.salary.rate)}</b></li>}
                   <li><span>{pc(R.salary.pct)} від маржі {money(R.margin)}{regAllowed && R.fromRegular ? ` (постійні ${money(R.fromRegular)} + ${SRC.short ?? "нові"} ${money(R.fromNew)})` : ""}</span><b className="zp-num">{money(R.margin * R.salary.pct / 100)}</b></li>
-                  {kpiOn && <li><span>Бонус за КПІ · {R.step ? `сходинка ${R.step[0]} %${R.salary.bonus ? (!st.calls ? ` · маржа від ${nf(S.kpi.waiveFrom)} — без дзвінків` : "") : " · без норми дзвінків — 0"}` : `конверсія нижче ${ladder[0]?.[0]} %`}</span><b className="zp-num">{money(R.salary.bonus)}</b></li>}
+                  {kpiOn && <li><span>Бонус за КПІ · {R.step ? `сходинка ${R.step[0]} %${R.salary.bonus ? (!st.calls ? ` · маржа від ${nf(S.kpi.waiveFrom)} — без дзвінків` : "") : S.kpi.offerFrom ? " · без КПІ — 0" : " · без норми дзвінків — 0"}` : `конверсія нижче ${ladder[0]?.[0]} %`}</span><b className="zp-num">{money(R.salary.bonus)}</b></li>}
                   <li className="zc-slip__tt"><span>Зарплата</span><b className="zp-num">{money(R.salary.total)}</b></li>
                 </ul>
                 {earned >= st.target
