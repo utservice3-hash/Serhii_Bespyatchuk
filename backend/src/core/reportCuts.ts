@@ -58,7 +58,9 @@ export async function callsByManager(from: string, to: string, scope: { managerI
   return r.rows.map((x) => ({ managerId: x.manager_id, talks: Number(x.talks), attempts: Number(x.attempts) }));
 }
 
-export interface CallsDayRow { managerId: number; day: string; talks: number; attempts: number }
+/** `long` — розмови, довші за `LONG_CALL_SEC` с («успішні дзвінки» оферу менеджера, «Зарплата» 13.11.2026). */
+export const LONG_CALL_SEC = 10;
+export interface CallsDayRow { managerId: number; day: string; talks: number; attempts: number; long: number }
 /**
  * Ті самі дві цифри, що `callsByManager`, лише в розрізі днів — для розгортки рядка.
  *
@@ -89,7 +91,7 @@ export async function callsByManagerDay(from: string, to: string, scope: { manag
    * ⚙️ `attempts` (недодзвони) склеюються тим самим правилом: перевід недодзвону
    * теж дає два записи, і рахувати їх двічі так само неправильно.
    */
-  const r = await pool.query<{ manager_id: number; day: string; talks: string; attempts: string }>(
+  const r = await pool.query<{ manager_id: number; day: string; talks: string; attempts: string; long: string }>(
     `WITH marked AS (
        SELECT rc.manager_id, rc.calldate, rc.billsec, ${mergedLagGapExpr("rc")} AS gap
          FROM ringostat_calls rc JOIN managers m ON m.id = rc.manager_id
@@ -97,9 +99,10 @@ export async function callsByManagerDay(from: string, to: string, scope: { manag
      )
      SELECT manager_id, to_char((calldate ${K})::date,'YYYY-MM-DD') AS day,
             COUNT(*) FILTER (WHERE billsec > 0 AND ${mergedLagFirst()})::int talks,
-            COUNT(*) FILTER (WHERE billsec = 0 AND ${mergedLagFirst()})::int attempts
+            COUNT(*) FILTER (WHERE billsec = 0 AND ${mergedLagFirst()})::int attempts,
+            COUNT(*) FILTER (WHERE billsec > ${LONG_CALL_SEC} AND ${mergedLagFirst()})::int long
        FROM marked GROUP BY 1, 2`, p);
-  return r.rows.map((x) => ({ managerId: x.manager_id, day: x.day, talks: Number(x.talks), attempts: Number(x.attempts) }));
+  return r.rows.map((x) => ({ managerId: x.manager_id, day: x.day, talks: Number(x.talks), attempts: Number(x.attempts), long: Number(x.long) }));
 }
 
 export interface JamRow { managerId: number; deals: number; sum: number }

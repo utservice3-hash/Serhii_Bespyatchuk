@@ -104,6 +104,10 @@ payrollRouter.post("/settings", h(["payroll_settings"], async (req, res, v) => {
 payrollRouter.get("/employees", h(VIEW, () => P.employeesView(pool)));
 payrollRouter.post("/employees", h(EDIT, async (req, res, v) => { const r = await P.addEmployee(pool, v, body(req)); res.status(201); return r; }));
 payrollRouter.patch("/employees/:userId", h(EDIT, (req, _r, v) => P.updateEmployee(pool, v, intP(req.params.userId), body(req))));
+// окремий відсоток за своїми клієнтами менеджера (без розголосу — лише фінансист і ОД задають)
+payrollRouter.get("/client-search", h(EDIT, (req) => P.clientSearch(pool, req.query.q)));
+payrollRouter.post("/employees/:userId/client-rates", h(EDIT, async (req, res, v) => { const r = await P.addClientRate(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
+payrollRouter.delete("/employees/:userId/client-rates/:id", h(EDIT, (req, _r, v) => P.removeClientRate(pool, v, intP(req.params.userId), intP(req.params.id))));
 payrollRouter.post("/departments", h(["payroll_settings"], (req, _r, v) => P.saveDepartment(pool, v, body(req))));
 payrollRouter.post("/teams", h(["payroll_settings"], (req, _r, v) => P.saveTeam(pool, v, body(req))));
 payrollRouter.get("/history", h(VIEW, (req) => P.historyView(pool, req.query.userId ? intP(req.query.userId) : null)));

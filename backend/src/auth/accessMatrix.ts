@@ -2249,6 +2249,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
   { method: "PATCH", path: "/api/payroll/employees/:userId", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
+  /* Окремий відсоток за своїми клієнтами менеджера (13.11.2026): задають лише фінансист і ОД (право payroll_edit). */
+  { method: "GET", path: "/api/payroll/client-search?q=ТОВ", cls: "GET",
+    allow: ["financier", "opdir"], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
+  { method: "POST", path: "/api/payroll/employees/:userId/client-rates", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
+  { method: "DELETE", path: "/api/payroll/employees/:userId/client-rates/:id", cls: "DELETE-ghost",
+    allow: ["financier", "opdir"], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
   { method: "POST", path: "/api/payroll/archive/import", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
   { method: "POST", path: "/api/payroll/settings", cls: "deny-only",

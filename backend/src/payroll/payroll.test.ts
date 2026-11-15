@@ -31,8 +31,11 @@ test("#2600 РУШІЙ ЗАРПЛАТИ: 63 тести пакета (40 золо
   // 🔒 «байт у байт» — хешем, а не словами: фікстура пакета несе СВОЇ налаштування, тож правку дефолтів рушія (утримання ТТН,
   // драбина KPI) його тести не бачать (заміряно саботажем: hold 3000 → 2000 лишав їх зеленими). Змінити рушій — свідомо, як lock-файл:
   // новий хеш сюди + запис чому. Хеші — файлів архіву «UTS_Zarplata_dlya_Romana_03.11.zip».
+  // ✏️ 13.11.2026 рушій змінено СВІДОМО (Роман: «офер — джерело правди»): умови КПІ оферу з `kpi.offerFrom` і окремий відсоток
+  // за своїми клієнтами (`clientRates`). Без offerFrom і clientRates рушій рахує як у пакеті — тому 63 тести пакета зелені й далі.
+  // Хеш пакета був eafed8b8…; нову поведінку стережуть #2606/#2607.
   const PKG: Record<string, string> = {
-    "zarplata-engine.mjs": "eafed8b8900df21bfbbece22aaa6cf53425e16321ecb933e8775e2f0c2ec63bb",
+    "zarplata-engine.mjs": "4d1deefad94659b46d3a847165dabca1374d29941a9901b11c8b1643255c9044",
     "notify.mjs": "413661dcd19936ff1a084b95133bdeb3561569a9f99504971b5f3ab74d699223",
     "format.mjs": "c22786b4978d87e582b076e6712eb1986b1d9f0ed61aa32de875eca3e6b6d7d2",
     "test/golden.test.mjs": "c18e2fbcd0e4f61da8c6a631d04377521981450b39f4bcf714717ac1d7128ef2",
@@ -361,3 +364,87 @@ test("#2605 EMAIL-КАНАЛ СПОВІЩЕНЬ: без SMTP_URL вимкнен�
   assert.ok(body.split("\r\n").every((l) => l.length <= 76 && !l.startsWith(".")), "🔴 рядок тіла довший за 76 або з крапки — SMTP обріже лист");
 });
 
+
+/** Мінімальний стан для рушія: один менеджер «Старт» у команді t1, листопад 2026 — поточний, жовтень — закритий. */
+function zpState(o: { kpi?: Record<string, unknown>; deals?: unknown[]; offerFrom?: string | null; now?: string; clientRates?: unknown[]; month?: string; margin?: number } = {}) {
+  const mk = o.month ?? "2026-11";
+  return {
+    now: o.now ?? "2026-11-30T23:00", liveMonth: "2026-11", closedMonth: "2026-10",
+    settings: { kpi: { offerFrom: o.offerFrom === undefined ? "2026-11" : o.offerFrom, normCalls: 50, minSuccessCalls: 990, minLeads: 50 } },
+    employees: [{ id: "1", name: "Тест Менеджер", role: "manager", title: "Менеджер", dept: "sales", team: "t1", startDate: "2026-01-05", birthday: null,
+      terms: [{ from: "2026-01", level: "start" }], official: [], leave: null, clientRates: o.clientRates ?? [] }],
+    departments: { sales: { name: "Продажі", sales: true } }, teams: { t1: { name: "Команда" } },
+    plans: { [mk]: { "1": 30000 } },
+    deals: { "1": { [mk]: o.deals ?? [{ id: "d1", date: `${mk}-10`, client: "Альфа", ck: "альфа", margin: o.margin ?? 40000, pay: "paid" }] } },
+    kpi: { "1": { [mk]: { normDays: 21, leads: 60, targetDeals: 12, successCalls: 990, ...(o.kpi ?? {}) } } },
+    responsibles: { ba: { id: "", name: "БА" }, acc: { id: "", name: "Бух" }, hr: { id: "", name: "HR" }, od: { id: "1", name: "ОД" }, finance: [] },
+  };
+}
+
+/**
+ * #2606 — БОНУС ЗА КОНВЕРСІЮ ЗА ОФЕРОМ (13.11.2026, Роман: «офер — джерело правди», «застосовуємо зараз»). З `kpi.offerFrom`:
+ * норма щодня без пропусків, ≥990 успішних, конверсія від 50 цільових, без «маржа від 50 000 — без дзвінків»; бонус у «зараз» —
+ * лише коли КПІ виконано, до того «умовний». Фікстура по обидва боки кожної межі; дзеркало — до offerFrom правила пакета.
+ * 🧨 Червоніє, якщо повернути пропуск днів, виняток за маржею, бонус до виконання КПІ або забути поріг лідів чи успішних.
+ */
+test("#2606 БОНУС ЗА ОФЕРОМ: КПІ щодня + 990 успішних + від 50 цільових, без винятку за маржею; до виконання — умовний", async () => {
+  const { createPayroll } = await import("./engine/zarplata-engine.mjs");
+  const calc = (o: Parameters<typeof zpState>[0]) => (createPayroll(zpState(o) as never) as never as { calc: (id: string, mk: string) => Record<string, any> }).calc("1", o?.month ?? "2026-11");
+  const full = calc({});
+  const need = full.kpi.need;
+  assert.ok(need > 0 && need === full.days.total, `🔴 норма — усі робочі дні без пропусків, а не ${need} з ${full.days.total}`);
+  assert.equal(full.kpi.step[1], 8000, "конверсія 20 % → сходинка 8 000");
+  assert.equal(full.now.bonus, 8000, "🔴 КПІ виконано — бонус має бути в «зараз»");
+  const miss1 = calc({ kpi: { normDays: need - 1 } });
+  assert.equal(miss1.now.bonus, 0, "🔴 один день без норми — за офером бонусу немає (пропусків не дозволено)");
+  const s989 = calc({ kpi: { successCalls: 989 } });
+  assert.equal(s989.now.bonus, 0, "🔴 989 успішних з 990 — бонусу немає");
+  assert.equal(calc({ kpi: { successCalls: 991 } }).now.bonus, 8000, "991 успішний — бонус є");
+  const l49 = calc({ kpi: { leads: 49, targetDeals: 12 } });
+  assert.ok(l49.kpi.fewLeads && l49.kpi.step === null && l49.now.bonus === 0, "🔴 49 цільових — конверсія не рахується, бонусу немає");
+  assert.ok(calc({ kpi: { leads: 50, targetDeals: 10 } }).now.bonus > 0, "50 цільових — конверсія рахується");
+  const rich = calc({ margin: 90000, kpi: { normDays: 0, successCalls: 0 } });
+  assert.equal(rich.now.bonus, 0, "🔴 маржа 90 000 без дзвінків — за офером без бонусу (винятку немає)");
+  assert.equal(rich.kpi.waived, false);
+  // посеред місяця: КПІ ще можна виконати — бонус умовний, у «зараз» не входить
+  const mid = calc({ now: "2026-11-13T12:00", kpi: { normDays: 10, successCalls: 300 } });   // 13.11 — минуло 10 робочих днів, усі з нормою
+  assert.equal(mid.now.bonus, 0, "🔴 КПІ ще не виконано — бонус не має входити в «зараз»");
+  assert.equal(mid.kpi.bonusPending, 8000, "🔴 посеред місяця бонус показується як умовний");
+  assert.equal(mid.now.total, mid.now.rate + mid.now.pctAmount + mid.now.birthday, "«зараз» = ставка + відсоток (+ ДН), без умовного бонусу");
+  const lost = calc({ now: "2026-11-13T12:00", kpi: { normDays: 8, successCalls: 300 } });
+  assert.ok(lost.now.bonus === 0 && lost.kpi.bonusPending === 0 && !lost.kpi.reach, "🔴 2 дні вже без норми — бонусу не буде, і умовним він не показується");
+  // 🪞 до offerFrom — правила пакета: пропуск 2 днів і «маржа від 50 000 — без дзвінків» діють
+  const old = calc({ offerFrom: "2026-12", margin: 90000, kpi: { normDays: 0, successCalls: 0 } });
+  assert.ok(old.kpi.waived && old.now.bonus === 8000, "🔴 до offerFrom зламано правила пакета (виняток за маржею)");
+  assert.equal(calc({ offerFrom: null, kpi: { normDays: need - 2 } }).now.bonus, 8000, "🔴 без offerFrom 2 дні без норми мають дозволятись, як у пакеті");
+});
+
+/**
+ * #2607 — ОКРЕМИЙ ВІДСОТОК ЗА СВОЇМИ КЛІЄНТАМИ (13.11.2026, Сергій: досвідчені, що приходять зі своїми клієнтами). Маржа угод
+ * клієнта з `clientRates` — за своїм відсотком, решта — за шкалою рівня; поріг рівня й план — з усієї маржі; у закритті (settlement)
+ * так само. Дзеркало: інший клієнт і ставка «з наступного місяця» — за шкалою.
+ * 🧨 Червоніє, якщо окремий відсоток не застосовано, застосовано до всієї маржі або раніше за свій місяць.
+ */
+test("#2607 СВОЇ КЛІЄНТИ: маржа клієнта — за окремим %, решта — за шкалою; не раніше свого місяця; так само в закритті", async () => {
+  const { createPayroll } = await import("./engine/zarplata-engine.mjs");
+  const deals = [
+    { id: "a", date: "2026-11-05", client: "Кераміка", ck: "кераміка", margin: 20000, pay: "paid" },
+    { id: "b", date: "2026-11-06", client: "Бета", ck: "бета", margin: 20000, pay: "paid" },
+  ];
+  const zp = (rates: unknown[]) => createPayroll(zpState({ deals, clientRates: rates }) as never) as never as { calc: (id: string, mk: string) => Record<string, any> };
+  const plain = zp([]).calc("1", "2026-11");
+  assert.equal(plain.now.pct, 20, "маржа 40 000 ≥ план 30 000 → 20 %");
+  assert.equal(plain.now.pctAmount, 8000);
+  const sp = zp([{ client: "кераміка", name: "Кераміка", pct: 45, from: "2026-11" }]).calc("1", "2026-11");
+  assert.equal(sp.now.pct, 20, "🔴 поріг рівня — з усієї маржі (40 000), а не з решти");
+  assert.equal(sp.now.pctAmount, 20000 * 0.45 + 20000 * 0.2, "🔴 Кераміка — 45 %, Бета — 20 %");
+  assert.equal(sp.special.lines.length, 1);
+  assert.equal(sp.special.lines[0].amount, 9000);
+  const later = zp([{ client: "кераміка", name: "Кераміка", pct: 45, from: "2026-12" }]).calc("1", "2026-11");
+  assert.equal(later.now.pctAmount, 8000, "🔴 окремий відсоток з грудня не має діяти в листопаді");
+  // закриття (settlement) жовтня — той самий розподіл
+  const oct = createPayroll(zpState({ month: "2026-10", deals: deals.map((d) => ({ ...d, date: d.date.replace("-11-", "-10-") })),
+    clientRates: [{ client: "кераміка", name: "Кераміка", pct: 45, from: "2026-10" }] }) as never) as never as { settlement: (id: string, mk: string) => Record<string, any> };
+  const st = oct.settlement("1", "2026-10");
+  assert.equal(st.pctAmount, 20000 * 0.45 + 20000 * 0.2, "🔴 у закритті окремий відсоток загубився");
+});

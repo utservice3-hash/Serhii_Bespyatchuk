@@ -26,7 +26,9 @@ function OfferBlock({ me }: { me: Obj }) {
   if (e.role === "manager" && lv !== "profi") cells = [
     ["Ставка", money(e.startRate), "за повний місяць; неповний — пропорційно робочим дням"],
     ["Відсоток від маржі", `${S.start.pctLow} → ${S.start.pctHigh} %`, `${S.start.pctHigh} % — коли виконано план ${ls ? `${nf(of.startPlan ?? 0)} ₴ за офером` : `місяця (${money(c?.plan ?? 0)} з «Планів»)`}; до всієї маржі`],
-    e.hasKpi ? ["Бонус за КПІ", lad.length ? `${nf(lad[0][1])}–${nf(lad[lad.length - 1][1])} ₴` : "—", `конверсія від ${lad[0]?.[0] ?? "—"} % і норма дзвінків ${S.kpi.normCalls}+; маржа від ${nf(S.kpi.waiveFrom)} ₴ — без дзвінків`]
+    e.hasKpi ? ["Бонус за КПІ", lad.length ? `${nf(lad[0][1])}–${nf(lad[lad.length - 1][1])} ₴` : "—", S.kpi.offerFrom
+      ? `конверсія від ${lad[0]?.[0] ?? "—"} % (рахується від ${S.kpi.minLeads} цільових звернень); ${S.kpi.normCalls} дзвінків щодня і від ${nf(S.kpi.minSuccessCalls)} успішних (понад 10 с) за місяць — обидві умови; нараховується лише після виконання`
+      : `конверсія від ${lad[0]?.[0] ?? "—"} % і норма дзвінків ${S.kpi.normCalls}+; маржа від ${nf(S.kpi.waiveFrom)} ₴ — без дзвінків`]
       : ["Бонус за КПІ", "немає", "в офері команди Лілії — зате ставка вдвічі більша"],
   ];
   else if (e.role === "manager") cells = [
