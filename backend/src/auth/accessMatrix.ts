@@ -1694,6 +1694,29 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/ba/cases/:id/files", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  /* 🎯 «Хантинг» (15.11.2026, ТЗ Івана): межа ПОІМЕННА (`hunt_access`: Іван, Сергій, Олександр), роль не дає нічого —
+     навіть адмінська. Проба матриці ходить від userId 0, якого в списку немає, тож КОЖНА роль бачить 403; «людина зі списку
+     може / інша з тією ж роллю ні» тримає живий гейт ядра #3961. Відкритий лише `/access` (тільки «чи показувати пункт»). */
+  { method: "GET", path: "/api/hunt/access", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+  { method: "GET", path: "/api/hunt/radar", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/hunt/contacts/activity", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/hunt/contacts/phones", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/hunt/candidates", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/hunt/candidates", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/hunt/candidates/:id", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "PATCH", path: "/api/hunt/candidates/:id", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/hunt/candidates/:id/stage", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/hunt/candidates/:id/comments", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
   /* 💰 Фінанси (29.09.2026): вкладка `finance` — керівництво і фінансист; запис — право `edit_finance` (той самий склад),
      погодження плану — з 06.10.2026 ПОІМЕННО (`fin_plan_approvers`), роль його не дає взагалі: тож рядок погодження —
      deny-only (403 тим, хто без вкладки), а «людина зі списку може / інша з тією ж роллю ні» тримає ЖИВИЙ гейт ядра. */

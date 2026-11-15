@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useToast } from "../../../components/Toasts";
-import { fetchHiringMeta, fetchSecretsStatus, fetchTeamVaultStatus, hiringError, type HiringMeta } from "../../../api";
+import { fetchHiringMeta, fetchSecretsStatus, fetchTeamVaultStatus, fetchHuntAccess, hiringError, type HiringMeta } from "../../../api";
 import { LS } from "../hiringView";
 import type { Toast } from "./HiringShared";
 import { HiringSchedule } from "./HiringSchedule";
@@ -13,6 +13,7 @@ import { HiringTeam } from "./HiringTeam";
 import { HiringSummary } from "./HiringSummary";
 import { OfferTemplatesTab } from "./HiringOffer";
 import { HiringChurnTab, HiringExitTab } from "./HiringChurn";
+import { HiringHunt } from "./HiringHunt";
 import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
 import "./hiring.css";
 
@@ -23,7 +24,7 @@ import "./hiring.css";
  *  • edit — рекрутер (HR) і адмін-рівень: усі три вкладки;
  *  • lead — тімлід: лише «Кандидати» своєї команди після співбесіди з ним.
  */
-type Tab = "sched" | "base" | "vac" | "train" | "daily" | "acc" | "tpl" | PlannedTab;
+type Tab = "sched" | "base" | "vac" | "train" | "daily" | "acc" | "tpl" | "hunt" | PlannedTab;
 
 /** Сервер відмовив у доступі (а не впав чи не встиг): 401/403. */
 const denied = (e: unknown) => { const st = (e as { response?: { status?: number } })?.response?.status; return st === 401 || st === 403; };
@@ -50,6 +51,9 @@ export function HiringSection() {
   // 👥 Тімлід (29.09.2026): «Співробітники» — люди й паролі СВОЄЇ команди (право `view_team_secrets`, межа — сервер).
   const [canTeam, setCanTeam] = useState(false);
   useEffect(() => { fetchTeamVaultStatus().then(() => setCanTeam(true)).catch((e) => setCanTeam(!denied(e))); }, []);
+  // 🎯 «Хантинг» (15.11.2026) — поіменно (Іван, Сергій, Олександр): пункт бачить лише той, кому сервер відповів `allowed`.
+  const [canHunt, setCanHunt] = useState(false);
+  useEffect(() => { fetchHuntAccess().then(setCanHunt).catch(() => setCanHunt(false)); }, []);
 
   // 🔔 Спільне повідомлення дашборда (`components/Toasts.tsx`) — раніше тут жила своя копія.
   const toast: Toast = useToast();
@@ -63,6 +67,7 @@ export function HiringSection() {
   const tabs: [Tab, string][] = meta.access === "edit"
     ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["daily", "Щоденний звіт"], ["tpl", "Шаблони"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
     : [["base", "Кандидати"], ["train", "На навчанні"], ["emp", "Співробітники"]];
+  if (canHunt) tabs.push(["hunt", "Хантинг"]);
   // «Співробітники» живі для тих, хто має право сейфу (імпорт кладе паролі туди); решті — пояснення.
   // «Зведення» живе (етап 2, 18.09.2026) для тих, хто редагує «Найм»; «Співробітники» — з правом сейфу.
   // «Плинність» і «Exit» (етап 5, 18.09.2026) — з реєстру, тож для тих самих, хто бачить «Співробітників».
@@ -101,6 +106,7 @@ export function HiringSection() {
       {active === "exit" && canSecrets && <HiringExitTab toast={toast} />}
       {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}
       {active === "daily" && <HiringDaily toast={toast} />}
+      {active === "hunt" && canHunt && <HiringHunt toast={toast} />}
     </div>
   );
 }

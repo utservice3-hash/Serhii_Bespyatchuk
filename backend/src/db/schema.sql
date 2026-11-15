@@ -8248,3 +8248,75 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS kommo_note_events_at TIMESTAMPTZ
 -- Відкат даних (код їх не прибирає): ALTER TABLE bank_accounts DROP COLUMN out_editors;
 -- ══════════════════════════════════════════════════════════════════════════
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS out_editors INTEGER[] NOT NULL DEFAULT '{}';
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🎯 ХАНТИНГ (15.11.2026, ТЗ Івана, погоджено Сергієм; проходи 1–2: «Радар Ларді» з архіву `lardi_offers` + «Воронка»)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Доступ ПОІМЕННИЙ, як `fin_plan_approvers`: роль не дає нічого, навіть адмінська. Склад — рішення Романа 15.11
+-- (Іван Романов 54, Беспятчук Сергій 1, Олександр Ступаківський 99); засів лише якщо список порожній — правку руками
+-- наступний викат не відкочує. Контакт Ларді ідентифікується `contact_key` (найменший номер телефону цифрами).
+-- Бекфілу немає: таблиці нові й порожні. ⚠️ revert коду таблиці не прибирає. Тримає #3960–#3965.
+CREATE TABLE IF NOT EXISTS hunt_access (
+  user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO hunt_access (user_id)
+SELECT id FROM users WHERE id IN (1, 54, 99) AND NOT EXISTS (SELECT 1 FROM hunt_access);
+
+CREATE TABLE IF NOT EXISTS hunt_candidates (
+  id                  SERIAL PRIMARY KEY,
+  contact_key         TEXT NOT NULL,
+  full_name           TEXT NOT NULL,
+  company             TEXT,
+  phones              JSONB NOT NULL DEFAULT '[]'::jsonb,
+  position            TEXT,
+  specialization      TEXT,
+  salary_expectation  TEXT,
+  interest            TEXT,
+  stage               TEXT NOT NULL DEFAULT 'picked'
+                        CHECK (stage IN ('picked','call','interview','approval','offer','hired','rejected')),
+  stage_changed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  next_step           TEXT,
+  next_step_at        TIMESTAMPTZ,
+  interview_at        TIMESTAMPTZ,
+  reject_reason       TEXT CHECK (reject_reason IS NULL OR reject_reason IN ('salary','not_ready','not_fit','other')),
+  source              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (stage <> 'rejected' OR reject_reason IS NOT NULL)
+);
+-- Один живий кандидат на контакт: у відмову можна піти й повернутись, але двічі у воронці — ні.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hunt_candidates_contact ON hunt_candidates (contact_key) WHERE stage <> 'rejected';
+
+CREATE TABLE IF NOT EXISTS hunt_stage_history (
+  id            SERIAL PRIMARY KEY,
+  candidate_id  INTEGER NOT NULL REFERENCES hunt_candidates(id) ON DELETE CASCADE,
+  from_stage    TEXT,
+  to_stage      TEXT NOT NULL,
+  reason        TEXT,
+  user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hunt_stage_history_cand ON hunt_stage_history (candidate_id, at);
+
+CREATE TABLE IF NOT EXISTS hunt_comments (
+  id            SERIAL PRIMARY KEY,
+  candidate_id  INTEGER NOT NULL REFERENCES hunt_candidates(id) ON DELETE CASCADE,
+  user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  text          TEXT NOT NULL CHECK (btrim(text) <> ''),
+  remind_at     TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hunt_comments_cand ON hunt_comments (candidate_id, created_at);
+
+-- Журнал перегляду повних телефонів (ТЗ п.9): хто й коли відкрив номер.
+CREATE TABLE IF NOT EXISTS hunt_phone_views (
+  id           SERIAL PRIMARY KEY,
+  contact_key  TEXT NOT NULL,
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Персональні дані чужих людей — не для моделі.
+REVOKE ALL ON hunt_access, hunt_candidates, hunt_stage_history, hunt_comments, hunt_phone_views FROM ai_readonly;
