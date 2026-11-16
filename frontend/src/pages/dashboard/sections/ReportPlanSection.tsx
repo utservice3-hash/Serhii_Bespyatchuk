@@ -394,6 +394,7 @@ export function ReportPlanSection({ auth, teams }: {
       ) : busy && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
         <SliceCtx.Provider value={slice}><AwaitCtx.Provider value={awaitMap}>
           <Glance data={data} focus={focus} focusDay={dayShown} today={today} periodLabel={periodLabel}
+            monthInProgress={mode === "month" && data.scope.isCurrent}
             statusFilter={statusFilter} onStatus={setStatusFilter} />
           {/* Застряглі — один рядок, розкривається на місці. Стан на зараз, не за періодом. */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
@@ -532,6 +533,24 @@ function SliceSwitch({ data, slice, onSlice }: { data: ReportPlan; slice: Slice;
   );
 }
 
+/**
+ * 🟧 ОЧІКУВАННЯ ЦЬОГО МІСЯЦЯ — ПУНКТИРОМ НА СМУЗІ (Сергій 16.11.2026: «не виведені очікування, їх
+ * треба додати до шкали прогресу, пунктиром, як і раніше було … очікування на цей місяць»).
+ *
+ * Сегмент стоїть ПІСЛЯ факту на тій самій шкалі (100% = план): факт суцільний, очікуване з
+ * плановою датою оплати в цьому місяці — заштриховане. У ЧИСЛО вони НЕ складаються: факт —
+ * гроші, що вже прийшли, очікуване — домовленість. Малюється лише для ПОВНОГО ПОТОЧНОГО місяця:
+ * `expectThisMonth` календарний, і над минулим місяцем чи тижнем він означав би інше.
+ */
+function ExpectSeg({ fact, expect, plan, title }: { fact: number; expect: number; plan: number; title: string }) {
+  if (plan <= 0 || expect <= 0) return null;
+  const from = Math.min(100, Math.max(0, (fact / plan) * 100));
+  const to = Math.min(100, Math.max(0, ((fact + expect) / plan) * 100));
+  if (to <= from) return null;
+  return <i title={title} style={{ left: `${from}%`, width: `${to - from}%`, borderRadius: 0,
+    background: `repeating-linear-gradient(135deg, ${AMBER} 0 5px, transparent 5px 10px)`, backgroundColor: AMBER + "22" }} />;
+}
+
 /** Колір виконання — те саме правило, що в `Donut` (≥100 / ≥70 / решта): одне правило на кільце й смугу. */
 const pctColor = (pct: number) => (pct >= 100 ? "var(--rv-ok)" : pct >= 70 ? "var(--rv-warn)" : "var(--rv-bad)");
 const WD_FULL = ["понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота", "неділя"];
@@ -542,8 +561,10 @@ const WD_FULL = ["понеділок", "вівторок", "середа", "че
  * чек» переїхав у підказку кільця, «поза ростером» і кількість нерозібраних розмов —
  * у підказку «ціну названо».
  */
-function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onStatus }: {
+function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onStatus, monthInProgress }: {
   data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string; periodLabel: string;
+  /** Обрано повний ПОТОЧНИЙ місяць — лише тоді очікування цього місяця лягає на смугу. */
+  monthInProgress: boolean;
   statusFilter: "g" | "a" | "r" | null; onStatus: (s: "g" | "a" | "r" | null) => void;
 }) {
   const g = data.glance;
@@ -571,6 +592,8 @@ function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onSta
             <div className="val">{fmt(g.fact)} <small>з {fmt(g.plan)} ₴</small></div>
             <div className="rv-pace">
               <i style={{ width: `${Math.min(100, pct)}%`, background: col }} />
+              {monthInProgress && <ExpectSeg fact={g.fact} expect={g.expectThisMonth} plan={g.plan}
+                title={`очікуємо цього місяця (є планова дата оплати) — ${fmt(g.expectThisMonth)} ₴`} />}
               {data.scope.isCurrent && <em style={{ left: `${pace}%` }} title={`темп: ${pace}% робочих днів минуло`} />}
             </div>
           </div>
@@ -689,9 +712,12 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, weekLabel, weekPeriod, d
           )}
         </div>
         <div className="rv-trk">
-          <div className="tl"><span>{isMonthMode ? "Місяць" : periodLabel} · <b>{fmt(m.fact)}</b> з {fmt(m.plan)} ₴</span><span className="p" style={{ color: sc }}>{pct}%</span></div>
+          <div className="tl"><span>{isMonthMode ? "Місяць" : periodLabel} · <b>{fmt(m.fact)}</b> з {fmt(m.plan)} ₴</span><span className="p" style={{ color: sc }}>{pct}%{m.monthInProgress && m.expectThisMonth > 0
+            ? <small style={{ color: AMBER, fontWeight: 600 }} title="очікуємо цього місяця (є планова дата оплати)"> +{k(m.expectThisMonth)} очік.</small> : null}</span></div>
           <div className="rv-track">
             <i style={{ width: `${Math.min(100, pct)}%`, background: sc }} />
+            {m.monthInProgress && <ExpectSeg fact={m.fact} expect={m.expectThisMonth} plan={m.plan}
+              title={`очікуємо цього місяця (є планова дата оплати) — ${fmt(m.expectThisMonth)} ₴`} />}
             {m.monthInProgress && <em style={{ left: `${Math.round(Math.min(1, Math.max(0, elapsed)) * 100)}%` }} title="де мав би бути факт, якщо йти рівно по плану" />}
           </div>
         </div>

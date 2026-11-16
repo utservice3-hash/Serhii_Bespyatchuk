@@ -139,3 +139,29 @@ test("#7728 смуга тижня — лише отримано; відправ�
   assert.match(card, /width: `\$\{Math\.min\(100, pct\)\}%`, background: sc/, "🔴 місячна смуга малює не факт ÷ план");
   assert.ok(!/carry/i.test(card), "🔴 у картку додали carryover — він перетинає очікуване на 69%");
 });
+
+/**
+ * #7734 — ОЧІКУВАННЯ ЦЬОГО МІСЯЦЯ — ПУНКТИРОМ НА СМУЗІ, ПІСЛЯ ФАКТУ, ЛИШЕ ДЛЯ ПОВНОГО ПОТОЧНОГО МІСЯЦЯ.
+ * Сергій 16.11.2026: «не виведені очікування, їх треба додати до шкали прогресу, пунктиром, як і раніше
+ * було … очікування на цей місяць». Сегмент — `expectThisMonth` (планова дата в цьому місяці), стоїть
+ * від кінця факту, заштрихований; з фактом у ЧИСЛО не складається. І на картці, і в плитці «Команда».
+ * 🧨 Червоніє, якщо прибрати сегмент з картки чи плитки, взяти не `expectThisMonth` або малювати поза поточним місяцем.
+ */
+test("#7734 очікування цього місяця — пунктиром на смузі після факту (картка і «Команда»), лише в поточному місяці", async () => {
+  const src = strip(await readFile(FE, "utf8"));
+  const seg = src.split("function ExpectSeg(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.ok(seg.length > 0, "🔴 компонента сегмента очікувань немає");
+  assert.match(seg, /const from = Math\.min\(100, Math\.max\(0, \(fact \/ plan\) \* 100\)\)/, "🔴 сегмент починається не з кінця факту");
+  assert.match(seg, /\(\(fact \+ expect\) \/ plan\) \* 100/, "🔴 кінець сегмента — не факт + очікуване на тій самій шкалі");
+  assert.match(seg, /repeating-linear-gradient\(135deg/, "🔴 очікуване не пунктиром — злиється з фактом");
+  const card = src.split("function MgrStrip(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.match(card, /\{m\.monthInProgress && <ExpectSeg fact=\{m\.fact\} expect=\{m\.expectThisMonth\} plan=\{m\.plan\}/,
+    "🔴 на картці немає очікувань цього місяця (або вони малюються поза поточним місяцем)");
+  const g = src.split("function Glance(")[1]?.split("\nfunction ")[0] ?? "";
+  assert.match(g, /\{monthInProgress && <ExpectSeg fact=\{g\.fact\} expect=\{g\.expectThisMonth\} plan=\{g\.plan\}/,
+    "🔴 у плитці «Команда» немає очікувань цього місяця");
+  assert.match(src, /monthInProgress=\{mode === "month" && data\.scope\.isCurrent\}/, "🔴 плитка малює очікування не лише в поточному місяці");
+  assert.ok(!/m\.fact\s*\+\s*m\.expectThisMonth/.test(src) && !/g\.fact\s*\+\s*g\.expectThisMonth/.test(src),
+    "🔴 факт і очікуване складено в одне число");
+});
+
