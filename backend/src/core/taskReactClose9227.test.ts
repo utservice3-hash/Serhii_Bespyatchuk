@@ -35,6 +35,10 @@ test("#4022 🪞 «ГОТОВО» НА ЗАДАЧІ РЕАКТИВАЦІЇ ПИ�
     "🔴 «Готово» з меню рядка йде повз галочку - задача реактивації закриється без причини");
   assert.doesNotMatch(ui, /commitTask\((task|openTask)\.id, \{ status \}\)/, "🔴 лишилось місце, де статус задачі пишеться повз перевірку причини");
   assert.match(ui, /if \(needsCloseReason\(t\.taskType, "done"\)\) \{ changeStatus\(t, "done"\); return; \}/, "🔴 галочка «виконано» закриває задачу реактивації без причини");
+  // Діалог причини мусить лежати ВИЩЕ за тло відкритої картки задачі - інакше його видно, а натиснути не можна.
+  const cardZ = Number(/setOpenTaskId\(null\)\} style=\{\{ position: "fixed", inset: 0, background: "rgba\(0,0,0,0\.35\)", zIndex: (\d+)/.exec(ui)?.[1]);
+  const dlgZ = Number(/\{reactClose && \([^]*?<div style=\{\{ position: "fixed", inset: 0, zIndex: (\d+) \}\}>\s*<CloseTaskDialog/.exec(ui)?.[1]);
+  assert.ok(cardZ > 0 && dlgZ > cardZ, `🔴 діалог причини (шар ${dlgZ}) під тлом картки задачі (шар ${cardZ}) - з картки його не натиснути`);
   assert.match(ui, /await closeReactivationTask\(\{ taskId: reactClose\.id, reason, note \}\)/, "🔴 причина з задачника не йде в роут закриття з причиною");
 
   const row = ACCESS_MATRIX.filter((x) => x.method === "GET" && x.path === "/api/dashboard/reactivation-task/close-reasons");

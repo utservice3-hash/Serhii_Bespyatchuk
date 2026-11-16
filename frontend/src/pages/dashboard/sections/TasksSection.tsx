@@ -2051,6 +2051,9 @@ export function TasksSection({
           форма нижче: перемикач у діалозі лише перемикає `taskType`. 📎 Зона файла, «список не завантажився» й
           «неактивні з команди» — ті самі компоненти, що в картці, передані слотами. */}
       {reactClose && (
+        /* Шар ВИЩЕ за картку задачі (її тло — zIndex 2500): сам діалог має 60 і з відкритої картки опинявся під тлом —
+           видно, а натиснути не можна (спіймано на проді 16.11.2026 одразу після викату). */
+        <div style={{ position: "fixed", inset: 0, zIndex: 2600 }}>
         <CloseTaskDialog task={{ taskId: reactClose.id, name: reactClose.title }} reasons={reactReasons ?? []} busy={reactBusy} error={reactErr}
           onCancel={() => { setReactClose(null); setReactErr(null); }}
           onSubmit={async (reason, note) => {
@@ -2064,6 +2067,7 @@ export function TasksSection({
               setReactErr((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? "Не вдалося закрити задачу");
             } finally { setReactBusy(false); }
           }} />
+        </div>
       )}
       {taskModalOpen && taskForm.taskType === "simple" && (
         <TaskCreateDialog
