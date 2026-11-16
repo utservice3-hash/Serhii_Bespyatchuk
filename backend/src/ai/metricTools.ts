@@ -87,6 +87,7 @@ export const FORBIDDEN_TABLES = [
   // 🏢 Орг структура (задача 7062, 27.10.2026): блоки й журнал переміщень людей (хто в якій «Команді»). REVOKE у схемі.
   "org_units", "org_log", "org_migrations", "dashboard_teams", "employee_levels",
   "hunt_access", "hunt_candidates", "hunt_stage_history", "hunt_comments", "hunt_phone_views",
+  "lardi_proposals", "lardi_proposal_events", "lardi_shippers",
   // 🛡 Журнал відхилених спам-заявок (05.10.2026): імена, пошти, IP. REVOKE у схемі. Тримає #1362c.
   "kommo_declined_forms",
   // 🏛 Prozorro-ліди (#5299): ПІБ, телефони й пошти контактних осіб переможців тендерів. REVOKE у схемі. Тримає #2355.

@@ -3,14 +3,14 @@ import { createPortal } from "react-dom";
 import {
   fetchHuntRadar, fetchHuntActivity, revealHuntPhones, fetchHuntCandidates, addHuntCandidate, fetchHuntCandidate, updateHuntCandidate,
   moveHuntCandidate, commentHuntCandidate, hiringError,
-  type HuntRadar, type HuntRadarRow, type HuntCandidateRow, type HuntCandidate, type HuntStage,
+  type HuntRadar, type HuntRadarRow, type HuntPeriod, type HuntHours, type HuntCandidateRow, type HuntCandidate, type HuntStage,
 } from "../../../api";
 import type { Toast } from "./HiringShared";
 
 /**
  * 🎯 «ХАНТИНГ» (15.11.2026, ТЗ Івана, погоджено Сергієм) — проходи 1–2: «Радар Ларді» + «Воронка кандидатів».
- * Дані радару — архів `collectLardi` (наші маршрути, раз на 3 год), не весь Ларді; живий скан — прохід 3, лише з
- * пакетом «Розширений доступ до API». Доступ поіменний — вирішує сервер (`/api/hunt/access`). Правила — `core/hunt.ts`.
+ * Дані радару — події живого скану `syncLardi` (прохід 3, кожні 15 хв) і перенесений архів `collectLardi`; живий скан
+ * працює лише з пакетом «Розширений доступ до API», інакше — плашка з текстом помилки Ларді. Доступ поіменний — вирішує сервер (`/api/hunt/access`). Правила — `core/hunt.ts`.
  */
 
 const STAGES: [HuntStage, string][] = [["picked", "Обрано"], ["call", "Дзвінок"], ["interview", "Співбесіда"], ["approval", "Погодження"], ["offer", "Оффер"], ["hired", "Вийшов на роботу"]];
@@ -39,59 +39,87 @@ export function HiringHunt({ toast }: { toast: Toast }) {
 
 /* ─────────────────────────── Радар ─────────────────────────── */
 
+const PERIODS: [HuntPeriod, string][] = [["h1", "Година"], ["d1", "Сьогодні"], ["d7", "Тиждень"], ["d30", "Місяць"]];
+const hh = (h: HuntHours | null) => (h ? `${String(h.from).padStart(2, "0")}:00–${String(h.to).padStart(2, "0")}:00` : null);
+
 function Radar({ toast, nonce, onAdded, onOpenFunnel }: { toast: Toast; nonce: number; onAdded: () => void; onOpenFunnel: (id: number) => void }) {
-  const [days, setDays] = useState(30);
+  const [period, setPeriod] = useState<HuntPeriod>("d30");
   const [show, setShow] = useState("all");
   const [side, setSide] = useState("");
+  const [dir, setDir] = useState("");
+  const [area, setArea] = useState("");
+  const [ctype, setCtype] = useState("");
+  const [hideBots, setHideBots] = useState(false);
   const [q, setQ] = useState("");
   const [d, setD] = useState<HuntRadar | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pick, setPick] = useState<HuntRadarRow | null>(null);
   const load = useCallback(() => {
-    setErr(null); fetchHuntRadar({ days, show, q, side }).then(setD).catch((e) => setErr(hiringError(e)));
-  }, [days, show, q, side]);
+    setErr(null); fetchHuntRadar({ period, show, q, side, dir, area, ctype, hideBots }).then(setD).catch((e) => setErr(hiringError(e)));
+  }, [period, show, q, side, dir, area, ctype, hideBots]);
   useEffect(() => { const t = setTimeout(load, q ? 300 : 0); return () => clearTimeout(t); }, [load, q, nonce]);
-  const col = days === 1 ? "d1" : days === 7 ? "d7" : "d30";
-  const stale = d?.dataUntil && Date.now() - new Date(d.dataUntil).getTime() > 6 * 3_600_000;
+  const live = d?.live;
+  const liveStale = !live?.until || Date.now() - new Date(live.until).getTime() > 30 * 60_000;
   return (
     <>
-      {d && (
-        <div className="hr-note" style={{ marginBottom: 12, ...(stale ? { background: "var(--warn-bg)", color: "var(--warn)" } : {}) }}>
-          Джерело — архів заявок Ларді по наших маршрутах (оновлюється раз на 3 год), не весь Ларді.{" "}
-          {stale ? <>Нові заявки не надходять з <b>{dmyhm(d.dataUntil)}</b>: пакет Ларді «Розширений доступ до API» не діє. Після оплати дані підуть самі.</>
-            : <>Останнє оновлення: {dmyhm(d.dataUntil)}.</>}{" "}
-          Тип компанії Ларді не віддає: серед активних є й вантажовласники.
+      {d && (liveStale ? (
+        <div className="hr-note" style={{ marginBottom: 12, background: "var(--warn-bg)", color: "var(--warn)" }}>
+          <b>Живий скан Ларді не працює</b>{live?.until ? <> з {dmyhm(live.until)}</> : null}.{" "}
+          {live?.error ? <>Ларді відповідає: «{live.error}»{live.errorAt ? <> ({dmyhm(live.errorAt)})</> : null}. </> : null}
+          Зараз у радарі {live?.until ? "останні живі дані й " : ""}архів заявок по наших маршрутах до <b>{dmyhm(d.archiveUntil)}</b>:
+          для них немає «за годину», годин публікації, області й мітки автоповтору. Після оплати пакета «Розширений доступ до API» скан піде сам.
         </div>
-      )}
+      ) : (
+        <div className="hr-note" style={{ marginBottom: 12 }}>
+          Живий скан Ларді кожні 15 хв · останній {dmyhm(live?.until)} · дані з {dmy(live?.since)}: повна тижнева картина — через тиждень після старту.
+          Тип компанії — за фільтром Ларді «лише вантажовласники».
+        </div>
+      ))}
       <div className="page-filters" style={{ marginBottom: 12, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <div className="hr-seg2">{([[1, "День"], [7, "Тиждень"], [30, "Місяць"]] as const).map(([k, l]) => <button key={k} className={days === k ? "on" : ""} onClick={() => setDays(k)}>{l}</button>)}</div>
+        <div className="hr-seg2">{PERIODS.map(([k, l]) => <button key={k} className={period === k ? "on" : ""} onClick={() => setPeriod(k)}>{l}</button>)}</div>
         <div className="hr-seg2">{([["", "Усі заявки"], ["cargo", "Вантаж"], ["lorry", "Транспорт"]] as const).map(([k, l]) => <button key={k} className={side === k ? "on" : ""} onClick={() => setSide(k)}>{l}</button>)}</div>
+        <select className="hr-inp" value={dir} onChange={(e) => setDir(e.target.value)} aria-label="Напрямок">
+          <option value="">Напрямок: усі</option><option value="ua">Україна ↔ Україна</option><option value="intl">Міжнародні</option>
+        </select>
+        <select className="hr-inp" value={area} onChange={(e) => setArea(e.target.value)} aria-label="Область відправки">
+          <option value="">Область: усі</option>{(d?.areas ?? []).map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select className="hr-inp" value={ctype} onChange={(e) => setCtype(e.target.value)} aria-label="Тип компанії">
+          <option value="">Компанії: усі</option><option value="no_shippers">без вантажовласників</option><option value="shippers">лише вантажовласники</option>
+        </select>
         <select className="hr-inp" value={show} onChange={(e) => setShow(e.target.value)} aria-label="Показати">
           <option value="all">Показати: усіх</option><option value="new">лише нових (не у воронці)</option><option value="funnel">лише у воронці</option>
         </select>
+        <label className="hr-muted" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={hideBots} onChange={(e) => setHideBots(e.target.checked)} /> приховати автоповтор
+        </label>
         <input className="hr-inp" placeholder="Пошук: імʼя, компанія, телефон" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: "1 1 220px" }} aria-label="Пошук" />
       </div>
       {err ? <div className="chart-card"><b>Радар недоступний.</b> <span className="hr-muted">{err}</span></div> : !d ? <p className="loading-text">Рахую активність…</p> : (
         <>
           <div className="kpi-grid">
-            <div className="kpi-card"><div className="kpi-label">Заявок за період</div><div className="kpi-value">{d.totals.offers.toLocaleString("uk-UA")}</div><div className="hr-muted">унікальних, у топі списку</div></div>
-            <div className="kpi-card"><div className="kpi-label">Активних менеджерів</div><div className="kpi-value">{d.totals.contacts}</div><div className="hr-muted">з {d.totals.companies} компаній</div></div>
+            <div className="kpi-card"><div className="kpi-label">Заявок за період</div><div className="kpi-value">{d.totals.offers.toLocaleString("uk-UA")}</div><div className="hr-muted">публікації й підняття</div></div>
+            <div className="kpi-card"><div className="kpi-label">Активних менеджерів</div><div className="kpi-value">{d.totals.contacts}</div><div className="hr-muted">з {d.totals.companies} компаній · автоповтор {d.totals.bots}</div></div>
             <div className="kpi-card"><div className="kpi-label">Нових кандидатів</div><div className="kpi-value">{d.totals.notInFunnel}</div><div className="hr-muted">ще не у воронці</div></div>
             <div className="kpi-card"><div className="kpi-label">У воронці зараз</div><div className="kpi-value">{d.totals.inFunnel}</div><div className="hr-muted">без відмов</div></div>
           </div>
           <div className="chart-card" style={{ padding: 0 }}>
             <div className="hr-tw">
               <table className="data-table compact" style={{ width: "100%" }}>
-                <thead><tr><th>#</th><th>Менеджер · компанія</th><th>Телефон</th><th className="num">День</th><th className="num">7 дн.</th><th className="num">30 дн.</th><th>Напрямки</th><th className="num">З ціною</th><th>Воронка</th></tr></thead>
+                <thead><tr><th>#</th><th>Менеджер · компанія</th><th>Телефон</th><th className="num">Год.</th><th className="num">Сьогодні</th><th className="num">7 дн.</th><th className="num">30 дн.</th><th>Напрямки</th><th className="num">З ціною</th><th>Воронка</th></tr></thead>
                 <tbody>
                   {d.rows.map((r, i) => (
                     <tr key={r.key} style={{ cursor: "pointer", background: pick?.key === r.key ? "var(--surface-2)" : undefined }} onClick={() => setPick(r)}>
                       <td className="hr-muted">{i + 1}</td>
-                      <td><b>{r.face}</b><div className="hr-muted" style={{ fontSize: 12 }}>{r.company}</div></td>
+                      <td>
+                        <b>{r.face}</b>
+                        {r.bot && <span className="emp-pill warn" style={{ marginLeft: 6 }} title="Ларді: автоповтор, понад 20 подій за 10 хв або рівні інтервали">схоже на автоповтор</span>}
+                        {r.shipper && <span className="emp-pill" style={{ marginLeft: 6 }}>вантажовласник</span>}
+                        <div className="hr-muted" style={{ fontSize: 12 }}>{r.company}{r.area ? ` · ${r.area}` : ""}{r.intl ? ` · міжнародні ${r.intl}` : ""}</div>
+                      </td>
                       <td className="hr-muted" style={{ whiteSpace: "nowrap" }}>{r.phones[0] ?? "—"}</td>
-                      <td className="num" style={{ fontWeight: col === "d1" ? 700 : undefined }}>{r.d1 || "—"}</td>
-                      <td className="num" style={{ fontWeight: col === "d7" ? 700 : undefined }}>{r.d7 || "—"}</td>
-                      <td className="num" style={{ fontWeight: col === "d30" ? 700 : undefined }}>{r.d30}</td>
+                      {(["h1", "d1", "d7", "d30"] as const).map((k) => (
+                        <td key={k} className="num" style={{ fontWeight: period === k ? 700 : undefined }}>{k === "h1" && !r.live ? <span className="hr-muted" title="лише з живого скану">·</span> : r[k] || "—"}</td>))}
                       <td style={{ fontSize: 12 }}>{r.top.map((t) => <div key={t.dir}>{t.dir} <span className="hr-muted">· {t.n}</span></div>)}</td>
                       <td className="num">{r.pricePct}%</td>
                       <td onClick={(e) => e.stopPropagation()}>
@@ -99,7 +127,7 @@ function Radar({ toast, nonce, onAdded, onOpenFunnel }: { toast: Toast; nonce: n
                           : <button className="hr-btn xs" onClick={() => setPick(r)}>+ У воронку</button>}
                       </td>
                     </tr>))}
-                  {!d.rows.length && <tr><td colSpan={9} className="hr-muted" style={{ padding: 16 }}>За цей період активних менеджерів немає{stale ? " — нових заявок з Ларді не надходить." : "."}</td></tr>}
+                  {!d.rows.length && <tr><td colSpan={10} className="hr-muted" style={{ padding: 16 }}>За цей період активних менеджерів немає{liveStale ? " — живий скан Ларді зараз не працює." : "."}</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -125,10 +153,10 @@ function PhoneReveal({ contactKey, masked, toast }: { contactKey: string; masked
 }
 
 function RadarCard({ row, toast, onClose, onAdded, onOpenFunnel }: { row: HuntRadarRow; toast: Toast; onClose: () => void; onAdded: () => void; onOpenFunnel: (id: number) => void }) {
-  const [act, setAct] = useState<{ days: { d: string; n: number }[]; top: { dir: string; n: number }[] } | null>(null);
+  const [act, setAct] = useState<{ days: { d: string; n: number }[]; top: { dir: string; n: number }[]; hours: HuntHours | null; bot: boolean; live: boolean } | null>(null);
   const [interest, setInterest] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setAct(null); fetchHuntActivity(row.key).then(setAct).catch(() => setAct({ days: [], top: [] })); }, [row.key]);
+  useEffect(() => { setAct(null); fetchHuntActivity(row.key).then(setAct).catch(() => setAct({ days: [], top: [], hours: null, bot: false, live: false })); }, [row.key]);
   const last7 = useMemo(() => {
     const m = new Map((act?.days ?? []).map((x) => [x.d, x.n]));
     return Array.from({ length: 7 }, (_, i) => { const dt = new Date(Date.now() - (6 - i) * 86_400_000); const k = dt.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }); return { k, n: m.get(k) ?? 0 }; });
@@ -150,10 +178,15 @@ function RadarCard({ row, toast, onClose, onAdded, onOpenFunnel }: { row: HuntRa
         <div>
           <div className="hunt-lbl">Активність за 7 днів</div>
           <div className="hunt-bars">{last7.map((x) => <div key={x.k} title={`${x.k}: ${x.n}`}><i style={{ height: `${(x.n / max) * 100}%` }} /><span>{x.k.slice(8)}</span></div>)}</div>
-          <div className="hr-muted" style={{ fontSize: 12 }}>День {row.d1} · 7 дн. {row.d7} · 30 дн. {row.d30} · вантаж {row.cargo} / транспорт {row.lorry} · з ціною {row.pricePct}%</div>
+          <div className="hr-muted" style={{ fontSize: 12 }}>Година {row.h1} · сьогодні {row.d1} · 7 дн. {row.d7} · 30 дн. {row.d30} · вантаж {row.cargo} / транспорт {row.lorry} · з ціною {row.pricePct}%</div>
         </div>
         <div><div className="hunt-lbl">Напрямки</div>{(act?.top ?? row.top).map((t) => <div key={t.dir} style={{ fontSize: 13 }}>{t.dir} <span className="hr-muted">· {t.n}</span></div>)}</div>
-        <div className="hr-muted" style={{ fontSize: 12 }}>Години публікації не показуємо: архів бачить заявку лише в момент скану (раз на 3 год), а не публікації.</div>
+        <div>
+          <div className="hunt-lbl">Години роботи</div>
+          {(act?.hours ?? row.hours) ? <div style={{ fontSize: 13 }}>Зазвичай публікує {hh(act?.hours ?? row.hours)} <span className="hr-muted">· за {(act?.hours ?? row.hours)!.n} подіями</span></div>
+            : <div className="hr-muted" style={{ fontSize: 12 }}>{(act?.live ?? row.live) ? "Замало подій, щоб назвати звичні години." : "Лише з живого скану: архів бачить заявку в момент нашого скану (раз на 3 год), а не публікації."}</div>}
+          {(act?.bot ?? row.bot) && <div style={{ fontSize: 12, color: "var(--warn)" }}>Схоже на автоповтор — заявки піднімає бот, активність завищена.</div>}
+        </div>
         {row.candidate ? (
           <button className="hr-btn p" onClick={() => onOpenFunnel(row.candidate!.id)}>Відкрити у воронці · {STAGE_LABEL[row.candidate.stage]}</button>
         ) : (

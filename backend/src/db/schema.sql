@@ -8335,3 +8335,78 @@ CREATE TABLE IF NOT EXISTS hunt_phone_views (
 
 -- Персональні дані чужих людей — не для моделі.
 REVOKE ALL ON hunt_access, hunt_candidates, hunt_stage_history, hunt_comments, hunt_phone_views FROM ai_readonly;
+
+-- ═══ 🛰 ХАНТИНГ, прохід 3 (16.11.2026, ТЗ Івана п.4–6): живий скан Ларді `syncLardi` → заявки й події ═══
+-- Заявка Ларді (`kind`, `id`). `ckey` — ключ контакту (найменший номер цифрами, інакше «компанія|імʼя»), той самий,
+-- що в `core/hunt.ts` і `hunt_candidates.contact_key`. `source`: 'live' — зі скану, 'archive' — перенесено з архіву
+-- `lardi_offers` (там немає дат Ларді, області й країни: час = наш скан раз на 3 год).
+CREATE TABLE IF NOT EXISTS lardi_proposals (
+  kind           TEXT NOT NULL CHECK (kind IN ('cargo','lorry')),
+  id             BIGINT NOT NULL,
+  ref_id         BIGINT,
+  contact_id     BIGINT,
+  ckey           TEXT NOT NULL,
+  company        TEXT,
+  face           TEXT,
+  phones         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  from_town      TEXT,
+  from_area      TEXT,
+  from_country   TEXT,
+  to_town        TEXT,
+  to_area        TEXT,
+  to_country     TEXT,
+  price          NUMERIC,
+  currency       TEXT,
+  auto_repeat    BOOLEAN NOT NULL DEFAULT false,
+  repeats_today  INTEGER NOT NULL DEFAULT 0,
+  created_at     TIMESTAMPTZ NOT NULL,
+  repeated_at    TIMESTAMPTZ,
+  first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  source         TEXT NOT NULL DEFAULT 'live' CHECK (source IN ('live','archive')),
+  PRIMARY KEY (kind, id)
+);
+CREATE INDEX IF NOT EXISTS idx_lardi_proposals_ckey ON lardi_proposals (ckey);
+
+-- Подія = публікація (`new`, на `dateCreate`) або підняття (`repeat`, на `dateRepeat`). Радар рахує саме їх (ТЗ п.6).
+CREATE TABLE IF NOT EXISTS lardi_proposal_events (
+  id           BIGSERIAL PRIMARY KEY,
+  kind         TEXT NOT NULL,
+  proposal_id  BIGINT NOT NULL,
+  ckey         TEXT NOT NULL,
+  type         TEXT NOT NULL CHECK (type IN ('new','repeat')),
+  at           TIMESTAMPTZ NOT NULL,
+  source       TEXT NOT NULL DEFAULT 'live' CHECK (source IN ('live','archive')),
+  FOREIGN KEY (kind, proposal_id) REFERENCES lardi_proposals (kind, id) ON DELETE CASCADE
+);
+-- Одна публікація на заявку; одне підняття на момент.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lardi_events_new ON lardi_proposal_events (kind, proposal_id) WHERE type = 'new';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lardi_events_repeat ON lardi_proposal_events (kind, proposal_id, at) WHERE type = 'repeat';
+CREATE INDEX IF NOT EXISTS idx_lardi_events_at ON lardi_proposal_events (at);
+CREATE INDEX IF NOT EXISTS idx_lardi_events_ckey ON lardi_proposal_events (ckey, at);
+
+-- Компанії, яких Ларді віддав на фільтр `onlyShippers` (тип компанії в самій заявці не приходить).
+CREATE TABLE IF NOT EXISTS lardi_shippers (
+  ref_id   BIGINT PRIMARY KEY,
+  company  TEXT,
+  seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Одноразово: архів `lardi_offers` за 35 днів → заявки й події 'archive', щоб радар не почався з нуля до оплати пакета.
+-- Умова «ще немає архівних подій» робить блок одноразовим. Відкат даних: DELETE FROM lardi_proposals WHERE source='archive'.
+INSERT INTO lardi_proposals (kind, id, ckey, company, face, phones, from_town, to_town, price, created_at, first_seen_at, last_seen_at, source)
+SELECT side, offer_id,
+       COALESCE(NULLIF((SELECT min(regexp_replace(p->>'n', '\D', '', 'g')) FROM jsonb_array_elements(COALESCE(phones, '[]'::jsonb)) p), ''),
+                lower(btrim(COALESCE(company, ''))) || '|' || lower(btrim(COALESCE(face, '')))),
+       company, face, COALESCE(phones, '[]'::jsonb), frm, tox, total, first_seen, first_seen, first_seen, 'archive'
+  FROM (SELECT DISTINCT ON (side, offer_id) * FROM lardi_offers
+         WHERE first_seen >= now() - interval '35 days' AND side IN ('cargo','lorry')
+         ORDER BY side, offer_id, first_seen) o
+ WHERE NOT EXISTS (SELECT 1 FROM lardi_proposal_events WHERE source = 'archive')
+ON CONFLICT (kind, id) DO NOTHING;
+INSERT INTO lardi_proposal_events (kind, proposal_id, ckey, type, at, source)
+SELECT kind, id, ckey, 'new', created_at, 'archive' FROM lardi_proposals p
+ WHERE source = 'archive' AND NOT EXISTS (SELECT 1 FROM lardi_proposal_events e WHERE e.source = 'archive')
+ON CONFLICT DO NOTHING;
+
+REVOKE ALL ON lardi_proposals, lardi_proposal_events, lardi_shippers FROM ai_readonly;

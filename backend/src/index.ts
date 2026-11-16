@@ -131,6 +131,7 @@ import { zakaz1cPayments } from "./zakaz1c/paymentsJob.js";
 import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
+import { syncLardi } from "./jobs/syncLardi.js";
 import { buildLeadgenLtv } from "./jobs/buildLeadgenLtv.js";
 import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
@@ -914,6 +915,12 @@ cron.schedule("12,42 * * * *", () => {
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {
   void runJob("collectLardi", () => collectLardi());
+});
+
+// 🛰 «Хантинг», прохід 3 (ТЗ Івана п.4): живий скан Ларді кожні 15 хв — о :04/:19/:34/:49, осторонь :00/:30 `syncKommo`
+// і :40 `collectLardi`. Під наглядом (`monitoredJobs.ts`, everyMin 15): відмова Ларді (403 — пакет не оплачено) = «АВАРІЯ».
+cron.schedule("4,19,34,49 * * * *", () => {
+  void runJob("syncLardi", () => syncLardi());
 });
 
 // 📵 Довідник номерів перевізників (задача 7359): Lardi-машини + «Перевізник» в історії, мінус номери замовників.

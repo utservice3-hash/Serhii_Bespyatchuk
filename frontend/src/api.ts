@@ -6976,12 +6976,16 @@ export const createLeadsBotLink = async () => (await api.post<{ url: string; cod
 // ── 🎯 Хантинг (15.11.2026, ТЗ Івана) — `backend/src/core/hunt.ts`. Доступ поіменний: Іван, Сергій, Олександр. ──
 export type HuntStage = "picked" | "call" | "interview" | "approval" | "offer" | "hired" | "rejected";
 export interface HuntRadarRow {
-  key: string; face: string; company: string; phones: string[]; d1: number; d7: number; d30: number; cargo: number; lorry: number;
+  key: string; face: string; company: string; phones: string[]; h1: number; d1: number; d7: number; d30: number; cargo: number; lorry: number;
   pricePct: number; top: { dir: string; n: number }[]; lastSeen: string; candidate: { id: number; stage: HuntStage } | null;
+  intl: number; area: string | null; shipper: boolean; bot: boolean; hours: HuntHours | null; live: boolean;
 }
+export interface HuntHours { from: number; to: number; n: number }
+export type HuntPeriod = "h1" | "d1" | "d7" | "d30";
 export interface HuntRadar {
-  days: number; rows: HuntRadarRow[]; dataUntil: string | null; stages: [string, string][];
-  totals: { offers: number; contacts: number; companies: number; notInFunnel: number; inFunnel: number };
+  period: HuntPeriod; rows: HuntRadarRow[]; dataUntil: string | null; stages: [string, string][]; areas: string[];
+  live: { since: string | null; until: string | null; error: string | null; errorAt: string | null }; archiveUntil: string | null;
+  totals: { offers: number; contacts: number; companies: number; bots: number; notInFunnel: number; inFunnel: number };
 }
 export interface HuntCandidateRow {
   id: number; full_name: string; company: string | null; phones: string[]; stage: HuntStage; stage_changed_at: string;
@@ -6993,10 +6997,10 @@ export interface HuntCandidate extends HuntCandidateRow {
   source: { from?: string; d7?: number; d30?: number; top?: { dir: string; n: number }[]; at?: string }; timeline: HuntTimelineItem[];
 }
 export const fetchHuntAccess = async () => (await api.get<{ allowed: boolean }>("/hunt/access")).data.allowed;
-export const fetchHuntRadar = async (p: { days: number; show: string; q: string; side: string }) =>
-  (await api.get<HuntRadar>("/hunt/radar", { params: p })).data;
+export const fetchHuntRadar = async (p: { period: HuntPeriod; show: string; q: string; side: string; dir: string; area: string; ctype: string; hideBots: boolean }) =>
+  (await api.get<HuntRadar>("/hunt/radar", { params: { ...p, hideBots: p.hideBots ? "1" : "" } })).data;
 export const fetchHuntActivity = async (key: string) =>
-  (await api.get<{ days: { d: string; n: number }[]; top: { dir: string; n: number }[] }>("/hunt/contacts/activity", { params: { key } })).data;
+  (await api.get<{ days: { d: string; n: number }[]; top: { dir: string; n: number }[]; hours: HuntHours | null; bot: boolean; live: boolean }>("/hunt/contacts/activity", { params: { key } })).data;
 export const revealHuntPhones = async (key: string) => (await api.post<{ phones: string[] }>("/hunt/contacts/phones", { key })).data.phones;
 export const fetchHuntCandidates = async (p: { q?: string; archived?: boolean }) =>
   (await api.get<{ rows: HuntCandidateRow[]; stages: [string, string][]; reasons: [string, string][] }>("/hunt/candidates", { params: { q: p.q ?? "", archived: p.archived ? "1" : "" } })).data;

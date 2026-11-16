@@ -44,7 +44,7 @@ huntRouter.use(async (req: Request, res: Response, next: NextFunction) => {
 });
 
 huntRouter.get("/radar", async (req, res) => {
-  try { const r = await radar(db(), req.query); res.json({ days: r.days, rows: r.rows, dataUntil: r.dataUntil, totals: r.totals, stages: HUNT_STAGES }); }
+  try { const r = await radar(db(), req.query); res.json({ period: r.period, rows: r.rows, dataUntil: r.dataUntil, live: r.live, archiveUntil: r.archiveUntil, areas: r.areas, totals: r.totals, stages: HUNT_STAGES }); }
   catch (e) { fail(res, e); }
 });
 huntRouter.get("/contacts/activity", async (req, res) => {

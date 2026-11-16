@@ -1,17 +1,17 @@
 /**
- * 🎯 ХАНТИНГ (15.11.2026, ТЗ Івана, погоджено Сергієм) — проходи 1–2: «Радар Ларді» і «Воронка кандидатів».
+ * 🎯 ХАНТИНГ (15–16.11.2026, ТЗ Івана, погоджено Сергієм) — «Радар Ларді» і «Воронка кандидатів».
  *
- * Джерело радару — архів `lardi_offers`, який збирає `collectLardi` (кожні 3 год по ~110 наших маршрутах). Це НЕ весь
- * Ларді і не живий скан: живий `syncLardi` (прохід 3) можливий лише з пакетом «Розширений доступ до API», а він не діє
- * з 12.11.2026 (пошук 403). Тому:
- *  · рахуємо УНІКАЛЬНІ заявки (`side`, `offer_id`): одну заявку збирач бачить кілька разів (заміряно 30 днів: 192 тис.
- *    записів = 80 тис. заявок);
- *  · «за годину» й «години публікації» не рахуємо: `first_seen` — час НАШОГО скану раз на 3 год, а не публікації;
- *  · тип компанії Ларді не віддає взагалі (заміряно 13.11), тож вантажовласників від експедиторів не відсіяти.
- * Контакт (менеджер) = `contact_key`: найменший номер телефону цифрами, без телефону — «компанія|імʼя».
- * Свої компанії (ЮТС) виключаються за назвою. Тримає #3960–#3965.
+ * Джерело радару (прохід 3) — ПОДІЇ `lardi_proposal_events` над заявками `lardi_proposals`:
+ *  · 'live' — живий скан `syncLardi` кожні 15 хв (`core/lardiSync.ts`): публікація на `dateCreate`, підняття на
+ *    `dateRepeat` — справжній час Ларді. Лише з них рахуються «за годину», години публікації й автоповтор;
+ *  · 'archive' — одноразово перенесений архів `collectLardi` (35 днів): час = наш скан раз на 3 год, без області й
+ *    країни. Тому архівні контакти не потрапляють у фільтр області, а «за годину» для них завжди 0.
+ * Пошук Ларді з 12.11.2026 віддає 403 (не оплачено «Розширений доступ до API») — доки так, у радарі лише архів.
+ * Контакт (менеджер) = `ckey`: найменший номер телефону цифрами, без телефону — «компанія|імʼя».
+ * Свої компанії (ЮТС, АвтоМув) — поза радаром за назвою і за `OWN_LARDI_REF_IDS`. Тримає #3960–#3969.
  */
 import type { Db } from "./secrets.js";
+import { botLike, typicalHours } from "./lardiSync.js";
 
 export class HuntError extends Error { constructor(public status: number, message: string) { super(message); } }
 
@@ -28,7 +28,7 @@ export async function huntAllowed(db: Db, userId: number): Promise<boolean> {
   return ((await db.query(`SELECT 1 FROM hunt_access WHERE user_id = $1`, [userId])).rowCount ?? 0) > 0;
 }
 
-/** Ключ контакту з телефонів Ларді: найменший номер цифрами. Чиста — щоб її однаково рахували радар і воронка. */
+/** Ключ контакту з телефонів Ларді: найменший номер цифрами. Чиста — щоб її однаково рахували радар, скан і воронка. */
 export function contactKey(phones: unknown, company: string | null, face: string | null): string {
   const nums = (Array.isArray(phones) ? phones : []).map((p) => String((p as { n?: unknown })?.n ?? "").replace(/\D/g, "")).filter(Boolean).sort();
   return nums[0] ?? `${(company ?? "").trim().toLowerCase()}|${(face ?? "").trim().toLowerCase()}`;
@@ -40,22 +40,29 @@ export const maskPhone = (n: string) => { const d = n.replace(/\D/g, ""); return
 /** Сутності HTML у назвах Ларді («&quot;Балі Сервіс&quot;») — одна розшифровка для всіх читачів. */
 export const unentity = (s: string | null) => (s ?? "").replace(/&quot;/g, "\"").replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&").trim();
 
-/** Свої компанії — поза радаром (ТЗ п.4). Поки немає ID на Ларді — за назвою. */
+/** Свої компанії — поза радаром (ТЗ п.4). За назвою — завжди; за ID на Ларді — коли їх назвуть (ВІДКРИТЕ ПИТАННЯ ТЗ п.11). */
 export const OWN_COMPANY_SQL = `COALESCE(company, '') !~* '^\\s*(ютс|uts|автомув|automove)\\M'`;
+export const OWN_LARDI_REF_IDS: readonly number[] = [];
 
-// Унікальні заявки за 30 днів із ключем контакту. `ph` рахується в SQL тим самим правилом, що `contactKey`.
-const OFFERS_CTE = `
-o AS (
-  SELECT DISTINCT ON (side, offer_id) side, offer_id, company, face, phones, frm, tox, total, first_seen,
-         (SELECT min(regexp_replace(p->>'n', '\\D', '', 'g')) FROM jsonb_array_elements(COALESCE(phones, '[]'::jsonb)) p) AS ph
-    FROM lardi_offers
-   WHERE first_seen >= now() - interval '30 days' AND ${OWN_COMPANY_SQL}
-   ORDER BY side, offer_id, first_seen),
-k AS (SELECT o.*, COALESCE(NULLIF(ph, ''), lower(btrim(COALESCE(company, ''))) || '|' || lower(btrim(COALESCE(face, '')))) AS ckey FROM o)`;
+// Події за 30 днів із полями заявки. Країна NULL (архів) читається як Україна: архів збирався лише по наших маршрутах.
+const EVENTS_CTE = `
+k AS (
+  SELECT e.kind AS side, e.type, e.at, e.source, p.id AS pid, p.ref_id, p.ckey, p.company, p.face, p.phones,
+         p.from_town AS frm, p.to_town AS tox, p.from_area, p.price AS total, p.auto_repeat,
+         (COALESCE(p.from_country, 'UA') <> 'UA' OR COALESCE(p.to_country, 'UA') <> 'UA') AS intl,
+         EXISTS (SELECT 1 FROM lardi_shippers s WHERE s.ref_id = p.ref_id) AS shipper
+    FROM lardi_proposal_events e
+    JOIN lardi_proposals p ON p.kind = e.kind AND p.id = e.proposal_id
+   WHERE e.at >= now() - interval '30 days' AND ${OWN_COMPANY_SQL.replace("company", "p.company")}
+     AND NOT (COALESCE(p.ref_id, 0) = ANY ($OWN::bigint[])))`;
+const ownIds = () => [...OWN_LARDI_REF_IDS];
+/** Підставляє номер параметра з ID своїх компаній у CTE. */
+const cte = (n: number) => EVENTS_CTE.replace("$OWN", `$${String(n)}`);
 
 export interface RadarRow {
-  key: string; face: string; company: string; phones: string[]; d1: number; d7: number; d30: number; cargo: number; lorry: number;
+  key: string; face: string; company: string; phones: string[]; h1: number; d1: number; d7: number; d30: number; cargo: number; lorry: number;
   pricePct: number; top: { dir: string; n: number }[]; lastSeen: string; candidate: { id: number; stage: HuntStage } | null;
+  intl: number; area: string | null; shipper: boolean; bot: boolean; hours: { from: number; to: number; n: number } | null; live: boolean;
 }
 
 /** Топ-2 напрямки за кількістю — чиста, щоб гейт перевіряв саме правило. */
@@ -65,64 +72,103 @@ export function topDirections(dirs: string[], n = 2): { dir: string; n: number }
   return [...m].map(([dir, c]) => ({ dir, n: c })).sort((a, b) => b.n - a.n || a.dir.localeCompare(b.dir, "uk")).slice(0, n);
 }
 
-/** Радар: найактивніші контакти. `days` — період сортування (1/7/30), `show` — усі / не у воронці / у воронці. */
-export async function radar(db: Db, opts: { days?: unknown; show?: unknown; q?: unknown; side?: unknown }) {
-  const days = [1, 7, 30].includes(Number(opts.days)) ? Number(opts.days) : 30;
+export const PERIODS = { h1: "1 hour", d1: "today", d7: "7 days", d30: "30 days" } as const;
+type Period = keyof typeof PERIODS;
+
+/**
+ * Радар: найактивніші контакти за подіями (`new` + `repeat`, ТЗ п.6). `period` — сортування й відбір (h1/d1/d7/d30;
+ * d1 = сьогодні за Києвом). Фільтри: `side`, `dir` (ua/intl), `area` (область відправки), `ctype` (no_shippers/shippers),
+ * `hideBots`, `show` (усі / не у воронці / у воронці), `q`.
+ */
+export async function radar(db: Db, opts: { period?: unknown; days?: unknown; show?: unknown; q?: unknown; side?: unknown; dir?: unknown; area?: unknown; ctype?: unknown; hideBots?: unknown }) {
+  const legacy = { 1: "d1", 7: "d7", 30: "d30" } as Record<number, Period>;
+  const period: Period = typeof opts.period === "string" && opts.period in PERIODS ? opts.period as Period : legacy[Number(opts.days)] ?? "d30";
   const show = opts.show === "new" || opts.show === "funnel" ? opts.show : "all";
   const side = opts.side === "cargo" || opts.side === "lorry" ? opts.side : null;
+  const dir = opts.dir === "ua" || opts.dir === "intl" ? opts.dir : null;
+  const ctype = opts.ctype === "no_shippers" || opts.ctype === "shippers" ? opts.ctype : null;
+  const area = typeof opts.area === "string" && opts.area.trim() ? opts.area.trim().slice(0, 80) : null;
+  const hideBots = opts.hideBots === true || opts.hideBots === "1" || opts.hideBots === "true";
   const q = typeof opts.q === "string" ? opts.q.trim().toLowerCase().slice(0, 80) : "";
-  const col = days === 1 ? "d1" : days === 7 ? "d7" : "d30";
-  const rows = (await db.query<{ ckey: string; face: string; company: string; phones: unknown; d1: number; d7: number; d30: number; cargo: number; lorry: number; price_pct: number; dirs: string[]; last_seen: string }>(
-    `WITH ${OFFERS_CTE}
-     SELECT ckey, max(face) AS face, max(company) AS company, (array_agg(phones ORDER BY first_seen DESC))[1] AS phones,
-            count(*) FILTER (WHERE first_seen >= now() - interval '1 day')::int AS d1,
-            count(*) FILTER (WHERE first_seen >= now() - interval '7 days')::int AS d7,
+  const since = period === "h1" ? `now() - interval '1 hour'` : period === "d1" ? `(date_trunc('day', now() AT TIME ZONE 'Europe/Kyiv') AT TIME ZONE 'Europe/Kyiv')`
+    : period === "d7" ? `now() - interval '7 days'` : `now() - interval '30 days'`;
+  const rows = (await db.query<{ ckey: string; face: string; company: string; phones: unknown; h1: number; d1: number; d7: number; d30: number;
+    cargo: number; lorry: number; price_pct: number; dirs: string[]; last_seen: string; intl: number; area: string | null; shipper: boolean;
+    auto: boolean; live_times: string[] | null }>(
+    `WITH ${cte(6)}, f AS (
+       SELECT * FROM k
+        WHERE ($1::text IS NULL OR side = $1)
+          AND ($2::text IS NULL OR ($2 = 'intl') = intl)
+          AND ($3::text IS NULL OR ($3 = 'shippers') = shipper)
+          AND ($4::text IS NULL OR from_area ILIKE '%' || $4 || '%')
+          AND ($5 = '' OR lower(COALESCE(face, '') || ' ' || COALESCE(company, '') || ' ' || COALESCE(phones::text, '')) LIKE '%' || $5 || '%'))
+     SELECT ckey, max(face) AS face, max(company) AS company, (array_agg(phones ORDER BY at DESC))[1] AS phones,
+            count(*) FILTER (WHERE at >= now() - interval '1 hour')::int AS h1,
+            count(*) FILTER (WHERE at >= (date_trunc('day', now() AT TIME ZONE 'Europe/Kyiv') AT TIME ZONE 'Europe/Kyiv'))::int AS d1,
+            count(*) FILTER (WHERE at >= now() - interval '7 days')::int AS d7,
             count(*)::int AS d30,
             count(*) FILTER (WHERE side = 'cargo')::int AS cargo, count(*) FILTER (WHERE side = 'lorry')::int AS lorry,
-            round(100.0 * count(total) / count(*))::int AS price_pct,
+            round(100.0 * count(DISTINCT (side, pid)) FILTER (WHERE total IS NOT NULL) / greatest(count(DISTINCT (side, pid)), 1))::int AS price_pct,
             array_agg(COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—')) AS dirs,
-            max(first_seen)::text AS last_seen
-       FROM k
-      WHERE ($1::text IS NULL OR side = $1)
-        AND ($2 = '' OR lower(COALESCE(face, '') || ' ' || COALESCE(company, '') || ' ' || COALESCE(phones::text, '')) LIKE '%' || $2 || '%')
+            max(at)::text AS last_seen, count(*) FILTER (WHERE intl)::int AS intl,
+            mode() WITHIN GROUP (ORDER BY from_area) AS area, bool_or(shipper) AS shipper, bool_or(auto_repeat) AS auto,
+            array_agg(at::text ORDER BY at) FILTER (WHERE source = 'live') AS live_times
+       FROM f
       GROUP BY ckey
-     HAVING count(*) FILTER (WHERE first_seen >= now() - make_interval(days => $3)) > 0
-      ORDER BY ${col} DESC, d30 DESC
-      LIMIT 300`, [side, q, days])).rows;
+     HAVING count(*) FILTER (WHERE at >= ${since}) > 0
+      ORDER BY ${period} DESC, d30 DESC
+      LIMIT 300`, [side, dir, ctype, area, q, ownIds()])).rows;
   const cands = new Map((await db.query<{ contact_key: string; id: number; stage: HuntStage }>(
     `SELECT contact_key, id, stage FROM hunt_candidates WHERE stage <> 'rejected'`)).rows.map((r) => [r.contact_key, { id: r.id, stage: r.stage }]));
-  const out: RadarRow[] = rows.map((r) => ({
-    key: r.ckey, face: unentity(r.face) || "без імені", company: unentity(r.company) || "без назви",
-    phones: (Array.isArray(r.phones) ? r.phones : []).map((p) => maskPhone(String((p as { n?: unknown }).n ?? ""))),
-    d1: r.d1, d7: r.d7, d30: r.d30, cargo: r.cargo, lorry: r.lorry, pricePct: r.price_pct,
-    top: topDirections(r.dirs), lastSeen: r.last_seen, candidate: cands.get(r.ckey) ?? null,
-  })).filter((r) => show === "all" || (show === "new" ? !r.candidate : !!r.candidate));
-  const fresh = (await db.query<{ last: string | null }>(`SELECT max(first_seen)::text AS last FROM lardi_offers`)).rows[0]?.last ?? null;
+  const out: RadarRow[] = rows.map((r) => {
+    const live = r.live_times ?? [];
+    return {
+      key: r.ckey, face: unentity(r.face) || "без імені", company: unentity(r.company) || "без назви",
+      phones: (Array.isArray(r.phones) ? r.phones : []).map((p) => maskPhone(String((p as { n?: unknown }).n ?? ""))),
+      h1: r.h1, d1: r.d1, d7: r.d7, d30: r.d30, cargo: r.cargo, lorry: r.lorry, pricePct: r.price_pct,
+      top: topDirections(r.dirs), lastSeen: r.last_seen, candidate: cands.get(r.ckey) ?? null,
+      intl: r.intl, area: r.area, shipper: r.shipper, bot: botLike(live, r.auto), hours: typicalHours(live), live: live.length > 0,
+    };
+  }).filter((r) => (show === "all" || (show === "new" ? !r.candidate : !!r.candidate)) && !(hideBots && r.bot));
+  const st = (await db.query<{ archive_until: string | null; live_until: string | null; live_since: string | null; err: string | null; err_at: string | null; ok_at: string | null }>(
+    `SELECT (SELECT max(at)::text FROM lardi_proposal_events WHERE source = 'archive') AS archive_until,
+            (SELECT max(last_seen_at)::text FROM lardi_proposals WHERE source = 'live') AS live_until,
+            (SELECT min(first_seen_at)::text FROM lardi_proposals WHERE source = 'live') AS live_since,
+            j.last_error AS err, j.last_error_at::text AS err_at, j.last_success_at::text AS ok_at
+       FROM (SELECT 1) one LEFT JOIN job_runs j ON j.name = 'syncLardi'`)).rows[0];
+  const areas = (await db.query<{ a: string }>(
+    `SELECT DISTINCT from_area AS a FROM lardi_proposals WHERE from_area IS NOT NULL AND last_seen_at >= now() - interval '30 days' ORDER BY 1 LIMIT 60`)).rows.map((r) => r.a);
+  // Помилка «свіжа», якщо вона пізніша за останній успіх (успіх не стирає `last_error`, jobs-sync.md).
+  const liveError = st?.err && (!st.ok_at || (st.err_at ?? "") > st.ok_at) ? st.err : null;
   return {
-    days, rows: out.slice(0, 200), dataUntil: fresh,
+    period, rows: out.slice(0, 200), areas,
+    dataUntil: st?.live_until ?? st?.archive_until ?? null,
+    live: { since: st?.live_since ?? null, until: st?.live_until ?? null, error: liveError, errorAt: liveError ? st?.err_at ?? null : null },
+    archiveUntil: st?.archive_until ?? null,
     totals: {
-      offers: out.reduce((a, r) => a + r[col], 0), contacts: out.length,
-      companies: new Set(out.map((r) => r.company)).size,
+      offers: out.reduce((a, r) => a + r[period], 0), contacts: out.length,
+      companies: new Set(out.map((r) => r.company)).size, bots: out.filter((r) => r.bot).length,
       notInFunnel: out.filter((r) => !r.candidate).length, inFunnel: cands.size,
     },
   };
 }
 
-/** Активність контакту за 30 днів по днях + напрямки — для картки праворуч. Телефонів НЕ віддає. */
+/** Активність контакту за 30 днів по днях + напрямки + години — для картки праворуч. Телефонів НЕ віддає. */
 export async function contactActivity(db: Db, key: string) {
   const rows = (await db.query<{ d: string; n: number }>(
-    `WITH ${OFFERS_CTE} SELECT ((first_seen AT TIME ZONE 'Europe/Kyiv')::date)::text AS d, count(*)::int AS n FROM k WHERE ckey = $1 GROUP BY 1 ORDER BY 1`, [key])).rows;
-  const dirs = (await db.query<{ dir: string }>(
-    `WITH ${OFFERS_CTE} SELECT COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—') AS dir FROM k WHERE ckey = $1`, [key])).rows.map((r) => r.dir);
-  if (!rows.length) throw new HuntError(404, "Контакт за 30 днів у архіві не знайдено");
-  return { days: rows, top: topDirections(dirs, 5) };
+    `WITH ${cte(2)} SELECT ((at AT TIME ZONE 'Europe/Kyiv')::date)::text AS d, count(*)::int AS n FROM k WHERE ckey = $1 GROUP BY 1 ORDER BY 1`, [key, ownIds()])).rows;
+  const ev = (await db.query<{ dir: string; at: string; source: string; auto_repeat: boolean }>(
+    `WITH ${cte(2)} SELECT COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—') AS dir, at::text AS at, source, auto_repeat FROM k WHERE ckey = $1`, [key, ownIds()])).rows;
+  if (!rows.length) throw new HuntError(404, "Контакт за 30 днів не знайдено");
+  const live = ev.filter((e) => e.source === "live").map((e) => e.at);
+  return { days: rows, top: topDirections(ev.map((e) => e.dir), 5), hours: typicalHours(live), bot: botLike(live, ev.some((e) => e.auto_repeat)), live: live.length > 0 };
 }
 
 /** «Показати телефон»: повні номери + запис у журнал переглядів (ТЗ п.9). */
 export async function revealPhones(db: Db, userId: number, key: unknown) {
   if (typeof key !== "string" || !key.trim()) throw new HuntError(400, "Не вказано контакт");
   const r = (await db.query<{ phones: unknown }>(
-    `WITH ${OFFERS_CTE} SELECT phones FROM k WHERE ckey = $1 ORDER BY first_seen DESC LIMIT 1`, [key])).rows[0];
+    `SELECT phones FROM lardi_proposals WHERE ckey = $1 ORDER BY last_seen_at DESC LIMIT 1`, [key])).rows[0];
   const own = r ? null : (await db.query<{ phones: unknown }>(`SELECT phones FROM hunt_candidates WHERE contact_key = $1 ORDER BY id DESC LIMIT 1`, [key])).rows[0];
   const src = r ?? own;
   if (!src) throw new HuntError(404, "Контакт не знайдено");
@@ -140,12 +186,12 @@ export async function addCandidate(db: Db, userId: number, body: { key?: unknown
   if ((await db.query(`SELECT 1 FROM hunt_candidates WHERE contact_key = $1 AND stage <> 'rejected'`, [key])).rowCount)
     throw new HuntError(409, "Цей контакт уже у воронці");
   const r = (await db.query<{ face: string; company: string; phones: unknown; d7: number; d30: number; dirs: string[] }>(
-    `WITH ${OFFERS_CTE}
-     SELECT max(face) AS face, max(company) AS company, (array_agg(phones ORDER BY first_seen DESC))[1] AS phones,
-            count(*) FILTER (WHERE first_seen >= now() - interval '7 days')::int AS d7, count(*)::int AS d30,
+    `WITH ${cte(2)}
+     SELECT max(face) AS face, max(company) AS company, (array_agg(phones ORDER BY at DESC))[1] AS phones,
+            count(*) FILTER (WHERE at >= now() - interval '7 days')::int AS d7, count(*)::int AS d30,
             array_agg(COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—')) AS dirs
-       FROM k WHERE ckey = $1`, [key])).rows[0];
-  if (!r || r.d30 === 0) throw new HuntError(404, "Контакт за 30 днів у архіві не знайдено");
+       FROM k WHERE ckey = $1`, [key, ownIds()])).rows[0];
+  if (!r || r.d30 === 0) throw new HuntError(404, "Контакт за 30 днів не знайдено");
   const source = { from: "lardi", d7: r.d7, d30: r.d30, top: topDirections(r.dirs), at: new Date().toISOString() };
   const id = (await db.query<{ id: number }>(
     `INSERT INTO hunt_candidates (contact_key, full_name, company, phones, interest, source, created_by)

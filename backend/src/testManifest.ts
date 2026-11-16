@@ -208,6 +208,7 @@ export const MANIFEST_FILES: string[] = [
   "core/hiringInterview.test.js",
   "core/churn.test.js",
   "core/hunt.test.js",
+  "core/lardiSync.test.js",
   "core/workua.test.js",
   "core/employeeAdd.test.js",
   "core/scheduleMove.test.js",
@@ -432,6 +433,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
   "org_units", "org_log", "org_migrations", "dashboard_teams", "employee_levels",
   "hunt_access", "hunt_candidates", "hunt_stage_history", "hunt_comments", "hunt_phone_views",
+  "lardi_proposals", "lardi_proposal_events", "lardi_shippers",
   "kommo_declined_forms",
   "prozorro_tenders", "prozorro_leads",
   "zakaz_onec_invoices", "zakaz_onec_pay_plan", "zakaz_onec_events", "zakaz_onec_customers",
@@ -1379,6 +1381,12 @@ export const MANIFEST_TESTS: string[] = [
   "#3962 ЖИВИЙ SQL РАДАРУ: унікальні заявки, контакт за номером, свої поза, вікна періодів, позначка воронки",
   "#3963 ЖИВИЙ SQL ВОРОНКИ: знімок і історія, двічі — 409, відмова з причиною, журнал телефону",
   "#3964 ФРОНТ ХАНТИНГУ: пункт у «Наймі» лише за `/api/hunt/access`",
+  "#3967 ЖИВИЙ SQL СКАНУ ЛАРДІ: new/repeat без дублів, архів без другої «нової», фільтри радару й мітка бота",
+  "#3969 ФРОНТ ХАНТИНГУ, прохід 3: година, фільтри ТЗ, бот, години, плашка живого скану",
+  // core/lardiSync.test.ts — живий скан Ларді для «Хантингу» (прохід 3, 16.11.2026)
+  "#3965 СКАН ЛАРДІ: розбір документованої заявки, події new/repeat, мітка бота, години, план сканів",
+  "#3966 СКАН ЛАРДІ: 403 — стоп на першому, 429 — пауза й повтор, сторінки, нерозібрана форма й нуль 200 — падіння",
+  "#3968 СКАН ЛАРДІ: у кроні кожні 15 хв і під наглядом",
   // core/churn.test.ts — плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026, етапи 4–5)
   "#583 ПЛИННІСТЬ: звільнені ÷ усі, хто працював у місяці; межі включно; без дати прийому — видно",
   "#584 ЖИВИЙ SQL: привʼязка до Kommo — за ID, за єдиним ПІБ, однофамільців не вгадує, повтор без змін",
