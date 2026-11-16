@@ -955,12 +955,26 @@ export async function addEmployee(pool: Pool, v: Viewer, body: Record<string, un
   await after(pool);
   return { ok: true };
 }
+/**
+ * Той самий запис умов / офіційної ЗП з того самого місяця вже є — не пишемо вдруге (звернення №120, Тетяна 12.11.2026:
+ * пʼять однакових «Офіційна ЗП з 2026-12: 7084» — екран відомості за листопад не мінявся, і здавалось, що «без змін»).
+ */
+export function sameTerms(prev: { level: string | null; rate: number | null; pct: number | null; pct_clear: boolean } | undefined,
+  next: { level: string | null; rate: number | null; pct: number | null; pctClear: boolean }): boolean {
+  return !!prev && (prev.level ?? null) === next.level && (prev.rate == null ? null : Number(prev.rate)) === next.rate
+    && (prev.pct == null ? null : Number(prev.pct)) === next.pct && !!prev.pct_clear === next.pctClear;
+}
+export function sameOfficial(prev: { amount: number | string; deduct: boolean } | undefined, amount: number, deduct: boolean): boolean {
+  return !!prev && Number(prev.amount) === amount && !!prev.deduct === deduct;
+}
 export async function updateEmployee(pool: Pool, v: Viewer, uid: number, body: Record<string, unknown>) {
   const id = String(uid); let task: Record<string, unknown> | null = null;
+  let fromOut = "", saved = 0;
   const reason = String(body.reason ?? "").trim(); if (reason.length < 3) fail(422, "Вкажіть причину зміни.", "reason");
   await tx(pool, async (c) => {
     const e = await engine(c, { fresh: true }); const p = e.zp.person(id); if (!p) fail(404, "Людини немає в зарплаті.");
     const fromMk = body.from === "next" ? nextMonth(e.zp.liveMonth) : e.zp.liveMonth;
+    fromOut = fromMk;
     // профіль (без дат «з місяця»)
     const prof: Array<[string, unknown]> = [];
     for (const [k, col] of [["title", "title"], ["dept", "dept_code"], ["team", "team_code"], ["leadsTeam", "leads_team_code"], ["offer", "offer_code"], ["startDate", "start_date"], ["birthday", "birthday_md"], ["isFinance", "is_finance"], ["role", "role"]] as const)
@@ -969,6 +983,7 @@ export async function updateEmployee(pool: Pool, v: Viewer, uid: number, body: R
       await c.query(`UPDATE payroll_employees SET ${prof.map(([col], i) => `${col} = $${i + 2}`).join(", ")} WHERE user_id = $1`, [uid, ...prof.map(([, val]) => val)]).catch((err: { code?: string }) => {
         if (err.code === "23505") fail(409, "У цієї команди вже є тім-лід."); if (err.code === "23514" || err.code === "23503" || err.code === "22007") fail(422, "Перевірте поля: відділ, команду, дати."); throw err; });
       await history(c, v.userId, uid, `Профіль: ${prof.map(([col]) => col).join(", ")}`, reason);
+      saved++;
     }
     const lvl = body.level === "start" || body.level === "profi" ? body.level as "start" | "profi" : null;
     const rate = "rate" in body && body.rate !== null && body.rate !== "" ? money(body.rate) : null;
@@ -977,6 +992,11 @@ export async function updateEmployee(pool: Pool, v: Viewer, uid: number, body: R
       if (rate != null && !(rate >= 0)) fail(422, "Ставка — не менше нуля.", "rate");
       const pct = pctIn && typeof pctIn === "object" ? Number((pctIn as Record<string, unknown>).value) : null;
       if (pct != null && !(pct > 0 && pct <= 100)) fail(422, "Відсоток — від 0 до 100.", "pct");
+      const prevT = (await c.query<{ level: string | null; rate: number | null; pct: number | null; pct_clear: boolean }>(
+        `SELECT level, rate::float8 AS rate, pct_value::float8 AS pct, pct_clear FROM payroll_terms WHERE user_id = $1 AND valid_from = $2::date ORDER BY id DESC LIMIT 1`,
+        [uid, monthStart(fromMk)])).rows[0];
+      if (!sameTerms(prevT, { level: lvl, rate, pct, pctClear: pctIn === null })) {
+      saved++;
       await c.query(`INSERT INTO payroll_terms (user_id, valid_from, level, rate, pct_base, pct_value, pct_clear, reason, changed_by) VALUES ($1,$2::date,$3,$4,$5,$6,$7,$8,$9)`,
         [uid, monthStart(fromMk), lvl, rate, pct != null ? "company" : null, pct, pctIn === null, reason, v.userId]);
       await history(c, v.userId, uid, `Умови з ${fromMk}:${lvl ? ` рівень ${lvl === "profi" ? "«Профі»" : "«Старт»"}` : ""}${rate != null ? ` ставка ${rate}` : ""}${pct != null ? ` ${pct} % маржі компанії` : pctIn === null ? " без відсотка" : ""}`, reason);
@@ -985,16 +1005,23 @@ export async function updateEmployee(pool: Pool, v: Viewer, uid: number, body: R
         const d = await c.query<{ id: string }>(`INSERT INTO payroll_offer_docs (user_id, offer_title, level, valid_from, why) VALUES ($1,$2,$3,$4::date,'рішення керівництва') RETURNING id::text`, [uid, OFFER_TITLES[lvl], lvl, monthStart(fromMk)]);
         task = { id: Number(d.rows[0].id), level: lvl, from: monthStart(fromMk), due: `${fromMk}-05`, why: "рішення керівництва", created: kyivNow() };
       }
+      }
     }
     if (body.official && typeof body.official === "object") {
       const o = body.official as Record<string, unknown>; const amount = money(o.amount);
       if (!(amount >= 0)) fail(422, "Офіційна ЗП — не менше нуля (0 — більше немає).", "official");
-      await c.query(`INSERT INTO payroll_official (user_id, valid_from, amount, deduct, note, changed_by) VALUES ($1,$2::date,$3,$4,$5,$6)`, [uid, monthStart(fromMk), amount, !!o.deduct, reason, v.userId]);
-      await history(c, v.userId, uid, `Офіційна ЗП з ${fromMk}: ${amount} (${o.deduct ? "вираховується" : "окремо"})`, reason);
+      const prevO = (await c.query<{ amount: number; deduct: boolean }>(
+        `SELECT amount::float8 AS amount, deduct FROM payroll_official WHERE user_id = $1 AND valid_from = $2::date ORDER BY id DESC LIMIT 1`, [uid, monthStart(fromMk)])).rows[0];
+      if (!sameOfficial(prevO, amount, !!o.deduct)) {
+        saved++;
+        await c.query(`INSERT INTO payroll_official (user_id, valid_from, amount, deduct, note, changed_by) VALUES ($1,$2::date,$3,$4,$5,$6)`, [uid, monthStart(fromMk), amount, !!o.deduct, reason, v.userId]);
+        await history(c, v.userId, uid, `Офіційна ЗП з ${fromMk}: ${amount} (${o.deduct ? "вираховується" : "окремо"})`, reason);
+      }
     }
   });
   await after(pool, task ? (e) => e.nt.build.offerTask(id, task) : undefined);
-  return { ok: true };
+  // `from` — з якого місяця діють ставка, рівень, % і офіційна ЗП; `saved` — скільки записів зроблено (0 — усе вже було записано).
+  return { ok: true, from: fromOut, saved };
 }
 // ===================================================================== окремий відсоток за своїми клієнтами
 /** Пошук клієнта для окремого відсотка: ключ і назва з угод (останні — вище). */

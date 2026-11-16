@@ -102,6 +102,8 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f, v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
+  /** Місяць, з якого діятимуть ставка, рівень, % і офіційна ЗП, — як його вибрано внизу. */
+  const effMonth = from === "next" ? nextMonth(live) : live;
 
   async function save() {
     setErr(null);
@@ -131,7 +133,16 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
     if (Object.keys(body).length <= 2) { setErr("Нічого не змінено."); return; }
     if (reason.trim().length < 3) { setErr("Вкажіть причину зміни."); return; }
     setBusy(true);
-    try { await payrollApi.updateEmployee(p.userId, body); toast(body.level ? "Умови збережено. Новий офер — у документах, рекрутер отримав задачу." : "Умови збережено."); onDone(); }
+    try {
+      const r = await payrollApi.updateEmployee(p.userId, body) as { saved?: number; from?: string };
+      // Звернення №120 (12.11.2026): з якого місяця діє зміна — словами, інакше «зберегла, а у відомості без змін».
+      const mk = r.from || effMonth, money = "level" in body || "rate" in body || "pct" in body || "official" in body;
+      // Спільні сповіщення дашборда (`components/Toasts`): «змін немає» — інформаційне, вікно лишається відкритим.
+      if (r.saved === 0) { toast(`Це вже записано з місяця «${monthTitle(mk)}».`, { head: "Змін немає", tone: "info" }); return; }
+      const when = money ? `Ставка, рівень, % і офіційна ЗП діють з місяця «${monthTitle(mk)}»${mk !== live ? ` — у відомості «${monthTitle(live)}» їх не буде` : ""}.` : "";
+      const offer = body.level ? "Новий офер — у документах, рекрутер отримав задачу." : "";
+      toast([when, offer].filter(Boolean).join(" ") || p.name, { head: "Умови збережено" }); onDone();
+    }
     catch (e) { setErr(errText(e)); } finally { setBusy(false); }
   }
 
@@ -152,7 +163,7 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
       <div className="zps-g3">
         {p.role !== "manager" && <Field label="Ставка, ₴"><input className="zp-input zp-input--num" inputMode="numeric" value={f.rate} onChange={(e) => set("rate", e.target.value)} /></Field>}
         {p.role === "staff" && <Field label="% від маржі компанії" hint="порожньо — без відсотка"><input className="zp-input zp-input--num" inputMode="decimal" value={f.pct} onChange={(e) => set("pct", e.target.value)} /></Field>}
-        <Field label="Офіційна ЗП, ₴ щомісяця" hint="0 або порожньо — немає"><input className="zp-input zp-input--num" inputMode="numeric" value={f.offAmt} onChange={(e) => set("offAmt", e.target.value)} placeholder="немає" /></Field>
+        <Field label="Офіційна ЗП, ₴ щомісяця" hint={`0 або порожньо — немає · діятиме з місяця «${monthTitle(effMonth)}»`}><input className="zp-input zp-input--num" inputMode="numeric" value={f.offAmt} onChange={(e) => set("offAmt", e.target.value)} placeholder="немає" /></Field>
         <Field label="Як рахуємо офіційну"><label className="zp-check"><input type="checkbox" checked={f.offDed} onChange={(e) => set("offDed", e.target.checked)} />вираховувати з загальної ЗП</label></Field>
       </div>
       <div className="zps-g3">
