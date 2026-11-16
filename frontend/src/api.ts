@@ -3692,7 +3692,7 @@ export interface Task {
   priority: TaskPriority;
   comments: string | null;
   department: string | null;
-  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation" | "oneonone" | "strategic";
+  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation" | "reactivation_client" | "oneonone" | "strategic";
   metric: "ads_count" | "avg_check" | "conversion" | null;
   targetValue: number | null;
   actualValue: number | null;
@@ -5372,6 +5372,11 @@ export async function fetchClientManagerHistory(clientKey: string): Promise<Mana
 export async function createClientReactivationTask(body: { clientKey: string; deadline?: string; comment?: string; assigneeId?: number }): Promise<{ id: number; clientName: string }> {
   const { data } = await api.post("/dashboard/reactivation-task", body);
   return data;
+}
+/** 📋 Довідник причин закриття задачі реактивації — для задачника (9227). */
+export async function fetchReactivationCloseReasons(): Promise<{ key: string; label: string }[]> {
+  const { data } = await api.get<{ closeReasons: { key: string; label: string }[] }>("/dashboard/reactivation-task/close-reasons");
+  return data.closeReasons;
 }
 export async function closeReactivationTask(body: { taskId: number; reason: string; note?: string }): Promise<{ closeReason: string }> {
   const { data } = await api.post("/dashboard/reactivation-task/close", body);

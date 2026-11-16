@@ -19,6 +19,10 @@ import {
   statusRights, statusActor, canChangeReviewer, effectiveReviewer, REVIEWED_TASK_TYPES,
 } from "../core/taskStatusRights.js";
 
+/** Тип задачі «реактивація клієнта» і текст відмови на «Готово» без причини (задача 9227). */
+export const REACTIVATION_CLIENT_TASK_TYPE = "reactivation_client";
+export const REACTIVATION_DONE_NEEDS_REASON = "Задача реактивації закривається з причиною - оберіть причину закриття";
+
 export const tasksRouter = Router();
 tasksRouter.use(requireAuth);
 
@@ -762,6 +766,12 @@ tasksRouter.patch("/:id", async (req, res) => {
     }
   }
   // 🎯 Стратегічну закриває лише «Приймає» (`statusRights.canDone`), решта доводить до затвердження.
+  // 📋 Задача реактивації закривається лише з причиною (CHECK `tasks_reactivation_close_reason`). Звичайне «Готово»
+  // причини не несе, і база відхиляла запис голою помилкою сервера (задача 9227: 89 задач зависли в «Готово на
+  // затвердження»). Тут — зрозуміла відмова; причину питає задачник і закриває через `/reactivation-task/close`.
+  if (before.taskType === REACTIVATION_CLIENT_TASK_TYPE && parsed.data.status === "done") {
+    return res.status(400).json({ error: REACTIVATION_DONE_NEEDS_REASON });
+  }
   if (before.taskType === STRATEGIC_TASK_TYPE && parsed.data.status === "done" && !rights.canDone) {
     return res.status(403).json({ error: "Стратегічну задачу закриває той, хто її приймає. Поставте «Готово на затвердження»" });
   }

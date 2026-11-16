@@ -930,6 +930,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/reactivation-task/close", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 📋 Довідник причин закриття для задачника (9227): читають усі, хто має вкладку клієнтів; HR — ні.
+  { method: "GET", path: "/api/dashboard/reactivation-task/close-reasons", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника): тімлід ОБʼЄДНУЄ клієнтів, але
   // лише коли ОБИДВА боки — його команди; міжкомандні випадки лишились за
   // `merge_clients` (КВП/ОД/адмін).

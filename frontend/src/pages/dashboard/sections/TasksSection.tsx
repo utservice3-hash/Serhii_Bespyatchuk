@@ -10,6 +10,7 @@ import {
   fetchTaskComments, createTaskComment, fetchTaskHistory,
   fetchTaskFiles, uploadTaskFile, deleteTaskFile, fetchTaskFileBlobUrl,
   markTaskSeen, fetchTaskAssignees, fetchMyTeamInactive,
+  fetchReactivationCloseReasons, closeReactivationTask,
   TASK_FILE_MAX_BYTES, TASK_FILES_PER_TASK,
   type ManagerOption,
   type ReactivationManager,
@@ -65,6 +66,8 @@ import { StatusPicker } from "../../../components/StatusPicker";
 import type { TaskForm } from "../taskForm";
 import { TasksFocusView } from "./TasksFocusView";
 import { TaskCreateDialog } from "./TaskCreateDialog";
+import { CloseTaskDialog } from "./ReactivationBits";
+import { needsCloseReason } from "../reactCloseRule";
 import { browserStorage, kyivDate, readDesign, writeDesign, type TasksDesign } from "../tasksFocus";
 
 const METRIC_LBL: Record<string, string> = {
@@ -647,6 +650,21 @@ export function TasksSection({
   /** 🤝 Форму відкрито зі «Спільних» — виконавець не підставляється, і без нього не створити. */
   const [sharedIntent, setSharedIntent] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
+  /* 📋 «Готово» на задачі реактивації питає причину закриття (9227): без неї база запис відхиляє. Усі місця зміни
+     статусу йдуть через `changeStatus`; причину зберігає той самий роут, що в «Клієнти та реактивація». */
+  const [reactClose, setReactClose] = useState<Task | null>(null);
+  const [reactReasons, setReactReasons] = useState<{ key: string; label: string }[] | null>(null);
+  const [reactBusy, setReactBusy] = useState(false);
+  const [reactErr, setReactErr] = useState<string | null>(null);
+  const changeStatus = (t: Task, status: Task["status"]) => {
+    if (needsCloseReason(t.taskType, status)) {
+      setReactErr(null); setReactClose(t);
+      if (!reactReasons) fetchReactivationCloseReasons().then(setReactReasons).catch(() => setReactErr("Не вдалося завантажити причини закриття"));
+      return;
+    }
+    patchTaskLocal(t.id, { status });
+    commitTask(t.id, { status });
+  };
   const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
   const [sortBy, setSortBy] = useState<"created" | "deadline" | "priority" | "status" | "assignee" | "title">("created");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -1548,10 +1566,7 @@ export function TasksSection({
                         value={task.status}
                         rights={task.statusRights}
                         reviewerName={task.reviewerName}
-                        onChange={(status) => {
-                          patchTaskLocal(task.id, { status });
-                          commitTask(task.id, { status });
-                        }}
+                        onChange={(status) => changeStatus(task, status)}
                       />
                     </td>
                     <td>
@@ -1671,6 +1686,8 @@ export function TasksSection({
               // ↩ «Скасувати» 8 с (подія з кнопкою, `toastRules`): галочку легко зачепити випадково —
               // 20.10.2026 так закрилась №5887. Скасування повертає САМЕ попередній статус.
               const prev = t.status;
+              // 📋 Задача реактивації: спершу причина закриття (9227) - без «Скасувати», бо закриття вже з причиною.
+              if (needsCloseReason(t.taskType, "done")) { changeStatus(t, "done"); return; }
               patchTaskLocal(t.id, { status: "done", doneAt: kyivDate(new Date()) });
               commitTask(t.id, { status: "done" });
               toast(`№${t.id} «${t.title.length > 90 ? `${t.title.slice(0, 90)}…` : t.title}»`, {
@@ -1679,7 +1696,8 @@ export function TasksSection({
               });
             }}
             onStatus={(t, status) => {
-              // Той самий шлях, що в селекторі статусу старої таблиці.
+              // Той самий шлях, що в селекторі статусу старої таблиці. «Готово» сюди не приходить: рядок шле його
+              // через `onDone` (гейт #1967), а там задача реактивації спершу питає причину (9227).
               patchTaskLocal(t.id, { status });
               commitTask(t.id, { status });
             }}
@@ -1834,7 +1852,7 @@ export function TasksSection({
                   <F icon="◔" label="Статус">
                     <StatusPicker value={openTask.status} fullWidth
                       rights={openTask.statusRights} reviewerName={openTask.reviewerName}
-                      onChange={(status) => { patchTaskLocal(openTask.id, { status }); commitTask(openTask.id, { status }); }} />
+                      onChange={(status) => changeStatus(openTask, status)} />
                   </F>
                 </>
               );
@@ -2032,6 +2050,21 @@ export function TasksSection({
       {/* 🆕 НОВА ЗАДАЧА / 🎯 ЦІЛЬ — компактний діалог (варіант А, Роман 26.10.2026). KPI-план і Реактивація — стара
           форма нижче: перемикач у діалозі лише перемикає `taskType`. 📎 Зона файла, «список не завантажився» й
           «неактивні з команди» — ті самі компоненти, що в картці, передані слотами. */}
+      {reactClose && (
+        <CloseTaskDialog task={{ taskId: reactClose.id, name: reactClose.title }} reasons={reactReasons ?? []} busy={reactBusy} error={reactErr}
+          onCancel={() => { setReactClose(null); setReactErr(null); }}
+          onSubmit={async (reason, note) => {
+            setReactBusy(true); setReactErr(null);
+            try {
+              const r = await closeReactivationTask({ taskId: reactClose.id, reason, note });
+              patchTaskLocal(reactClose.id, { status: "done", doneAt: kyivDate(new Date()), closeReason: r.closeReason });
+              toast(`Задачу закрито: «${reactClose.title}»`);
+              setReactClose(null);
+            } catch (e) {
+              setReactErr((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? "Не вдалося закрити задачу");
+            } finally { setReactBusy(false); }
+          }} />
+      )}
       {taskModalOpen && taskForm.taskType === "simple" && (
         <TaskCreateDialog
           form={taskForm}

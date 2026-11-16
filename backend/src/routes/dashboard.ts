@@ -8625,6 +8625,12 @@ dashboardRouter.post("/reactivation-task", async (req, res) => {
   res.json({ id: r.rows[0].id, assigneeId, clientName });
 });
 
+// 📋 Перелік причин закриття — для задачника (9227): там «Готово» на задачі реактивації теж мусить спитати причину,
+// а перелік живе в ядрі. Лише довідник, без даних клієнтів; вкладкова межа — та сама, що в закриття.
+dashboardRouter.get("/reactivation-task/close-reasons", (_req, res) => {
+  res.json({ closeReasons: reactivation.CLOSE_REASONS });
+});
+
 /**
  * Закриття задачі реактивації — ПРИЧИНА ОБОВʼЯЗКОВА.
  * Межу тримає ще й CHECK у БД: форму обійде будь-який прямий UPDATE, а дані про
