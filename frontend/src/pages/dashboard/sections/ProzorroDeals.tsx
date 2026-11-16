@@ -181,6 +181,19 @@ function matches(r: PzDealRowT, f: PoolFilter): boolean {
 
 const STATES: [PoolFilter["state"], string][] = [["all", "Усі"], ["new", "Не взято"], ["work", "У роботі"], ["opr", "ОПР"], ["passed", "Передано"], ["closed", "Закрито"]];
 
+/** Таблиця пулу: кожна клітинка в один рядок, довге — обрізано з повним текстом у підказці; шапка лишається при прокрутці. */
+const POOL_COLS: [string, "left" | "right" | "center"][] = [["Створено", "left"], ["Компанія", "left"], ["Сума", "right"], ["Ніша", "left"],
+  ["Відповідальний", "left"], ["Стан", "left"], ["Розмова", "center"], ["Причина закриття", "left"], ["", "right"]];
+const TD = { padding: "9px 12px", whiteSpace: "nowrap", verticalAlign: "middle" } as const;
+const TH = { ...TD, position: "sticky", top: 0, zIndex: 1, background: "var(--card-bg)", fontSize: 12, borderBottom: "1px solid var(--border)" } as const;
+const CLIP = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
+/** «Демчук Вікторія Олександрівна» → «Демчук В. О.»; повне — у підказці. */
+function shortName(full: string): string {
+  const p = full.trim().split(/\s+/);
+  if (p.length < 2 || full.startsWith("—")) return full;
+  return `${p[0]} ${p.slice(1).map((x) => `${x[0]}.`).join(" ")}`;
+}
+
 export function ProzorroDealsPool({ data, filter, onFilter }: { data: PzDealsResp; filter: PoolFilter; onFilter: (f: PoolFilter) => void }) {
   const rows = useMemo(() => data.rows.filter((r) => matches(r, filter)), [data, filter]);
   const managers = useMemo(() => [...new Set(data.rows.map((r) => r.manager ?? "— без відповідального —"))].sort(), [data]);
@@ -206,25 +219,36 @@ export function ProzorroDealsPool({ data, filter, onFilter }: { data: PzDealsRes
         <input type="search" value={filter.q} onChange={(e) => onFilter({ ...filter, q: e.target.value })} placeholder="Компанія" aria-label="Пошук компанії" style={sel} />
         <button type="button" className="hr-btn" onClick={() => onFilter(EMPTY_FILTER)}>Скинути</button>
       </div>
-      <div style={{ overflowX: "auto" }}>
-        <table className="data-table">
-          <thead><tr><th>Створено</th><th>Компанія</th><th style={{ textAlign: "right" }}>Сума тендера</th><th>Ніша</th><th>Відповідальний</th><th>Стан у Kommo</th><th>Розмова</th><th>Причина закриття</th><th>Kommo</th></tr></thead>
+      <div style={{ overflow: "auto", maxHeight: "70vh", border: "1px solid var(--border)", borderRadius: 10 }}>
+        <table className="data-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+          <thead>
+            <tr>
+              {POOL_COLS.map(([label, align]) => (
+                <th key={label} style={{ ...TH, textAlign: align }}>{label}</th>))}
+            </tr>
+          </thead>
           <tbody>
             {rows.map((r) => {
               const st = STATE_UI[r.state];
+              const who = r.manager ?? "— без відповідального —";
               return (
                 <tr key={r.leadId}>
-                  <td>{ddmm(r.day)}</td><td>{r.company}</td><td style={{ textAlign: "right" }}>{uah(r.amount)}</td>
-                  <td style={{ color: MUTED }}>{r.niche ?? "—"}</td><td>{r.manager ?? "— без відповідального —"}</td>
-                  <td><span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 600, borderRadius: 999, padding: "2px 8px", whiteSpace: "nowrap", background: st.bg, color: st.fg }}>{st.label}</span>
-                    {r.state === "new" && r.ageDays >= 1 && <span style={{ fontSize: 11, color: "var(--warn)", marginLeft: 6 }}>{r.ageDays} дн.</span>}</td>
-                  <td>{r.talk ? <span style={{ color: "var(--ok)", fontWeight: 600 }}>✓ була</span> : <span style={{ color: MUTED }}>—</span>}</td>
-                  <td style={{ color: MUTED }}>{r.reason ?? ""}</td>
-                  <td><a href={r.url} target="_blank" rel="noreferrer">{r.leadId} ↗</a></td>
+                  <td style={{ ...TD, color: MUTED }}>{ddmm(r.day)}</td>
+                  <td style={{ ...TD, maxWidth: 340 }} title={r.company}><div style={CLIP}>{r.company}</div></td>
+                  <td style={{ ...TD, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{uah(r.amount)}</td>
+                  <td style={{ ...TD, maxWidth: 170, color: MUTED, fontSize: 12.5 }} title={r.niche ?? ""}><div style={CLIP}>{r.niche ?? "—"}</div></td>
+                  <td style={TD} title={who}>{shortName(who)}</td>
+                  <td style={TD}>
+                    <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 600, borderRadius: 999, padding: "2px 8px", background: st.bg, color: st.fg }}>{st.label}</span>
+                    {r.state === "new" && r.ageDays >= 1 && <span style={{ fontSize: 11, color: "var(--warn)", marginLeft: 6 }}>{r.ageDays} дн.</span>}
+                  </td>
+                  <td style={{ ...TD, textAlign: "center" }}>{r.talk ? <span style={{ color: "var(--ok)", fontWeight: 600 }} title="вихідний дзвінок довше 8 с">✓</span> : <span style={{ color: MUTED }}>—</span>}</td>
+                  <td style={{ ...TD, maxWidth: 200, color: MUTED, fontSize: 12.5 }} title={r.reason ?? ""}><div style={CLIP}>{r.reason ?? ""}</div></td>
+                  <td style={{ ...TD, textAlign: "right" }}><a href={r.url} target="_blank" rel="noreferrer" title={`Угода ${r.leadId} у Kommo`}>Kommo ↗</a></td>
                 </tr>
               );
             })}
-            {!rows.length && <tr><td colSpan={9} style={{ color: MUTED }}>Таких угод за період немає.</td></tr>}
+            {!rows.length && <tr><td colSpan={POOL_COLS.length} style={{ ...TD, color: MUTED }}>Таких угод за період немає.</td></tr>}
           </tbody>
         </table>
       </div>
