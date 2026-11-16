@@ -8072,6 +8072,21 @@ CREATE TABLE IF NOT EXISTS payroll_reminders (
   sent_at    TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payroll_reminders_open ON payroll_reminders (user_id, month, kind) WHERE sent_at IS NULL;
+-- Окремий відсоток за своїми клієнтами менеджера (13.11.2026, Сергій: досвідчені, що приходять зі своїми клієнтами;
+-- без розголосу — задають фінансист і ОД, бачать вони, СЕО, тім-лід і сам менеджер). Зняте не видаляється — removed_at.
+CREATE TABLE IF NOT EXISTS payroll_client_rates (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  client_key  TEXT NOT NULL,
+  client_name TEXT NOT NULL,
+  pct         NUMERIC(5,2) NOT NULL CHECK (pct > 0 AND pct <= 100),
+  valid_from  DATE NOT NULL CHECK (valid_from = date_trunc('month', valid_from)::date),
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  removed_by  INTEGER REFERENCES users(id),
+  removed_at  TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_client_rates_live ON payroll_client_rates (user_id, client_key) WHERE removed_at IS NULL;
 -- Канал «email» центру сповіщень: коли лист пішов (SMTP_URL у .env; без нього канал не працює і так і пише в налаштуваннях).
 ALTER TABLE notification_recipients ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ;
 
@@ -8093,7 +8108,7 @@ REVOKE ALL ON payroll_settings_versions, payroll_departments, payroll_teams, pay
   payroll_leaves, payroll_cards, payroll_months, payroll_records, payroll_record_extras, payroll_payout_forms, payroll_payout_lines,
   payroll_advances, payroll_advance_lines, payroll_ttn_seen, payroll_ttn_legacy, payroll_archive, payroll_offer_docs,
   payroll_clearances, payroll_clearance_signatures, payroll_clearance_drafts, payroll_clearance_files, payroll_history,
-  notify_rules, notifications, notification_recipients, payroll_reminders FROM ai_readonly;
+  notify_rules, notifications, notification_recipients, payroll_reminders, payroll_client_rates FROM ai_readonly;
 
 -- 🗝 Вкладка «Зарплата» — кожному, крім кандидата (кабінет є в кожного, хто є в payroll_employees; решта бачить порожній стан).
 UPDATE roles SET screen_access = screen_access || '{"payroll":true}'::jsonb
@@ -8248,3 +8263,75 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS kommo_note_events_at TIMESTAMPTZ
 -- Відкат даних (код їх не прибирає): ALTER TABLE bank_accounts DROP COLUMN out_editors;
 -- ══════════════════════════════════════════════════════════════════════════
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS out_editors INTEGER[] NOT NULL DEFAULT '{}';
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🎯 ХАНТИНГ (15.11.2026, ТЗ Івана, погоджено Сергієм; проходи 1–2: «Радар Ларді» з архіву `lardi_offers` + «Воронка»)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Доступ ПОІМЕННИЙ, як `fin_plan_approvers`: роль не дає нічого, навіть адмінська. Склад — рішення Романа 15.11
+-- (Іван Романов 54, Беспятчук Сергій 1, Олександр Ступаківський 99); засів лише якщо список порожній — правку руками
+-- наступний викат не відкочує. Контакт Ларді ідентифікується `contact_key` (найменший номер телефону цифрами).
+-- Бекфілу немає: таблиці нові й порожні. ⚠️ revert коду таблиці не прибирає. Тримає #3960–#3965.
+CREATE TABLE IF NOT EXISTS hunt_access (
+  user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO hunt_access (user_id)
+SELECT id FROM users WHERE id IN (1, 54, 99) AND NOT EXISTS (SELECT 1 FROM hunt_access);
+
+CREATE TABLE IF NOT EXISTS hunt_candidates (
+  id                  SERIAL PRIMARY KEY,
+  contact_key         TEXT NOT NULL,
+  full_name           TEXT NOT NULL,
+  company             TEXT,
+  phones              JSONB NOT NULL DEFAULT '[]'::jsonb,
+  position            TEXT,
+  specialization      TEXT,
+  salary_expectation  TEXT,
+  interest            TEXT,
+  stage               TEXT NOT NULL DEFAULT 'picked'
+                        CHECK (stage IN ('picked','call','interview','approval','offer','hired','rejected')),
+  stage_changed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  next_step           TEXT,
+  next_step_at        TIMESTAMPTZ,
+  interview_at        TIMESTAMPTZ,
+  reject_reason       TEXT CHECK (reject_reason IS NULL OR reject_reason IN ('salary','not_ready','not_fit','other')),
+  source              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (stage <> 'rejected' OR reject_reason IS NOT NULL)
+);
+-- Один живий кандидат на контакт: у відмову можна піти й повернутись, але двічі у воронці — ні.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hunt_candidates_contact ON hunt_candidates (contact_key) WHERE stage <> 'rejected';
+
+CREATE TABLE IF NOT EXISTS hunt_stage_history (
+  id            SERIAL PRIMARY KEY,
+  candidate_id  INTEGER NOT NULL REFERENCES hunt_candidates(id) ON DELETE CASCADE,
+  from_stage    TEXT,
+  to_stage      TEXT NOT NULL,
+  reason        TEXT,
+  user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hunt_stage_history_cand ON hunt_stage_history (candidate_id, at);
+
+CREATE TABLE IF NOT EXISTS hunt_comments (
+  id            SERIAL PRIMARY KEY,
+  candidate_id  INTEGER NOT NULL REFERENCES hunt_candidates(id) ON DELETE CASCADE,
+  user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  text          TEXT NOT NULL CHECK (btrim(text) <> ''),
+  remind_at     TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hunt_comments_cand ON hunt_comments (candidate_id, created_at);
+
+-- Журнал перегляду повних телефонів (ТЗ п.9): хто й коли відкрив номер.
+CREATE TABLE IF NOT EXISTS hunt_phone_views (
+  id           SERIAL PRIMARY KEY,
+  contact_key  TEXT NOT NULL,
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Персональні дані чужих людей — не для моделі.
+REVOKE ALL ON hunt_access, hunt_candidates, hunt_stage_history, hunt_comments, hunt_phone_views FROM ai_readonly;

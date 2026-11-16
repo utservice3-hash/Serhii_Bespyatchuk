@@ -55,21 +55,32 @@ export async function loadResponsibles(db: Db): Promise<Responsibles> {
   };
 }
 
-export interface KpiSource { (from: string, to: string, managerIds: number[], today: string): Promise<Map<number, { normDays: number; leads: number; targetDeals: number }>> }
+/** `norm` — норма дзвінків на день для «Зарплати»; не задано — загальна норма з «Планів» дашборда. */
+export interface KpiSource { (from: string, to: string, managerIds: number[], today: string, norm?: number | null): Promise<Map<number, { normDays: number; leads: number; targetDeals: number; successCalls: number }>> }
+
+/**
+ * 📄 УМОВИ ОФЕРУ ДЛЯ БОНУСУ ЗА КОНВЕРСІЮ (13.11.2026, Роман: «офер — джерело правди», «застосовуємо зараз»).
+ * З листопада 2026: 50 дзвінків щодня без пропусків · ≥990 успішних (> 10 с) за місяць · конверсія від 50 цільових лідів ·
+ * без «маржа від 50 000 — без дзвінків» · бонус у «зараз» — лише коли КПІ виконано. Конверсія — за фільтрами Даші в Kommo
+ * (`rnkConvAsKommo`, затверджено 13.11). Норма 50 — лише зарплатна: у «Звіті» й КВП лишається норма з «Планів» (45).
+ */
+export const OFFER_KPI = { offerFrom: "2026-11", normCalls: 50, minSuccessCalls: 990, minLeads: 50 } as const;
 
 /** КПІ з ядра: дні з нормою дзвінків + цільові звернення / цільові угоди (лінива загрузка ядра — без пулу на імпорті). */
-export const coreKpi: KpiSource = async (from, to, managerIds, today) => {
-  const out = new Map<number, { normDays: number; leads: number; targetDeals: number }>();
+export const coreKpi: KpiSource = async (from, to, managerIds, today, normOverride) => {
+  const out = new Map<number, { normDays: number; leads: number; targetDeals: number; successCalls: number }>();
   if (!managerIds.length) return out;
   const [{ callsByManagerDay }, { callNormCell }, { callsNormFor }, { rnkConvAsKommo }] = await Promise.all([
     import("../core/reportCuts.js"), import("../core/callNorm.js"), import("../core/callsNormPlan.js"), import("../core/metrics.js")]);
-  const [calls, norm, conv] = await Promise.all([callsByManagerDay(from, to, {}), callsNormFor(from), rnkConvAsKommo({ from, to }, managerIds)]);
+  const [calls, planNorm, conv] = await Promise.all([callsByManagerDay(from, to, {}), callsNormFor(from), rnkConvAsKommo({ from, to }, managerIds)]);
+  const norm = normOverride ?? planNorm;
   const byM = new Map<number, typeof calls>();
   for (const c of calls) { const a = byM.get(c.managerId) ?? []; a.push(c); byM.set(c.managerId, a); }
   for (const id of managerIds) {
     const cell = callNormCell(byM.get(id) ?? [], norm, from, to, today);
     const cv = conv.rows.find((r) => r.managerId === id);
-    out.set(id, { normDays: cell.daysWithNorm ?? 0, leads: cv?.target ?? 0, targetDeals: cv?.won ?? 0 });
+    const successCalls = (byM.get(id) ?? []).filter((d) => d.day >= from && d.day <= to).reduce((a, d) => a + d.long, 0);
+    out.set(id, { normDays: cell.daysWithNorm ?? 0, leads: cv?.target ?? 0, targetDeals: cv?.won ?? 0, successCalls });
   }
   return out;
 };
@@ -103,6 +114,9 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
         LEFT JOIN payroll_leaves l ON l.user_id = pe.user_id ORDER BY pe.user_id`);
   const termsQ = await db.query<{ user_id: number; valid_from: Date; level: string | null; rate: string | null; pct_base: string | null; pct_value: string | null; pct_clear: boolean }>(
     `SELECT user_id, valid_from, level, rate, pct_base, pct_value, pct_clear FROM payroll_terms ORDER BY user_id, valid_from, id`);
+  // окремий відсоток за своїми клієнтами менеджера (знято — не діє; `valid_from` — з якого місяця)
+  const crQ = await db.query<{ id: string; user_id: number; client_key: string; client_name: string; pct: string; mk: string }>(
+    `SELECT id::text, user_id, client_key, client_name, pct, to_char(valid_from, 'YYYY-MM') AS mk FROM payroll_client_rates WHERE removed_at IS NULL ORDER BY user_id, id`);
   const offQ = await db.query<{ user_id: number; valid_from: Date; amount: string; deduct: boolean }>(
     `SELECT user_id, valid_from, amount, deduct FROM payroll_official ORDER BY user_id, valid_from, id`);
   const dateOnly = (d: Date) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
@@ -121,6 +135,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       id, name: r.name, role: r.role, title: r.title, dept: r.dept_code, team: r.team_code, leadsTeam: r.leads_team_code,
       ...(r.offer_code ? { offer: r.offer_code } : {}),
       startDate: dateOnly(r.start_date), birthday: r.birthday_md, terms, official,
+      clientRates: crQ.rows.filter((c) => c.user_id === r.user_id).map((c) => ({ id: Number(c.id), client: c.client_key, name: c.client_name, pct: Number(c.pct), from: c.mk })),
       leave: r.leave_date ? { date: dateOnly(r.leave_date), type: r.leave_type } : null, isFinance: r.is_finance,
     };
   });
@@ -149,9 +164,9 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   const deals: Record<string, Record<string, unknown[]>> = {};
   const ttnAt: Record<string, string | null> = {};
   if (managerIds.length) {
-    const dq = await db.query<{ kommo_id: string; manager_id: number; day: string; mk: string; client: string | null; name: string | null; price: string; paid: boolean; over: boolean; seen_at: Date | null }>(
+    const dq = await db.query<{ kommo_id: string; manager_id: number; day: string; mk: string; client: string | null; ck: string | null; name: string | null; price: string; paid: boolean; over: boolean; seen_at: Date | null }>(
       `SELECT d.kommo_id::text, d.manager_id, to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM-DD') AS day,
-              to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM') AS mk, d.client_name AS client, d.name, d.price,
+              to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM') AS mk, d.client_name AS client, d.client_key AS ck, d.name, d.price,
               EXISTS (SELECT 1 FROM onec_deal_payments p WHERE p.deal_id = d.kommo_id) AS paid,
               (d.planned_payment_at IS NOT NULL AND (d.planned_payment_at ${KYIV})::date < $4::date) AS over,
               ts.seen_at
@@ -162,7 +177,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       [managerIds, monthStart(fromMonth), `${live}-${lastDay(live)}`, today, STAGE_SUCCESS, FC_PIPELINES]);
     for (const r of dq.rows) {
       const e = byManager.get(r.manager_id); if (!e) continue;
-      ((deals[e] ??= {})[r.mk] ??= []).push({ id: r.kommo_id, date: r.day, client: r.client || r.name || `угода ${r.kommo_id}`, margin: Number(r.price), pay: r.paid ? "paid" : r.over ? "over" : "wait" });
+      ((deals[e] ??= {})[r.mk] ??= []).push({ id: r.kommo_id, date: r.day, client: r.client || r.name || `угода ${r.kommo_id}`, ck: r.ck, margin: Number(r.price), pay: r.paid ? "paid" : r.over ? "over" : "wait" });
       ttnAt[r.kommo_id] = kyivIso(r.seen_at);
     }
   }
@@ -174,7 +189,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
     const ms = [...new Set([live, prevMonth(live), closedMonth].filter(Boolean) as string[])];
     for (const mk of ms) {
       const to = `${mk}-${lastDay(mk)}`;
-      const k = await src(monthStart(mk), to, managerIds, today);
+      const k = await src(monthStart(mk), to, managerIds, today, mk >= OFFER_KPI.offerFrom ? OFFER_KPI.normCalls : null);
       for (const [m, v] of k) { const e = byManager.get(m); if (e) (kpi[e] ??= {})[mk] = v; }
     }
   }
@@ -258,6 +273,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       return { id: Number(t.id), empId: String(t.user_id), title: t.offer_title, level: t.level, from, due: `${from.slice(0, 7)}-05`, why: t.why, createdAt: kyivIso(t.created_at), signedAt: kyivIso(t.signed_at), doneAt: kyivIso(t.signed_at), voidAt: kyivIso(t.void_at) }; });
 
   const settings = { ...(setQ.rows[0]?.settings ?? {}) } as Record<string, unknown>;
+  settings.kpi = { ...(settings.kpi as object ?? {}), ...OFFER_KPI };   // умови оферу — не налаштування: їх не перекриває версія з БД
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };
   return {
     now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, kpi, ttnAt, ttnLegacy,

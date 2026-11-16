@@ -207,6 +207,7 @@ export const MANIFEST_FILES: string[] = [
   "core/offers.test.js",
   "core/hiringInterview.test.js",
   "core/churn.test.js",
+  "core/hunt.test.js",
   "core/workua.test.js",
   "core/employeeAdd.test.js",
   "core/scheduleMove.test.js",
@@ -430,6 +431,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "ba_equipment_issues",
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
   "org_units", "org_log", "org_migrations", "dashboard_teams", "employee_levels",
+  "hunt_access", "hunt_candidates", "hunt_stage_history", "hunt_comments", "hunt_phone_views",
   "kommo_declined_forms",
   "prozorro_tenders", "prozorro_leads",
   "zakaz_onec_invoices", "zakaz_onec_pay_plan", "zakaz_onec_events", "zakaz_onec_customers",
@@ -439,7 +441,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "payroll_leaves", "payroll_cards", "payroll_months", "payroll_records", "payroll_record_extras", "payroll_payout_forms", "payroll_payout_lines",
   "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
   "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
-  "notify_rules", "notifications", "notification_recipients", "payroll_reminders",
+  "notify_rules", "notifications", "notification_recipients", "payroll_reminders", "payroll_client_rates",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -1371,6 +1373,12 @@ export const MANIFEST_TESTS: string[] = [
   "#580 ЖИВИЙ SQL: + Співбесіда з новим кандидатом — один кандидат із вакансією, повтор номера — без дубля",
   "#581 ЖИВИЙ SQL: + Співбесіда з наявним — ранні етапи → «заплановано», пізні не зсуваються",
   "#582 ЖИВИЙ SQL: щоденний звіт — діалог і рядок графіка рахуються однаково",
+  // core/hunt.test.ts — «Хантинг»: радар Ларді й воронка кандидатів (15.11.2026, ТЗ Івана)
+  "#3960 ХАНТИНГ: ключ контакту, маска телефону, топ напрямків, назви без &quot;",
+  "#3961 ЖИВИЙ SQL ХАНТИНГУ: доступ — за списком, а не за роллю; засів не перезаписує",
+  "#3962 ЖИВИЙ SQL РАДАРУ: унікальні заявки, контакт за номером, свої поза, вікна періодів, позначка воронки",
+  "#3963 ЖИВИЙ SQL ВОРОНКИ: знімок і історія, двічі — 409, відмова з причиною, журнал телефону",
+  "#3964 ФРОНТ ХАНТИНГУ: пункт у «Наймі» лише за `/api/hunt/access`",
   // core/churn.test.ts — плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026, етапи 4–5)
   "#583 ПЛИННІСТЬ: звільнені ÷ усі, хто працював у місяці; межі включно; без дати прийому — видно",
   "#584 ЖИВИЙ SQL: привʼязка до Kommo — за ID, за єдиним ПІБ, однофамільців не вгадує, повтор без змін",
@@ -3453,6 +3461,8 @@ export const MANIFEST_TESTS: string[] = [
   "#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, закриття, перевірка, незгода й ОД, форма, відомість, виплата, аванс, обхідний лист, сповіщення",
   "#2604 ФРОНТ «ЗАРПЛАТИ»: пункт меню, розділ, дзвіночок у шапці, вкладки за правами з сервера, один чанк, посилання сповіщень",
   "#2605 EMAIL-КАНАЛ СПОВІЩЕНЬ: без SMTP_URL вимкнено; лист — UTF-8 base64, тема encoded-word, відправник з імені",
+  "#2606 БОНУС ЗА ОФЕРОМ: КПІ щодня + 990 успішних + від 50 цільових, без винятку за маржею; до виконання — умовний",
+  "#2607 СВОЇ КЛІЄНТИ: маржа клієнта — за окремим %, решта — за шкалою; не раніше свого місяця; так само в закритті",
   // core/kvpShip.test.ts — Звіт КВП, режим «🚚 Відправлені авто» (задача 7185, макет затверджено 02.11).
   "#3320 тиждень «Відправлених авто»: оплачено + чекаємо + без оплати == відправлено, межі тижня включно",
   "#3321 🪞 когорта «Відправлених»: без оплати = лише 143 всередині «чекає», оплачено = 142 і етап оплати, день за Києвом",

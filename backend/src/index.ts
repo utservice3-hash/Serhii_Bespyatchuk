@@ -47,6 +47,7 @@ import { trainingRouter } from "./routes/training.js";
 import { hiringQuestionsRouter } from "./routes/hiringQuestions.js";
 import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
+import { huntRouter } from "./routes/hunt.js";
 import { baRouter } from "./routes/businessAssistant.js";
 import { orgRouter } from "./routes/org.js";
 import { orgTeamsRouter } from "./routes/orgTeams.js";
@@ -211,6 +212,7 @@ app.use("/api/training/candidate", candidateTrainingRouter); // «моє нав�
 app.use("/api/training/questions", hiringQuestionsRouter); // питання кандидата тімліду (найм 2a) — ДО trainingRouter
 app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter);
+app.use("/api/hunt", huntRouter); // 🎯 Хантинг (15.11.2026): вкладка «hiring» + поіменний `hunt_access`
 app.use("/api/ba", baRouter); // 🗂 Бізнес-асистент: претензії й судовий реєстр (задача 4314)
 app.use("/api/finance/calendar", financeCalendarRouter); // 📅 «Календар оплат» (27.10.2026) — лише view_private_finance
 app.use("/api/finance/payments", financePaymentsRouter); // 💸 «Оплати перевізникам» (16.10.2026) — лише view_private_finance

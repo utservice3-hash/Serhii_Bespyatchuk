@@ -34,7 +34,7 @@ const SCALES: Array<[string, Array<[string, string]>]> = [
   ["«Старт»", [["start.rate", "Ставка, ₴"], ["start.pctLow", "% — план не виконано"], ["start.pctHigh", "% — план виконано"], ["start.minPlanForHigh", "Вищий % — якщо план від, ₴"]]],
   ["«Профі»", [["profi.threshold", "Поріг, ₴"], ["profi.pct1", "% — до порогу"], ["profi.pct2", "% — від порогу"], ["profi.pct3", "% — план керівника виконано"]]],
   ["Тім-лід", [["lead.pctLow", "% — план команди не виконано"], ["lead.pctHigh", "% — виконано"]]],
-  ["Бонус за КПІ («Старт»)", [["kpi.waiveFrom", "Без дзвінків від маржі, ₴"], ["kpi.missDaysAllowed", "Днів без норми без втрати бонусу"]]],
+  ["Бонус за КПІ («Старт») — лише до жовтня 2026; з листопада діють умови оферу", [["kpi.waiveFrom", "Без дзвінків від маржі, ₴"], ["kpi.missDaysAllowed", "Днів без норми без втрати бонусу"]]],
   ["Аванс", [["advance.fromDay", "Заявки з числа"], ["advance.managerPct", "Менеджер, % маржі"], ["advance.leadPct", "Тім-лід, % маржі команди"], ["advance.staffPct", "Ставка, % ставки"]]],
   ["Дні народження", [["birthday.each", "З кожного колеги, ₴"], ["birthday.company", "Від компанії, ₴"], ["birthday.lead", "Тім-ліду від компанії, ₴"], ["birthday.perMonth", "Стаж до року: за місяць, ₴"]]],
   ["ТТН", [["ttn.minPct", "Мінімум угод з ТТН, %"], ["ttn.hold", "Утримання, ₴"]]],
@@ -97,7 +97,9 @@ function Rules({ S }: { S: Obj }) {
   const rows: Array<[string, string]> = [
     ["«Старт»", `ставка ${num(S.start?.rate)} ₴ · ${S.start?.pctLow} % — план не виконано · ${S.start?.pctHigh} % — виконано (план від ${num(S.start?.minPlanForHigh)})`],
     ["«Профі»", `${S.profi?.pct1} % — до ${num(S.profi?.threshold)} · ${S.profi?.pct2} % — від ${num(S.profi?.threshold)} · ${S.profi?.pct3} % — план керівника виконано`],
-    ["Бонус за КПІ («Старт»)", `норма ${S.kpi?.normCalls} дзвінків на день — з «Планів» дашборда · днів: усі робочі мінус ${S.kpi?.missDaysAllowed} · від ${num(S.kpi?.waiveFrom)} маржі — без дзвінків · ${(S.kpi?.ladder ?? []).map((s: number[]) => `${s[0]} % → ${num(s[1])}`).join(", ")}`],
+    ["Бонус за КПІ («Старт»)", S.kpi?.offerFrom
+      ? `за офером, з ${String(S.kpi.offerFrom).slice(5, 7)}.${String(S.kpi.offerFrom).slice(0, 4)}: ${S.kpi.normCalls} дзвінків щодня без пропусків · від ${num(S.kpi.minSuccessCalls)} успішних (понад 10 с) за місяць · конверсія — від ${S.kpi.minLeads} цільових звернень · бонус у «зараз» — лише коли КПІ виконано · ${(S.kpi?.ladder ?? []).map((s: number[]) => `${s[0]} % → ${num(s[1])}`).join(", ")}`
+      : `норма ${S.kpi?.normCalls} дзвінків на день — з «Планів» дашборда · днів: усі робочі мінус ${S.kpi?.missDaysAllowed} · від ${num(S.kpi?.waiveFrom)} маржі — без дзвінків · ${(S.kpi?.ladder ?? []).map((s: number[]) => `${s[0]} % → ${num(s[1])}`).join(", ")}`],
     ["Тім-лід", `ставка — у кожного своя · ${S.lead?.pctLow} % / ${S.lead?.pctHigh} % від маржі команди без власних угод (план команди — з «Планів»)`],
     ["Аванс", `заявка з ${S.advance?.fromDay} числа до кінця місяця · менеджер — до ${S.advance?.managerPct} % маржі «Успішно реалізовано» · тім-лід — до ${S.advance?.leadPct} % маржі команди · ставка — до ${S.advance?.staffPct} % ставки · не більше нарахованого на дату заявки · при закритті місяця аванс вираховується`],
     ["Дні народження", `з кожного колеги ${num(S.birthday?.each)} ₴, автоматично (у місяці дня народження) · іменинник — збір + ${num(S.birthday?.company)} ₴ від компанії, тім-лід — ${num(S.birthday?.lead)} ₴ · стаж до року — ${num(S.birthday?.perMonth)} ₴ × відпрацьовані місяці + ${num(S.birthday?.company)} ₴ від компанії, без збору`],

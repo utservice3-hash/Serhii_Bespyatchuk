@@ -184,6 +184,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/training"), tabs: ["training"] },
     // 🧑‍💼 Найм (17.09.2026). Вкладка — ПЕРША межа; друга, всередині, — `hiringAccess` у роуті.
     { test: pre("/api/hiring"), tabs: ["hiring"] },
+    // 🎯 «Хантинг» (15.11.2026) — підвкладка «Найму»; поверх вкладки — ПОІМЕННИЙ список `hunt_access` у самому роутері.
+    { test: pre("/api/hunt"), tabs: ["hiring"] },
     // 🗂 Бізнес-асистент (задача 4314). Вкладка — перша межа; друга — `onlyBa` у кожному обробнику.
     { test: pre("/api/ba"), tabs: ["ba"] },
     // 💰 Фінанси (29.09.2026). Вкладка — перша межа; друга — `onlyFinance`/`canEdit`/`canApprove` першим оператором.

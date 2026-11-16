@@ -30,7 +30,7 @@ function stopsOf(c: Obj, S: Obj, ls: boolean): Array<[number, string, string, bo
   if (c.kind === "staff") return c.plan ? [[c.plan, `План компанії ${nf(c.plan)}`, ""]] : [];
   if (c.level === "start") {
     const s: Array<[number, string, string, boolean?]> = [[c.plan, `План ${nf(c.plan)}`, `→ ${S.start.pctHigh} %${ls ? " · крок до «Профі»" : ""}`]];
-    if (c.kpi && Math.abs(S.kpi.waiveFrom - c.plan) > c.plan * 0.12) s.push([S.kpi.waiveFrom, nf(S.kpi.waiveFrom), "· бонус без дзвінків", true]);
+    if (c.kpi && !c.kpi.strict && Math.abs(S.kpi.waiveFrom - c.plan) > c.plan * 0.12) s.push([S.kpi.waiveFrom, nf(S.kpi.waiveFrom), "· бонус без дзвінків", true]);
     return s;
   }
   const s: Array<[number, string, string, boolean?]> = [[S.profi.threshold, nf(S.profi.threshold), `→ ${S.profi.pct2} %`]];
@@ -145,7 +145,14 @@ function todoItems(me: Obj, go: Go, ex: Ex): Todo[] {
       const ladder = (S.kpi.ladder ?? []) as Array<[number, number]>;
       const curB = k.step ? k.step[1] : 0, nx = ladder.find((s) => s[0] > k.conv);
       if (nx && k.leads) { const need = Math.max(1, ceilE(nx[0] * k.leads / 100) - k.targetDeals); it.push({ v: nx[1] - curB, cls: "gain", imp: money(nx[1] - curB, { sign: true }), lbl: "до бонусу", h: `Ще ${need} ${plural(need, "цільова угода", "цільові угоди", "цільових угод")} — конверсія ${nx[0]} %`, p: `Зараз ${pc(k.conv)}: ${k.targetDeals} з ${k.leads} цільових звернень. Бонус ${money(nx[1])} замість ${money(curB)}.`, bar: k.conv / nx[0], color: "var(--info)", act: { label: "Мої звернення", run: () => ex.nav("ai-calls") } }); }
-      if (k.step && k.waived) it.push({ v: 2, cls: "done", imp: money(k.step[1]), lbl: "бонус", h: `Маржа від ${nf(S.kpi.waiveFrom)} ₴ — дзвінки не враховуються`, p: `Бонус за КПІ — лише за конверсією: ${pc(k.conv)} → сходинка ${k.step[0]} %.` });
+      if (k.strict) {
+        // офер: бонус — лише коли виконано обидві умови дзвінків і є від minLeads цільових звернень
+        const callsTxt = `${k.normDays} з ${k.need} днів по ${S.kpi.normCalls}+ дзвінків · успішних ${nf(k.successCalls)} з ${nf(k.minSuccessCalls)}`;
+        if (k.fewLeads) it.push({ v: 1, cls: "risk", imp: `${k.leads} / ${k.minLeads}`, lbl: "звернень", h: `Конверсія рахується від ${k.minLeads} цільових звернень`, p: `Зараз ${k.leads} — до ${k.minLeads} бонус за конверсію не нараховується.`, bar: k.minLeads ? k.leads / k.minLeads : 0, color: "var(--warn)", act: { label: "Мої звернення", run: () => ex.nav("ai-calls") } });
+        else if (k.step && k.done) it.push({ v: 2, cls: "done", imp: money(k.step[1]), lbl: "бонус", h: "КПІ виконано — бонус нараховано", p: `Конверсія ${pc(k.conv)} → сходинка ${k.step[0]} %. ${callsTxt}.` });
+        else if (k.step && k.reach) it.push({ v: k.step[1], cls: "risk", imp: money(k.step[1]), lbl: "умовно", h: "Бонус буде, коли виконаєте КПІ", p: `${callsTxt}. Поки КПІ не виконано, бонус у «зараз» не входить.`, bar: k.need ? k.normDays / k.need : 0, color: "var(--warn)", act: { label: "Дзвінки сьогодні", run: () => ex.nav("report") } });
+        else if (k.step) it.push({ v: k.step[1], cls: "risk", imp: money(k.step[1]), lbl: "не буде", h: "КПІ цього місяця вже не виконати", p: `${callsTxt}. Бонус за конверсію цього місяця не нараховується.`, bar: k.need ? k.normDays / k.need : 0, color: "var(--warn)", act: toDeals });
+      } else if (k.step && k.waived) it.push({ v: 2, cls: "done", imp: money(k.step[1]), lbl: "бонус", h: `Маржа від ${nf(S.kpi.waiveFrom)} ₴ — дзвінки не враховуються`, p: `Бонус за КПІ — лише за конверсією: ${pc(k.conv)} → сходинка ${k.step[0]} %.` });
       else if (k.step && !k.done && k.reach) { const rest = k.need - k.normDays; it.push({ v: k.step[1], cls: "risk", imp: money(k.step[1]), lbl: "зберегти", h: `Норма дзвінків ${S.kpi.normCalls}+ ще в ${rest} ${plural(rest, "день", "дні", "днів")} із ${k.left}`, p: `${k.normDays} з ${k.need} потрібних днів.${c.margin < S.kpi.waiveFrom ? ` Або маржа від ${nf(S.kpi.waiveFrom)} ₴ — ще ${money(S.kpi.waiveFrom - c.margin)}, тоді дзвінки не враховуються.` : ""}`, bar: k.need ? k.normDays / k.need : 0, color: "var(--warn)", act: { label: "Дзвінки сьогодні", run: () => ex.nav("report") } }); }
       else if (k.step && !k.done) it.push({ v: k.step[1], cls: "risk", imp: money(k.step[1]), lbl: "під ризиком", h: "Норму дзвінків цього місяця вже не набрати", p: `${k.normDays} з ${k.need} днів, лишилось ${k.left} ${plural(k.left, "день", "дні", "днів")}. Бонус ${money(k.step[1])} буде, лише якщо маржа дійде до ${nf(S.kpi.waiveFrom)} ₴ — ще ${money(Math.max(0, S.kpi.waiveFrom - c.margin))}.`, bar: c.margin / S.kpi.waiveFrom, color: "var(--warn)", act: toDeals });
     }
@@ -225,8 +232,11 @@ function partsOf(me: Obj, c: Obj, plan: boolean): Array<{ k: string; s: string; 
   if (c.kind !== "manager" || c.level === "start")
     out.push({ k: c.kind === "manager" ? `Ставка «Старт»${ls ? " · офер Лілії" : ""}` : c.kind === "lead" ? "Ставка тім-ліда" : "Ставка",
       s: !x.rate ? (e.leave && e.leave.date?.slice(0, 7) === c.month ? "звільнення: ставка не нараховується (п. 11 оферу)" : "—") : dy.total < dy.full ? `пропорційно: ${dy.total} з ${dy.full} робочих днів` : "за повний місяць", v: x.rate, color: "var(--text-muted)" });
-  if (c.kind !== "staff" || c.pctRule) out.push({ k: `Відсоток · ${pc(x.pct)}`, s: `від ${c.kind === "lead" ? "маржі команди" : c.kind === "staff" ? "маржі компанії" : "маржі"} ${money(plan ? c.marginPlan : c.margin)}`, v: x.pctAmount, color: "var(--brand)" });
-  if (c.kind === "manager" && c.kpi) { const k = c.kpi as Obj; out.push({ k: "Бонус за КПІ", s: k.noBonus ? "звільнення — без бонусу" : k.step ? `конверсія ${pc(k.conv)} → сходинка ${k.step[0]} %${x.bonus ? "" : " · без норми дзвінків — 0"}` : `конверсія ${pc(k.conv)} — нижче ${S.kpi.ladder?.[0]?.[0]} %`, v: x.bonus, color: "var(--info)" }); }
+  // свої клієнти з окремим відсотком — окремими рядками; основний відсоток — від решти маржі
+  const sp = (c.kind === "manager" && c.special ? c.special : { margin: 0, amount: 0, lines: [] }) as Obj;
+  if (c.kind !== "staff" || c.pctRule) out.push({ k: `Відсоток · ${pc(x.pct)}`, s: `від ${c.kind === "lead" ? "маржі команди" : c.kind === "staff" ? "маржі компанії" : sp.lines.length ? "решти маржі" : "маржі"} ${money((plan ? c.marginPlan : c.margin) - sp.margin)}`, v: x.pctAmount - sp.amount, color: "var(--brand)" });
+  for (const l of sp.lines as Obj[]) out.push({ k: `Свої клієнти · ${pc(l.pct)}`, s: `${l.name}: маржа ${money(l.margin)}`, v: Number(l.amount), color: "var(--brand)" });
+  if (c.kind === "manager" && c.kpi) { const k = c.kpi as Obj; out.push({ k: "Бонус за КПІ", s: k.noBonus ? "звільнення — без бонусу" : k.fewLeads ? `цільових звернень ${k.leads} з ${k.minLeads} — конверсія ще не рахується` : k.step ? `конверсія ${pc(k.conv)} → сходинка ${k.step[0]} %${x.bonus ? "" : k.strict ? (k.bonusPending && !plan ? ` · умовно ${money(k.bonusPending)} — після виконання КПІ` : " · КПІ не виконано — 0") : " · без норми дзвінків — 0"}` : `конверсія ${pc(k.conv)} — нижче ${S.kpi.ladder?.[0]?.[0]} %`, v: x.bonus, color: "var(--info)" }); }
   const bl = (c.birthdays ?? []) as Obj[], g = bl.find((b) => b.kind === "gift"), gv = bl.filter((b) => b.kind === "give");
   if (g) out.push({ k: `Ваш день народження · ${dd(g.date)}`, s: "нараховуємо автоматично", v: Number(g.amount), color: "var(--zp-gift)" });
   if (gv.length) out.push({ k: gv.length > 1 ? `Збір на дні народження колег · ${gv.length}` : "Збір на день народження колеги", s: `${gv.map((b) => `${b.who?.name ?? ""}, ${dd(b.date)}`).join("; ")} — ${nf(S.birthday.each)} ₴ з кожного, автоматично`, v: sumOf(gv), color: "var(--text-muted)" });

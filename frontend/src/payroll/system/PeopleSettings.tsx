@@ -28,6 +28,68 @@ function LevelTag({ level }: { level: string | null }) {
   return <span className={`zps-lvl ${level === "profi" ? "zps-lvl--profi" : ""}`}>{level === "profi" ? "Профі" : "Старт"}</span>;
 }
 
+/** Окремий відсоток за своїми клієнтами менеджера (без розголосу: задають фінансист і ОД). Діє одразу після збереження. */
+function ClientRates({ p, live, onDone }: { p: Obj; live: string; onDone: () => void }) {
+  const toast = useToast();
+  const rates = (p.clientRates ?? []) as Obj[];
+  const [q, setQ] = useState("");
+  const [found, setFound] = useState<Obj[] | null>(null);
+  const [pick, setPick] = useState<Obj | null>(null);
+  const [val, setVal] = useState("45");
+  const [from, setFrom] = useState<"now" | "next">("now");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function search() {
+    setErr(null); setPick(null);
+    if (q.trim().length < 2) { setErr("Введіть щонайменше 2 літери назви клієнта."); return; }
+    try { setFound(await payrollApi.clientSearch(q.trim())); } catch (e) { setErr(errText(e)); }
+  }
+  async function add() {
+    setErr(null);
+    const v = Number(val.replace(",", "."));
+    if (!pick) { setErr("Оберіть клієнта зі списку."); return; }
+    if (!(v > 0 && v <= 100)) { setErr("Відсоток — від 0 до 100."); return; }
+    setBusy(true);
+    try { await payrollApi.addClientRate(p.userId, { clientKey: pick.clientKey, clientName: pick.clientName, pct: v, from }); toast(`Окремий відсоток збережено: ${pick.clientName} — ${v} %.`); onDone(); }
+    catch (e) { setErr(errText(e)); } finally { setBusy(false); }
+  }
+  async function remove(r: Obj) {
+    setBusy(true);
+    try { await payrollApi.removeClientRate(p.userId, r.id); toast(`Знято: ${r.name}.`); onDone(); }
+    catch (e) { toast(errText(e), { error: true }); } finally { setBusy(false); }
+  }
+  return (
+    <Field label="Окремий відсоток за своїми клієнтами" hint="Маржа цих клієнтів рахується за своїм відсотком, решта — за шкалою рівня. Бачать фінансист, ОД, СЕО і сам менеджер у кабінеті.">
+      {rates.length ? (
+        <table className="zp-table"><tbody>
+          {rates.map((r) => (
+            <tr key={r.id ?? r.client}><td><b>{r.name}</b><div className="zp-hint">з {String(r.from).slice(5, 7)}.{String(r.from).slice(0, 4)}</div></td><td className="r">{pct(r.pct, 1)}</td>
+              <td className="r"><button className="zp-btn zp-btn--sm" disabled={busy || r.id == null} onClick={() => void remove(r)}>Зняти</button></td></tr>
+          ))}
+        </tbody></table>
+      ) : <div className="zp-hint">Немає — уся маржа за шкалою рівня.</div>}
+      <div className="zp-row" style={{ gap: 8, marginTop: 8 }}>
+        <input className="zp-input" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void search(); }} placeholder="назва клієнта" />
+        <button className="zp-btn" onClick={() => void search()}>Знайти</button>
+      </div>
+      {found && (found.length ? (
+        <select className="zp-select" value={pick?.clientKey ?? ""} onChange={(e) => setPick(found.find((x) => x.clientKey === e.target.value) ?? null)}>
+          <option value="">оберіть клієнта…</option>
+          {found.map((c) => <option key={c.clientKey} value={c.clientKey}>{c.clientName} · угод {c.deals}</option>)}
+        </select>
+      ) : <div className="zp-hint">Клієнтів з такою назвою в угодах немає.</div>)}
+      {pick && (
+        <div className="zp-row" style={{ gap: 8, marginTop: 8 }}>
+          <input className="zp-input zp-input--num" inputMode="decimal" value={val} onChange={(e) => setVal(e.target.value)} style={{ maxWidth: 90 }} /> <span>%</span>
+          <Seg items={[["now", `з ${monthTitle(live)}`], ["next", `з ${monthTitle(nextMonth(live))}`]]} value={from} onChange={setFrom} />
+          <button className="zp-btn zp-btn--primary" disabled={busy} onClick={() => void add()}>Додати</button>
+        </div>
+      )}
+      {err && <div className="zp-err">{err}</div>}
+    </Field>
+  );
+}
+
 function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org: Obj; live: string; settings: Obj; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const [f, setF] = useState({
@@ -102,6 +164,7 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
         <Field label="День народження"><input className="zp-input" value={f.birthday} onChange={(e) => set("birthday", e.target.value)} placeholder="дд.мм" /></Field>
       </div>
       <label className="zp-check"><input type="checkbox" checked={f.isFinance} onChange={(e) => set("isFinance", e.target.checked)} />Фінансист (його ЗП перевіряє ОД)</label>
+      {p.role === "manager" && <ClientRates p={p} live={live} onDone={onDone} />}
       <Field label="З якого місяця діють ставка, рівень, % і офіційна ЗП" hint="Посада, відділ, команда й дати змінюються одразу.">
         <Seg items={[["cur", `з поточного — ${monthTitle(live)}`], ["next", `з наступного — ${monthTitle(nextMonth(live))}`]]} value={from} onChange={setFrom} />
       </Field>
@@ -206,7 +269,7 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged }: { emp
                         {p.offer === "ls" && <div className="zp-hint">офер Лілії Шаврової</div>}</> : "—"}
                     </td>
                     <td className="r">{p.role === "manager" ? (p.level === "start" ? money(p.offer === "ls" ? S.offers?.ls?.startRate : S.start?.rate) : "—") : money(p.rate)}</td>
-                    <td>{p.role === "manager" ? "за рівнем" : p.role === "lead" ? `${S.lead?.pctLow} / ${S.lead?.pctHigh} % маржі команди` : p.pctRule ? `${pct(p.pctRule.value, 1)} маржі компанії` : "—"}</td>
+                    <td>{p.role === "manager" ? <>за рівнем{(p.clientRates ?? []).length ? <div className="zp-hint">+ окремий % за {(p.clientRates ?? []).length} {(p.clientRates ?? []).length === 1 ? "клієнтом" : "клієнтами"}</div> : null}</> : p.role === "lead" ? `${S.lead?.pctLow} / ${S.lead?.pctHigh} % маржі команди` : p.pctRule ? `${pct(p.pctRule.value, 1)} маржі компанії` : "—"}</td>
                     <td>{p.official ? <><b>{money(p.official.amount)}</b><div className="zp-hint">{p.official.deduct ? "вираховується з загальної" : "окремо, не вираховується"}</div></> : <span className="zp-hint">немає</span>}</td>
                     <td><OfferDocCell d={p.offerDoc as Obj | null} /></td>
                     <td>{bday(p.birthday)}</td>

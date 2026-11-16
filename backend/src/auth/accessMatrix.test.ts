@@ -34,6 +34,15 @@ const ADMIN_LEVEL_ROLES = new Set(["admin", "ceo", "opdir", "kvp", "financier"])
  * інакше це знову «непробована роль у deny», з якої й почався інцидент.
  */
 const ADMIN_DENIED_BY_PERM: Record<string, string> = {
+  "GET /api/hunt/radar": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
+  "GET /api/hunt/contacts/activity": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
+  "GET /api/hunt/candidates": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
+  "GET /api/hunt/candidates/:id": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
+  "POST /api/hunt/contacts/phones": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
+  "POST /api/hunt/candidates": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
+  "PATCH /api/hunt/candidates/:id": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
+  "POST /api/hunt/candidates/:id/stage": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
+  "POST /api/hunt/candidates/:id/comments": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
   // 💰 «Зарплата» (ТЗ §2): дії — лише з правом-ключем payroll_* (фінансист, ОД; рішення по незгоді — лише ОД); адмін сум не бачить.
   "PATCH /api/payroll/records/:month/:userId": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/records/:month/:userId/extras": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
@@ -44,6 +53,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/payroll/employees/:userId/leave": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/employees": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "PATCH /api/payroll/employees/:userId": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/employees/:userId/client-rates": "право-ключ «Зарплати» payroll_edit (окремий відсоток за своїми клієнтами, 13.11.2026) — у обробнику ДО читання тіла",
   "POST /api/payroll/archive/import": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/settings": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/departments": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",

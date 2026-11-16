@@ -6972,3 +6972,36 @@ export const setLinkedinQueuePaused = async (paused: boolean) => (await api.put<
 // 🤖 Бот «UTS Заявки» (черга LinkedIn): підключення власного акаунта.
 export const fetchLeadsBotMe = async () => (await api.get<{ configured: boolean; linked: boolean; inQueue: boolean; eligible: boolean; botUsername: string | null }>("/leads-bot/me")).data;
 export const createLeadsBotLink = async () => (await api.post<{ url: string; code: string; botUsername: string; expiresInSec: number }>("/leads-bot/link")).data;
+
+// ── 🎯 Хантинг (15.11.2026, ТЗ Івана) — `backend/src/core/hunt.ts`. Доступ поіменний: Іван, Сергій, Олександр. ──
+export type HuntStage = "picked" | "call" | "interview" | "approval" | "offer" | "hired" | "rejected";
+export interface HuntRadarRow {
+  key: string; face: string; company: string; phones: string[]; d1: number; d7: number; d30: number; cargo: number; lorry: number;
+  pricePct: number; top: { dir: string; n: number }[]; lastSeen: string; candidate: { id: number; stage: HuntStage } | null;
+}
+export interface HuntRadar {
+  days: number; rows: HuntRadarRow[]; dataUntil: string | null; stages: [string, string][];
+  totals: { offers: number; contacts: number; companies: number; notInFunnel: number; inFunnel: number };
+}
+export interface HuntCandidateRow {
+  id: number; full_name: string; company: string | null; phones: string[]; stage: HuntStage; stage_changed_at: string;
+  next_step: string | null; next_step_at: string | null; interest: string | null; reject_reason: string | null; last_comment: string | null;
+}
+export interface HuntTimelineItem { id: number; kind: "comment" | "stage"; text?: string; remind_at?: string | null; from_stage?: string | null; to_stage?: string; reason?: string | null; at: string; who: string | null }
+export interface HuntCandidate extends HuntCandidateRow {
+  position: string | null; specialization: string | null; salary_expectation: string | null; interview_at: string | null; created_at: string;
+  source: { from?: string; d7?: number; d30?: number; top?: { dir: string; n: number }[]; at?: string }; timeline: HuntTimelineItem[];
+}
+export const fetchHuntAccess = async () => (await api.get<{ allowed: boolean }>("/hunt/access")).data.allowed;
+export const fetchHuntRadar = async (p: { days: number; show: string; q: string; side: string }) =>
+  (await api.get<HuntRadar>("/hunt/radar", { params: p })).data;
+export const fetchHuntActivity = async (key: string) =>
+  (await api.get<{ days: { d: string; n: number }[]; top: { dir: string; n: number }[] }>("/hunt/contacts/activity", { params: { key } })).data;
+export const revealHuntPhones = async (key: string) => (await api.post<{ phones: string[] }>("/hunt/contacts/phones", { key })).data.phones;
+export const fetchHuntCandidates = async (p: { q?: string; archived?: boolean }) =>
+  (await api.get<{ rows: HuntCandidateRow[]; stages: [string, string][]; reasons: [string, string][] }>("/hunt/candidates", { params: { q: p.q ?? "", archived: p.archived ? "1" : "" } })).data;
+export const addHuntCandidate = async (key: string, interest: string) => (await api.post<{ id: number }>("/hunt/candidates", { key, interest })).data.id;
+export const fetchHuntCandidate = async (id: number) => (await api.get<HuntCandidate>(`/hunt/candidates/${id}`)).data;
+export const updateHuntCandidate = async (id: number, b: Record<string, string | null>) => (await api.patch(`/hunt/candidates/${id}`, b)).data;
+export const moveHuntCandidate = async (id: number, to: HuntStage, reason?: string) => (await api.post(`/hunt/candidates/${id}/stage`, { to, reason })).data;
+export const commentHuntCandidate = async (id: number, text: string, remindAt: string | null) => (await api.post(`/hunt/candidates/${id}/comments`, { text, remindAt })).data;

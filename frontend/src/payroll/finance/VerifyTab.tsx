@@ -160,7 +160,7 @@ function VerifyWindow({ mk, userId, S, ctx, onSaved, prev, next, onGo }: {
     pct: kind === "manager" ? (level === "start" ? (S ? `«Старт»: ${S.start.pctLow} / ${S.start.pctHigh} %` : "«Старт»") : S ? `«Профі»: ${S.profi.pct1} / ${S.profi.pct2} / ${S.profi.pct3} %` : "«Профі»")
       : kind === "lead" ? (S ? `від маржі команди: ${S.lead.pctLow} % — план не виконано, ${S.lead.pctHigh} % — виконано` : "від маржі команди") : "від маржі компанії",
     rate: c.days && c.days.total < c.days.full ? `${c.days.total} з ${c.days.full} днів` : "повний місяць",
-    bonus: c.kpi ? `конверсія ${pct(c.kpi.conv, 1)} (${c.kpi.targetDeals} з ${c.kpi.leads}) · норма ${c.kpi.normDays} з ${c.kpi.need} днів${c.kpi.waived ? ` · маржа від ${num(S?.kpi?.waiveFrom ?? 50000)} — без дзвінків` : ""}${c.kpi.noBonus ? " · звільнення: без бонусу" : ""}` : "",
+    bonus: c.kpi ? `конверсія ${pct(c.kpi.conv, 1)} (${c.kpi.targetDeals} з ${c.kpi.leads}${c.kpi.fewLeads ? ` — менше ${c.kpi.minLeads} цільових, не рахується` : ""}) · норма ${c.kpi.normDays} з ${c.kpi.need} днів${c.kpi.strict ? ` · успішних дзвінків ${num(c.kpi.successCalls)} з ${num(c.kpi.minSuccessCalls)}${c.kpi.done ? " · КПІ виконано" : " · КПІ не виконано — без бонусу"}` : ""}${c.kpi.waived ? ` · маржа від ${num(S?.kpi?.waiveFrom ?? 50000)} — без дзвінків` : ""}${c.kpi.noBonus ? " · звільнення: без бонусу" : ""}` : "",
   };
 
   async function save() {

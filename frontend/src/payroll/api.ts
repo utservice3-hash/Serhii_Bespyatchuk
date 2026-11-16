@@ -83,6 +83,10 @@ export const payrollApi = {
   employees: () => g("/payroll/employees"),
   addEmployee: (body: Obj) => p("/payroll/employees", body),
   updateEmployee: async (userId: string | number, body: Obj) => (await api.patch(`/payroll/employees/${userId}`, body)).data,
+  // окремий відсоток за своїми клієнтами менеджера (фінансист і ОД)
+  clientSearch: (q: string) => g<Obj[]>("/payroll/client-search", { q }),
+  addClientRate: (userId: string | number, body: { clientKey: string; clientName: string; pct: number; from: "now" | "next" }) => p(`/payroll/employees/${userId}/client-rates`, body),
+  removeClientRate: async (userId: string | number, id: number) => { await api.delete(`/payroll/employees/${userId}/client-rates/${id}`); },
   saveDepartment: (body: Obj) => p("/payroll/departments", body),
   saveTeam: (body: Obj) => p("/payroll/teams", body),
   history: (userId?: string | number) => g<Obj[]>("/payroll/history", userId ? { userId } : undefined),

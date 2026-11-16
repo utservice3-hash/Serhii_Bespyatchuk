@@ -54,7 +54,7 @@ export default function ForecastTab({ ctx }: { ctx: PayrollCtx }) {
   ];
 
   const detail = (x: Obj) => x.kind === "plan" ? `до плану ще ${money(x.gap)}: потрібно ~${money(x.need)} маржі на день, зараз у середньому ~${money(x.avg)}`
-    : x.kind === "calls" ? `норму дзвінків уже не набрати (${x.calls?.normDays ?? "—"} з ${x.calls?.need ?? "—"} днів) — бонус лише якщо маржа дійде до ${money(S.kpi?.waiveFrom)}`
+    : x.kind === "calls" ? (S.kpi?.offerFrom ? `КПІ за офером уже не виконати (норма ${x.calls?.normDays ?? "—"} з ${x.calls?.need ?? "—"} днів) — бонусу не буде` : `норму дзвінків уже не набрати (${x.calls?.normDays ?? "—"} з ${x.calls?.need ?? "—"} днів) — бонус лише якщо маржа дійде до ${money(S.kpi?.waiveFrom)}`)
     : x.kind === "ttn" ? `ТТН ${x.ttn?.done ?? "—"} з ${x.ttn?.total ?? "—"} (${pct(x.ttn?.pct, 1)}), є угоди без ТТН понад тиждень`
     : x.kind === "clearance" ? `підписано ${x.clearance?.done ?? 0} з ${x.clearance?.total ?? 8} пунктів обхідного листа — фінальна виплата заблокована`
     : x.kind === "dispute" ? `${low(x.month)}: ${x.text ? `«${x.text}»` : "не погоджується з розрахунковим листом"}${x.at ? ` · ${ddmm(x.at)}` : ""} — чекає відповіді фінансиста або рішення ОД`
