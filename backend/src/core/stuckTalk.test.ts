@@ -243,6 +243,27 @@ test("#73c RINGOSTAT ГАСИТЬ, КОЛИ У КЛІЄНТА ОДНА ВІДК�
   });
 });
 
+test("#7735 РОЗМОВИ РАХУЮТЬСЯ ЛИШЕ ДЛЯ КЛІЄНТІВ ІЗ ВІДКРИТОЮ УГОДОЮ — і для всіх таких", async (t) => {
+  await withScratch(t, async (c, now) => {
+    // Двоє, кому в агрегаті робити нічого: клієнт без угод узагалі і клієнт, чия єдина угода закрита.
+    await c.query(`INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,created_at_kommo)
+                   VALUES (399,'закрита',10,8921932,142,1000,'лишезакрита',$1)`, [new Date(now - 100 * DAY)]);
+    for (const [u, ck] of [["g1", "безугод"], ["g2", "лишезакрита"]])
+      await c.query(`INSERT INTO ringostat_calls (uniqueid,calldate,call_type,billsec,duration,client_key)
+                     VALUES ($1,$2,'in',120,120,$3)`, [u, new Date(now - 2 * H), ck]);
+    const r = await c.query<{ client_key: string }>(
+      `WITH ${ringostatTalkCte({ pipelines: "$1" })} SELECT client_key FROM talk ORDER BY 1`, [FC]);
+    const got = r.rows.map((x) => x.client_key).sort();
+    for (const ghost of ["безугод", "лишезакрита"])
+      assert.ok(!got.includes(ghost),
+        `🔴 у talk потрапив «${ghost}», у якого немає відкритої FC-угоди: агрегат знову рахується `
+        + "по всіх клієнтах, і запит екрана повертається до 2 с замість 0,4");
+    // 🪞 Дзеркало: звуження не має зʼїсти тих, заради кого CTE існує.
+    assert.deepEqual(got, ["розмовдва", "розмоводин", "розмовстар"].sort(),
+      "🔴 з talk зникли клієнти з відкритою угодою і розмовою — Ringostat перестав би гасити угоди");
+  });
+});
+
 test("#73d КІЛЬКА ВІДКРИТИХ УГОД — РОЗМОВА НЕ ГАСИТЬ ЖОДНОЇ", async (t) => {
   await withScratch(t, async (c, now) => {
     await c.query(`INSERT INTO job_runs (name,last_success_at)

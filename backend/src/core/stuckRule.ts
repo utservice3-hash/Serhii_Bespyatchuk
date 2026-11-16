@@ -302,19 +302,30 @@ export function stuckBaseConds(o: StuckRuleOpts): string[] {
  * CTE віддає два стовпці на клієнта: коли була остання РОЗМОВА і скільки в нього
  * відкритих FC-угод. Рахується один раз на весь запит, а не LATERAL-ом на рядок.
  */
+/**
+ * ⏱ `talk` РАХУЄТЬСЯ ЛИШЕ ДЛЯ КЛІЄНТІВ ІЗ ВІДКРИТОЮ FC-УГОДОЮ (16.11.2026, `#7735`).
+ *
+ * Список будується з відкритих FC-угод, а це рівно ті клієнти, що є в `open_cnt`. Розмова
+ * клієнта без відкритої угоди до жодного рядка приєднатись не може, тож її агрегат — робота
+ * в нікуди. Заміряно на проді 16.11.2026: плановик оцінював угоди в 1 рядок при 564
+ * фактичних і перебирав увесь агрегат розмов (24,6 тис. клієнтів) на кожну угоду —
+ * 13,9 млн відкинутих пар, 2,1 с. Зі звуженням: 0,37 с, ті самі 52 рядки байт-у-байт.
+ * Тому `open_cnt` стоїть ПЕРШИМ: `talk` на нього посилається.
+ */
 export function ringostatTalkCte(o: { pipelines: string }): string {
-  return `talk AS (
-      SELECT c.client_key, MAX(c.calldate) AS talk_at
-        FROM ringostat_calls c
-       WHERE c.billsec > 0 AND c.client_key IS NOT NULL
-       GROUP BY c.client_key
-    ), open_cnt AS (
+  return `open_cnt AS (
       SELECT d.client_key, count(*) AS n
         FROM deals d
         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
        WHERE d.client_key IS NOT NULL AND d.pipeline_id = ANY(${o.pipelines})
          AND psm.funnel_stage <> 'paid'
        GROUP BY d.client_key
+    ), talk AS (
+      SELECT c.client_key, MAX(c.calldate) AS talk_at
+        FROM ringostat_calls c
+       WHERE c.billsec > 0 AND c.client_key IS NOT NULL
+         AND c.client_key IN (SELECT oc0.client_key FROM open_cnt oc0)
+       GROUP BY c.client_key
     )`;
 }
 
