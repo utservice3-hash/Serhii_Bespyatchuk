@@ -267,6 +267,9 @@ test("#3316 ЖИВА БД: клієнти з реклами — кампанії
   assert.equal(Math.round(sum("regularMargin") * 100), Math.round(regulars.reduce((s, c) => s + c.margin, 0) * 100), "🔴 маржа постійних не сходиться");
   assert.ok(r.campaigns.every((c) => c.vip + c.regularSeg + c.episodic <= c.regular), "🔴 типів більше, ніж постійних");
   assert.equal(new Set(r.clients.map((c) => c.clientKey)).size, r.clients.length, "🔴 клієнт двічі в списку");
-  assert.ok(r.clients.every((c) => c.repeatMargin <= c.margin + 0.01), "🔴 повторні більші за весь LTV клієнта");
+  // Повторні = LTV − перша угода. Перша угода буває мінусовою (на проді 16.11 такі є) — тоді повторні законно більші за LTV,
+  // тож межа «не більше LTV» діє лише для неувідʼємної першої угоди.
+  assert.ok(r.clients.every((c) => Math.abs(c.repeatMargin - (c.margin - c.firstMargin)) < 0.01), "🔴 повторні ≠ LTV мінус перша угода");
+  assert.ok(r.clients.every((c) => c.firstMargin < 0 || c.repeatMargin <= c.margin + 0.01), "🔴 повторні більші за LTV при невідʼємній першій угоді");
   assert.equal(r.cohorts.reduce((s, c) => s + c.clients, 0), r.totals.clients, "🔴 когорти не сходяться з плиткою");
 });
