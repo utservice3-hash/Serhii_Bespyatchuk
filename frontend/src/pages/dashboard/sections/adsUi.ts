@@ -56,3 +56,9 @@ export const campKey = (name: string) => name.trim()
   .replace(/\s+\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?$/, "")
   .replace(/[\s_]+/g, "_")
   .toLowerCase();
+
+/**
+ * Назва кампанії з місцями переносу після «_», «.», «-»: у назвах Google немає пробілів, і без цього рядок або
+ * розпирав таблицю, або ламався посеред слова («gruza.t|onaj»).
+ */
+export const wrapName = (name: string) => name.replace(/([_.\-])/g, "$1​");

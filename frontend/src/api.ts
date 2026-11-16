@@ -1400,26 +1400,39 @@ export interface AdsReport {
    * клієнтів за весь час (і не з реклами теж) — з неї LTV. Відсутнє — старий сервер: колонок клієнтів немає.
    */
   campaignClients?: { campaign: string | null; clients: number; regular: number; vip: number; regularSeg: number; episodic: number;
-                      margin: number; regularMargin: number }[];
+                      margin: number; regularMargin: number; repeatMargin?: number; deals?: number }[];
 }
 
-/** 👥 Постійний клієнт з реклами (вкладка «Постійні клієнти з реклами», #8709). */
-export interface AdsRegularClient {
+/**
+ * 👥 Клієнт з реклами (вкладка «Постійні клієнти з реклами», #8709/#8704) — заплатив хоч раз після першого рекламного ліда.
+ * Групи — ті самі, що в блоці «LTV клієнтів лідогенерації» (`LtvGroup`): постійний × працює зараз.
+ */
+export interface AdsClient {
   clientKey: string; name: string;
   /** Кампанія ПЕРШОГО рекламного ліда клієнта; null — прийшов без мітки (органіка/дзвінок). */
   campaign: string | null;
   firstLead: string;              // YYYY-MM-DD
   segment: "vip" | "regular" | "episodic" | "unknown";
+  state: "active" | "sleeping" | "lost" | null;
+  qualified: boolean;             // постійний за ядром: 2+ успішні угоди
+  group: LtvGroup;
   deals: number;                  // успішних угод від першого ліда
-  margin: number;                 // маржа від першого ліда до сьогодні — і не з реклами теж
+  margin: number;                 // LTV: маржа від першого ліда до сьогодні — і не з реклами теж
+  repeatMargin: number;           // з неї — повторні замовлення (усе після першої оплаченої угоди)
+}
+/** Агрегат групи клієнтів (кампанія / когорта / разом) — рахує сервер (`core/adClientsFold.ts`). */
+export interface AdsClientsAgg {
+  clients: number; regular: number; active: number; vip: number; regularSeg: number; episodic: number;
+  margin: number; regularMargin: number; repeatMargin: number; deals: number; regularDeals: number;
+  mix: Record<LtvGroup, number>;
 }
 export interface AdsClientsReport {
   from: string; to: string;
-  /** Ті самі рядки, що `campaignClients`, для клієнтів із першим лідом у [from, to] — зведення по кампаніях. */
-  campaigns: NonNullable<AdsReport["campaignClients"]>;
-  /** Усі клієнти з реклами з першим лідом у [from, to] (не лише постійні) — для плиток. */
-  totals: { clients: number; margin: number };
-  regulars: AdsRegularClient[];
+  campaigns: (AdsClientsAgg & { campaign: string | null })[];
+  /** Когорта — місяць ПЕРШОГО рекламного ліда клієнта. */
+  cohorts: (AdsClientsAgg & { ym: string })[];
+  totals: AdsClientsAgg;
+  clients: AdsClient[];
 }
 /** `from`/`to` — коли прийшов ПЕРШИЙ рекламний лід клієнта; маржа (LTV) — від першого ліда до сьогодні. */
 export async function fetchAdsClients(from: string, to: string): Promise<AdsClientsReport> {

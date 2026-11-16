@@ -6235,11 +6235,13 @@ dashboardRouter.get("/ads/clients", async (req, res) => {
   const to = dateParam(req.query.to) ?? today;
   const { adSources } = await getSettings();
   const r = await adClients(from, to, adSources);
+  // 🔁 #8704: клієнти (не лише постійні) — для фільтрів «Стали постійними / Працюють зараз», як у блоці LTV лідгенів.
   res.json({
-    from: r.from, to: r.to, campaigns: r.campaigns, totals: r.totals,
-    regulars: r.regulars.map((c) => ({
+    from: r.from, to: r.to, campaigns: r.campaigns, cohorts: r.cohorts, totals: r.totals,
+    clients: r.clients.map((c) => ({
       clientKey: c.clientKey, name: c.name, campaign: c.campaign, firstLead: c.firstLead,
-      segment: c.segment, deals: c.deals, margin: c.margin,
+      segment: c.segment, state: c.state, qualified: c.qualified, group: c.group,
+      deals: c.deals, margin: c.margin, repeatMargin: c.repeatMargin,
     })),
   });
 });

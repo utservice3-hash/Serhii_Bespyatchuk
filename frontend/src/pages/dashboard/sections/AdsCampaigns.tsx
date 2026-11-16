@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchAds, type AdsReport } from "../../../api";
 import { todayKyiv } from "../periodRules";
-import { TH, TH_L, TD, TD_L, LAB, DIM, CARD, money, dayLabel, times, HINT_EARNED, campKey } from "./adsUi";
+import { TH, TH_L, TD, TD_L, LAB, DIM, CARD, money, dayLabel, times, HINT_EARNED, campKey, wrapName } from "./adsUi";
 
 /**
  * 📊 АНАЛІТИКА КАМПАНІЙ (задача #8709, зустріч 09.11.2026: «які кампанії за весь час зʼїли найбільше грошей, скільки дали
@@ -106,9 +106,9 @@ export function AdsCampaigns({ data, from, to }: { data: AdsReport; from: string
     const x = times(r.earned, r.cost);
     return (
       <tr key={r.key} style={isUntagged ? { color: "var(--rpt-muted, #8a8f98)" } : undefined}>
-        <td style={{ ...TD_L, whiteSpace: "normal", wordBreak: "break-word", maxWidth: 260, lineHeight: 1.3 }}
+        <td style={{ ...TD_L, whiteSpace: "normal", maxWidth: 280, lineHeight: 1.3 }}
             title={isUntagged ? "Угоди без мітки кампанії, а також «(organic)», «(direct)», «(referral)», «(not set)»" : undefined}>
-          {r.campaign}
+          {isUntagged ? r.campaign : wrapName(r.campaign)}
           <div style={SUB}>{isUntagged ? "клієнти без жодної рекламної мітки" : r.cost === 0 ? "у періоді не крутилась" : r.channelGroup ?? ""}</div>
         </td>
         <td style={TD}>

@@ -262,8 +262,11 @@ test("#3316 ЖИВА БД: клієнти з реклами — кампанії
   if (skip) return t.skip(skip);
   const sum = (k: "clients" | "regular" | "regularMargin") => r.campaigns.reduce((s, c) => s + c[k], 0);
   assert.equal(sum("clients"), r.totals.clients, "🔴 клієнти по кампаніях ≠ плитці — клієнт подвоївся чи загубився");
-  assert.equal(sum("regular"), r.regulars.length, "🔴 постійні по кампаніях ≠ списку постійних");
-  assert.equal(Math.round(sum("regularMargin") * 100), Math.round(r.regulars.reduce((s, c) => s + c.margin, 0) * 100), "🔴 маржа постійних не сходиться");
+  const regulars = r.clients.filter((c) => c.qualified);
+  assert.equal(sum("regular"), regulars.length, "🔴 постійні по кампаніях ≠ списку постійних");
+  assert.equal(Math.round(sum("regularMargin") * 100), Math.round(regulars.reduce((s, c) => s + c.margin, 0) * 100), "🔴 маржа постійних не сходиться");
   assert.ok(r.campaigns.every((c) => c.vip + c.regularSeg + c.episodic <= c.regular), "🔴 типів більше, ніж постійних");
-  assert.equal(new Set(r.regulars.map((c) => c.clientKey)).size, r.regulars.length, "🔴 клієнт двічі в списку постійних");
+  assert.equal(new Set(r.clients.map((c) => c.clientKey)).size, r.clients.length, "🔴 клієнт двічі в списку");
+  assert.ok(r.clients.every((c) => c.repeatMargin <= c.margin + 0.01), "🔴 повторні більші за весь LTV клієнта");
+  assert.equal(r.cohorts.reduce((s, c) => s + c.clients, 0), r.totals.clients, "🔴 когорти не сходяться з плиткою");
 });

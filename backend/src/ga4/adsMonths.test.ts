@@ -4,7 +4,7 @@ import { mergeAdDays, mergeAdMonths } from "./report.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { adCampaignTagSql, dealCampaignSql, GENERIC_CLIENT_KEYS_SQL, LEAD_PARENT_JOIN, NOT_A_CAMPAIGN } from "../core/adCampaign.js";
-import { foldAdClients } from "../core/adClientsFold.js";
+import { adClientGroupOf, foldAdClients } from "../core/adClientsFold.js";
 
 /**
  * #3315 — ОКУПНІСТЬ ПО МІСЯЦЯХ І «ЗАРОБИЛИ ЛІДИ ДНЯ» (задача #8702, зустріч 09.11.2026).
@@ -48,7 +48,7 @@ test("#3315b МІТКА КАМПАНІЇ: не-кампанії → NULL, спе
  */
 test("#3316b КЛІЄНТИ З РЕКЛАМИ: постійний = qualified ядра, типи — segment ядра, Σ кампаній == плитці", () => {
   const c = (key: string, campaign: string | null, qualified: boolean, segment: "vip" | "regular" | "episodic" | "unknown", margin: number) =>
-    ({ clientKey: key, name: key, campaign, firstLead: "2026-10-01", segment, qualified, deals: qualified ? 3 : 1, margin });
+    ({ clientKey: key, name: key, campaign, firstLead: "2026-10-01", segment, state: null, qualified, deals: qualified ? 3 : 1, margin, firstMargin: 1000 });
   const r = foldAdClients([
     c("a", "S", true, "vip", 50000), c("b", "S", true, "unknown", 7000), c("c", "S", false, "unknown", 2000),
     c("d", null, true, "episodic", 9000), c("e", "P", false, "regular", 4000),
@@ -58,7 +58,7 @@ test("#3316b КЛІЄНТИ З РЕКЛАМИ: постійний = qualified я
     "🔴 кампанія S: лічильники чи маржа не ті («ще без типу» не має йти в типи)");
   const P = r.campaigns.find((x) => x.campaign === "P")!;
   assert.equal(P.regular, 0, "🔴 непостійний (qualified=false) з сегментом «regular» зарахований у постійні");
-  assert.deepEqual([r.totals.clients, r.totals.margin, r.regulars.length], [5, 72000, 3], "🔴 плитки не сходяться з кампаніями");
+  assert.deepEqual([r.totals.clients, r.totals.margin, r.clients.filter((x) => x.qualified).length], [5, 72000, 3], "🔴 плитки не сходяться з кампаніями");
   assert.equal(r.campaigns.reduce((s, x) => s + x.clients, 0), r.totals.clients);
 });
 
@@ -75,4 +75,24 @@ test("#3316c КАМПАНІЯ КЛІЄНТА: (referral) не кампанія, 
   assert.ok(m, "🔴 не знайдено GENERIC_CLIENT_KEYS у metrics.js");
   const keys = m![1].split(",").map((x) => x.trim().replace(/^"|"$/g, ""));
   assert.equal(GENERIC_CLIENT_KEYS_SQL, `ARRAY[${keys.map((k) => `'${k}'`).join(",")}]`, "🔴 копія ключів-заглушок розійшлась із metrics");
+});
+
+/**
+ * #3317b — ПОВТОРНІ ЗАМОВЛЕННЯ, ГРУПИ Й КОГОРТИ (#8704, зустріч 12.11.2026: «скільки постійні принесли після першого
+ * замовлення», «скільки разів у середньому замовляє», «як у лідгенів»). 🧨 Червоніє, якщо повторні почнуть включати
+ * першу угоду, групи розійдуться з блоком LTV лідгенів (постійний × «активний»), або когорта візьме не місяць першого ліда.
+ */
+test("#3317b ПОВТОРНІ ЗАМОВЛЕННЯ: повторні = LTV − перша угода, групи як у лідгенів, когорта — місяць першого ліда", () => {
+  const c = (key: string, ym: string, qualified: boolean, state: "active" | "sleeping" | "lost" | null, deals: number, margin: number, first: number) =>
+    ({ clientKey: key, name: key, campaign: "S", firstLead: `${ym}-05`, segment: "unknown" as const, state, qualified, deals, margin, firstMargin: first });
+  const r = foldAdClients([
+    c("a", "2026-03", true, "active", 6, 30000, 4000), c("b", "2026-03", true, "sleeping", 2, 9000, 5000),
+    c("c", "2026-04", false, "active", 1, 3000, 3000), c("d", "2026-04", false, "lost", 1, 2000, 2000),
+  ], "2026-01-01", "2026-11-16");
+  assert.deepEqual([r.totals.repeatMargin, r.totals.deals, r.totals.regularDeals, r.totals.active], [30000, 10, 8, 2],
+    "🔴 повторні не дорівнюють LTV мінус першу угоду, або угоди/«працюють зараз» пораховано не так");
+  assert.deepEqual(r.totals.mix, { rw: 1, rs: 1, ow: 1, os: 1 }, "🔴 групи складу розійшлись із блоком LTV лідгенів");
+  assert.equal(adClientGroupOf({ qualified: true, state: null }), "rs", "🔴 постійний без стану має бути «не замовляє», а не «працює»");
+  assert.deepEqual(r.cohorts.map((x) => [x.ym, x.clients, x.regular]), [["2026-03", 2, 2], ["2026-04", 2, 0]], "🔴 когорта — не місяць першого ліда");
+  assert.deepEqual(r.clients.map((x) => x.repeatMargin), [26000, 4000, 0, 0], "🔴 повторні по клієнту пораховано не так");
 });

@@ -39,10 +39,12 @@ export const AD_CLIENTS_SQL = `
   )
   SELECT f.client_key, f.campaign, COALESCE(NULLIF(btrim(f.client_name), ''), f.client_key) AS name,
          to_char((f.lead_at AT TIME ZONE 'Europe/Kyiv')::date, 'YYYY-MM-DD') AS first_lead,
-         pm.deals, pm.margin
+         pm.deals, pm.margin, pm.first_margin
     FROM first f
     LEFT JOIN LATERAL (
-      SELECT COUNT(*)::int AS deals, COALESCE(SUM(p.price), 0) AS margin
+      SELECT COUNT(*)::int AS deals, COALESCE(SUM(p.price), 0) AS margin,
+             -- 🔁 #8704: маржа ПЕРШОЇ оплаченої угоди після першого ліда; решта — повторні замовлення.
+             COALESCE((ARRAY_AGG(p.price ORDER BY COALESCE(p.closed_at_kommo, p.created_at_kommo), p.kommo_id))[1], 0) AS first_margin
         FROM deals p
         JOIN pipeline_stage_map psm ON psm.pipeline_id = p.pipeline_id AND psm.status_id = p.status_id
        WHERE p.client_key = f.client_key AND psm.funnel_stage = 'paid'
@@ -54,16 +56,16 @@ export const AD_CLIENTS_SQL = `
 
 export async function adClients(from: string, to: string, adSources: string[]): Promise<AdClientsReport> {
   const [rows, segments] = await Promise.all([
-    pool.query<{ client_key: string; campaign: string | null; name: string; first_lead: string; deals: number; margin: string }>(
-      AD_CLIENTS_SQL, [adSources, from, to]),
+    pool.query<{ client_key: string; campaign: string | null; name: string; first_lead: string; deals: number; margin: string;
+                 first_margin: string }>(AD_CLIENTS_SQL, [adSources, from, to]),
     loadClientSegments(),
   ]);
   const clients: AdClient[] = rows.rows.map((r) => {
     const seg = segments.get(r.client_key);
     return {
       clientKey: r.client_key, name: r.name, campaign: r.campaign, firstLead: r.first_lead,
-      segment: seg?.segment ?? "unknown", qualified: seg?.qualified ?? false,
-      deals: Number(r.deals ?? 0), margin: Number(r.margin ?? 0),
+      segment: seg?.segment ?? "unknown", state: seg?.state ?? null, qualified: seg?.qualified ?? false,
+      deals: Number(r.deals ?? 0), margin: Number(r.margin ?? 0), firstMargin: Number(r.first_margin ?? 0),
     };
   });
   return foldAdClients(clients, from, to);
