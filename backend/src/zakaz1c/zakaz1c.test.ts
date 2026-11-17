@@ -178,7 +178,7 @@ test("#7104 ВІДПОВІДЬ 1С: state:false — помилка словам�
 test("#7105 ВІДЖЕТ: вкладка card_sdk + lcard-0, `{}` лише тестувальникам, запити лише підписаним каналом, секретів немає", () => {
   const manifest = JSON.parse(WIDGET("manifest.json"));
   assert.ok(manifest.locations.includes("card_sdk") && manifest.locations.includes("lcard-0"), "без card_sdk/lcard-0 вкладки не буде");
-  assert.equal(JSON.parse(WIDGET("i18n/ru.json")).widget.name, "Закритий ТЕСТ 1С");
+  assert.equal(JSON.parse(WIDGET("i18n/ru.json")).widget.name, "Рахунок 1С");
   const js = WIDGET("script.js");
   assert.match(js, /if \(!allowedHere\(\)\) return Promise\.resolve\(\[\]\);/, "не-тестувальнику вкладка не прибирається");
   assert.match(js, /return t\.length === 0 \|\| t\.indexOf\(me\(\)\) !== -1;/, "порожній список тестувальників не відкриває вкладку всім");
