@@ -328,7 +328,7 @@ test("#956 ЦИТАТА: лише зі слів співрозмовника; ф
     carrierBucket({ caller_role: role, caller_role_confidence: conf, quote_check: qc });
   assert.equal(b(0.85, "counterpart"), "carrier");
   assert.equal(b(0.8499, "counterpart"), "low", "🔴 поріг 0,85 поплив");
-  assert.equal(b(0.95, "manager"), "low", "🔴 упевнений вердикт на фразі менеджера");
+  assert.equal(b(0.88, "manager"), "low", "🔴 упевнений вердикт на фразі менеджера (у смузі 0,85–0,90 цитата обовʼязкова)");
   assert.equal(b(0.95, "empty", "other"), "other", "дзеркало: «інше» цитати не вимагає");
   assert.equal(b(0.4, "counterpart", "unclear"), "unclear");
   const bad = interpretCarrier({ text: JSON.stringify({ ...r("x"), caller_role_confidence: 1.2 }), finishReason: "STOP", blockReason: null, usage: null }, turns);
@@ -547,7 +547,7 @@ async function seedClose(c: Raw, base: number) {
   await mk(1, "carrier", 0.95, "counterpart");     // кандидат
   await mk(2, "carrier", 0.84, "counterpart");     // нижче порогу
   await mk(3, "client", 0.95, "counterpart");      // клієнт
-  await mk(4, "carrier", 0.95, "manager");         // цитата менеджера
+  await mk(4, "carrier", 0.88, "manager");         // цитата менеджера (0,85–0,90: без доказу не закриваємо)
   await mk(5, "carrier", 0.95, "counterpart");     // уже не на етапі
   await c.raw.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state,reused_from)
     VALUES ($1,$2,$3,$4,'reused',$5)`, [base + 6, phone(base, 1), min(100).toISOString(), NOW.toISOString(), base + 1]);
@@ -702,7 +702,7 @@ async function seedDecide(c: Raw, base: number) {
       ON CONFLICT (kommo_id) DO UPDATE SET status_id = EXCLUDED.status_id`, [base + n, P, status, min(301 - n).toISOString()]);
   };
   await mk(1, "carrier", 0.78, "counterpart");        // невпевнено → у черзі
-  await mk(2, "carrier", 0.95, "manager");            // цитата менеджера → у черзі
+  await mk(2, "carrier", 0.88, "manager");            // цитата менеджера (0,85–0,90) → у черзі
   await mk(3, "unclear", 0.3, "empty");               // не чути → у черзі
   await mk(4, "carrier", 0.95, "counterpart");        // упевнений → не в черзі (закриває автоматика)
   await mk(5, "client", 0.95, "counterpart");         // упевнений клієнт → не в черзі
@@ -782,8 +782,8 @@ test("#1043 ЧОМУ НЕ ВПЕВНЕНИЙ: чотири різні причи
   const w = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"]) =>
     whyUncertain({ caller_role: role, caller_role_confidence: conf, quote_check: qc });
   assert.equal(w("carrier", 0.8, "counterpart"), "впевненість нижче 85%");
-  assert.equal(w("carrier", 0.95, "manager"), "доказ — слова менеджера, а не того, хто дзвонив");
-  assert.equal(w("client", 0.95, "absent"), "у розмові немає фрази-доказу");
+  assert.equal(w("carrier", 0.88, "manager"), "доказ — слова менеджера, а не того, хто дзвонив");
+  assert.equal(w("client", 0.88, "absent"), "у розмові немає фрази-доказу");
   assert.equal(w("unclear", 0.3, "empty"), "розмову не розібрати");
   assert.equal(w("carrier", 0.95, "counterpart"), null, "🔴 упевнений вердикт отримав причину — потрапить у чергу");
   assert.equal(w("other", 0.9, "empty"), null);
@@ -1431,7 +1431,7 @@ test("#1077 КАТЕГОРІЯ: людина > AI; поріг 0,85 з обох �
   assert.deepEqual(cat({ ...base, human: "client", result: r("carrier", 0.99), ai: "done" }), ["client", "human"], "🔴 AI переважив людину");
   assert.deepEqual(cat({ ...base, result: r("carrier", 0.85), ai: "done" }), ["carrier", "ai"]);
   assert.deepEqual(cat({ ...base, result: r("carrier", 0.8499), ai: "done" }), ["review", null], "🔴 невпевнений став категорією");
-  assert.deepEqual(cat({ ...base, result: r("client", 0.95, "manager"), ai: "done" }), ["review", null], "🔴 цитата менеджера — упевнений клієнт");
+  assert.deepEqual(cat({ ...base, result: r("client", 0.88, "manager"), ai: "done" }), ["review", null], "🔴 цитата менеджера (0,85–0,90) — упевнений клієнт");
   assert.deepEqual(cat({ ...base, result: r("other", 0.9, "empty"), ai: "done" }), ["other", "ai"], "дзеркало: «Інше» цитати не вимагає");
   assert.deepEqual(cat({ ...base, result: r("unclear", 0.3, "empty"), ai: "done" }), ["review", null]);
   assert.deepEqual(cat({ ...base, dealState: "no_talk" }), ["no_talk", null], "🔴 угоду без розмови віддано людині на перевірку");
@@ -2241,4 +2241,61 @@ test("#1788b СТРОК ЗАДАЧІ Й ЧЕРГА: до 17:00 — 18:00 сьо�
   // Б уже отримав 1 угоду сьогодні → А спершу «доганяє» (3), далі рівно — менший id (3), потім Б (7), потім знову А.
   assert.deepEqual([1, 2, 3, 4].map(() => pickDuty(duty, taken)?.managerId), [3, 3, 7, 3], "🔴 не по черзі (або не враховано, що Б уже отримав угоду сьогодні)");
   assert.equal(pickDuty([], new Map()), null);
+});
+
+// ─── Від 90% без доказу (рішення Романа 16.11.2026: «нехай закриває ті що 90 - 100 відсотків», «клієнтів теж») ───
+
+/**
+ * #4070 — ВІД 0,90 ЦИТАТА НЕ ПОТРІБНА: перевізник і клієнт від 0,90 упевнені й без підтвердженої цитати
+ * (absent / manager / side_unknown / empty); на 0,8999 без цитати — «невпевнено»; від 0,85 до 0,90 з цитатою — упевнені.
+ * 🧨 Червоніє, якщо межу 0,90 підняти/опустити, прибрати її для клієнта або зламати смугу 0,85–0,90.
+ */
+test("#4070 ВІД 0,90 БЕЗ ЦИТАТИ: перевізник і клієнт упевнені; 0,8999 без цитати — невпевнено; 0,85 з цитатою — упевнений", () => {
+  const b = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"]) =>
+    carrierBucket({ caller_role: role, caller_role_confidence: conf, quote_check: qc });
+  for (const role of ["carrier", "client"] as const) {
+    for (const qc of ["absent", "manager", "side_unknown", "empty"] as const) {
+      assert.equal(b(role, 0.9, qc), role, `🔴 ${role} 0,90 «${qc}» не став упевненим`);
+      assert.equal(b(role, 0.8999, qc), "low", `🔴 ${role} 0,8999 «${qc}» без доказу став упевненим`);
+    }
+    assert.equal(b(role, 0.85, "counterpart"), role, `🔴 ${role} 0,85 з цитатою перестав бути упевненим`);
+    assert.equal(b(role, 0.8499, "counterpart"), "low", `🔴 ${role} нижче 0,85 став упевненим`);
+  }
+  assert.equal(b("unclear", 0.99, "counterpart"), "unclear", "🔴 «не розібрати» стало вердиктом");
+});
+
+/**
+ * #4071 — КАТЕГОРІЯ Й ЧЕРГА: перевізник 0,95 без цитати — категорія «перевізник» (його закриває автоматика), клієнт 0,95
+ * без цитати — «клієнт» (переносить автоматика); обидва без причини невпевненості. На 0,88 без цитати — «На перевірці».
+ * 🧨 Червоніє, якщо `dealCategory`/`whyUncertain` розійдуться з кошиком — угода впаде в чергу людині або навпаки.
+ */
+test("#4071 КАТЕГОРІЯ ВІД 0,90: без цитати — категорія AI і без причини; 0,88 — «На перевірці» з причиною", async () => {
+  const { dealCategory, whyUncertain } = await import("./carrierCallRules.js");
+  const r = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"]): CarrierResult =>
+    ({ summary: "", manager_channel: "1", caller_role: role, caller_role_confidence: conf, caller_role_quote: "x", quote_check: qc });
+  const base = { human: null, result: null, dealState: "own", ai: "done" } as Parameters<typeof dealCategory>[0];
+  const cat = (x: CarrierResult) => { const v = dealCategory({ ...base, result: x }); return [v.category, v.source]; };
+  assert.deepEqual(cat(r("carrier", 0.95, "absent")), ["carrier", "ai"], "🔴 перевізник 95% без цитати лишився людині");
+  assert.deepEqual(cat(r("client", 0.95, "manager")), ["client", "ai"], "🔴 клієнт 95% без цитати лишився людині");
+  assert.deepEqual(cat(r("carrier", 0.88, "absent")), ["review", null], "🔴 перевізник 88% без цитати закриється без людини");
+  assert.equal(whyUncertain(r("carrier", 0.95, "absent")), null, "🔴 упевнений отримав причину — потрапить у чергу");
+  assert.equal(whyUncertain(r("client", 0.88, "absent")), "у розмові немає фрази-доказу");
+});
+
+/**
+ * #4072 — ПРИМІТКА В KOMMO НЕ ПІДПИСУЄ СПІВРОЗМОВНИКУ ЧУЖИХ СЛІВ: цитата йде в примітку лише з `counterpart`; з
+ * absent / manager / side_unknown / empty — примітка без «Співрозмовник: …», але з упевненістю.
+ * 🧨 Червоніє, якщо непідтверджену цитату (або слова менеджера) записати в Kommo як слова співрозмовника.
+ */
+test("#4072 ПРИМІТКА ЗАКРИТТЯ: цитата лише підтверджена співрозмовником", async () => {
+  const { provenQuote } = await import("./carrierCallRules.js");
+  const { closeNoteText } = await import("./carrierClose.js");
+  assert.equal(provenQuote("своя фура", "counterpart"), "своя фура", "🔴 підтверджену цитату загублено");
+  for (const qc of ["absent", "manager", "side_unknown", "empty", null] as const) {
+    assert.equal(provenQuote("своя фура", qc), null, `🔴 цитата «${String(qc)}» піде в Kommo як слова співрозмовника`);
+    const note = closeNoteText(0.95, provenQuote("своя фура", qc));
+    assert.doesNotMatch(note, /Співрозмовник/, `🔴 «${String(qc)}»: у примітці чужі слова`);
+    assert.match(note, /впевненість 0,95/);
+  }
+  assert.match(closeNoteText(0.95, provenQuote("своя фура", "counterpart")), /Співрозмовник: «своя фура»/);
 });
