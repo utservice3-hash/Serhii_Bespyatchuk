@@ -331,10 +331,12 @@ export function buildZakaz1cRouter(): Router {
 
     // Повтор тієї самої форми (existed) — рахунок уже в угоді: PDF і примітку вдруге не кладемо.
     const att = inv.existed ? { fileUuid: null, error: null } : await attachInvoice(leadId, inv, o, mode, false);
-    let attachError = att.error;
+    const attachError = att.error;
     if (!inv.existed) {
       const patch = claimPatch(leadId, lead, inv.number);
-      if (patch) await patchLeads([patch]).catch((e) => { attachError = attachError ?? `угода Kommo: ${(e as Error).message.slice(0, 200)}`; });
+      // Поля угоди («Номер заказа», тег) — не PDF: їхня помилка йде в попередження, а не в attach_error,
+      // інакше плитка каже «PDF у файлах угоди немає», хоча PDF лежить (№9696, 17.11.2026).
+      if (patch) await patchLeads([patch]).catch((e) => { warnings.push(`поля угоди не записались: ${(e as Error).message.slice(0, 200)}`); });
       if (!lead.tags.includes(WIDGET_TAG)) {
         await addLeadNote(leadId, `${testMark(mode)}Угоду веде віджет «Рахунок 1С». Рахунки в цій угоді виставляйте там, Genesis не використовуйте.`)
           .catch(() => undefined);

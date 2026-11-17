@@ -805,6 +805,9 @@ test("#7143 PDF ЗНОВУ В УГОДУ: примітку з рахунком �
   assert.match(route, /markInvoiceAttached\(/, "помилка прикріплення не знімається після успіху");
   assert.doesNotMatch(route, /createInvoiceIn1c|updateInvoiceIn1c/, "повтор PDF чіпає рахунок у 1С");
   assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.3");
+  assert.doesNotMatch(srv, /attachError = attachError \?\? `угода Kommo/, "збій полів угоди знову показується як «PDF немає» (№9696)");
+  assert.match(js, /reattachBtn\(inv, "link mut"\)/, "кнопка не внизу плитки рахунку");
+  assert.match(js, /"Повернути PDF рахунку в угоду<\/button>"/, "назва кнопки незрозуміла");
 });
 
 test("#7144 СУМА РАХУНКУ — З «ПРИХОД 1»: бюджет угоди — це зазор; вікно підставляє суму клієнта з поля 2097627, порожнє поле — порожня сума, а не бюджет", () => {

@@ -84,7 +84,7 @@ define(["jquery"], function ($) {
       + P + " .btn.main{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:700}"
       + P + " .btn.dash{border-style:dashed;color:var(--mut)}"
       + P + " .btn.sm{padding:4px 10px;font-size:12px}"
-      + P + " .btn.link{border:0;padding:4px 0;color:var(--acc)}"
+      + P + " .btn.link{border:0;padding:4px 0;color:var(--acc)}" + P + " .btn.link.mut{color:var(--mut);text-decoration:underline dotted}"
       + P + " .btn[disabled]{opacity:.55;cursor:not-allowed}"
       + P + " .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}"
       + P + " .between{justify-content:space-between}"
@@ -315,8 +315,13 @@ define(["jquery"], function ($) {
 
     function pdfBtns(inv) {
       return "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='1'>PDF</button>"
-        + "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='0'>без печатки</button>"
-        + "<button class='btn sm' data-z1c='reattach' data-uid='" + esc(inv.invoice_uid) + "' title='Видалили примітку з рахунком або PDF не прикріпився — покладемо PDF у файли угоди ще раз. Рахунок у 1С той самий, нового не буде'>↻ PDF в угоду</button>";
+        + "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='0'>без печатки</button>";
+    }
+    /** Внизу рахунку: запис з PDF зник зі стрічки угоди (видалили або не прикріпився) — повертаємо. Рахунок у 1С той самий. */
+    function reattachBtn(inv, cls) {
+      return "<button class='btn " + cls + "' data-z1c='reattach' data-uid='" + esc(inv.invoice_uid) + "' style='text-align:left'"
+        + " title='Якщо запис з PDF рахунку видалили зі стрічки угоди або PDF не прикріпився — покладемо його в угоду ще раз. Рахунок у 1С той самий, нового не буде'>"
+        + "Повернути PDF рахунку в угоду</button>";
     }
     function editBtn(inv) {
       return inv.can_edit && state.data.owner !== "genesis"
@@ -335,7 +340,7 @@ define(["jquery"], function ($) {
           + "<div class='mut'>" + esc(dmy(inv.invoice_date)) + " · " + esc(inv.organization) + " · " + money(inv.total) + " " + esc(inv.currency) + "</div>"
           + (inv.attach_error ? "<div class='mut'>PDF у файлах угоди немає — візьміть тут</div>" : "")
           + "<div class='row'>" + pdfBtns(inv) + "</div><div class='row'>" + editBtn(inv) + "</div>"
-          + "<button class='btn link' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button></div>"
+          + "<button class='btn link' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button>" + reattachBtn(inv, "link mut") + "</div>"
         : "<div class='step next'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "wait", t: "немає" }) + "</div><div class='big'>—</div>"
           + "<div class='mut'>Маршрут і суму з «Приход 1» підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
       var dp = inv ? dealPay() : null;
@@ -477,7 +482,7 @@ define(["jquery"], function ($) {
         + (many ? "<div style='margin-top:16px'><b>Усі рахунки угоди</b><table><tr><th>№</th><th>Дата</th><th>Організація</th><th>Сума</th><th>Оплата</th><th></th></tr>"
           + invoices().map(function (i) {
             return "<tr><td><b>" + esc(i.number_print) + "</b></td><td>" + esc(dmy(i.invoice_date)) + "</td><td>" + esc(i.organization) + "</td><td>" + money(i.total) + " " + esc(i.currency)
-              + "</td><td>" + chip(payChip(i.pay)) + "</td><td><span class='row' style='gap:6px'>" + pdfBtns(i) + editBtn(i) + actBtns(i) + "</span></td></tr>";
+              + "</td><td>" + chip(payChip(i.pay)) + "</td><td><span class='row' style='gap:6px'>" + pdfBtns(i) + editBtn(i) + actBtns(i) + reattachBtn(i, "sm") + "</span></td></tr>";
           }).join("") + "</table></div>" : "")
         + modalHtml() + "</div>");
     }
