@@ -68,7 +68,7 @@ import { TasksFocusView } from "./TasksFocusView";
 import { TaskCreateDialog } from "./TaskCreateDialog";
 import { CloseTaskDialog } from "./ReactivationBits";
 import { needsCloseReason } from "../reactCloseRule";
-import { browserStorage, kyivDate, readDesign, writeDesign, type TasksDesign } from "../tasksFocus";
+import { browserStorage, isSetByMe, kyivDate, readDesign, readOwnerGroupBy, writeDesign, writeOwnerGroupBy, type OwnerGroupBy, type TasksDesign } from "../tasksFocus";
 
 const METRIC_LBL: Record<string, string> = {
   ads_count: "Реклама",
@@ -649,6 +649,15 @@ export function TasksSection({
   const [filesViewer, setFilesViewer] = useState<number | null>(null);
   /** 🤝 Форму відкрито зі «Спільних» — виконавець не підставляється, і без нього не створити. */
   const [sharedIntent, setSharedIntent] = useState(false);
+  /**
+   * 📤 «СПІЛЬНІ»: ДВА НАПРЯМКИ (задача 9711, Юлія Левентова 16.11.2026; макет погоджено Романом 17.11.2026).
+   * «Мені поставили» — те, що було завжди (за замовчуванням, щоб нічия звичка не зламалась). «Поставлені
+   * мною» — автор я, виконавець інший; у новому дизайні групується по виконавцю або по команді, і цей
+   * вибір памʼятає браузер. Однаково для всіх ролей.
+   */
+  const [sharedSide, setSharedSide] = useState<"toMe" | "byMe">("toMe");
+  const [ownerBy, setOwnerByState] = useState<OwnerGroupBy>(() => readOwnerGroupBy(browserStorage()));
+  const setOwnerBy = (v: OwnerGroupBy) => { setOwnerByState(v); writeOwnerGroupBy(browserStorage(), v); };
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
   /* 📋 «Готово» на задачі реактивації питає причину закриття (9227): без неї база запис відхиляє. Усі місця зміни
      статусу йдуть через `changeStatus`; причину зберігає той самий роут, що в «Клієнти та реактивація». */
@@ -907,6 +916,18 @@ export function TasksSection({
   const sharedNew = sharedOpen.filter((t) => t.hasUnseen).length;
 
   /**
+   * 📤 «ПОСТАВЛЕНІ МНОЮ» — правило в `tasksFocus.ts` (`isSetByMe`), тут лише хто дивиться.
+   * Число на перемикачі — відкриті, БЕЗ тижневих KPI-планів: вони в окремій згорнутій групі й у плитку
+   * «Активні» не входять, тож інакше в тімліда число на перемикачі розійшлось би з плиткою під ним.
+   * Число на самій вкладці «Спільні» лишається числом ВХІДНИХ — його сенс («що мені прийшло») не міняємо.
+   */
+  const isSetByMeT = (t: Task) => isSetByMe(t, { userId: currentUserId, managerId: currentManagerId });
+  const todayKyiv = kyivDate(new Date());
+  const byMeOpen = tasks.filter((t) => isSetByMeT(t) && t.status !== "done" && t.taskType !== "kpi_period");
+  const byMeLate = byMeOpen.filter((t) => !!t.deadline && t.deadline < todayKyiv).length;
+  const teamNameOf = (id: number) => (teams ?? []).find((t) => t.id === id)?.name;
+
+  /**
    * ✅ «НА МОЄМУ ПРИЙНЯТТІ» (рішення Романа 30.09.2026) — задачі, які виконавець довів до
    * «Готово на затвердження» і які закриваю я. Предикат той самий, що в сповіщенні
    * (`acceptanceNotify.ts`): тост і список не мусять розходитись. Тримає `#1080i`.
@@ -982,6 +1003,7 @@ export function TasksSection({
        саме зникнення, що ми лікували 14.09. */
     const canSeeAllTab = isAdmin || role === "team_lead" || role === "company";
     if (adminTab === "mine" && canSeeAllTab) { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
+    else if (adminTab === "shared" && sharedSide === "byMe") { base = base.filter(isSetByMeT); synths = []; }
     else if (adminTab === "shared") { base = base.filter(isSharedWithMe); synths = []; }
     else if (adminTab === "review") { base = base.filter(awaitsMe); synths = []; }
     if (assigneeFilter !== "") { base = base.filter((t) => t.assigneeId === assigneeFilter); synths = synths.filter((s) => s.assigneeId === assigneeFilter); }
@@ -1111,7 +1133,7 @@ export function TasksSection({
         )}
         {adminTab === "shared" && (
           <>
-            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· поставили вам інші</span>
+            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· {sharedSide === "byMe" ? "ви поставили іншим" : "поставили вам інші"}</span>
             {/* 🤝 ПОСТАВИТИ ЗАДАЧУ КОМУСЬ — окрема кнопка, бо «+ Додати» підставляє
                 виконавцем ТЕБЕ, і зі «Спільних» це створювало звичайну задачу собі
                 (відгук власника 14.09.2026). Тут виконавець порожній і обовʼязковий. */}
@@ -1130,6 +1152,35 @@ export function TasksSection({
           {design === "new" ? "↩ Старий дизайн" : "✨ Новий дизайн"}
         </button>
       </div>
+
+      {/* 📤 НАПРЯМОК «СПІЛЬНИХ» (9711): «Мені поставили» / «Поставлені мною». Біля другого — червоним,
+          скільки з поставлених прострочено, щоб проблему було видно, не відкриваючи блок. Групування —
+          лише в новому дизайні: у старій таблиці є колонка «Виконавець» і сортування за нею. */}
+      {adminTab === "shared" && (
+        <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+          <div className="tf-side" role="group" aria-label="Напрямок спільних задач">
+            <button type="button" className={sharedSide === "toMe" ? "on" : ""} aria-pressed={sharedSide === "toMe"}
+              onClick={() => setSharedSide("toMe")} title="Задачі, які вам поставили інші">
+              📥 Мені поставили{sharedOpen.length > 0 ? ` · ${sharedOpen.length}` : ""}
+            </button>
+            <button type="button" className={sharedSide === "byMe" ? "on" : ""} aria-pressed={sharedSide === "byMe"}
+              onClick={() => setSharedSide("byMe")} title="Задачі, які ви поставили іншим">
+              📤 Поставлені мною{byMeOpen.length > 0 ? ` · ${byMeOpen.length}` : ""}
+              {byMeLate > 0 && <span className="late"> · {byMeLate} простр.</span>}
+            </button>
+          </div>
+          {sharedSide === "byMe" && design === "new" && (
+            <div className="tf-own-by" role="group" aria-label="Групування">
+              Групувати:
+              <button type="button" className={ownerBy === "person" ? "on" : ""} aria-pressed={ownerBy === "person"} onClick={() => setOwnerBy("person")}>по виконавцю</button>
+              <button type="button" className={ownerBy === "team" ? "on" : ""} aria-pressed={ownerBy === "team"} onClick={() => setOwnerBy("team")}>по команді</button>
+            </div>
+          )}
+          {sharedSide === "byMe" && design === "old" && (
+            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Групування — у новому дизайні; тут сортуйте за колонкою «Виконавець».</span>
+          )}
+        </div>
+      )}
 
       {/* 📎 ЄДИНИЙ схований інпут на всю секцію: його кличуть і рядок, і картка.
           🔴 НЕ `display:none`: такий елемент у частині рушіїв не отримує кліку від
@@ -1671,6 +1722,8 @@ export function TasksSection({
         const goals = base.filter(activeGoal)
           .sort((a, b) => (a.deadline ?? "9999-12-31").localeCompare(b.deadline ?? "9999-12-31"));
         const rows = base.filter((t) => t.taskType !== "kpi_period" && !activeGoal(t));
+        // 📤 «Поставлені мною» (9711): групи по виконавцю/команді замість груп за терміном.
+        const byMeView = adminTab === "shared" && sharedSide === "byMe";
         return (
           <TasksFocusView
             rows={rows}
@@ -1678,6 +1731,17 @@ export function TasksSection({
             today={kyivDate(new Date())}
             showAssignee={rows.some((t) => !isMine(t))}
             isMine={isMine}
+            owner={byMeView ? { by: ownerBy, teamName: teamNameOf } : null}
+            emptyNode={byMeView ? (
+              <div className="loading-text" style={{ display: "grid", gap: 10, justifyItems: "center" }}>
+                <span>Ви ще не ставили задач іншим. Тут зʼявляться задачі, де автор ви, а виконавець хтось інший.</span>
+                <button type="button"
+                  onClick={() => { setCreateErr(null); setSharedIntent(true); setTaskForm({ ...emptyTaskForm }); setTaskModalOpen(true); }}
+                  style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--brand)", background: "transparent", color: "var(--brand)", cursor: "pointer", fontWeight: 600 }}>
+                  🤝 Поставити задачу
+                </button>
+              </div>
+            ) : undefined}
             meId={currentUserId}
             onOpen={setOpenTaskId}
             onOpenFeed={openFeed}

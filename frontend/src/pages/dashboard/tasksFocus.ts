@@ -187,3 +187,111 @@ export function readGoalsOpen(store: Pick<Storage, "getItem"> | null | undefined
 export function writeGoalsOpen(store: Pick<Storage, "setItem"> | null | undefined, open: boolean): void {
   try { store?.setItem(GOALS_OPEN_KEY, open ? "1" : "0"); } catch { /* сховище недоступне */ }
 }
+
+// ── 📤 «ПОСТАВЛЕНІ МНОЮ» У «СПІЛЬНИХ» (задача 9711, Юлія Левентова 16.11.2026; макет погоджено Романом 17.11.2026) ──
+
+/** Що з задачі потрібно правилам «Поставлені мною». Поля — ті самі, що в `Task` з `/tasks`. */
+export interface OwnedTask extends FocusTask {
+  createdById?: number | null;
+  assigneeId: number | null;
+  assigneeUserId?: number | null;
+  assigneeName?: string | null;
+  assigneeTeamId?: number | null;
+  taskType?: string;
+}
+
+/** Хто дивиться: акаунт (`users.id`) і, якщо є, картка менеджера CRM. */
+export interface TaskViewerIds { userId?: number | null; managerId?: number | null }
+
+/**
+ * 📤 «ПОСТАВЛЕНІ МНОЮ» — автор я, а виконавець хтось інший (дзеркало вхідних `isSharedWithMe`).
+ *
+ * Три умови, і кожна обовʼязкова:
+ * - автор — я (`createdById === userId`), і `userId` відомий: без нього `undefined === undefined`
+ *   зробило б «моїми» всі задачі без автора;
+ * - виконавець Є — менеджер CRM або акаунт. Задача без виконавця — це моя власна, вона у «Своїх»;
+ * - виконавець — НЕ я (ні як менеджер, ні як акаунт). Задача самому собі — не «поставлена іншому».
+ * Дні тижневого KPI (`daily_kpi`) приховані всюди, тож і тут їх немає. Правило одне для всіх ролей:
+ * сервер віддає кожному всі задачі, де він автор (`visibilityCondSql`), межа доступу не змінюється.
+ * Тримає `#7850`.
+ */
+export function isSetByMe(t: OwnedTask, me: TaskViewerIds): boolean {
+  if (me.userId == null || t.createdById !== me.userId) return false;
+  if (t.taskType === "daily_kpi") return false;
+  const toManager = t.assigneeId != null;
+  const toAccount = t.assigneeUserId != null;
+  if (!toManager && !toAccount) return false;
+  if (toManager && me.managerId != null && t.assigneeId === me.managerId) return false;
+  if (toAccount && t.assigneeUserId === me.userId) return false;
+  return true;
+}
+
+/** Групування «Поставлених мною»: по людині-виконавцю або по його команді. */
+export type OwnerGroupBy = "person" | "team";
+export const OWNER_NO_TEAM = "Поза командами";
+
+export interface OwnerGroup<T> {
+  key: string;
+  label: string;
+  /** Команда виконавця — підписом у заголовку групи «по виконавцю»; у групі «по команді» — `null`. */
+  team: string | null;
+  /** Активні за дедлайном (найближчий зверху), за ними виконані цього тижня. */
+  items: T[];
+  active: number;
+  late: number;
+  review: number;
+}
+
+/**
+ * Розкласти задачі по виконавцях або командах. Виконані РАНІШЕ цього тижня в групи не йдуть: вони
+ * лишаються однією згорнутою групою «Виконано раніше», як і зараз.
+ *
+ * 🔴 Ключ групи — ID, а не імʼя: двоє тезок не мусять злитися в одну людину. Виконавець-менеджер і
+ * виконавець-акаунт мають різні простори ID, тому ключі різні (`m:` / `u:`).
+ * 🔴 Невідоме названо словами: без команди — «Поза командами», без імені — «Без імені», а не
+ * порожній заголовок (правило фронту «невідоме має читатись як невідоме»).
+ * Порядок: спершу групи з простроченими, далі за кількістю активних, далі за назвою. Тримає `#7851`.
+ */
+export function ownerGroups<T extends OwnedTask>(tasks: T[], by: OwnerGroupBy, today: string,
+  teamName: (teamId: number) => string | null | undefined): OwnerGroup<T>[] {
+  const teamOf = (t: T) => (t.assigneeTeamId != null ? teamName(t.assigneeTeamId) ?? `Команда #${t.assigneeTeamId}` : null);
+  const m = new Map<string, OwnerGroup<T> & { all: T[] }>();
+  for (const t of tasks) {
+    const done = t.status === "done";
+    if (done && !doneThisWeek(t, today)) continue;
+    const team = teamOf(t);
+    const key = by === "team"
+      ? (t.assigneeTeamId != null ? `t:${t.assigneeTeamId}` : "t:none")
+      : (t.assigneeId != null ? `m:${t.assigneeId}` : `u:${t.assigneeUserId ?? "none"}`);
+    let g = m.get(key);
+    if (!g) {
+      g = by === "team"
+        ? { key, label: team ?? OWNER_NO_TEAM, team: null, items: [], all: [], active: 0, late: 0, review: 0 }
+        : { key, label: t.assigneeName?.trim() || "Без імені", team: team ?? OWNER_NO_TEAM, items: [], all: [], active: 0, late: 0, review: 0 };
+      m.set(key, g);
+    }
+    g.all.push(t);
+    if (!done) {
+      g.active += 1;
+      if (bucketOf(t, today) === "late") g.late += 1;
+      if (t.status === "ready_for_approval") g.review += 1;
+    }
+  }
+  const out: OwnerGroup<T>[] = [];
+  for (const g of m.values()) {
+    const act = g.all.filter((t) => t.status !== "done").sort((a, b) => (a.deadline ?? "9999-12-31").localeCompare(b.deadline ?? "9999-12-31"));
+    const fin = g.all.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? "").localeCompare(a.doneAt ?? ""));
+    out.push({ key: g.key, label: g.label, team: g.team, items: [...act, ...fin], active: g.active, late: g.late, review: g.review });
+  }
+  out.sort((a, b) => Number(b.late > 0) - Number(a.late > 0) || b.active - a.active || a.label.localeCompare(b.label, "uk"));
+  return out;
+}
+
+/** Вибір групування памʼятає браузер. Зламане сховище — «по виконавцю», як за замовчуванням. */
+export const OWNER_GROUP_KEY = "uts.tasks.ownerGroupBy";
+export function readOwnerGroupBy(store: Pick<Storage, "getItem"> | null | undefined): OwnerGroupBy {
+  try { return store?.getItem(OWNER_GROUP_KEY) === "team" ? "team" : "person"; } catch { return "person"; }
+}
+export function writeOwnerGroupBy(store: Pick<Storage, "setItem"> | null | undefined, v: OwnerGroupBy): void {
+  try { store?.setItem(OWNER_GROUP_KEY, v); } catch { /* сховище недоступне */ }
+}
