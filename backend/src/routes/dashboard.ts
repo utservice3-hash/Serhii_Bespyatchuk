@@ -5062,16 +5062,18 @@ dashboardRouter.get("/report", async (req, res) => {
     // на 15 мс: тоді гейт `#36` (він б'є БЕЗ періоду) міряв би шлях, яким не ходить
     // жоден користувач — рівно та хвороба, яку цей прохід і лікує. Один шлях для
     // всіх, ціна названа.
-    `WITH ${metrics.FIRST_PAID_CTE}
+    // 🎯 9932: «Прийнято реклами» — правило Сергія (`adsAcceptedSql`: `adDealSql` joined + «клієнт з реклами
+    // оплатив»), той самий вираз, що `adsAcceptedByMgr`. CTE `adsAcceptedCte` уже містить `first_paid`.
+    `WITH ${metrics.adsAcceptedCte(`$${actAdIdx}`)}
      SELECT m.id, m.name,
-       COUNT(*) FILTER (WHERE ${metrics.adDealSqlMode(`$${actAdIdx}`, "joined")}) AS ad_leads,
+       COUNT(*) FILTER (WHERE ${metrics.adsAcceptedSql(`$${actAdIdx}`)}) AS ad_leads,
        COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes
      FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
      -- LEFT JOIN: «Прийнято реклами» рахує ВСІ ад-угоди повного циклу незалежно від
      -- поточного етапу (мапиться лише 5 із 15 статусів); quotes/dispatched і далі
      -- фільтрують по funnel_stage, тож null-етап їх природно виключає.
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${metrics.FIRST_PAID_JOIN}
+     ${metrics.ADS_ACCEPTED_JOINS}
      WHERE ${actConds.join(" AND ")}
      GROUP BY m.id, m.name`, actP);
 

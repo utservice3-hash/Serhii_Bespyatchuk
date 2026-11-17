@@ -170,7 +170,7 @@ test("#36 ЧАС ВІДПОВІДІ: /overview і /report тримаються �
 });
 
 /**
- * #24p / #24q — ПЕРЕХІД `actByMgr` НА JOIN-ФОРМУ (31.08.2026).
+ * #24p / #24q — ПЕРЕХІД `actByMgr` НА JOIN-ФОРМУ (31.08.2026). ⚠️ `#24q` знято 17.11.2026 (задача 9932): роут кличе правило 9932, його стереже `#9932c`.
  *
  * `#35` вище доводить, що дві форми предиката дають однакові ПОРЯДКОВІ значення
  * по `deals`. Цього НЕ досить для приймання цього проходу: питання власника
@@ -242,28 +242,35 @@ test("#24p ad_leads ПО КОЖНОМУ МЕНЕДЖЕРУ не змінився
   }
 });
 
-test("#24q РОУТ КЛИЧЕ САМЕ ШВИДКУ ФОРМУ — інакше фікс не доїхав", async () => {
-  const fs = await import("node:fs/promises");
-  const url = await import("node:url");
-  const src = await fs.readFile(
-    url.fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
-
-  // 🔴 МЕЖА ЗРІЗУ — СЕМАНТИЧНА, а не «N символів»: беремо рівно запит actByMgr,
-  // від його параметрів до його ж GROUP BY. Зріз по довжині вже одного разу
-  // зробив гейт беззубим — саботаж просто не потрапляв у вікно.
-  const from = src.indexOf("const actP: unknown[]");
-  assert.ok(from > 0, "🔴 не знайдено початок запиту actByMgr — гейт втратив предмет");
-  const to = src.indexOf("GROUP BY m.id, m.name`, actP);", from);
-  assert.ok(to > from, "🔴 не знайдено кінець запиту actByMgr — зріз розповзся");
-  const block = src.slice(from, to);
-
-  assert.match(block, /adDealSqlMode\([^)]*"joined"\)/,
-    "🔴 actByMgr не кличе join-форму предиката — корельований EXISTS повернувся "
-    + "(28 728 loops, 97% буферів запиту)");
-  assert.match(block, /\bFIRST_PAID_CTE\b/,
-    "🔴 у запиті немає CTE `first_paid` — join-форма без нього не має на що спиратись");
-  assert.match(block, /\bFIRST_PAID_JOIN\b/,
-    "🔴 у запиті немає `LEFT JOIN first_paid` — предикат читав би відсутню таблицю");
-  assert.doesNotMatch(block, /metrics\.adDealSql\(/,
-    "🔴 у actByMgr лишився виклик correlated-дефолту `adDealSql(` — дві форми в одному запиті");
+/**
+ * #9932d — ПРАВИЛО СЕРГІЯ НА ЖИВІЙ БАЗІ: стара множина «Прийнято реклами» ⊆ нова, і нова справді більша.
+ * (Заміна `#24q`: actByMgr тепер кличе `adsAcceptedSql`, а не `adDealSqlMode(…"joined")`; роут стереже `#9932c`.)
+ * Порядково, по угодах повного циклу за жовтень 2026: жодна угода, рекламна за `adDealSql`, не зникла (OR-форма
+ * мусить лише ДОДАВАТИ), і правило додало > 0 угод (інакше предикат вироджений і рівність нічого не доводить).
+ * Заміряно 17.11.2026 тим самим правилом: жовтень 857 → 995 по активних менеджерах.
+ * 🧨 Зробити `adsAcceptedSql` «лише правило Сергія» (без `adDealSql`) → червоніє «зникли».
+ */
+test("#9932d ЖИВА БАЗА: «Прийнято реклами» за правилом 9932 ⊇ старої реклами, і правило додає угоди", needsDb(), async () => {
+  const m = await import("./metrics.js");
+  const { pool } = await import("../db/pool.js");
+  const { getSettings } = await import("../routes/settings.js");
+  const { adSources } = await getSettings();
+  assert.ok(Array.isArray(adSources) && adSources.length > 0, "🔴 adSources порожній — гейт міряв би предикат, який нікого не пропускає");
+  const r = await pool.query<{ total: number; old_ad: number; new_ad: number; lost: number; gained: number }>(
+    `WITH ${m.adsAcceptedCte("$2")}
+     SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE ${m.adDealSqlMode("$2", "joined")})::int AS old_ad,
+            COUNT(*) FILTER (WHERE ${m.adsAcceptedSql("$2")})::int AS new_ad,
+            COUNT(*) FILTER (WHERE ${m.adDealSqlMode("$2", "joined")} AND NOT COALESCE(${m.adsAcceptedSql("$2")}, false))::int AS lost,
+            COUNT(*) FILTER (WHERE COALESCE(${m.adsAcceptedSql("$2")}, false) AND NOT COALESCE(${m.adDealSqlMode("$2", "joined")}, false))::int AS gained
+       FROM deals d ${m.ADS_ACCEPTED_JOINS}
+      WHERE d.pipeline_id = ANY($1)
+        AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN '2026-10-01' AND '2026-10-31'`,
+    [[8921932, 155304], adSources]);
+  const x = r.rows[0];
+  assert.ok(x.total > 100 && x.old_ad > 0 && x.old_ad < x.total,
+    `🔴 жовтень: угод ${x.total}, реклами ${x.old_ad} — вибірка вироджена, порівнювати нічого`);
+  assert.equal(x.lost, 0, `🔴 за правилом 9932 зникли ${x.lost} угод, що рекламні за adDealSql — правило мусить лише додавати`);
+  assert.equal(x.new_ad, x.old_ad + x.gained, "🔴 нова множина ≠ стара + додані — розклад не сходиться");
+  assert.ok(x.gained > 0, `🔴 правило Сергія не додало жодної угоди за жовтень (було ${x.old_ad}) — предикат вироджений`);
 });
