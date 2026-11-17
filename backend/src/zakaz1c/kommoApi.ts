@@ -24,6 +24,8 @@ export const KOMMO_FIELDS = {
   // менеджер вписує її, коли перевізник надішле документи, а сервер переносить у 1С (`setActDate`). Те саме поле — фінансовий
   // якір дашборда (`deals.unload_at`), тож пишемо його лише в угодах віджета.
   leadActDate: 463253,
+  // «Приход 1» — сума, яку платить клієнт. Бюджет угоди — це зазор (наш заробіток), тож суму рахунку підставляємо звідси (17.11.2026).
+  leadIncome1: 2097627,
   // ⬇ Поля, які зараз пише Genesis (лише API). Ми пишемо їх тільки при ZAKAZ1C_FIELDS_MODE=live.
   leadOrderNo: 2096315, // «Номер заказа» (text) — номер рахунку 1С, як «000008587»
   leadPaid1c: 2096323, // «Оплачено 1с» (text) — сума оплат, як «28000»
@@ -56,6 +58,9 @@ async function kommoJson<T>(path: string): Promise<T> {
 type Cf = { field_id: number; values?: { value?: unknown }[] }[] | null | undefined;
 const cfText = (cf: Cf, id: number) => String(cf?.find((f) => f.field_id === id)?.values?.[0]?.value ?? "").trim();
 
+/** «36 000», «36000,50», «36 000 грн» → 36000.5; не число — 0. */
+export const moneyOf = (v: string) => { const n = Number(v.replace(/[\s\u00a0]/g, "").replace(",", ".").replace(/[^0-9.]/g, "")); return Number.isFinite(n) && n > 0 ? n : 0; };
+
 export interface LeadForInvoice {
   id: number;
   name: string;
@@ -70,6 +75,8 @@ export interface LeadForInvoice {
   pipelineId: number | null;
   statusId: number | null;
   company: { id: number; name: string; edrpou: string } | null;
+  /** «Приход 1» — сума від клієнта; підстановка суми рахунку (бюджет угоди — це зазор). 0 — поле порожнє. */
+  income1: number;
   /** «Дата выгрузки (Дата акта)» по-київськи `YYYY-MM-DD`; порожньо — не вказано. */
   actDate: string;
   /** Основний контакт угоди — підстановка ПІБ і телефону для клієнта-фізособи (0.6.0). */
@@ -109,6 +116,7 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
     pipelineId: Number(l.pipeline_id) || null,
     statusId: Number(l.status_id) || null,
     company,
+    income1: moneyOf(cfText(l.custom_fields_values, KOMMO_FIELDS.leadIncome1)),
     actDate: kyivDateOfUnix(Number(cfText(l.custom_fields_values, KOMMO_FIELDS.leadActDate)) || 0),
     contact,
   };

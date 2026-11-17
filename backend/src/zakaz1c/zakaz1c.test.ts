@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
+import { KOMMO_FIELDS, moneyOf } from "./kommoApi.js";
 import {
   actPdfFrom1c, actRefusal, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, canEdit, customerInfoFrom1c, dealFieldsOf,
   fromCreateInvoiceReply, genesisComment, invoiceAllowed, orgRules, parseInvoiceForm, parseOrganizations, payStateOf, serviceLine, serviceSwaps,
@@ -804,4 +805,16 @@ test("#7143 PDF ЗНОВУ В УГОДУ: примітку з рахунком �
   assert.match(route, /markInvoiceAttached\(/, "помилка прикріплення не знімається після успіху");
   assert.doesNotMatch(route, /createInvoiceIn1c|updateInvoiceIn1c/, "повтор PDF чіпає рахунок у 1С");
   assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.3");
+});
+
+test("#7144 СУМА РАХУНКУ — З «ПРИХОД 1»: бюджет угоди — це зазор; вікно підставляє суму клієнта з поля 2097627, порожнє поле — порожня сума, а не бюджет", () => {
+  // 17.11.2026, менеджер Дмитро: «тягне суму з Бюджету — тобто зазор, а треба з поля «Приход 1»».
+  assert.equal(KOMMO_FIELDS.leadIncome1, 2097627);
+  assert.equal(moneyOf("36000"), 36000);
+  assert.equal(moneyOf("36 000"), 36000);
+  assert.equal(moneyOf("36\u00a0000,50"), 36000.5);
+  assert.equal(moneyOf(""), 0);
+  assert.equal(moneyOf("—"), 0);
+  assert.match(MOUNT(), /lead: \{ id: lead\.id, name: lead\.name, price: lead\.income1,/, "вікно й далі отримує бюджет як суму рахунку");
+  assert.match(WIDGET("script.js"), /price: d\.lead\.income1 \|\| d\.lead\.price \|\| ""/, "вікно бере суму не з «Приход 1»");
 });

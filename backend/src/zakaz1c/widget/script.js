@@ -208,7 +208,7 @@ define(["jquery"], function ($) {
         requestId: uuid(), editUid: null,
         org: o.key, currency: "UAH", bankUid: defaultBank(o, "UAH"), agreement: "", vatType: o.vatTypes[0], dueDate: addDays(d.today, 7), actDate: "",
         crmComment: "", stamp: true,
-        items: [{ service: o.services[0], route: routeOf(d.lead), full: true, qty: 1, price: d.lead.price || "", vat: o.itemVats[0] }]
+        items: [{ service: o.services[0], route: routeOf(d.lead), full: true, qty: 1, price: d.lead.income1 || d.lead.price || "", vat: o.itemVats[0] }]
       };
       f.items.forEach(function (it) { retitle(f, it); });
       return f;
@@ -337,7 +337,7 @@ define(["jquery"], function ($) {
           + "<div class='row'>" + pdfBtns(inv) + "</div><div class='row'>" + editBtn(inv) + "</div>"
           + "<button class='btn link' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button></div>"
         : "<div class='step next'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "wait", t: "немає" }) + "</div><div class='big'>—</div>"
-          + "<div class='mut'>Маршрут і суму підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
+          + "<div class='mut'>Маршрут і суму з «Приход 1» підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
       var dp = inv ? dealPay() : null;
       var s2 = "<div class='step " + (dp && dp.all ? "done" : inv ? "next" : "") + "'><div class='h'><span>2 · Оплата</span>" + (inv ? chip(dp.chip) : chip({ k: "wait", t: "чекає рахунок" })) + "</div>"
         + (inv ? "<div class='big'>" + esc(dp.paidText) + "</div><div class='mut'>із " + esc(dp.totalText) + (invoices().length > 1 ? " · " + invoices().length + " рахунки" : "") + "</div>"

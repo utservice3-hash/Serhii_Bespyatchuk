@@ -217,7 +217,8 @@ export function buildZakaz1cRouter(): Router {
       canCreate: allowed.ok && owner !== "genesis", blockedWhy: owner === "genesis" ? GENESIS_DEAL_WHY : allowed.ok ? null : allowed.why,
       orgs: orgsForWindow(banks), currencies: CURRENCIES, waits: ONEC_WAITS,
       canCreatePerson: allowedPerson.ok && owner !== "genesis", blockedWhyPerson: owner === "genesis" ? GENESIS_DEAL_WHY : allowedPerson.ok ? null : allowedPerson.why,
-      lead: { id: lead.id, name: lead.name, price: lead.price, car: lead.car, cityFrom: lead.cityFrom, cityTo: lead.cityTo, company: lead.company,
+      // `price` — сума, яку вікно підставляє в рахунок: «Приход 1», а не бюджет (бюджет — зазор). Так працює й архів до 0.6.3.
+      lead: { id: lead.id, name: lead.name, price: lead.income1, income1: lead.income1, budget: lead.price, car: lead.car, cityFrom: lead.cityFrom, cityTo: lead.cityTo, company: lead.company,
         contact: lead.contact, actDate: lead.actDate },
       onec: { found: onec.found, name: onec.name, agreements: onec.agreements, error: onec.error ?? null },
       person: person ? { uid: person.uid, name: person.name, phone: person.phone, code: person.code, warnings: person.warnings,
