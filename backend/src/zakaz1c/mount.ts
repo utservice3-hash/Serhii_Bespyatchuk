@@ -26,10 +26,11 @@ import { requireKommoCaller } from "./kommoAuth.js";
 import { onecServiceBase, zakaz1cFieldsMode, zakaz1cMode, zakaz1cOnecWebhookKey, zakaz1cTestEdrpou, zakaz1cTesters } from "./env.js";
 import { decidePayment, parseEvent, webhookKeyOk, type OnecEvent } from "./events.js";
 import { pushActDate } from "./actDates.js";
+import { pushDealFields } from "./dealFields.js";
 import {
   CURRENCIES, PIB_RULE, actPdfFrom1c, buildCreateCustomerBody, buildCreateInvoiceBody, buildPersonCustomerBody, buildUpdateInvoiceBody, codeOfService,
   createCustomerIn1c, createInvoiceIn1c, customerInfoByUid, customerInfoFrom1c, invoiceAllowed, invoicePdfFrom1c, itemVatsFor, kyivIso, orgRules, organizationsFrom1c,
-  parseInvoiceForm, serviceSwaps, servicesFor, updateInvoiceIn1c, vatTypesFor, type BankAccount, type CreatedInvoice, type InvoiceForm,
+  genesisDealFields, parseInvoiceForm, serviceSwaps, servicesFor, updateInvoiceIn1c, vatTypesFor, type BankAccount, type CreatedInvoice, type InvoiceForm,
   type OrgRule,
 } from "./invoice.js";
 import {
@@ -38,7 +39,8 @@ import {
 import { noteInvoice } from "./notes.js";
 import { GENESIS_DEAL_WHY, WIDGET_TAG, claimPatch, dealOwner, type DealOwner } from "./owner.js";
 import {
-  actAttached, applyPaymentEvent, dealInvoicesPay, invoiceOfLead, lastWritten, listInvoices, markActAttached, markEvent, onecNumbersOfDeal,
+  actAttached, applyPaymentEvent, dealInvoicesPay, invoiceForReattach, invoiceOfLead, lastWritten, listInvoices, markActAttached, markEvent,
+  markInvoiceAttached, onecNumbersOfDeal, saveDealFieldsSent,
   personOfLead, recordEvent, saveInvoice, savePerson, saveWritten, type InvoiceRow,
 } from "./store.js";
 
@@ -49,7 +51,7 @@ export const ONEC_WAITS = {
   person: PIB_RULE,
   docs: "Акт зʼявиться, щойно бухгалтерія проведе реалізацію в 1С. ТТН формується в Конструкторі дашборда.",
   fopBanks: "1С не віддала рахунки ФОП — спробуйте пізніше.",
-  edit: "Змінити можна лише в день виставлення і поки немає оплати — далі через запит бухгалтерії.",
+  edit: "Змінити можна протягом доби після виставлення і поки немає оплати — далі через запит бухгалтерії.",
 } as const;
 
 
@@ -210,13 +212,16 @@ export function buildZakaz1cRouter(): Router {
       await pushActDate(pool, leadId, lead.actDate, actInvoices(listed)).catch(() => undefined);
       invoices = await listInvoices(pool, leadId, today);
     }
+    // Поля угоди («Расход», авто…) → рахунки віджета, якщо змінились (0.6.4). Збій 1С не заважає відкрити вкладку.
+    if (owner === "widget") await pushDealFields(pool, leadId, lead).catch(() => undefined);
     res.json({
       mode, testEdrpou: zakaz1cTestEdrpou(), today, managerName, owner, ownerWhy: owner === "genesis" ? GENESIS_DEAL_WHY : null,
       genesisNumbers: owner === "genesis" ? info.foreign : [],
       canCreate: allowed.ok && owner !== "genesis", blockedWhy: owner === "genesis" ? GENESIS_DEAL_WHY : allowed.ok ? null : allowed.why,
       orgs: orgsForWindow(banks), currencies: CURRENCIES, waits: ONEC_WAITS,
       canCreatePerson: allowedPerson.ok && owner !== "genesis", blockedWhyPerson: owner === "genesis" ? GENESIS_DEAL_WHY : allowedPerson.ok ? null : allowedPerson.why,
-      lead: { id: lead.id, name: lead.name, price: lead.price, car: lead.car, cityFrom: lead.cityFrom, cityTo: lead.cityTo, company: lead.company,
+      // `price` — сума, яку вікно підставляє в рахунок: «Приход 1», а не бюджет (бюджет — зазор). Так працює й архів до 0.6.3.
+      lead: { id: lead.id, name: lead.name, price: lead.income1, income1: lead.income1, budget: lead.price, car: lead.car, cityFrom: lead.cityFrom, cityTo: lead.cityTo, company: lead.company,
         contact: lead.contact, actDate: lead.actDate },
       onec: { found: onec.found, name: onec.name, agreements: onec.agreements, error: onec.error ?? null },
       person: person ? { uid: person.uid, name: person.name, phone: person.phone, code: person.code, warnings: person.warnings,
@@ -320,7 +325,8 @@ export function buildZakaz1cRouter(): Router {
 
     const o = orgs.find((x) => x.key === form.org)!;
     const manager = await kommoUserName(caller.userId);
-    const body = buildCreateInvoiceBody(leadId, form, { customerUid, manager, today, orgCode: o.code! });
+    const dealFields = genesisDealFields(lead.raw);
+    const body = buildCreateInvoiceBody(leadId, form, { customerUid, manager, today, orgCode: o.code!, dealFields });
     const result = await createInvoiceIn1c(onecServiceBase(), body);
     if (!result.ok) return res.status(502).json({ error: result.why });
     const inv = result.invoice;
@@ -329,10 +335,12 @@ export function buildZakaz1cRouter(): Router {
 
     // Повтор тієї самої форми (existed) — рахунок уже в угоді: PDF і примітку вдруге не кладемо.
     const att = inv.existed ? { fileUuid: null, error: null } : await attachInvoice(leadId, inv, o, mode, false);
-    let attachError = att.error;
+    const attachError = att.error;
     if (!inv.existed) {
       const patch = claimPatch(leadId, lead, inv.number);
-      if (patch) await patchLeads([patch]).catch((e) => { attachError = attachError ?? `угода Kommo: ${(e as Error).message.slice(0, 200)}`; });
+      // Поля угоди («Номер заказа», тег) — не PDF: їхня помилка йде в попередження, а не в attach_error,
+      // інакше плитка каже «PDF у файлах угоди немає», хоча PDF лежить (№9696, 17.11.2026).
+      if (patch) await patchLeads([patch]).catch((e) => { warnings.push(`поля угоди не записались: ${(e as Error).message.slice(0, 200)}`); });
       if (!lead.tags.includes(WIDGET_TAG)) {
         await addLeadNote(leadId, `${testMark(mode)}Угоду веде віджет «Рахунок 1С». Рахунки в цій угоді виставляйте там, Genesis не використовуйте.`)
           .catch(() => undefined);
@@ -340,6 +348,7 @@ export function buildZakaz1cRouter(): Router {
     }
     await saveInvoice(pool, { leadId, inv: { ...inv, warnings }, form: inv.existed ? null : form, mode: mode === "live" ? "live" : "test",
       kommoUserId: caller.userId, fileUuid: att.fileUuid, attachError });
+    if (!inv.existed) await saveDealFieldsSent(pool, inv.uid, dealFields, null).catch(() => undefined);
     res.json({
       invoice: { uid: inv.uid, number: inv.numberPrint, date: inv.date, organization: inv.organization, agreement: inv.agreement,
         currency: inv.currency, vatType: inv.vatType, total: inv.total, existed: inv.existed, warnings },
@@ -376,7 +385,9 @@ export function buildZakaz1cRouter(): Router {
     form.actDate = lead.actDate || form.actDate || row.act_date || "";
     const o = orgs.find((x) => x.key === form.org)!;
     const manager = await kommoUserName(caller.userId);
-    const result = await updateInvoiceIn1c(onecServiceBase(), buildUpdateInvoiceBody(uid, form, { manager, dealId: leadId, orgCode: o.code! }));
+    const dealFields = genesisDealFields(lead.raw);
+    const result = await updateInvoiceIn1c(onecServiceBase(), buildUpdateInvoiceBody(uid, form, { manager, dealId: leadId, orgCode: o.code!, dealFields }));
+    if (result.ok) await saveDealFieldsSent(pool, uid, dealFields, null).catch(() => undefined);
     if (!result.ok) return res.status(502).json({ error: result.why });
     const inv = result.invoice;
     const att = await attachInvoice(leadId, inv, o, mode, true);
@@ -401,6 +412,35 @@ export function buildZakaz1cRouter(): Router {
     const pdf = await invoicePdfFrom1c(onecServiceBase(), uid, stamp);
     if (!pdf.ok) return res.status(502).json({ error: pdf.why });
     res.json({ fileName: `invoice_${own.numberPrint}${stamp ? "" : "_bez_pechatky"}.pdf`, base64: pdf.bytes.toString("base64") });
+  });
+
+  /**
+   * «PDF знову в угоду» (0.6.3, 17.11.2026): менеджер випадково видалив примітку з рахунком або PDF не прикріпився
+   * (№9696 — «fetch failed»). Беремо PDF з 1С і кладемо у файли й стрічку угоди тим самим підписом, що й при виставленні.
+   * Рахунок у 1С не чіпаємо: номер той самий, нового рахунку не буде.
+   */
+  r.post("/lead/:leadId/invoice/:uid/attach", async (req: Request, res: Response) => {
+    const leadId = leadIdOf(req);
+    const uid = String(req.params.uid ?? "");
+    if (!leadId || !UID_RE.test(uid)) return res.status(400).json({ error: "Некоректний запит." });
+    const inv = await invoiceForReattach(pool, uid);
+    if (inv?.leadId !== leadId) return res.status(404).json({ error: "Рахунок не з цієї угоди." });
+    const pdf = await invoicePdfFrom1c(onecServiceBase(), uid, inv.stamp);
+    if (!pdf.ok) return res.status(502).json({ error: pdf.why });
+    let file: { uuid: string; versionUuid: string } | null = null;
+    let error: string | null = null;
+    try {
+      file = await withNetRetry(() => attachPdfToLead(leadId, `invoice_${inv.numberPrint}.pdf`, pdf.bytes));
+    } catch (e) {
+      error = (e as Error).message.slice(0, 300);
+    }
+    const orgShort = orgRules().find((o) => o.key === inv.orgKey)?.short ?? "";
+    const note = await noteInvoice({ testMode: inv.mode === "test", numberPrint: inv.numberPrint, date: inv.invoiceDate, orgShort,
+      total: inv.total, currency: inv.currency }, file, { fileNote: (f) => addFileNote(leadId, f), textNote: (t) => addLeadNote(leadId, t) });
+    if (note.kind !== "file") error = error ?? note.why;
+    await markInvoiceAttached(pool, uid, file?.uuid ?? null, error);
+    if (error) return res.status(502).json({ error: `PDF у угоду не ліг: ${error}` });
+    res.json({ ok: true, number: inv.numberPrint });
   });
 
   /**

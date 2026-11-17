@@ -6908,6 +6908,10 @@ ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS bank_uid TEXT;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS stamp BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS edits INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS act_file_uuid TEXT;
+-- Версія 0.6.4 (17.11.2026): поля угоди, які Genesis переносив у рахунок («Расход 1–3», тип оплати, авто, код оплати…).
+-- `deal_fields_sent` — що востаннє пішло в 1С; NULL — рахунок до 0.6.4: звірка його не чіпає без окремого дозволу.
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS deal_fields_sent JSONB;
+ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS deal_fields_error TEXT;
 -- Версія 0.5 (30.10.2026): вебхук 1С → віджет. Стан оплати рахунку з ОСТАННЬОЇ події 1С (абсолютний: оплачено всього,
 -- залишок) — не різниця, тож повтор чи інший порядок подій не ламають. `pay_event_at` — коли 1С надіслала цей стан.
 ALTER TABLE zakaz_onec_invoices ADD COLUMN IF NOT EXISTS paid_total NUMERIC(14,2);

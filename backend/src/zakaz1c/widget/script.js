@@ -84,7 +84,7 @@ define(["jquery"], function ($) {
       + P + " .btn.main{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:700}"
       + P + " .btn.dash{border-style:dashed;color:var(--mut)}"
       + P + " .btn.sm{padding:4px 10px;font-size:12px}"
-      + P + " .btn.link{border:0;padding:4px 0;color:var(--acc)}"
+      + P + " .btn.link{border:0;padding:4px 0;color:var(--acc)}" + P + " .btn.link.mut{color:var(--mut);text-decoration:underline dotted}"
       + P + " .btn[disabled]{opacity:.55;cursor:not-allowed}"
       + P + " .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}"
       + P + " .between{justify-content:space-between}"
@@ -208,7 +208,7 @@ define(["jquery"], function ($) {
         requestId: uuid(), editUid: null,
         org: o.key, currency: "UAH", bankUid: defaultBank(o, "UAH"), agreement: "", vatType: o.vatTypes[0], dueDate: addDays(d.today, 7), actDate: "",
         crmComment: "", stamp: true,
-        items: [{ service: o.services[0], route: routeOf(d.lead), full: true, qty: 1, price: d.lead.price || "", vat: o.itemVats[0] }]
+        items: [{ service: o.services[0], route: routeOf(d.lead), full: true, qty: 1, price: d.lead.income1 || d.lead.price || "", vat: o.itemVats[0] }]
       };
       f.items.forEach(function (it) { retitle(f, it); });
       return f;
@@ -317,9 +317,15 @@ define(["jquery"], function ($) {
       return "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='1'>PDF</button>"
         + "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='0'>без печатки</button>";
     }
+    /** Внизу рахунку: запис з PDF зник зі стрічки угоди (видалили або не прикріпився) — повертаємо. Рахунок у 1С той самий. */
+    function reattachBtn(inv, cls) {
+      return "<button class='btn " + cls + "' data-z1c='reattach' data-uid='" + esc(inv.invoice_uid) + "' style='text-align:left'"
+        + " title='Якщо запис з PDF рахунку видалили зі стрічки угоди або PDF не прикріпився — покладемо його в угоду ще раз. Рахунок у 1С той самий, нового не буде'>"
+        + "Повернути PDF рахунку в угоду</button>";
+    }
     function editBtn(inv) {
       return inv.can_edit && state.data.owner !== "genesis"
-        ? "<button class='btn sm' data-z1c='edit' data-uid='" + esc(inv.invoice_uid) + "' title='Сьогодні й поки немає оплати рахунок можна виправити: номер лишиться той самий'>Змінити</button>"
+        ? "<button class='btn sm' data-z1c='edit' data-uid='" + esc(inv.invoice_uid) + "' title='Протягом доби після виставлення і поки немає оплати рахунок можна виправити: номер лишиться той самий'>Змінити</button>"
         : "<button class='btn sm' data-z1c='req' data-uid='" + esc(inv.invoice_uid) + "' title='" + esc(state.data.waits.edit) + "'>Запит бухгалтерії</button>";
     }
     function actBtns(inv) {
@@ -334,9 +340,9 @@ define(["jquery"], function ($) {
           + "<div class='mut'>" + esc(dmy(inv.invoice_date)) + " · " + esc(inv.organization) + " · " + money(inv.total) + " " + esc(inv.currency) + "</div>"
           + (inv.attach_error ? "<div class='mut'>PDF у файлах угоди немає — візьміть тут</div>" : "")
           + "<div class='row'>" + pdfBtns(inv) + "</div><div class='row'>" + editBtn(inv) + "</div>"
-          + "<button class='btn link' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button></div>"
+          + "<button class='btn link' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + " style='text-align:left'>+ ще рахунок</button>" + reattachBtn(inv, "link mut") + "</div>"
         : "<div class='step next'><div class='h'><span>1 · Рахунок</span>" + chip({ k: "wait", t: "немає" }) + "</div><div class='big'>—</div>"
-          + "<div class='mut'>Маршрут і суму підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
+          + "<div class='mut'>Маршрут і суму з «Приход 1» підставимо з угоди</div><div><button class='btn main' data-z1c='open'" + (cust().can && cust().found ? "" : " disabled") + ">Виставити рахунок</button></div></div>";
       var dp = inv ? dealPay() : null;
       var s2 = "<div class='step " + (dp && dp.all ? "done" : inv ? "next" : "") + "'><div class='h'><span>2 · Оплата</span>" + (inv ? chip(dp.chip) : chip({ k: "wait", t: "чекає рахунок" })) + "</div>"
         + (inv ? "<div class='big'>" + esc(dp.paidText) + "</div><div class='mut'>із " + esc(dp.totalText) + (invoices().length > 1 ? " · " + invoices().length + " рахунки" : "") + "</div>"
@@ -476,7 +482,7 @@ define(["jquery"], function ($) {
         + (many ? "<div style='margin-top:16px'><b>Усі рахунки угоди</b><table><tr><th>№</th><th>Дата</th><th>Організація</th><th>Сума</th><th>Оплата</th><th></th></tr>"
           + invoices().map(function (i) {
             return "<tr><td><b>" + esc(i.number_print) + "</b></td><td>" + esc(dmy(i.invoice_date)) + "</td><td>" + esc(i.organization) + "</td><td>" + money(i.total) + " " + esc(i.currency)
-              + "</td><td>" + chip(payChip(i.pay)) + "</td><td><span class='row' style='gap:6px'>" + pdfBtns(i) + editBtn(i) + actBtns(i) + "</span></td></tr>";
+              + "</td><td>" + chip(payChip(i.pay)) + "</td><td><span class='row' style='gap:6px'>" + pdfBtns(i) + editBtn(i) + actBtns(i) + reattachBtn(i, "sm") + "</span></td></tr>";
           }).join("") + "</table></div>" : "")
         + modalHtml() + "</div>");
     }
@@ -533,6 +539,17 @@ define(["jquery"], function ($) {
           + (r.attached ? " · PDF у файлах угоди" : (inv.existed ? "" : " · PDF не прикріпився: " + (r.attachError || "")))
           + (inv.warnings && inv.warnings.length ? " · " + inv.warnings.join("; ") : ""));
         state.form = null;
+        return load();
+      }).catch(function (e) { say("err", e.message); })
+        .then(function () { state.busy = false; render(); });
+    }
+
+    /** PDF рахунку знову у файли й стрічку угоди (примітку видалили або PDF не прикріпився). Рахунок у 1С не змінюється. */
+    function reattach(uid) {
+      if (state.busy) return;
+      state.busy = true; state.msg = null; render();
+      api("POST", "/lead/" + leadId() + "/invoice/" + uid + "/attach", {}).then(function (r) {
+        say("ok", "PDF рахунку №" + r.number + " знову у файлах угоди й у стрічці.");
         return load();
       }).catch(function (e) { say("err", e.message); })
         .then(function () { state.busy = false; render(); });
@@ -650,6 +667,7 @@ define(["jquery"], function ($) {
       else if (a === "pedit") { state.personEdit = true; state.form = null; }
       else if (a === "pcancel") { state.personEdit = false; state.pname = null; state.pphone = null; }
       else if (a === "actsave") { saveActDate(); return; }
+      else if (a === "reattach") { reattach(String(b.data("uid"))); return; }
       else if (a === "pdf") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/pdf?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "act") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/act?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "req") state.modal = { uid: String(b.data("uid")), text: "" };

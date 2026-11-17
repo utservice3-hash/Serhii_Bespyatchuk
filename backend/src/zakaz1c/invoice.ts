@@ -218,6 +218,28 @@ export function dealFieldsOf(form: Pick<InvoiceForm, "actDate" | "crmComment">) 
   };
 }
 
+/** Поля угоди, які Genesis переносив у рахунок (лист 1С 02.11.2026). Порядок ключів сталий — по ньому звіряємо «вже надіслано». */
+export const GENESIS_DEAL_FIELD_KEYS = ["vehicle", "payment_code", "expense_1", "expense_2", "expense_3", "payment_type_1", "payment_type_2",
+  "payment_type_3", "request_type", "sales_channel", "registration_type", "registration_code"] as const;
+const NUMERIC_DEAL_FIELDS = new Set(["expense_1", "expense_2", "expense_3"]);
+
+/**
+ * Сирі поля угоди → `deal_fields` 1С, як їх заповнював Genesis (0.6.4, 17.11.2026: «по новому рахунку не заповнюється
+ * Расход 1»). Порожнє поле → `null` (1С очищає реквізит — угода і рахунок не розходяться). «Расход» — число: «36 000»,
+ * «36000,50» → 36000 / 36000.5; не число → `null`, бо 1С на нечислове відмовляє весь рахунок. Чиста.
+ */
+export function genesisDealFields(raw: Record<string, string>): Record<string, string | number | null> {
+  const out: Record<string, string | number | null> = {};
+  for (const k of GENESIS_DEAL_FIELD_KEYS) {
+    const v = String(raw[k] ?? "").trim();
+    if (NUMERIC_DEAL_FIELDS.has(k)) {
+      const n = Number(v.replace(/[\s\u00a0]/g, "").replace(",", "."));
+      out[k] = v && Number.isFinite(n) ? n : null;
+    } else out[k] = v || null;
+  }
+  return out;
+}
+
 const itemsOf = (form: InvoiceForm) => form.items.map((it) => ({ code: SERVICES.find((x) => x.name === it.service)?.code ?? "", article: "",
   name: it.service, unit: "Послуга", qty: it.qty, price: it.price, vat: it.vat, content: serviceLine(it, form.currency) }));
 
@@ -225,8 +247,9 @@ const itemsOf = (form: InvoiceForm) => form.items.map((it) => ({ code: SERVICES.
  * Тіло `POST /createInvoice`. Чиста функція: гейт звіряє, що жодне поле вікна не загубилось дорогою.
  * `order_date` свідомо НЕ шлемо: коментар має бути рівно як у Genesis.
  */
-export function buildCreateInvoiceBody(dealId: number, form: InvoiceForm, who: { customerUid: string; manager: string; today: string; orgCode: string }) {
-  const df = dealFieldsOf(form);
+export function buildCreateInvoiceBody(dealId: number, form: InvoiceForm,
+  who: { customerUid: string; manager: string; today: string; orgCode: string; dealFields?: Record<string, string | number | null> }) {
+  const df = { ...(who.dealFields ?? {}), ...dealFieldsOf(form) };
   return {
     customer_uid: who.customerUid,
     organization: who.orgCode,
@@ -253,7 +276,8 @@ export function buildCreateInvoiceBody(dealId: number, form: InvoiceForm, who: {
  * й валюту 1С змінити не дасть — шлемо ті самі, а розбіжність сервер відсікає ще до запиту (`mount.ts`).
  * У `deal_fields` порожнє поле = очистити реквізит: менеджер міг стерти дату акту, тож шлемо обидва поля явно.
  */
-export function buildUpdateInvoiceBody(invoiceUid: string, form: InvoiceForm, who: { manager: string; dealId: number; orgCode: string }) {
+export function buildUpdateInvoiceBody(invoiceUid: string, form: InvoiceForm,
+  who: { manager: string; dealId: number; orgCode: string; dealFields?: Record<string, string | number | null> }) {
   return {
     invoice_uid: invoiceUid,
     organization: who.orgCode,
@@ -264,7 +288,7 @@ export function buildUpdateInvoiceBody(invoiceUid: string, form: InvoiceForm, wh
     ...(form.dueDate ? { due_date: form.dueDate } : {}),
     comment: genesisComment(who.manager, who.dealId),
     ...(form.bankUid ? { bank_account: form.bankUid } : {}),
-    deal_fields: { act_date: form.actDate || null, act_date_by_manager: !!form.actDate, crm_comment: form.crmComment || null },
+    deal_fields: { ...(who.dealFields ?? {}), act_date: form.actDate || null, act_date_by_manager: !!form.actDate, crm_comment: form.crmComment || null },
     items: itemsOf(form),
     pdf: true,
     stamp: form.stamp,
@@ -591,8 +615,12 @@ export function payStateOf(inv: { createdAt: Date; total: number }, unpaid: { pa
  * «Змінити» — лише в день виставлення і лише без оплати (Сергій та Інна, 27.10.2026); далі — запит бухгалтерії.
  * «Немає серед неоплачених» не вважаємо «без оплати»: невідомо — значить через бухгалтерію.
  */
-export function canEdit(createdDay: string, pay: PayState, today: string): boolean {
-  return createdDay === today && pay.paid <= 0 && (pay.k === "unpaid" || pay.k === "overdue" || pay.k === "pending");
+/** Скільки після виставлення можна «Змінити» (17.11.2026, Роман: «давай сутки») — раніше було «до кінця дня». */
+export const EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** «Змінити»: протягом доби після виставлення і поки немає жодної оплати. Далі — запит бухгалтерії. */
+export function canEdit(createdAt: Date, pay: PayState, now: Date): boolean {
+  return now.getTime() - createdAt.getTime() < EDIT_WINDOW_MS && pay.paid <= 0 && (pay.k === "unpaid" || pay.k === "overdue" || pay.k === "pending");
 }
 
 /* ——— організації й банки (`GET /organizations`) ——— */

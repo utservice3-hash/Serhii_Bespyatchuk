@@ -7,6 +7,7 @@
 import { pool } from "../db/pool.js";
 import { jobSkip } from "../jobs/jobRuns.js";
 import { runActDateSync } from "./actDates.js";
+import { runDealFieldsSync } from "./dealFields.js";
 import { runPayments } from "./payments.js";
 
 const CEILING_MS = 15 * 60_000;
@@ -18,6 +19,8 @@ export async function zakaz1cPayments(): Promise<unknown> {
   try {
     let acts: unknown;
     try { acts = await runActDateSync(pool); } catch (e) { acts = { error: (e as Error).message.slice(0, 200) }; }
-    return { ...(await runPayments(pool)), acts };
+    let fields: unknown;
+    try { fields = await runDealFieldsSync(pool); } catch (e) { fields = { error: (e as Error).message.slice(0, 200) }; }
+    return { ...(await runPayments(pool)), acts, fields };
   } finally { running = null; }
 }
