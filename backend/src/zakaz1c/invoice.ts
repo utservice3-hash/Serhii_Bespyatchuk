@@ -591,8 +591,12 @@ export function payStateOf(inv: { createdAt: Date; total: number }, unpaid: { pa
  * «Змінити» — лише в день виставлення і лише без оплати (Сергій та Інна, 27.10.2026); далі — запит бухгалтерії.
  * «Немає серед неоплачених» не вважаємо «без оплати»: невідомо — значить через бухгалтерію.
  */
-export function canEdit(createdDay: string, pay: PayState, today: string): boolean {
-  return createdDay === today && pay.paid <= 0 && (pay.k === "unpaid" || pay.k === "overdue" || pay.k === "pending");
+/** Скільки після виставлення можна «Змінити» (17.11.2026, Роман: «давай сутки») — раніше було «до кінця дня». */
+export const EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** «Змінити»: протягом доби після виставлення і поки немає жодної оплати. Далі — запит бухгалтерії. */
+export function canEdit(createdAt: Date, pay: PayState, now: Date): boolean {
+  return now.getTime() - createdAt.getTime() < EDIT_WINDOW_MS && pay.paid <= 0 && (pay.k === "unpaid" || pay.k === "overdue" || pay.k === "pending");
 }
 
 /* ——— організації й банки (`GET /organizations`) ——— */

@@ -325,7 +325,7 @@ define(["jquery"], function ($) {
     }
     function editBtn(inv) {
       return inv.can_edit && state.data.owner !== "genesis"
-        ? "<button class='btn sm' data-z1c='edit' data-uid='" + esc(inv.invoice_uid) + "' title='Сьогодні й поки немає оплати рахунок можна виправити: номер лишиться той самий'>Змінити</button>"
+        ? "<button class='btn sm' data-z1c='edit' data-uid='" + esc(inv.invoice_uid) + "' title='Протягом доби після виставлення і поки немає оплати рахунок можна виправити: номер лишиться той самий'>Змінити</button>"
         : "<button class='btn sm' data-z1c='req' data-uid='" + esc(inv.invoice_uid) + "' title='" + esc(state.data.waits.edit) + "'>Запит бухгалтерії</button>";
     }
     function actBtns(inv) {

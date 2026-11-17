@@ -104,7 +104,7 @@ export async function listInvoices(pool: Pool, leadId: number, today: string): P
       org_key: r.org_key, currency: r.currency, vat_type: r.vat_type, total: Number(r.total) || 0, existed: r.existed,
       attach_error: r.attach_error, items: r.items, agreement_uid: r.agreement_uid, bank_uid: r.bank_uid, due_date: r.due_date,
       act_date: r.act_date, crm_comment: r.crm_comment, stamp: r.stamp !== false, edits: Number(r.edits) || 0, created_at: r.created_at,
-      pay, can_edit: canEdit(r.created_day, pay, today), realized: r.realized === true, act_sync_error: r.act_sync_error ?? null,
+      pay, can_edit: canEdit(new Date(r.created_ts), pay, new Date()), realized: r.realized === true, act_sync_error: r.act_sync_error ?? null,
     };
   });
 }

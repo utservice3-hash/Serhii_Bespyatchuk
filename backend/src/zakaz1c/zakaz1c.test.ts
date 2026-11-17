@@ -288,14 +288,16 @@ test("#7110 ОПЛАТА РАХУНКУ І «ЗМІНИТИ»: стан — зі
   assert.equal(payStateOf(inv, null, c({ dealPaid: 0 })).k, "missing", "рахунок без оплат угоди зараховано оплаченим");
   assert.equal(payStateOf(inv, null, c({ syncedAt: before, dealPaid: 1800 })).k, "pending", "знімок до рахунку прочитано як «оплачено»");
   assert.equal(payStateOf(inv, null, c({ syncedAt: null })).k, "pending");
-  // «Змінити»: дозвіл — сьогодні й без оплати; заборона — вчора, частково, оплачено, невідомо.
+  // «Змінити»: дозвіл — доба після виставлення й без оплати; заборона — старший за добу, частково, оплачено, невідомо.
   const unpaid = payStateOf(inv, { paid: 0, remaining: 1800, due: null }, c({}));
-  assert.equal(canEdit(TODAY, unpaid, TODAY), true, "сьогоднішній неоплачений рахунок не можна змінити");
-  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({ syncedAt: before })), TODAY), true, "свіжий рахунок до синку не можна змінити");
-  assert.equal(canEdit("2026-10-27", unpaid, TODAY), false, "вчорашній рахунок можна змінити");
-  assert.equal(canEdit(TODAY, payStateOf(inv, { paid: 500, remaining: 1300, due: null }, c({})), TODAY), false, "частково оплачений можна змінити");
-  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({ dealPaid: 1800 })), TODAY), false, "оплачений можна змінити");
-  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({})), TODAY), false, "рахунок, якого немає серед неоплачених, можна змінити");
+  const AT = new Date("2026-10-28T15:00:00+02:00"), H = 60 * 60 * 1000;
+  assert.equal(canEdit(AT, unpaid, new Date(AT.getTime() + H)), true, "свіжий неоплачений рахунок не можна змінити");
+  assert.equal(canEdit(AT, unpaid, new Date(AT.getTime() + 23 * H)), true, "наступного дня в межах доби не можна змінити (17.11: «сутки»)");
+  assert.equal(canEdit(AT, payStateOf(inv, null, c({ syncedAt: before })), new Date(AT.getTime() + H)), true, "свіжий рахунок до синку не можна змінити");
+  assert.equal(canEdit(AT, unpaid, new Date(AT.getTime() + 24 * H + 1)), false, "рахунок старший за добу можна змінити");
+  assert.equal(canEdit(AT, payStateOf(inv, { paid: 500, remaining: 1300, due: null }, c({})), new Date(AT.getTime() + H)), false, "частково оплачений можна змінити");
+  assert.equal(canEdit(AT, payStateOf(inv, null, c({ dealPaid: 1800 })), new Date(AT.getTime() + H)), false, "оплачений можна змінити");
+  assert.equal(canEdit(AT, payStateOf(inv, null, c({})), new Date(AT.getTime() + H)), false, "рахунок, якого немає серед неоплачених, можна змінити");
 });
 
 test("#7112 ПІДМІНА ПОСЛУГИ: 1С поставила іншу номенклатуру — менеджер бачить попередження; та сама — тиша", () => {
