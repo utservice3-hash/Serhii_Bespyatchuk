@@ -1802,9 +1802,11 @@ tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
 
 /* картки */
 .rv-cards { display: flex; flex-direction: column; gap: 8px; }
-.rv-mc { background: var(--rv-card); border: 1px solid var(--rv-line); border-radius: 12px; position: relative; overflow: hidden; }
-.rv-mc::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--sc); }
-.rv-mc.self { box-shadow: 0 0 0 1px var(--rv-ink) inset; }
+/* ⓘ у картці (задача 9233): без `overflow: hidden`, інакше підказку обрізало краєм картки. Заради кутів
+   смуги статусу overflow і стояв, тому смуга тепер — внутрішня тінь: вона сама йде по заокругленню. */
+.rv-mc { background: var(--rv-card); border: 1px solid var(--rv-line); border-radius: 12px; position: relative; box-shadow: inset 4px 0 0 var(--sc); }
+.rv-mc .info-hint-pop { font-weight: 400; color: var(--text, #1a1a1a); }
+.rv-mc.self { box-shadow: inset 4px 0 0 var(--sc), 0 0 0 1px var(--rv-ink) inset; }
 .rv-mc > .hd { width: 100%; border: 0; background: none; text-align: left; cursor: pointer; display: grid;
   grid-template-columns: 200px minmax(0,1.35fr) minmax(0,1fr) 380px 18px; gap: 20px; align-items: start; padding: 14px 16px 14px 20px; }
 .rv-mc .who b { font-size: 14.5px; } .rv-mc .who .ln2 { font-size: 12px; color: var(--rv-muted); margin-top: 2px; }

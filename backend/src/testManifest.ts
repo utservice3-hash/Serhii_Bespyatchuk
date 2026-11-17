@@ -392,6 +392,7 @@ export const MANIFEST_FILES: string[] = [
   "core/callAiPromise.test.js",
   "core/carrierCalls.test.js",
   "core/actionFeedback.test.js",
+  "core/reportCardHints.test.js",
   "core/toastRules.test.js",
   "core/strategicTasks.test.js",
   "core/taskCreateRules.test.js",
@@ -450,6 +451,9 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
 export const MANIFEST_TESTS: string[] = [
+  // core/reportCardHints.test.ts — ⓘ біля цифр картки менеджера у «Звіті» (задача 9233, 17.11.2026)
+  "#7800 КАРТКА МЕНЕДЖЕРА: ⓘ стоїть біля кожного з пʼяти чисел 9233 (тиждень, «Відправлено», прогноз, «чекає…», «чекають рішення»)",
+  "#7800b ТЕКСТИ ⓘ КАЖУТЬ ТЕ, ЩО РАХУЄ КОД: прогноз без добору, «Відправлено» за датою загрузки, план тижня з ручною ціллю",
   "#7140 БАЛАНС КАБІНЕТУ: ×1,2 на витратах, ÷1,2 для без ПДВ, середня без сьогодні, звірка з кабінетом",
   "#7140b БАЛАНС КАБІНЕТУ — ЛИШЕ АДМІНИ: requireRole на обох маршрутах, тімлід у deny",
   "#7140c БАЛАНС КАБІНЕТУ: витрата дня — більше з GA4 і аркуша бюджету, без майбутніх днів аркуша; звірка тим самим правилом",
