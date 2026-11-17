@@ -790,3 +790,18 @@ test("#7142 ВКЛАДКА В МЕНЮ «…»: контейнер зʼявив�
   assert.match(js, /destroy: function \(\) \{[^}]*observer\.disconnect\(\)/, "після закриття картки стеження лишається працювати");
   assert.match(js, /\.catch\(function \(e\) \{ state\.err = e\.message; paint\(true\); \}\)/, "помилка сервера губиться, якщо контейнера ще не було");
 });
+
+test("#7143 PDF ЗНОВУ В УГОДУ: примітку з рахунком видалили або PDF не прикріпився — кнопка кладе PDF з 1С у файли й стрічку угоди лише своєї угоди, рахунок у 1С не змінюється", () => {
+  // 17.11.2026: менеджер спитав, як повернути рахунок, якщо випадково видалив примітку; №9696 PDF не прикріпився («fetch failed»).
+  const js = WIDGET("script.js");
+  assert.match(js, /data-z1c='reattach'/, "у плитці рахунку немає кнопки «↻ PDF в угоду»");
+  assert.match(js, /api\("POST", "\/lead\/" \+ leadId\(\) \+ "\/invoice\/" \+ uid \+ "\/attach"/, "кнопка не кличе сервер");
+  const srv = MOUNT();
+  const route = srv.slice(srv.indexOf('r.post("/lead/:leadId/invoice/:uid/attach"'), srv.indexOf("Акт за рахунком — як у Genesis"));
+  assert.ok(route.length > 100, "маршруту /attach немає");
+  assert.match(route, /if \(inv\?\.leadId !== leadId\) return res\.status\(404\)/, "PDF можна покласти в чужу угоду");
+  assert.match(route, /noteInvoice\(/, "примітка не тим самим підписом, що при виставленні");
+  assert.match(route, /markInvoiceAttached\(/, "помилка прикріплення не знімається після успіху");
+  assert.doesNotMatch(route, /createInvoiceIn1c|updateInvoiceIn1c/, "повтор PDF чіпає рахунок у 1С");
+  assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.3");
+});

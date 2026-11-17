@@ -38,7 +38,8 @@ import {
 import { noteInvoice } from "./notes.js";
 import { GENESIS_DEAL_WHY, WIDGET_TAG, claimPatch, dealOwner, type DealOwner } from "./owner.js";
 import {
-  actAttached, applyPaymentEvent, dealInvoicesPay, invoiceOfLead, lastWritten, listInvoices, markActAttached, markEvent, onecNumbersOfDeal,
+  actAttached, applyPaymentEvent, dealInvoicesPay, invoiceForReattach, invoiceOfLead, lastWritten, listInvoices, markActAttached, markEvent,
+  markInvoiceAttached, onecNumbersOfDeal,
   personOfLead, recordEvent, saveInvoice, savePerson, saveWritten, type InvoiceRow,
 } from "./store.js";
 
@@ -401,6 +402,35 @@ export function buildZakaz1cRouter(): Router {
     const pdf = await invoicePdfFrom1c(onecServiceBase(), uid, stamp);
     if (!pdf.ok) return res.status(502).json({ error: pdf.why });
     res.json({ fileName: `invoice_${own.numberPrint}${stamp ? "" : "_bez_pechatky"}.pdf`, base64: pdf.bytes.toString("base64") });
+  });
+
+  /**
+   * «PDF знову в угоду» (0.6.3, 17.11.2026): менеджер випадково видалив примітку з рахунком або PDF не прикріпився
+   * (№9696 — «fetch failed»). Беремо PDF з 1С і кладемо у файли й стрічку угоди тим самим підписом, що й при виставленні.
+   * Рахунок у 1С не чіпаємо: номер той самий, нового рахунку не буде.
+   */
+  r.post("/lead/:leadId/invoice/:uid/attach", async (req: Request, res: Response) => {
+    const leadId = leadIdOf(req);
+    const uid = String(req.params.uid ?? "");
+    if (!leadId || !UID_RE.test(uid)) return res.status(400).json({ error: "Некоректний запит." });
+    const inv = await invoiceForReattach(pool, uid);
+    if (inv?.leadId !== leadId) return res.status(404).json({ error: "Рахунок не з цієї угоди." });
+    const pdf = await invoicePdfFrom1c(onecServiceBase(), uid, inv.stamp);
+    if (!pdf.ok) return res.status(502).json({ error: pdf.why });
+    let file: { uuid: string; versionUuid: string } | null = null;
+    let error: string | null = null;
+    try {
+      file = await withNetRetry(() => attachPdfToLead(leadId, `invoice_${inv.numberPrint}.pdf`, pdf.bytes));
+    } catch (e) {
+      error = (e as Error).message.slice(0, 300);
+    }
+    const orgShort = orgRules().find((o) => o.key === inv.orgKey)?.short ?? "";
+    const note = await noteInvoice({ testMode: inv.mode === "test", numberPrint: inv.numberPrint, date: inv.invoiceDate, orgShort,
+      total: inv.total, currency: inv.currency }, file, { fileNote: (f) => addFileNote(leadId, f), textNote: (t) => addLeadNote(leadId, t) });
+    if (note.kind !== "file") error = error ?? note.why;
+    await markInvoiceAttached(pool, uid, file?.uuid ?? null, error);
+    if (error) return res.status(502).json({ error: `PDF у угоду не ліг: ${error}` });
+    res.json({ ok: true, number: inv.numberPrint });
   });
 
   /**

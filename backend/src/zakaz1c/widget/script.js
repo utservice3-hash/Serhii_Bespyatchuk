@@ -315,7 +315,8 @@ define(["jquery"], function ($) {
 
     function pdfBtns(inv) {
       return "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='1'>PDF</button>"
-        + "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='0'>без печатки</button>";
+        + "<button class='btn sm' data-z1c='pdf' data-uid='" + esc(inv.invoice_uid) + "' data-stamp='0'>без печатки</button>"
+        + "<button class='btn sm' data-z1c='reattach' data-uid='" + esc(inv.invoice_uid) + "' title='Видалили примітку з рахунком або PDF не прикріпився — покладемо PDF у файли угоди ще раз. Рахунок у 1С той самий, нового не буде'>↻ PDF в угоду</button>";
     }
     function editBtn(inv) {
       return inv.can_edit && state.data.owner !== "genesis"
@@ -538,6 +539,17 @@ define(["jquery"], function ($) {
         .then(function () { state.busy = false; render(); });
     }
 
+    /** PDF рахунку знову у файли й стрічку угоди (примітку видалили або PDF не прикріпився). Рахунок у 1С не змінюється. */
+    function reattach(uid) {
+      if (state.busy) return;
+      state.busy = true; state.msg = null; render();
+      api("POST", "/lead/" + leadId() + "/invoice/" + uid + "/attach", {}).then(function (r) {
+        say("ok", "PDF рахунку №" + r.number + " знову у файлах угоди й у стрічці.");
+        return load();
+      }).catch(function (e) { say("err", e.message); })
+        .then(function () { state.busy = false; render(); });
+    }
+
     function createCustomer() {
       if (state.busy) return;
       state.busy = true; state.msg = null; render();
@@ -650,6 +662,7 @@ define(["jquery"], function ($) {
       else if (a === "pedit") { state.personEdit = true; state.form = null; }
       else if (a === "pcancel") { state.personEdit = false; state.pname = null; state.pphone = null; }
       else if (a === "actsave") { saveActDate(); return; }
+      else if (a === "reattach") { reattach(String(b.data("uid"))); return; }
       else if (a === "pdf") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/pdf?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "act") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/act?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "req") state.modal = { uid: String(b.data("uid")), text: "" };

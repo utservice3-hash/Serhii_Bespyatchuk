@@ -117,6 +117,24 @@ export async function invoiceOfLead(pool: Pool, uid: string): Promise<{ leadId: 
   return r ? { leadId: Number(r.lead_id), numberPrint: r.number_print, invoiceDate: r.invoice_date } : null;
 }
 
+/** Рахунок для «PDF знову в угоду»: усе, що треба для підпису файлу, як при виставленні. */
+export async function invoiceForReattach(pool: Pool, uid: string): Promise<{
+  leadId: number; numberPrint: string; invoiceDate: string; orgKey: string | null; total: number; currency: string; mode: string; stamp: boolean;
+} | null> {
+  const q = await pool.query<Record<string, any>>(
+    `SELECT lead_id::text AS lead_id, number_print, invoice_date, org_key, total::float8 AS total, currency, mode, stamp
+       FROM zakaz_onec_invoices WHERE invoice_uid = $1`, [uid]);
+  const r = q.rows[0];
+  return r ? { leadId: Number(r.lead_id), numberPrint: r.number_print, invoiceDate: r.invoice_date, orgKey: r.org_key ?? null,
+    total: Number(r.total) || 0, currency: r.currency, mode: r.mode, stamp: r.stamp !== false } : null;
+}
+
+/** PDF знову лежить в угоді: новий файл і без помилки прикріплення (плитка перестає казати «PDF у файлах угоди немає»). */
+export async function markInvoiceAttached(pool: Pool, uid: string, fileUuid: string | null, error: string | null): Promise<void> {
+  await pool.query(`UPDATE zakaz_onec_invoices SET kommo_file_uuid = COALESCE($2, kommo_file_uuid), attach_error = $3, updated_at = now()
+                     WHERE invoice_uid = $1`, [uid, fileUuid, error]);
+}
+
 /** Номери ВСІХ рахунків 1С за угодою (`onec_deal_invoices`, синк щогодини) — для «хто веде угоду» (`owner.ts`). */
 export async function onecNumbersOfDeal(pool: Pool, leadId: number): Promise<string[]> {
   const q = await pool.query<{ number: string | null }>(`SELECT number FROM onec_deal_invoices WHERE deal_id = $1`, [leadId]);
