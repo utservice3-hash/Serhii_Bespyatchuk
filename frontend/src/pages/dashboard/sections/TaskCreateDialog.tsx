@@ -3,7 +3,7 @@ import type { ManagerOption, TaskAssignee, TaskPriority } from "../../../api";
 import type { TaskForm } from "../taskForm";
 import { teamGroups } from "../assigneeGroups";
 import { kyivDate } from "../tasksFocus";
-import { defaultSharedDeadline, formMissing, leadersOf, pickGroups, plainEnterSubmits, quickDates, withLeaders, type PickPerson } from "../taskCreateRules";
+import { defaultSharedDeadline, formMissing, pickGroups, pickGroupsLeadersFirst, plainEnterSubmits, quickDates, type PickPerson } from "../taskCreateRules";
 
 /**
  * 🆕 НОВА ЗАДАЧА — КОМПАКТНИЙ ДІАЛОГ (варіант А, рішення Романа 26.10.2026: «роби А»).
@@ -76,12 +76,10 @@ export function TaskCreateDialog({
   const who2 = managerName(form.assigneeId2);
   const reviewer = form.reviewerId === "" ? null : accountName(form.reviewerId);
 
-  // Акаунти без менеджера CRM: менеджера обирають як менеджера, інакше людина була б у списку двічі.
-  const plainAccounts = useMemo(() => accounts.filter((a) => a.managerId == null), [accounts]);
-  // 👔 «Керівники» першою групою (9377) — ярлик угорі; у своїй команді людина лишається.
-  const groups = useMemo(() => pickGroups(withLeaders(teamGroups(managerOptions, myTeamId), managerOptions, selfManagerId), plainAccounts, query),
-    [managerOptions, myTeamId, selfManagerId, plainAccounts, query]);
-  const leaders = useMemo(() => leadersOf(managerOptions, selfManagerId), [managerOptions, selfManagerId]);
+  // 👔 Спочатку «Керівники» (тімліди + керівництво за роллю акаунта), далі команди (моя перша), далі акаунти (9377).
+  // Акаунти без менеджера CRM ідуть як акаунти, привʼязані до менеджера — як менеджер, інакше людина була б двічі.
+  const groups = useMemo(() => pickGroupsLeadersFirst(teamGroups(managerOptions, myTeamId), managerOptions, accounts, query),
+    [managerOptions, myTeamId, accounts, query]);
   const groups2 = useMemo(() => pickGroups(teamGroups(managerOptions, myTeamId, form.assigneeId), [], query),
     [managerOptions, myTeamId, form.assigneeId, query]);
 
@@ -91,6 +89,8 @@ export function TaskCreateDialog({
       ? { ...f, assigneeUserId: p.id, assigneeId: "", assigneeId2: "" }
       : { ...f, assigneeId: p.id, assigneeUserId: "", assigneeId2: f.assigneeId2 === p.id ? "" : f.assigneeId2 });
     setPop(null); setQuery("");
+    // ⏎ Курсор назад в опис (9377): обрав людину — і Enter одразу створює задачу, без кліку по кнопці.
+    titleRef.current?.focus();
   };
   const setKind = (k: Kind) => {
     if (k === "kpi" || k === "react") { onKind(k); return; }
@@ -164,23 +164,6 @@ export function TaskCreateDialog({
               onChange={(e) => setForm((f) => ({ ...f, goalResult: e.target.value }))}
               placeholder="Напр.: гроші постійних клієнтів за грудень ≥ 3 млн ₴ у Звіті КВП" />
             {!form.goalResult.trim() && <span className="tc-hint">Без результату стратегічна задача не створиться</span>}
-          </div>
-        )}
-
-        {/* 👔 КЕРІВНИКИ ОДНИМ КЛІКОМ (9377): кнопка «Поставити задачу» → текст → керівник → Enter. Після кліку курсор
-            повертається в опис, щоб Enter створив задачу, а не натиснув кнопку вдруге. */}
-        {sharedIntent && leaders.length > 0 && (
-          <div className="tc-chips tc-leads" role="group" aria-label="Керівники">
-            <span className="tc-leads-h">👔 Керівники:</span>
-            {leaders.map((l) => {
-              const on = form.assigneeUserId === "" && form.assigneeId === l.id;
-              return (
-                <button type="button" key={l.id} className={`tc-chip${on ? " set" : ""}`} aria-pressed={on}
-                  onClick={(e) => { e.stopPropagation(); pick({ kind: "manager", id: l.id, name: l.name }); titleRef.current?.focus(); }}>
-                  <span className="tc-ava">{initials(l.name)}</span>{l.name}
-                </button>
-              );
-            })}
           </div>
         )}
 

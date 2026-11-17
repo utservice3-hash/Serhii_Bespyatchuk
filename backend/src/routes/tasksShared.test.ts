@@ -965,9 +965,9 @@ test("#493 СЕЛЕКТ ВИКОНАВЦЯ: моя команда першою, 
   const groups = src.split("<AssigneeOptgroups options=").length - 1;
   assert.ok(groups >= 3, `🔴 селектів виконавця з групуванням ${groups}, чекали ≥3 (форма KPI, картка, клітинка)`);
   const dlg = codeOf("pages", "dashboard", "sections", "TaskCreateDialog.tsx");
-  // 👔 17.11.2026 (9377): над командами — ярлик «Керівники» (`withLeaders`); серед КОМАНД моя лишається першою —
-  // `withLeaders` порядку команд не змінює, це тримає `#7880`. Тут — що команди й далі йдуть через `teamGroups`.
-  assert.match(dlg, /pickGroups\(withLeaders\(teamGroups\(managerOptions, myTeamId\), managerOptions, selfManagerId\), plainAccounts, query\)/, "🔴 вибір виконавця в діалозі не ставить мою команду першою");
+  // 👔 17.11.2026 (9377, Роман): першою — група «Керівники»; серед КОМАНД моя лишається першою —
+  // `pickGroupsLeadersFirst` порядку команд не змінює, це тримає `#7880`. Тут — що команди й далі йдуть через `teamGroups`.
+  assert.match(dlg, /pickGroupsLeadersFirst\(teamGroups\(managerOptions, myTeamId\), managerOptions, accounts, query\)/, "🔴 вибір виконавця в діалозі не ставить мою команду першою");
   assert.match(dlg, /pickGroups\(teamGroups\(managerOptions, myTeamId, form\.assigneeId\), \[\], query\)/, "🔴 другий виконавець не вирізає першого");
   assert.equal(src.split("managerOptions.map((m) => <option").length - 1, 1, "🔴 якийсь селект знову плоский (дозволено лише фільтр у шапці)");
   assert.ok(src.split("<InactiveTeamHint people={myTeamInactive} />").length - 1 >= 2, "🔴 підказки про неактивних немає у формі чи картці");

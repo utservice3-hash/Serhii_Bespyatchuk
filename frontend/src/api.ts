@@ -3906,7 +3906,11 @@ export interface TaskHistoryEntry {
   actorRole?: string | null;
 }
 /** Кандидат у виконавці-акаунти. Сервер віддає імʼя без email — логін не їде на екран. */
-export interface TaskAssignee { id: number; name: string; nameIsLogin: boolean; managerId: number | null }
+export interface TaskAssignee {
+  id: number; name: string; nameIsLogin: boolean; managerId: number | null;
+  /** Ефективна роль акаунта (`role_override ?? role`) — для групи «Керівники» (9377). */
+  role?: string | null;
+}
 
 /** 🔴 Ліміт файла 5 МБ — рішення Романа 14.09.2026. Дзеркалить `FILE_MAX_BYTES` сервера. */
 export const TASK_FILE_MAX_BYTES = 5 * 1024 * 1024;

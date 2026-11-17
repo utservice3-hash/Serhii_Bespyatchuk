@@ -83,27 +83,45 @@ export function pickGroups(
 export const LEADERS_TITLE = "👔 Керівники";
 
 /**
- * 👔 КЕРІВНИКИ ЗВЕРХУ (9377, Юлія 16.11.2026: «щоб поставити задачу Андрію, Дарині, Василю… треба гортати
- * весь список з 60 людей»). Керівник — активний менеджер з роллю «Тимлид» у Kommo (`isTeamLead`), тож склад
- * блоку — дзеркало CRM, руками його ніхто не веде. Себе не показуємо. Людина лишається і у своїй команді:
- * блок — ярлик угорі, а не переїзд. Немає жодного керівника — групи немає (а не порожній заголовок).
+ * Ролі акаунтів, що входять у «Керівники» (9377, Роман 17.11.2026: «тімліди, Сергій, я, Даша і т.д.»):
+ * адмін, КВП, СЕО, операційний директор. Бухгалтерія, HR, фінансист, менеджер — ні.
+ */
+export const LEADER_ROLES: readonly string[] = ["admin", "kvp", "ceo", "opdir"];
+
+type LeadMgr = { id: number; name: string; isTeamLead?: boolean };
+type LeadAcc = { id: number; name: string; managerId: number | null; role?: string | null };
+
+/**
+ * 👔 СПОЧАТКУ КЕРІВНИКИ, ПОТІМ УСІ ІНШІ (9377; Роман 17.11.2026: «щоб при виборі всіх були спочатку керівники,
+ * а потім тільки менеджери і інші»). Керівник — менеджер із роллю «Тимлид» у Kommo (`isTeamLead`) або людина,
+ * чий акаунт має роль із `LEADER_ROLES` (менеджер, привʼязаний до такого акаунта, теж керівник). Керівники —
+ * одна група першою, за абеткою; з команд і з «Акаунтів» вони прибрані, щоб нікого не було двічі. Далі —
+ * команди в порядку `teamGroups` (моя перша), далі акаунти. Пошук — по всіх групах; порожні зникають.
  * Тримає `#7880`.
  */
-export function withLeaders<G extends readonly [string, readonly { id: number; name: string }[]]>(
-  groups: readonly G[],
-  options: readonly { id: number; name: string; isTeamLead?: boolean }[],
-  selfId: number | null = null,
-): [string, { id: number; name: string }[]][] {
-  const leaders = leadersOf(options, selfId);
-  const rest = groups.map(([t, ps]) => [t, [...ps]] as [string, { id: number; name: string }[]]);
-  return leaders.length ? [[LEADERS_TITLE, leaders], ...rest] : rest;
-}
-
-/** Керівники для ряду кнопок і для групи — за абеткою, без мене, без дублів. Тримає `#7880`. */
-export function leadersOf(options: readonly { id: number; name: string; isTeamLead?: boolean }[], selfId: number | null = null): { id: number; name: string }[] {
-  const byId = new Map<number, { id: number; name: string }>();
-  for (const m of options) if (m.isTeamLead === true && m.id !== selfId && !byId.has(m.id)) byId.set(m.id, { id: m.id, name: m.name });
-  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, "uk"));
+export function pickGroupsLeadersFirst(
+  managerGroups: readonly [string, readonly { id: number; name: string }[]][],
+  managers: readonly LeadMgr[],
+  accounts: readonly LeadAcc[],
+  query: string,
+): [string, PickPerson[]][] {
+  const leadRole = (r: string | null | undefined) => r != null && LEADER_ROLES.includes(r);
+  const leadMgr = new Set<number>(managers.filter((m) => m.isTeamLead === true).map((m) => m.id));
+  for (const a of accounts) if (a.managerId != null && leadRole(a.role)) leadMgr.add(a.managerId);
+  const mgrById = new Map(managers.map((m) => [m.id, m] as const));
+  const plain = accounts.filter((a) => a.managerId == null);
+  const leaders: PickPerson[] = [
+    ...[...leadMgr].filter((id) => mgrById.has(id)).map((id) => ({ kind: "manager" as const, id, name: mgrById.get(id)!.name })),
+    ...plain.filter((a) => leadRole(a.role)).map((a) => ({ kind: "account" as const, id: a.id, name: a.name })),
+  ].sort((x, y) => x.name.localeCompare(y.name, "uk"));
+  const q = query.trim().toLowerCase();
+  const head: [string, PickPerson[]][] = [[LEADERS_TITLE, leaders.filter((p) => !q || p.name.toLowerCase().includes(q))]];
+  const rest = pickGroups(
+    managerGroups.map(([t, ms]) => [t, ms.filter((m) => !leadMgr.has(m.id))] as [string, { id: number; name: string }[]]),
+    plain.filter((a) => !leadRole(a.role)),
+    query,
+  );
+  return [...head, ...rest].filter(([, ps]) => ps.length > 0);
 }
 
 /**
