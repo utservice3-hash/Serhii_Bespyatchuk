@@ -564,3 +564,23 @@ test("#3651 тег «LinkedIn» теж робить угоду угодою з L
   const by = Object.fromEntries(r.deals.map((x) => [x.kommoId, [x.bySource, x.byTag]]));
   assert.deepEqual(by, { 9363101: [false, true], 9363102: [true, true], 9363103: [true, false] }, "🔴 «звідки LinkedIn» не той");
 });
+
+/**
+ * 🏷 ЗАДАЧА 9363 · ДОБІР ІСТОРІЇ: з подій «тег додано» беремо рівно угоди, яким додали тег «LinkedIn». Формат Kommo
+ * `[{ tag: { name } }]`; кілька тегів в одній події; схожий тег, інша сутність (контакт) і порожня подія — ні.
+ * 🧨 САБОТАЖ: у `leadIdsWithTag` `.includes(tag)` → `.some((n) => n.includes("Linked"))` — червоніє «схожий тег».
+ */
+test("#3653 добір тегів з подій Kommo «тег додано»: лише угоди з тегом «LinkedIn», без дублів; схожий тег, контакт і порожня подія — ні", async () => {
+  const { leadIdsWithTag, tagNamesOf } = await import("./linkedinTagEvents.js");
+  assert.deepEqual(tagNamesOf([{ tag: { name: " LinkedIn " } }, { tag: { name: "VIP" } }]), ["LinkedIn", "VIP"]);
+  assert.deepEqual(tagNamesOf(null), [], "🔴 порожня подія впала або вигадала тег");
+  const ev = [
+    { entityId: 30, entityType: "lead", valueAfter: [{ tag: { name: "LinkedIn" } }] },
+    { entityId: 10, entityType: "lead", valueAfter: [{ tag: { name: "VIP" } }, { tag: { name: "LinkedIn" } }] },
+    { entityId: 30, entityType: "lead", valueAfter: [{ tag: { name: "LinkedIn" } }] },           // повтор — один раз
+    { entityId: 20, entityType: "lead", valueAfter: [{ tag: { name: "LinkedIn-архів" } }] },     // схожий — ні
+    { entityId: 40, entityType: "contact", valueAfter: [{ tag: { name: "LinkedIn" } }] },        // контакт — ні
+    { entityId: 50, entityType: "lead", valueAfter: [] },
+  ];
+  assert.deepEqual(leadIdsWithTag(ev, "LinkedIn"), [10, 30], "🔴 добір узяв схожий тег, контакт чи дубль — або загубив угоду з кількома тегами");
+});

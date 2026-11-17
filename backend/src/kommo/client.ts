@@ -829,6 +829,33 @@ export async function forEachStatusChangeEventPage(
   return total;
 }
 
+/**
+ * 🏷 Події «тег додано» на угодах за [fromUnix, toUnix] (задача 9363). Сторінками по 100, як решта подій; `maxPages` —
+ * стеля одного проходу (Kommo капить пагінацію подій ~20 тис., тож викликати помісячно). `capped` — дійшли до стелі.
+ */
+export async function forEachTagAddedEventPage(
+  fromUnix: number, toUnix: number,
+  onPage: (events: { entityId: number; entityType: string; valueAfter: unknown; at: number }[]) => Promise<void>,
+  maxPages = 200,
+): Promise<{ total: number; capped: boolean }> {
+  type Raw = { entity_id: number; entity_type: string; created_at: number; value_after?: unknown };
+  let total = 0;
+  for (let page = 1; ; page++) {
+    const data = await kommoRequest<KommoListResponse<Raw>>(
+      `/api/v4/events?limit=100&page=${page}&filter[type]=entity_tag_added&filter[entity]=lead` +
+        `&${encodeURIComponent("filter[created_at][from]")}=${fromUnix}` +
+        `&${encodeURIComponent("filter[created_at][to]")}=${toUnix}`
+    );
+    const raw = data?._embedded?.events ?? [];
+    if (raw.length) {
+      await onPage(raw.map((e) => ({ entityId: e.entity_id, entityType: e.entity_type, valueAfter: e.value_after, at: e.created_at })));
+      total += raw.length;
+    }
+    if (raw.length < 100 || !data?._links?.next) return { total, capped: false };
+    if (page >= maxPages) return { total, capped: true };
+  }
+}
+
 export interface KommoResponsibleEvent {
   entityId: number;
   /** Хто був відповідальним ДО зміни (для «хто закривав угоду», «Результат місяця», 23.10.2026). */
