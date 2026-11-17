@@ -7,7 +7,7 @@ import { CreateTaskDialog } from "./ReactivationBits";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { monthsLabel } from "./ClientSeasonBlock";
-import { readLeadNav, leadNavSearch, backTarget, type LeadNav } from "../clientLeadNav";
+import { readLeadNav, leadNavSearch, backTarget, backIsHistoryBack, type LeadNav } from "../clientLeadNav";
 
 /**
  * 🚦 «З КИМ З ПОСТІЙНИХ ГОВОРИТИ» — ПРОСТИЙ ЕКРАН ТІМЛІДА (ТЗ Юлі 28.10.2026, етап 2; задача 7360).
@@ -130,13 +130,18 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   const dockSrc = useDockSrc();
   const topRef = useRef<HTMLDivElement>(null);
 
-  /** Перехід між рівнями — окремий запис історії (`pushState`), тож «назад» браузера повертає на рівень вище. */
-  const go = useCallback((nav: LeadNav) => {
+  /**
+   * Перехід між рівнями — окремий запис історії (`pushState`), тож «назад» браузера повертає на рівень вище.
+   * Кнопка «← Назад» (`back`) там, де ми прийшли саме з того рівня, робить `history.back()`, а не новий запис.
+   */
+  const go = useCallback((nav: LeadNav, back = false) => {
+    topRef.current?.scrollIntoView({ block: "start" });
+    if (back && backIsHistoryBack(window.history.state, nav)) { window.history.back(); return; }
     setTeam(nav.team); setMgr(nav.mgr); setOpen(null);
     const u = new URL(window.location.href);
-    window.history.pushState({}, "", `${u.pathname}${leadNavSearch(u.search, nav)}${u.hash}`);
-    topRef.current?.scrollIntoView({ block: "start" });
-  }, []);
+    const from = readLeadNav(u.search, auth.role, auth.teamId);
+    window.history.pushState({ lead9225: { from } }, "", `${u.pathname}${leadNavSearch(u.search, nav)}${u.hash}`);
+  }, [auth.role, auth.teamId]);
   useEffect(() => {
     const onPop = () => {
       const n = readLeadNav(window.location.search, auth.role, auth.teamId);
@@ -176,7 +181,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   const mgrName = managers.find((m) => m.id === mgrEff)?.name;
   const back = backTarget({ team: teamEff, mgr: mgrEff }, auth.role);
   const backBtn = back && (
-    <button type="button" onClick={() => go(back.nav)} style={{ ...S.btn(true), fontSize: 14, padding: "8px 16px" }}>{back.label}</button>
+    <button type="button" onClick={() => go(back.nav, true)} style={{ ...S.btn(true), fontSize: 14, padding: "8px 16px" }}>{back.label}</button>
   );
   const scopeRows = mgrRows ?? teamRows;
 
@@ -186,7 +191,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
         <button type="button" onClick={() => go({ team: null, mgr: null })} style={{ ...S.btn(teamEff == null), padding: "3px 9px" }}>Усі команди</button>
       )}
       {!isManager && teamEff != null && <>
-        <span style={{ color: "#9ca3af" }}>›</span>
+        {auth.role !== "team_lead" && <span style={{ color: "#9ca3af" }}>›</span>}
         <button type="button" onClick={() => go({ team: teamEff, mgr: null })} style={{ ...S.btn(mgrEff == null), padding: "3px 9px" }}>{teamName}</button>
       </>}
       {!isManager && mgrEff != null && <><span style={{ color: "#9ca3af" }}>›</span><b>{mgrName}</b></>}

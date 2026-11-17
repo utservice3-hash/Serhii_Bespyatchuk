@@ -45,3 +45,13 @@ export function backTarget(nav: LeadNav, role: string): { label: string; nav: Le
   if (nav.team != null && role !== "team_lead") return { label: "← Назад до списку команд", nav: { team: null, mgr: null } };
   return null;
 }
+
+/**
+ * Чи кнопка «назад» на сторінці має зробити `history.back()`, а не новий запис. Так історія лишається лінійною:
+ * інакше «← Назад» клав би ще один запис, і наступне «назад» браузера повертало б у щойно закритого менеджера.
+ * `state` — `history.state` поточного запису; ми кладемо туди рівень, з якого прийшли (`from`).
+ */
+export function backIsHistoryBack(state: unknown, target: LeadNav): boolean {
+  const from = (state as { lead9225?: { from?: LeadNav } } | null)?.lead9225?.from;
+  return from != null && from.team === target.team && from.mgr === target.mgr;
+}

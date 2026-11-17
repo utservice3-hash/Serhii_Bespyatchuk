@@ -73,8 +73,10 @@ test("#9225d ЕКРАН КЛИЧЕ ПРАВИЛО: перехід — pushState,
   const loyalty = readFileSync(FE("sections/LoyaltySection.tsx"), "utf8");
 
   // ① Перехід між рівнями — окремий запис історії, інакше «назад» знову виведе з розділу.
-  const go = lead.slice(lead.indexOf("const go = useCallback("), lead.indexOf("}, []);", lead.indexOf("const go = useCallback(")));
-  assert.ok(go.length > 0, "у ClientLeadSection немає функції переходу go");
+  const goStart = lead.indexOf("const go = useCallback(");
+  const goEnd = lead.indexOf("}, [auth.role, auth.teamId]);", goStart);
+  assert.ok(goStart >= 0 && goEnd > goStart, "у ClientLeadSection немає функції переходу go (або змінилась її межа)");
+  const go = lead.slice(goStart, goEnd);
   assert.match(go, /window\.history\.pushState\(/, "🔴 перехід між рівнями не пише запис історії (pushState)");
   assert.match(go, /leadNavSearch\(/, "🔴 перехід пише адресу не через leadNavSearch");
   // ② Усі входи на рівень ідуть через go — жодного прямого setMgr/setTeam у кліках.
@@ -87,4 +89,21 @@ test("#9225d ЕКРАН КЛИЧЕ ПРАВИЛО: перехід — pushState,
   // ④ Кнопка — і над лічильниками, і під списком клієнтів.
   assert.match(lead, /\{backBtn\}\{crumb\}/, "🔴 немає кнопки «назад» поруч із ланцюжком");
   assert.match(lead, /\{showClients && backBtn && <div>\{backBtn\}<\/div>\}/, "🔴 немає кнопки «назад» під списком клієнтів");
+});
+
+test("#9225e КНОПКА «НАЗАД» НЕ ПЛОДИТЬ ІСТОРІЮ: прийшли з того рівня → history.back(); інакше — новий запис", async () => {
+  const { backIsHistoryBack } = await loadNav();
+  // ① Прийшли зі списку менеджерів команди 6 — кнопка «назад» туди ж: це крок назад в історії.
+  assert.equal(backIsHistoryBack({ lead9225: { from: { team: 6, mgr: null } } }, { team: 6, mgr: null }), true);
+  // ② Дзеркала: відкрито посиланням (стану немає), чужий стан роутера, прийшли з іншого рівня — новий запис.
+  assert.equal(backIsHistoryBack(null, { team: 6, mgr: null }), false);
+  assert.equal(backIsHistoryBack({ idx: 3, key: "x" }, { team: 6, mgr: null }), false);
+  assert.equal(backIsHistoryBack({ lead9225: { from: { team: null, mgr: null } } }, { team: 6, mgr: null }), false);
+  assert.equal(backIsHistoryBack({ lead9225: { from: { team: 6, mgr: 191 } } }, { team: 6, mgr: null }), false);
+
+  // ③ Екран справді кличе це для кнопки, а перехід кладе `from` у стан запису.
+  const lead = readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8");
+  assert.match(lead, /onClick=\{\(\) => go\(back\.nav, true\)\}/, "🔴 кнопка «назад» не позначає перехід як «назад»");
+  assert.match(lead, /if \(back && backIsHistoryBack\(window\.history\.state, nav\)\) \{ window\.history\.back\(\); return; \}/, "🔴 кнопка «назад» не користується history.back()");
+  assert.match(lead, /pushState\(\{ lead9225: \{ from \} \}/, "🔴 перехід не запамʼятовує рівень, з якого прийшли");
 });
