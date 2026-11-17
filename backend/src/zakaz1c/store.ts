@@ -135,6 +135,27 @@ export async function markInvoiceAttached(pool: Pool, uid: string, fileUuid: str
                      WHERE invoice_uid = $1`, [uid, fileUuid, error]);
 }
 
+/** Що востаннє пішло в `deal_fields` 1С по рахунках угоди: uid → обʼєкт або `null` (рахунок до 0.6.4). */
+export async function sentDealFields(pool: Pool, leadId: number): Promise<Map<string, Record<string, unknown> | null>> {
+  const q = await pool.query<{ invoice_uid: string; deal_fields_sent: Record<string, unknown> | null }>(
+    `SELECT invoice_uid, deal_fields_sent FROM zakaz_onec_invoices WHERE lead_id = $1`, [leadId]);
+  return new Map(q.rows.map((r) => [r.invoice_uid, r.deal_fields_sent]));
+}
+
+/** Записати, що пішло в 1С (`fields`), або відмову 1С словами (`error`, тоді `fields` лишається як було). */
+export async function saveDealFieldsSent(pool: Pool, uid: string, fields: Record<string, unknown> | null, error: string | null): Promise<void> {
+  await pool.query(`UPDATE zakaz_onec_invoices SET deal_fields_sent = COALESCE($2::jsonb, deal_fields_sent), deal_fields_error = $3, updated_at = now()
+                     WHERE invoice_uid = $1`, [uid, fields ? JSON.stringify(fields) : null, error]);
+}
+
+/** Угоди, де є рахунки віджета від 0.6.4 без оплати й реалізації за 90 днів — їх щогодини звіряє `runDealFieldsSync`. */
+export async function leadsForDealFieldsSync(pool: Pool): Promise<number[]> {
+  const q = await pool.query<{ lead_id: string }>(
+    `SELECT DISTINCT lead_id::text AS lead_id FROM zakaz_onec_invoices
+      WHERE deal_fields_sent IS NOT NULL AND realized IS NOT TRUE AND COALESCE(paid_total, 0) = 0 AND created_at > now() - interval '90 days'`);
+  return q.rows.map((r) => Number(r.lead_id));
+}
+
 /** Номери ВСІХ рахунків 1С за угодою (`onec_deal_invoices`, синк щогодини) — для «хто веде угоду» (`owner.ts`). */
 export async function onecNumbersOfDeal(pool: Pool, leadId: number): Promise<string[]> {
   const q = await pool.query<{ number: string | null }>(`SELECT number FROM onec_deal_invoices WHERE deal_id = $1`, [leadId]);

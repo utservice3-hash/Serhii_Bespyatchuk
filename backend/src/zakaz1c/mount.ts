@@ -26,10 +26,11 @@ import { requireKommoCaller } from "./kommoAuth.js";
 import { onecServiceBase, zakaz1cFieldsMode, zakaz1cMode, zakaz1cOnecWebhookKey, zakaz1cTestEdrpou, zakaz1cTesters } from "./env.js";
 import { decidePayment, parseEvent, webhookKeyOk, type OnecEvent } from "./events.js";
 import { pushActDate } from "./actDates.js";
+import { pushDealFields } from "./dealFields.js";
 import {
   CURRENCIES, PIB_RULE, actPdfFrom1c, buildCreateCustomerBody, buildCreateInvoiceBody, buildPersonCustomerBody, buildUpdateInvoiceBody, codeOfService,
   createCustomerIn1c, createInvoiceIn1c, customerInfoByUid, customerInfoFrom1c, invoiceAllowed, invoicePdfFrom1c, itemVatsFor, kyivIso, orgRules, organizationsFrom1c,
-  parseInvoiceForm, serviceSwaps, servicesFor, updateInvoiceIn1c, vatTypesFor, type BankAccount, type CreatedInvoice, type InvoiceForm,
+  genesisDealFields, parseInvoiceForm, serviceSwaps, servicesFor, updateInvoiceIn1c, vatTypesFor, type BankAccount, type CreatedInvoice, type InvoiceForm,
   type OrgRule,
 } from "./invoice.js";
 import {
@@ -39,7 +40,7 @@ import { noteInvoice } from "./notes.js";
 import { GENESIS_DEAL_WHY, WIDGET_TAG, claimPatch, dealOwner, type DealOwner } from "./owner.js";
 import {
   actAttached, applyPaymentEvent, dealInvoicesPay, invoiceForReattach, invoiceOfLead, lastWritten, listInvoices, markActAttached, markEvent,
-  markInvoiceAttached, onecNumbersOfDeal,
+  markInvoiceAttached, onecNumbersOfDeal, saveDealFieldsSent,
   personOfLead, recordEvent, saveInvoice, savePerson, saveWritten, type InvoiceRow,
 } from "./store.js";
 
@@ -211,6 +212,8 @@ export function buildZakaz1cRouter(): Router {
       await pushActDate(pool, leadId, lead.actDate, actInvoices(listed)).catch(() => undefined);
       invoices = await listInvoices(pool, leadId, today);
     }
+    // Поля угоди («Расход», авто…) → рахунки віджета, якщо змінились (0.6.4). Збій 1С не заважає відкрити вкладку.
+    if (owner === "widget") await pushDealFields(pool, leadId, lead).catch(() => undefined);
     res.json({
       mode, testEdrpou: zakaz1cTestEdrpou(), today, managerName, owner, ownerWhy: owner === "genesis" ? GENESIS_DEAL_WHY : null,
       genesisNumbers: owner === "genesis" ? info.foreign : [],
@@ -322,7 +325,8 @@ export function buildZakaz1cRouter(): Router {
 
     const o = orgs.find((x) => x.key === form.org)!;
     const manager = await kommoUserName(caller.userId);
-    const body = buildCreateInvoiceBody(leadId, form, { customerUid, manager, today, orgCode: o.code! });
+    const dealFields = genesisDealFields(lead.raw);
+    const body = buildCreateInvoiceBody(leadId, form, { customerUid, manager, today, orgCode: o.code!, dealFields });
     const result = await createInvoiceIn1c(onecServiceBase(), body);
     if (!result.ok) return res.status(502).json({ error: result.why });
     const inv = result.invoice;
@@ -344,6 +348,7 @@ export function buildZakaz1cRouter(): Router {
     }
     await saveInvoice(pool, { leadId, inv: { ...inv, warnings }, form: inv.existed ? null : form, mode: mode === "live" ? "live" : "test",
       kommoUserId: caller.userId, fileUuid: att.fileUuid, attachError });
+    if (!inv.existed) await saveDealFieldsSent(pool, inv.uid, dealFields, null).catch(() => undefined);
     res.json({
       invoice: { uid: inv.uid, number: inv.numberPrint, date: inv.date, organization: inv.organization, agreement: inv.agreement,
         currency: inv.currency, vatType: inv.vatType, total: inv.total, existed: inv.existed, warnings },
@@ -380,7 +385,9 @@ export function buildZakaz1cRouter(): Router {
     form.actDate = lead.actDate || form.actDate || row.act_date || "";
     const o = orgs.find((x) => x.key === form.org)!;
     const manager = await kommoUserName(caller.userId);
-    const result = await updateInvoiceIn1c(onecServiceBase(), buildUpdateInvoiceBody(uid, form, { manager, dealId: leadId, orgCode: o.code! }));
+    const dealFields = genesisDealFields(lead.raw);
+    const result = await updateInvoiceIn1c(onecServiceBase(), buildUpdateInvoiceBody(uid, form, { manager, dealId: leadId, orgCode: o.code!, dealFields }));
+    if (result.ok) await saveDealFieldsSent(pool, uid, dealFields, null).catch(() => undefined);
     if (!result.ok) return res.status(502).json({ error: result.why });
     const inv = result.invoice;
     const att = await attachInvoice(leadId, inv, o, mode, true);

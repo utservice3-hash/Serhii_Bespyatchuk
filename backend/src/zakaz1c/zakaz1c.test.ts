@@ -5,6 +5,8 @@ import path from "node:path";
 import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
 import { KOMMO_FIELDS, moneyOf } from "./kommoApi.js";
+import { genesisDealFields as gdf } from "./invoice.js";
+import { sameDealFields } from "./dealFields.js";
 import {
   actPdfFrom1c, actRefusal, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, canEdit, customerInfoFrom1c, dealFieldsOf,
   fromCreateInvoiceReply, genesisComment, invoiceAllowed, orgRules, parseInvoiceForm, parseOrganizations, payStateOf, serviceLine, serviceSwaps,
@@ -822,4 +824,37 @@ test("#7144 СУМА РАХУНКУ — З «ПРИХОД 1»: бюджет уг
   assert.equal(moneyOf("—"), 0);
   assert.match(MOUNT(), /lead: \{ id: lead\.id, name: lead\.name, price: lead\.income1,/, "вікно й далі отримує бюджет як суму рахунку");
   assert.match(WIDGET("script.js"), /price: d\.lead\.income1 \|\| d\.lead\.price \|\| ""/, "вікно бере суму не з «Приход 1»");
+});
+
+test("#7145 ПОЛЯ УГОДИ → РАХУНОК 1С ЯК У GENESIS: «Расход 1–3» з типом оплати, авто, код оплати, тип запиту, канал продажу й реєстрація компанії йдуть у deal_fields при виставленні, «Змінити» і звірці; оплачений, реалізований і рахунок до 0.6.4 звірка не чіпає", () => {
+  // 17.11.2026, бухгалтерія: «коли роблять по новому рахунку, не заповнюється Расход 1». Id полів — лист 1С 02.11.2026.
+  assert.deepEqual([KOMMO_FIELDS.leadExpense1, KOMMO_FIELDS.leadExpense2, KOMMO_FIELDS.leadExpense3], [2097661, 2097663, 2097665]);
+  assert.deepEqual([KOMMO_FIELDS.leadExpenseType1, KOMMO_FIELDS.leadExpenseType2, KOMMO_FIELDS.leadExpenseType3], [2097651, 2097653, 2097655]);
+  const f = gdf({ expense_1: "74 000", expense_2: "1500,50", expense_3: "", payment_type_1: "Безнал с НДС", vehicle: "МАН АТ9718СР",
+    payment_code: "", request_type: "Перевезення", sales_channel: "Google Ads", registration_type: "", registration_code: "" });
+  assert.equal(f.expense_1, 74000);
+  assert.equal(f.expense_2, 1500.5);
+  assert.equal(f.expense_3, null, "порожній «Расход» не очищає реквізит");
+  assert.equal(gdf({ expense_1: "дві тисячі" }).expense_1, null, "нечислове «Расход» зламає весь рахунок у 1С");
+  assert.equal(f.payment_type_1, "Безнал с НДС");
+  assert.equal(f.payment_type_2, null);
+  assert.equal(f.vehicle, "МАН АТ9718СР");
+  const p = parseInvoiceForm(FORM, ctx);
+  assert.equal(p.ok, true);
+  if (!p.ok) return;
+  const c = buildCreateInvoiceBody(1, p.form, { customerUid: "u", manager: "", today: TODAY, orgCode: "000000004", dealFields: f }) as Record<string, any>;
+  assert.equal(c.deal_fields.expense_1, 74000, "«Расход 1» не йде в новий рахунок");
+  assert.equal(c.deal_fields.payment_type_1, "Безнал с НДС");
+  assert.equal(c.deal_fields.act_date, "2026-10-30", "поля угоди перебили дату акту");
+  assert.equal(c.deal_fields.crm_comment, "клієнт просив до пʼятниці", "поля угоди перебили коментар");
+  const u = buildUpdateInvoiceBody("uid", p.form, { manager: "m", dealId: 1, orgCode: "000000004", dealFields: f }) as Record<string, any>;
+  assert.equal(u.deal_fields.expense_1, 74000, "«Змінити» не переносить «Расход 1»");
+  // Звірка: jsonb не зберігає порядок ключів — порівнюємо по ключах; рахунок до 0.6.4 (null) — «не надіслано».
+  assert.equal(sameDealFields(JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(f).reverse()))), f), true);
+  assert.equal(sameDealFields({ ...f, expense_1: 1 }, f), false);
+  assert.equal(sameDealFields(null, f), false);
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "dealFields.ts"), "utf8");
+  assert.match(src, /if \(s === null && !opts\.backfill\) continue;/, "звірка дописує рахунки до 0.6.4 без дозволу");
+  assert.match(src, /if \(r\.realized \|\| r\.pay\.paid > 0 \|\| r\.pay\.k === "paid"\) continue;/, "звірка ліземо в оплачений/реалізований рахунок");
+  assert.match(src, /updateInvoiceIn1c\(onecServiceBase\(\), \{ invoice_uid: r\.invoice_uid, deal_fields: want \}\)/, "звірка шле в 1С більше, ніж поля угоди");
 });
