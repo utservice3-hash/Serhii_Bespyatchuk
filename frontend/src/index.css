@@ -1654,6 +1654,9 @@ tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
 .tc-res input.bad { border-color: var(--brand); }
 .tc-hint { font-size: 13px; color: var(--brand); }
 .tc-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 👔 Ряд керівників у «Спільній задачі» (9377): один клік — виконавець. */
+.tc-leads { align-items: center; gap: 6px; }
+.tc-leads-h { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-right: 2px; }
 .tc-anchor { position: relative; }
 .tc-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);
   border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 14px; cursor: pointer; white-space: nowrap; }

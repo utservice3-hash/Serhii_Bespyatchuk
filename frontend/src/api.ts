@@ -2068,6 +2068,8 @@ export interface ManagerOption {
   name: string;
   teamId: number | null;
   teamName: string | null;
+  /** Тімлід за роллю «Тимлид» у Kommo (9377: блок «Керівники»). Необовʼязкове — інші джерела списку його не дають. */
+  isTeamLead?: boolean;
 }
 
 export async function fetchManagerOptions(teamId?: number): Promise<ManagerOption[]> {

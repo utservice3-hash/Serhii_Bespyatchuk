@@ -78,3 +78,51 @@ export function pickGroups(
     accounts.filter((a) => hit(a.name)).map((a) => ({ kind: "account" as const, id: a.id, name: a.name }))]);
   return out.filter(([, ps]) => ps.length > 0);
 }
+
+/** Підпис групи керівників у виборі виконавця (9377). */
+export const LEADERS_TITLE = "👔 Керівники";
+
+/**
+ * 👔 КЕРІВНИКИ ЗВЕРХУ (9377, Юлія 16.11.2026: «щоб поставити задачу Андрію, Дарині, Василю… треба гортати
+ * весь список з 60 людей»). Керівник — активний менеджер з роллю «Тимлид» у Kommo (`isTeamLead`), тож склад
+ * блоку — дзеркало CRM, руками його ніхто не веде. Себе не показуємо. Людина лишається і у своїй команді:
+ * блок — ярлик угорі, а не переїзд. Немає жодного керівника — групи немає (а не порожній заголовок).
+ * Тримає `#7880`.
+ */
+export function withLeaders<G extends readonly [string, readonly { id: number; name: string }[]]>(
+  groups: readonly G[],
+  options: readonly { id: number; name: string; isTeamLead?: boolean }[],
+  selfId: number | null = null,
+): [string, { id: number; name: string }[]][] {
+  const leaders = leadersOf(options, selfId);
+  const rest = groups.map(([t, ps]) => [t, [...ps]] as [string, { id: number; name: string }[]]);
+  return leaders.length ? [[LEADERS_TITLE, leaders], ...rest] : rest;
+}
+
+/** Керівники для ряду кнопок і для групи — за абеткою, без мене, без дублів. Тримає `#7880`. */
+export function leadersOf(options: readonly { id: number; name: string; isTeamLead?: boolean }[], selfId: number | null = null): { id: number; name: string }[] {
+  const byId = new Map<number, { id: number; name: string }>();
+  for (const m of options) if (m.isTeamLead === true && m.id !== selfId && !byId.has(m.id)) byId.set(m.id, { id: m.id, name: m.name });
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, "uk"));
+}
+
+/**
+ * 📅 ДЕДЛАЙН ЗА ЗАМОВЧУВАННЯМ для задачі зі «Спільних» (9377: «Enter — задача створена з дедлайном»):
+ * «Завтра» від київського сьогодні, та сама дата, що в швидкій кнопці. Людина може змінити пігулкою
+ * «Дедлайн» до створення. Тримає `#7881`.
+ */
+export function defaultSharedDeadline(today: string): string {
+  return quickDates(today).find((q) => q.label === "Завтра")!.date;
+}
+
+/**
+ * ⏎ ЗВИЧАЙНИЙ ENTER СТВОРЮЄ ЗАДАЧУ — лише в діалозі «Спільна задача» (9377). Shift+Enter — новий рядок;
+ * під час набору через IME Enter підтверджує символ, а не форму. У звичайній «+ Додати» Enter лишається
+ * новим рядком (довгі описи), створює там Ctrl/⌘+Enter, як і раніше. Тримає `#7882`.
+ */
+export function plainEnterSubmits(
+  e: { key: string; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey?: boolean; isComposing?: boolean },
+  o: { sharedIntent: boolean },
+): boolean {
+  return o.sharedIntent && e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing;
+}
