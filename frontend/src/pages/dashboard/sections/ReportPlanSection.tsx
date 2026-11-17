@@ -657,6 +657,38 @@ export function Donut({ pct, title }: { pct: number; title?: string }) {
   );
 }
 
+/**
+ * ⓘ ПІДКАЗКИ КАРТКИ МЕНЕДЖЕРА (задача 9233, ТЗ Юлі 16.11.2026: «підказки ⓘ простими словами біля
+ * цих цифр, включно з «чекає рішення»»; приймання — Сергій і Василь розуміють цифру без пояснень).
+ *
+ * Тексти описують РІВНО те, що рахує код поруч, і їх треба правити разом із розрахунком:
+ *  · weekPlan  — `plans.effectiveWeekTargets` → `core/weekPlan.ts` (робочі дні + заморожування в понеділок; ручна ціль перемагає);
+ *  · sent      — `reportCuts.dispatchCohortByManagerDay` за ТИЖНЕВИЙ період (анкер `load_at`), оплачені й ні;
+ *  · projected — `forecast.forecastMonth(факт, expectThisMonth)`: добору НЕМАЄ (рішення власника 06.08.2026);
+ *  · expectLegend — «дата є» = `expectThisMonth` (зона `EXPECT_ZONE`, планова дата в цьому місяці),
+ *    «без дати» = `cohort.awaitNoDateSum` (авто ОБРАНОГО періоду, ще не оплачені, без планової дати);
+ *  · awaiting  — `carrierDeals.isAwaitingNow` (review|error і досі на етапі) + `reviewDeadline` для «прострочено».
+ * Гейт `#4031` стереже, що кожна ⓘ стоїть на своєму місці.
+ */
+const CARD_HINT = {
+  weekPlan: "Отримано за тиждень з плану тижня. План рахується в понеділок і до неділі не змінюється: "
+    + "що лишилось до плану місяця, ділимо на робочі дні, що лишились, і беремо частку цього тижня. "
+    + "Недобрали минулого тижня - план наступних більший, перевиконали - менший. "
+    + "Якщо тімлід задав ціль у Задачнику вручну, діє вона.",
+  sent: "Сума авто, які завантажились цього тижня (за «Датою загрузки» в Kommo), оплачені чи ні. "
+    + "Це робота тижня, а не гроші: гроші рахуються в день, коли зайшли, тому в «отримано» потрапляють "
+    + "і оплати за авто минулих тижнів. Ці числа збігатися не мають.",
+  projected: "Прогноз місяця = отримано + угоди, які чекають оплату з плановою датою в цьому місяці. "
+    + "Угоди без планової дати сюди не входять.",
+  expectLegend: "«Чекає, дата є» - угоди між «Виставленням рахунку» і «Очікуємо оплату», у яких у Kommo "
+    + "стоїть планова дата оплати в цьому місяці; входять у прогноз. "
+    + "«Чекає без дати» - авто, завантажені цього місяця, ще не оплачені і без планової дати; у прогноз не входять.",
+  awaiting: "Дзвінки на мобільний менеджера, де AI не впевнений, хто дзвонив (перевізник чи клієнт), "
+    + "або не зміг розібрати розмову. Угода стоїть на етапі «Дзвінки на мобільні», поки менеджер не вирішить сам. "
+    + "«Прострочено» - не вирішено до кінця робочого дня (якщо прийшло після 18:00 - до кінця наступного). "
+    + "Клік по кнопці - «Перевізники за розмовою».",
+} as const;
+
 // Смуга менеджера: МІСЯЦЬ (головна траєкторія, статус+сортування) + ТИЖДЕНЬ (поточний), обидва завжди (#11).
 /**
  * 🃏 КАРТКА МЕНЕДЖЕРА — НОВИЙ ВИГЛЯД (макет, погоджено 13.11.2026).
@@ -716,6 +748,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
               🚚 чекають рішення: {aw.awaitingNow}{aw.overdueNow > 0 ? ` · прострочено ${String(aw.overdueNow)}` : ""}
             </button>
           )}
+          {aw && <InfoHint text={CARD_HINT.awaiting} />}
         </div>
         {/**
           * 📊 СМУГА МІСЯЦЯ З УСІМ, ЩО БУЛО ДО РЕМЕЙКУ (Роман 16.11.2026: «повертай все», макет `kartka-maket`).
@@ -740,12 +773,13 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
               <span><i className="sw" style={{ background: sc }} />отримано <b>{fmt(m.fact)}</b></span>
               {m.expectThisMonth > 0 && <span><i className="sw rv-hatch" />чекає, дата є <b>{fmt(m.expectThisMonth)}</b></span>}
               {noDate > 0 && <span><i className="sw rv-hatch2" />чекає без дати <b>{fmt(noDate)}</b></span>}
+              {(m.expectThisMonth > 0 || noDate > 0) && <InfoHint text={CARD_HINT.expectLegend} />}
             </div>
           )}
           {uncovered > 0 && <div className="rv-ln"><span style={{ color: RED, fontWeight: 650 }}>не покрито {fmt(uncovered)} ₴ — {Math.round((uncovered / m.plan) * 100)}% плану</span></div>}
           <div className="rv-ln">треба <b>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.)
             {m.monthInProgress
-              ? <> · прогноз <b title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</>
+              ? <> · прогноз <b>{k(m.projected)}</b>{m.plan > 0 ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}<InfoHint text={CARD_HINT.projected} /></>
               : <> · прогноз — лише для повного поточного місяця</>}
           </div>
           {/* Форвард-блок ПОЗА обраним періодом — календарні місяці за плановою датою оплати, і це підписано. */}
@@ -760,10 +794,10 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
           * тижня; повертаючи смужку, беремо саме тиждень, щоб підпис і число говорили про одне.
           */}
         <div className="rv-trk">
-          <div className="tl"><span>Тиждень {weekLabel} · <b>{fmt(m.week.fact)}</b> з {fmt(m.week.target)}</span><span className="p">{wPct}%</span></div>
+          <div className="tl"><span>Тиждень {weekLabel} · <b>{fmt(m.week.fact)}</b> з {fmt(m.week.target)}<InfoHint text={CARD_HINT.weekPlan} /></span><span className="p">{wPct}%</span></div>
           <div className="rv-track"><i style={{ width: `${Math.min(100, wPct)}%`, background: "var(--rv-ink)", opacity: .55 }} /></div>
           {sent > 0 && (<>
-            <div className="tl" style={{ marginTop: 8 }}><span>Відправлено · <b>{fmt(sent)} ₴</b></span><span className="p" style={{ color: AMBER }}>{sentPct}%</span></div>
+            <div className="tl" style={{ marginTop: 8 }}><span>Відправлено · <b>{fmt(sent)} ₴</b><InfoHint text={CARD_HINT.sent} /></span><span className="p" style={{ color: AMBER }}>{sentPct}%</span></div>
             <div className="rv-track"><i className="rv-hatch" style={{ width: `${Math.min(100, sentPct)}%` }} /></div>
             <div className="rv-ln">{sentCars} {sentCars === 1 ? "машина" : sentCars < 5 ? "машини" : "машин"} · роботи зроблено на {sentPct}% тижневого плану</div>
           </>)}
