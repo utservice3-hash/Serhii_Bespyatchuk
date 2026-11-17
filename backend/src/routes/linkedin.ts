@@ -7,13 +7,14 @@ import { requireAuth } from "../auth/middleware.js";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { linkedinScope, loadLinkedinStats } from "../core/linkedinStats.js";
+import { kommoLeadUrl } from "../core/kommoLinks.js";
 
 export const linkedinRouter = Router();
 linkedinRouter.use(requireAuth);
 
 linkedinRouter.get("/stats", async (req, res) => {
   // Скоуп — з токена, не з запиту: менеджер — лише свої, тімлід — своя команда, керівництво — усі.
-  try { res.json(await loadLinkedinStats(pool, req.query.from, req.query.to, config.linkedinQueue.mode, new Date(), linkedinScope(req.auth!))); }
+  try { res.json(await loadLinkedinStats(pool, req.query.from, req.query.to, config.linkedinQueue.mode, new Date(), linkedinScope(req.auth!), kommoLeadUrl)); }
   catch (e) {
     const status = (e as { status?: number })?.status;
     if (!status) console.error("linkedin/stats:", e);

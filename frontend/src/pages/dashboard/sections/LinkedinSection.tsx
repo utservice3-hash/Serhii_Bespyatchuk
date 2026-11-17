@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchLinkedinStats, setLinkedinQueuePaused, type LinkedinStats } from "../../../api";
+import { fetchLinkedinStats, setLinkedinQueuePaused, type LinkedinOutcome, type LinkedinStats } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 import { useDialogs } from "../../../components/Dialogs";
 import { todayKyiv } from "../periodRules";
@@ -130,6 +130,53 @@ function BotStatus({ q, canEdit, busy, onToggle }: { q: LinkedinStats["queue"]; 
   );
 }
 
+const OUTCOME: Record<LinkedinOutcome, { label: string; color: string }> = {
+  open: { label: "у роботі", color: AMBER }, won: { label: "успішна", color: GREEN }, lost: { label: "закрита, не реалізована", color: MUTED },
+};
+
+/**
+ * 🔗 «Усі угоди з LinkedIn» (задача 9363): «Источник клиента» = LinkedIn у Kommo, будь-яка воронка й етап, включно із
+ * закритими. Не залежить від періоду: це поточний стан CRM на останній синк. Правило — `core/linkedinDeals.ts`.
+ */
+function AllDeals({ d, scope }: { d: LinkedinStats["deals"]; scope: LinkedinStats["scope"] }) {
+  const who = scope === "own" ? "мої" : scope === "team" ? "моєї команди" : "усі";
+  return (
+    <div className="chart-card" style={{ marginTop: 16 }}>
+      <h2 className="chart-title">Усі угоди з LinkedIn · {d.total}</h2>
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
+        Угоди, де в Kommo «Источник клиента» = LinkedIn ({who}), за весь час, етап — поточний у CRM. Від періоду вище не залежить, оновлюється з кожним синком.
+        {" "}У роботі <b>{d.open}</b> · успішні <b>{d.won}</b> · закриті й не реалізовані <b>{d.lost}</b>.
+      </div>
+      {d.total === 0 ? <p className="loading-text">Угод із джерелом «LinkedIn» у Kommo немає.</p> : (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(420px, 2fr)", gap: 16, alignItems: "start" }}>
+          <table className="data-table">
+            <thead><tr><th>Етап зараз</th><th style={{ textAlign: "right" }}>Угод</th></tr></thead>
+            <tbody>
+              {d.byStage.map((r) => (
+                <tr key={`${r.pipeline}|${r.stage}`}><td><span style={{ color: MUTED }}>{r.pipeline} · </span>{r.stage}</td>
+                  <td style={{ textAlign: "right", color: OUTCOME[r.outcome].color, fontWeight: 600 }}>{r.count}</td></tr>
+              ))}
+              <tr style={{ fontWeight: 700 }}><td>Разом</td><td style={{ textAlign: "right" }}>{d.total}</td></tr>
+            </tbody>
+          </table>
+          <table className="data-table">
+            <thead><tr><th>Угода</th><th>Етап зараз</th><th>Менеджер</th><th>Створено</th></tr></thead>
+            <tbody>{d.deals.map((x) => (
+              <tr key={x.kommoId}>
+                <td>{x.url ? <a href={x.url} target="_blank" rel="noreferrer">{x.name ?? `#${String(x.kommoId)}`}</a> : (x.name ?? `#${String(x.kommoId)}`)}</td>
+                <td><span style={{ color: OUTCOME[x.outcome].color, fontWeight: 600 }}>{x.stage}</span>
+                  <span style={{ fontSize: 11, color: MUTED }}> · {x.pipeline}</span></td>
+                <td>{x.managerName ?? "менеджера немає в дашборді"}</td>
+                <td style={{ whiteSpace: "nowrap" }}>{fmtAt(x.createdAt)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StatsTab({ s }: { s: LinkedinStats }) {
   const k = s.kpi;
   const tot = s.perManager.reduce((a, m) => ({ received: a.received + m.received, taken: a.taken + m.taken, ignored: a.ignored + m.ignored }), { received: 0, taken: 0, ignored: 0 });
@@ -147,6 +194,8 @@ function StatsTab({ s }: { s: LinkedinStats }) {
         <div className="kpi-card" title="Машини рахуються з каналу LinkedIn: потрібне джерело «LinkedIn» у Kommo і прохід «канал LinkedIn»"><span className="kpi-label">Машин поїхало</span><span className="kpi-value">—</span>
           <span style={{ fontSize: 11, color: MUTED }}>зʼявиться з каналом LinkedIn</span></div>
       </div>
+
+      <AllDeals d={s.deals} scope={s.scope} />
 
       {s.stage && (
         <div className="chart-card" style={{ marginTop: 16 }}>

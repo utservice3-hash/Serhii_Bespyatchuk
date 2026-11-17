@@ -2,6 +2,7 @@ import type { Db } from "./adCallFacts.js";
 import { closeModeOf, type CloseMode } from "./carrierClose.js";
 import { DUP_REASON_PREFIX, nextInRing } from "./linkedinQueue.js";
 import { loadStageCreated, type StageCreated } from "./linkedinStageDeals.js";
+import { loadLinkedinDeals, type LinkedinDeals } from "./linkedinDeals.js";
 
 /**
  * 🔗 «Клієнти → LinkedIn» (задача 7361): статистика черги за період. Без пулу й без `metrics.ts` — гейти `#3406`/`#3414`
@@ -41,6 +42,8 @@ export interface LinkedinStats {
   items: QueueItemView[];
   /** 📅 Лише керівництву: угоди, створені на етапі «LinkedIn» від початку етапу (не лише через бота), по днях. */
   stage: StageCreated | null;
+  /** 🔗 Усі угоди з LinkedIn за правилом ядра (`linkedinDeals.ts`, задача 9363): за весь час, етап поточний, у скоупі ролі. */
+  deals: LinkedinDeals;
   /** Рядок черги (хто в колі, хто наступний) — лише керівництву; іншим `members`/`nextName` порожні. */
   queue: { mode: CloseMode; members: number; nextName: string | null; launchedAt: string | null;
     paused: boolean; pausedBy: string | null; pausedAt: string | null };
@@ -52,7 +55,7 @@ export interface LinkedinStats {
  * журналу; «Взяв за» — від останньої пропозиції цьому менеджеру. «Машин поїхало» тут свідомо немає (канал LinkedIn).
  */
 export async function loadLinkedinStats(db: Db, fromRaw: unknown, toRaw: unknown, modeRaw: string, now = new Date(),
-  scope: LinkedinScope = { kind: "all" }): Promise<LinkedinStats> {
+  scope: LinkedinScope = { kind: "all" }, leadUrl: ((kommoId: number) => string) | null = null): Promise<LinkedinStats> {
   const today = kyivToday(now);
   const from = isDate(fromRaw) ? fromRaw : today.slice(0, 8) + "01";
   const to = isDate(toRaw) ? toRaw : today;
@@ -114,6 +117,7 @@ export async function loadLinkedinStats(db: Db, fromRaw: unknown, toRaw: unknown
       dispatcher: all ? Number(k.disp) : null, dispatcherDup: all ? Number(k.dup) : null, dispatcherNobody: all ? Number(k.disp) - Number(k.dup) : null,
       avgTakeMin: k.avg_min == null ? null : Number(k.avg_min) },
     perManager, items, stage: all ? await loadStageCreated(db, from, to) : null,
+    deals: await loadLinkedinDeals(db, ids, leadUrl),
     queue: { mode: closeModeOf(modeRaw), members: ring.length, nextName: ring.find((r) => r.id === nextId)?.name ?? null,
       launchedAt: st?.launched_at ? new Date(st.launched_at).toISOString() : null,
       paused: st?.paused ?? false, pausedBy: all ? st?.pname ?? null : null, pausedAt: st?.paused_at ? new Date(st.paused_at).toISOString() : null },
