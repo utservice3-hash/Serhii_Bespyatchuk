@@ -4715,6 +4715,10 @@ ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS route_mismatch INTEGER;
 -- якщо «Оплачено из 1с» (з `deal_fin_fields`, синк `syncDealFinance`) і «Оригиналы получено» — його синк пише сюди: поле Kommo «Оригиналы получено» (2097501, checkbox). NULL = синк ще не бачив
 -- угоду після появи колонки — «не синхронізовано», НЕ «ні». У знімку — скільки зараховано за документами.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS originals_received BOOLEAN;
+-- 🏷 ТЕГИ УГОДИ (задача 9363, 17.11.2026): назви тегів Kommo (`_embedded.tags`), пише `syncKommo` щопроходу. NULL = синк
+-- ще не бачив угоду після появи колонки — «не читали», НЕ «тегів немає»; порожній масив — тегів справді немає.
+-- Читач — `core/linkedinDeals.ts` (тег «LinkedIn»). Історію до появи колонки добирає `jobs/backfillLinkedinTags.ts`.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS tags TEXT[];
 ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS ttn_by_docs INTEGER;
 -- Угоди, де ТТН прикріплено, але маршрут у ній НЕ збігся з угодою (звіряє людина). Позначка —
 -- на угоді, а не на місяці: угода закривається один раз, і її місяць визначає дата закриття.

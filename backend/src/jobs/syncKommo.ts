@@ -14,7 +14,7 @@ import {
   extractRejectReason,
   extractRequestType,
   extractSalesChannel,
-  extractWebTags, extractGclid,
+  extractWebTags, extractGclid, extractTags,
   fetchAllDeals,
   fetchLeadsByIds,
   extractCarrierPayType,
@@ -779,14 +779,14 @@ export async function upsertDeal(
          unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus, reject_reason,
          request_type, sales_channel, carrier_pay_type, carrier_pay_amount,
          client_pay_amount, carrier_obligation, carrier_name, carrier_edrpou, source_deal_id, source_responsible,
-         fm_income, fm_expense, ttn_files, taken_field_at, gclid, originals_received
+         fm_income, fm_expense, ttn_files, taken_field_at, gclid, originals_received, tags
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12,
                  -- 🔴 КАНОНІЧНИЙ КЛЮЧ РАХУЄМО ТУТ, а не пишемо сирий. Інакше синк при
                  -- наступному оновленні угоди ЗАТЕР би канонічний ключ сирим, і аліас
                  -- тихо перестав би діяти — рівно для тих угод, що змінюються найчастіше.
                  COALESCE((SELECT a.canonical_key FROM client_key_alias a
                             WHERE a.alias_key = $12 AND a.revoked_at IS NULL), $12),
-                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -840,7 +840,9 @@ export async function upsertDeal(
          -- 📈 gclid — офлайн-конверсії Google Ads (core/googleAdsConversions.ts).
          gclid = EXCLUDED.gclid,
          -- 📄 «Оригиналы получено» — «ТТН за документами» Бізнес-асистента (04.11.2026).
-         originals_received = EXCLUDED.originals_received`,
+         originals_received = EXCLUDED.originals_received,
+         -- 🏷 Теги угоди (задача 9363, тег «LinkedIn»). NULL у вставці = Kommo не віддав ключ тегів: лишаємо записане.
+         tags = COALESCE(EXCLUDED.tags, deals.tags)`,
       [
         deal.id,
         deal.name,
@@ -885,6 +887,7 @@ export async function upsertDeal(
         extractTakenInWork(deal),
         extractGclid(deal),
         extractOriginalsReceived(deal),
+        extractTags(deal),
       ]
     );
 }
