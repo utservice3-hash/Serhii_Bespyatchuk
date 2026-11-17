@@ -28,8 +28,10 @@ teamsRouter.get("/managers", async (req, res) => {
   const params: unknown[] = [];
   const conds = ["m.is_active = true"];
   if (req.query.teamId) { params.push(Number(req.query.teamId)); conds.push(`m.team_id = $${params.length}`); }
+  // 👔 `isTeamLead` (9377): блок «Керівники» у виборі виконавця. Ознака — з ролі «Тимлид» у Kommo
+  // (`syncKommo`), тож список керівників — дзеркало CRM, а не перелік, який хтось веде руками.
   const result = await pool.query(
-    `SELECT m.id, m.name, m.team_id AS "teamId", t.name AS "teamName"
+    `SELECT m.id, m.name, m.team_id AS "teamId", t.name AS "teamName", m.is_team_lead AS "isTeamLead"
        FROM managers m LEFT JOIN teams t ON t.id = m.team_id
       WHERE ${conds.join(" AND ")}
       ORDER BY t.name NULLS LAST, m.name`,

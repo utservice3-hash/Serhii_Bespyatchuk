@@ -907,12 +907,15 @@ tasksRouter.delete("/:id", async (req, res) => {
  * фільтрується активністю АКАУНТА, а вимкнений у Kommo штаб (той самий випадок) інакше
  * знову перетворився б на логін.
  */
+// 👔 `role` (9377, Роман 17.11.2026: «спочатку керівники — тімліди, Сергій, я, Даша і т.д.»): ефективна роль
+// акаунта, щоб вибір виконавця ставив керівництво першим. Лише ключ ролі; доступ і склад списку не змінюються.
 tasksRouter.get("/assignees", async (_req, res) => {
   const r = await pool.query(
     `SELECT u.id,
             COALESCE(NULLIF(btrim(u.full_name), ''), NULLIF(btrim(m.name), ''), split_part(u.email, '@', 1)) AS name,
             ((u.full_name IS NULL OR btrim(u.full_name) = '') AND (m.name IS NULL OR btrim(m.name) = '')) AS "nameIsLogin",
-            u.manager_id AS "managerId"
+            u.manager_id AS "managerId",
+            COALESCE(u.role_override, u.role) AS role
        FROM users u
        LEFT JOIN managers m ON m.id = u.manager_id
       WHERE u.is_active
