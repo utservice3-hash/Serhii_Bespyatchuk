@@ -78,3 +78,69 @@ export function pickGroups(
     accounts.filter((a) => hit(a.name)).map((a) => ({ kind: "account" as const, id: a.id, name: a.name }))]);
   return out.filter(([, ps]) => ps.length > 0);
 }
+
+/** Підпис групи керівників у виборі виконавця (9377). */
+export const LEADERS_TITLE = "👔 Керівники";
+
+/**
+ * Ролі акаунтів, що входять у «Керівники» (9377, Роман 17.11.2026: «тімліди, Сергій, я, Даша і т.д.»):
+ * адмін, КВП, СЕО, операційний директор. Бухгалтерія, HR, фінансист, менеджер — ні.
+ */
+export const LEADER_ROLES: readonly string[] = ["admin", "kvp", "ceo", "opdir"];
+
+type LeadMgr = { id: number; name: string; isTeamLead?: boolean };
+type LeadAcc = { id: number; name: string; managerId: number | null; role?: string | null };
+
+/**
+ * 👔 СПОЧАТКУ КЕРІВНИКИ, ПОТІМ УСІ ІНШІ (9377; Роман 17.11.2026: «щоб при виборі всіх були спочатку керівники,
+ * а потім тільки менеджери і інші»). Керівник — менеджер із роллю «Тимлид» у Kommo (`isTeamLead`) або людина,
+ * чий акаунт має роль із `LEADER_ROLES` (менеджер, привʼязаний до такого акаунта, теж керівник). Керівники —
+ * одна група першою, за абеткою; з команд і з «Акаунтів» вони прибрані, щоб нікого не було двічі. Далі —
+ * команди в порядку `teamGroups` (моя перша), далі акаунти. Пошук — по всіх групах; порожні зникають.
+ * Тримає `#7880`.
+ */
+export function pickGroupsLeadersFirst(
+  managerGroups: readonly [string, readonly { id: number; name: string }[]][],
+  managers: readonly LeadMgr[],
+  accounts: readonly LeadAcc[],
+  query: string,
+): [string, PickPerson[]][] {
+  const leadRole = (r: string | null | undefined) => r != null && LEADER_ROLES.includes(r);
+  const leadMgr = new Set<number>(managers.filter((m) => m.isTeamLead === true).map((m) => m.id));
+  for (const a of accounts) if (a.managerId != null && leadRole(a.role)) leadMgr.add(a.managerId);
+  const mgrById = new Map(managers.map((m) => [m.id, m] as const));
+  const plain = accounts.filter((a) => a.managerId == null);
+  const leaders: PickPerson[] = [
+    ...[...leadMgr].filter((id) => mgrById.has(id)).map((id) => ({ kind: "manager" as const, id, name: mgrById.get(id)!.name })),
+    ...plain.filter((a) => leadRole(a.role)).map((a) => ({ kind: "account" as const, id: a.id, name: a.name })),
+  ].sort((x, y) => x.name.localeCompare(y.name, "uk"));
+  const q = query.trim().toLowerCase();
+  const head: [string, PickPerson[]][] = [[LEADERS_TITLE, leaders.filter((p) => !q || p.name.toLowerCase().includes(q))]];
+  const rest = pickGroups(
+    managerGroups.map(([t, ms]) => [t, ms.filter((m) => !leadMgr.has(m.id))] as [string, { id: number; name: string }[]]),
+    plain.filter((a) => !leadRole(a.role)),
+    query,
+  );
+  return [...head, ...rest].filter(([, ps]) => ps.length > 0);
+}
+
+/**
+ * 📅 ДЕДЛАЙН ЗА ЗАМОВЧУВАННЯМ для задачі зі «Спільних» (9377: «Enter — задача створена з дедлайном»):
+ * «Завтра» від київського сьогодні, та сама дата, що в швидкій кнопці. Людина може змінити пігулкою
+ * «Дедлайн» до створення. Тримає `#7881`.
+ */
+export function defaultSharedDeadline(today: string): string {
+  return quickDates(today).find((q) => q.label === "Завтра")!.date;
+}
+
+/**
+ * ⏎ ЗВИЧАЙНИЙ ENTER СТВОРЮЄ ЗАДАЧУ — лише в діалозі «Спільна задача» (9377). Shift+Enter — новий рядок;
+ * під час набору через IME Enter підтверджує символ, а не форму. У звичайній «+ Додати» Enter лишається
+ * новим рядком (довгі описи), створює там Ctrl/⌘+Enter, як і раніше. Тримає `#7882`.
+ */
+export function plainEnterSubmits(
+  e: { key: string; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey?: boolean; isComposing?: boolean },
+  o: { sharedIntent: boolean },
+): boolean {
+  return o.sharedIntent && e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing;
+}

@@ -193,6 +193,8 @@ export interface KommoDeal {
   _embedded?: {
     contacts?: { id: number; is_main?: boolean }[];
     companies?: { id: number; is_main?: boolean }[];
+    /** Теги угоди — Kommo віддає їх у кожній угоді списку без окремого `with` (заміряно 17.11.2026, задача 9363). */
+    tags?: { id: number; name: string }[];
   };
 }
 
@@ -506,6 +508,16 @@ export function extractGclid(deal: KommoDeal): string | null {
   return fieldText(deal, FIELD_GCLID);
 }
 
+/**
+ * 🏷 Назви тегів угоди (задача 9363: тег «LinkedIn»). `null` — Kommo не віддав ключ `_embedded.tags` зовсім: це
+ * «не знаємо», а не «тегів немає», і синк тоді НЕ затирає записане раніше. Порожній масив — тегів справді немає.
+ */
+export function extractTags(deal: KommoDeal): string[] | null {
+  const tags = deal._embedded?.tags;
+  if (!Array.isArray(tags)) return null;
+  return [...new Set(tags.map((t) => String(t?.name ?? "").trim()).filter(Boolean))].sort();
+}
+
 export function extractWebTags(deal: KommoDeal): WebTags {
   return {
     utmMedium: fieldText(deal, FIELD_UTM_MEDIUM),
@@ -815,6 +827,33 @@ export async function forEachStatusChangeEventPage(
     page += 1;
   }
   return total;
+}
+
+/**
+ * 🏷 Події «тег додано» на угодах за [fromUnix, toUnix] (задача 9363). Сторінками по 100, як решта подій; `maxPages` —
+ * стеля одного проходу (Kommo капить пагінацію подій ~20 тис., тож викликати помісячно). `capped` — дійшли до стелі.
+ */
+export async function forEachTagAddedEventPage(
+  fromUnix: number, toUnix: number,
+  onPage: (events: { entityId: number; entityType: string; valueAfter: unknown; at: number }[]) => Promise<void>,
+  maxPages = 200,
+): Promise<{ total: number; capped: boolean }> {
+  type Raw = { entity_id: number; entity_type: string; created_at: number; value_after?: unknown };
+  let total = 0;
+  for (let page = 1; ; page++) {
+    const data = await kommoRequest<KommoListResponse<Raw>>(
+      `/api/v4/events?limit=100&page=${page}&filter[type]=entity_tag_added&filter[entity]=lead` +
+        `&${encodeURIComponent("filter[created_at][from]")}=${fromUnix}` +
+        `&${encodeURIComponent("filter[created_at][to]")}=${toUnix}`
+    );
+    const raw = data?._embedded?.events ?? [];
+    if (raw.length) {
+      await onPage(raw.map((e) => ({ entityId: e.entity_id, entityType: e.entity_type, valueAfter: e.value_after, at: e.created_at })));
+      total += raw.length;
+    }
+    if (raw.length < 100 || !data?._links?.next) return { total, capped: false };
+    if (page >= maxPages) return { total, capped: true };
+  }
 }
 
 export interface KommoResponsibleEvent {

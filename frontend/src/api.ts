@@ -2068,6 +2068,8 @@ export interface ManagerOption {
   name: string;
   teamId: number | null;
   teamName: string | null;
+  /** Тімлід за роллю «Тимлид» у Kommo (9377: блок «Керівники»). Необовʼязкове — інші джерела списку його не дають. */
+  isTeamLead?: boolean;
 }
 
 export async function fetchManagerOptions(teamId?: number): Promise<ManagerOption[]> {
@@ -3904,7 +3906,11 @@ export interface TaskHistoryEntry {
   actorRole?: string | null;
 }
 /** Кандидат у виконавці-акаунти. Сервер віддає імʼя без email — логін не їде на екран. */
-export interface TaskAssignee { id: number; name: string; nameIsLogin: boolean; managerId: number | null }
+export interface TaskAssignee {
+  id: number; name: string; nameIsLogin: boolean; managerId: number | null;
+  /** Ефективна роль акаунта (`role_override ?? role`) — для групи «Керівники» (9377). */
+  role?: string | null;
+}
 
 /** 🔴 Ліміт файла 5 МБ — рішення Романа 14.09.2026. Дзеркалить `FILE_MAX_BYTES` сервера. */
 export const TASK_FILE_MAX_BYTES = 5 * 1024 * 1024;
@@ -6980,8 +6986,17 @@ export interface LinkedinStats {
     seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number }[];
   /** Лише керівництву: угоди, створені на етапі «LinkedIn» від початку етапу, по днях (не лише через бота). */
   stage: { created: number; firstDay: string | null; byDay: { day: string; count: number }[] } | null;
+  /** 🔗 Усі угоди з LinkedIn (джерело або тег LinkedIn у Kommo, задача 9363): за весь час, етап поточний, у скоупі ролі. */
+  deals: LinkedinDeals;
   queue: { mode: "off" | "dry" | "live"; members: number; nextName: string | null; launchedAt: string | null;
     paused: boolean; pausedBy: string | null; pausedAt: string | null };
+}
+export type LinkedinOutcome = "open" | "won" | "lost";
+export interface LinkedinDeals {
+  total: number; open: number; won: number; lost: number;
+  byStage: { pipeline: string; stage: string; outcome: LinkedinOutcome; count: number }[];
+  deals: { kommoId: number; url: string | null; name: string | null; managerName: string | null; bySource: boolean; byTag: boolean; pipeline: string; stage: string;
+    outcome: LinkedinOutcome; createdAt: string | null }[];
 }
 export const fetchLinkedinStats = async (from: string, to: string) => (await api.get<LinkedinStats>("/linkedin/stats", { params: { from, to } })).data;
 export const fetchLinkedinQueue = async () => (await api.get<LinkedinQueueScreen>("/linkedin-queue")).data;

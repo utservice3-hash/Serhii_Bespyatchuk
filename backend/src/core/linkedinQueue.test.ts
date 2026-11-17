@@ -484,3 +484,103 @@ test("#3417 екран: «Пішли на Операційного директ�
   assert.match(body, /\bawait sweepLinkedinStageHistory\(\)/, "🔴 джоба черги не добирає угоди, що пішли з етапу");
   assert.match(job, /filter\[\$\{side\}\]\[leads_statuses\]\[0\]\[status_id\]=\$\{String\(statusId\)\}/, "🔴 події Kommo не відфільтровано по етапу LinkedIn");
 });
+
+/**
+ * 🔗 ЗАДАЧА 9363 (ТЗ Юлі 16.11.2026; Роман 17.11.2026): «Усі угоди з LinkedIn» — «Источник клиента» = LinkedIn, будь-яка
+ * воронка й етап, включно із закритими, з розбивкою по поточному етапу; у скоупі ролі. Фікстура по ОБИДВА боки межі:
+ * джерело LinkedIn у повному циклі (відкрита, успішна, закрита) і в Кваліфікації — так; «Создан вручную», порожнє
+ * джерело на етапі «LinkedIn», «LinkedIn Ads» — ні. Іде через `loadLinkedinStats` — той самий виклик, що в роуті.
+ * 🧨 САБОТАЖ: у `linkedinDealSql` `= '${LINKEDIN_CLIENT_SOURCE}'` → `<> ''` — червоніє «чужі джерела»;
+ *    `d.manager_id = ANY($1::int[])` → `d.manager_id IS NOT NULL` — червоніє «менеджер бачить чужі угоди».
+ */
+test("#3650 «Усі угоди з LinkedIn»: джерело LinkedIn у будь-якій воронці й на будь-якому етапі, включно із закритими; інше джерело й етап «LinkedIn» без джерела — ні; розбивка по поточному етапу; менеджер — свої, тімлід — команда, керівництво — усі", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { loadLinkedinStats } = await import("./linkedinStats.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`DELETE FROM deals WHERE kommo_id BETWEEN 9363000 AND 9363999`);
+  await q(`DELETE FROM managers WHERE kommo_user_id BETWEEN 936300 AND 936302`);
+  const t1 = (await q(`INSERT INTO teams (name) VALUES ('LI команда 1') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`)).rows[0].id as number;
+  const t2 = (await q(`INSERT INTO teams (name) VALUES ('LI команда 2') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`)).rows[0].id as number;
+  const mk = async (n: string, team: number, k: number) => (await q(`INSERT INTO managers (name, is_active, kommo_user_id, team_id) VALUES ($1, true, $2, $3) RETURNING id`, [n, k, team])).rows[0].id as number;
+  const A = await mk("LI А", t1, 936300), B = await mk("LI Б", t1, 936301), C = await mk("LI В", t2, 936302);
+  const deal = (id: number, mgr: number | null, p: number, s: number, src: string | null, iso: string) =>
+    q(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, client_source, created_at_kommo) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, `LI ${String(id)}`, mgr, p, s, src, iso]);
+  await deal(9363001, A, 8921932, 69693668, "LinkedIn", "2026-10-27T09:00:00Z"); // повний цикл, «Взято на прорахунок»
+  await deal(9363002, A, 8921932, 69693668, "LinkedIn", "2026-11-03T09:00:00Z"); // той самий етап — рахується двічі
+  await deal(9363003, B, 8921932, 142, "LinkedIn", "2026-11-10T09:00:00Z");      // успішна
+  await deal(9363004, C, 8921932, 143, " LinkedIn ", "2026-11-12T09:00:00Z");    // закрита; пробіли в CRM — те саме значення
+  await deal(9363005, null, 8921928, 113486296, "LinkedIn", "2026-11-14T09:00:00Z"); // Кваліфікація, без менеджера
+  await deal(9363006, A, 8921932, 69693672, "Создан вручную", "2026-11-05T09:00:00Z"); // інше джерело — ні
+  await deal(9363007, A, 8921928, 113486296, null, "2026-11-06T09:00:00Z");          // етап «LinkedIn» без джерела — ні
+  await deal(9363008, B, 8921932, 69693668, "LinkedIn Ads", "2026-11-07T09:00:00Z");  // схоже, але інше значення — ні
+  const day = ["2026-11-17", "2026-11-17", "", new Date("2026-11-17T10:00:00Z")] as const;
+  const url = (id: number) => `https://crm.test/leads/detail/${String(id)}`;
+  const ids = (d: { deals: { kommoId: number }[] }) => d.deals.map((x) => x.kommoId).sort();
+  const all = (await loadLinkedinStats(c.db, ...day, { kind: "all" }, url)).deals;
+  assert.deepEqual(ids(all), [9363001, 9363002, 9363003, 9363004, 9363005],
+    "🔴 чужі джерела або етап «LinkedIn» без джерела в списку — або угоду з LinkedIn загублено (закрита, Кваліфікація, без менеджера)");
+  assert.deepEqual([all.total, all.open, all.won, all.lost], [5, 3, 1, 1], "🔴 підсумок за станом угоди не той");
+  assert.deepEqual(all.byStage.map((r) => [r.pipeline, r.stage, r.count]), [
+    ["Повний цикл", "Взято на прорахунок", 2], ["Кваліфікація", "LinkedIn", 1],
+    ["Повний цикл", "Успішна угода", 1], ["Повний цикл", "Закрито і не реалізовано", 1],
+  ], "🔴 розбивка по поточному етапу не та");
+  assert.equal(all.deals.find((x) => x.kommoId === 9363001)?.url, "https://crm.test/leads/detail/9363001", "🔴 посилання в Kommo не на ту угоду");
+  const own = (await loadLinkedinStats(c.db, ...day, { kind: "own", managerId: A })).deals;
+  assert.deepEqual(ids(own), [9363001, 9363002], "🔴 менеджер бачить чужі угоди (або не бачить своїх)");
+  const team = (await loadLinkedinStats(c.db, ...day, { kind: "team", teamId: t1 })).deals;
+  assert.deepEqual(ids(team), [9363001, 9363002, 9363003], "🔴 тімлід бачить угоди іншої команди (або не бачить своєї)");
+  const empty = (await loadLinkedinStats(c.db, ...day, { kind: "own", managerId: -1 })).deals;
+  assert.deepEqual([empty.total, empty.deals.length], [0, 0], "🔴 порожній скоуп показав угоди");
+  assert.ok(C > 0);
+});
+
+/**
+ * 🏷 ЗАДАЧА 9363, ДРУГА ПОЛОВИНА ПРАВИЛА (Роман 17.11.2026 «джерело і тег»): тег «LinkedIn» сам по собі робить угоду
+ * угодою з LinkedIn; джерело + тег — та сама угода один раз; інший тег, схожий тег і NULL («теги ще не читали») — ні.
+ * 🧨 САБОТАЖ: у `linkedinDealSql` прибрати `OR ${tagSql(alias)}` — червоніє «угода лише з тегом загубилась»;
+ *    `'{}'::text[]` → `ARRAY['LinkedIn']` — червоніє «NULL-теги пораховано».
+ */
+test("#3651 тег «LinkedIn» теж робить угоду угодою з LinkedIn: лише тег — так, джерело і тег — один раз, інший чи схожий тег і непрочитані теги (NULL) — ні; видно, чим саме", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { loadLinkedinDeals } = await import("./linkedinDeals.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`DELETE FROM deals WHERE kommo_id BETWEEN 9363000 AND 9363999`);
+  const deal = (id: number, src: string | null, tags: string[] | null, s = 69693668) =>
+    q(`INSERT INTO deals (kommo_id, name, pipeline_id, status_id, client_source, tags, created_at_kommo) VALUES ($1, $2, 8921932, $3, $4, $5, '2026-11-10T09:00:00Z')`,
+      [id, `LT ${String(id)}`, s, src, tags]);
+  await deal(9363101, null, ["LinkedIn"]);                 // лише тег — так
+  await deal(9363102, "LinkedIn", ["LinkedIn", "VIP"], 142); // джерело і тег — один раз
+  await deal(9363103, "LinkedIn", []);                     // лише джерело, тегів немає — так
+  await deal(9363104, null, ["LinkedIn-архів", "VIP"]);    // схожий тег — ні
+  await deal(9363105, null, null);                         // теги не читали, джерела немає — ні
+  await deal(9363106, "Создан вручную", ["Prozorro"]);     // інше — ні
+  const r = await loadLinkedinDeals(c.db, null);
+  assert.deepEqual(r.deals.map((x) => x.kommoId).sort(), [9363101, 9363102, 9363103],
+    "🔴 угода лише з тегом загубилась — або пораховано схожий тег, NULL-теги чи інше джерело");
+  assert.equal(r.total, 3, "🔴 угода з джерелом і тегом порахована двічі");
+  const by = Object.fromEntries(r.deals.map((x) => [x.kommoId, [x.bySource, x.byTag]]));
+  assert.deepEqual(by, { 9363101: [false, true], 9363102: [true, true], 9363103: [true, false] }, "🔴 «звідки LinkedIn» не той");
+});
+
+/**
+ * 🏷 ЗАДАЧА 9363 · ДОБІР ІСТОРІЇ: з подій «тег додано» беремо рівно угоди, яким додали тег «LinkedIn». Формат Kommo
+ * `[{ tag: { name } }]`; кілька тегів в одній події; схожий тег, інша сутність (контакт) і порожня подія — ні.
+ * 🧨 САБОТАЖ: у `leadIdsWithTag` `.includes(tag)` → `.some((n) => n.includes("Linked"))` — червоніє «схожий тег».
+ */
+test("#3653 добір тегів з подій Kommo «тег додано»: лише угоди з тегом «LinkedIn», без дублів; схожий тег, контакт і порожня подія — ні", async () => {
+  const { leadIdsWithTag, tagNamesOf } = await import("./linkedinTagEvents.js");
+  assert.deepEqual(tagNamesOf([{ tag: { name: " LinkedIn " } }, { tag: { name: "VIP" } }]), ["LinkedIn", "VIP"]);
+  assert.deepEqual(tagNamesOf(null), [], "🔴 порожня подія впала або вигадала тег");
+  const ev = [
+    { entityId: 30, entityType: "lead", valueAfter: [{ tag: { name: "LinkedIn" } }] },
+    { entityId: 10, entityType: "lead", valueAfter: [{ tag: { name: "VIP" } }, { tag: { name: "LinkedIn" } }] },
+    { entityId: 30, entityType: "lead", valueAfter: [{ tag: { name: "LinkedIn" } }] },           // повтор — один раз
+    { entityId: 20, entityType: "lead", valueAfter: [{ tag: { name: "LinkedIn-архів" } }] },     // схожий — ні
+    { entityId: 40, entityType: "contact", valueAfter: [{ tag: { name: "LinkedIn" } }] },        // контакт — ні
+    { entityId: 50, entityType: "lead", valueAfter: [] },
+  ];
+  assert.deepEqual(leadIdsWithTag(ev, "LinkedIn"), [10, 30], "🔴 добір узяв схожий тег, контакт чи дубль — або загубив угоду з кількома тегами");
+});
