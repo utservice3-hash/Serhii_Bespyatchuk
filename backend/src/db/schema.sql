@@ -8414,3 +8414,16 @@ SELECT kind, id, ckey, 'new', created_at, 'archive' FROM lardi_proposals p
 ON CONFLICT DO NOTHING;
 
 REVOKE ALL ON lardi_proposals, lardi_proposal_events, lardi_shippers FROM ai_readonly;
+
+-- ✍️ ПІДПИСИ «ПЕРШОГО ДОТИКУ» СЕЛІНОЇ Й НАЗАРОВОЇ (17.11.2026). Після плутанини 27.10 акаунт Назарової (`naas@uts.ua`)
+-- мав імʼя «Селіна Альона Ігорівна», а акаунт Селіної (`sai@uts.ua`) — порожнє, тож підписи коментарів брали чуже імʼя
+-- або логін. Код тепер бере імʼя з Kommo (`actorDisplayName`, #4060); тут — разово імена двох акаунтів і їхні вже записані
+-- підписи (на проді 32 + 10). Умовою на ЗЛАМАНЕ значення: повторний прогін нічого не чіпає. ⚠️ revert коду дані не повертає.
+UPDATE users SET full_name = 'Назарова Анастасія Сергіївна' WHERE email = 'naas@uts.ua' AND full_name = 'Селіна Альона Ігорівна';
+UPDATE users SET full_name = 'Селіна Альона Ігорівна' WHERE email = 'sai@uts.ua' AND (full_name IS NULL OR btrim(full_name) = '');
+UPDATE first_touch_notes n SET set_by_name = m.name
+  FROM users u JOIN managers m ON m.id = u.manager_id
+ WHERE n.set_by = u.id AND u.email IN ('naas@uts.ua', 'sai@uts.ua') AND n.set_by_name IS DISTINCT FROM m.name;
+UPDATE call_type_overrides o SET set_by_name = m.name
+  FROM users u JOIN managers m ON m.id = u.manager_id
+ WHERE o.set_by = u.id AND u.email IN ('naas@uts.ua', 'sai@uts.ua') AND o.set_by_name IS DISTINCT FROM m.name;

@@ -83,7 +83,7 @@ import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays, mergeAdMonths } from "../ga4/report.js";
 import { adClients } from "../core/adClients.js";
 import { dateParam } from "../core/queryParams.js";
-import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
+import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, actorDisplayName, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
 import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview, reviewClosure, canCloseReview, REVIEW_NEEDS_COMMENT_UA } from "../core/firstTouchTeamReport.js";
 import { canSendCallFeedback, callFeedbackBody, CALL_FEEDBACK_MAX } from "../core/firstTouchFeedback.js";
@@ -12001,7 +12001,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/close-deal", async (req, res) => {
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? `користувач #${String(auth.userId)}`;
+  const who = (await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null)) ?? `користувач #${String(auth.userId)}`;
   const suggested = (await closeOffer(pool, card.row)).suggestedId;
   const r = await closeDeal(pool, firstTouchKommo, { uniqueid, kommoIds: card.row.kommoIds, calledAt: card.row.calledAt, reasonId,
     suggestedId: suggested, user: { id: auth.userId ?? null, name: who }, now: new Date() });
@@ -12016,7 +12016,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/close-deal/revert", async (req, res) =
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? `користувач #${String(auth.userId)}`;
+  const who = (await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null)) ?? `користувач #${String(auth.userId)}`;
   const r = await revertDeal(pool, firstTouchKommo, { uniqueid, user: { id: auth.userId ?? null, name: who }, now: new Date() });
   if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
   res.json({ ok: true, kommoId: r.kommoId });
@@ -12038,7 +12038,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  const who = await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null);
   await setCallType(pool, uniqueid, isCargo, { userId: auth.userId ?? null, name: who }, new Date(), cut);
   res.json({ ok: true });
 });
@@ -12063,7 +12063,7 @@ dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const pr = kind === "price" ? checkPriceNote(req.body?.reason, text) : { ok: true as const, reason: null };
   if (!pr.ok) { res.status(400).json({ error: pr.why }); return; }
   if (kind === "review" && text.trim() && !canCloseReview(card.row)) { res.status(409).json({ error: REVIEW_NEEDS_COMMENT_UA }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  const who = await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null);
   await setCallNote(pool, uniqueid, kind as NoteKind, text, { userId: auth.userId ?? null, name: who }, new Date(), pr.reason);
   res.json({ ok: true });
 });
@@ -12433,7 +12433,7 @@ dashboardRouter.post("/missed-calls/no-callback/task", async (req, res) => {
   const items = Array.isArray(req.body?.items) ? (req.body.items as { uniqueid?: unknown; managerId?: unknown }[]).slice(0, 100) : [];
   if (!items.length) { res.status(400).json({ error: "Немає жодного дзвінка" }); return; }
   const today = kyivToday();
-  const author = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? "користувач дашборда";
+  const author = (await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null)) ?? "користувач дашборда";
   const out: { uniqueid: string; result: "created" | "exists" | "error"; taskId?: number; deadline?: string | null; error?: string }[] = [];
   for (const it of items) {
     const uniqueid = String(it.uniqueid ?? "");
@@ -12477,7 +12477,7 @@ dashboardRouter.post("/missed-calls/norm", async (req, res) => {
   if (!canSetCallbackNorm(auth.roleKey)) { res.status(403).json({ error: "Ціль ставить і змінює лише керівництво" }); return; }
   const v = callbackNormVerdict(req.body?.norm);
   if (!v.ok) { res.status(400).json({ error: v.error }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  const who = await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null);
   await missedCalls.setCallbackNorm(v.norm, auth.userId ?? null, who);
   res.json({ ok: true });
 });

@@ -779,6 +779,19 @@ export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by
     [uniqueid, cut ? false : isCargo, cut ? "cut" : null, by.userId, by.name, at.toISOString()]);
 }
 
+/**
+ * ✍️ ІМʼЯ АВТОРА ПІДПИСУ (17.11.2026). Спершу — імʼя з Kommo (як людину знають у CRM), далі — імʼя акаунта дашборда,
+ * далі — логін. Ручне `users.full_name` у CRM-акаунта може бути хибним: у `naas@uts.ua` після плутанини 27.10 стояло
+ * «Селіна Альона Ігорівна», і 32 коментарі Назарової підписались чужим імʼям. Тримає #4060.
+ */
+export async function actorDisplayName(db: Db, userId: number | null, fallback: string | null): Promise<string | null> {
+  if (userId == null) return fallback;
+  const r = (await db.query<{ name: string | null }>(
+    `SELECT COALESCE(NULLIF(btrim(m.name), ''), NULLIF(btrim(u.full_name), ''), u.email) AS name
+       FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $1`, [userId])).rows[0];
+  return r?.name ?? fallback;
+}
+
 export type NoteKind = "price" | "missed" | "offline" | "review" | "explain";
 /** Записати (або замінити) коментар виду `kind`. Порожній текст — прибрати коментар. Право й скоуп — у роуті. */
 export async function setCallNote(db: Db, uniqueid: string, kind: NoteKind, text: string, by: { userId: number | null; name: string | null }, at: Date,
