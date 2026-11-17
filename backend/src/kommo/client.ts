@@ -193,6 +193,8 @@ export interface KommoDeal {
   _embedded?: {
     contacts?: { id: number; is_main?: boolean }[];
     companies?: { id: number; is_main?: boolean }[];
+    /** Теги угоди — Kommo віддає їх у кожній угоді списку без окремого `with` (заміряно 17.11.2026, задача 9363). */
+    tags?: { id: number; name: string }[];
   };
 }
 
@@ -504,6 +506,16 @@ export interface WebTags {
 /** gclid ліда — для вивантаження офлайн-конверсій у Google Ads. */
 export function extractGclid(deal: KommoDeal): string | null {
   return fieldText(deal, FIELD_GCLID);
+}
+
+/**
+ * 🏷 Назви тегів угоди (задача 9363: тег «LinkedIn»). `null` — Kommo не віддав ключ `_embedded.tags` зовсім: це
+ * «не знаємо», а не «тегів немає», і синк тоді НЕ затирає записане раніше. Порожній масив — тегів справді немає.
+ */
+export function extractTags(deal: KommoDeal): string[] | null {
+  const tags = deal._embedded?.tags;
+  if (!Array.isArray(tags)) return null;
+  return [...new Set(tags.map((t) => String(t?.name ?? "").trim()).filter(Boolean))].sort();
 }
 
 export function extractWebTags(deal: KommoDeal): WebTags {

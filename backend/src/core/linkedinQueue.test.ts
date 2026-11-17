@@ -535,3 +535,32 @@ test("#3650 «Усі угоди з LinkedIn»: джерело LinkedIn у буд
   assert.deepEqual([empty.total, empty.deals.length], [0, 0], "🔴 порожній скоуп показав угоди");
   assert.ok(C > 0);
 });
+
+/**
+ * 🏷 ЗАДАЧА 9363, ДРУГА ПОЛОВИНА ПРАВИЛА (Роман 17.11.2026 «джерело і тег»): тег «LinkedIn» сам по собі робить угоду
+ * угодою з LinkedIn; джерело + тег — та сама угода один раз; інший тег, схожий тег і NULL («теги ще не читали») — ні.
+ * 🧨 САБОТАЖ: у `linkedinDealSql` прибрати `OR ${tagSql(alias)}` — червоніє «угода лише з тегом загубилась»;
+ *    `'{}'::text[]` → `ARRAY['LinkedIn']` — червоніє «NULL-теги пораховано».
+ */
+test("#3651 тег «LinkedIn» теж робить угоду угодою з LinkedIn: лише тег — так, джерело і тег — один раз, інший чи схожий тег і непрочитані теги (NULL) — ні; видно, чим саме", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { loadLinkedinDeals } = await import("./linkedinDeals.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`DELETE FROM deals WHERE kommo_id BETWEEN 9363000 AND 9363999`);
+  const deal = (id: number, src: string | null, tags: string[] | null, s = 69693668) =>
+    q(`INSERT INTO deals (kommo_id, name, pipeline_id, status_id, client_source, tags, created_at_kommo) VALUES ($1, $2, 8921932, $3, $4, $5, '2026-11-10T09:00:00Z')`,
+      [id, `LT ${String(id)}`, s, src, tags]);
+  await deal(9363101, null, ["LinkedIn"]);                 // лише тег — так
+  await deal(9363102, "LinkedIn", ["LinkedIn", "VIP"], 142); // джерело і тег — один раз
+  await deal(9363103, "LinkedIn", []);                     // лише джерело, тегів немає — так
+  await deal(9363104, null, ["LinkedIn-архів", "VIP"]);    // схожий тег — ні
+  await deal(9363105, null, null);                         // теги не читали, джерела немає — ні
+  await deal(9363106, "Создан вручную", ["Prozorro"]);     // інше — ні
+  const r = await loadLinkedinDeals(c.db, null);
+  assert.deepEqual(r.deals.map((x) => x.kommoId).sort(), [9363101, 9363102, 9363103],
+    "🔴 угода лише з тегом загубилась — або пораховано схожий тег, NULL-теги чи інше джерело");
+  assert.equal(r.total, 3, "🔴 угода з джерелом і тегом порахована двічі");
+  const by = Object.fromEntries(r.deals.map((x) => [x.kommoId, [x.bySource, x.byTag]]));
+  assert.deepEqual(by, { 9363101: [false, true], 9363102: [true, true], 9363103: [true, false] }, "🔴 «звідки LinkedIn» не той");
+});

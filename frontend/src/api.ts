@@ -6980,7 +6980,7 @@ export interface LinkedinStats {
     seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number }[];
   /** Лише керівництву: угоди, створені на етапі «LinkedIn» від початку етапу, по днях (не лише через бота). */
   stage: { created: number; firstDay: string | null; byDay: { day: string; count: number }[] } | null;
-  /** 🔗 Усі угоди з LinkedIn («Источник клиента» = LinkedIn, задача 9363): за весь час, етап поточний, у скоупі ролі. */
+  /** 🔗 Усі угоди з LinkedIn (джерело або тег LinkedIn у Kommo, задача 9363): за весь час, етап поточний, у скоупі ролі. */
   deals: LinkedinDeals;
   queue: { mode: "off" | "dry" | "live"; members: number; nextName: string | null; launchedAt: string | null;
     paused: boolean; pausedBy: string | null; pausedAt: string | null };
@@ -6989,7 +6989,7 @@ export type LinkedinOutcome = "open" | "won" | "lost";
 export interface LinkedinDeals {
   total: number; open: number; won: number; lost: number;
   byStage: { pipeline: string; stage: string; outcome: LinkedinOutcome; count: number }[];
-  deals: { kommoId: number; url: string | null; name: string | null; managerName: string | null; pipeline: string; stage: string;
+  deals: { kommoId: number; url: string | null; name: string | null; managerName: string | null; bySource: boolean; byTag: boolean; pipeline: string; stage: string;
     outcome: LinkedinOutcome; createdAt: string | null }[];
 }
 export const fetchLinkedinStats = async (from: string, to: string) => (await api.get<LinkedinStats>("/linkedin/stats", { params: { from, to } })).data;

@@ -135,7 +135,7 @@ const OUTCOME: Record<LinkedinOutcome, { label: string; color: string }> = {
 };
 
 /**
- * 🔗 «Усі угоди з LinkedIn» (задача 9363): «Источник клиента» = LinkedIn у Kommo, будь-яка воронка й етап, включно із
+ * 🔗 «Усі угоди з LinkedIn» (задача 9363): «Источник клиента» = LinkedIn або тег LinkedIn у Kommo, будь-яка воронка й етап, включно із
  * закритими. Не залежить від періоду: це поточний стан CRM на останній синк. Правило — `core/linkedinDeals.ts`.
  */
 function AllDeals({ d, scope }: { d: LinkedinStats["deals"]; scope: LinkedinStats["scope"] }) {
@@ -144,10 +144,10 @@ function AllDeals({ d, scope }: { d: LinkedinStats["deals"]; scope: LinkedinStat
     <div className="chart-card" style={{ marginTop: 16 }}>
       <h2 className="chart-title">Усі угоди з LinkedIn · {d.total}</h2>
       <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
-        Угоди, де в Kommo «Источник клиента» = LinkedIn ({who}), за весь час, етап — поточний у CRM. Від періоду вище не залежить, оновлюється з кожним синком.
+        Угоди, де в Kommo «Источник клиента» = LinkedIn або стоїть тег LinkedIn ({who}), за весь час, етап — поточний у CRM. Від періоду вище не залежить, оновлюється з кожним синком.
         {" "}У роботі <b>{d.open}</b> · успішні <b>{d.won}</b> · закриті й не реалізовані <b>{d.lost}</b>.
       </div>
-      {d.total === 0 ? <p className="loading-text">Угод із джерелом «LinkedIn» у Kommo немає.</p> : (
+      {d.total === 0 ? <p className="loading-text">Угод із джерелом чи тегом «LinkedIn» у Kommo немає.</p> : (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(420px, 2fr)", gap: 16, alignItems: "start" }}>
           <table className="data-table">
             <thead><tr><th>Етап зараз</th><th style={{ textAlign: "right" }}>Угод</th></tr></thead>
@@ -160,13 +160,14 @@ function AllDeals({ d, scope }: { d: LinkedinStats["deals"]; scope: LinkedinStat
             </tbody>
           </table>
           <table className="data-table">
-            <thead><tr><th>Угода</th><th>Етап зараз</th><th>Менеджер</th><th>Створено</th></tr></thead>
+            <thead><tr><th>Угода</th><th>Етап зараз</th><th>Менеджер</th><th>Звідки LinkedIn</th><th>Створено</th></tr></thead>
             <tbody>{d.deals.map((x) => (
               <tr key={x.kommoId}>
                 <td>{x.url ? <a href={x.url} target="_blank" rel="noreferrer">{x.name ?? `#${String(x.kommoId)}`}</a> : (x.name ?? `#${String(x.kommoId)}`)}</td>
                 <td><span style={{ color: OUTCOME[x.outcome].color, fontWeight: 600 }}>{x.stage}</span>
                   <span style={{ fontSize: 11, color: MUTED }}> · {x.pipeline}</span></td>
                 <td>{x.managerName ?? "менеджера немає в дашборді"}</td>
+                <td style={{ fontSize: 12, color: MUTED }}>{x.bySource && x.byTag ? "джерело і тег" : x.bySource ? "джерело" : "лише тег"}</td>
                 <td style={{ whiteSpace: "nowrap" }}>{fmtAt(x.createdAt)}</td>
               </tr>
             ))}</tbody>
