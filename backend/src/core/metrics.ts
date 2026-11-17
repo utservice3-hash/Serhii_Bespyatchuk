@@ -10,7 +10,7 @@ import { archivedSql, LAST_PAID_CTE } from "./clientArchive.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 import type { LazyCache } from "./lazyCache.js";
-import { dealCampaignSql, LEAD_PARENT_JOIN } from "./adCampaign.js";
+import { dealCampaignSql, LEAD_PARENT_JOIN, GENERIC_CLIENT_KEYS_SQL } from "./adCampaign.js";
 // 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
 // (задача 4892, `core/teamAt.ts`). Знімки «станом на зараз» (очікування, дебіторка, застряглі,
 // прострочені) лишаються на поточній команді; когортні воронки — окремим проходом.
@@ -195,6 +195,53 @@ export const adDealSqlMode = (srcRef: string, mode: PriorPaidMode): string =>
     AND ${notElogistSql("d")})`;
 
 export const adDealSql = (srcRef: string): string => adDealSqlMode(srcRef, "correlated");
+
+/**
+ * 🎯 «ПРИЙНЯТО РЕКЛАМИ» ЗА ПРАВИЛОМ СЕРГІЯ (задача 9932; TOP Weekly 16.11.2026, Сергій: «клієнт прийшов з
+ * реклами і оплатив — далі всі його угоди рахуються як реклама»; Юля 17.11: «так, і для „Прийнято реклами“
+ * теж, щоб колонки не розходились»; Роман 17.11 — «роби», «викочуй»). Глосарій §3.
+ *
+ * Угода «прийнята як реклама», якщо вона рекламна сама (`adDealSql`), АБО:
+ *   • клієнт (`client_key`, не заглушка) має рекламну угоду (`adDealSql`) — «прийшов з реклами»; і
+ *   • після першої такої угоди в клієнта є оплачена угода (`funnel_stage='paid'`), створена РАНІШЕ за цю.
+ * Не діє, як і раніше: лідоген (пріоритет 1, §3a), «…реактив…» у джерелі, eLogist. «Клієнт з реклами» — той
+ * самий, що на екрані «Реклама» (`adClients`: рекламна угода + оплата після неї).
+ *
+ * ⚠️ Це переглядає гейт власника 04.08 («звернення постійного клієнта — не реклама») ЛИШЕ для «Прийнято реклами»
+ * і пари до неї (чисельник лайфтайм-конверсії). `adDealSql` НЕ змінюється: на ньому стоять рекламні гроші й ROMI,
+ * платні ліди й CPL, списки дзвінків першого дотику, нецільові — там постійний клієнт рекламним лідом не стає.
+ *
+ * 🚀 Лише join-форма: «клієнт з реклами оплатив» агрегується ОДИН раз (`ad_origin`), а не корельованим підзапитом
+ * на кожен рядок (урок `#35/#36`). Запит ставить `adsAcceptedCte` першим у `WITH` (він уже містить `first_paid`)
+ * і обидва join-и `ADS_ACCEPTED_JOINS`. Гейти `#9932…`.
+ */
+export const adsAcceptedCte = (srcRef: string): string => `${FIRST_PAID_CTE},
+  ad_first AS (
+    SELECT d.client_key, MIN(d.created_at_kommo) AS ad_first_at
+      FROM deals d ${FIRST_PAID_JOIN}
+     WHERE d.client_key IS NOT NULL AND NOT (d.client_key = ANY(${GENERIC_CLIENT_KEYS_SQL}))
+       AND ${adDealSqlMode(srcRef, "joined")}
+     GROUP BY d.client_key
+  ),
+  ad_origin AS (
+    SELECT af.client_key, MIN(p.created_at_kommo) AS ad_paid_at
+      FROM ad_first af
+      JOIN deals p ON p.client_key = af.client_key AND p.created_at_kommo >= af.ad_first_at
+      JOIN pipeline_stage_map psm_ao ON psm_ao.pipeline_id = p.pipeline_id AND psm_ao.status_id = p.status_id
+     WHERE psm_ao.funnel_stage = 'paid'
+     GROUP BY af.client_key
+  )`;
+export const ADS_ACCEPTED_JOINS = `${FIRST_PAID_JOIN} LEFT JOIN ad_origin ao ON ao.client_key = d.client_key`;
+
+/** Друга половина правила: клієнт прийшов з реклами й оплатив ДО створення цієї угоди (крім лідогену/реактивації/eLogist). */
+export const AD_ORIGIN_SQL = `(ao.ad_paid_at IS NOT NULL AND ao.ad_paid_at < d.created_at_kommo
+    AND d.lead_channel IS DISTINCT FROM 'leadgen'
+    AND COALESCE(d.client_source, '') NOT ILIKE '%реактив%'
+    AND ${notElogistSql("d")})`;
+
+/** Предикат «Прийнято реклами» (потребує `adsAcceptedCte` + `ADS_ACCEPTED_JOINS`). */
+export const adsAcceptedSql = (srcRef: string): string =>
+  `(${adDealSqlMode(srcRef, "joined")} OR ${AD_ORIGIN_SQL})`;
 
 /**
  * СЕГМЕНТ УГОДИ (не глобальна мітка клієнта), пріоритет-партиція (GLOSSARY §9):
@@ -1177,8 +1224,8 @@ export async function expectedByPlannedBucket(s: SnapshotScope, granularity: "da
 
 // ───────────────────────── ЛІДИ (ads_accepted) ─────────────────────────
 
-/** Спільний скоуп для ads_accepted: FC + період по created_at + adDealSql. */
-function adsScope(s: MetricScope, adSources: string[]): { where: string; params: unknown[]; activeJoin: string } {
+/** Спільний скоуп для ads_accepted: FC + період по created_at + `adsAcceptedSql` (правило Сергія, 9932). */
+function adsScope(s: MetricScope, adSources: string[]): { where: string; params: unknown[]; activeJoin: string; cte: string; joins: string } {
   const params: unknown[] = [FC_PIPELINES];
   const conds = ["d.pipeline_id = ANY($1)"];
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
@@ -1186,19 +1233,22 @@ function adsScope(s: MetricScope, adSources: string[]): { where: string; params:
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   params.push(adSources);
-  conds.push(adDealSql(`$${params.length}`));
-  return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "" };
+  const src = `$${params.length}`;
+  conds.push(adsAcceptedSql(src));
+  return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "",
+    cte: `WITH ${adsAcceptedCte(src)}`, joins: ADS_ACCEPTED_JOINS };
 }
 
 /**
  * `ads_accepted` («Прийнято реклами») — угоди повного циклу, СТВОРЕНІ в періоді, що
- * відповідають `adDealSql`. Канонічна заміна 8 розкиданих `ad_leads` + дубля в
- * computeAuto (рероутинг — КРОК 9). `adSources` беруться з `getSettings()`.
+ * відповідають `adsAcceptedSql` (`adDealSql` + правило Сергія, задача 9932). Канонічна заміна
+ * 8 розкиданих `ad_leads` + дубля в computeAuto (рероутинг — КРОК 9). `adSources` — з `getSettings()`.
  */
 export async function adsAccepted(s: MetricScope, adSources: string[]): Promise<number> {
-  const { where, params, activeJoin } = adsScope(s, adSources);
+  const { where, params, activeJoin, cte, joins } = adsScope(s, adSources);
   const r = await pool.query<{ n: string }>(
-    `SELECT COUNT(*) AS n FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin} WHERE ${where}`,
+    `${cte}
+     SELECT COUNT(*) AS n FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin} ${joins} WHERE ${where}`,
     params
   );
   return Number(r.rows[0]?.n ?? 0);
@@ -1213,10 +1263,11 @@ export interface MgrCount {
 
 /** `ads_accepted` по менеджеру (для звіту/КВП). */
 export async function adsAcceptedByMgr(s: MetricScope, adSources: string[]): Promise<MgrCount[]> {
-  const { where, params, activeJoin } = adsScope({ ...s, activeOnly: true }, adSources); // active-only скрізь
+  const { where, params, activeJoin, cte, joins } = adsScope({ ...s, activeOnly: true }, adSources); // active-only скрізь
   const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; n: string }>(
-    `SELECT m.id AS manager_id, m.name, m.team_id, COUNT(*) AS n
-     FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin}
+    `${cte}
+     SELECT m.id AS manager_id, m.name, m.team_id, COUNT(*) AS n
+     FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin} ${joins}
      WHERE ${where}
      GROUP BY m.id, m.name, m.team_id
      ORDER BY n DESC`,
@@ -3542,18 +3593,21 @@ export interface ReachedAutoChan { ad: number; leadgen: number }
  * каналу, що знаменник). Угоди, що БУДЬ-КОЛИ досягли «авто працює» (подія у
  * `deal_stage_events` зі status_id ∈ AUTO_WORKING), за ВЕСЬ ЧАС, ПО МЕНЕДЖЕРУ, РОЗБИТІ ПО
  * КАНАЛУ:
- *   • `ad`      — рекламна угода (`adDealSql`) → пара до знаменника adsAccepted (РНК);
+ *   • `ad`      — «прийнята реклама» (`adsAcceptedSql`, 9932) → пара до знаменника adsAccepted (РНК);
  *   • `leadgen` — `lead_channel='leadgen'`      → пара до знаменника leadgen (РПК).
  * Active-only (як знаменники) → num ⊆ den → командна конверсія ≤100%. Дедуп по `kommo_id`.
  * Команда = Σ менеджерів (Σ-інваріант). `adSources` — канонічний список рекламних джерел.
  */
 export async function reachedAutoByManager(adSources: string[]): Promise<Map<number, ReachedAutoChan>> {
-  const ad = adDealSql("$3");
+  // 🎯 9932: чисельник — ТИМ САМИМ предикатом, що знаменник `adsAcceptedByMgr`, інакше num ⊄ den.
+  const ad = adsAcceptedSql("$3");
   const r = await pool.query<{ manager_id: number; ad: string; leadgen: string }>(
-    `SELECT d.manager_id,
+    `WITH ${adsAcceptedCte("$3")}
+     SELECT d.manager_id,
             COUNT(DISTINCT d.kommo_id) FILTER (WHERE ${ad}) ad,
             COUNT(DISTINCT d.kommo_id) FILTER (WHERE d.lead_channel = 'leadgen') leadgen
        FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+       ${ADS_ACCEPTED_JOINS}
       WHERE d.pipeline_id = ANY($1)
         AND EXISTS (SELECT 1 FROM deal_stage_events e WHERE e.kommo_id = d.kommo_id AND e.status_id = ANY($2))
       GROUP BY d.manager_id`, [FC_PIPELINES, AUTO_WORKING, adSources]);

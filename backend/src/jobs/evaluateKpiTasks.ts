@@ -6,7 +6,7 @@ import * as money from "../core/money.js";
 /**
  * ЄДИНЕ ДЖЕРЕЛО ФАКТУ KPI — ТІ САМІ core-функції, що живлять Звіт. Задачник і Звіт
  * більше не розходяться (принцип власника). Визначення (рішення власника):
- *   ads_count      → metrics.adsAcceptedByMgr  (adDealSql: client_source∈adSources
+ *   ads_count      → metrics.adsAcceptedByMgr  (adsAcceptedSql = adDealSql + правило Сергія 9932:
  *                    АБО lead_channel='ad', без реактивації; created у періоді)
  *   leadgen_count  → metrics.createdSplitByManager (lead_channel='leadgen', FC-угоди,
  *                    створені у вікні) — ТЕ САМЕ, що показує Звіт
