@@ -3,9 +3,9 @@ import type { Task, TaskStatus } from "../../../api";
 import { StatusPicker } from "../../../components/StatusPicker";
 import { STATUS_DOT_COLORS } from "../constants";
 import {
-  FOCUS_BUCKETS, chipKeeps, focusCounts, focusGroups, goalProgress, goalState, kyivDate,
-  browserStorage, readGoalsOpen, writeGoalsOpen,
-  type FocusBucket, type FocusChip,
+  FOCUS_BUCKETS, bucketOf, chipKeeps, doneThisWeek, focusCounts, focusGroups, goalProgress, goalState, kyivDate,
+  browserStorage, ownerGroups, readGoalsOpen, writeGoalsOpen,
+  type FocusBucket, type FocusChip, type OwnerGroup, type OwnerGroupBy,
 } from "../tasksFocus";
 
 /**
@@ -19,7 +19,7 @@ import {
  * селектора статусу. Редагування — у картці задачі (клік по назві); у рядку лише галочка
  * «Готово», бо це найчастіша дія. Права на неї рахує сервер (`statusRights`).
  */
-export function TasksFocusView({ rows, kpi, today, showAssignee, isMine, meId, onOpen, onOpenFeed, onDone, onReopen, onStatus, goals = [], subsOf = () => [], goalTitleOf = () => null, onAddSub }: {
+export function TasksFocusView({ rows, kpi, today, showAssignee: showAssigneeProp, isMine: isMineProp, meId, onOpen, onOpenFeed, onDone, onReopen, onStatus, goals = [], subsOf = () => [], goalTitleOf = () => null, onAddSub, owner = null, emptyNode }: {
   rows: Task[];
   /** Плани KPI (тижневі парасольки) — окремою згорнутою групою, у лічильники не входять. */
   kpi: { count: number; node: ReactNode } | null;
@@ -45,7 +45,20 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, isMine, meId, o
   goalTitleOf?: (goalId: number) => string | null;
   /** «+ Підзадача» — форма задачі з уже вибраною ціллю. */
   onAddSub?: (goalId: number) => void;
+  /**
+   * 📤 «Поставлені мною» (9711): групи по виконавцю або команді ЗАМІСТЬ груп за терміном. Плитки й
+   * «Виконано раніше» — ті самі, з тих самих рядків, тож лічильники збігаються зі списком, як і зараз.
+   * `null` — звичайний вигляд.
+   */
+  owner?: { by: OwnerGroupBy; teamName: (teamId: number) => string | null | undefined } | null;
+  /** Що сказати, коли задач немає. Без нього — «Задач немає.», як і було. */
+  emptyNode?: ReactNode;
 }) {
+  /* 📤 «Поставлені мною» (9711): «по виконавцю» — імʼя вже в заголовку групи, колонка зайва; «по команді» —
+     колонка потрібна. Тут кожна задача — чужа (автор я, виконавець інший), тож «своя» не порожнить колонку:
+     інакше задача, поставлена АКАУНТУ, підпадала б під «мою» (`isMine`: автор я і без менеджера-виконавця). */
+  const showAssignee = owner ? owner.by === "team" : showAssigneeProp;
+  const isMine = owner ? () => false : isMineProp;
   const [chip, setChip] = useState<FocusChip | null>(null);
   const [closed, setClosed] = useState<Set<string>>(() => new Set(["doneEarlier", "kpi"]));
   const toggle = (k: string) => setClosed((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
@@ -175,7 +188,28 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, isMine, meId, o
   };
 
   const keep = (b: FocusBucket | "doneWeek" | "doneEarlier") => (t: Task) => chipKeeps(chip, b, t.status);
-  const groups = FOCUS_BUCKETS.map((b) => group(b.key, b.label, g[b.key].filter(keep(b.key)), false, b.key === "late" ? "err" : ""));
+  // Плитка-фільтр у групах «по людині»: та сама належність до групи терміну, що й у звичайному вигляді.
+  const keepAny = (t: Task) => chipKeeps(chip, t.status === "done" ? (doneThisWeek(t, today) ? "doneWeek" : "doneEarlier") : bucketOf(t, today), t.status);
+  const ownerGroup = (og: OwnerGroup<Task>) => {
+    const items = og.items.filter(keepAny);
+    if (items.length === 0) return null;
+    const key = `owner:${owner?.by}:${og.key}`;
+    const isClosed = closed.has(key);
+    return (
+      <section key={key} className="tf-group">
+        <button type="button" className="tf-gh" aria-expanded={!isClosed} onClick={() => toggle(key)}>
+          <span aria-hidden="true">{isClosed ? "▸" : "▾"}</span> {og.label} <span className="tf-cnt">· {og.active}</span>
+          {og.late > 0 && <span className="tf-own-late">· {og.late} прострочено</span>}
+          {og.review > 0 && <span className="tf-own-review">· {og.review} чекає прийняття</span>}
+          {og.team && <span className="tf-own-team">{og.team}</span>}
+        </button>
+        {!isClosed && items.map((t) => row(t, t.status === "done"))}
+      </section>
+    );
+  };
+  const groups = owner
+    ? ownerGroups(rows, owner.by, today, owner.teamName).map(ownerGroup)
+    : FOCUS_BUCKETS.map((b) => group(b.key, b.label, g[b.key].filter(keep(b.key)), false, b.key === "late" ? "err" : ""));
   const nothing = c.active === 0 && g.doneWeek.length === 0 && g.doneEarlier.length === 0 && !kpi;
 
   return (
@@ -203,11 +237,11 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, isMine, meId, o
         </section>
       )}
       {nothing ? (
-        <p className="loading-text">Задач немає.</p>
+        emptyNode ?? <p className="loading-text">Задач немає.</p>
       ) : (
         <div className="tf-list">
           {groups}
-          {group("doneWeek", "Виконано цього тижня", g.doneWeek.filter(keep("doneWeek")), true, "ok")}
+          {!owner && group("doneWeek", "Виконано цього тижня", g.doneWeek.filter(keep("doneWeek")), true, "ok")}
           {chip == null && group("doneEarlier", "Виконано раніше", g.doneEarlier, true)}
           {chip == null && kpi && kpi.count > 0 && (
             <section className="tf-group">
