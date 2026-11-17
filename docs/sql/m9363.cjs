@@ -28,16 +28,15 @@ const kget = async (p) => {
   const ls = sample?._embedded?.leads ?? [];
   console.log("СПИСОК УГОД (як синк): угод", ls.length, "з ключем _embedded.tags:", ls.filter((l) => Array.isArray(l._embedded?.tags)).length,
     "з непорожніми тегами:", ls.filter((l) => (l._embedded?.tags ?? []).length > 0).length);
-  // Угоди з тегом LinkedIn (фільтр по тегу) — скільки
-  for (const t of tags.filter((t) => /linked/i.test(t.name))) {
-    let n = 0, ids = [], pg = 1;
-    let raw = 0;
-    for (;;) { const r = await kget(`/api/v4/leads?limit=250&page=${pg}&filter[tags][0]=${t.id}`); const b = r?._embedded?.leads ?? []; raw += b.length;
-      const hit = b.filter((x) => (x._embedded?.tags ?? []).some((g) => g.id === t.id)); n += hit.length; ids.push(...hit.map((x) => x.id));
-      if (b.length < 250 || pg >= 20) break; pg++; }
-    console.log(`ТЕГ «${t.name}» (${t.id}): фільтр повернув ${raw}, з цим тегом справді ${n}${pg >= 20 ? " (обрізано на 20 сторінках)" : ""}`);
-    global.tagIds = (global.tagIds || []).concat(ids);
-  }
+  // Угоди з тегом LinkedIn: фільтра по тегу Kommo v4 не приймає (400), тож повний прохід списку угод і перевірка _embedded.tags.
+  try {
+    const lt = tags.filter((t) => /linked/i.test(t.name)).map((t) => t.id);
+    let total = 0, pg = 1; global.tagIds = [];
+    for (;;) { const r = await kget(`/api/v4/leads?limit=250&page=${pg}`); const b = r?._embedded?.leads ?? []; total += b.length;
+      for (const x of b) if ((x._embedded?.tags ?? []).some((g) => lt.includes(g.id))) global.tagIds.push(x.id);
+      if (b.length < 250 || pg >= 200) break; pg++; await new Promise((z) => setTimeout(z, 200)); }
+    console.log(`ПРОХІД УГОД: переглянуто ${total} (сторінок ${pg}), з тегом LinkedIn ${global.tagIds.length}`);
+  } catch (e) { console.log("ТЕГ: прохід упав —", e.message, "(частина БД нижче однаково йде)"); }
   // ── БД
   const c = new Client({ connectionString: process.env.DATABASE_URL }); await c.connect();
   await c.query("BEGIN READ ONLY");
