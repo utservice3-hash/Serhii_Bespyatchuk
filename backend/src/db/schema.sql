@@ -8468,3 +8468,22 @@ ALTER TABLE hunt_comments ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
 INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
  ('hunt.remind', 'Хантинг', false, 'Настав час нагадування з коментаря до кандидата', 'автор коментаря')
 ON CONFLICT (type) DO NOTHING;
+
+-- 🧾 ПОЇЗДКА ПОЗА CRM, ПІДТВЕРДЖЕНА ТІМЛІДОМ (задача 9045, ТЗ Юлі 16.11.2026; Роман 18.11 «роби»). Клієнт їздив за
+-- готівку чи без рахунку, і в Kommo угоди немає — на «З ким говорити» він жовтий, хоча працює. Тімлід своєї команди
+-- подає дату поїздки й обовʼязковий коментар (№ рахунку, як оплачено): дата рахується замовленням ЛИШЕ для кольору й
+-- циклу реактивації, у гроші не йде. Рядки не видаляються: «зняти» = `revoked_at`, тож видно, хто, коли і що подав.
+-- ⚠️ revert коду таблицю не прибирає, але без коду її ніхто не читає.
+CREATE TABLE IF NOT EXISTS client_trip_confirms (
+  id          SERIAL PRIMARY KEY,
+  client_key  TEXT NOT NULL,
+  trip_day    DATE NOT NULL,
+  note        TEXT NOT NULL,
+  created_by  INTEGER NOT NULL REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_by  INTEGER REFERENCES users(id),
+  revoked_at  TIMESTAMPTZ,
+  CONSTRAINT client_trip_confirms_note_chk CHECK (btrim(note) <> ''),
+  CONSTRAINT client_trip_confirms_revoke_chk CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_client_trip_confirms_live ON client_trip_confirms (client_key) WHERE revoked_at IS NULL;
