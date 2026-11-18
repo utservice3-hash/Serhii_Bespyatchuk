@@ -317,6 +317,7 @@ export const MANIFEST_FILES: string[] = [
   "oneOnOne/legacyAnswers.test.js",
   "core/priorPaid.test.js",
   "core/adsAccepted9932.test.js",
+  "core/sources9230.test.js",
   "core/clientLeadNav9225.test.js",
   "jobs/calls.test.js",
   "utils/phone.test.js",
@@ -1201,6 +1202,12 @@ export const MANIFEST_TESTS: string[] = [
   "#9932 ПРАВИЛО СЕРГІЯ — ЛИШЕ В «ПРИЙНЯТО РЕКЛАМИ»: adDealSql і гроші не зачеплені, винятки на місці",
   "#9932b ФІКСТУРА: клієнт з реклами оплатив → далі реклама; без оплати, до оплати, лідоген, реактивація, eLogist, заглушка — ні",
   "#9932c /report actByMgr рахує «Прийнято реклами» тим самим правилом 9932, у join-формі",
+  // core/sources9230.test.ts — «зі створених: LinkedIn / Prozorro» у Звіті (задача 9230, 18.11.2026)
+  "#9230 ПАРТИЦІЯ «ЗІ СТВОРЕНИХ» З LinkedIn І Prozorro: Σ семи кошиків == створено, у рядку й у зрізі класу",
+  "#9230b dealSourceCase: реклама / лідоген / eLogist / «не вказано» старші за LinkedIn і Prozorro, а ті — за «без джерела»",
+  "#9230c Prozorro = джерело «AI тендер» або тег «AI тендер» / «Prozorro»; старий тег «тендер» — ні",
+  "#9230d правило LinkedIn / Prozorro живе лише в linkedinDeals.ts і prozorroSource.ts",
+  "#9230e LinkedIn і Prozorro видно на екрані: /report-plan, колонки Звіту, перемикач зрізу, чип дня, Звіт КВП",
   // core/clientLeadNav9225.test.ts — «З ким говорити»: кнопка «Назад» і рівень екрана в адресі (задача 9225, 17.11.2026)
   "#9225 ТІМЛІД: команда з адреси ігнорується — завжди своя; менеджер з адреси — лише себе",
   "#9225b СМІТТЯ В АДРЕСІ → РІВЕНЬ «СПИСОК»; коректні id (і «Без команди» = -1) читаються",
