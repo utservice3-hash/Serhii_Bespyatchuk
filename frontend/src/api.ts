@@ -1700,6 +1700,8 @@ export interface ReportPlanManager {
   // 🗓 Планова дата в МИНУЛИХ місяцях. Не входить у прогноз і не є «простроченим»
   //    з плитки КВП (там межа — сьогодні). Заміряно 07.09.2026: 67.1% зони відділу.
   expectPastMonths: number;
+  /** Очікування з плановою датою оплати в межах ОБРАНОГО періоду (для тижня). */
+  expectInPeriod: number;
   // 🟡 Добір нового бізнесу. У `projected` з 06.08.2026 НЕ входить (рішення власника),
   // але лишається видимим числом — щоб зміна формули читалась, а не зникла тихо.
   dobir: number;
@@ -1752,7 +1754,7 @@ export interface ReportPlanManager {
 export interface ReportPlan {
   scope: { from: string; to: string; isCurrent: boolean; workingDaysTotal: number; workingDaysElapsed: number };
   role: string; viewerManagerId: number | null; elapsed: number; remainingWorkdays: number;
-  glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number; expectPastMonths: number;
+  glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number; expectPastMonths: number; expectInPeriod: number;
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
     /**

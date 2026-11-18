@@ -803,6 +803,13 @@ const DEFAULT_SHOWN_1311 = [
 ];
 
 /**
+ * ↩️ ТИПОВИЙ НАБІР З 18.11.2026 — 12 МАКЕТА + 8, ЩО БУЛИ ТИПОВИМИ ДО 13.11 (пункт 1 TOP Weekly 16.11:
+ * «зафіксувати всі показники, які були, і повернути»; «роби» Романа 18.11). Теж перелічено ТУТ, не імпортом.
+ */
+const RESTORED_1611_EXPECTED = ["created", "ads", "leadgen", "conv", "dispatch", "awaitNoDate", "jamDeals", "responseTime"];
+const DEFAULT_SHOWN_1811 = [...DEFAULT_SHOWN_1311, ...RESTORED_1611_EXPECTED];
+
+/**
  * #2465 — БУДЬ-ЯКУ КОЛОНКУ, КРІМ «МЕНЕДЖЕР», МОЖНА ВИМКНУТИ (задача 7087).
  *
  * Роман, 26.10.2026: «хочеться щоб можна було ставити порядок колонок і вибирати
@@ -1083,17 +1090,17 @@ test("#7724 ОДИН cols: шапка, рядки, tfoot і ряд груп іт
 });
 
 /**
- * #7725 — ТИПОВИЙ НАБІР = 12 КОЛОНОК МАКЕТА; СТАРИЙ ВИБІР НЕ ГУБИТЬ CORE. Наступник `#7712`.
- * Хто нічого не обирав — бачить 12 колонок; хто обирав колись (коли core були завжди на
+ * #7890 — ТИПОВИЙ НАБІР = 12 КОЛОНОК МАКЕТА + 8 ПОВЕРНУТИХ; СТАРИЙ ВИБІР НЕ ГУБИТЬ CORE. Наступник `#7725`.
+ * Хто нічого не обирав — бачить 20 колонок; хто обирав колись (коли core були завжди на
  * екрані) — не втрачає «Створено», «Авто» й решту core, яких не вимикав.
  * 🧨 Червоніє, якщо змінити типовий набір або накладати збережений вибір на новий (вужчий) набір.
  */
-test("#7725 ТИПОВИЙ НАБІР — 12 КОЛОНОК МАКЕТА; старий збережений вибір не ховає core, яких людина не вимикала", async () => {
+test("#7890 ТИПОВИЙ НАБІР — 12 КОЛОНОК МАКЕТА + 8, ЩО БУЛИ ДО 13.11; старий збережений вибір не ховає core, яких людина не вимикала", async () => {
   const { REPORT_COLS, readColPrefs, DEFAULT_OPT_ON, colVisible } = await loadCols();
   const shownBy = (prefs: Record<string, boolean>) =>
     REPORT_COLS.filter((c: any) => c.key !== "factUndef" && c.key !== "name" && colVisible(c.key, prefs)).map((c: any) => c.key);
-  assert.deepEqual(shownBy(DEFAULT_OPT_ON).sort(), [...DEFAULT_SHOWN_1311].sort(), "🔴 типовий набір колонок не той, що в погодженому макеті");
-  assert.deepEqual(shownBy(readColPrefs(memStore({}), 42)).sort(), [...DEFAULT_SHOWN_1311].sort(), "🔴 людина без збереженого вибору бачить не типовий набір");
+  assert.deepEqual(shownBy(DEFAULT_OPT_ON).sort(), [...DEFAULT_SHOWN_1811].sort(), "🔴 типовий набір колонок не той, що в погодженому макеті");
+  assert.deepEqual(shownBy(readColPrefs(memStore({}), 42)).sort(), [...DEFAULT_SHOWN_1811].sort(), "🔴 людина без збереженого вибору бачить не типовий набір");
   const coreKeys = REPORT_COLS.filter((c: any) => c.core && c.key !== "name").map((c: any) => c.key);
   assert.ok(coreKeys.length >= 10, `🔴 core-колонок ${coreKeys.length} — розбір реєстру зламався`);
   for (const [label, st] of [
@@ -1111,21 +1118,56 @@ test("#7725 ТИПОВИЙ НАБІР — 12 КОЛОНОК МАКЕТА; ста
 });
 
 /**
- * #7726 — «УСІ» ВМИКАЄ ВСЕ, «СКИНУТИ» — 12 КОЛОНОК МАКЕТА І ТИПОВИЙ ПОРЯДОК. Наступник `#7713`.
+ * #7891 — «УСІ» ВМИКАЄ ВСЕ, «СКИНУТИ» — 20 КОЛОНОК (12 МАКЕТА + 8 ПОВЕРНУТИХ) І ТИПОВИЙ ПОРЯДОК. Наступник `#7726`.
  * 🧨 Червоніє, якщо `resetColPrefs` віддає не новий типовий набір або «Скинути» не скидає порядок.
  */
-test("#7726 «УСІ» ВМИКАЄ КОЖНУ КОЛОНКУ, «СКИНУТИ» ПОВЕРТАЄ 12 КОЛОНОК МАКЕТА І ТИПОВИЙ ПОРЯДОК", async () => {
+test("#7891 «УСІ» ВМИКАЄ КОЖНУ КОЛОНКУ, «СКИНУТИ» ПОВЕРТАЄ 12 КОЛОНОК МАКЕТА + 8 ПОВЕРНУТИХ І ТИПОВИЙ ПОРЯДОК", async () => {
   const { REPORT_COLS, allColPrefs, resetColPrefs, resetColOrder, defaultColOrder, colVisible } = await loadCols();
   const all = allColPrefs();
   assert.deepEqual(REPORT_COLS.filter((c: any) => !colVisible(c.key, all)).map((c: any) => c.key), [], "🔴 «Усі» лишає вимкнені колонки");
   const r = resetColPrefs();
   const shown = REPORT_COLS.filter((c: any) => c.key !== "factUndef" && c.key !== "name" && colVisible(c.key, r)).map((c: any) => c.key);
-  assert.deepEqual(shown.sort(), [...DEFAULT_SHOWN_1311].sort(), "🔴 «Скинути до типових» дає не типовий набір");
+  assert.deepEqual(shown.sort(), [...DEFAULT_SHOWN_1811].sort(), "🔴 «Скинути до типових» дає не типовий набір");
   assert.deepEqual(resetColOrder(), defaultColOrder(), "🔴 «Скинути до типових» дає не типовий порядок");
-  assert.equal(colVisible("created", r), false, "🔴 «Скинути» лишає колонку поза типовим набором (це «Усі» під іншою назвою)");
+  assert.equal(colVisible("convAd", r), false, "🔴 «Скинути» лишає колонку поза типовим набором (це «Усі» під іншою назвою)");
   const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
   const pick = s.split("function ColumnPicker(")[1]?.split("\nfunction ")[0] ?? "";
   assert.match(pick, /const onReset = \(\) => \{ resetCols\(\); onResetOrder\(\); \};/, "🔴 «Скинути» скидає не обидва — вибір і порядок");
+});
+
+/**
+ * #7892 — ОДИН РАЗ НА ЛЮДИНУ ДОДАТИ 8 КОЛОНОК, ЗНИКЛИХ 13.11; НІЧОГО НЕ СХОВАТИ; ВДРУГЕ НЕ ВМИКАТИ.
+ * 13.11 `remakeResetOnce` переписав кожному вибір на 12 колонок макета, і тімліди 16.11 не знайшли
+ * «Створено», «Реклама», «Лідоген», «Авто» (TOP Weekly 16.11). `restoreColsOnce` їх ДОДАЄ поверх
+ * поточного вибору. Дзеркало: колонку, яку людина вимкнула ПІСЛЯ повернення, вдруге не вмикаємо.
+ * 🧨 Червоніє, якщо функція перезапише вибір типовим (сховає ввімкнене людиною), не додасть одну з 8,
+ * повториться на другому відкритті, зачепить чужий ключ або стоятиме в таблиці після читання вибору.
+ */
+test("#7892 ОДИН РАЗ НА ЛЮДИНУ — +8 КОЛОНОК, ЗНИКЛИХ 13.11; НІЧОГО НЕ ХОВАЄ; ВИМКНЕНЕ ПІСЛЯ — НЕ ВМИКАЄ ВДРУГЕ; ЧУЖІ НЕ ЗАЧЕПЛЕНІ", async () => {
+  const { restoreColsOnce, readColPrefs, colVisible, RESTORED_1611 } = await loadCols();
+  assert.deepEqual([...RESTORED_1611].sort(), [...RESTORED_1611_EXPECTED].sort(), "🔴 перелік повернутих колонок не той, що зник 13.11");
+  // Людина після 13.11 щось налаштувала: увімкнула convAd, вимкнула projected.
+  const mine = { fact: true, plan: true, pct: true, projected: false, convAd: true, created: false, ads: false };
+  const st = memStore({ "rptTableCols:42": mine, "rptTableCols:7": { convAd: true } });
+  assert.equal(restoreColsOnce(st, 42), true, "🔴 перше відкриття не повернуло колонки");
+  const p = readColPrefs(st, 42);
+  const missing = RESTORED_1611_EXPECTED.filter((k) => !colVisible(k, p));
+  assert.deepEqual(missing, [], "🔴 не повернулось: " + missing.join(", "));
+  assert.equal(p.convAd, true, "🔴 повернення сховало колонку, яку людина ввімкнула сама");
+  assert.equal(p.projected, false, "🔴 повернення ввімкнуло колонку, яку людина вимкнула сама (це скидання, а не додавання)");
+  assert.equal(st.data.get("rptTableCols:7"), JSON.stringify({ convAd: true }), "🔴 повернення зачепило чужий вибір");
+  // Далі людина вимикає повернуту колонку — і вона лишається вимкненою.
+  st.data.set("rptTableCols:42", JSON.stringify({ ...p, ads: false }));
+  assert.equal(restoreColsOnce(st, 42), false, "🔴 повернення повторилось — вимкнене людиною вмикатиметься щоразу");
+  assert.equal(readColPrefs(st, 42).ads, false, "🔴 вимкнена після повернення колонка знову на екрані");
+  assert.equal(restoreColsOnce(null, 42), false, "🔴 без сховища повернення «сталось»");
+  // Порядок у таблиці: скидання макета → повернення → читання вибору.
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  const iReset = s.indexOf("remakeResetOnce(colStore(), userId)"), iRestore = s.indexOf("restoreColsOnce(colStore(), userId)"),
+    iRead = s.indexOf("readColPrefs(colStore(), userId)");
+  assert.ok(iRestore > 0, "🔴 таблиця не кличе повернення колонок");
+  assert.ok(iReset > 0 && iRestore > iReset, "🔴 повернення стоїть ДО скидання макета — скидання його зітре для тих, хто ще не відкривав");
+  assert.ok(iRead > iRestore, "🔴 повернення стоїть ПІСЛЯ читання вибору — таблиця відмалюється без повернутих колонок");
 });
 
 /**

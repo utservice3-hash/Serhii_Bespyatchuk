@@ -6,7 +6,7 @@ import {
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
   applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
   isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT,
-  fmtCallback, callbackTone, remakeResetOnce,
+  fmtCallback, callbackTone, remakeResetOnce, restoreColsOnce,
   type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
@@ -78,6 +78,8 @@ export function ReportTableSection({
   const [userId] = useState<number | null>(viewerUserId);
   // Один раз на людину — колонки як на макеті (див. `remakeResetOnce`). Стоїть ДО читання вибору.
   useState(() => remakeResetOnce(colStore(), userId));
+  // Один раз на людину — повернути 8 колонок, зниклих 13.11 (див. `restoreColsOnce`). Після скидання, ДО читання.
+  useState(() => restoreColsOnce(colStore(), userId));
   const [optOn, setOptOn] = useState<Record<string, boolean>>(() => readColPrefs(colStore(), userId));
   const toggleCol = (k: string) => setOptOn((p) => {
     const next = { ...p, [k]: !p[k] };
