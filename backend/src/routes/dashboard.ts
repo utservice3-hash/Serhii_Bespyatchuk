@@ -10223,6 +10223,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   //    щоб Звіт КВП рахував прогноз ТИМ САМИМ кодом, а не «за тим самим сенсом» —
   //    рішення 06.08.2026 доїхало сюди й не доїхало туди саме через дві копії.
   const expPlannedM = forecast.expectedSplitByMonth(expDays, kyivToday);
+  // ⏳ Очікування з плановою датою В МЕЖАХ обраного періоду (тиждень Звіту; пункт 2 TOP Weekly 16.11).
+  const expRangeM = forecast.expectedInRange(expDays, from, to);
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
   /** Канальна конверсія в контракт: counts завжди, % лише при taken ≥ 10 — той самий
    *  поріг, що в combined, і рахується ТИМ САМИМ полем `cohortPct` ядра. */
@@ -10448,6 +10450,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // не надійшли. Не входить ні в прогноз, ні в два сусідні числа — саме тому й
       // зникало з екрана (07.09.2026: 67% зони по відділу).
       expectPastMonths: Math.round(expPlannedM.get(m.id)?.pastMonths ?? 0),
+      // ⏳ Планова дата в межах ОБРАНОГО періоду — для «з очікуваннями» в режимі «Тиждень».
+      expectInPeriod: Math.round(expRangeM.get(m.id) ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       // 🔴 ПРОГНОЗ МІСЯЦЯ (рішення власника 06.08.2026) = ФАКТ ② + ОЧІКУВАННЯ З
       // ПЛАНОВОЮ ДАТОЮ ОПЛАТИ В ЦЬОМУ Ж МІСЯЦІ. Контрольне число власника, звірене
@@ -10604,6 +10608,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     expectThisMonth: managers.reduce((s, m) => s + m.expectThisMonth, 0),
     expectNextMonth: managers.reduce((s, m) => s + m.expectNextMonth, 0),
     expectPastMonths: managers.reduce((s, m) => s + m.expectPastMonths, 0),
+    expectInPeriod: managers.reduce((s, m) => s + m.expectInPeriod, 0),
     dispatched: managers.reduce((s, m) => s + m.kpi.dispatch.fact, 0),
     dispatchedRevenue: managers.reduce((s, m) => s + m.kpi.dispatch.revenue, 0),
     created: managers.reduce((s, m) => s + m.created, 0),

@@ -398,6 +398,7 @@ export function ReportPlanSection({ auth, teams }: {
         <SliceCtx.Provider value={slice}><AwaitCtx.Provider value={awaitMap}>
           <Glance data={data} focus={focus} focusDay={dayShown} today={today} periodLabel={periodLabel}
             monthInProgress={mode === "month" && data.scope.isCurrent}
+            weekInProgress={mode === "week" && data.scope.isCurrent}
             statusFilter={statusFilter} onStatus={setStatusFilter} />
           {/* Застряглі — один рядок, розкривається на місці. Стан на зараз, не за періодом. */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
@@ -565,10 +566,12 @@ const WD_FULL = ["понеділок", "вівторок", "середа", "че
  * чек» переїхав у підказку кільця, «поза ростером» і кількість нерозібраних розмов —
  * у підказку «ціну названо».
  */
-function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onStatus, monthInProgress }: {
+function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onStatus, monthInProgress, weekInProgress }: {
   data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string; periodLabel: string;
   /** Обрано повний ПОТОЧНИЙ місяць — лише тоді очікування цього місяця лягає на смугу. */
   monthInProgress: boolean;
+  /** Обрано ПОТОЧНИЙ тиждень — очікування з плановою датою цього тижня лягає на смугу й у рядок «з очікуваннями». */
+  weekInProgress: boolean;
   statusFilter: "g" | "a" | "r" | null; onStatus: (s: "g" | "a" | "r" | null) => void;
 }) {
   const g = data.glance;
@@ -581,6 +584,15 @@ function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onSta
   const col = pctColor(pct);
   const pace = Math.round(Math.min(1, Math.max(0, data.elapsed)) * 100);
   const dayHead = focusDay === today ? "Сьогодні" : WD_FULL[dow(focusDay) - 1].replace(/^./, (c) => c.toUpperCase());
+  /**
+   * ⏳ «З ОЧІКУВАННЯМИ» (TOP Weekly 16.11.2026, пункт 2, Сергій: «з очікуваннями скільки ми виконали»).
+   * Місяць — та сама формула, що «прогноз» картки менеджера: факт + очікуємо з план. датою в цьому місяці.
+   * Тиждень — факт + очікуємо з план. датою в межах тижня. Лише для ПОТОЧНОГО періоду: у минулому
+   * нічого не очікується, і рядок домалював би гроші, яких не буде. Без дати — не входить ніде.
+   */
+  const expNow = monthInProgress ? g.expectThisMonth : weekInProgress ? g.expectInPeriod : null;
+  const withExp = expNow == null ? null : g.fact + expNow;
+  const pctWithExp = withExp != null && g.plan > 0 ? Math.round((withExp / g.plan) * 100) : null;
   const ringTitle = `Круг оплати — факт (отримані кошти): ${fmt(g.fact)} ₴\n= успішно реалізовано (виграно 142): ${fmt(g.factSuccess)} ₴\n+ оплачено: ${fmt(g.factPaid)} ₴\nчек: ${g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"}`;
   return (
     <section className="rv-kpis">
@@ -598,8 +610,20 @@ function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onSta
               <i style={{ width: `${Math.min(100, pct)}%`, background: col }} />
               {monthInProgress && <ExpectSeg fact={g.fact} expect={g.expectThisMonth} plan={g.plan}
                 title={`очікуємо цього місяця (є планова дата оплати) — ${fmt(g.expectThisMonth)} ₴`} />}
+              {weekInProgress && <ExpectSeg fact={g.fact} expect={g.expectInPeriod} plan={g.plan}
+                title={`очікуємо цього тижня (планова дата оплати в межах тижня) — ${fmt(g.expectInPeriod)} ₴`} />}
               {data.scope.isCurrent && <em style={{ left: `${pace}%` }} title={`темп: ${pace}% робочих днів минуло`} />}
             </div>
+            {withExp != null && (
+              <div style={{ fontSize: 12, marginTop: 5 }}>з очікуваннями <b>{fmt(withExp)} ₴</b>
+                {pctWithExp != null && <> · <b style={{ color: pctColor(pctWithExp) }}>{pctWithExp}%</b> плану {monthInProgress ? "місяця" : "тижня"}</>}
+                {" "}<InfoHint text={monthInProgress
+                  ? "Отримано + угоди, які чекають оплату з плановою датою в цьому місяці. Те саме, що «прогноз» у картках менеджерів, лише для всієї команди. Угоди без планової дати й з минулих місяців не входять."
+                  : "Отримано за тиждень + угоди, які чекають оплату з плановою датою на цьому тижні (Пн-Нд), включно з днями, що вже минули. Угоди без планової дати не входять."} />
+              </div>
+            )}
+            {/* ↩️ Розклад факту й чек команди — рядком, як було до 13.11 (TOP Weekly 16.11, пункт 1; «роби» Романа 18.11). */}
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>= успішно {k(g.factSuccess)} + оплачено {k(g.factPaid)} · чек {g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"} <InfoHint text="Ср. чек Звіту = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період»; Σ суми ÷ Σ угод (не середнє середніх)." /></div>
           </div>
         </div>
         {/* 🔵 Три стани покривають УСІХ: Σ чипів = кількість менеджерів (рішення власника 07.08.2026). */}
@@ -616,6 +640,7 @@ function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onSta
         <div className="lab">Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. «Цей міс» входить у прогноз; без дати — ні. Календарні місяці — від обраного періоду НЕ залежить." /></div>
         <div className="val" style={{ color: g.expectThisMonth > 0 ? "var(--rv-ok)" : MUTED }}>{fmt(g.expectThisMonth)} <small>₴ цей міс</small></div>
         <div className="rv-mini">
+          {weekInProgress && <><span>на цей тиждень</span><b style={{ color: g.expectInPeriod > 0 ? "var(--rv-warn)" : undefined }}>{fmt(g.expectInPeriod)} ₴</b></>}
           <span>наступний місяць</span><b>{fmt(g.expectNextMonth)} ₴</b>
           {/* 🔴 «З минулих місяців» — НЕ «прострочено» з плитки КВП: там межа «сьогодні», тут — початок місяця. */}
           <span>з минулих місяців</span><b style={{ color: g.expectPastMonths !== 0 ? "var(--rv-warn)" : undefined }}>{fmt(g.expectPastMonths)} ₴</b>
