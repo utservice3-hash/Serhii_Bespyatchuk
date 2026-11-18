@@ -417,8 +417,11 @@ export interface CustomerInfo {
 
 /** `customerInfo` за кодом компанії угоди. Помилка 1С не ламає вікно: показуємо її словами. */
 export async function customerInfoFrom1c(base: string, code: string, doFetch: FetchLike = fetch): Promise<CustomerInfo> {
-  const kind = codeKind(code);
-  if (!kind) return code ? { found: false, uid: "", name: "", agreements: [], error: "код компанії не 8 і не 10 цифр" } : { found: false, uid: "", name: "", agreements: [] };
+  // Іноземна компанія (18.11.2026: UAB «Brandelektra», литовський код 304210390, 9 цифр) — 1С знаходить її за `edrpou`
+  // (у картці 1С код лежить там же, `resident: false`). Шукаємо за будь-яким кодом 5–15 цифр; СТВОРЮЄМО ж нового
+  // контрагента, як і раніше, лише за українським кодом (`codeKind` у `buildCreateCustomerBody`).
+  const kind = codeKind(code) ?? (/^\d{5,15}$/.test(code) ? "edrpou" : null);
+  if (!kind) return code ? { found: false, uid: "", name: "", agreements: [], error: "код компанії не схожий на код (лише цифри, 5–15)" } : { found: false, uid: "", name: "", agreements: [] };
   return customerInfoQuery(base, `${kind}=${encodeURIComponent(code)}`, doFetch);
 }
 
