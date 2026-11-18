@@ -92,13 +92,14 @@ export function PeriodStepper({ state, onPatch, today }: {
           {stepperLabel(state, today)}<small>▾</small>
         </button>
         <button type="button" className="arr" aria-label="Наступний період" disabled={!canNext} onClick={() => step(1)}>›</button>
+        {/* Поповер живе всередині смуги «‹ назва ›», щоб відкриватись під кнопкою, а не під вкладками. */}
+        {pop && (
+          <Calendar state={state} today={today}
+            onPick={(patch) => { setPop(false); onPatch(patch); }} />
+        )}
       </div>
       {!isCurrent && state.mode !== "range" && (
         <button type="button" className="rv-tonow" onClick={() => onPatch({ anchor: today, focusDay: today })}>↺ До поточного</button>
-      )}
-      {pop && (
-        <Calendar state={state} today={today}
-          onPick={(patch) => { setPop(false); onPatch(patch); }} />
       )}
     </div>
   );

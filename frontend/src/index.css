@@ -1729,7 +1729,7 @@ tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
 .rv-seg button[aria-pressed="true"] { background: var(--rv-card); color: var(--rv-ink); box-shadow: 0 1px 3px rgba(20,30,50,.12); }
 .rv-seg.rv-view button[aria-pressed="true"] { color: var(--rv-brand); }
 .rv-pgrp { display: flex; gap: 10px; align-items: center; position: relative; flex-wrap: wrap; }
-.rv-stepper { display: flex; align-items: center; background: var(--rv-card); border: 1px solid var(--rv-line); border-radius: 11px; }
+.rv-stepper { display: flex; align-items: center; position: relative; background: var(--rv-card); border: 1px solid var(--rv-line); border-radius: 11px; }
 .rv-stepper .arr { border: 0; background: transparent; width: 36px; height: 38px; font-size: 17px; cursor: pointer; border-radius: 11px; }
 .rv-stepper .arr:disabled { opacity: .3; cursor: default; }
 .rv-stepper .arr:not(:disabled):hover { background: var(--bg); }
@@ -1742,7 +1742,7 @@ tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
   background-position: calc(100% - 15px) 16px,calc(100% - 10px) 16px; background-size: 5px 5px; background-repeat: no-repeat; }
 
 /* поповер календаря */
-.rv-pop { position: absolute; top: 46px; left: 0; z-index: 70; background: var(--rv-card); border: 1px solid var(--rv-line); border-radius: 14px; box-shadow: 0 18px 40px rgba(20,30,50,.16); padding: 14px; }
+.rv-pop { position: absolute; top: 46px; left: 50%; transform: translateX(-50%); z-index: 70; background: var(--rv-card); border: 1px solid var(--rv-line); border-radius: 14px; box-shadow: 0 18px 40px rgba(20,30,50,.16); padding: 14px; }
 .rv-pop-h { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 650; }
 .rv-pop-h button { border: 0; background: none; width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 16px; }
 .rv-pop-h button:hover:not(:disabled) { background: var(--bg); } .rv-pop-h button:disabled { opacity: .3; }
