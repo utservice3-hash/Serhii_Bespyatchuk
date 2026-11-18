@@ -6442,16 +6442,19 @@ export const archiveBaEquipment = async (id: number, archived: boolean) => { awa
 export const issueBaEquipment = async (id: number, p: { employeeId: number; issuedOn: string }) => (await api.post<{ issueId: number }>(`/ba/equipment/${id}/issue`, p)).data.issueId;
 export const returnBaIssue = async (issueId: number, returnedOn: string) => { await api.post(`/ba/issues/${issueId}/return`, { returnedOn }); };
 export const undoReturnBaIssue = async (issueId: number) => { await api.post(`/ba/issues/${issueId}/undo-return`); };
-export interface BaTtnCounts { needed: number; attached: number; mismatched: number; byDocs: number; unsynced: number; present: number; pct: number | null }
+export interface BaTtnCounts { needed: number; attached: number; mismatched: number; byDocs: number; byAnyDoc: number; unsynced: number; present: number; pct: number | null }
 export interface BaTtnRow {
   managerId: number; name: string; active: boolean; live: BaTtnCounts; kommoUrl: string | null;
-  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnByDocs: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
+  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnByDocs: number | null; ttnByAnyDoc: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
   history: { month: string; pct: number | null }[];
 }
 export interface BaTtnDeal {
   kommoId: number; name: string; client: string; closedOn: string; ttnFiles: number | null; mismatch: { note: string } | null; url: string;
   /** Зараховано без файла ТТН (04.11.2026) і обидві умови окремо; `originals: null` — ще не синхронізовано. */
-  byDocs: boolean; docs: { paid1c: boolean; originals: boolean | null };
+  byDocs: boolean;
+  /** Зараховано за набором документів (18.11.2026): перевізнику безнал і є файл у решті полів «Документы»; `otherFiles: null` — не синхронізовано. */
+  byAnyDoc: boolean;
+  docs: { paid1c: boolean; originals: boolean | null; otherFiles: number | null; carrierBeznal: boolean };
 }
 export const fetchBaTtn = async (month: string) => (await api.get<{ month: string; rows: BaTtnRow[] }>("/ba/ttn", { params: { month } })).data;
 export const fetchBaTtnDeals = async (month: string, managerId: number) => (await api.get<{ deals: BaTtnDeal[] }>(`/ba/ttn/${month}/${managerId}/deals`)).data.deals;

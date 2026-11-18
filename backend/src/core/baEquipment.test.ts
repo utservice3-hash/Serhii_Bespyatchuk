@@ -88,8 +88,9 @@ test("#982 ЖИВИЙ SQL ТТН: угоди == фільтр Даші, межі 
       (13, 'Межа-початок', 3890085), (14, 'Межа-кінець', 3890086)`);
     const deal = (id: number, mgr: number, over: Partial<{ pipe: number; st: number; pay: string; at: string; ttn: number | null }> = {}) =>
       // `originals_received = false`: з 04.11.2026 угода без файла, у якої «Оригиналы получено» ще не прочитано, — «не
-      // синхронізовано» і блокує фіксацію; цей гейт про фільтр і межі, тож галочку прочитано («ні»).
-      c.query(`INSERT INTO deals (kommo_id, manager_id, pipeline_id, status_id, payment_type, closed_at_kommo, ttn_files, originals_received) VALUES ($1,$2,$3,$4,$5,$6,$7,false)`,
+      // синхронізовано» і блокує фіксацію; цей гейт про фільтр і межі, тож галочку прочитано («ні»). Так само з 18.11.2026
+      // `doc_files = 0`: решту «Документів» прочитано, файлів немає.
+      c.query(`INSERT INTO deals (kommo_id, manager_id, pipeline_id, status_id, payment_type, closed_at_kommo, ttn_files, originals_received, doc_files) VALUES ($1,$2,$3,$4,$5,$6,$7,false,0)`,
         [id, mgr, over.pipe ?? 8921932, over.st ?? 142, over.pay ?? "Безнал с НДС", over.at ?? "2026-08-15 12:00:00+03",
           over.ttn === undefined ? 0 : over.ttn]);
     await deal(1, 11, { ttn: 2 });                                  // рахується, ТТН є
@@ -361,16 +362,17 @@ test("#1400 ТТН З KOMMO: рахуються лише живі файли п�
 });
 
 /**
- * #3765 (було #3761, до того #1402) — ЖИВИЙ SQL «НАЯВНИХ» З «ЗА ДОКУМЕНТАМИ» (Даша, рішення Романа 04.11.2026; оновлений
- * текст 05.11.2026 — без умови про розхід). Прикріплено — серед ТИХ САМИХ угод (готівкова з ТТН — ні); «маршрут не збігся»
- * віднімається лише з прикріплених; БЕЗ файла угода зараховується, коли «Оплачено из 1с» І «Оригиналы получено» — кожна
- * умова має приклад по обидва боки; розхід (з ПДВ, без ПДВ, «на выгрузке», готівка) не важить; угода з файлом не рахується
- * вдруге; немає фінансових полів — не «за документами». NULL файлів або непрочитані «оригінали» в угоди без файла —
- * «не синхронізовано», блокує фіксацію; знімок несе «за документами».
- * 🧨 Червоніє, якщо прибрати будь-яку з двох умов, повернути умову про розхід, рахувати угоду з файлом двічі або читати
- * непрочитані «оригінали» як «ні».
+ * #4110 (було #3765, до того #3761 і #1402) — ЖИВИЙ SQL «НАЯВНИХ» З ДВОМА ПРАВИЛАМИ БЕЗ ФАЙЛА. Прикріплено — серед ТИХ САМИХ
+ * угод (готівкова з ТТН — ні); «маршрут не збігся» віднімається лише з прикріплених. БЕЗ файла угода зараховується:
+ *  • «за документами» (Даша, 04-05.11.2026) — «Оплачено из 1с» І «Оригиналы получено», розхід не важить;
+ *  • «за набором документів» (задача Сергія 18.11.2026) — перевізнику безнал (з ПДВ або без) І файл у решті полів «Документы».
+ * Кожна умова має приклад по обидва боки; угода, що підходить під обидва правила, — лише «за документами»; угода з файлом
+ * — лише прикріплена. NULL файлів ТТН, непрочитані «оригінали» чи файли решти «Документів» в угоди без файла — «не
+ * синхронізовано», блокує фіксацію; знімок несе обидві категорії.
+ * 🧨 Червоніє, якщо прибрати будь-яку умову будь-якого правила, рахувати угоду двічі, зарахувати готівку перевізнику чи
+ * читати непрочитане як «ні».
  */
-test("#3765 ЖИВИЙ SQL ТТН: за документами — оплата й оригінали, розхід не важить, з файлом не двічі, непрочитане — не синхронізовано", async (t) => {
+test("#4110 ЖИВИЙ SQL ТТН: за документами і за набором документів — кожна умова з обох боків, ніде не двічі, непрочитане — не синхронізовано", async (t) => {
   const s = await scratchDb(t);
   if (!s) return;
   const ttn = await import("./baTtn.js");
@@ -379,9 +381,9 @@ test("#3765 ЖИВИЙ SQL ТТН: за документами — оплата 
   try {
     await c.query(`INSERT INTO managers (id, name, kommo_user_id) VALUES (21, 'Семенюк', 12163420)`);
     type Fin = { paid: boolean; vat?: number; novat?: number; unload?: number; cash?: number };
-    const deal = async (id: number, files: number | null, orig: boolean | null, fin: Fin | null, pay = "Безнал с НДС") => {
-      await c.query(`INSERT INTO deals (kommo_id, manager_id, pipeline_id, status_id, payment_type, closed_at_kommo, ttn_files, originals_received)
-        VALUES ($1,21,8921932,142,$2,'2026-08-10 12:00+03',$3,$4)`, [id, pay, files, orig]);
+    const deal = async (id: number, files: number | null, orig: boolean | null, fin: Fin | null, docs: number | null = 0, pay = "Безнал с НДС") => {
+      await c.query(`INSERT INTO deals (kommo_id, manager_id, pipeline_id, status_id, payment_type, closed_at_kommo, ttn_files, originals_received, doc_files)
+        VALUES ($1,21,8921932,142,$2,'2026-08-10 12:00+03',$3,$4,$5)`, [id, pay, files, orig, docs]);
       if (fin) await c.query(`INSERT INTO deal_fin_fields (kommo_id, paid1c, out_vat, out_novat, out_unload, out_cash) VALUES ($1,$2,$3,$4,$5,$6)`,
         [id, fin.paid, fin.vat ?? 0, fin.novat ?? 0, fin.unload ?? 0, fin.cash ?? 0]);
     };
@@ -390,35 +392,45 @@ test("#3765 ЖИВИЙ SQL ТТН: за документами — оплата 
     await deal(2, 2, false, null);                                  // прикріплено, потім «не збігся»
     await deal(3, 0, true, ok);                                     // за документами: розхід з ПДВ
     await deal(4, 0, true, { paid: true, novat: -5000 });           // за документами: розхід без ПДВ
-    await deal(5, 0, false, ok);                                    // ні: оригіналів немає
-    await deal(6, 0, true, { ...ok, paid: false });                 // ні: не «Оплачено из 1с»
+    await deal(5, 0, false, ok);                                    // ні: оригіналів немає, інших документів теж
+    await deal(6, 0, true, { ...ok, paid: false });                 // ні: не «Оплачено из 1с», інших документів немає
     await deal(7, 0, true, { paid: true, unload: -3000, cash: -1000 }); // за документами: розхід не важить («на выгрузке» й готівка)
     await deal(8, 0, true, null);                                   // ні: фінансових полів немає
-    await deal(9, 1, true, ok);                                     // прикріплено — і лише раз, хоч умови теж є
+    await deal(9, 1, true, ok, 2);                                  // прикріплено — і лише раз, хоч умови обох правил теж є
     await deal(10, 0, null, ok);                                    // не синхронізовано: «оригінали» ще не прочитано
     await deal(11, null, null, null);                               // не синхронізовано: файли невідомо
-    await deal(12, 0, true, ok, "Наличные");                        // готівкова — не рахується ніде
+    await deal(12, 0, true, ok, 2, "Наличные");                     // готівкова — не рахується ніде
+    await deal(13, 0, false, { paid: false, vat: -9000 }, 2);       // за набором: перевізнику з ПДВ, є документи (і неоплачена — не важить)
+    await deal(14, 0, false, { paid: true, novat: -5000 }, 1);      // за набором: перевізнику без ПДВ
+    await deal(15, 0, false, { paid: true, unload: -3000, cash: -1000 }, 3); // ні: перевізнику не безнал, хоч документи є
+    await deal(17, 0, true, ok, 2);                                 // за документами — і НЕ ще раз за набором
+    await deal(18, 1, false, ok, 2);                                // прикріплено — і НЕ ще раз за набором
+    await deal(19, 0, false, ok, null);                             // не синхронізовано: решту «Документів» ще не прочитано
+    await deal(20, 0, false, null, 2);                              // ні: фінансових полів немає — безнал перевізнику невідомий
     await c.query(`INSERT INTO ba_ttn_route_mismatch (kommo_id) VALUES (2)`);
     const m = (await ttn.ttnDealsByManager(db, "2026-08")).get(21)!;
-    assert.deepEqual({ ...m }, { needed: 11, attached: 3, mismatched: 1, byDocs: 3, unsynced: 2, present: 5 }, "🔴 числа ТТН не ті");
-    await assert.rejects(ttn.saveTtnCheck(db, 901, "2026-08", 21, {}), /не синхронізовано/, "🔴 зафіксовано місяць із непрочитаними «оригіналами»");
+    assert.deepEqual({ ...m }, { needed: 18, attached: 4, mismatched: 1, byDocs: 4, byAnyDoc: 2, unsynced: 3, present: 9 }, "🔴 числа ТТН не ті");
+    await assert.rejects(ttn.saveTtnCheck(db, 901, "2026-08", 21, {}), /не синхронізовано/, "🔴 зафіксовано місяць із непрочитаними полями");
     await assert.rejects(ttn.setRouteMismatch(db, 901, 3, {}), (e) => status(e) === 409, "🔴 «не збігся» поставлено на угоду без файла ТТН");
+    await assert.rejects(ttn.setRouteMismatch(db, 901, 13, {}), (e) => status(e) === 409, "🔴 «не збігся» поставлено на угоду за набором документів");
 
     const list = await ttn.ttnDealsOf(db, "2026-08", 21, "https://utsercice.kommo.com/");
     const of = (id: number) => list.find((d) => d.kommoId === id)!;
-    assert.deepEqual([of(3).byDocs, of(4).byDocs, of(7).byDocs, of(9).byDocs], [true, true, true, false], "🔴 позначка «за документами» не на тих угодах");
-    assert.deepEqual(of(5).docs, { paid1c: true, originals: false }, "🔴 угоді без оригіналів не видно, чого бракує");
-    assert.deepEqual([of(6).docs.paid1c, of(10).docs.originals], [false, null]);
-    assert.deepEqual(list.slice(0, 5).map((d) => d.kommoId).sort((x, y) => x - y), [5, 6, 8, 10, 11], "🔴 незараховані угоди не стоять зверху");
+    assert.deepEqual([of(3).byDocs, of(4).byDocs, of(7).byDocs, of(9).byDocs, of(17).byDocs], [true, true, true, false, true], "🔴 позначка «за документами» не на тих угодах");
+    assert.deepEqual([13, 14, 15, 17, 18, 20, 9].map((id) => of(id).byAnyDoc), [true, true, false, false, false, false, false], "🔴 позначка «за набором документів» не на тих угодах");
+    assert.deepEqual(of(5).docs, { paid1c: true, originals: false, otherFiles: 0, carrierBeznal: true }, "🔴 угоді без оригіналів і документів не видно, чого бракує");
+    assert.deepEqual(of(15).docs, { paid1c: true, originals: false, otherFiles: 3, carrierBeznal: false }, "🔴 не видно, що перевізнику не безнал");
+    assert.deepEqual([of(6).docs.paid1c, of(10).docs.originals, of(19).docs.otherFiles], [false, null, null]);
+    assert.deepEqual(list.slice(0, 8).map((d) => d.kommoId).sort((x, y) => x - y), [5, 6, 8, 10, 11, 15, 19, 20], "🔴 незараховані угоди не стоять зверху");
 
-    await c.query(`UPDATE deals SET originals_received = false, ttn_files = 0 WHERE kommo_id IN (10, 11)`);
+    await c.query(`UPDATE deals SET originals_received = false, ttn_files = 0, doc_files = 0 WHERE kommo_id IN (10, 11, 19)`);
     await ttn.saveTtnCheck(db, 901, "2026-08", 21, { note: "" });
     const v = (await ttn.ttnMonth(db, "2026-08", "https://utsercice.kommo.com")).rows[0];
-    assert.deepEqual([v.saved?.dealsNeeded, v.saved?.ttnAttached, v.saved?.routeMismatch, v.saved?.ttnByDocs, v.saved?.ttnPresent, v.saved?.pct],
-      [11, 3, 1, 3, 5, 45], "🔴 знімок не несе «за документами»");
-    assert.equal(v.history[5].pct, 45, "динаміка рахує «наявні» тим самим правилом");
+    assert.deepEqual([v.saved?.dealsNeeded, v.saved?.ttnAttached, v.saved?.routeMismatch, v.saved?.ttnByDocs, v.saved?.ttnByAnyDoc, v.saved?.ttnPresent, v.saved?.pct],
+      [18, 4, 1, 4, 2, 9, 50], "🔴 знімок не несе обох категорій");
+    assert.equal(v.history[5].pct, 50, "динаміка рахує «наявні» тим самим правилом");
     await ttn.clearRouteMismatch(db, 2);
-    assert.equal((await ttn.ttnDealsByManager(db, "2026-08")).get(21)!.present, 6, "🔴 зняття позначки не повернуло наявні");
+    assert.equal((await ttn.ttnDealsByManager(db, "2026-08")).get(21)!.present, 10, "🔴 зняття позначки не повернуло наявні");
   } finally { await s.dispose(); }
 });
 
@@ -453,30 +465,51 @@ test("#3760 ОРИГІНАЛИ З KOMMO: поле 2097501 відмічене —
 });
 
 /**
- * #3766 (було #3763) — ФРОНТ ТТН «ЗА ДОКУМЕНТАМИ»: окрема колонка біля «Маршрут не збігся», у розкритті — «за документами»
- * замість «немає», а в незарахованої — словами, чого бракує з ДВОХ умов (розхід Даша прибрала 05.11.2026); непрочитані
- * «оригінали» — «не синхронізовано».
- * 🧨 Червоніє, якщо прибрати колонку, позначку, перелік того, чого бракує, або повернути в нього розхід.
+ * #4111 (було #3766, до того #3763) — ФРОНТ ТТН: окремі колонки «За документами» і «За набором документів» біля
+ * «Маршрут не збігся»; у розкритті — позначка кожного правила замість «немає», а в незарахованої — словами, чого бракує за
+ * КОЖНИМ правилом; непрочитані поля — «не синхронізовано». Розходу клієнта в умовах «за документами» немає (Даша, 05.11).
+ * 🧨 Червоніє, якщо прибрати колонку, позначку, перелік того, чого бракує, чи «не синхронізовано» для решти «Документів».
  */
-test("#3766 ФРОНТ ТТН: колонка «За документами», позначка в угоді й чого бракує з двох умов", () => {
+test("#4111 ФРОНТ ТТН: колонки «За документами» і «За набором документів», позначки в угоді й чого бракує за кожним правилом", () => {
   const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages/dashboard/sections/BaTtn.tsx"), "utf8");
-  assert.ok(fe.includes(`<th className="num">Маршрут не збігся</th><th className="num">За документами</th><th className="num">Наявні</th>`), "🔴 немає колонки «За документами»");
-  assert.match(fe, /\{r\.live\.byDocs \|\| <span className="hr-muted">0<\/span>\}/, "🔴 колонка не з сервера");
+  assert.ok(fe.includes(`<th className="num">Маршрут не збігся</th><th className="num">За документами</th><th className="num">За набором документів</th><th className="num">Наявні</th>`), "🔴 немає колонок правил");
+  assert.match(fe, /\{r\.live\.byDocs \|\| <span className="hr-muted">0<\/span>\}/, "🔴 колонка «за документами» не з сервера");
+  assert.match(fe, /\{r\.live\.byAnyDoc \|\| <span className="hr-muted">0<\/span>\}/, "🔴 колонка «за набором документів» не з сервера");
   assert.match(fe, /: d\.byDocs \? <span className="hr-pill ok"[^>]*>за документами<\/span>/, "🔴 угода «за документами» не позначена");
-  for (const w of ["«Оплачено из 1с»", "«Оригиналы получено»"]) assert.ok(fe.includes(`&& "${w}"`), `🔴 не видно, що бракує «${w}»`);
-  assert.ok(!/розхід/i.test(fe), "🔴 на екрані знову умова про розхід — Даша її прибрала");
-  assert.match(fe, /оригінали не синхронізовано/);
-  assert.equal((fe.match(/colSpan=\{9\}/g) ?? []).length, 2, "🔴 нову колонку не враховано в розкритті й порожньому рядку");
+  assert.match(fe, /: d\.byAnyDoc \? <span className="hr-pill ok"[^>]*>за набором документів/, "🔴 угода «за набором документів» не позначена");
+  for (const w of ["«Оплачено из 1с»", "«Оригиналы получено»", "безготівкової оплати перевізнику", "файла в інших полях «Документы»"]) assert.ok(fe.includes(`&& "${w}"`), `🔴 не видно, що бракує «${w}»`);
+  assert.match(fe, /бракує: \{lacks\(d\)\} · або: \{lacksAny\(d\)\}/, "🔴 у незарахованої не видно обох правил");
+  assert.match(fe, /"оригінали" : "інші документи"\} не синхронізовано/, "🔴 непрочитані «Документи» не названі");
+  assert.ok(!fe.includes("d.ttnFiles === 0 && !d.byDocs).length"), "🔴 «без ТТН» рахує угоди за набором документів");
+  assert.equal((fe.match(/colSpan=\{10\}/g) ?? []).length, 2, "🔴 нову колонку не враховано в розкритті й порожньому рядку");
 });
 
 /**
- * #3764 — ДОТЯГУВАННЯ «ОРИГІНАЛІВ»: інструмент бере й угоди, де прочитано файли, але не «оригінали», і пише кожну колонку
- * лише там, де вона ще NULL (повторний прогін нічого не переписує, синк — головний).
- * 🧨 Червоніє, якщо вибірка знову лише за `ttn_files IS NULL` або запис перетирає вже прочитане.
+ * #4112 (було #3764) — ДОТЯГУВАННЯ ТРЬОХ КОЛОНОК: інструмент бере угоди, де не прочитано хоч одне з — файли ТТН, «оригінали»,
+ * файли решти «Документів», і пише кожну колонку лише там, де вона ще NULL (повторний прогін нічого не переписує, синк — головний).
+ * 🧨 Червоніє, якщо вибірка не бере угоди без `doc_files` або запис перетирає вже прочитане.
  */
-test("#3764 ДОТЯГУВАННЯ: обидві колонки, лише порожні, вибірка — й без «оригіналів»", () => {
+test("#4112 ДОТЯГУВАННЯ: три колонки, лише порожні, вибірка — й без решти «Документів»", () => {
   const src = SRC("tools/backfillTtnFiles.ts");
-  assert.match(src, /AND \(ttn_files IS NULL OR originals_received IS NULL\)/, "🔴 угоди з прочитаними файлами, але без «оригіналів», не дотягуються");
-  assert.match(src, /SET ttn_files = COALESCE\(ttn_files, \$2\), originals_received = COALESCE\(originals_received, \$3\)/, "🔴 дотягування перетирає прочитане");
-  assert.match(src, /orig: extractOriginalsReceived\(l\)/);
+  assert.equal((src.match(/\(ttn_files IS NULL OR originals_received IS NULL OR doc_files IS NULL\)/g) ?? []).length, 2, "🔴 угоди без прочитаних «Документів» не дотягуються");
+  assert.match(src, /SET ttn_files = COALESCE\(ttn_files, \$2\), originals_received = COALESCE\(originals_received, \$3\),\s+doc_files = COALESCE\(doc_files, \$4\)/, "🔴 дотягування перетирає прочитане");
+  assert.match(src, /docs: extractOtherDocFiles\(l\)/);
+});
+
+/**
+ * #4113 — РЕШТА «ДОКУМЕНТІВ» З KOMMO (задача Сергія 18.11.2026). Рахуються живі файли в шести полях вкладки «Документы»
+ * («ТТН 2стр», «Акт», обидва договори, «Договор 2стр», «Счет от перевозчика»); саме поле «ТТН» — ні (воно своє), видалені й
+ * значення без файла — ні, чужі поля — ні; полів немає — 0.
+ * 🧨 Червоніє, якщо загубити поле зі списку, рахувати «ТТН» удруге, видалений файл чи чуже поле.
+ */
+test("#4113 ІНШІ ДОКУМЕНТИ З KOMMO: шість полів вкладки, без «ТТН», без видалених і чужих", async () => {
+  const { extractOtherDocFiles, FIELDS_OTHER_DOCS } = await import("../kommo/client.js");
+  assert.deepEqual([...FIELDS_OTHER_DOCS].sort(), [2097275, 2097277, 2097293, 2097337, 2097505, 2098433], "🔴 не ті поля вкладки «Документы»");
+  const f = (n: number, del = false) => ({ value: { file_uuid: `u${n}`, version_uuid: `v${n}`, file_name: `d${n}.pdf`, file_size: 1, is_deleted: del } });
+  const deal = (vals: { field_id: number; values: unknown[] }[] | null) => ({ id: 1, custom_fields_values: vals }) as never;
+  assert.equal(extractOtherDocFiles(deal(FIELDS_OTHER_DOCS.map((id, i) => ({ field_id: id, values: [f(i)] })))), 6, "🔴 не кожне поле вкладки пораховане");
+  assert.equal(extractOtherDocFiles(deal([{ field_id: 2097291, values: [f(1), f(2)] }])), 0, "🔴 саме поле «ТТН» пораховане як інший документ");
+  assert.equal(extractOtherDocFiles(deal([{ field_id: 2097505, values: [f(1), f(2, true), { value: { file_name: "без uuid" } }] }])), 1, "🔴 видалений файл чи значення без файла пораховане");
+  assert.equal(extractOtherDocFiles(deal([{ field_id: 2096325, values: [f(1)] }])), 0, "🔴 чуже поле пораховане");
+  assert.equal(extractOtherDocFiles(deal(null)), 0);
 });

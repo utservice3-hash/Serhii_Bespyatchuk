@@ -396,12 +396,27 @@ export function extractCarrierEdrpou(deal: KommoDeal): string | null {
  * появи колонки. Живить ТТН-моніторинг Бізнес-асистента (05.10.2026).
  */
 export const FIELD_TTN = 2097291;
-export function extractTtnFiles(deal: KommoDeal): number {
-  const f = deal.custom_fields_values?.find((v) => v.field_id === FIELD_TTN);
+/** Живі (не видалені) файли в полі-файлі угоди; поля немає — 0. */
+function fileCount(deal: KommoDeal, fieldId: number): number {
+  const f = deal.custom_fields_values?.find((v) => v.field_id === fieldId);
   return (f?.values ?? []).filter((v) => {
     const file = v.value as { file_uuid?: unknown; is_deleted?: unknown } | null | undefined;
     return !!file && typeof file === "object" && !!file.file_uuid && file.is_deleted !== true;
   }).length;
+}
+export function extractTtnFiles(deal: KommoDeal): number {
+  return fileCount(deal, FIELD_TTN);
+}
+
+/**
+ * 📑 Решта полів-файлів вкладки «Документы» угоди, крім самої «ТТН» (задача Сергія 18.11.2026, запит Даші): «ТТН 2стр»,
+ * «Акт», «Договор с заказчиком», «Договор с перевозчиком», «Договор 2стр», «Счет от перевозчика». Скільки в них живих
+ * файлів разом — синк пише в `deals.doc_files` (NULL = угоду синк ще не бачив після появи колонки, «не синхронізовано»).
+ * Живить правило «ТТН за набором документів» (`TTN_BY_ANY_DOC_SQL`).
+ */
+export const FIELDS_OTHER_DOCS = [2097337, 2097293, 2097277, 2097275, 2098433, 2097505] as const;
+export function extractOtherDocFiles(deal: KommoDeal): number {
+  return FIELDS_OTHER_DOCS.reduce((n, id) => n + fileCount(deal, id), 0);
 }
 
 /**
