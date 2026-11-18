@@ -73,6 +73,12 @@ export function RowComment({ clientKey, value, canWrite, onSaved }: {
       style={{ fontSize: 12, color: text ? "#374151" : "#9ca3af",
                cursor: canWrite ? "pointer" : "default", display: "inline-block", maxWidth: 220 }}>
       {short || (canWrite ? "+ коментар" : "—")}
+      {/* 💬 9224: дата й автор видно одразу, а не лише в підказці — ТЗ «з датою і автором». */}
+      {text && value && (
+        <span style={{ display: "block", fontSize: 11, color: "#6b7280" }}>
+          {value.createdAt.slice(0, 10).split("-").reverse().slice(0, 2).join(".")} · {value.author ?? "невідомо"}
+        </span>
+      )}
     </span>
   );
 }

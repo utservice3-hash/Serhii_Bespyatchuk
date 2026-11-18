@@ -170,6 +170,7 @@ import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as orphanRelease from "../core/orphanRelease.js";
 import * as problemClient from "../core/problemClient.js";
+import * as clientCommentLog from "../core/clientCommentLog.js";
 import * as clientKindFacts from "../core/clientKindFacts.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
@@ -6925,7 +6926,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     return f.state === "sleeping" || f.state === "lost" ? f.state : "active";
   };
 
-  const lastComment = await latestCommentByClient();
+  // 💬 9224: для «Роботи з клієнтом» — останній коментар ЛЮДИНИ, без записів задачі (📞 постановка, 📋 закриття).
+  const [lastComment, lastWorkComment] = await Promise.all([latestCommentByClient(), latestCommentByClient({ withoutTaskLog: true })]);
   // 🚦 Екран тімліда «з ким з постійних говорити» (задача 7360): колір, «працюють», «передати іншому», лічильники.
   // Правило — `core/clientLeadRules.ts`, факти — `core/clientLeadFacts.ts`; місяць лічильників — поточний (київський).
   const leadFacts = await clientLeadFacts.leadFactsFor(pool, rosterRows.map((c) => c.client_key));
@@ -6951,7 +6953,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       color, lastOrder, orderDays,
       works: off ? { yes: true, by: "season" as const, at: null, windowDays: clientLeadRules.workWindowDays(segment) } : clientLeadRules.workVerdict({
         talk10: f?.talk10 ?? null, stage: f?.stage ?? null,
-        comment: lastComment.get(c.client_key)?.createdAt ?? null,
+        comment: lastWorkComment.get(c.client_key)?.createdAt ?? null,
         contact: manualAt ? kyivDayOfIso(manualAt) : null,
         payment: paymentProofByKey.get(c.client_key)?.at ?? null,
         order: lastOrder, dealNew: f?.dealNew ?? null,
@@ -7456,13 +7458,15 @@ dashboardRouter.post("/client-plan/return", async (req, res) => {
  * для СОТЕНЬ рядків одразу, і підзапит на кожен рядок — це рівно та помилка,
  * що коштувала `/overview` 9.5 с (див. `core/metrics.hasPriorPaidSql`).
  */
-async function latestCommentByClient(): Promise<Map<string, { body: string; author: string | null; createdAt: string }>> {
+async function latestCommentByClient(opts: { withoutTaskLog?: boolean } = {}): Promise<Map<string, { body: string; author: string | null; createdAt: string }>> {
+  // 💬 9224: `withoutTaskLog` — без записів задачі реактивації (позначки з `core/clientCommentLog.ts`, не копія).
   const r = await pool.query<{ client_key: string; body: string; author: string | null; created_at: string }>(
     `SELECT DISTINCT ON (c.client_key) c.client_key, c.body,
             COALESCE(u.full_name, u.email) AS author,
             to_char(c.created_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS created_at
        FROM client_comments c LEFT JOIN users u ON u.id = c.author_id
-      ORDER BY c.client_key, c.created_at DESC`);
+      ${opts.withoutTaskLog ? "WHERE NOT (c.body LIKE ANY($1::text[]))" : ""}
+      ORDER BY c.client_key, c.created_at DESC`, opts.withoutTaskLog ? [clientCommentLog.TASK_LOG_LIKE] : []);
   return new Map(r.rows.map((x) => [x.client_key, { body: x.body, author: x.author, createdAt: x.created_at }]));
 }
 
@@ -8626,6 +8630,9 @@ dashboardRouter.post("/reactivation-task", async (req, res) => {
                         task_type, client_key, description)
      VALUES ($1,'not_started',$2,$3,'high',$4,$5,'reactivation_client',$6,$7) RETURNING id`,
     [`Реактивація: ${clientName}`, deadline, assigneeId, dept.rows[0]?.name ?? null, auth.userId, clientKey, note]);
+  // 💬 9224: коментар із постановки — і в стрічку клієнта, щоб його бачили «З ким говорити», «План місяця» і задача.
+  const logged = clientCommentLog.taskSetComment(deadline, note);
+  if (logged) await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`, [clientKey, auth.userId, logged]);
   res.json({ id: r.rows[0].id, assigneeId, clientName });
 });
 
@@ -8667,6 +8674,10 @@ dashboardRouter.post("/reactivation-task/close", async (req, res) => {
     `UPDATE tasks SET status = 'done', close_reason = $2, closed_at = now(),
             closed_by = $3, updated_at = now() WHERE id = $1`,
     [taskId, stored, auth.userId]);
+  // 💬 9224: причина й пояснення — і в стрічку клієнта (так само, як «Проблемний» і «В нічийні»).
+  const reasonLabel = reactivation.CLOSE_REASONS.find((x) => x.key === reasonKey)?.label ?? reasonKey;
+  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
+    [row.client_key, auth.userId, clientCommentLog.taskClosedComment(reasonLabel, note)]);
   res.json({ ok: true, closeReason: stored });
 });
 

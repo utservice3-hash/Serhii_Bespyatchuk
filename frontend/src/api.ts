@@ -3942,6 +3942,12 @@ export async function createTaskComment(taskId: number, body: string): Promise<T
   return data;
 }
 
+/** 💬 9224: стрічка коментарів клієнта задачі реактивації — лише читання (та сама `client_comments`). */
+export async function fetchTaskClientComments(taskId: number): Promise<{ clientKey: string | null; comments: ClientComment[] }> {
+  const { data } = await api.get<{ clientKey: string | null; comments: ClientComment[] }>(`/tasks/${taskId}/client-comments`);
+  return data;
+}
+
 export async function fetchTaskHistory(taskId: number): Promise<TaskHistoryEntry[]> {
   const { data } = await api.get<{ history: TaskHistoryEntry[] }>(`/tasks/${taskId}/history`);
   return data.history;
