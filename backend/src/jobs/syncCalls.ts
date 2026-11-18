@@ -8,7 +8,7 @@
  * зовнішній контракт із розділом, який працює. Домішати до нього запис 580 тис.
  * рядків означало б, що падіння покликового синку валить і цифру статистик.
  */
-import { linkByPhoneSql, linkByFioSql } from "./callLinkSql.js";
+import { linkByPhoneSql, linkByFioSql, sharedPhonesSql } from "./callLinkSql.js";
 import { createRunGuard, type GuardSkip } from "./runGuard.js";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
@@ -118,13 +118,20 @@ export async function upsertCalls(calls: RawCall[]): Promise<number> {
  * NULL, і на екрані буде «менеджер невідомий». Вгадувати по номеру заборонено:
  * один внутрішній номер за рік міняє власника, і ми приписали б дзвінки не тому.
  */
-export async function linkCalls(since?: Date): Promise<{ byPhone: number; byFio: number }> {
+export async function linkCalls(since?: Date): Promise<{ byPhone: number; byFio: number; shared?: { deleted: number; written: number } }> {
   // Без `since` — повний прохід, байт-у-байт як до винесення SQL. З `since` — лише свіже вікно.
   const p = linkByPhoneSql(since);
   const byPhone = p.params.length ? await pool.query(p.sql, p.params) : await pool.query(p.sql);
   const f = linkByFioSql(since);
   const byFio = f.params.length ? await pool.query(f.sql, f.params) : await pool.query(f.sql);
-  return { byPhone: byPhone.rowCount ?? 0, byFio: byFio.rowCount ?? 0 };
+  // 📞 Спільні номери (9061) — лише в ПОВНОМУ проході: агрегат по контактах, а не по свіжих дзвінках, і для
+  // пʼятихвилинного синку зайвий. До першого повного проходу таблиця порожня = поведінка до 9061.
+  let shared: { deleted: number; written: number } | undefined;
+  if (!since) {
+    const sp = sharedPhonesSql();
+    shared = (await pool.query<{ deleted: number; written: number }>(sp.sql)).rows[0];
+  }
+  return { byPhone: byPhone.rowCount ?? 0, byFio: byFio.rowCount ?? 0, shared };
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");

@@ -873,6 +873,20 @@ CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, ca
 CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_manager    ON ringostat_calls(manager_id, calldate DESC) WHERE manager_id IS NOT NULL;
 
+-- 📞 СПІЛЬНІ НОМЕРИ (задача 9061, 18.11.2026). Номер, що є в контактах угод 2+ клієнтів: по рядку на (клієнт,
+-- номер) і скільки всього клієнтів у номера (`n`). `ringostat_calls.client_key` віддає дзвінок ОДНОМУ клієнту
+-- (з найпізніше закритою угодою); ця таблиця дає екранам клієнтів побачити розмову й у решти (`core/sharedPhoneCalls.ts`).
+-- Повний перерахунок — у годинному `linkCalls` одним оператором (`jobs/callLinkSql.ts`). Зріз поточного стану:
+-- історії немає й не треба, бо номер→клієнти перераховується з контактів щоразу. Порожня таблиця = поведінка до 9061.
+CREATE TABLE IF NOT EXISTS shared_phone_clients (
+  client_key  TEXT NOT NULL,
+  phone       TEXT NOT NULL,                -- той самий нормалізований вигляд, що `ringostat_calls.client_phone`
+  n           INTEGER NOT NULL CHECK (n >= 2),  -- скільки клієнтів має цей номер (разом із цим)
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (client_key, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_spc_phone ON shared_phone_clients(phone);
+
 -- 📵 ЖУРНАЛ СИГНАЛІВ ПО ПРОПУЩЕНИХ (ТЗ-1, прохід 3, 16.09.2026). Одна задача на
 -- менеджера + номер + київський день — рішення власника. Логіка — `core/missedCallSignal.ts`.
 -- 🔴 АНТИ-ДУБЛЬ ТРИМАЄ PRIMARY KEY, А НЕ ПОШУК ЗА ЗАГОЛОВКОМ. Сусідні джоби шукають
@@ -8438,3 +8452,19 @@ UPDATE first_touch_notes n SET set_by_name = m.name
 UPDATE call_type_overrides o SET set_by_name = m.name
   FROM users u JOIN managers m ON m.id = u.manager_id
  WHERE o.set_by = u.id AND u.email IN ('naas@uts.ua', 'sai@uts.ua') AND o.set_by_name IS DISTINCT FROM m.name;
+
+-- ═══ 🎯 ХАНТИНГ, доведення до ТЗ (18.11.2026): рейтинг компанії, перевізники, нагадування, строк зберігання ═══
+-- Рейтинг власника заявки (Ларді: `owner.rating.positiveCommentCount` / `negativeCommentCount`) — ТЗ п.7, таблиця радару.
+ALTER TABLE lardi_proposals ADD COLUMN IF NOT EXISTS rating_pos INTEGER;
+ALTER TABLE lardi_proposals ADD COLUMN IF NOT EXISTS rating_neg INTEGER;
+-- Тип компанії в заявці Ларді не приходить; є фільтри пошуку `onlyShippers` і `onlyCarrier` — окремими сканами збираємо
+-- `refId` вантажовласників і перевізників. «Експедитор» (ТЗ п.4) = ні те, ні те.
+ALTER TABLE lardi_shippers ADD COLUMN IF NOT EXISTS is_shipper BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE lardi_shippers ADD COLUMN IF NOT EXISTS is_carrier BOOLEAN NOT NULL DEFAULT false;
+-- Строк зберігання (ТЗ п.9): контакт не у воронці й не зʼявлявся на Ларді понад 90 днів — видаляє `syncLardi` щопроходу.
+CREATE INDEX IF NOT EXISTS idx_lardi_proposals_seen ON lardi_proposals (last_seen_at);
+-- Нагадування з коментаря (ТЗ п.8, п.10 «Потім»): `huntReminders` шле сповіщення авторові й ставить позначку — рівно раз.
+ALTER TABLE hunt_comments ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
+INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
+ ('hunt.remind', 'Хантинг', false, 'Настав час нагадування з коментаря до кандидата', 'автор коментаря')
+ON CONFLICT (type) DO NOTHING;

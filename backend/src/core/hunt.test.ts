@@ -193,6 +193,54 @@ test("#3967 ЖИВИЙ SQL СКАНУ ЛАРДІ: new/repeat без дублів
 });
 
 /**
+ * #3977 — ДОВЕДЕННЯ ДО ТЗ, ЖИВИЙ SQL: рейтинг компанії в рядку радару; «експедитори» = без вантажовласників і
+ * перевізників; свої за ID Ларді поза радаром; строк зберігання по обидва боки межі (91 день не у воронці — видалено,
+ * 89 днів — лишився, 91 день у воронці — лишився); нагадування — раз, не для відмови; звіт рахує «дійшли» за історією.
+ * 🧨 Червоніє, якщо чистити контакт із воронки, слати нагадування двічі або рахувати звіт за поточним етапом.
+ */
+test("#3977 ЖИВИЙ SQL ХАНТИНГУ ДО ТЗ: рейтинг, експедитори, свої за ID, 90 днів, нагадування раз, звіт за історією", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const h = await import("./hunt.js");
+  const { parseProposal } = await import("./lardiSync.js");
+  const { recordProposals, markCompanies, purgeStaleContacts } = await import("./lardiSyncDb.js");
+  const P = (it: Record<string, unknown>) => parseProposal("cargo", it)!;
+  const rated = (id: number, ref: number, phone: string, pos: number) => { const it = lardiItem(id, ref, phone, 10) as { owner: Record<string, unknown> }; it.owner.rating = { positiveCommentCount: pos, negativeCommentCount: 1 }; return P(it as never); };
+  try {
+    await recordProposals(s.db, [rated(1, 7, "+380501112233", 40), rated(2, 8, "+380671234567", 5), rated(3, 9, "+380931234567", 9), rated(4, h.OWN_LARDI_REF_IDS[0], "+380630000000", 1)]);
+    await markCompanies(s.db, [8], "shipper"); await markCompanies(s.db, [9], "carrier"); await markCompanies(s.db, [9], "shipper");
+    const all = await h.radar(s.db, { period: "h1" });
+    assert.deepEqual(all.rows.map((r) => r.key).sort(), ["380501112233", "380671234567", "380931234567"], "🔴 своя компанія за ID Ларді потрапила в радар");
+    assert.deepEqual(all.rows.find((r) => r.key === "380501112233")!.rating, { pos: 40, neg: 1 }, "🔴 рейтинг компанії не дійшов до радару");
+    assert.deepEqual((await h.radar(s.db, { period: "h1", ctype: "forwarders" })).rows.map((r) => r.key), ["380501112233"], "🔴 «експедитори» лишили вантажовласника чи перевізника");
+    assert.deepEqual((await h.radar(s.db, { period: "h1", ctype: "carriers" })).rows.map((r) => [r.key, r.shipper, r.carrier]), [["380931234567", true, true]], "🔴 позначки компанії не складаються");
+
+    const iv = await s.u("i@uts.ua", "hr");
+    const { id } = await h.addCandidate(s.db, iv, { key: "380671234567" });
+    await s.c.query(`UPDATE lardi_proposals SET last_seen_at = now() - interval '91 days' WHERE id IN (1, 2)`);
+    await s.c.query(`UPDATE lardi_proposals SET last_seen_at = now() - interval '89 days' WHERE id = 3`);
+    assert.equal(await purgeStaleContacts(s.db), 1, "🔴 видалено не рівно один застарілий контакт");
+    assert.deepEqual((await s.c.query(`SELECT id::int FROM lardi_proposals WHERE id IN (1,2,3) ORDER BY id`)).rows.map((r) => r.id), [2, 3], "🔴 межа 90 днів або захист воронки не працює");
+    assert.equal((await s.c.query(`SELECT count(*)::int AS n FROM lardi_proposal_events WHERE proposal_id = 1`)).rows[0].n, 0, "🔴 події видаленої заявки лишились");
+
+    await h.addComment(s.db, iv, id, { text: "Передзвонити", remindAt: new Date(Date.now() - 60_000).toISOString() });
+    await h.addComment(s.db, iv, id, { text: "Пізніше", remindAt: new Date(Date.now() + 3_600_000).toISOString() });
+    const due = await h.dueReminders(s.db);
+    assert.deepEqual(due.map((d) => [d.text, d.user_id, d.candidate_id]), [["Передзвонити", iv, id]], "🔴 нагадування: не той склад");
+    await h.markReminded(s.db, due.map((d) => d.id));
+    assert.equal((await h.dueReminders(s.db)).length, 0, "🔴 нагадування прийшло б удруге");
+    await h.addComment(s.db, iv, id, { text: "Після відмови", remindAt: new Date(Date.now() - 60_000).toISOString() });
+    await h.changeStage(s.db, iv, id, { to: "call" }); await h.changeStage(s.db, iv, id, { to: "interview" });
+    await h.changeStage(s.db, iv, id, { to: "rejected", reason: "salary" });
+    assert.equal((await h.dueReminders(s.db)).length, 0, "🔴 нагадування по кандидату з відмовою");
+    await h.addCandidate(s.db, iv, { key: "380931234567" });
+    const rep = await h.report(s.db);
+    assert.deepEqual(rep.stages.slice(0, 4).map((x) => [x.key, x.reached, x.now, x.conversionPct]),
+      [["picked", 2, 1, 100], ["call", 1, 0, 50], ["interview", 1, 0, 100], ["approval", 0, 0, 0]], "🔴 звіт рахує не за історією етапів");
+    assert.deepEqual(rep.rejects, [{ reason: "salary", from_stage: "interview", n: 1 }], "🔴 причини відмов у звіті");
+  } finally { await s.done(); }
+});
+
+/**
  * #3964 — ФРОНТ: пункт «Хантинг» зʼявляється лише за відповіддю сервера (`fetchHuntAccess`), а не за роллю.
  * 🧨 Червоніє, якщо показувати пункт усім із вкладкою «Найм».
  */

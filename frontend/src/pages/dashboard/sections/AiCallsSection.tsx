@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./firstTouch.css";
 import { fetchAiCalls, fetchAiCallsMeta, type AiCallsResp, type AiCallsMetaResp } from "../../../api";
-import { AiCallDrawer, FeedbackButton } from "./AiCallDrawer";
+import { AiCallDrawer, ApproveButton, FeedbackButton } from "./AiCallDrawer";
 import { FirstTouchQueue } from "./FirstTouchQueue";
 import { FirstTouchPriceChart } from "./FirstTouchPriceChart";
 import { ReviewByTeamBlock } from "./ReviewByTeamBlock";
@@ -9,7 +9,7 @@ import { AnimatedNumber } from "./AnimatedNumber";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
+import { approveState, approveWaitText, STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
   PROMISE_UI, GROUP_LABEL, applyListFilter, type ListFilter, type PipelineGroupT,
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
@@ -252,6 +252,19 @@ export function AiCallsSection() {
     && (!needle || `${r.summary ?? ""} ${r.managerName ?? ""} ${r.priceValue ?? ""}`.toLowerCase().includes(needle)));
   const pickTile = (k: TileKey) => { setPreset(preset === k ? "all" : k); setTab("report"); setView("all"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); };
   const goodBad = (ok: boolean | null) => (ok == null ? "" : ok ? " is-ok" : " is-bad");
+  // ✅ Задача 9229: клітинка «Розбір» розмови, що чекає розбору. Хто може розбирати — бачить «Погоджую», коли менеджер
+  // пояснив сам; коли коментар вписав не менеджер — так і написано (раніше тут стояло «менеджер пояснив»).
+  const reviewTodoCell = (r: (typeof rows)[number]) => {
+    const ap = approveState(r, d.canReview);
+    const label = ap?.kind === "can" ? "менеджер пояснив" : ap?.kind === "notManager" ? `коментар від ${ap.author}`
+      : ap?.kind === "wait" ? "не розібрано" : r.explainNote ? "менеджер пояснив" : "не розібрано";
+    return (
+      <>
+        <span style={{ color: "var(--danger, #b91c1c)" }} title={ap ? approveWaitText(ap) ?? undefined : undefined}>{label}</span>
+        {ap?.kind === "can" && <div style={{ marginTop: 4 }}><ApproveButton uniqueid={r.uniqueid} onDone={() => setReload((x) => x + 1)} /></div>}
+      </>
+    );
+  };
   const kpi = (k: TileKey, label: string, value: React.ReactNode, sub: string, hint: string, tone = "") => (
     <button type="button" className={`ftd-kpi ftd-tile${tone}${preset === k ? " on" : ""}`} aria-pressed={preset === k} onClick={() => pickTile(k)}>
       <span className="ftd-kpi-l">{label}<InfoHint text={hint} /></span>
@@ -580,7 +593,8 @@ export function AiCallsSection() {
                             ? <span style={{ color: "var(--ok, #166534)" }}>{r.reviewNote.byName ?? "розібрано"} · {new Date(r.reviewNote.at).toLocaleDateString("uk-UA", { day: "2-digit", month: "2-digit", timeZone: "Europe/Kyiv" })}</span>
                             : r.missedNote ? <span style={{ color: "var(--ok, #166534)" }}>опрацьовано</span>
                             : r.reviewClosure === "invoice" ? <span style={{ color: "var(--ok, #166534)" }} title={CLOSURE_UI.invoice.hint}>{CLOSURE_UI.invoice.label}</span>
-                            : r.needsReview ? <span style={{ color: "var(--danger, #b91c1c)" }}>{r.explainNote ? "менеджер пояснив" : "не розібрано"}</span>
+                            // ✅ Задача 9229: «Погоджую» прямо в списку — той самий стан, що в черзі й картці (`approveState`).
+                            : r.needsReview ? reviewTodoCell(r)
                             : <span className="ftd-sub">—</span>}
                             {/* 💬 Задача 7183: чим закрито — «погоджено коментар» / «закрито тімлідом». */}
                             {r.reviewClosure && r.reviewClosure !== "invoice" && <div className="ftd-sub" title={CLOSURE_UI[r.reviewClosure].hint}>{CLOSURE_UI[r.reviewClosure].label}</div>}
