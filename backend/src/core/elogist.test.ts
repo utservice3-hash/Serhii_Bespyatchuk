@@ -242,7 +242,10 @@ test("#2492 ПАРТИЦІЯ ДЖЕРЕЛА З eLogist: Σ п'яти кошик�
     ad_count: "4", leadgen_count: "3", elogist_count: "5", other_count: "3", no_channel_count: "0",
     new_ad: "2", new_lg: "1", new_el: "4", new_oth: "2", new_nch: "0",
     repeat_ad: "2", repeat_lg: "2", repeat_el: "1", repeat_oth: "1", repeat_nch: "0",
-    undef_ad: "0", undef_lg: "0", undef_el: "0", undef_oth: "0", undef_nch: "0" };
+    undef_ad: "0", undef_lg: "0", undef_el: "0", undef_oth: "0", undef_nch: "0",
+    // 🔗 з 18.11.2026 (задача 9230) кошиків сім: LinkedIn і Prozorro тут нулі, тож твердження гейта про eLogist
+    // лишається тим самим; сім кошиків разом стереже `#9230`.
+    linkedin_count: "0", prozorro_count: "0", new_li: "0", new_pz: "0", repeat_li: "0", repeat_pz: "0", undef_li: "0", undef_pz: "0" };
   const cap = await capturePool(() => ({ rows: [fx] }));
   let rows: Awaited<ReturnType<typeof import("./metrics.js")["createdSplitByManager"]>> = [];
   try {
