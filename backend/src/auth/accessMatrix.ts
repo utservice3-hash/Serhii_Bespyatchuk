@@ -1516,6 +1516,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/tasks/:id/history", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  // 💬 9224: стрічка клієнта в задачі реактивації, лише читання. Межа — вкладка `tasks` + видимість задачі.
+  { method: "GET", path: "/api/tasks/:id/client-comments", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "POST", path: "/api/tasks/:id/seen", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/tasks/assignees", cls: "GET",
@@ -1707,6 +1710,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/hunt/contacts/activity", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/hunt/contacts/phones", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/hunt/report", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/hunt/candidates", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },

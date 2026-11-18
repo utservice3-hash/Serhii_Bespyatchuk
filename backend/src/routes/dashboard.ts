@@ -27,7 +27,7 @@ import { klassOf } from "../core/klassFilter.js";
 import { overviewCache } from "../core/lazyCache.js";
 
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
-const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, otherCount: 0, noChannelCount: 0 } as const;
+const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, linkedinCount: 0, prozorroCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl } from "../core/kommoLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
 import { canCloseDeal } from "../core/firstTouchClose.js";
@@ -83,7 +83,7 @@ import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays, mergeAdMonths } from "../ga4/report.js";
 import { adClients } from "../core/adClients.js";
 import { dateParam } from "../core/queryParams.js";
-import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
+import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, actorDisplayName, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
 import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, clientDecision, reviewReason, needsReview, reviewClosure, canCloseReview, REVIEW_NEEDS_COMMENT_UA } from "../core/firstTouchTeamReport.js";
 import { canSendCallFeedback, callFeedbackBody, CALL_FEEDBACK_MAX } from "../core/firstTouchFeedback.js";
@@ -170,6 +170,7 @@ import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as orphanRelease from "../core/orphanRelease.js";
 import * as problemClient from "../core/problemClient.js";
+import * as clientCommentLog from "../core/clientCommentLog.js";
 import * as clientKindFacts from "../core/clientKindFacts.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
@@ -5062,16 +5063,18 @@ dashboardRouter.get("/report", async (req, res) => {
     // на 15 мс: тоді гейт `#36` (він б'є БЕЗ періоду) міряв би шлях, яким не ходить
     // жоден користувач — рівно та хвороба, яку цей прохід і лікує. Один шлях для
     // всіх, ціна названа.
-    `WITH ${metrics.FIRST_PAID_CTE}
+    // 🎯 9932: «Прийнято реклами» — правило Сергія (`adsAcceptedSql`: `adDealSql` joined + «клієнт з реклами
+    // оплатив»), той самий вираз, що `adsAcceptedByMgr`. CTE `adsAcceptedCte` уже містить `first_paid`.
+    `WITH ${metrics.adsAcceptedCte(`$${actAdIdx}`)}
      SELECT m.id, m.name,
-       COUNT(*) FILTER (WHERE ${metrics.adDealSqlMode(`$${actAdIdx}`, "joined")}) AS ad_leads,
+       COUNT(*) FILTER (WHERE ${metrics.adsAcceptedSql(`$${actAdIdx}`)}) AS ad_leads,
        COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes
      FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
      -- LEFT JOIN: «Прийнято реклами» рахує ВСІ ад-угоди повного циклу незалежно від
      -- поточного етапу (мапиться лише 5 із 15 статусів); quotes/dispatched і далі
      -- фільтрують по funnel_stage, тож null-етап їх природно виключає.
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${metrics.FIRST_PAID_JOIN}
+     ${metrics.ADS_ACCEPTED_JOINS}
      WHERE ${actConds.join(" AND ")}
      GROUP BY m.id, m.name`, actP);
 
@@ -6923,7 +6926,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     return f.state === "sleeping" || f.state === "lost" ? f.state : "active";
   };
 
-  const lastComment = await latestCommentByClient();
+  // 💬 9224: для «Роботи з клієнтом» — останній коментар ЛЮДИНИ, без записів задачі (📞 постановка, 📋 закриття).
+  const [lastComment, lastWorkComment] = await Promise.all([latestCommentByClient(), latestCommentByClient({ withoutTaskLog: true })]);
   // 🚦 Екран тімліда «з ким з постійних говорити» (задача 7360): колір, «працюють», «передати іншому», лічильники.
   // Правило — `core/clientLeadRules.ts`, факти — `core/clientLeadFacts.ts`; місяць лічильників — поточний (київський).
   const leadFacts = await clientLeadFacts.leadFactsFor(pool, rosterRows.map((c) => c.client_key));
@@ -6949,7 +6953,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       color, lastOrder, orderDays,
       works: off ? { yes: true, by: "season" as const, at: null, windowDays: clientLeadRules.workWindowDays(segment) } : clientLeadRules.workVerdict({
         talk10: f?.talk10 ?? null, stage: f?.stage ?? null,
-        comment: lastComment.get(c.client_key)?.createdAt ?? null,
+        comment: lastWorkComment.get(c.client_key)?.createdAt ?? null,
         contact: manualAt ? kyivDayOfIso(manualAt) : null,
         payment: paymentProofByKey.get(c.client_key)?.at ?? null,
         order: lastOrder, dealNew: f?.dealNew ?? null,
@@ -7002,6 +7006,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       lastTalkRecording: reactByKey.get(c.client_key)?.lastTalkRecording ?? null,
       lastTalkSec: reactByKey.get(c.client_key)?.lastTalkSec ?? null,
       lastTalkBy: reactByKey.get(c.client_key)?.lastTalkBy ?? null,
+      // 📞 Розмова на спільному номері (9061): скільки ще клієнтів має номер — щоб тімлід бачив, звідки розмова.
+      lastTalkSharedWith: reactByKey.get(c.client_key)?.lastTalkSharedWith ?? 0,
       attempts: reactByKey.get(c.client_key)?.attempts ?? 0,
       // 📱 Останній контакт = свіжіше з розмови Ringostat і ручного запису; джерело названо.
       lastContact: lastContactOf(reactByKey.get(c.client_key)?.lastTalk ?? null,
@@ -7452,13 +7458,15 @@ dashboardRouter.post("/client-plan/return", async (req, res) => {
  * для СОТЕНЬ рядків одразу, і підзапит на кожен рядок — це рівно та помилка,
  * що коштувала `/overview` 9.5 с (див. `core/metrics.hasPriorPaidSql`).
  */
-async function latestCommentByClient(): Promise<Map<string, { body: string; author: string | null; createdAt: string }>> {
+async function latestCommentByClient(opts: { withoutTaskLog?: boolean } = {}): Promise<Map<string, { body: string; author: string | null; createdAt: string }>> {
+  // 💬 9224: `withoutTaskLog` — без записів задачі реактивації (позначки з `core/clientCommentLog.ts`, не копія).
   const r = await pool.query<{ client_key: string; body: string; author: string | null; created_at: string }>(
     `SELECT DISTINCT ON (c.client_key) c.client_key, c.body,
             COALESCE(u.full_name, u.email) AS author,
             to_char(c.created_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS created_at
        FROM client_comments c LEFT JOIN users u ON u.id = c.author_id
-      ORDER BY c.client_key, c.created_at DESC`);
+      ${opts.withoutTaskLog ? "WHERE NOT (c.body LIKE ANY($1::text[]))" : ""}
+      ORDER BY c.client_key, c.created_at DESC`, opts.withoutTaskLog ? [clientCommentLog.TASK_LOG_LIKE] : []);
   return new Map(r.rows.map((x) => [x.client_key, { body: x.body, author: x.author, createdAt: x.created_at }]));
 }
 
@@ -8622,6 +8630,9 @@ dashboardRouter.post("/reactivation-task", async (req, res) => {
                         task_type, client_key, description)
      VALUES ($1,'not_started',$2,$3,'high',$4,$5,'reactivation_client',$6,$7) RETURNING id`,
     [`Реактивація: ${clientName}`, deadline, assigneeId, dept.rows[0]?.name ?? null, auth.userId, clientKey, note]);
+  // 💬 9224: коментар із постановки — і в стрічку клієнта, щоб його бачили «З ким говорити», «План місяця» і задача.
+  const logged = clientCommentLog.taskSetComment(deadline, note);
+  if (logged) await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`, [clientKey, auth.userId, logged]);
   res.json({ id: r.rows[0].id, assigneeId, clientName });
 });
 
@@ -8663,6 +8674,10 @@ dashboardRouter.post("/reactivation-task/close", async (req, res) => {
     `UPDATE tasks SET status = 'done', close_reason = $2, closed_at = now(),
             closed_by = $3, updated_at = now() WHERE id = $1`,
     [taskId, stored, auth.userId]);
+  // 💬 9224: причина й пояснення — і в стрічку клієнта (так само, як «Проблемний» і «В нічийні»).
+  const reasonLabel = reactivation.CLOSE_REASONS.find((x) => x.key === reasonKey)?.label ?? reasonKey;
+  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
+    [row.client_key, auth.userId, clientCommentLog.taskClosedComment(reasonLabel, note)]);
   res.json({ ok: true, closeReason: stored });
 });
 
@@ -9952,13 +9967,13 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   // 🔴 НЕ плутати з `leadsAd/leadsLeadgen/leadsOther`: ті рахують ЛІДИ (інша
   // популяція, інший запит). Дві сімʼї поруч мусять лишатись підписаними окремо —
   // саме тому вони й названі по-різному, а не «ad/leadgen» двічі.
-  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; crAd: number; crLeadgen: number; crElogist: number; crOther: number; crNoChannel: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispElogist: number; dispUndef: number; dispSum: number; dispPaid: { deals: number; sum: number }; dispAwait: { deals: number; sum: number }; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
-  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, crAd: 0, crLeadgen: 0, crElogist: 0, crOther: 0, crNoChannel: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispElogist: 0, dispUndef: 0, dispSum: 0, dispPaid: { deals: 0, sum: 0 }, dispAwait: { deals: 0, sum: 0 }, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
+  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; crAd: number; crLeadgen: number; crElogist: number; crLinkedin: number; crProzorro: number; crOther: number; crNoChannel: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispElogist: number; dispUndef: number; dispSum: number; dispPaid: { deals: number; sum: number }; dispAwait: { deals: number; sum: number }; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
+  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, crAd: 0, crLeadgen: 0, crElogist: 0, crLinkedin: 0, crProzorro: 0, crOther: 0, crNoChannel: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispElogist: 0, dispUndef: 0, dispSum: 0, dispPaid: { deals: 0, sum: 0 }, dispAwait: { deals: 0, sum: 0 }, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
   const dayMap = new Map<string, Cell>();
   const dget = (d: string) => { let e = dayMap.get(d); if (!e) { e = zero(); dayMap.set(d, e); } return e; };
   for (const r of createdRows) dget(r.bucket).created += r.deals;
   for (const r of splitRows) { const e = dget(r.bucket); e.newCount += r.newCount; e.repeatCount += r.repeatCount; e.undefCount += r.undefCount;
-    e.crAd += r.adCount; e.crLeadgen += r.leadgenCount; e.crElogist += r.elogistCount; e.crOther += r.otherCount; e.crNoChannel += r.noChannelCount; }
+    e.crAd += r.adCount; e.crLeadgen += r.leadgenCount; e.crElogist += r.elogistCount; e.crLinkedin += r.linkedinCount; e.crProzorro += r.prozorroCount; e.crOther += r.otherCount; e.crNoChannel += r.noChannelCount; }
   for (const r of leadsRows) { const e = dget(r.bucket); const c = (r as { channel?: string }).channel; if (c === "ad") e.leadsAd += r.deals; else if (c === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals; }
   for (const r of dispRows) { const e = dget(r.ym); e.dispatched += r.deals; e.dispRepeat += r.repeat; e.dispLeadgen += r.leadgen; e.dispAd += r.ad; e.dispElogist += r.elogist; e.dispUndef += r.undef; }
   for (const r of recvRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.received.deals += r.deals; e.received.revenue += r.revenue; }
@@ -9974,7 +9989,7 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
     e.dispPaid.deals += r.paidDeals; e.dispPaid.sum += r.paidSum;
     e.dispAwait.deals += r.awaitDeals; e.dispAwait.sum += r.awaitSum; }
 
-  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, crAd: a.crAd + b.crAd, crLeadgen: a.crLeadgen + b.crLeadgen, crElogist: a.crElogist + b.crElogist, crOther: a.crOther + b.crOther, crNoChannel: a.crNoChannel + b.crNoChannel, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispElogist: a.dispElogist + b.dispElogist, dispUndef: a.dispUndef + b.dispUndef, dispSum: a.dispSum + b.dispSum, dispPaid: { deals: a.dispPaid.deals + b.dispPaid.deals, sum: a.dispPaid.sum + b.dispPaid.sum }, dispAwait: { deals: a.dispAwait.deals + b.dispAwait.deals, sum: a.dispAwait.sum + b.dispAwait.sum }, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
+  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, crAd: a.crAd + b.crAd, crLeadgen: a.crLeadgen + b.crLeadgen, crElogist: a.crElogist + b.crElogist, crLinkedin: a.crLinkedin + b.crLinkedin, crProzorro: a.crProzorro + b.crProzorro, crOther: a.crOther + b.crOther, crNoChannel: a.crNoChannel + b.crNoChannel, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispElogist: a.dispElogist + b.dispElogist, dispUndef: a.dispUndef + b.dispUndef, dispSum: a.dispSum + b.dispSum, dispPaid: { deals: a.dispPaid.deals + b.dispPaid.deals, sum: a.dispPaid.sum + b.dispPaid.sum }, dispAwait: { deals: a.dispAwait.deals + b.dispAwait.deals, sum: a.dispAwait.sum + b.dispAwait.sum }, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   /**
    * 🔴 БЛОКИ — ПО ЗАПИТАНОМУ ДІАПАЗОНУ, А НЕ ПО МІСЯЦЮ `from` (20.08.2026).
@@ -10432,13 +10447,15 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       // ДЖЕРЕЛО — накладка поверх партиції (⊂ created), у суму не додається.
       // 🧺 РОЗКЛАД СТВОРЕНИХ ЗА ДЖЕРЕЛОМ — ПОВНИЙ, тобто ПАРТИЦІЯ (24.08.2026).
-      // `srcAd + srcLeadgen + srcElogist + srcOther + srcNoChannel == created` (eLogist —
+      // `srcAd + srcLeadgen + srcElogist + srcLinkedin + srcProzorro + srcOther + srcNoChannel == created` (eLogist —
       // окремий кошик з 27.10.2026, рішення власника). Раніше віддавались
       // лише перші дві гілки з чотирьох, і 43.2% угод не мали імені на екрані взагалі.
       // ⚠️ `srcNoChannel` (канал не заповнено) — НЕ те саме, що невизначена НОВИЗНА:
       // остання їде окремим полем і належить ІНШІЙ партиції. Тримає `#174`.
       srcAd: splitM.get(m.id)?.adCount ?? 0, srcLeadgen: splitM.get(m.id)?.leadgenCount ?? 0,
       srcElogist: splitM.get(m.id)?.elogistCount ?? 0,
+      // 🔗🏛 LinkedIn і Prozorro (задача 9230, 18.11.2026) — кошики, вирізані з «інше»; Σ семи == created.
+      srcLinkedin: splitM.get(m.id)?.linkedinCount ?? 0, srcProzorro: splitM.get(m.id)?.prozorroCount ?? 0,
       srcOther: splitM.get(m.id)?.otherCount ?? 0, srcNoChannel: splitM.get(m.id)?.noChannelCount ?? 0,
       // 🔀 Е3: той самий розклад ВСЕРЕДИНІ кожного класу новизни. Їде разом із
       // рядком, бо перемикач «усі / лише нові / лише постійні» НЕ ходить на
@@ -10814,7 +10831,9 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
       // доїхати окремим станом, інакше він зіллється з `null` («джерело незастосовне»)
       // і незнання читатиметься як відсутність питання. Тримає `#175`.
       // 🟣 + `elogist` (окремий канал з 27.10.2026) — без нього чип eLogist-угоди мовчки став би `null`.
-      source: x.source === "ad" || x.source === "leadgen" || x.source === "elogist" || x.source === "other" || x.source === "undef" ? x.source : null,
+      // 🔗🏛 + `linkedin`/`prozorro` (задача 9230) — без них чип такої угоди став би `null`.
+      source: x.source === "ad" || x.source === "leadgen" || x.source === "elogist" || x.source === "linkedin" || x.source === "prozorro"
+        || x.source === "other" || x.source === "undef" ? x.source : null,
       price: Math.round(Number(x.price)), status: label(Number(x.status_id)),
     })),
   });
@@ -11088,7 +11107,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       // рахує всі чотири — і 44% створеного (999-1010 угод серпня, у РПК 74.4%) не
       // потрапляло на екран узагалі. `other`/`noChannel` беруться з ТОГО САМОГО
       // `splitByMgr`: жодного нового запиту, лише перестала губитись частина.
-      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, ad: s?.adCount ?? 0, leadgen: s?.leadgenCount ?? 0, elogist: s?.elogistCount ?? 0, other: s?.otherCount ?? 0, noChannel: s?.noChannelCount ?? 0 }; })(),
+      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, ad: s?.adCount ?? 0, leadgen: s?.leadgenCount ?? 0, elogist: s?.elogistCount ?? 0, linkedin: s?.linkedinCount ?? 0, prozorro: s?.prozorroCount ?? 0, other: s?.otherCount ?? 0, noChannel: s?.noChannelCount ?? 0 }; })(),
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
       weeks: weeksForMgr(mid, mp.plan),    // Крок Д фінал #2: тижневий розріз Т1–Т5
     });
@@ -11442,9 +11461,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     createdSplit: {
       totals: createdSplitMgr.reduce((a, x) => ({
         created: a.created + x.created, new: a.new + x.newCount, repeat: a.repeat + x.repeatCount, undef: a.undef + x.undefCount,
-        ad: a.ad + x.adCount, leadgen: a.leadgen + x.leadgenCount, elogist: a.elogist + x.elogistCount, other: a.other + x.otherCount, noChannel: a.noChannel + x.noChannelCount,
-      }), { created: 0, new: 0, repeat: 0, undef: 0, ad: 0, leadgen: 0, elogist: 0, other: 0, noChannel: 0 }),
-      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, ad: x.adCount, leadgen: x.leadgenCount, elogist: x.elogistCount, other: x.otherCount, noChannel: x.noChannelCount })),
+        ad: a.ad + x.adCount, leadgen: a.leadgen + x.leadgenCount, elogist: a.elogist + x.elogistCount, linkedin: a.linkedin + x.linkedinCount, prozorro: a.prozorro + x.prozorroCount, other: a.other + x.otherCount, noChannel: a.noChannel + x.noChannelCount,
+      }), { created: 0, new: 0, repeat: 0, undef: 0, ad: 0, leadgen: 0, elogist: 0, linkedin: 0, prozorro: 0, other: 0, noChannel: 0 }),
+      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, ad: x.adCount, leadgen: x.leadgenCount, elogist: x.elogistCount, linkedin: x.linkedinCount, prozorro: x.prozorroCount, other: x.otherCount, noChannel: x.noChannelCount })),
     },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),
@@ -11999,7 +12018,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/close-deal", async (req, res) => {
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? `користувач #${String(auth.userId)}`;
+  const who = (await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null)) ?? `користувач #${String(auth.userId)}`;
   const suggested = (await closeOffer(pool, card.row)).suggestedId;
   const r = await closeDeal(pool, firstTouchKommo, { uniqueid, kommoIds: card.row.kommoIds, calledAt: card.row.calledAt, reasonId,
     suggestedId: suggested, user: { id: auth.userId ?? null, name: who }, now: new Date() });
@@ -12014,7 +12033,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/close-deal/revert", async (req, res) =
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? `користувач #${String(auth.userId)}`;
+  const who = (await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null)) ?? `користувач #${String(auth.userId)}`;
   const r = await revertDeal(pool, firstTouchKommo, { uniqueid, user: { id: auth.userId ?? null, name: who }, now: new Date() });
   if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
   res.json({ ok: true, kommoId: r.kommoId });
@@ -12036,7 +12055,7 @@ dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  const who = await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null);
   await setCallType(pool, uniqueid, isCargo, { userId: auth.userId ?? null, name: who }, new Date(), cut);
   res.json({ ok: true });
 });
@@ -12061,7 +12080,7 @@ dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const pr = kind === "price" ? checkPriceNote(req.body?.reason, text) : { ok: true as const, reason: null };
   if (!pr.ok) { res.status(400).json({ error: pr.why }); return; }
   if (kind === "review" && text.trim() && !canCloseReview(card.row)) { res.status(409).json({ error: REVIEW_NEEDS_COMMENT_UA }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  const who = await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null);
   await setCallNote(pool, uniqueid, kind as NoteKind, text, { userId: auth.userId ?? null, name: who }, new Date(), pr.reason);
   res.json({ ok: true });
 });
@@ -12431,7 +12450,7 @@ dashboardRouter.post("/missed-calls/no-callback/task", async (req, res) => {
   const items = Array.isArray(req.body?.items) ? (req.body.items as { uniqueid?: unknown; managerId?: unknown }[]).slice(0, 100) : [];
   if (!items.length) { res.status(400).json({ error: "Немає жодного дзвінка" }); return; }
   const today = kyivToday();
-  const author = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? "користувач дашборда";
+  const author = (await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null)) ?? "користувач дашборда";
   const out: { uniqueid: string; result: "created" | "exists" | "error"; taskId?: number; deadline?: string | null; error?: string }[] = [];
   for (const it of items) {
     const uniqueid = String(it.uniqueid ?? "");
@@ -12475,7 +12494,7 @@ dashboardRouter.post("/missed-calls/norm", async (req, res) => {
   if (!canSetCallbackNorm(auth.roleKey)) { res.status(403).json({ error: "Ціль ставить і змінює лише керівництво" }); return; }
   const v = callbackNormVerdict(req.body?.norm);
   if (!v.ok) { res.status(400).json({ error: v.error }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  const who = await actorDisplayName(pool, auth.userId ?? null, auth.email ?? null);
   await missedCalls.setCallbackNorm(v.norm, auth.userId ?? null, who);
   res.json({ ok: true });
 });

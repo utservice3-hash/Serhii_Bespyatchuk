@@ -1087,7 +1087,7 @@ test("#1509 ЖИВИЙ SQL: виділений рахунок додає бюд�
 });
 
 /**
- * #3790b — ЖИВИЙ SQL: ВИДІЛЕНІ РАХУНКИ-МАШИНИ (рішення Романа 09.11.2026, 62832949 + 62839599, 62839603). Основна угода несе
+ * #3790b — ЖИВИЙ SQL: ВИДІЛЕНІ РАХУНКИ-МАШИНИ (рішення Романа 09.11.2026, 62832949 + 62839599, 62839603; 17.11.2026 + 62844667). Основна угода несе
  * бюджет разом з обома рахунками, а кожен рахунок — свою київську «Дату загрузки» і те, чи зайшли за нього гроші, за ЙОГО
  * етапом («Оплата отримана» — так, «Виставлення рахунку» — ні). Рядок списку називає рахунки з датами загрузки.
  * 🧨 САБОТАЖ: у `handoffDealStates` `moneyCame: moneyCameIn(c)` → `moneyCame: false` → червоніє (оплачений рахунок без грошей).
@@ -1104,19 +1104,22 @@ test("#3790b ЖИВИЙ SQL: рахунки-машини — бюджет раз
   await mk(62832949, 100274340, 5_449, utc("2026-11-08T22:00:00"));   // 09.11 за Києвом, «Виставлення рахунку»
   await mk(62839599, 69716460, 6_740, utc("2026-11-08T22:00:00"));    // 09.11, «Оплата отримана»
   await mk(62839603, 100274340, 6_740, utc("2026-11-09T22:00:00"));   // 10.11, «Виставлення рахунку»
+  await mk(62844667, 100274340, 5_449, utc("2026-11-11T22:00:00"));   // 12.11, «Виставлення рахунку» (додано 17.11)
   const got = (await money.handoffDealStates([62832949])).get(62832949);
-  assert.deepEqual([got?.price, got?.cls, got?.loadDay], [18_929, "expect", "2026-11-09"], "🔴 бюджет не разом із двома рахунками або змінився стан основної");
+  assert.deepEqual([got?.price, got?.cls, got?.loadDay], [24_378, "expect", "2026-11-09"], "🔴 бюджет не разом із трьома рахунками або змінився стан основної");
   assert.deepEqual(got?.extraCars, [
     { dealId: 62839599, loadDay: "2026-11-09", moneyCame: true },
     { dealId: 62839603, loadDay: "2026-11-10", moneyCame: false },
+    { dealId: 62844667, loadDay: "2026-11-12", moneyCame: false },
   ], "🔴 рахунки-машини: не та київська загрузка або гроші не за власним етапом");
   const h = { day: "2026-11-05", lgId: 1, lgTeamId: 1, pzId: 62643775, at: 0, dealId: 62832949, dealName: "р", dealClient: "к", salesManager: "м",
     dealReason: null, closedDay: null, planPayDay: null, pzName: "р", pzClient: "к", clientKey: null, linkPrio: 0,
-    cls: "expect" as const, price: 18_929, autoDay: null, extraCars: got?.extraCars } as unknown as Parameters<typeof handoffDealRow>[0];
+    cls: "expect" as const, price: 24_378, autoDay: null, extraCars: got?.extraCars } as unknown as Parameters<typeof handoffDealRow>[0];
   const row = handoffDealRow(h, { pipelineId: FC[0], statusId: 100274340 }, { stageName: () => "Виставлення рахунку", qualificationPipelines: [], leadUrl: (id) => `u/${id}` });
   assert.deepEqual(row.split, [
     { dealId: 62839599, url: "u/62839599", loadDay: "2026-11-09" },
     { dealId: 62839603, url: "u/62839603", loadDay: "2026-11-10" },
+    { dealId: 62844667, url: "u/62844667", loadDay: "2026-11-12" },
   ], "🔴 рядок не називає рахунки-машини з датами загрузки");
 });
 

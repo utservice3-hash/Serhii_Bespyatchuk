@@ -45,6 +45,12 @@ export const CARRIER_OPS = {
 
 /** Поріг, з якого вердикт вважається впевненим (ТЗ, крок 3; поріг для АВТОМАТИЧНИХ дій у CRM — окремо, Сергій). */
 export const CARRIER_THRESHOLD = 0.85;
+/**
+ * Поріг, з якого клієнт/перевізник упевнений і БЕЗ підтвердженої цитати співрозмовника (рішення Романа 16.11.2026:
+ * «нехай закриває ті що 90-100 відсотків», «клієнтів теж»). Замір того ж дня: з 30.09 таких угод 57 (перевізник 41,
+ * клієнт 16), люди вирішили 17 — і всі 17 збіглись з AI. Від 85 до 90% цитата, як і раніше, обовʼязкова.
+ */
+export const CARRIER_NO_QUOTE_THRESHOLD = 0.9;
 
 export const RUBRIC_CARRIER_V1 = "carrier-v1";
 /**
@@ -288,8 +294,8 @@ export const CARRIER_KIT = {
 };
 
 /**
- * Кошик на екрані. Роль клієнт/перевізник показуємо впевненою лише з порогом І підтвердженою цитатою
- * співрозмовника; інакше — «нижче порогу». «Інше» цитати не вимагає: там нема що доводити.
+ * Кошик на екрані. Роль клієнт/перевізник показуємо впевненою з порогом І підтвердженою цитатою співрозмовника,
+ * або від `CARRIER_NO_QUOTE_THRESHOLD` (90%) без цитати; інакше — «нижче порогу». «Інше» цитати не вимагає: там нема що доводити.
  */
 export type CarrierBucket = CallerRole | "low";
 
@@ -297,8 +303,13 @@ export function carrierBucket(r: Pick<CarrierResult, "caller_role" | "caller_rol
   threshold: number = CARRIER_THRESHOLD): CarrierBucket {
   if (r.caller_role === "unclear") return "unclear";
   if (r.caller_role_confidence < threshold) return "low";
-  if (r.caller_role !== "other" && r.quote_check !== "counterpart") return "low";
+  if (r.caller_role !== "other" && r.quote_check !== "counterpart" && r.caller_role_confidence < CARRIER_NO_QUOTE_THRESHOLD) return "low";
   return r.caller_role;
+}
+
+/** Цитата для примітки в Kommo — лише підтверджена словами співрозмовника; інакше ми підписали б йому чужі слова. */
+export function provenQuote(quote: string | null, quoteCheck: string | null | undefined): string | null {
+  return quoteCheck === "counterpart" ? quote : null;
 }
 
 // ─── Категорія угоди — ОДНЕ правило для вкладок, черги, звіту й закриття (ТЗ 30.09.2026) ───────────

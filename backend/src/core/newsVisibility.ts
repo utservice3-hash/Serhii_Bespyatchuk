@@ -71,6 +71,22 @@ export function newsScope(
   return { where: `WHERE ${all.join(" AND ")}`, params: p };
 }
 
+/**
+ * 🎯 АДРЕСАТ, ЯКИЙ НЕ Є ВКЛАДКОЮ: `hunt` — ті, хто є в поіменному списку «Хантингу» (`hunt_access`).
+ *
+ * Рішення Романа 16.11.2026: новину про «Хантинг» бачили всі 14 з вкладкою «Найм», хоча сам екран відкривається лише
+ * трьом (Сергій, Іван, Олександр) — «вона не має відображатися їм, а тільки тим, хто має доступ до хантингу». Доступ
+ * до «Хантингу» дає НЕ роль, тож вкладкою його не виразити; читачеві, що є в списку, додається адресат `hunt`.
+ * Чиста функція — щоб список, лічильник і «долистав досюди» брали ОДИН набір адресатів.
+ */
+export const HUNT_AUDIENCE = "hunt";
+/** Адресати в рядку «Кому:», які не є вкладками меню. */
+export const PSEUDO_AUDIENCES: readonly string[] = [HUNT_AUDIENCE];
+export function readerAudience(roleTabs: readonly string[], huntAllowed: boolean): string[] {
+  const base = roleTabs.filter((t) => t !== HUNT_AUDIENCE);
+  return huntAllowed ? [...base, HUNT_AUDIENCE] : base;
+}
+
 /** Дописується до `WHERE`, коли інші умови вже є. */
 export function andAlive(hasWhere: boolean): string {
   return hasWhere ? `AND ${NEWS_ALIVE}` : `WHERE ${NEWS_ALIVE}`;

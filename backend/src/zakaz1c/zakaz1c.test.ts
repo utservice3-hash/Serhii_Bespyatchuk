@@ -4,6 +4,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
+import { KOMMO_FIELDS, moneyOf } from "./kommoApi.js";
+import { genesisDealFields as gdf, codeKind } from "./invoice.js";
+import { sameDealFields } from "./dealFields.js";
 import {
   actPdfFrom1c, actRefusal, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, canEdit, customerInfoFrom1c, dealFieldsOf,
   fromCreateInvoiceReply, genesisComment, invoiceAllowed, orgRules, parseInvoiceForm, parseOrganizations, payStateOf, serviceLine, serviceSwaps,
@@ -178,7 +181,7 @@ test("#7104 ВІДПОВІДЬ 1С: state:false — помилка словам�
 test("#7105 ВІДЖЕТ: вкладка card_sdk + lcard-0, `{}` лише тестувальникам, запити лише підписаним каналом, секретів немає", () => {
   const manifest = JSON.parse(WIDGET("manifest.json"));
   assert.ok(manifest.locations.includes("card_sdk") && manifest.locations.includes("lcard-0"), "без card_sdk/lcard-0 вкладки не буде");
-  assert.equal(JSON.parse(WIDGET("i18n/ru.json")).widget.name, "Закритий ТЕСТ 1С");
+  assert.equal(JSON.parse(WIDGET("i18n/ru.json")).widget.name, "Рахунок 1С");
   const js = WIDGET("script.js");
   assert.match(js, /if \(!allowedHere\(\)\) return Promise\.resolve\(\[\]\);/, "не-тестувальнику вкладка не прибирається");
   assert.match(js, /return t\.length === 0 \|\| t\.indexOf\(me\(\)\) !== -1;/, "порожній список тестувальників не відкриває вкладку всім");
@@ -287,14 +290,16 @@ test("#7110 ОПЛАТА РАХУНКУ І «ЗМІНИТИ»: стан — зі
   assert.equal(payStateOf(inv, null, c({ dealPaid: 0 })).k, "missing", "рахунок без оплат угоди зараховано оплаченим");
   assert.equal(payStateOf(inv, null, c({ syncedAt: before, dealPaid: 1800 })).k, "pending", "знімок до рахунку прочитано як «оплачено»");
   assert.equal(payStateOf(inv, null, c({ syncedAt: null })).k, "pending");
-  // «Змінити»: дозвіл — сьогодні й без оплати; заборона — вчора, частково, оплачено, невідомо.
+  // «Змінити»: дозвіл — доба після виставлення й без оплати; заборона — старший за добу, частково, оплачено, невідомо.
   const unpaid = payStateOf(inv, { paid: 0, remaining: 1800, due: null }, c({}));
-  assert.equal(canEdit(TODAY, unpaid, TODAY), true, "сьогоднішній неоплачений рахунок не можна змінити");
-  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({ syncedAt: before })), TODAY), true, "свіжий рахунок до синку не можна змінити");
-  assert.equal(canEdit("2026-10-27", unpaid, TODAY), false, "вчорашній рахунок можна змінити");
-  assert.equal(canEdit(TODAY, payStateOf(inv, { paid: 500, remaining: 1300, due: null }, c({})), TODAY), false, "частково оплачений можна змінити");
-  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({ dealPaid: 1800 })), TODAY), false, "оплачений можна змінити");
-  assert.equal(canEdit(TODAY, payStateOf(inv, null, c({})), TODAY), false, "рахунок, якого немає серед неоплачених, можна змінити");
+  const AT = new Date("2026-10-28T15:00:00+02:00"), H = 60 * 60 * 1000;
+  assert.equal(canEdit(AT, unpaid, new Date(AT.getTime() + H)), true, "свіжий неоплачений рахунок не можна змінити");
+  assert.equal(canEdit(AT, unpaid, new Date(AT.getTime() + 23 * H)), true, "наступного дня в межах доби не можна змінити (17.11: «сутки»)");
+  assert.equal(canEdit(AT, payStateOf(inv, null, c({ syncedAt: before })), new Date(AT.getTime() + H)), true, "свіжий рахунок до синку не можна змінити");
+  assert.equal(canEdit(AT, unpaid, new Date(AT.getTime() + 24 * H + 1)), false, "рахунок старший за добу можна змінити");
+  assert.equal(canEdit(AT, payStateOf(inv, { paid: 500, remaining: 1300, due: null }, c({})), new Date(AT.getTime() + H)), false, "частково оплачений можна змінити");
+  assert.equal(canEdit(AT, payStateOf(inv, null, c({ dealPaid: 1800 })), new Date(AT.getTime() + H)), false, "оплачений можна змінити");
+  assert.equal(canEdit(AT, payStateOf(inv, null, c({})), new Date(AT.getTime() + H)), false, "рахунок, якого немає серед неоплачених, можна змінити");
 });
 
 test("#7112 ПІДМІНА ПОСЛУГИ: 1С поставила іншу номенклатуру — менеджер бачить попередження; та сама — тиша", () => {
@@ -777,5 +782,93 @@ test("#7141 ВІКНО 0.6.0: дати акту у формі рахунку н�
   assert.match(js, /\$\.extend\(\{\}, f, \{ customerKind: kind\(\) \}\)/, "рахунок не каже серверу, на кого виставляти");
   assert.match(js, /seg\("kind", \[\{ v: "company", t: "Юрособа \/ ФОП" \}, \{ v: "person", t: "Фізособа без коду" \}\]/, "немає перемикача виду клієнта");
   assert.match(js, /"\/lead\/" \+ leadId\(\) \+ "\/person", \{ name: name, phone: phone \}/);
-  assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.0");
+  assert.match(JSON.parse(WIDGET("manifest.json")).widget.version, /^0\.6\./);
+});
+
+test("#7142 ВКЛАДКА В МЕНЮ «…»: контейнер зʼявився ПІСЛЯ даних — вікно домальовується, а не лишається порожнім; без зациклення", () => {
+  // 12.11.2026: у вузькому вікні вкладка «Закритий ТЕСТ 1С» схована в «…», Kommo створює її контейнер лише при відкритті —
+  // дані вже прийшли, малювати було нікуди, вкладка порожня. Відтворено в браузері на 0.6.0 і на виправленні.
+  const js = WIDGET("script.js");
+  assert.match(js, /observer = new MutationObserver\(/, "вікно не стежить за появою контейнера вкладки");
+  assert.match(js, /loadPreloadedData: function \(\) \{\s*if \(!allowedHere\(\)\) return Promise\.resolve\(\[\]\);\s*watch\(\);/, "стеження не вмикається разом із вкладкою");
+  assert.match(js, /if \(!el\.length \|\| \(!force && el\.find\("\." \+ NS\)\.length\)\) return;/, "домальовування не перевіряє, що вміст уже є — зациклиться на власних змінах");
+  assert.match(js, /destroy: function \(\) \{[^}]*observer\.disconnect\(\)/, "після закриття картки стеження лишається працювати");
+  assert.match(js, /\.catch\(function \(e\) \{ state\.err = e\.message; paint\(true\); \}\)/, "помилка сервера губиться, якщо контейнера ще не було");
+});
+
+test("#7143 PDF ЗНОВУ В УГОДУ: примітку з рахунком видалили або PDF не прикріпився — кнопка кладе PDF з 1С у файли й стрічку угоди лише своєї угоди, рахунок у 1С не змінюється", () => {
+  // 17.11.2026: менеджер спитав, як повернути рахунок, якщо випадково видалив примітку; №9696 PDF не прикріпився («fetch failed»).
+  const js = WIDGET("script.js");
+  assert.match(js, /data-z1c='reattach'/, "у плитці рахунку немає кнопки «↻ PDF в угоду»");
+  assert.match(js, /api\("POST", "\/lead\/" \+ leadId\(\) \+ "\/invoice\/" \+ uid \+ "\/attach"/, "кнопка не кличе сервер");
+  const srv = MOUNT();
+  const route = srv.slice(srv.indexOf('r.post("/lead/:leadId/invoice/:uid/attach"'), srv.indexOf("Акт за рахунком — як у Genesis"));
+  assert.ok(route.length > 100, "маршруту /attach немає");
+  assert.match(route, /if \(inv\?\.leadId !== leadId\) return res\.status\(404\)/, "PDF можна покласти в чужу угоду");
+  assert.match(route, /noteInvoice\(/, "примітка не тим самим підписом, що при виставленні");
+  assert.match(route, /markInvoiceAttached\(/, "помилка прикріплення не знімається після успіху");
+  assert.doesNotMatch(route, /createInvoiceIn1c|updateInvoiceIn1c/, "повтор PDF чіпає рахунок у 1С");
+  assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.3");
+  assert.doesNotMatch(srv, /attachError = attachError \?\? `угода Kommo/, "збій полів угоди знову показується як «PDF немає» (№9696)");
+  assert.match(js, /reattachBtn\(inv, "link mut"\)/, "кнопка не внизу плитки рахунку");
+  assert.match(js, /"Повернути PDF рахунку в угоду<\/button>"/, "назва кнопки незрозуміла");
+});
+
+test("#7144 СУМА РАХУНКУ — З «ПРИХОД 1»: бюджет угоди — це зазор; вікно підставляє суму клієнта з поля 2097627, порожнє поле — порожня сума, а не бюджет", () => {
+  // 17.11.2026, менеджер Дмитро: «тягне суму з Бюджету — тобто зазор, а треба з поля «Приход 1»».
+  assert.equal(KOMMO_FIELDS.leadIncome1, 2097627);
+  assert.equal(moneyOf("36000"), 36000);
+  assert.equal(moneyOf("36 000"), 36000);
+  assert.equal(moneyOf("36\u00a0000,50"), 36000.5);
+  assert.equal(moneyOf(""), 0);
+  assert.equal(moneyOf("—"), 0);
+  assert.match(MOUNT(), /lead: \{ id: lead\.id, name: lead\.name, price: lead\.income1,/, "вікно й далі отримує бюджет як суму рахунку");
+  assert.match(WIDGET("script.js"), /price: d\.lead\.income1 \|\| d\.lead\.price \|\| ""/, "вікно бере суму не з «Приход 1»");
+});
+
+test("#7145 ПОЛЯ УГОДИ → РАХУНОК 1С ЯК У GENESIS: «Расход 1–3» з типом оплати, авто, код оплати, тип запиту, канал продажу й реєстрація компанії йдуть у deal_fields при виставленні, «Змінити» і звірці; оплачений, реалізований і рахунок до 0.6.4 звірка не чіпає", () => {
+  // 17.11.2026, бухгалтерія: «коли роблять по новому рахунку, не заповнюється Расход 1». Id полів — лист 1С 02.11.2026.
+  assert.deepEqual([KOMMO_FIELDS.leadExpense1, KOMMO_FIELDS.leadExpense2, KOMMO_FIELDS.leadExpense3], [2097661, 2097663, 2097665]);
+  assert.deepEqual([KOMMO_FIELDS.leadExpenseType1, KOMMO_FIELDS.leadExpenseType2, KOMMO_FIELDS.leadExpenseType3], [2097651, 2097653, 2097655]);
+  const f = gdf({ expense_1: "74 000", expense_2: "1500,50", expense_3: "", payment_type_1: "Безнал с НДС", vehicle: "МАН АТ9718СР",
+    payment_code: "", request_type: "Перевезення", sales_channel: "Google Ads", registration_type: "", registration_code: "" });
+  assert.equal(f.expense_1, 74000);
+  assert.equal(f.expense_2, 1500.5);
+  assert.equal(f.expense_3, null, "порожній «Расход» не очищає реквізит");
+  assert.equal(gdf({ expense_1: "дві тисячі" }).expense_1, null, "нечислове «Расход» зламає весь рахунок у 1С");
+  assert.equal(f.payment_type_1, "Безнал с НДС");
+  assert.equal(f.payment_type_2, null);
+  assert.equal(f.vehicle, "МАН АТ9718СР");
+  const p = parseInvoiceForm(FORM, ctx);
+  assert.equal(p.ok, true);
+  if (!p.ok) return;
+  const c = buildCreateInvoiceBody(1, p.form, { customerUid: "u", manager: "", today: TODAY, orgCode: "000000004", dealFields: f }) as Record<string, any>;
+  assert.equal(c.deal_fields.expense_1, 74000, "«Расход 1» не йде в новий рахунок");
+  assert.equal(c.deal_fields.payment_type_1, "Безнал с НДС");
+  assert.equal(c.deal_fields.act_date, "2026-10-30", "поля угоди перебили дату акту");
+  assert.equal(c.deal_fields.crm_comment, "клієнт просив до пʼятниці", "поля угоди перебили коментар");
+  const u = buildUpdateInvoiceBody("uid", p.form, { manager: "m", dealId: 1, orgCode: "000000004", dealFields: f }) as Record<string, any>;
+  assert.equal(u.deal_fields.expense_1, 74000, "«Змінити» не переносить «Расход 1»");
+  // Звірка: jsonb не зберігає порядок ключів — порівнюємо по ключах; рахунок до 0.6.4 (null) — «не надіслано».
+  assert.equal(sameDealFields(JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(f).reverse()))), f), true);
+  assert.equal(sameDealFields({ ...f, expense_1: 1 }, f), false);
+  assert.equal(sameDealFields(null, f), false);
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "dealFields.ts"), "utf8");
+  assert.match(src, /if \(s === null && !opts\.backfill\) continue;/, "звірка дописує рахунки до 0.6.4 без дозволу");
+  assert.match(src, /if \(r\.realized \|\| r\.pay\.paid > 0 \|\| r\.pay\.k === "paid"\) continue;/, "звірка ліземо в оплачений/реалізований рахунок");
+  assert.match(src, /updateInvoiceIn1c\(onecServiceBase\(\), \{ invoice_uid: r\.invoice_uid, deal_fields: want \}\)/, "звірка шле в 1С більше, ніж поля угоди");
+});
+
+test("#7146 ІНОЗЕМНИЙ КЛІЄНТ: компанія з не-українським кодом (литовський 304210390, з літерами теж) шукається в 1С за кодом як є, а не відкидається; створення контрагента — як і раніше, лише за 8/10 цифрами", async () => {
+  // 18.11.2026: Дмитрук не зміг виставити рахунок UAB «Brandelektra» (угода 62848799) — «код компанії не 8 і не 10 цифр».
+  const urls: string[] = [];
+  const fake = (async (u: string) => { urls.push(String(u));
+    return new Response(JSON.stringify({ state: true, uid: "2397d541-1bfb-11ee-ab40-5404a68a652e", name: "UAB \"Brandelektra\"", agreements: [] }), { status: 200 }); }) as any;
+  const c = await customerInfoFrom1c("https://1c", "304210390", fake);
+  assert.equal(c.found, true, "іноземного клієнта, який є в 1С, не знайдено");
+  assert.match(urls[0], /customerInfo\?edrpou=304210390$/);
+  assert.equal(codeKind("304210390"), null, "створення контрагента пустить не-український код");
+  await customerInfoFrom1c("https://1c", "LT100010061716", fake);
+  assert.match(urls[1], /customerInfo\?edrpou=LT100010061716$/, "код з літерами не шукається");
+  assert.doesNotMatch(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "invoice.ts"), "utf8"), /customerInfo\?name=|`name=\$\{/, "пошук за назвою — у 1С дублі");
 });

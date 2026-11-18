@@ -10,7 +10,7 @@ import { archivedSql, LAST_PAID_CTE } from "./clientArchive.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 import type { LazyCache } from "./lazyCache.js";
-import { dealCampaignSql, LEAD_PARENT_JOIN } from "./adCampaign.js";
+import { dealCampaignSql, LEAD_PARENT_JOIN, GENERIC_CLIENT_KEYS_SQL } from "./adCampaign.js";
 // 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
 // (задача 4892, `core/teamAt.ts`). Знімки «станом на зараз» (очікування, дебіторка, застряглі,
 // прострочені) лишаються на поточній команді; когортні воронки — окремим проходом.
@@ -19,6 +19,8 @@ import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
 import { FC_PIPELINE_IDS } from "./moneyBuckets.js";
 import { elogistMarkSql, notElogistSql } from "./elogist.js";
+import { linkedinDealSql } from "./linkedinDeals.js";
+import { prozorroDealSql } from "./prozorroSource.js";
 import type { LeadChannel } from "./dealSourceState.js";
 
 /**
@@ -195,6 +197,53 @@ export const adDealSqlMode = (srcRef: string, mode: PriorPaidMode): string =>
     AND ${notElogistSql("d")})`;
 
 export const adDealSql = (srcRef: string): string => adDealSqlMode(srcRef, "correlated");
+
+/**
+ * 🎯 «ПРИЙНЯТО РЕКЛАМИ» ЗА ПРАВИЛОМ СЕРГІЯ (задача 9932; TOP Weekly 16.11.2026, Сергій: «клієнт прийшов з
+ * реклами і оплатив — далі всі його угоди рахуються як реклама»; Юля 17.11: «так, і для „Прийнято реклами“
+ * теж, щоб колонки не розходились»; Роман 17.11 — «роби», «викочуй»). Глосарій §3.
+ *
+ * Угода «прийнята як реклама», якщо вона рекламна сама (`adDealSql`), АБО:
+ *   • клієнт (`client_key`, не заглушка) має рекламну угоду (`adDealSql`) — «прийшов з реклами»; і
+ *   • після першої такої угоди в клієнта є оплачена угода (`funnel_stage='paid'`), створена РАНІШЕ за цю.
+ * Не діє, як і раніше: лідоген (пріоритет 1, §3a), «…реактив…» у джерелі, eLogist. «Клієнт з реклами» — той
+ * самий, що на екрані «Реклама» (`adClients`: рекламна угода + оплата після неї).
+ *
+ * ⚠️ Це переглядає гейт власника 04.08 («звернення постійного клієнта — не реклама») ЛИШЕ для «Прийнято реклами»
+ * і пари до неї (чисельник лайфтайм-конверсії). `adDealSql` НЕ змінюється: на ньому стоять рекламні гроші й ROMI,
+ * платні ліди й CPL, списки дзвінків першого дотику, нецільові — там постійний клієнт рекламним лідом не стає.
+ *
+ * 🚀 Лише join-форма: «клієнт з реклами оплатив» агрегується ОДИН раз (`ad_origin`), а не корельованим підзапитом
+ * на кожен рядок (урок `#35/#36`). Запит ставить `adsAcceptedCte` першим у `WITH` (він уже містить `first_paid`)
+ * і обидва join-и `ADS_ACCEPTED_JOINS`. Гейти `#9932…`.
+ */
+export const adsAcceptedCte = (srcRef: string): string => `${FIRST_PAID_CTE},
+  ad_first AS (
+    SELECT d.client_key, MIN(d.created_at_kommo) AS ad_first_at
+      FROM deals d ${FIRST_PAID_JOIN}
+     WHERE d.client_key IS NOT NULL AND NOT (d.client_key = ANY(${GENERIC_CLIENT_KEYS_SQL}))
+       AND ${adDealSqlMode(srcRef, "joined")}
+     GROUP BY d.client_key
+  ),
+  ad_origin AS (
+    SELECT af.client_key, MIN(p.created_at_kommo) AS ad_paid_at
+      FROM ad_first af
+      JOIN deals p ON p.client_key = af.client_key AND p.created_at_kommo >= af.ad_first_at
+      JOIN pipeline_stage_map psm_ao ON psm_ao.pipeline_id = p.pipeline_id AND psm_ao.status_id = p.status_id
+     WHERE psm_ao.funnel_stage = 'paid'
+     GROUP BY af.client_key
+  )`;
+export const ADS_ACCEPTED_JOINS = `${FIRST_PAID_JOIN} LEFT JOIN ad_origin ao ON ao.client_key = d.client_key`;
+
+/** Друга половина правила: клієнт прийшов з реклами й оплатив ДО створення цієї угоди (крім лідогену/реактивації/eLogist). */
+export const AD_ORIGIN_SQL = `(ao.ad_paid_at IS NOT NULL AND ao.ad_paid_at < d.created_at_kommo
+    AND d.lead_channel IS DISTINCT FROM 'leadgen'
+    AND COALESCE(d.client_source, '') NOT ILIKE '%реактив%'
+    AND ${notElogistSql("d")})`;
+
+/** Предикат «Прийнято реклами» (потребує `adsAcceptedCte` + `ADS_ACCEPTED_JOINS`). */
+export const adsAcceptedSql = (srcRef: string): string =>
+  `(${adDealSqlMode(srcRef, "joined")} OR ${AD_ORIGIN_SQL})`;
 
 /**
  * СЕГМЕНТ УГОДИ (не глобальна мітка клієнта), пріоритет-партиція (GLOSSARY §9):
@@ -527,7 +576,10 @@ export interface CreatedBucketRow { bucket: string; deals: number }
  * Рядок розколу СТВОРЕНИХ — **ДВІ НЕЗАЛЕЖНІ ПАРТИЦІЇ ОДНОГО НАБОРУ**.
  *
  *   новизна : `newCount + repeatCount + undefCount   == created`
- *   джерело : `adCount + leadgenCount + elogistCount + otherCount + noChannelCount == created`
+ *   джерело : `adCount + leadgenCount + elogistCount + linkedinCount + prozorroCount + otherCount + noChannelCount == created`
+ *
+ * 🔗🏛 З 18.11.2026 кошиків джерела СІМ: LinkedIn і Prozorro вирізані з «інше» (задача 9230) —
+ * лише там, де канал «інше»; угода з реклами чи лідогену лишається у своєму каналі.
  *
  * 🟣 З 27.10.2026 кошиків джерела П'ЯТЬ: `elogistCount` — окремий канал eLogist (рішення
  * власника, `core/elogist.ts`). До того ці угоди сиділи в `adCount`.
@@ -559,6 +611,9 @@ export interface CreatedSplitRow {
   adCount: number;
   leadgenCount: number;
   elogistCount: number;
+  /** 🔗 LinkedIn (§20) і 🏛 Prozorro (§21) — вирізані з «інше» (задача 9230, 18.11.2026). */
+  linkedinCount: number;
+  prozorroCount: number;
   otherCount: number;
   noChannelCount: number;
   /**
@@ -578,18 +633,20 @@ export interface CreatedSplitRow {
   sourceByKlass: Record<"new" | "rep" | "undef", SourceCounts>;
 }
 
-/** Розклад джерела всередині одного класу новизни. `created` — Σ п'яти. */
+/** Розклад джерела всередині одного класу новизни. `created` — Σ семи (LinkedIn і Prozorro — з 18.11.2026). */
 export interface SourceCounts {
   created: number;
   adCount: number;
   leadgenCount: number;
   elogistCount: number;
+  linkedinCount: number;
+  prozorroCount: number;
   otherCount: number;
   noChannelCount: number;
 }
 export interface CreatedSplitBucketRow {
   bucket: string; created: number; newCount: number; repeatCount: number; undefCount: number;
-  adCount: number; leadgenCount: number; elogistCount: number; otherCount: number; noChannelCount: number;
+  adCount: number; leadgenCount: number; elogistCount: number; linkedinCount: number; prozorroCount: number; otherCount: number; noChannelCount: number;
 }
 
 // Дженерик/порожні client_key, що НЕ беруть участі в матчингу історії клієнта
@@ -707,15 +764,21 @@ export function createdKlassCase(ops: {
  * саме це й ховала стара перша гілка. `NULL` каналу читається як «невизначено», а
  * не зсипається в «інше»: невідоме має читатись як невідоме.
  */
-export function dealSourceCase(channel: string): string {
+export function dealSourceCase(channel: string, marks: { linkedin: string; prozorro: string }): string {
   // 🟣 'elogist' — власна гілка (рішення власника 27.10.2026): без неї eLogist мовчки осів би
   // в catch-all «без джерела», і партиція сходилась би, ховаючи цілий канал.
+  // 🔗🏛 'linkedin' / 'prozorro' (задача 9230, Роман 18.11.2026) — вирізаються ЛИШЕ з «інше»: канал
+  // (реклама / лідоген / eLogist, «останній дотик») їх перебиває, а невідомий канал лишається невідомим.
+  // Тому гілки стоять ПІСЛЯ каналів і `IS NULL`. Ознаки — лише з ядра (`linkedinDealSql`, `prozorroDealSql`);
+  // `marks` обовʼязковий, щоб жодна форма правила не забула нові кошики. LinkedIn перед Prozorro, якщо обидві мітки.
   return `
   CASE
     WHEN ${channel} = 'ad' THEN 'ad'
     WHEN ${channel} = 'leadgen' THEN 'leadgen'
     WHEN ${channel} = 'elogist' THEN 'elogist'
     WHEN ${channel} IS NULL THEN 'undef'
+    WHEN ${marks.linkedin} THEN 'linkedin'
+    WHEN ${marks.prozorro} THEN 'prozorro'
     ELSE 'other'
   END`;
 }
@@ -724,7 +787,7 @@ export function dealSourceCase(channel: string): string {
 const CREATED_KLASS_CASE = createdKlassCase({
   vkey: "vkey", hasPrior: "has_prior", salesChannel: "sales_channel",
 });
-const CREATED_SOURCE_CASE = dealSourceCase("lead_channel");
+const CREATED_SOURCE_CASE = dealSourceCase("lead_channel", { linkedin: "is_li", prozorro: "is_pz" });
 
 /**
  * ІНЛАЙН-форма ТОГО САМОГО правила — для запитів, що беруть угоди напряму з
@@ -745,7 +808,8 @@ export function dealKlassSql(alias = "d"): string {
 }
 
 /** ДЖЕРЕЛО угоди в інлайн-формі — пара до `dealKlassSql` (та сама угода, інший вимір). */
-export const dealSourceSql = (alias = "d"): string => dealSourceCase(`${alias}.lead_channel`);
+export const dealSourceSql = (alias = "d"): string => dealSourceCase(`${alias}.lead_channel`,
+  { linkedin: linkedinDealSql(alias), prozorro: prozorroDealSql(alias) });
 
 // РОЗБИВКА ЗА ДЖЕРЕЛОМ (реклама / лідоген / постійний / невизн) — ЧОТИРИ категорії за
 // ПОХОДЖЕННЯМ угоди. ⚠️ Цей вираз ЗМІШУЄ джерело з новизною (гілка 'repeat') і тому
@@ -801,12 +865,13 @@ function classifyCte(
   const vcarry = opts.carryVkey ? ", vkey" : ""; // vkey у final для COUNT(DISTINCT client) — repeatClientsByBucket
   return `base AS (
        SELECT d.kommo_id, d.manager_id, d.created_at_kommo, d.sales_channel, d.lead_channel${bcol}${pcol},
-              CASE WHEN d.client_key IS NULL OR d.client_key = ANY($2) THEN NULL ELSE d.client_key END AS vkey
+              CASE WHEN d.client_key IS NULL OR d.client_key = ANY($2) THEN NULL ELSE d.client_key END AS vkey,
+              ${linkedinDealSql("d")} AS is_li, ${prozorroDealSql("d")} AS is_pz
          FROM deals d LEFT JOIN managers m ON m.id = d.manager_id ${activeJoin}
         WHERE ${conds.join(" AND ")}
      ),
      classed AS (
-       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey${bcarry}${pcarry},
+       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey, b.is_li, b.is_pz${bcarry}${pcarry},
               ${priorClientSql({ vkey: "b.vkey", createdAt: "b.created_at_kommo", selfId: "b.kommo_id" })} AS has_prior
          FROM base b
      ),
@@ -877,8 +942,8 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   // 🔀 Зріз джерела всередині класу — ЧОТИРИ `FILTER` на кожен із трьох класів.
   // Пари (klass, source) перелічені ЯВНО, без циклу по рядку SQL: перелік має
   // збігатися з `dealSourceCase`, і `#212` це звіряє на живих даних.
-  const bySrc = (k: string): string => ["ad", "leadgen", "elogist", "other", "undef"]
-    .map((s, i) => `COUNT(*) FILTER (WHERE klass = '${k}' AND source = '${s}') AS ${k}_${["ad", "lg", "el", "oth", "nch"][i]}`)
+  const bySrc = (k: string): string => ["ad", "leadgen", "elogist", "linkedin", "prozorro", "other", "undef"]
+    .map((s, i) => `COUNT(*) FILTER (WHERE klass = '${k}' AND source = '${s}') AS ${k}_${["ad", "lg", "el", "li", "pz", "oth", "nch"][i]}`)
     .join(",\n            ");
   const r = await pool.query<Record<string, string> & { manager_id: number; name: string; team_id: number | null }>(
     `WITH ${cte}
@@ -890,6 +955,8 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
             COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
             COUNT(*) FILTER (WHERE source = 'elogist') AS elogist_count,
+            COUNT(*) FILTER (WHERE source = 'linkedin') AS linkedin_count,
+            COUNT(*) FILTER (WHERE source = 'prozorro') AS prozorro_count,
             COUNT(*) FILTER (WHERE source = 'other') AS other_count,
             COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count,
             ${bySrc("new")},
@@ -902,13 +969,15 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   );
   const slice = (x: Record<string, string>, k: string): SourceCounts => {
     const n = (suf: string): number => Number(x[`${k}_${suf}`]);
-    const ad = n("ad"), lg = n("lg"), el = n("el"), oth = n("oth"), nch = n("nch");
-    return { created: ad + lg + el + oth + nch, adCount: ad, leadgenCount: lg, elogistCount: el, otherCount: oth, noChannelCount: nch };
+    const ad = n("ad"), lg = n("lg"), el = n("el"), li = n("li"), pz = n("pz"), oth = n("oth"), nch = n("nch");
+    return { created: ad + lg + el + li + pz + oth + nch, adCount: ad, leadgenCount: lg, elogistCount: el,
+      linkedinCount: li, prozorroCount: pz, otherCount: oth, noChannelCount: nch };
   };
   return r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, teamId: x.team_id,
     created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
     adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count), elogistCount: Number(x.elogist_count),
+    linkedinCount: Number(x.linkedin_count), prozorroCount: Number(x.prozorro_count),
     otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
     sourceByKlass: { new: slice(x, "new"), rep: slice(x, "repeat"), undef: slice(x, "undef") },
   }));
@@ -927,7 +996,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
     : `to_char(date_trunc('${granularity === "month" ? "month" : "week"}', ${col})::date, 'YYYY-MM-DD')`;
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params, bucketExpr);
-  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; elogist_count: string; other_count: string; no_channel_count: string }>(
+  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; elogist_count: string; linkedin_count: string; prozorro_count: string; other_count: string; no_channel_count: string }>(
     `WITH ${cte}
      SELECT bucket,
             COUNT(*) AS created,
@@ -937,6 +1006,8 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
             COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
             COUNT(*) FILTER (WHERE source = 'elogist') AS elogist_count,
+            COUNT(*) FILTER (WHERE source = 'linkedin') AS linkedin_count,
+            COUNT(*) FILTER (WHERE source = 'prozorro') AS prozorro_count,
             COUNT(*) FILTER (WHERE source = 'other') AS other_count,
             COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count
        FROM final
@@ -946,6 +1017,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
   return r.rows.map((x) => ({
     bucket: x.bucket, created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
     adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count), elogistCount: Number(x.elogist_count),
+    linkedinCount: Number(x.linkedin_count), prozorroCount: Number(x.prozorro_count),
     otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
   }));
 }
@@ -994,12 +1066,13 @@ function wonSplitCte(): string {
   return `base AS (
        SELECT dd.kommo_id, dd.manager_id, dd.created_at_kommo, dd.closed_at_kommo, dd.sales_channel,
               dd.lead_channel, dd.price, dd.client_key, dd.client_name,
-              CASE WHEN dd.client_key IS NULL OR dd.client_key = ANY($2) THEN NULL ELSE dd.client_key END AS vkey
+              CASE WHEN dd.client_key IS NULL OR dd.client_key = ANY($2) THEN NULL ELSE dd.client_key END AS vkey,
+              ${linkedinDealSql("dd")} AS is_li, ${prozorroDealSql("dd")} AS is_pz
          FROM deals dd JOIN managers m ON m.id = dd.manager_id AND m.is_active
         WHERE __CONDS__
      ),
      classed AS (
-       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey, b.price,
+       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey, b.price, b.is_li, b.is_pz,
               b.client_key, b.client_name, b.closed_at_kommo,
               ${priorClientSql({ vkey: "b.vkey", createdAt: "b.created_at_kommo", selfId: "b.kommo_id" })} AS has_prior
          FROM base b
@@ -1177,8 +1250,8 @@ export async function expectedByPlannedBucket(s: SnapshotScope, granularity: "da
 
 // ───────────────────────── ЛІДИ (ads_accepted) ─────────────────────────
 
-/** Спільний скоуп для ads_accepted: FC + період по created_at + adDealSql. */
-function adsScope(s: MetricScope, adSources: string[]): { where: string; params: unknown[]; activeJoin: string } {
+/** Спільний скоуп для ads_accepted: FC + період по created_at + `adsAcceptedSql` (правило Сергія, 9932). */
+function adsScope(s: MetricScope, adSources: string[]): { where: string; params: unknown[]; activeJoin: string; cte: string; joins: string } {
   const params: unknown[] = [FC_PIPELINES];
   const conds = ["d.pipeline_id = ANY($1)"];
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
@@ -1186,19 +1259,22 @@ function adsScope(s: MetricScope, adSources: string[]): { where: string; params:
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   params.push(adSources);
-  conds.push(adDealSql(`$${params.length}`));
-  return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "" };
+  const src = `$${params.length}`;
+  conds.push(adsAcceptedSql(src));
+  return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "",
+    cte: `WITH ${adsAcceptedCte(src)}`, joins: ADS_ACCEPTED_JOINS };
 }
 
 /**
  * `ads_accepted` («Прийнято реклами») — угоди повного циклу, СТВОРЕНІ в періоді, що
- * відповідають `adDealSql`. Канонічна заміна 8 розкиданих `ad_leads` + дубля в
- * computeAuto (рероутинг — КРОК 9). `adSources` беруться з `getSettings()`.
+ * відповідають `adsAcceptedSql` (`adDealSql` + правило Сергія, задача 9932). Канонічна заміна
+ * 8 розкиданих `ad_leads` + дубля в computeAuto (рероутинг — КРОК 9). `adSources` — з `getSettings()`.
  */
 export async function adsAccepted(s: MetricScope, adSources: string[]): Promise<number> {
-  const { where, params, activeJoin } = adsScope(s, adSources);
+  const { where, params, activeJoin, cte, joins } = adsScope(s, adSources);
   const r = await pool.query<{ n: string }>(
-    `SELECT COUNT(*) AS n FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin} WHERE ${where}`,
+    `${cte}
+     SELECT COUNT(*) AS n FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin} ${joins} WHERE ${where}`,
     params
   );
   return Number(r.rows[0]?.n ?? 0);
@@ -1213,10 +1289,11 @@ export interface MgrCount {
 
 /** `ads_accepted` по менеджеру (для звіту/КВП). */
 export async function adsAcceptedByMgr(s: MetricScope, adSources: string[]): Promise<MgrCount[]> {
-  const { where, params, activeJoin } = adsScope({ ...s, activeOnly: true }, adSources); // active-only скрізь
+  const { where, params, activeJoin, cte, joins } = adsScope({ ...s, activeOnly: true }, adSources); // active-only скрізь
   const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; n: string }>(
-    `SELECT m.id AS manager_id, m.name, m.team_id, COUNT(*) AS n
-     FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin}
+    `${cte}
+     SELECT m.id AS manager_id, m.name, m.team_id, COUNT(*) AS n
+     FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin} ${joins}
      WHERE ${where}
      GROUP BY m.id, m.name, m.team_id
      ORDER BY n DESC`,
@@ -3542,18 +3619,21 @@ export interface ReachedAutoChan { ad: number; leadgen: number }
  * каналу, що знаменник). Угоди, що БУДЬ-КОЛИ досягли «авто працює» (подія у
  * `deal_stage_events` зі status_id ∈ AUTO_WORKING), за ВЕСЬ ЧАС, ПО МЕНЕДЖЕРУ, РОЗБИТІ ПО
  * КАНАЛУ:
- *   • `ad`      — рекламна угода (`adDealSql`) → пара до знаменника adsAccepted (РНК);
+ *   • `ad`      — «прийнята реклама» (`adsAcceptedSql`, 9932) → пара до знаменника adsAccepted (РНК);
  *   • `leadgen` — `lead_channel='leadgen'`      → пара до знаменника leadgen (РПК).
  * Active-only (як знаменники) → num ⊆ den → командна конверсія ≤100%. Дедуп по `kommo_id`.
  * Команда = Σ менеджерів (Σ-інваріант). `adSources` — канонічний список рекламних джерел.
  */
 export async function reachedAutoByManager(adSources: string[]): Promise<Map<number, ReachedAutoChan>> {
-  const ad = adDealSql("$3");
+  // 🎯 9932: чисельник — ТИМ САМИМ предикатом, що знаменник `adsAcceptedByMgr`, інакше num ⊄ den.
+  const ad = adsAcceptedSql("$3");
   const r = await pool.query<{ manager_id: number; ad: string; leadgen: string }>(
-    `SELECT d.manager_id,
+    `WITH ${adsAcceptedCte("$3")}
+     SELECT d.manager_id,
             COUNT(DISTINCT d.kommo_id) FILTER (WHERE ${ad}) ad,
             COUNT(DISTINCT d.kommo_id) FILTER (WHERE d.lead_channel = 'leadgen') leadgen
        FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+       ${ADS_ACCEPTED_JOINS}
       WHERE d.pipeline_id = ANY($1)
         AND EXISTS (SELECT 1 FROM deal_stage_events e WHERE e.kommo_id = d.kommo_id AND e.status_id = ANY($2))
       GROUP BY d.manager_id`, [FC_PIPELINES, AUTO_WORKING, adSources]);

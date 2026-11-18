@@ -24,6 +24,16 @@ export const KOMMO_FIELDS = {
   // менеджер вписує її, коли перевізник надішле документи, а сервер переносить у 1С (`setActDate`). Те саме поле — фінансовий
   // якір дашборда (`deals.unload_at`), тож пишемо його лише в угодах віджета.
   leadActDate: 463253,
+  // «Приход 1» — сума, яку платить клієнт. Бюджет угоди — це зазор (наш заробіток), тож суму рахунку підставляємо звідси (17.11.2026).
+  leadIncome1: 2097627,
+  // ⬇ Поля угоди, які Genesis переносив у рахунок 1С (`deal_fields`); id — з налаштувань обробника Genesis (лист 1С 02.11.2026).
+  leadPaymentCode: 2096385, // «Код оплаты» → payment_code
+  leadExpense1: 2097661, leadExpense2: 2097663, leadExpense3: 2097665, // «Расход 1–3» → expense_1..3
+  leadExpenseType1: 2097651, leadExpenseType2: 2097653, leadExpenseType3: 2097655, // «Расход N Тип оплаты» → payment_type_N
+  leadRequestType: 2097965, // «Тип запиту» → request_type
+  leadSalesChannel: 2099549, // «Канал продажу» → sales_channel
+  companyRegType: 2099913, // компанія «Тип регистрации» → registration_type
+  companyRegCode: 2099915, // компанія «Регистрационный код» → registration_code
   // ⬇ Поля, які зараз пише Genesis (лише API). Ми пишемо їх тільки при ZAKAZ1C_FIELDS_MODE=live.
   leadOrderNo: 2096315, // «Номер заказа» (text) — номер рахунку 1С, як «000008587»
   leadPaid1c: 2096323, // «Оплачено 1с» (text) — сума оплат, як «28000»
@@ -56,6 +66,9 @@ async function kommoJson<T>(path: string): Promise<T> {
 type Cf = { field_id: number; values?: { value?: unknown }[] }[] | null | undefined;
 const cfText = (cf: Cf, id: number) => String(cf?.find((f) => f.field_id === id)?.values?.[0]?.value ?? "").trim();
 
+/** «36 000», «36000,50», «36 000 грн» → 36000.5; не число — 0. */
+export const moneyOf = (v: string) => { const n = Number(v.replace(/[\s\u00a0]/g, "").replace(",", ".").replace(/[^0-9.]/g, "")); return Number.isFinite(n) && n > 0 ? n : 0; };
+
 export interface LeadForInvoice {
   id: number;
   name: string;
@@ -70,6 +83,10 @@ export interface LeadForInvoice {
   pipelineId: number | null;
   statusId: number | null;
   company: { id: number; name: string; edrpou: string } | null;
+  /** «Приход 1» — сума від клієнта; підстановка суми рахунку (бюджет угоди — це зазор). 0 — поле порожнє. */
+  income1: number;
+  /** Сирі значення полів угоди й компанії для `deal_fields` 1С (як у Genesis); збирає `genesisDealFields` (`invoice.ts`). */
+  raw: Record<string, string>;
   /** «Дата выгрузки (Дата акта)» по-київськи `YYYY-MM-DD`; порожньо — не вказано. */
   actDate: string;
   /** Основний контакт угоди — підстановка ПІБ і телефону для клієнта-фізособи (0.6.0). */
@@ -81,11 +98,17 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
   const l = await kommoJson<any>(`/api/v4/leads/${leadId}?with=companies,contacts`);
   const companyId = Number(l?._embedded?.companies?.[0]?.id) || 0;
   let company: LeadForInvoice["company"] = null;
+  let companyRaw: Record<string, string> = {};
   if (companyId) {
     const c = await kommoJson<any>(`/api/v4/companies/${companyId}`);
-    const edrpou = cfText(c.custom_fields_values, KOMMO_FIELDS.companyEdrpou).replace(/\D/g, "")
-      || cfText(c.custom_fields_values, KOMMO_FIELDS.companyInn).replace(/\D/g, "");
+    // Код — як записаний у компанії, без пробілів і розділових знаків. Літери лишаємо: іноземні коди бувають з ними
+    // (18.11.2026: UAB «Brandelektra» — 304210390); українські 8/10 цифр від цього не змінюються.
+    const clean = (v: string) => v.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+    const edrpou = clean(cfText(c.custom_fields_values, KOMMO_FIELDS.companyEdrpou))
+      || clean(cfText(c.custom_fields_values, KOMMO_FIELDS.companyInn));
     company = { id: companyId, name: String(c.name ?? ""), edrpou };
+    companyRaw = { registration_type: cfText(c.custom_fields_values, KOMMO_FIELDS.companyRegType),
+      registration_code: cfText(c.custom_fields_values, KOMMO_FIELDS.companyRegCode) };
   }
   // Основний контакт (is_main), інакше перший. Збій контакту не ламає вікно: фізособу тоді вписують руками.
   const contacts: any[] = Array.isArray(l?._embedded?.contacts) ? l._embedded.contacts : [];
@@ -109,6 +132,20 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
     pipelineId: Number(l.pipeline_id) || null,
     statusId: Number(l.status_id) || null,
     company,
+    income1: moneyOf(cfText(l.custom_fields_values, KOMMO_FIELDS.leadIncome1)),
+    raw: {
+      vehicle: cfText(l.custom_fields_values, KOMMO_FIELDS.leadCar),
+      payment_code: cfText(l.custom_fields_values, KOMMO_FIELDS.leadPaymentCode),
+      expense_1: cfText(l.custom_fields_values, KOMMO_FIELDS.leadExpense1),
+      expense_2: cfText(l.custom_fields_values, KOMMO_FIELDS.leadExpense2),
+      expense_3: cfText(l.custom_fields_values, KOMMO_FIELDS.leadExpense3),
+      payment_type_1: cfText(l.custom_fields_values, KOMMO_FIELDS.leadExpenseType1),
+      payment_type_2: cfText(l.custom_fields_values, KOMMO_FIELDS.leadExpenseType2),
+      payment_type_3: cfText(l.custom_fields_values, KOMMO_FIELDS.leadExpenseType3),
+      request_type: cfText(l.custom_fields_values, KOMMO_FIELDS.leadRequestType),
+      sales_channel: cfText(l.custom_fields_values, KOMMO_FIELDS.leadSalesChannel),
+      ...companyRaw,
+    },
     actDate: kyivDateOfUnix(Number(cfText(l.custom_fields_values, KOMMO_FIELDS.leadActDate)) || 0),
     contact,
   };

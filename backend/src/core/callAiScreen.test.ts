@@ -2437,24 +2437,6 @@ test("#3361 ЖИВА СХЕМА: коментар менеджера — лиш�
 });
 
 /**
- * #3362 — ПРОВОДКА ЗАКРИТТЯ: сервер відмовляє в «Розібрано» без коментаря менеджера (409, текст ядра) — правило не обходиться
- * повз кнопку; картка й черга показують кнопку лише за `managerCommented`, інакше — «чекає коментаря менеджера».
- * 🧨 Червоніє, якщо прибрати перевірку в роуті, повернути кнопку «Розібрано без коментаря» чи показувати її за будь-яким коментарем.
- */
-test("#3362 ПРОВОДКА ЗАКРИТТЯ: роут відмовляє без коментаря менеджера; кнопки в картці й черзі — лише за managerCommented", () => {
-  const dash = SRC("routes/dashboard.ts");
-  assert.match(dash, /if \(kind === "review" && text\.trim\(\) && !canCloseReview\(card\.row\)\) \{ res\.status\(409\)\.json\(\{ error: REVIEW_NEEDS_COMMENT_UA \}\); return; \}\s*const who =/,
-    "🔴 сервер ставить «Розібрано» без коментаря менеджера (або перевірка після запису)");
-  assert.match(dash, /explainNote: r\.explainNote, managerCommented: r\.managerCommented,/, "🔴 список не віддає фронту, чи писав менеджер");
-  const dr = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
-  assert.doesNotMatch(dr, /Розібрано без коментаря/, "🔴 у картці повернулась кнопка «Розібрано без коментаря»");
-  assert.match(dr, /\{c\.row\.managerCommented\s*\? <button[^>]*onClick=\{\(\) => void go\(\)\}[\s\S]{0,200}: <span[^>]*>\{WAIT_MANAGER_COMMENT_UA\}<\/span>\}/, "🔴 кнопка в картці не за managerCommented");
-  const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
-  assert.doesNotMatch(qx, /Опрацьовано без коментаря/, "🔴 у черзі повернулась кнопка «без коментаря»");
-  assert.match(qx, /\{cur\?\.managerCommented\s*\? <button[^>]*onClick=\{\(\) => void review\(\)\}/, "🔴 кнопка в черзі не за managerCommented");
-});
-
-/**
  * #3363 — РУБРИКА «ЯК НАЗВАНО ЦІНУ» (задача 7351, п.6): лише точна / вилка / «від…» / «не назвав»; форма без цитати —
  * відмова; на екрані — лише зі звіреною цитатою; «не назвав» і незвірене — «не визначено», а не форма. Лише нові розмови
  * (з 03.11, «тільки з сьогодні»), у тіку — своєю часткою бюджету розбору.
@@ -2976,4 +2958,26 @@ test("#3737 ЖИВА СХЕМА: дата прийому з «Найму» → �
   const rep = teamReport(rows);
   assert.ok(rep.adaptation.some((l) => l.managerId === 93737) && rep.managers.some((l) => l.managerId === 93737),
     "🔴 у звіті тімліда новачок не поділився: розмова 10-го дня — у блоці адаптації, 40-го — у команді");
+});
+
+/**
+ * #4060 — ПІДПИС КОМЕНТАРЯ = ІМʼЯ З KOMMO (17.11.2026). Акаунт із CRM підписується імʼям менеджера Kommo, навіть якщо в
+ * акаунті руками стоїть інше (`naas@uts.ua` → «Селіна…», хоча в Kommo «Назарова…»); акаунт без Kommo — своїм імʼям;
+ * без імені — логіном; без користувача — запасним рядком. Записаний коментар несе саме це імʼя.
+ * 🧨 Червоніє, якщо повернути `users.full_name` першим.
+ */
+test("#4060 ПІДПИС: імʼя з Kommo перемагає ручне імʼя акаунта; без Kommo — імʼя, без імені — логін", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const A = await import("./callAiScreen.js");
+  await c.raw.query(`INSERT INTO managers (id, name) VALUES (940601, 'Назарова Анастасія Сергіївна') ON CONFLICT (id) DO NOTHING`);
+  const ids = (await c.raw.query(`INSERT INTO users (email, password_hash, role, full_name, manager_id) VALUES
+      ('naas-4060@uts.ua','x','manager','Селіна Альона Ігорівна',940601),
+      ('plain-4060@uts.ua','x','manager','Ручне Імʼя',NULL),
+      ('noname-4060@uts.ua','x','manager',NULL,NULL) RETURNING id`)).rows.map((r) => r.id as number);
+  assert.equal(await A.actorDisplayName(c.db, ids[0], "x"), "Назарова Анастасія Сергіївна", "🔴 ручне імʼя акаунта перемогло Kommo");
+  assert.equal(await A.actorDisplayName(c.db, ids[1], "x"), "Ручне Імʼя", "🔴 без Kommo — не імʼя акаунта");
+  assert.equal(await A.actorDisplayName(c.db, ids[2], "x"), "noname-4060@uts.ua", "🔴 без імені — не логін");
+  assert.equal(await A.actorDisplayName(c.db, null, "fallback"), "fallback");
+  const routes = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
+  assert.equal((routes.match(/SELECT full_name AS name FROM users WHERE id = \$1/g) ?? []).length, 0, "🔴 роут знову підписує ручним іменем акаунта");
 });

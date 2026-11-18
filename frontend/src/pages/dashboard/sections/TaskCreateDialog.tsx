@@ -3,7 +3,7 @@ import type { ManagerOption, TaskAssignee, TaskPriority } from "../../../api";
 import type { TaskForm } from "../taskForm";
 import { teamGroups } from "../assigneeGroups";
 import { kyivDate } from "../tasksFocus";
-import { formMissing, pickGroups, quickDates, type PickPerson } from "../taskCreateRules";
+import { defaultSharedDeadline, formMissing, pickGroups, pickGroupsLeadersFirst, plainEnterSubmits, quickDates, type PickPerson } from "../taskCreateRules";
 
 /**
  * 🆕 НОВА ЗАДАЧА — КОМПАКТНИЙ ДІАЛОГ (варіант А, рішення Романа 26.10.2026: «роби А»).
@@ -58,6 +58,10 @@ export function TaskCreateDialog({
   const [more, setMore] = useState(() => !!(form.department || form.comments || form.pendingFile));
   const titleRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => { titleRef.current?.focus(); }, []);
+  // 📅 Задача зі «Спільних» одразу з дедлайном (9377): «Enter — задача створена з дедлайном». Лише якщо дати ще немає.
+  useEffect(() => {
+    if (sharedIntent) setForm((f) => (f.deadline ? f : { ...f, deadline: defaultSharedDeadline(kyivDate(new Date())) }));
+  }, [sharedIntent, setForm]);
 
   const kind: Kind = form.strategic ? "goal" : "task";
   const missing = formMissing(form, { sharedIntent });
@@ -72,10 +76,10 @@ export function TaskCreateDialog({
   const who2 = managerName(form.assigneeId2);
   const reviewer = form.reviewerId === "" ? null : accountName(form.reviewerId);
 
-  // Акаунти без менеджера CRM: менеджера обирають як менеджера, інакше людина була б у списку двічі.
-  const plainAccounts = useMemo(() => accounts.filter((a) => a.managerId == null), [accounts]);
-  const groups = useMemo(() => pickGroups(teamGroups(managerOptions, myTeamId), plainAccounts, query),
-    [managerOptions, myTeamId, plainAccounts, query]);
+  // 👔 Спочатку «Керівники» (тімліди + керівництво за роллю акаунта), далі команди (моя перша), далі акаунти (9377).
+  // Акаунти без менеджера CRM ідуть як акаунти, привʼязані до менеджера — як менеджер, інакше людина була б двічі.
+  const groups = useMemo(() => pickGroupsLeadersFirst(teamGroups(managerOptions, myTeamId), managerOptions, accounts, query),
+    [managerOptions, myTeamId, accounts, query]);
   const groups2 = useMemo(() => pickGroups(teamGroups(managerOptions, myTeamId, form.assigneeId), [], query),
     [managerOptions, myTeamId, form.assigneeId, query]);
 
@@ -85,6 +89,8 @@ export function TaskCreateDialog({
       ? { ...f, assigneeUserId: p.id, assigneeId: "", assigneeId2: "" }
       : { ...f, assigneeId: p.id, assigneeUserId: "", assigneeId2: f.assigneeId2 === p.id ? "" : f.assigneeId2 });
     setPop(null); setQuery("");
+    // ⏎ Курсор назад в опис (9377): обрав людину — і Enter одразу створює задачу, без кліку по кнопці.
+    titleRef.current?.focus();
   };
   const setKind = (k: Kind) => {
     if (k === "kpi" || k === "react") { onKind(k); return; }
@@ -143,6 +149,12 @@ export function TaskCreateDialog({
 
         <textarea ref={titleRef} className="tc-title" rows={2} value={form.title}
           onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+          onKeyDown={(e) => {
+            // ⏎ У «Спільній задачі» звичайний Enter створює (9377); Shift+Enter — новий рядок. Ctrl/⌘+Enter — як і раніше, вище.
+            if (plainEnterSubmits({ key: e.key, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, isComposing: e.nativeEvent.isComposing }, { sharedIntent })) {
+              e.preventDefault(); submit();
+            }
+          }}
           placeholder={kind === "goal" ? "Яка стратегічна задача? Напр.: вивести постійних клієнтів на 3 млн на місяць" : "Що зробити? Опишіть задачу"} aria-label="Опис задачі" />
 
         {kind === "goal" && (
@@ -240,7 +252,7 @@ export function TaskCreateDialog({
         )}
 
         <div className="tc-foot">
-          <span className="tc-kbd">⌘/Ctrl + Enter — створити</span>
+          <span className="tc-kbd">{sharedIntent ? "Enter — створити · Shift+Enter — новий рядок" : "⌘/Ctrl + Enter — створити"}</span>
           <span className="tc-spacer" />
           {missing.length > 0 && <span className="tc-why">Бракує: {missing.join(", ")}</span>}
           <button type="button" className="tc-btn ghost" onClick={onClose}>Скасувати</button>

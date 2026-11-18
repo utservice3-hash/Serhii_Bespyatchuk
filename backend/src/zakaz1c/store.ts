@@ -104,7 +104,7 @@ export async function listInvoices(pool: Pool, leadId: number, today: string): P
       org_key: r.org_key, currency: r.currency, vat_type: r.vat_type, total: Number(r.total) || 0, existed: r.existed,
       attach_error: r.attach_error, items: r.items, agreement_uid: r.agreement_uid, bank_uid: r.bank_uid, due_date: r.due_date,
       act_date: r.act_date, crm_comment: r.crm_comment, stamp: r.stamp !== false, edits: Number(r.edits) || 0, created_at: r.created_at,
-      pay, can_edit: canEdit(r.created_day, pay, today), realized: r.realized === true, act_sync_error: r.act_sync_error ?? null,
+      pay, can_edit: canEdit(new Date(r.created_ts), pay, new Date()), realized: r.realized === true, act_sync_error: r.act_sync_error ?? null,
     };
   });
 }
@@ -115,6 +115,45 @@ export async function invoiceOfLead(pool: Pool, uid: string): Promise<{ leadId: 
     `SELECT lead_id::text AS lead_id, number_print, invoice_date FROM zakaz_onec_invoices WHERE invoice_uid = $1`, [uid]);
   const r = q.rows[0];
   return r ? { leadId: Number(r.lead_id), numberPrint: r.number_print, invoiceDate: r.invoice_date } : null;
+}
+
+/** Рахунок для «PDF знову в угоду»: усе, що треба для підпису файлу, як при виставленні. */
+export async function invoiceForReattach(pool: Pool, uid: string): Promise<{
+  leadId: number; numberPrint: string; invoiceDate: string; orgKey: string | null; total: number; currency: string; mode: string; stamp: boolean;
+} | null> {
+  const q = await pool.query<Record<string, any>>(
+    `SELECT lead_id::text AS lead_id, number_print, invoice_date, org_key, total::float8 AS total, currency, mode, stamp
+       FROM zakaz_onec_invoices WHERE invoice_uid = $1`, [uid]);
+  const r = q.rows[0];
+  return r ? { leadId: Number(r.lead_id), numberPrint: r.number_print, invoiceDate: r.invoice_date, orgKey: r.org_key ?? null,
+    total: Number(r.total) || 0, currency: r.currency, mode: r.mode, stamp: r.stamp !== false } : null;
+}
+
+/** PDF знову лежить в угоді: новий файл і без помилки прикріплення (плитка перестає казати «PDF у файлах угоди немає»). */
+export async function markInvoiceAttached(pool: Pool, uid: string, fileUuid: string | null, error: string | null): Promise<void> {
+  await pool.query(`UPDATE zakaz_onec_invoices SET kommo_file_uuid = COALESCE($2, kommo_file_uuid), attach_error = $3, updated_at = now()
+                     WHERE invoice_uid = $1`, [uid, fileUuid, error]);
+}
+
+/** Що востаннє пішло в `deal_fields` 1С по рахунках угоди: uid → обʼєкт або `null` (рахунок до 0.6.4). */
+export async function sentDealFields(pool: Pool, leadId: number): Promise<Map<string, Record<string, unknown> | null>> {
+  const q = await pool.query<{ invoice_uid: string; deal_fields_sent: Record<string, unknown> | null }>(
+    `SELECT invoice_uid, deal_fields_sent FROM zakaz_onec_invoices WHERE lead_id = $1`, [leadId]);
+  return new Map(q.rows.map((r) => [r.invoice_uid, r.deal_fields_sent]));
+}
+
+/** Записати, що пішло в 1С (`fields`), або відмову 1С словами (`error`, тоді `fields` лишається як було). */
+export async function saveDealFieldsSent(pool: Pool, uid: string, fields: Record<string, unknown> | null, error: string | null): Promise<void> {
+  await pool.query(`UPDATE zakaz_onec_invoices SET deal_fields_sent = COALESCE($2::jsonb, deal_fields_sent), deal_fields_error = $3, updated_at = now()
+                     WHERE invoice_uid = $1`, [uid, fields ? JSON.stringify(fields) : null, error]);
+}
+
+/** Угоди, де є рахунки віджета від 0.6.4 без оплати й реалізації за 90 днів — їх щогодини звіряє `runDealFieldsSync`. */
+export async function leadsForDealFieldsSync(pool: Pool): Promise<number[]> {
+  const q = await pool.query<{ lead_id: string }>(
+    `SELECT DISTINCT lead_id::text AS lead_id FROM zakaz_onec_invoices
+      WHERE deal_fields_sent IS NOT NULL AND realized IS NOT TRUE AND COALESCE(paid_total, 0) = 0 AND created_at > now() - interval '90 days'`);
+  return q.rows.map((r) => Number(r.lead_id));
 }
 
 /** Номери ВСІХ рахунків 1С за угодою (`onec_deal_invoices`, синк щогодини) — для «хто веде угоду» (`owner.ts`). */

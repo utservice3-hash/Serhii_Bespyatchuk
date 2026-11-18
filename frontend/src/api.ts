@@ -1535,7 +1535,8 @@ export interface KvpDeptWeek { idx: number; from: string; to: string; plan: numb
  * `noChannel` = `lead_channel IS NULL`; на живих даних 0, але кошик існує в ядрі.
  */
 // 🟣 `elogist` — п'ятий кошик з 27.10.2026 (рішення власника: eLogist окремо від реклами UTS).
-export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; elogist: number; other: number; noChannel: number }
+// 🔗🏛 `linkedin`/`prozorro` — кошики, вирізані з «інше» (задача 9230, 18.11.2026).
+export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; elogist: number; linkedin: number; prozorro: number; other: number; noChannel: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
@@ -1552,7 +1553,7 @@ export interface KvpDetailCell {
   created: number; newCount: number; repeatCount: number; undefCount: number;
   // 🔴 crAd/crLeadgen/crOther — партиція СТВОРЕНОГО за каналом (Σ == created).
   // НЕ плутати з leadsAd/leadsLeadgen/leadsOther: ті рахують ЛІДИ — інша популяція.
-  crAd: number; crLeadgen: number; crElogist: number; crOther: number; crNoChannel: number;
+  crAd: number; crLeadgen: number; crElogist: number; crLinkedin: number; crProzorro: number; crOther: number; crNoChannel: number;
   leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
   // Розбивка відправлених авто за джерелом (постійний / лідоген / реклама / невизн). Σ = dispatched.
   dispRepeat: number; dispLeadgen: number; dispAd: number; dispElogist: number; dispUndef: number;
@@ -1663,9 +1664,9 @@ export interface ReportPlanKpi { fact: number | null; target: number; taken?: nu
   repeat?: number; leadgen?: number; ad?: number; elogist?: number; undef?: number;
   // Тільки для «avgCheck» (#4): пул reportChain — signed Σ÷count (revenue/deals для Σ/Σ).
   deals?: number }
-/** Розклад джерела всередині одного класу новизни (`created` == Σ п'яти; eLogist — з 27.10.2026). */
+/** Розклад джерела всередині одного класу новизни (`created` == Σ семи; eLogist — з 27.10.2026, LinkedIn/Prozorro — з 18.11.2026). */
 export interface SrcCounts {
-  created: number; adCount: number; leadgenCount: number; elogistCount: number; otherCount: number; noChannelCount: number;
+  created: number; adCount: number; leadgenCount: number; elogistCount: number; linkedinCount: number; prozorroCount: number; otherCount: number; noChannelCount: number;
 }
 /** Лічильники «першого дотику». `noRecord` — бот розмови не чув; у відсоток НЕ входить. */
 export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
@@ -1720,8 +1721,8 @@ export interface ReportPlanManager {
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
-  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ п'яти == created (гейт #174; eLogist — з 27.10.2026).
-  srcAd: number; srcLeadgen: number; srcElogist: number; srcOther: number; srcNoChannel: number;
+  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ семи == created (гейт #174; eLogist — з 27.10.2026; LinkedIn/Prozorro — з 18.11.2026).
+  srcAd: number; srcLeadgen: number; srcElogist: number; srcLinkedin: number; srcProzorro: number; srcOther: number; srcNoChannel: number;
   /**
    * 🔀 Той самий розклад ВСЕРЕДИНІ кожного класу новизни (Е3). Приїжджає разом
    * із рядком, бо перемикач НЕ ходить на сервер: `/overview` ×4 вже 4 940-5 168 мс
@@ -1804,7 +1805,7 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
  *  водночас `src:"rep"` і `source:"ad"` (постійний клієнт прийшов через рекламу). */
 // Джерело угоди — партиція з п'яти (див. metrics.dealSourceCase; `elogist` — з 27.10.2026). `null`
 // НЕ окремий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#175c`/`#2493`.
-export type DealSource = "ad" | "leadgen" | "elogist" | "other" | "undef" | null;
+export type DealSource = "ad" | "leadgen" | "elogist" | "linkedin" | "prozorro" | "other" | "undef" | null;
 /**
  * НОВИЗНА клієнта — ДЗЕРКАЛО `core/klassFilter.DealKlassState`. `"undef"` став
  * окремим станом 25.08.2026: до того сервер зводив його в `null`, тож 6 угод
@@ -2068,6 +2069,8 @@ export interface ManagerOption {
   name: string;
   teamId: number | null;
   teamName: string | null;
+  /** Тімлід за роллю «Тимлид» у Kommo (9377: блок «Керівники»). Необовʼязкове — інші джерела списку його не дають. */
+  isTeamLead?: boolean;
 }
 
 export async function fetchManagerOptions(teamId?: number): Promise<ManagerOption[]> {
@@ -3904,7 +3907,11 @@ export interface TaskHistoryEntry {
   actorRole?: string | null;
 }
 /** Кандидат у виконавці-акаунти. Сервер віддає імʼя без email — логін не їде на екран. */
-export interface TaskAssignee { id: number; name: string; nameIsLogin: boolean; managerId: number | null }
+export interface TaskAssignee {
+  id: number; name: string; nameIsLogin: boolean; managerId: number | null;
+  /** Ефективна роль акаунта (`role_override ?? role`) — для групи «Керівники» (9377). */
+  role?: string | null;
+}
 
 /** 🔴 Ліміт файла 5 МБ — рішення Романа 14.09.2026. Дзеркалить `FILE_MAX_BYTES` сервера. */
 export const TASK_FILE_MAX_BYTES = 5 * 1024 * 1024;
@@ -3932,6 +3939,12 @@ export async function fetchTaskComments(taskId: number): Promise<TaskComment[]> 
 }
 export async function createTaskComment(taskId: number, body: string): Promise<TaskComment> {
   const { data } = await api.post<TaskComment>(`/tasks/${taskId}/comments`, { body });
+  return data;
+}
+
+/** 💬 9224: стрічка коментарів клієнта задачі реактивації — лише читання (та сама `client_comments`). */
+export async function fetchTaskClientComments(taskId: number): Promise<{ clientKey: string | null; comments: ClientComment[] }> {
+  const { data } = await api.get<{ clientKey: string | null; comments: ClientComment[] }>(`/tasks/${taskId}/client-comments`);
   return data;
 }
 
@@ -4896,6 +4909,8 @@ export interface ClientPlanRow {
   lastTalkRecording?: string | null;
   lastTalkSec?: number | null;
   lastTalkBy?: string | null;
+  /** 📞 Розмова на спільному номері (задача 9061): скільки ЩЕ клієнтів має цей номер; 0 — номер лише цього клієнта. */
+  lastTalkSharedWith?: number;
   /** 🔗 Хто приєднаний до цього рядка (обʼєднання в CRM-ключах). Порожньо — ні з ким. */
   merged?: AliasName[];
   /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */
@@ -6436,16 +6451,19 @@ export const archiveBaEquipment = async (id: number, archived: boolean) => { awa
 export const issueBaEquipment = async (id: number, p: { employeeId: number; issuedOn: string }) => (await api.post<{ issueId: number }>(`/ba/equipment/${id}/issue`, p)).data.issueId;
 export const returnBaIssue = async (issueId: number, returnedOn: string) => { await api.post(`/ba/issues/${issueId}/return`, { returnedOn }); };
 export const undoReturnBaIssue = async (issueId: number) => { await api.post(`/ba/issues/${issueId}/undo-return`); };
-export interface BaTtnCounts { needed: number; attached: number; mismatched: number; byDocs: number; unsynced: number; present: number; pct: number | null }
+export interface BaTtnCounts { needed: number; attached: number; mismatched: number; byDocs: number; byAnyDoc: number; unsynced: number; present: number; pct: number | null }
 export interface BaTtnRow {
   managerId: number; name: string; active: boolean; live: BaTtnCounts; kommoUrl: string | null;
-  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnByDocs: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
+  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnByDocs: number | null; ttnByAnyDoc: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
   history: { month: string; pct: number | null }[];
 }
 export interface BaTtnDeal {
   kommoId: number; name: string; client: string; closedOn: string; ttnFiles: number | null; mismatch: { note: string } | null; url: string;
   /** Зараховано без файла ТТН (04.11.2026) і обидві умови окремо; `originals: null` — ще не синхронізовано. */
-  byDocs: boolean; docs: { paid1c: boolean; originals: boolean | null };
+  byDocs: boolean;
+  /** Зараховано за набором документів (18.11.2026): перевізнику безнал і є файл у решті полів «Документы»; `otherFiles: null` — не синхронізовано. */
+  byAnyDoc: boolean;
+  docs: { paid1c: boolean; originals: boolean | null; otherFiles: number | null; carrierBeznal: boolean };
 }
 export const fetchBaTtn = async (month: string) => (await api.get<{ month: string; rows: BaTtnRow[] }>("/ba/ttn", { params: { month } })).data;
 export const fetchBaTtnDeals = async (month: string, managerId: number) => (await api.get<{ deals: BaTtnDeal[] }>(`/ba/ttn/${month}/${managerId}/deals`)).data.deals;
@@ -6980,8 +6998,17 @@ export interface LinkedinStats {
     seenAt: string; offeredAt: string | null; deadlineAt: string | null; misses: number }[];
   /** Лише керівництву: угоди, створені на етапі «LinkedIn» від початку етапу, по днях (не лише через бота). */
   stage: { created: number; firstDay: string | null; byDay: { day: string; count: number }[] } | null;
+  /** 🔗 Усі угоди з LinkedIn (джерело або тег LinkedIn у Kommo, задача 9363): за весь час, етап поточний, у скоупі ролі. */
+  deals: LinkedinDeals;
   queue: { mode: "off" | "dry" | "live"; members: number; nextName: string | null; launchedAt: string | null;
     paused: boolean; pausedBy: string | null; pausedAt: string | null };
+}
+export type LinkedinOutcome = "open" | "won" | "lost";
+export interface LinkedinDeals {
+  total: number; open: number; won: number; lost: number;
+  byStage: { pipeline: string; stage: string; outcome: LinkedinOutcome; count: number }[];
+  deals: { kommoId: number; url: string | null; name: string | null; managerName: string | null; bySource: boolean; byTag: boolean; pipeline: string; stage: string;
+    outcome: LinkedinOutcome; createdAt: string | null }[];
 }
 export const fetchLinkedinStats = async (from: string, to: string) => (await api.get<LinkedinStats>("/linkedin/stats", { params: { from, to } })).data;
 export const fetchLinkedinQueue = async () => (await api.get<LinkedinQueueScreen>("/linkedin-queue")).data;
@@ -6996,7 +7023,7 @@ export type HuntStage = "picked" | "call" | "interview" | "approval" | "offer" |
 export interface HuntRadarRow {
   key: string; face: string; company: string; phones: string[]; h1: number; d1: number; d7: number; d30: number; cargo: number; lorry: number;
   pricePct: number; top: { dir: string; n: number }[]; lastSeen: string; candidate: { id: number; stage: HuntStage } | null;
-  intl: number; area: string | null; shipper: boolean; bot: boolean; hours: HuntHours | null; live: boolean;
+  intl: number; area: string | null; shipper: boolean; carrier: boolean; rating: { pos: number; neg: number } | null; bot: boolean; hours: HuntHours | null; live: boolean;
 }
 export interface HuntHours { from: number; to: number; n: number }
 export type HuntPeriod = "h1" | "d1" | "d7" | "d30";
@@ -7017,6 +7044,12 @@ export interface HuntCandidate extends HuntCandidateRow {
 export const fetchHuntAccess = async () => (await api.get<{ allowed: boolean }>("/hunt/access")).data.allowed;
 export const fetchHuntRadar = async (p: { period: HuntPeriod; show: string; q: string; side: string; dir: string; area: string; ctype: string; hideBots: boolean }) =>
   (await api.get<HuntRadar>("/hunt/radar", { params: { ...p, hideBots: p.hideBots ? "1" : "" } })).data;
+export interface HuntReport {
+  total: number; rejected: number; reasons: [string, string][];
+  stages: { key: string; label: string; reached: number; now: number; conversionPct: number | null }[];
+  rejects: { reason: string; from_stage: string | null; n: number }[];
+}
+export const fetchHuntReport = async () => (await api.get<HuntReport>("/hunt/report")).data;
 export const fetchHuntActivity = async (key: string) =>
   (await api.get<{ days: { d: string; n: number }[]; top: { dir: string; n: number }[]; hours: HuntHours | null; bot: boolean; live: boolean }>("/hunt/contacts/activity", { params: { key } })).data;
 export const revealHuntPhones = async (key: string) => (await api.post<{ phones: string[] }>("/hunt/contacts/phones", { key })).data.phones;

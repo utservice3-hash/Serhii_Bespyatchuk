@@ -7,6 +7,7 @@ import { OrphanPoolSection } from "./OrphanPoolSection";
 import { ArchiveSection } from "./ArchiveSection";
 import ClosedTasksSection from "./ClosedTasksSection";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
+import { leadNavSearch } from "../clientLeadNav";
 
 /**
  * 🗂 РОЗДІЛ «КЛІЄНТИ» — ОДИН РОЗДІЛ, ЧОТИРИ РОБОТИ (макет власника 05.08.2026).
@@ -75,6 +76,23 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
     window.history.replaceState({}, "", u);
   }, [tab]);
 
+  // 🔙 Задача 9225: «З ким говорити» пише рівень (`team`/`mgr`) окремими записами історії. «Назад» браузера може
+  // повернути на запис з іншою вкладкою — тоді вкладку треба перечитати з адреси, інакше адреса й екран розійдуться.
+  useEffect(() => {
+    const onPop = () => setTab(readTab());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  /** Перемикання вкладки прибирає рівень «З ким говорити» з адреси: він належить лише тій вкладці. */
+  const pickTab = (k: Tab) => {
+    if (k !== tab) {
+      const u = new URL(window.location.href);
+      window.history.replaceState({}, "", `${u.pathname}${leadNavSearch(u.search, { team: null, mgr: null })}${u.hash}`);
+    }
+    setTab(k);
+  };
+
   // 🔴 ЛІЧИЛЬНИК ПУЛУ — З ТИХ САМИХ ДАНИХ, ЩО Й САМА ВКЛАДКА. Окремий
   // COUNT-запит одного дня розійшовся б зі списком, і ми довго шукали б, чому
   // «27» не дорівнює кількості рядків.
@@ -118,7 +136,7 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
 
       <div className="cl-tabs" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {visible.map((t) => (
-          <button key={t.key} className="cl-tab" aria-pressed={active === t.key} onClick={() => setTab(t.key)}>
+          <button key={t.key} className="cl-tab" aria-pressed={active === t.key} onClick={() => pickTab(t.key)}>
             {t.label}
             {t.key === "pool" && pool != null && (
               <span className="cl-count" data-hot={pool.tiles.clients > 0 ? "1" : "0"}>{pool.tiles.clients}</span>

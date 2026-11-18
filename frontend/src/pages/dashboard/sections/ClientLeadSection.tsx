@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { AuthPayload } from "../../../auth";
 import { fetchClientPlans, createClientReactivationTask, type ClientPlansResp, type ClientPlanRow } from "../../../api";
 import { SegmentBadge } from "./SegmentBadge";
@@ -7,6 +7,7 @@ import { CreateTaskDialog } from "./ReactivationBits";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { monthsLabel } from "./ClientSeasonBlock";
+import { readLeadNav, leadNavSearch, backTarget, backIsHistoryBack, type LeadNav } from "../clientLeadNav";
 
 /**
  * 🚦 «З КИМ З ПОСТІЙНИХ ГОВОРИТИ» — ПРОСТИЙ ЕКРАН ТІМЛІДА (ТЗ Юлі 28.10.2026, етап 2; задача 7360).
@@ -32,6 +33,13 @@ const COLOR = {
 } as const;
 /** Група рядка: діюча позначка «Проблемний» (8350) переважає колір. */
 const groupOf = (r: Row): keyof typeof COLOR => (r.lead.problem ? "problem" : r.lead.color);
+/** «ще 1 клієнт / 2 клієнти / 5 клієнтів» — спільний номер останньої розмови (задача 9061). */
+function sharedLabel(n: number): string {
+  // Прямо звʼязана розмова буває й на номері поза стелею (до 139 клієнтів), тож відмінювання повне.
+  const teen = [11, 12, 13, 14].includes(n % 100), m10 = n % 10;
+  const w = !teen && m10 === 1 ? "клієнт" : !teen && [2, 3, 4].includes(m10) ? "клієнти" : "клієнтів";
+  return `${String(n)} ${w}`;
+}
 const WORK_BY: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці", season: "не сезон (сезонний)" };
 const SOURCE: Record<string, string> = { leadgen: "лідогенерація", ad: "реклама", manager: "менеджер" };
 
@@ -118,14 +126,37 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   const [month] = useState(ym);
   const [data, setData] = useState<ClientPlansResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [team, setTeam] = useState<number | null>(() => (auth.role === "team_lead" && auth.teamId != null ? auth.teamId : null));
-  const [mgr, setMgr] = useState<number | null>(null);
+  // 🔙 Задача 9225: команда й менеджер — з адреси (`?team=&mgr=`), щоб посилання й «назад» браузера вели туди ж.
+  const [team, setTeam] = useState<number | null>(() => readLeadNav(window.location.search, auth.role, auth.teamId).team);
+  const [mgr, setMgr] = useState<number | null>(() => readLeadNav(window.location.search, auth.role, auth.teamId).mgr);
   const [open, setOpen] = useState<string | null>(null);
   const [showGreen, setShowGreen] = useState(false);
   const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [actErr, setActErr] = useState<string | null>(null);
   const dockSrc = useDockSrc();
+  const topRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Перехід між рівнями — окремий запис історії (`pushState`), тож «назад» браузера повертає на рівень вище.
+   * Кнопка «← Назад» (`back`) там, де ми прийшли саме з того рівня, робить `history.back()`, а не новий запис.
+   */
+  const go = useCallback((nav: LeadNav, back = false) => {
+    topRef.current?.scrollIntoView({ block: "start" });
+    if (back && backIsHistoryBack(window.history.state, nav)) { window.history.back(); return; }
+    setTeam(nav.team); setMgr(nav.mgr); setOpen(null);
+    const u = new URL(window.location.href);
+    const from = readLeadNav(u.search, auth.role, auth.teamId);
+    window.history.pushState({ lead9225: { from } }, "", `${u.pathname}${leadNavSearch(u.search, nav)}${u.hash}`);
+  }, [auth.role, auth.teamId]);
+  useEffect(() => {
+    const onPop = () => {
+      const n = readLeadNav(window.location.search, auth.role, auth.teamId);
+      setTeam(n.team); setMgr(n.mgr); setOpen(null);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [auth.role, auth.teamId]);
 
   const load = useCallback(() => {
     setErr(null);
@@ -142,26 +173,35 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   const teams = [...new Map(all.map((c) => [c.teamId ?? -1, c.teamName || "Без команди"])).entries()]
     .map(([id, name]) => ({ id, name, rows: all.filter((c) => (c.teamId ?? -1) === id) }))
     .sort((a, b) => a.name.localeCompare(b.name, "uk"));
-  const teamRows = isManager ? all : team == null ? all : all.filter((c) => (c.teamId ?? -1) === team);
+  // Чужий чи застарілий `team=` в адресі (команди вже немає у видачі) → список команд, а не порожній екран.
+  // Тімліду команду не перевіряємо: вона його власна, і порожня команда має лишатись порожньою, як досі.
+  const teamEff = isManager || auth.role === "team_lead" || team == null || teams.some((t) => t.id === team) ? team : null;
+  const teamRows = isManager ? all : teamEff == null ? all : all.filter((c) => (c.teamId ?? -1) === teamEff);
   const managers = [...new Map(teamRows.map((c) => [c.managerId, c.managerName])).entries()]
     .map(([id, name]) => ({ id, name, rows: teamRows.filter((c) => c.managerId === id) }))
     .sort((a, b) => a.name.localeCompare(b.name, "uk"));
   // Менеджер бачить лише своїх — вибирати нема з чого; інакше — список менеджера, коли його обрано.
-  const mgrRows = isManager ? all : mgr == null ? null : teamRows.filter((c) => c.managerId === mgr);
-  const teamName = teams.find((t) => t.id === team)?.name;
-  const mgrName = managers.find((m) => m.id === mgr)?.name;
+  // Менеджера з адреси, якого немає в цій команді (звільнений, чужий), не відкриваємо — показуємо список менеджерів.
+  const mgrEff = teamEff == null || mgr == null || !managers.some((m) => m.id === mgr) ? null : mgr;
+  const mgrRows = isManager ? all : mgrEff == null ? null : teamRows.filter((c) => c.managerId === mgrEff);
+  const teamName = teams.find((t) => t.id === teamEff)?.name;
+  const mgrName = managers.find((m) => m.id === mgrEff)?.name;
+  const back = backTarget({ team: teamEff, mgr: mgrEff }, auth.role);
+  const backBtn = back && (
+    <button type="button" onClick={() => go(back.nav, true)} style={{ ...S.btn(true), fontSize: 14, padding: "8px 16px" }}>{back.label}</button>
+  );
   const scopeRows = mgrRows ?? teamRows;
 
   const crumb = (
     <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, flexWrap: "wrap" }}>
       {!isManager && auth.role !== "team_lead" && (
-        <button type="button" onClick={() => { setTeam(null); setMgr(null); }} style={{ ...S.btn(team == null), padding: "3px 9px" }}>Усі команди</button>
+        <button type="button" onClick={() => go({ team: null, mgr: null })} style={{ ...S.btn(teamEff == null), padding: "3px 9px" }}>Усі команди</button>
       )}
-      {!isManager && team != null && <>
-        <span style={{ color: "#9ca3af" }}>›</span>
-        <button type="button" onClick={() => setMgr(null)} style={{ ...S.btn(mgr == null), padding: "3px 9px" }}>{teamName}</button>
+      {!isManager && teamEff != null && <>
+        {auth.role !== "team_lead" && <span style={{ color: "#9ca3af" }}>›</span>}
+        <button type="button" onClick={() => go({ team: teamEff, mgr: null })} style={{ ...S.btn(mgrEff == null), padding: "3px 9px" }}>{teamName}</button>
       </>}
-      {!isManager && mgr != null && <><span style={{ color: "#9ca3af" }}>›</span><b>{mgrName}</b></>}
+      {!isManager && mgrEff != null && <><span style={{ color: "#9ca3af" }}>›</span><b>{mgrName}</b></>}
     </div>
   );
 
@@ -214,6 +254,14 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
                 {c.lastTalkBy && <span style={grey}>{c.lastTalkBy}</span>}
               </div>
             ) : <span style={S.chip("#fef2f2", "#b91c1c")}>розмов не було</span>}
+            {c.lastTalk && (c.lastTalkSharedWith ?? 0) > 0 && (
+              <div style={{ marginTop: 4 }}>
+                <span style={S.chip("#eff6ff", "#1d4ed8")}
+                  title="номер цієї розмови є в контактах кількох клієнтів у Kommo — розмова могла бути й про іншого клієнта">
+                  📞 спільний номер · ще {sharedLabel(c.lastTalkSharedWith ?? 0)}
+                </span>
+              </div>
+            )}
             {L.summary
               ? <div style={{ fontSize: 12, marginTop: 4, color: "#374151" }} title="суть розмови — з AI-аналізу дзвінка">💬 {dm(L.summary.at)}: {L.summary.text.length > 160 ? `${L.summary.text.slice(0, 160)}…` : L.summary.text}</div>
               : c.lastTalk && <div style={{ ...grey, marginTop: 3 }}>суть: розмову не розбирав AI</div>}
@@ -265,9 +313,9 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
     );
   };
 
-  const showClients = isManager || mgr != null;
+  const showClients = isManager || mgrEff != null;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div ref={topRef} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>З ким з постійних говорити</h2>
         <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
@@ -275,15 +323,18 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
           «Працюють» — розмова від 10 с, рух угоди, коментар, контакт або оплата у Виписці за ритм сегмента; колір від цього не змінюється.
         </div>
       </div>
-      {!isManager && crumb}
+      {/* 🔙 9225: помітна кнопка «назад» поруч із ланцюжком — ланцюжок на кнопку не схожий, тімлід його не впізнав. */}
+      {!isManager && <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>{backBtn}{crumb}</div>}
       <Counters rows={scopeRows} month={month} />
       {actErr && <div role="alert" style={{ ...S.card, color: "#b91c1c", fontWeight: 600 }}>⚠️ {actErr}</div>}
-      {!isManager && team == null && <LevelTable title="Команда" groups={teams} onPick={(id) => { setTeam(id); setMgr(null); }} />}
-      {!isManager && team != null && mgr == null && <LevelTable title="Менеджер" groups={managers} onPick={setMgr} />}
+      {!isManager && teamEff == null && <LevelTable title="Команда" groups={teams} onPick={(id) => go({ team: id, mgr: null })} />}
+      {!isManager && teamEff != null && mgrEff == null && <LevelTable title="Менеджер" groups={managers} onPick={(id) => go({ team: teamEff, mgr: id })} />}
       {/* ⚠️ «Проблемні» (8350) — між червоними й зеленими, і лише коли вони є (порожня група нічого не каже). */}
       {showClients && (["yellow", "red", "problem", "green"] as const)
         .filter((k) => k !== "problem" || (mgrRows ?? []).some((c) => groupOf(c) === "problem"))
         .map((k) => group(k, (mgrRows ?? []).filter((c) => (k === "problem" ? c.lead.problem != null : !c.lead.problem && c.lead.color === k))))}
+      {/* Список клієнтів довгий: після прокрутки верхньої кнопки вже не видно — та сама кнопка внизу. */}
+      {showClients && backBtn && <div>{backBtn}</div>}
       {creating && (
         <CreateTaskDialog client={creating} busy={busy} error={actErr}
           onCancel={() => { setCreating(null); setActErr(null); }}

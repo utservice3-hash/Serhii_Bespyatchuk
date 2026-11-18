@@ -2,11 +2,17 @@ import { Router } from "express";
 import { isAdminScope, isAdminOrLead, tabsOfRole } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { unreadSinceQuery, MARK_SEEN_SQL, unreadByIdQuery, maxVisibleIdQuery } from "../core/newsSeen.js";
-import { newsScope, DELETE_SQL, NEWS_KIND_SQL, parseNewsKind } from "../core/newsVisibility.js";
+import { newsScope, DELETE_SQL, NEWS_KIND_SQL, parseNewsKind, readerAudience } from "../core/newsVisibility.js";
+import { huntAllowed } from "../core/hunt.js";
 import { requireAuth } from "../auth/middleware.js";
 
 export const newsRouter = Router();
 newsRouter.use(requireAuth);
+
+/** Адресати читача: вкладки ролі + `hunt`, якщо людина є в поіменному списку «Хантингу» (Роман 16.11.2026). */
+async function audienceOf(auth: { roleKey: string; userId: number }): Promise<string[]> {
+  return readerAudience(tabsOfRole(auth.roleKey), await huntAllowed(pool, auth.userId));
+}
 
 /** Вручну публікуються лише новини компанії — вкладка «Загальні» (06.11.2026: інших вкладок немає). */
 const CATEGORIES = ["company"];
@@ -20,7 +26,7 @@ newsRouter.get("/", async (req, res) => {
   const conds: string[] = [];
   const pre: unknown[] = [];
   if (kind) conds.push(NEWS_KIND_SQL[kind]);
-  const { where, params } = newsScope(tabsOfRole(req.auth!.roleKey), conds, pre);
+  const { where, params } = newsScope(await audienceOf(req.auth!), conds, pre);
   const result = await pool.query(
     `SELECT id, category, title, body, author, image_url, created_at
      FROM news ${where} ORDER BY created_at DESC LIMIT 100`,
@@ -65,7 +71,7 @@ newsRouter.delete("/:id", async (req, res) => {
 newsRouter.get("/unread", async (req, res) => {
   // 🎯 Вкладки читача рахуються ОДИН раз і йдуть в усі три запити цього роуту — інакше
   //    лічильник і «долистав досюди» могли б розійтися між собою в межах однієї відповіді.
-  const tabs = tabsOfRole(req.auth!.roleKey);
+  const tabs = await audienceOf(req.auth!);
   const mq = maxVisibleIdQuery(tabs);
   const max = await pool.query<{ max_id: number }>(mq.text, mq.params);
   const maxId = max.rows[0]?.max_id ?? 0;
@@ -98,7 +104,7 @@ newsRouter.get("/unread", async (req, res) => {
  */
 newsRouter.post("/seen", async (req, res) => {
   await pool.query(MARK_SEEN_SQL, [req.auth!.userId]);
-  const mq = maxVisibleIdQuery(tabsOfRole(req.auth!.roleKey));
+  const mq = maxVisibleIdQuery(await audienceOf(req.auth!));
   const max = await pool.query<{ max_id: number }>(mq.text, mq.params);
   res.json({ ok: true, maxId: max.rows[0]?.max_id ?? 0 });
 });

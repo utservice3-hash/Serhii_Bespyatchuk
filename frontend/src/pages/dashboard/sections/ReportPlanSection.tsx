@@ -78,6 +78,9 @@ function SrcChip({ src, source }: { src: DealKlass; source?: DealSource }) {
     "leadgen": { l: "лідог.", t: "джерело угоди — лідогенератор. Окремий вимір: на новизну клієнта не впливає." },
     // 🟣 eLogist — окремий канал з 27.10.2026 (рішення власника), НЕ реклама UTS.
     "elogist": { l: "eLogist", t: "джерело угоди — eLogist (сайт elogist.com.ua, сестринський бренд). Окремий канал, НЕ реклама UTS (рішення власника 27.10.2026). На новизну клієнта не впливає." },
+    // 🔗 LinkedIn і Prozorro — з 18.11.2026 (задача 9230), вирізані з «без джерела».
+    "linkedin": { l: "LinkedIn", t: "угода з LinkedIn: «Источник клиента» = LinkedIn або тег LinkedIn (глосарій §20). На новизну клієнта не впливає." },
+    "prozorro": { l: "Prozorro", t: "тендер Prozorro: джерело «AI тендер» або тег «AI тендер» / «Prozorro» (глосарій §21). На новизну клієнта не впливає." },
     "other": { l: "без джерела", t: "ані рекламного, ані лідоген-дотику не було — угоду завів менеджер сам. Це ВІДПОВІДЬ, а не прогалина; переважно робота з наявною базою." },
     "undef": { l: "канал не вказано", t: "канал угоди не заповнений у CRM — ми НЕ ЗНАЄМО джерела (на відміну від «без джерела», де відомо, що дотику не було).", dim: true },
   };
@@ -542,13 +545,14 @@ function SliceSwitch({ data, slice, onSlice }: { data: ReportPlan; slice: Slice;
  * гроші, що вже прийшли, очікуване — домовленість. Малюється лише для ПОВНОГО ПОТОЧНОГО місяця:
  * `expectThisMonth` календарний, і над минулим місяцем чи тижнем він означав би інше.
  */
-function ExpectSeg({ fact, expect, plan, title }: { fact: number; expect: number; plan: number; title: string }) {
+function ExpectSeg({ fact, expect, plan, title, light }: { fact: number; expect: number; plan: number; title: string; light?: boolean }) {
   if (plan <= 0 || expect <= 0) return null;
   const from = Math.min(100, Math.max(0, (fact / plan) * 100));
   const to = Math.min(100, Math.max(0, ((fact + expect) / plan) * 100));
   if (to <= from) return null;
-  return <i title={title} style={{ left: `${from}%`, width: `${to - from}%`, borderRadius: 0,
-    background: `repeating-linear-gradient(135deg, ${AMBER} 0 5px, transparent 5px 10px)`, backgroundColor: AMBER + "22" }} />;
+  return <i title={title} className={light ? "rv-hatch2" : "rv-hatch"} style={{ left: `${from}%`, width: `${to - from}%`, borderRadius: 0,
+    background: `repeating-linear-gradient(135deg, ${AMBER} 0 5px, transparent 5px 10px)`, backgroundColor: AMBER + "22",
+    ...(light ? { background: `repeating-linear-gradient(135deg, ${AMBER}99 0 2px, transparent 2px 7px)`, backgroundColor: AMBER + "14" } : null) }} />;
 }
 
 /** Колір виконання — те саме правило, що в `Donut` (≥100 / ≥70 / решта): одне правило на кільце й смугу. */
@@ -656,6 +660,38 @@ export function Donut({ pct, title }: { pct: number; title?: string }) {
   );
 }
 
+/**
+ * ⓘ ПІДКАЗКИ КАРТКИ МЕНЕДЖЕРА (задача 9233, ТЗ Юлі 16.11.2026: «підказки ⓘ простими словами біля
+ * цих цифр, включно з «чекає рішення»»; приймання — Сергій і Василь розуміють цифру без пояснень).
+ *
+ * Тексти описують РІВНО те, що рахує код поруч, і їх треба правити разом із розрахунком:
+ *  · weekPlan  — `plans.effectiveWeekTargets` → `core/weekPlan.ts` (робочі дні + заморожування в понеділок; ручна ціль перемагає);
+ *  · sent      — `reportCuts.dispatchCohortByManagerDay` за ТИЖНЕВИЙ період (анкер `load_at`), оплачені й ні;
+ *  · projected — `forecast.forecastMonth(факт, expectThisMonth)`: добору НЕМАЄ (рішення власника 06.08.2026);
+ *  · expectLegend — «дата є» = `expectThisMonth` (зона `EXPECT_ZONE`, планова дата в цьому місяці),
+ *    «без дати» = `cohort.awaitNoDateSum` (авто ОБРАНОГО періоду, ще не оплачені, без планової дати);
+ *  · awaiting  — `carrierDeals.isAwaitingNow` (review|error і досі на етапі) + `reviewDeadline` для «прострочено».
+ * Гейт `#4031` стереже, що кожна ⓘ стоїть на своєму місці.
+ */
+const CARD_HINT = {
+  weekPlan: "Отримано за тиждень з плану тижня. План рахується в понеділок і до неділі не змінюється: "
+    + "що лишилось до плану місяця, ділимо на робочі дні, що лишились, і беремо частку цього тижня. "
+    + "Недобрали минулого тижня - план наступних більший, перевиконали - менший. "
+    + "Якщо тімлід задав ціль у Задачнику вручну, діє вона.",
+  sent: "Сума авто, які завантажились цього тижня (за «Датою загрузки» в Kommo), оплачені чи ні. "
+    + "Це робота тижня, а не гроші: гроші рахуються в день, коли зайшли, тому в «отримано» потрапляють "
+    + "і оплати за авто минулих тижнів. Ці числа збігатися не мають.",
+  projected: "Прогноз місяця = отримано + угоди, які чекають оплату з плановою датою в цьому місяці. "
+    + "Угоди без планової дати сюди не входять.",
+  expectLegend: "«Чекає, дата є» - угоди між «Виставленням рахунку» і «Очікуємо оплату», у яких у Kommo "
+    + "стоїть планова дата оплати в цьому місяці; входять у прогноз. "
+    + "«Чекає без дати» - авто, завантажені цього місяця, ще не оплачені і без планової дати; у прогноз не входять.",
+  awaiting: "Дзвінки на мобільний менеджера, де AI не впевнений, хто дзвонив (перевізник чи клієнт), "
+    + "або не зміг розібрати розмову. Угода стоїть на етапі «Дзвінки на мобільні», поки менеджер не вирішить сам. "
+    + "«Прострочено» - не вирішено до кінця робочого дня (якщо прийшло після 18:00 - до кінця наступного). "
+    + "Клік по кнопці - «Перевізники за розмовою».",
+} as const;
+
 // Смуга менеджера: МІСЯЦЬ (головна траєкторія, статус+сортування) + ТИЖДЕНЬ (поточний), обидва завжди (#11).
 /**
  * 🃏 КАРТКА МЕНЕДЖЕРА — НОВИЙ ВИГЛЯД (макет, погоджено 13.11.2026).
@@ -666,7 +702,7 @@ export function Donut({ pct, title }: { pct: number; title?: string }) {
  * змінилась верстка, не розрахунок. Імʼя `MgrStrip` лишено навмисно — його ж
  * малює таблиця для одного менеджера, і гейти читають саме цю назву.
  */
-function MgrStrip({ m, mWeek, focusDay, today, elapsed, weekLabel, weekPeriod, drillPeriod, periodLabel, isMonthMode, weeksFirst, role, isSelf, open, onToggle }: {
+function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPeriod, drillPeriod, periodLabel, isMonthMode, weeksFirst, role, isSelf, open, onToggle }: {
   m: ReportPlanManager; mWeek: ReportPlanManager | undefined;
   focusDay: string; today: string; elapsed: number; remWd: number; weekLabel: string;
   weekPeriod: { from: string; to: string };
@@ -695,6 +731,11 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, weekLabel, weekPeriod, d
     : (chekAlt ? Math.round((m.kpi.dispatch.revenue ?? 0) / dispCnt) : null);
   const ft = firstTouchLabel(m.firstTouch);
   const sc = SCOL[s];
+  const noDate = m.cohort?.awaitNoDateSum ?? 0;
+  const uncovered = m.monthInProgress && m.plan > 0 ? Math.max(0, m.plan - m.fact - m.expectThisMonth - noDate) : 0;
+  const sent = mWeek?.cohort?.sum ?? 0, sentCars = mWeek?.cohort?.deals ?? 0;
+  const sentPct = m.week.target > 0 ? Math.round((sent / m.week.target) * 100) : 0;
+  const smax = Math.max(...m.spark, 1);
   return (
     <article className={`rv-mc${open ? " open" : ""}${isSelf ? " self" : ""}`} style={{ ["--sc" as string]: sc }}>
       <div className="hd" role="button" tabIndex={0} aria-expanded={open} onClick={onToggle}
@@ -710,27 +751,73 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, weekLabel, weekPeriod, d
               🚚 чекають рішення: {aw.awaitingNow}{aw.overdueNow > 0 ? ` · прострочено ${String(aw.overdueNow)}` : ""}
             </button>
           )}
+          {aw && <InfoHint text={CARD_HINT.awaiting} />}
         </div>
+        {/**
+          * 📊 СМУГА МІСЯЦЯ З УСІМ, ЩО БУЛО ДО РЕМЕЙКУ (Роман 16.11.2026: «повертай все», макет `kartka-maket`).
+          * Факт — суцільний; «чекає, дата є» і «чекає БЕЗ дати» — два пунктири на ТІЙ САМІЙ шкалі
+          * (множини не перетинаються: дата або є, або немає); синя риска — прогноз. Сегменти й прогноз —
+          * лише для повного поточного місяця: `expectThisMonth` календарний, а прогноз бек рахує лише там.
+          */}
         <div className="rv-trk">
-          <div className="tl"><span>{isMonthMode ? "Місяць" : periodLabel} · <b>{fmt(m.fact)}</b> з {fmt(m.plan)} ₴</span><span className="p" style={{ color: sc }}>{pct}%{m.monthInProgress && m.expectThisMonth > 0
-            ? <small style={{ color: AMBER, fontWeight: 600 }} title="очікуємо цього місяця (є планова дата оплати)"> +{k(m.expectThisMonth)} очік.</small> : null}</span></div>
+          <div className="tl"><span>{isMonthMode ? "Місяць" : periodLabel} · <b>{fmt(m.fact)}</b> з {fmt(m.plan)} ₴</span><span className="p" style={{ color: sc }}>{pct}%</span></div>
           <div className="rv-track">
             <i style={{ width: `${Math.min(100, pct)}%`, background: sc }} />
             {m.monthInProgress && <ExpectSeg fact={m.fact} expect={m.expectThisMonth} plan={m.plan}
-              title={`очікуємо цього місяця (є планова дата оплати) — ${fmt(m.expectThisMonth)} ₴`} />}
+              title={`чекає, дата оплати в цьому місяці — ${fmt(m.expectThisMonth)} ₴`} />}
+            {m.monthInProgress && <ExpectSeg fact={m.fact + m.expectThisMonth} expect={noDate} plan={m.plan} light
+              title={`чекає БЕЗ планової дати — ${fmt(noDate)} ₴ · у прогноз не входить`} />}
             {m.monthInProgress && <em style={{ left: `${Math.round(Math.min(1, Math.max(0, elapsed)) * 100)}%` }} title="де мав би бути факт, якщо йти рівно по плану" />}
+            {m.monthInProgress && m.plan > 0 && <span className="rv-fc" style={{ left: `${Math.min(100, (m.projected / m.plan) * 100)}%` }}
+              title={`прогноз ${fmt(m.projected)} ₴ — факт + очікування з датою оплати`} />}
+          </div>
+          {m.monthInProgress && m.plan > 0 && (
+            <div className="rv-leg">
+              <span><i className="sw" style={{ background: sc }} />отримано <b>{fmt(m.fact)}</b></span>
+              {m.expectThisMonth > 0 && <span><i className="sw rv-hatch" />чекає, дата є <b>{fmt(m.expectThisMonth)}</b></span>}
+              {noDate > 0 && <span><i className="sw rv-hatch2" />чекає без дати <b>{fmt(noDate)}</b></span>}
+              {(m.expectThisMonth > 0 || noDate > 0) && <InfoHint text={CARD_HINT.expectLegend} />}
+            </div>
+          )}
+          {uncovered > 0 && <div className="rv-ln"><span style={{ color: RED, fontWeight: 650 }}>не покрито {fmt(uncovered)} ₴ — {Math.round((uncovered / m.plan) * 100)}% плану</span></div>}
+          <div className="rv-ln">треба <b>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.)
+            {m.monthInProgress
+              ? <> · прогноз <b>{k(m.projected)}</b>{m.plan > 0 ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}<InfoHint text={CARD_HINT.projected} /></>
+              : <> · прогноз — лише для повного поточного місяця</>}
+          </div>
+          {/* Форвард-блок ПОЗА обраним періодом — календарні місяці за плановою датою оплати, і це підписано. */}
+          <div className="rv-ln" title="Очікування за ПЛАНОВОЮ датою оплати, календарні місяці. НЕ залежить від обраного періоду.">
+            💰 очікуємо <b style={{ color: GREEN }}>{k(m.expectThisMonth)}</b> цей · <b>{k(m.expectNextMonth)}</b> наст. міс
+            {Math.abs(m.expectPastMonths) >= 500 && <> · <b style={{ color: AMBER }}>{k(m.expectPastMonths)}</b> з минулих міс</>} · поза обраним періодом
           </div>
         </div>
+        {/**
+          * 🗓 ТИЖДЕНЬ: отримано / ціль + друга смужка «Відправлено» з ТИЖНЕВОЇ когорти (`mWeek.cohort` — та сама,
+          * що в «Грошах тижня»). До ремейку тут стояла когорта ОБРАНОГО періоду (у місяці — місячна) під підписом
+          * тижня; повертаючи смужку, беремо саме тиждень, щоб підпис і число говорили про одне.
+          */}
         <div className="rv-trk">
-          <div className="tl"><span>Тиждень {weekLabel} · <b>{fmt(m.week.fact)}</b> з {fmt(m.week.target)}{m.week.isManual ? " ✎" : ""}</span><span className="p">{wPct}%</span></div>
+          <div className="tl"><span>Тиждень {weekLabel} · <b>{fmt(m.week.fact)}</b> з {fmt(m.week.target)}<InfoHint text={CARD_HINT.weekPlan} /></span><span className="p">{wPct}%</span></div>
           <div className="rv-track"><i style={{ width: `${Math.min(100, wPct)}%`, background: "var(--rv-ink)", opacity: .55 }} /></div>
+          {sent > 0 && (<>
+            <div className="tl" style={{ marginTop: 8 }}><span>Відправлено · <b>{fmt(sent)} ₴</b><InfoHint text={CARD_HINT.sent} /></span><span className="p" style={{ color: AMBER }}>{sentPct}%</span></div>
+            <div className="rv-track"><i className="rv-hatch" style={{ width: `${Math.min(100, sentPct)}%` }} /></div>
+            <div className="rv-ln">{sentCars} {sentCars === 1 ? "машина" : sentCars < 5 ? "машини" : "машин"} · роботи зроблено на {sentPct}% тижневого плану</div>
+          </>)}
+          <div className="rv-ln">{m.week.isManual ? <>ціль <b style={{ color: AMBER }}>задана вручну</b> у Задачнику</> : <>динамічний план тижня · залишок ÷ тижнів, що лишились</>}</div>
         </div>
-        <div className="rv-nums">
-          <div title={`${m.new} нових · ${m.rep} постійних`}><b>{m.created}</b>створено</div>
-          <div title={`на ${fmt(m.kpi.dispatch.revenue ?? 0)} ₴`}><b>{dispCnt}</b>авто</div>
-          <div title={chekAlt ? "по відправлених авто, ще не закриті (сума÷авто)" : undefined}><b>{chekFact == null ? "—" : fmt(chekFact)}{chekAlt ? "*" : ""}</b>сер. чек</div>
-          <div title="пропущені вхідні за період; червоним — скільки досі без передзвону">
-            <b>{m.missed.missed}{m.missed.noCallback > 0 && <small> ({m.missed.noCallback})</small>}</b>пропущені</div>
+        <div>
+          <div className="rv-nums rv-nums5">
+            <div><b>{m.created}</b>створено<small>{m.new} нов · {m.rep} пост</small></div>
+            <div><b>{dispCnt}</b>авто<small>{k(m.kpi.dispatch.revenue ?? 0)} ₴</small></div>
+            <div title={chekAlt ? "по відправлених авто, ще не закриті (сума÷авто)" : undefined}><b>{chekFact == null ? "—" : fmt(chekFact)}{chekAlt ? "*" : ""}</b>сер. чек</div>
+            <div><b>{fmt(m.fact)}</b>отримано ₴</div>
+            <div title="пропущені вхідні за період; червоним — скільки досі без передзвону">
+              <b>{m.missed.missed}{m.missed.noCallback > 0 && <small className="miss"> ({m.missed.noCallback})</small>}</b>пропущені</div>
+          </div>
+          <div className="rv-spark" title={`отримано по тижнях (${m.spark.length})`}>
+            {m.spark.map((v, ix) => <i key={ix} style={{ height: `${Math.max(8, (v / smax) * 100)}%`, background: ix === m.spark.length - 1 ? BAR : undefined }} />)}
+          </div>
         </div>
         <span className="rv-chev">▸</span>
       </div>
@@ -754,6 +841,22 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, weekLabel, weekPeriod, d
                 <div className="note">ціль <b>задана вручну</b> у Задачнику
                   {m.week.dynamic > 0 && m.week.dynamic !== m.week.manual ? ` — не рахувалась (динамічна була б ${fmt(m.week.dynamic)})` : ""}</div>
               ) : <div className="note">динамічний план тижня · залишок ÷ тижнів, що лишились</div>}
+            </div>
+            {/* 📅 Показники за ОБРАНИЙ період — повернуто 16.11.2026 (Роман: «повертай все»). Ціль — лише з
+                тижневих парасольок (`core/kpiTargets`), тож у місяці частина метрик чесно «план не задано». */}
+            <div className="rv-pane">
+              <h4>📅 Показники <small>факт за {isMonthMode ? "місяць" : periodLabel} · ціль — з тижневої задачі</small></h4>
+              <KpiRow lbl="реклама" k={m.kpi.ads} />
+              <KpiRow lbl="лідоген" k={m.kpi.leadgen} />
+              <div className="kv" title={`Авто за джерелом: ${autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.elogist ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}`}>
+                <span>авто</span><b>{dispCnt}<span style={{ color: MUTED, fontWeight: 500 }}> · {k(m.kpi.dispatch.revenue ?? 0)} ₴{m.kpi.dispatch.target > 0 ? ` / ${m.kpi.dispatch.target}` : " · план не задано"}</span></b>
+              </div>
+              <div className="kv"><span>авто за джерелом</span><b style={{ fontWeight: 500 }}>{autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.elogist ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}</b></div>
+              <div className="kv" title={chekAlt ? "по відправлених авто, ще не закриті (сума÷авто)" : "Ср. чек = пул «угоди ЗАРАЗ у роботі + виграні за обраний період». Σ signed ÷ Σ угод."}>
+                <span>сер. чек</span><b>{chekFact == null ? "—" : fmt(chekFact)}{chekAlt ? <sup style={{ color: AMBER, fontSize: 9 }}>*відпр.</sup> : null}<span style={{ color: MUTED, fontWeight: 500 }}>{m.kpi.avgCheck.target > 0 ? ` / ${fmt(m.kpi.avgCheck.target)}` : " · план не задано"}</span></b>
+              </div>
+              <KpiRow lbl="конверсія" k={m.kpi.conversion} pctUnit />
+              <div className="kv"><span>ціну названо</span><b>{ft.main}{ft.sub ? <span style={{ color: MUTED, fontWeight: 500 }}> · {ft.sub}</span> : null}</b></div>
             </div>
             <WeekMoney mWeek={mWeek} managerId={m.managerId} period={weekPeriod} />
             <div className="rv-pane">

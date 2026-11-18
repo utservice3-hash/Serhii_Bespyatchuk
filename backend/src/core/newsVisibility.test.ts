@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
-import { NEWS_ALIVE, andAlive, DELETE_SQL, newsScope, NEWS_KIND_SQL, parseNewsKind } from "./newsVisibility.js";
+import { NEWS_ALIVE, andAlive, DELETE_SQL, newsScope, NEWS_KIND_SQL, parseNewsKind, readerAudience, HUNT_AUDIENCE, PSEUDO_AUDIENCES } from "./newsVisibility.js";
 import { unreadSinceQuery, unreadByIdQuery, maxVisibleIdQuery } from "./newsSeen.js";
 // 🎯 Три запити стали білдерами разом з адресністю (09.09.2026). Гейти нижче про
 //    ЖИВЕ/ВИДАЛЕНЕ, тож вкладки їм байдужі — передаємо порожні свідомо.
@@ -334,5 +334,58 @@ test("#377 лічильник == список, і maxId не ковтає нев
       + "перестрибне через адресні новини, і вони не спливуть, навіть коли роль отримає вкладку");
     // 🪞 Дзеркало: вибірка не вироджена — адресна новина в базі Є, просто не для цього читача.
     assert.equal(list.length, 2, "🔴 у фікстурі не лишилось невидимої новини — гейт перевіряє порожнечу");
+  } finally { await c.end(); }
+});
+
+/**
+ * #4010 — АДРЕСАТ `hunt` (Роман 16.11.2026: новина про «Хантинг» лише тим, хто має до нього доступ). Читачеві
+ * зі списку `hunt_access` додається `hunt` поруч із вкладками ролі; без доступу — ні, навіть якщо в ролі є вкладка «Найм».
+ * Список новин, лічильник непрочитаних і «долистав досюди» беруть адресатів через ОДНУ функцію роуту, а не `tabsOfRole`
+ * напряму — інакше значок рахував би новину, якої людина не бачить. 🧨 Червоніє, якщо `hunt` давати всім, не давати
+ * нікому або якщо хоч один читач піде повз `audienceOf`.
+ */
+test("#4010 АДРЕСАТ `hunt`: додається лише тому, хто в списку «Хантингу»; усі три читачі новин беруть адресатів з одного місця", () => {
+  assert.equal(HUNT_AUDIENCE, "hunt");
+  assert.deepEqual([...PSEUDO_AUDIENCES], ["hunt"]);
+  assert.deepEqual(readerAudience(["hiring", "news"], true), ["hiring", "news", "hunt"]);
+  assert.deepEqual(readerAudience(["hiring", "news"], false), ["hiring", "news"], "без доступу до «Хантингу» отримав адресата hunt");
+  assert.deepEqual(readerAudience([], false), [], "порожній набір вкладок мусить лишатись порожнім (fail-closed)");
+  assert.deepEqual(readerAudience(["hunt", "news"], false), ["news"], "вкладка з іменем hunt не має відкривати поіменний адресат");
+  const route = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "news.ts"), "utf8");
+  assert.match(route, /return readerAudience\(tabsOfRole\(auth\.roleKey\), await huntAllowed\(pool, auth\.userId\)\);/);
+  assert.equal((route.match(/await audienceOf\(req\.auth!\)/g) || []).length, 3, "не всі три читачі новин беруть адресатів через audienceOf");
+  assert.equal((route.match(/tabsOfRole\(/g) || []).length, 1, "якийсь читач новин узяв вкладки ролі напряму, повз список «Хантингу»");
+});
+
+/**
+ * #4011 — 🪞 НАСКРІЗНО НА SQL (scratch-БД). Новина з адресатом `hunt` доходить до читача зі списку «Хантингу» і
+ * НЕ доходить до тімліда й адміна, у яких є вкладка «Найм»; новина вкладки «Найм» і новина «для всіх» — як і були.
+ * Лічильник непрочитаних рахує рівно те саме. 🧨 Червоніє, якщо `hunt` підмінити вкладкою «Найм» або загубити адресата.
+ */
+test("#4011 🪞 НОВИНА ДЛЯ «ХАНТИНГУ»: бачить людина зі списку, а тімлід і адмін із вкладкою «Найм» — ні; новини вкладки «Найм» як були", async (t) => {
+  const { provisionScratch } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    await c.query(`INSERT INTO news (category,title,body,author,audience_tabs) VALUES
+      ('company','всім','x','Дашборд',NULL), ('company','найм','x','Дашборд',ARRAY['hiring']), ('company','хантинг','x','Дашборд',ARRAY['hunt'])`);
+    const titles = async (aud: string[]) => {
+      const { where, params } = newsScope(aud);
+      return (await c.query<{ title: string }>(`SELECT title FROM news ${where} ORDER BY id`, params)).rows.map((r) => r.title);
+    };
+    const unread = async (aud: string[]) => {
+      const q = unreadByIdQuery(0, aud);
+      return (await c.query<{ n: number }>(q.text, q.params)).rows[0].n;
+    };
+    const ivan = readerAudience(["hiring", "news"], true), lead = readerAudience(["hiring", "news"], false);
+    assert.deepEqual(await titles(ivan), ["всім", "найм", "хантинг"], "людина зі списку «Хантингу» не бачить новину про нього");
+    assert.deepEqual(await titles(lead), ["всім", "найм"], "тімлід / адмін із вкладкою «Найм» бачить новину «Хантингу»");
+    assert.deepEqual(await titles(readerAudience(["report"], false)), ["всім"]);
+    assert.equal(await unread(ivan), 3);
+    assert.equal(await unread(lead), 2, "лічильник рахує новину «Хантингу» тому, хто її не бачить");
   } finally { await c.end(); }
 });

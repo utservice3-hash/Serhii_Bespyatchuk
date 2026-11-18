@@ -1,5 +1,5 @@
 import type { Db } from "./adCallFacts.js";
-import { CARRIER_STAGE, OTHER_TYPE_UA, type OtherType } from "./carrierCallRules.js";
+import { CARRIER_STAGE, OTHER_TYPE_UA, provenQuote, type OtherType } from "./carrierCallRules.js";
 import { carrierDealRows } from "./carrierDeals.js";
 import { AUTO_CARRIER_TAG, carrierHistorySql, historyCloseNote, HISTORY_GUARD, readHistoryGate } from "./carrierHistory.js";
 import { lardiCloseNote } from "./carrierLardi.js";
@@ -103,6 +103,8 @@ export interface KommoCloser {
 
 export interface CloseCandidate {
   kommoId: number; uniqueid: string | null; confidence: number | null; quote: string | null; logged: boolean; byHuman: boolean;
+  /** `quote_check` вердикту: у примітку цитата йде лише підтверджена (`provenQuote`). */
+  quoteCheck: string | null;
   reason: CloseReason; otherType: OtherType | null;
   /** AI-«Інше» без рішення людини — окремий перемикач (`CARRIER_AUTO_CLOSE_OTHER`). */
   aiOther: boolean;
@@ -137,7 +139,7 @@ export async function closeCandidates(db: Db, onStage: ReadonlySet<number>, now:
     const l = log.get(r.kommoId);
     if (r.close?.state === "closed" || l?.reverted || l?.recent_fail) continue;
     const byHuman = r.source === "human";
-    out.push({ kommoId: r.kommoId, uniqueid: r.uniqueid, confidence: r.ai.confidence, quote: r.ai.quote, logged: l != null,
+    out.push({ kommoId: r.kommoId, uniqueid: r.uniqueid, confidence: r.ai.confidence, quote: r.ai.quote, quoteCheck: r.ai.quoteCheck, logged: l != null,
       byHuman, reason: r.category, otherType: r.otherType, aiOther: r.category === "other" && !byHuman,
       history: r.source === "crm", historyFrom: r.historyFrom, lardi: r.source === "lardi", lardiNote: r.lardiNote });
   }
@@ -240,7 +242,7 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
       rep.closed += ids.length;
       // Примітка — пояснення для менеджера. Її збій закриття не скасовує: угода вже закрита, а причина стоїть у полі.
       const text = (c: CloseCandidate) => c.lardi ? lardiCloseNote(c.lardiNote) : c.history ? historyCloseNote(c.historyFrom ?? "?")
-        : reason === "carrier" ? closeNoteText(c.confidence ?? 0, c.quote, c.byHuman)
+        : reason === "carrier" ? closeNoteText(c.confidence ?? 0, provenQuote(c.quote, c.quoteCheck), c.byHuman)
         : reason === "no_talk" ? NO_TALK_NOTE : closeNoteTextOther(c.confidence, c.otherType, c.byHuman);
       await kommo.addNotes(batch.map((c) => ({ entity_id: c.kommoId, note_type: "common", params: { text: text(c) } })))
         .catch((e: unknown) => db.query(`UPDATE carrier_close_log SET close_error = $2 WHERE kommo_id = ANY($1::bigint[])`,

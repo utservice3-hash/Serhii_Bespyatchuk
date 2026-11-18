@@ -81,3 +81,54 @@ test("#3762 ЖИВИЙ SQL СИНКУ: upsertDeal пише deals.originals_recei
   await upsertDeal(deal(true) as never, mgr, new Map(), new Map());
   assert.equal(await orig(), true, "🔴 оновлення синку не підхопило пізніше поставлену галочку");
 });
+
+/**
+ * #4114 — ЖИВИЙ SQL СИНКУ РЕШТИ «ДОКУМЕНТІВ» (задача Сергія 18.11.2026): `doc_files` пише СПРАВЖНЯ вставка `upsertDeal` — і на
+ * вставці, і на оновленні (документ прикріпили пізніше / видалили). Без цього «за набором документів» не зарахувало б жодної
+ * нової угоди, а всі без файла ТТН вічно стояли б «не синхронізовано».
+ * 🧨 Червоніє, якщо загубити колонку у вставці чи в `ON CONFLICT … SET`.
+ */
+test("#4114 ЖИВИЙ SQL СИНКУ: upsertDeal пише deals.doc_files і на вставці, і на оновленні", async (t) => {
+  const l = await liveDb();
+  if ("skip" in l) return t.skip(l.skip);
+  const { c, upsertDeal } = l;
+  const now = Math.floor(Date.now() / 1000);
+  const file = (n: number) => ({ value: { file_uuid: `d${n}`, version_uuid: `w${n}`, file_name: `doc${n}.pdf`, file_size: 1, is_deleted: false } });
+  const deal = (vals: { field_id: number; values: unknown[] }[]) => ({ id: 9004, name: "Угода", price: 1000, pipeline_id: 8921932, status_id: 142, responsible_user_id: 555,
+    created_at: now, updated_at: now, closed_at: now, custom_fields_values: vals });
+  const mgr = new Map([[555, 11]]);
+  const docs = async () => (await c.query(`SELECT doc_files FROM deals WHERE kommo_id = 9004`)).rows[0]?.doc_files;
+  await upsertDeal(deal([{ field_id: 2097293, values: [file(1)] }, { field_id: 2097505, values: [file(2)] }]) as never, mgr, new Map(), new Map());
+  assert.equal(await docs(), 2, "🔴 вставка синку не записала doc_files");
+  await upsertDeal(deal([]) as never, mgr, new Map(), new Map());
+  assert.equal(await docs(), 0, "🔴 оновлення синку не переписало doc_files (документи видалили в CRM)");
+  await upsertDeal(deal([{ field_id: 2097337, values: [file(3)] }]) as never, mgr, new Map(), new Map());
+  assert.equal(await docs(), 1, "🔴 оновлення синку не підхопило пізніше прикріплений документ");
+});
+
+/**
+ * #3652 — ЖИВИЙ SQL СИНКУ ТЕГІВ (задача 9363, тег «LinkedIn»): `deals.tags` пише СПРАВЖНЯ вставка `upsertDeal`. Тег поставили
+ * пізніше — оновлення підхоплює; зняли всі — порожній список; Kommo не віддав ключ `_embedded.tags` — записане НЕ затирається
+ * (це «не знаємо», а не «тегів немає»).
+ * 🧨 САБОТАЖ: `tags = COALESCE(EXCLUDED.tags, deals.tags)` → `tags = EXCLUDED.tags` — червоніє «без ключа затерто»;
+ *    прибрати `tags` з `ON CONFLICT … SET` — червоніє «оновлення не підхопило».
+ */
+test("#3652 ЖИВИЙ SQL СИНКУ: upsertDeal пише deals.tags і на вставці, і на оновленні; Kommo без ключа тегів — записане лишається, порожній список — тегів немає", async (t) => {
+  const l = await liveDb();
+  if ("skip" in l) return t.skip(l.skip);
+  const { c, upsertDeal } = l;
+  const now = Math.floor(Date.now() / 1000);
+  const deal = (tags: string[] | undefined) => ({ id: 9003, name: "Угода", price: 1000, pipeline_id: 8921932, status_id: 69693668, responsible_user_id: 555,
+    created_at: now, updated_at: now, closed_at: null, custom_fields_values: [],
+    _embedded: tags === undefined ? {} : { tags: tags.map((name, i) => ({ id: 100 + i, name })) } });
+  const mgr = new Map([[555, 11]]);
+  const tags = async () => (await c.query(`SELECT tags FROM deals WHERE kommo_id = 9003`)).rows[0]?.tags as string[] | null;
+  await upsertDeal(deal([]) as never, mgr, new Map(), new Map());
+  assert.deepEqual(await tags(), [], "🔴 вставка синку не записала порожній список тегів");
+  await upsertDeal(deal(["VIP", " LinkedIn "]) as never, mgr, new Map(), new Map());
+  assert.deepEqual(await tags(), ["LinkedIn", "VIP"], "🔴 оновлення не підхопило пізніше поставлений тег (або не обрізало пробіли)");
+  await upsertDeal(deal(undefined) as never, mgr, new Map(), new Map());
+  assert.deepEqual(await tags(), ["LinkedIn", "VIP"], "🔴 Kommo без ключа тегів — синк затер записані теги");
+  await upsertDeal(deal([]) as never, mgr, new Map(), new Map());
+  assert.deepEqual(await tags(), [], "🔴 теги зняли в CRM — синк лишив старі");
+});
