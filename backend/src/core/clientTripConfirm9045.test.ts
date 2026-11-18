@@ -62,10 +62,11 @@ test("#9045 🪞 ПОЇЗДКА ПОЗА CRM: колір у межах ритм�
   assert.equal(cleanTripNote("ок"), null, "🔴 прийнято порожній коментар");
   assert.equal(cleanTripNote(undefined), null);
   assert.equal(cleanTripNote("x".repeat(2000))?.length, 1000, "коментар обрізано до 1000");
-  // 🔒 Роль: лише тімлід (ТЗ); керівництву — рішення Сергія.
-  assert.equal(canConfirmTrip("team_lead"), true, "🔴 тімлід не може подати");
-  for (const r of ["manager", "admin", "company", "kvp", "ceo", "opdir", "financier", "hr", "candidate"]) {
-    assert.equal(canConfirmTrip(r), false, `🔴 подати може ${r}`);
+  // 🔒 Роль: тімлід (ТЗ) і адмін-рівень (Роман 18.11: «подати можна всім (адмінам)»); менеджер і HR — ні.
+  assert.equal(canConfirmTrip("team_lead", false), true, "🔴 тімлід не може подати");
+  for (const r of ["admin", "company"]) assert.equal(canConfirmTrip(r, true), true, `🔴 адмін-рівень (${r}) не може подати`);
+  for (const r of ["manager", "company", "hr", "candidate"]) {
+    assert.equal(canConfirmTrip(r, false), false, `🔴 подати може ${r} без адмін-рівня`);
   }
 });
 
@@ -84,7 +85,7 @@ test("#9045b ПРОВОДКА: колір, «Проблемний», цикл, �
   assert.match(plans, /reactCycleRules\.inReact\(reactInv\(key\), nowYm\)/, "🔴 вкладка «Реактивація» без поїздки");
   assert.match(plans, /reactCycle\.cycleView\(reactInv\(c\.client_key\)/, "🔴 вигляд циклу без поїздки");
   assert.match(plans, /trip: tripByKey\.get\(c\.client_key\) \?\? null,/, "🔴 рядок не віддає підтвердження");
-  assert.match(plans, /canConfirmTrip: clientTripConfirm\.canConfirmTrip\(auth\.role\),/, "🔴 право не віддається фронту");
+  assert.match(plans, /canConfirmTrip: clientTripConfirm\.canConfirmTrip\(auth\.role, isAdminScope\(auth\)\),/, "🔴 право не віддається фронту");
   const card = dash.slice(dash.indexOf('dashboardRouter.get("/client-card"'));
   assert.match(card, /lastOrderDate\(h\?\.last_paid \?\? null, cardLastInv, cardTripDay\)/, "🔴 картка: «Проблемний» без поїздки");
   assert.match(card, /reactCycleRules\.inReact\(cardReactInv,/, "🔴 картка: цикл без поїздки");
@@ -97,7 +98,7 @@ test("#9045b ПРОВОДКА: колір, «Проблемний», цикл, �
     assert.ok(i > 0, `🔴 роуту ${p} немає`);
     const body = dash.slice(i, dash.indexOf("dashboardRouter.", i + 10));
     const first = body.split("\n").slice(1).map((x) => x.trim()).filter((x) => x && !x.startsWith("const auth") && !x.startsWith("const clientKey"))[0];
-    assert.match(first, /^if \(!clientTripConfirm\.canConfirmTrip\(auth\.role\) \|\| !clientKey \|\| !\(await canSeeClient\(auth, clientKey\)\)\) \{$/,
+    assert.match(first, /^if \(!clientTripConfirm\.canConfirmTrip\(auth\.role, isAdminScope\(auth\)\) \|\| !clientKey \|\| !\(await canSeeClient\(auth, clientKey\)\)\) \{$/,
       `🔴 ${p}: роль і межа — не перший оператор (403 = гейт, не валідація)`);
   }
   const post = dash.slice(dash.indexOf('dashboardRouter.post("/client-trip-confirm"'));
@@ -123,7 +124,7 @@ test("#9045b ПРОВОДКА: колір, «Проблемний», цикл, �
 });
 
 /**
- * #9045c 🪞 — ЖИВИЙ: роути на справжній схемі. Тімлід своєї команди — 200 (дзеркало); чужої — 403; менеджер і адмін — 403;
+ * #9045c 🪞 — ЖИВИЙ: роути на справжній схемі. Тімлід своєї команди і адмін — 200 (дзеркало); чужий тімлід і менеджер — 403;
  * без коментаря / з майбутньою датою — 400; запис із автором, коментар у коментарях клієнта; гроші клієнта до і після —
  * байт у байт; CHECK не пускає порожній коментар; «зняти» лишає рядок в історії, повторне — 409.
  * 🧨 Червоніє, якщо SQL зламається на справжній БД, межа пропустить чужого, або поїздка підмішається в гроші.
@@ -177,7 +178,6 @@ test("#9045c 🪞 ЖИВИЙ «ПОЇЗДКА ПОЗА CRM»: права з дз
 
     assert.equal((await call("/client-trip-confirm", otherLead, body)).status, 403, "🔴 тімлід чужої команди подав поїздку");
     assert.equal((await call("/client-trip-confirm", manager, body)).status, 403, "🔴 менеджер подав поїздку");
-    assert.equal((await call("/client-trip-confirm", admin, body)).status, 403, "🔴 адмін подав поїздку (доступ керівництву — рішення Сергія)");
     assert.equal((await call("/client-trip-confirm", lead, { ...body, note: "ок" })).status, 400, "🔴 прийнято поїздку без коментаря");
     assert.equal((await call("/client-trip-confirm", lead, { ...body, day: "2099-01-01" })).status, 400, "🔴 прийнято поїздку з майбутнього");
     assert.equal((await call("/client-trip-confirm/clear", lead, { clientKey: "ейдівіпі" })).status, 409, "🔴 зняття без підтвердження — не 409");
@@ -202,6 +202,12 @@ test("#9045c 🪞 ЖИВИЙ «ПОЇЗДКА ПОЗА CRM»: права з дз
     const hist = (await c.query<{ n: string; by: number }>(`SELECT COUNT(*) AS n, MAX(revoked_by) AS by FROM client_trip_confirms WHERE revoked_at IS NOT NULL`)).rows[0];
     assert.deepEqual([Number(hist.n), Number(hist.by)], [1, 2], "🔴 «зняти» не лишило рядок в історії з автором");
     assert.equal((await call("/client-trip-confirm/clear", lead, { clientKey: "ейдівіпі" })).status, 409, "🔴 повторне зняття — не 409");
+    // 🪞 Адмін-рівень (Роман 18.11 «подати можна всім (адмінам)») — будь-якого клієнта, і знімає теж.
+    const byAdmin = await call("/client-trip-confirm", admin, body);
+    assert.equal(byAdmin.status, 200, `🔴 адмін не зміг подати поїздку: ${String(byAdmin.json.error ?? "")}`);
+    assert.equal((await T.tripsFor(pool, ["ейдівіпі"])).get("ейдівіпі")?.byName, "a@x", "🔴 подав адмін, а автор інший");
+    assert.equal(await money(), before, "🔴 поїздка від адміна змінила гроші клієнта");
+    assert.equal((await call("/client-trip-confirm/clear", admin, { clientKey: "ейдівіпі" })).status, 200, "🔴 адмін не зміг зняти");
     await pool.end().catch(() => {});
   } finally {
     await c.end();

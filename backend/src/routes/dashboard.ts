@@ -7183,8 +7183,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     tabGroupRank: clientTabs.TAB_GROUP_RANK,
     // 🔁 Пул лідгенів (ТЗ 22.09, п.4.2–4.4): хто бачить вкладку пулу і хто може брати.
     leadgenPool: await leadgenPoolAccess(auth),
-    // 🧾 Хто може подати / зняти поїздку поза CRM (9045) — та сама функція, що гейтить роут. Межа команди — у роуті.
-    canConfirmTrip: clientTripConfirm.canConfirmTrip(auth.role),
+    // 🧾 Хто може подати / зняти поїздку поза CRM (9045): тімлід і адмін-рівень — та сама функція, що гейтить роут.
+    // Межа команди тімліда — у роуті.
+    canConfirmTrip: clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)),
     reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, decisionDays: reactCycleRules.DECISION_DAYS,
                   selfGraceDays: reactCycleRules.SELF_GRACE_DAYS, weeklyCap: reactCycleRules.WEEKLY_CAP,
                   launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR,
@@ -8525,16 +8526,16 @@ dashboardRouter.post("/client-problem/clear", async (req, res) => {
 });
 
 /**
- * 🧾 «ПОЇЗДКА БУЛА (ПОЗА CRM)» (задача 9045; ТЗ Юлі 16.11.2026; Роман 18.11.2026 «роби»). Подає ЛИШЕ тімлід і лише
- * клієнта своєї команди: роль (`canConfirmTrip`) і межа (`canSeeClient`) — ПЕРШИМ оператором, разом (403 = гейт,
- * не валідація). Дата поїздки + обовʼязковий коментар (№ рахунку, як оплачено). Дата рахується замовленням для
+ * 🧾 «ПОЇЗДКА БУЛА (ПОЗА CRM)» (задача 9045; ТЗ Юлі 16.11.2026; Роман 18.11.2026 «роби»). Подає тімлід (клієнта
+ * своєї команди) і адмін-рівень (будь-якого; Роман 18.11 «подати можна всім (адмінам)»): роль (`canConfirmTrip`) і
+ * межа (`canSeeClient`) — ПЕРШИМ оператором, разом (403 = гейт, не валідація). Дата поїздки + обовʼязковий коментар (№ рахунку, як оплачено). Дата рахується замовленням для
  * кольору й рахунком для циклу реактивації; у гроші не йде. Коментар дублюється в коментарі клієнта.
  */
 dashboardRouter.post("/client-trip-confirm", async (req, res) => {
   const auth = req.auth!;
   const clientKey = String(req.body?.clientKey ?? "").trim();
-  if (!clientTripConfirm.canConfirmTrip(auth.role) || !clientKey || !(await canSeeClient(auth, clientKey))) {
-    return res.status(403).json({ error: "Підтвердити поїздку може лише тімлід команди клієнта" });
+  if (!clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)) || !clientKey || !(await canSeeClient(auth, clientKey))) {
+    return res.status(403).json({ error: "Підтвердити поїздку може тімлід команди клієнта або керівництво" });
   }
   const dayErr = clientTripConfirm.tripDayError(req.body?.day, kyivToday());
   if (dayErr) return res.status(400).json({ error: dayErr });
@@ -8551,8 +8552,8 @@ dashboardRouter.post("/client-trip-confirm", async (req, res) => {
 dashboardRouter.post("/client-trip-confirm/clear", async (req, res) => {
   const auth = req.auth!;
   const clientKey = String(req.body?.clientKey ?? "").trim();
-  if (!clientTripConfirm.canConfirmTrip(auth.role) || !clientKey || !(await canSeeClient(auth, clientKey))) {
-    return res.status(403).json({ error: "Зняти підтвердження може лише тімлід команди клієнта" });
+  if (!clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)) || !clientKey || !(await canSeeClient(auth, clientKey))) {
+    return res.status(403).json({ error: "Зняти підтвердження може тімлід команди клієнта або керівництво" });
   }
   if (!(await clientTripConfirm.clearTrips(pool, clientKey, auth.userId))) {
     return res.status(409).json({ error: "Підтвердженої поїздки на клієнті немає" });
