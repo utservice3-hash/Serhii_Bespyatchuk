@@ -1,9 +1,11 @@
 /**
- * ✍️ ЗАПИС У GOOGLE-ТАБЛИЦЮ — ЛИШЕ ДЛЯ ФАЙЛУ НА ОПЛАТУ ПЕРЕВІЗНИКАМ (13.10.2026). Окремий модуль навмисно: `googleSheets.ts`
- * читає Сейф і писати не вміє за побудовою (#1249), тож писар не може опинитись у шляху Сейфу випадково (#1268).
+ * ✍️ ЗАПИС У GOOGLE-ТАБЛИЦЮ — файл на оплату перевізникам (13.10.2026) і вкладка «Data» фінансів (18.11.2026,
+ * `insertDataRows`). Окремий модуль навмисно: `googleSheets.ts` читає Сейф і писати не вміє за побудовою (#1249), тож
+ * писар не може опинитись у шляху Сейфу випадково (#1268).
  * Писати сервісний акаунт може лише в таблиці, якими з ним поділились як із редактором.
  */
 import { googleToken } from "./googleSheets.js";
+import { buildInsertRequests, assertAppendOnly, FORMULA_SPANS, type DataRow } from "../core/dataSheetRows.js";
 
 const WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 
@@ -39,3 +41,57 @@ export async function writeSheetTab(spreadsheetId: string, tab: string, values: 
   if (!put.ok) throw await sheetsError(put);
 }
 
+
+/**
+ * Відмова запису в Data з відповіддю на головне питання обліку: чи МОГЛИ рядки лягти в таблицю.
+ * `no` — точно ні (відмова до запиту або Google відповів помилкою; batchUpdate атомарний). `unknown` — запит пішов і
+ * обірвався без відповіді: рядки могли лягти, тож повторювати їх наосліп не можна (дубль у фінансах).
+ */
+export class DataSheetWriteError extends Error {
+  constructor(message: string, readonly applied: "no" | "unknown") { super(message); }
+}
+
+/** Номер колонки (0-based) → літера. */
+const colLetter = (i: number): string => String.fromCharCode(65 + i);
+
+/**
+ * 📤 Дописати рядки у вкладку `tab` (Data): ВСТАВКОЮ після останнього рядка з датою в E — так межі формул CF,
+ * обмежені номером рядка, розсуваються самі. Формули B–C, I–L, S беруться з того самого останнього рядка; якщо там
+ * формул немає — відмова ДО запису (рядки без формул тихо випали б із CF). Один атомарний batchUpdate.
+ */
+export async function insertDataRows(spreadsheetId: string, tab: string, rows: DataRow[]): Promise<{ lastRow: number; inserted: number }> {
+  if (!rows.length) return { lastRow: 0, inserted: 0 };
+  let auth: Record<string, string>;
+  try { auth = { Authorization: `Bearer ${await googleToken(WRITE_SCOPE)}`, "Content-Type": "application/json" }; }
+  catch (e) { throw new DataSheetWriteError((e as Error).message, "no"); }
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`;
+  const get = async (url: string) => {
+    const res = await fetch(url, { headers: auth, signal: AbortSignal.timeout(60000) }).catch((e) => { throw new DataSheetWriteError(`Google Sheets: ${(e as Error).message}`, "no"); });
+    if (!res.ok) throw new DataSheetWriteError((await sheetsError(res)).message, "no");
+    return res.json() as Promise<any>;
+  };
+  const meta = await get(`${base}?fields=sheets.properties(sheetId,title)`);
+  const sheet = (meta.sheets ?? []).find((s: any) => s.properties?.title === tab);
+  if (!sheet) throw new DataSheetWriteError(`Google Sheets: вкладки «${tab}» немає`, "no");
+  const sheetId = Number(sheet.properties.sheetId);
+  const colE = await get(`${base}/values/${encodeURIComponent(`${tab}!E1:E`)}?majorDimension=COLUMNS`);
+  const e: unknown[] = colE.values?.[0] ?? [];
+  let lastRow = e.length;
+  while (lastRow > 0 && String(e[lastRow - 1] ?? "").trim() === "") lastRow--;
+  if (lastRow < 3) throw new DataSheetWriteError(`Google Sheets: у «${tab}» немає рядків із датою — не знаю, куди вставляти`, "no");
+  const tpl = await get(`${base}/values/${encodeURIComponent(`${tab}!A${lastRow}:S${lastRow}`)}?valueRenderOption=FORMULA`);
+  const cells: unknown[] = tpl.values?.[0] ?? [];
+  const missing = FORMULA_SPANS.flatMap((s) => Array.from({ length: s.to - s.from + 1 }, (_, k) => s.from + k))
+    .filter((c) => !String(cells[c] ?? "").startsWith("="));
+  if (missing.length) throw new DataSheetWriteError(`Google Sheets: у рядку ${lastRow} «${tab}» немає формул у ${missing.map(colLetter).join(", ")} — `
+    + "нові рядки не мали б звідки їх узяти; вставку не роблю", "no");
+  const requests = buildInsertRequests(sheetId, lastRow, rows);
+  try { assertAppendOnly(requests, lastRow, rows.length); }
+  catch (err) { throw new DataSheetWriteError((err as Error).message, "no"); }
+  let res: Response;
+  try {
+    res = await fetch(`${base}:batchUpdate`, { method: "POST", headers: auth, signal: AbortSignal.timeout(120000), body: JSON.stringify({ requests }) });
+  } catch (err) { throw new DataSheetWriteError(`Google Sheets: запит обірвався без відповіді — ${(err as Error).message}`, "unknown"); }
+  if (!res.ok) throw new DataSheetWriteError((await sheetsError(res)).message, "no");
+  return { lastRow, inserted: rows.length };
+}
