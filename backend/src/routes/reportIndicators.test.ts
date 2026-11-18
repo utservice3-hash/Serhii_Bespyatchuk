@@ -63,9 +63,12 @@ const REPORT_INDICATORS: Indicator[] = [
   { label: "кільце % плану, розклад «успішно + оплачено» в підказці", where: "плитка «Команда»", file: "plan", fn: "Glance", marker: /= успішно реалізовано \(виграно 142\)/ },
   { label: "рядок «= успішно … + оплачено … · чек … ₴» (повернуто 18.11)", where: "плитка «Команда»", file: "plan", fn: "Glance", marker: /= успішно \{k\(g\.factSuccess\)\} \+ оплачено \{k\(g\.factPaid\)\} · чек \{g\.avgCheck == null/ },
   { label: "очікування цього місяця пунктиром на смузі", where: "плитка «Команда»", file: "plan", fn: "Glance", marker: /<ExpectSeg fact=\{g\.fact\} expect=\{g\.expectThisMonth\}/ },
+  { label: "очікування цього тижня пунктиром на смузі (додано 18.11, пункт 2)", where: "плитка «Команда»", file: "plan", fn: "Glance", marker: /<ExpectSeg fact=\{g\.fact\} expect=\{g\.expectInPeriod\}/ },
+  { label: "рядок «з очікуваннями … ₴ · N% плану» (додано 18.11, пункт 2)", where: "плитка «Команда»", file: "plan", fn: "Glance", marker: /з очікуваннями <b>\{fmt\(withExp\)\} ₴<\/b>/ },
   { label: "чипи станів: зрив · відстає · у нормі", where: "плитка «Команда»", file: "plan", fn: "Glance", marker: /s === "r" \? "зрив" : s === "a" \? "відстає" : "у нормі"/ },
   // ── плитка «Очікуємо» ──
   { label: "очікуємо за план. датою — цей місяць", where: "плитка «Очікуємо»", file: "plan", fn: "Glance", marker: /\{fmt\(g\.expectThisMonth\)\} <small>₴ цей міс<\/small>/ },
+  { label: "на цей тиждень (режим «Тиждень», додано 18.11)", where: "плитка «Очікуємо»", file: "plan", fn: "Glance", marker: /<span>на цей тиждень<\/span>/ },
   { label: "наступний місяць", where: "плитка «Очікуємо»", file: "plan", fn: "Glance", marker: /<span>наступний місяць<\/span><b>\{fmt\(g\.expectNextMonth\)\} ₴<\/b>/ },
   { label: "з минулих місяців", where: "плитка «Очікуємо»", file: "plan", fn: "Glance", marker: /<span>з минулих місяців<\/span>/ },
   // ── плитка «Авто й ціна» ──
