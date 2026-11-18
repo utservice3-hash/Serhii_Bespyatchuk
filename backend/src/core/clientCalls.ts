@@ -9,8 +9,10 @@
  * #814/#814b).
  *
  * Місяць — той, що обраний на екрані (`YYYY-MM`), межі — за КИЄВОМ. Звʼязка —
- * `ringostat_calls.client_key` (канонічний ключ після злиттів). Спільні номери не розводимо:
- * рішення Юлі 24.09.2026 «нічого не чіпаємо».
+ * `ringostat_calls.client_key` (канонічний ключ після злиттів) ПЛЮС спільні номери в межах стелі
+ * (`core/sharedPhoneCalls.ts`). 🔁 До 18.11.2026 тут стояло «спільні номери не розводимо: рішення Юлі
+ * 24.09.2026 «нічого не чіпаємо»». ТЗ Юлі до задачі 9061 від 16.11.2026 («знайти, чому розмови Дмитрука не
+ * прив'язуються, і виправити») — новіше рішення; Роман дав «роби» 18.11.2026.
  *
  * 🟢 РОЗМОВА vs СПРОБА: `billsec > 0` — розмова, решта — недодзвін (рішення власника 04.08.2026);
  * показуються обидва числа, не сумою.
@@ -19,6 +21,7 @@
  * `core/carrierPhones.ts`).
  */
 import { notCarrierCallSql } from "./carrierPhones.js";
+import { clientCallsSql } from "./sharedPhoneCalls.js";
 
 export interface CallsMonth {
   month: string;
@@ -28,16 +31,16 @@ export interface CallsMonth {
 
 /** SQL один. `$1` — масив канонічних ключів, `$2` — місяць `YYYY-MM`. */
 export const CALLS_BY_MONTH_SQL = `
-  SELECT client_key,
+  SELECT rc.ck AS client_key,
          COUNT(*)::int AS calls,
-         COUNT(*) FILTER (WHERE billsec > 0)::int AS talks
-    FROM ringostat_calls
-   WHERE client_key = ANY($1) AND ${notCarrierCallSql("ringostat_calls")}
-     -- Діапазон за КИЇВСЬКИМ часом, а не to_char(...) = $2: так працює індекс (client_key, calldate).
-     -- Заміряно 28.09.2026 на 1 187 клієнтах: to_char — 1 126 мс. Межі стереже #814c.
-     AND calldate >= (($2 || '-01')::date::timestamp AT TIME ZONE 'Europe/Kyiv')
-     AND calldate <  ((($2 || '-01')::date + interval '1 month')::timestamp AT TIME ZONE 'Europe/Kyiv')
-   GROUP BY client_key`;
+         COUNT(*) FILTER (WHERE rc.billsec > 0)::int AS talks
+    FROM ${clientCallsSql("= ANY($1)")} rc
+   WHERE ${notCarrierCallSql("rc")}
+     -- Діапазон за КИЇВСЬКИМ часом, а не to_char(...) = $2: так працюють індекси (client_key, calldate) і
+     -- (client_phone, calldate). Заміряно 28.09.2026 на 1 187 клієнтах: to_char — 1 126 мс. Межі стереже #814c.
+     AND rc.calldate >= (($2 || '-01')::date::timestamp AT TIME ZONE 'Europe/Kyiv')
+     AND rc.calldate <  ((($2 || '-01')::date + interval '1 month')::timestamp AT TIME ZONE 'Europe/Kyiv')
+   GROUP BY rc.ck`;
 
 export async function callsByMonth(keys: string[], month: string): Promise<Map<string, { calls: number; talks: number }>> {
   const out = new Map<string, { calls: number; talks: number }>();

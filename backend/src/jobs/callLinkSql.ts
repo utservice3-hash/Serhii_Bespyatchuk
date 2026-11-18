@@ -11,6 +11,8 @@
  * прохід не змінюється — доведено виконанням шаблону з git), з нею — звʼязується лише
  * свіже вікно за індексом `idx_rc_calldate`.
  */
+import { GENERIC_CLIENT_KEYS_SQL } from "../core/adCampaign.js";
+
 export interface LinkSql { sql: string; params: unknown[] }
 
 const withBound = (since?: Date): { bound: string; params: unknown[] } =>
@@ -81,4 +83,39 @@ export function linkByFioSql(since?: Date): LinkSql {
                 COALESCE((regexp_split_to_array(btrim(rc.employee_fio), '\\s+'))[2], ''),
                 'ʼ’\`', '')), '\\s+', '', 'g')
         AND rc.manager_id IS DISTINCT FROM mm.id${bound}`, params };
+}
+
+/**
+ * 📞 СПІЛЬНІ НОМЕРИ (задача 9061): перерахунок `shared_phone_clients` ОДНИМ оператором — читач ніколи не бачить
+ * таблицю напівпорожньою. Ті самі контакти, що в `linkByPhoneSql`, тож «хто має номер» і «кому дзвінок напряму»
+ * рахуються з одного джерела. Заглушки замість клієнта (`названиенеуказано`, порожній) клієнтами не рахуються:
+ * інакше номер одного клієнта ставав би «спільним» із заглушкою. Лише в повному (годинному) проході — без межі
+ * `since`: це агрегат по контактах, а не по свіжих дзвінках. Повертає, скільки рядків видалено й записано.
+ */
+export function sharedPhonesSql(): LinkSql {
+  return { sql: `WITH ph AS (
+         SELECT DISTINCT cp.phone, d.client_key
+           FROM contact_phones cp
+           JOIN deal_contacts dc ON dc.contact_id = cp.contact_id
+           JOIN deals d ON d.kommo_id = dc.deal_kommo_id AND d.client_key IS NOT NULL
+          WHERE NOT (d.client_key = ANY(${GENERIC_CLIENT_KEYS_SQL}))
+       ),
+       fresh AS (
+         SELECT client_key, phone, n FROM (
+           SELECT ph.client_key, ph.phone, COUNT(*) OVER (PARTITION BY ph.phone)::int AS n FROM ph
+         ) x WHERE n >= 2
+       ),
+       del AS (
+         DELETE FROM shared_phone_clients s
+          WHERE NOT EXISTS (SELECT 1 FROM fresh f WHERE f.client_key = s.client_key AND f.phone = s.phone)
+         RETURNING 1
+       ),
+       ins AS (
+         INSERT INTO shared_phone_clients (client_key, phone, n)
+         SELECT client_key, phone, n FROM fresh
+         ON CONFLICT (client_key, phone) DO UPDATE SET n = EXCLUDED.n, updated_at = now()
+          WHERE shared_phone_clients.n IS DISTINCT FROM EXCLUDED.n
+         RETURNING 1
+       )
+       SELECT (SELECT COUNT(*) FROM del)::int AS deleted, (SELECT COUNT(*) FROM ins)::int AS written`, params: [] };
 }

@@ -33,6 +33,13 @@ const COLOR = {
 } as const;
 /** Група рядка: діюча позначка «Проблемний» (8350) переважає колір. */
 const groupOf = (r: Row): keyof typeof COLOR => (r.lead.problem ? "problem" : r.lead.color);
+/** «ще 1 клієнт / 2 клієнти / 5 клієнтів» — спільний номер останньої розмови (задача 9061). */
+function sharedLabel(n: number): string {
+  // Прямо звʼязана розмова буває й на номері поза стелею (до 139 клієнтів), тож відмінювання повне.
+  const teen = [11, 12, 13, 14].includes(n % 100), m10 = n % 10;
+  const w = !teen && m10 === 1 ? "клієнт" : !teen && [2, 3, 4].includes(m10) ? "клієнти" : "клієнтів";
+  return `${String(n)} ${w}`;
+}
 const WORK_BY: Record<string, string> = { talk: "розмова", stage: "рух угоди", deal: "нова угода", order: "замовлення", comment: "коментар", contact: "контакт", payment: "оплата у Виписці", season: "не сезон (сезонний)" };
 const SOURCE: Record<string, string> = { leadgen: "лідогенерація", ad: "реклама", manager: "менеджер" };
 
@@ -247,6 +254,14 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
                 {c.lastTalkBy && <span style={grey}>{c.lastTalkBy}</span>}
               </div>
             ) : <span style={S.chip("#fef2f2", "#b91c1c")}>розмов не було</span>}
+            {c.lastTalk && (c.lastTalkSharedWith ?? 0) > 0 && (
+              <div style={{ marginTop: 4 }}>
+                <span style={S.chip("#eff6ff", "#1d4ed8")}
+                  title="номер цієї розмови є в контактах кількох клієнтів у Kommo — розмова могла бути й про іншого клієнта">
+                  📞 спільний номер · ще {sharedLabel(c.lastTalkSharedWith ?? 0)}
+                </span>
+              </div>
+            )}
             {L.summary
               ? <div style={{ fontSize: 12, marginTop: 4, color: "#374151" }} title="суть розмови — з AI-аналізу дзвінка">💬 {dm(L.summary.at)}: {L.summary.text.length > 160 ? `${L.summary.text.slice(0, 160)}…` : L.summary.text}</div>
               : c.lastTalk && <div style={{ ...grey, marginTop: 3 }}>суть: розмову не розбирав AI</div>}
