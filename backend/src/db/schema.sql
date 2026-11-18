@@ -8438,3 +8438,19 @@ UPDATE first_touch_notes n SET set_by_name = m.name
 UPDATE call_type_overrides o SET set_by_name = m.name
   FROM users u JOIN managers m ON m.id = u.manager_id
  WHERE o.set_by = u.id AND u.email IN ('naas@uts.ua', 'sai@uts.ua') AND o.set_by_name IS DISTINCT FROM m.name;
+
+-- ═══ 🎯 ХАНТИНГ, доведення до ТЗ (18.11.2026): рейтинг компанії, перевізники, нагадування, строк зберігання ═══
+-- Рейтинг власника заявки (Ларді: `owner.rating.positiveCommentCount` / `negativeCommentCount`) — ТЗ п.7, таблиця радару.
+ALTER TABLE lardi_proposals ADD COLUMN IF NOT EXISTS rating_pos INTEGER;
+ALTER TABLE lardi_proposals ADD COLUMN IF NOT EXISTS rating_neg INTEGER;
+-- Тип компанії в заявці Ларді не приходить; є фільтри пошуку `onlyShippers` і `onlyCarrier` — окремими сканами збираємо
+-- `refId` вантажовласників і перевізників. «Експедитор» (ТЗ п.4) = ні те, ні те.
+ALTER TABLE lardi_shippers ADD COLUMN IF NOT EXISTS is_shipper BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE lardi_shippers ADD COLUMN IF NOT EXISTS is_carrier BOOLEAN NOT NULL DEFAULT false;
+-- Строк зберігання (ТЗ п.9): контакт не у воронці й не зʼявлявся на Ларді понад 90 днів — видаляє `syncLardi` щопроходу.
+CREATE INDEX IF NOT EXISTS idx_lardi_proposals_seen ON lardi_proposals (last_seen_at);
+-- Нагадування з коментаря (ТЗ п.8, п.10 «Потім»): `huntReminders` шле сповіщення авторові й ставить позначку — рівно раз.
+ALTER TABLE hunt_comments ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
+INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
+ ('hunt.remind', 'Хантинг', false, 'Настав час нагадування з коментаря до кандидата', 'автор коментаря')
+ON CONFLICT (type) DO NOTHING;

@@ -1708,6 +1708,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/hunt/contacts/phones", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/hunt/report", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/hunt/candidates", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/hunt/candidates", cls: "deny-only",

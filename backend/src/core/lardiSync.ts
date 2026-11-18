@@ -37,7 +37,7 @@ export interface Proposal {
   company: string | null; face: string | null; phones: { n: string; m: unknown[] }[];
   fromTown: string | null; fromArea: string | null; fromCountry: string | null;
   toTown: string | null; toArea: string | null; toCountry: string | null;
-  price: number | null; currency: string | null; autoRepeat: boolean; repeatsToday: number;
+  price: number | null; currency: string | null; autoRepeat: boolean; repeatsToday: number; ratingPos: number | null; ratingNeg: number | null;
   createdAt: string; repeatedAt: string | null;
 }
 
@@ -53,6 +53,9 @@ export function parseProposal(kind: SyncKind, it: unknown): Proposal | null {
   if (!id || !refId || !createdAt) return null;
   const f = point(o.waypointListSource), t = point(o.waypointListTarget);
   const pay = obj(o.payment), rep = obj(o.repeat);
+  // Рейтинг — обʼєкт (звірено з живою відповіддю 18.11.2026); масив із документації теж приймаємо.
+  const rt = Array.isArray(owner.rating) ? obj(owner.rating[0]) : obj(owner.rating);
+  const cnt = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : null);
   const phones = arr(owner.phones).map((p) => ({ n: String(p.number ?? "").trim(), m: Array.isArray(p.messengers) ? p.messengers : [] })).filter((p) => p.n);
   const repeatedAt = lardiTime(o.dateRepeat);
   return {
@@ -60,6 +63,7 @@ export function parseProposal(kind: SyncKind, it: unknown): Proposal | null {
     fromTown: f.town, fromArea: f.area, fromCountry: f.country, toTown: t.town, toArea: t.area, toCountry: t.country,
     price: num(pay.value), currency: txt(obj(pay.currency).name), autoRepeat: rep.auto === true,
     repeatsToday: Math.max(0, Math.trunc(Number(rep.countToday) || 0)),
+    ratingPos: cnt(rt.positiveCommentCount), ratingNeg: cnt(rt.negativeCommentCount),
     // «Повтор» раніше створення — це не підняття, а та сама публікація.
     createdAt, repeatedAt: repeatedAt && repeatedAt > createdAt ? repeatedAt : null,
   };
@@ -85,31 +89,49 @@ export function eventsFor(p: Proposal, knownRepeatAt: string | null | undefined)
 export const BOT_BURST = 20;
 export const BOT_WINDOW_MS = 10 * 60_000;
 export function botLike(times: string[], autoFlag: boolean): boolean {
-  if (autoFlag) return true;
   const ts = times.map((t) => Date.parse(t)).filter(Number.isFinite).sort((a, b) => a - b);
+  let maxBurst = 0;
   for (let i = 0, j = 0; j < ts.length; j++) {
     while (ts[j] - ts[i] > BOT_WINDOW_MS) i++;
-    if (j - i + 1 > BOT_BURST) return true;
+    maxBurst = Math.max(maxBurst, j - i + 1);
   }
   const gaps = ts.slice(1).map((t, k) => t - ts[k]).filter((g) => g > 0);
-  if (gaps.length < 6) return false;
-  const mean = gaps.reduce((a, g) => a + g, 0) / gaps.length;
-  const sd = Math.sqrt(gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / gaps.length);
-  return sd / mean < 0.1;
+  const mean = gaps.length ? gaps.reduce((a, g) => a + g, 0) / gaps.length : 0;
+  const sd = gaps.length ? Math.sqrt(gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / gaps.length) : 0;
+  return botFrom({ auto: autoFlag, maxBurst, gapN: gaps.length, gapMean: mean, gapSd: sd });
+}
+
+/**
+ * Те саме правило над ГОТОВОЮ статистикою — її рахує SQL радару (вікно 10 хв, `lag` між подіями), щоб не тягнути в
+ * процес усі часи подій: бот із 3 000 підняттями на добу за 30 днів — це десятки тисяч рядків на ОДИН контакт.
+ * 📐 18.11.2026 саме це поклало прод: радар збирав масиви часів, телефонів і напрямків, і процес убило по памʼяті.
+ */
+export function botFrom(s: { auto: boolean; maxBurst: number; gapN: number; gapMean: number; gapSd: number }): boolean {
+  if (s.auto) return true;
+  if (s.maxBurst > BOT_BURST) return true;
+  if (s.gapN < 6 || !(s.gapMean > 0)) return false;
+  return s.gapSd / s.gapMean < 0.1;
 }
 
 /** «Зазвичай публікує з … до …» (ТЗ п.6): години Києва, що разом покривають ≥ 80% подій, від першої до останньої. */
 export function typicalHours(times: string[]): { from: number; to: number; n: number } | null {
-  const hours = times.map((t) => Number(new Intl.DateTimeFormat("uk-UA", { hour: "2-digit", hourCycle: "h23", timeZone: "Europe/Kyiv" }).format(new Date(t))))
-    .filter(Number.isFinite);
-  if (hours.length < 3) return null;
   const by = new Array<number>(24).fill(0);
-  for (const h of hours) by[h]++;
+  for (const t of times) {
+    const h = Number(new Intl.DateTimeFormat("uk-UA", { hour: "2-digit", hourCycle: "h23", timeZone: "Europe/Kyiv" }).format(new Date(t)));
+    if (Number.isFinite(h)) by[h]++;
+  }
+  return hoursFromCounts(by);
+}
+
+/** Те саме над гістограмою «година Києва → кількість» (її рахує SQL радару). */
+export function hoursFromCounts(by: number[]): { from: number; to: number; n: number } | null {
+  const total = by.reduce((a, n) => a + n, 0);
+  if (total < 3) return null;
   const ranked = by.map((n, h) => ({ h, n })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n || a.h - b.h);
   const keep: number[] = [];
   let acc = 0;
-  for (const x of ranked) { keep.push(x.h); acc += x.n; if (acc >= hours.length * 0.8) break; }
-  return { from: Math.min(...keep), to: Math.max(...keep) + 1, n: hours.length };
+  for (const x of ranked) { keep.push(x.h); acc += x.n; if (acc >= total * 0.8) break; }
+  return { from: Math.min(...keep), to: Math.max(...keep) + 1, n: total };
 }
 
 /**
@@ -117,14 +139,20 @@ export function typicalHours(times: string[]): { from: number; to: number; n: nu
  * переліку фільтрів ТЗ). `directionFrom` у Ларді обовʼязковий, тож міжнародку «в Україну» скануємо від сусідів.
  */
 export const INBOUND_COUNTRIES = ["PL", "MD", "RO", "HU", "SK", "LT", "DE", "CZ"] as const;
-export interface ScanSpec { label: string; filter: Any; shippers?: boolean }
+export interface ScanSpec { label: string; filter: Any; shippers?: boolean; carriers?: boolean }
 export function scanPlan(): ScanSpec[] {
   const dir = (sign: string) => ({ directionRows: [{ countrySign: sign }] });
   return [
     { label: "з України", filter: { directionFrom: dir("UA") } },
+    // Ввіз з усіх країн одним пошуком: `directionFrom` на ділі необовʼязковий (звірено живим запитом 18.11.2026).
+    { label: "в Україну", filter: { directionTo: dir("UA") } },
     ...INBOUND_COUNTRIES.map((c) => ({ label: `${c} → Україна`, filter: { directionFrom: dir(c), directionTo: dir("UA") } })),
     // Вантажовласники: окремий скан з фільтром Ларді `onlyShippers` — лише щоб дізнатись їхні `refId`.
     { label: "вантажовласники з України", filter: { directionFrom: dir("UA"), onlyShippers: true }, shippers: true },
+    { label: "вантажовласники в Україну", filter: { directionTo: dir("UA"), onlyShippers: true }, shippers: true },
+    // Перевізники — так само, фільтром Ларді `onlyCarrier` (звірено живим запитом 18.11.2026).
+    { label: "перевізники з України", filter: { directionFrom: dir("UA"), onlyCarrier: true }, carriers: true },
+    { label: "перевізники в Україну", filter: { directionTo: dir("UA"), onlyCarrier: true }, carriers: true },
   ];
 }
 
@@ -138,7 +166,7 @@ export interface SyncDeps {
   search: (kind: SyncKind, filter: Any, page: number) => Promise<PageAnswer>;
   /** Записати сторінку; повертає, скільки заявок на ній ми бачили вперше. */
   record: (items: Proposal[]) => Promise<{ fresh: number; events: number }>;
-  shippers: (refIds: number[]) => Promise<void>;
+  shippers: (refIds: number[], kind: "shipper" | "carrier") => Promise<void>;
   sleep: (ms: number) => Promise<void>;
 }
 export interface SyncTally { requests: number; ok: number; seen: number; fresh: number; events: number; unparsed: number; shippers: number; retries: number }
@@ -151,7 +179,7 @@ export function lardiReason(detail: string): string {
 
 /**
  * Один прохід. Сторінки йдуть, поки на сторінці є хоч одна нова або піднята заявка (ТЗ: «до заявок, які вже бачили»), але не далі
- * `MAX_PAGES`. 401/402/403 — про обліковий запис, тож зупиняємось на першій і падаємо з текстом Ларді (→ «АВАРІЯ»).
+ * `MAX_PAGES` (на ділі Ларді віддає не більше 500 заявок на один пошук — заміряно 18.11.2026). 401/402/403 — про обліковий запис, тож зупиняємось на першій і падаємо з текстом Ларді (→ «АВАРІЯ»).
  * 429 — пауза 30/60/120 с і повтор; після третьої — падіння. Жодної 200 за прохід — теж падіння: нуль тут аварія.
  * Заявки, які не вдалось розібрати, рахуються окремо: якщо розібрано НУЛЬ із ненульової сторінки — падіння з назвою
  * полів (форма відповіді розійшлась із документацією — перше, що треба побачити після оплати пакета).
@@ -159,8 +187,9 @@ export function lardiReason(detail: string): string {
 export async function runLardiSync(deps: SyncDeps, plan: ScanSpec[] = scanPlan()): Promise<SyncTally> {
   const t: SyncTally = { requests: 0, ok: 0, seen: 0, fresh: 0, events: 0, unparsed: 0, shippers: 0, retries: 0 };
   for (const spec of plan) {
-    for (const kind of spec.shippers ? (["cargo"] as const) : SYNC_KINDS) {
-      for (let page = 1; page <= (spec.shippers ? 5 : MAX_PAGES); page++) {
+    const mark = spec.shippers ? "shipper" as const : spec.carriers ? "carrier" as const : null;
+    for (const kind of SYNC_KINDS) {
+      for (let page = 1; page <= MAX_PAGES; page++) {
         let r: PageAnswer;
         for (let attempt = 0; ; attempt++) {
           t.requests++;
@@ -181,9 +210,9 @@ export async function runLardiSync(deps: SyncDeps, plan: ScanSpec[] = scanPlan()
           throw new Error(`Ларді: жодної заявки не розібрано (${spec.label}, ${kind}) — бракує id / owner.refId / dateCreate. Поля першої: ${keys}`);
         }
         t.seen += good.length;
-        if (spec.shippers) {
+        if (mark) {
           const ids = [...new Set(good.map((p) => p.refId))];
-          await deps.shippers(ids);
+          await deps.shippers(ids, mark);
           t.shippers += ids.length;
         } else {
           const w = await deps.record(good);

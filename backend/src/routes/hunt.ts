@@ -4,7 +4,7 @@ import { requireAuth } from "../auth/middleware.js";
 import type { Db } from "../core/secrets.js";
 import {
   HuntError, huntAllowed, radar, contactActivity, revealPhones, addCandidate, listCandidates, candidateDetail,
-  updateCandidate, changeStage, addComment, HUNT_STAGES, REJECT_REASONS,
+  updateCandidate, changeStage, addComment, report, HUNT_STAGES, REJECT_REASONS,
 } from "../core/hunt.js";
 
 /**
@@ -46,6 +46,9 @@ huntRouter.use(async (req: Request, res: Response, next: NextFunction) => {
 huntRouter.get("/radar", async (req, res) => {
   try { const r = await radar(db(), req.query); res.json({ period: r.period, rows: r.rows, dataUntil: r.dataUntil, live: r.live, archiveUntil: r.archiveUntil, areas: r.areas, totals: r.totals, stages: HUNT_STAGES }); }
   catch (e) { fail(res, e); }
+});
+huntRouter.get("/report", async (_req, res) => {
+  try { res.json(await report(db())); } catch (e) { fail(res, e); }
 });
 huntRouter.get("/contacts/activity", async (req, res) => {
   try { res.json(await contactActivity(db(), String(req.query.key ?? ""))); } catch (e) { fail(res, e); }

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchHuntRadar, fetchHuntActivity, revealHuntPhones, fetchHuntCandidates, addHuntCandidate, fetchHuntCandidate, updateHuntCandidate,
+  fetchHuntRadar, fetchHuntReport, fetchHuntActivity, revealHuntPhones, fetchHuntCandidates, addHuntCandidate, fetchHuntCandidate, updateHuntCandidate,
   moveHuntCandidate, commentHuntCandidate, hiringError,
-  type HuntRadar, type HuntRadarRow, type HuntPeriod, type HuntHours, type HuntCandidateRow, type HuntCandidate, type HuntStage,
+  type HuntRadar, type HuntRadarRow, type HuntReport, type HuntPeriod, type HuntHours, type HuntCandidateRow, type HuntCandidate, type HuntStage,
 } from "../../../api";
 import type { Toast } from "./HiringShared";
 
@@ -22,16 +22,20 @@ const daysSince = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date
 const toLocalInput = (iso: string | null) => (iso ? new Date(new Date(iso).getTime() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : "");
 
 export function HiringHunt({ toast }: { toast: Toast }) {
-  const [sub, setSub] = useState<"radar" | "funnel">("radar");
+  // Перехід із нагадування у дзвіночку: `?tab=hunt&cand=<id>` відкриває воронку на картці кандидата.
+  const fromLink = Number(new URLSearchParams(window.location.search).get("cand")) || null;
+  const [sub, setSub] = useState<"radar" | "funnel" | "report">(fromLink ? "funnel" : "radar");
   const [nonce, setNonce] = useState(0);
-  const [openCand, setOpenCand] = useState<number | null>(null);
+  const [openCand, setOpenCand] = useState<number | null>(fromLink);
   return (
     <>
       <div className="hr-seg2" style={{ marginBottom: 14 }}>
         <button className={sub === "radar" ? "on" : ""} onClick={() => setSub("radar")}>Радар Ларді</button>
         <button className={sub === "funnel" ? "on" : ""} onClick={() => setSub("funnel")}>Воронка кандидатів</button>
+        <button className={sub === "report" ? "on" : ""} onClick={() => setSub("report")}>Звіт</button>
       </div>
-      {sub === "radar" ? <Radar toast={toast} nonce={nonce} onAdded={() => setNonce((n) => n + 1)} onOpenFunnel={(id) => { setSub("funnel"); setOpenCand(id); }} />
+      {sub === "report" ? <Report />
+        : sub === "radar" ? <Radar toast={toast} nonce={nonce} onAdded={() => setNonce((n) => n + 1)} onOpenFunnel={(id) => { setSub("funnel"); setOpenCand(id); }} onShowFunnel={() => setSub("funnel")} />
         : <Funnel toast={toast} nonce={nonce} openId={openCand} onOpen={setOpenCand} onChanged={() => setNonce((n) => n + 1)} />}
     </>
   );
@@ -42,13 +46,13 @@ export function HiringHunt({ toast }: { toast: Toast }) {
 const PERIODS: [HuntPeriod, string][] = [["h1", "Година"], ["d1", "Сьогодні"], ["d7", "Тиждень"], ["d30", "Місяць"]];
 const hh = (h: HuntHours | null) => (h ? `${String(h.from).padStart(2, "0")}:00–${String(h.to).padStart(2, "0")}:00` : null);
 
-function Radar({ toast, nonce, onAdded, onOpenFunnel }: { toast: Toast; nonce: number; onAdded: () => void; onOpenFunnel: (id: number) => void }) {
+function Radar({ toast, nonce, onAdded, onOpenFunnel, onShowFunnel }: { toast: Toast; nonce: number; onAdded: () => void; onOpenFunnel: (id: number) => void; onShowFunnel: () => void }) {
   const [period, setPeriod] = useState<HuntPeriod>("d30");
   const [show, setShow] = useState("all");
   const [side, setSide] = useState("");
   const [dir, setDir] = useState("");
   const [area, setArea] = useState("");
-  const [ctype, setCtype] = useState("");
+  const [ctype, setCtype] = useState("forwarders"); // ТЗ п.4: на старті — лише експедитори
   const [hideBots, setHideBots] = useState(false);
   const [q, setQ] = useState("");
   const [d, setD] = useState<HuntRadar | null>(null);
@@ -72,7 +76,7 @@ function Radar({ toast, nonce, onAdded, onOpenFunnel }: { toast: Toast; nonce: n
       ) : (
         <div className="hr-note" style={{ marginBottom: 12 }}>
           Живий скан Ларді кожні 15 хв · останній {dmyhm(live?.until)} · дані з {dmy(live?.since)}: повна тижнева картина — через тиждень після старту.
-          Тип компанії — за фільтром Ларді «лише вантажовласники».
+          «Експедитори» — ті, кого Ларді не віддав на фільтри «вантажовласники» й «перевізники»: позначки добираються з кожним сканом.
         </div>
       ))}
       <div className="page-filters" style={{ marginBottom: 12, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -85,7 +89,8 @@ function Radar({ toast, nonce, onAdded, onOpenFunnel }: { toast: Toast; nonce: n
           <option value="">Область: усі</option>{(d?.areas ?? []).map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
         <select className="hr-inp" value={ctype} onChange={(e) => setCtype(e.target.value)} aria-label="Тип компанії">
-          <option value="">Компанії: усі</option><option value="no_shippers">без вантажовласників</option><option value="shippers">лише вантажовласники</option>
+          <option value="forwarders">Компанії: експедитори</option><option value="">усі</option><option value="no_shippers">без вантажовласників</option>
+          <option value="shippers">лише вантажовласники</option><option value="carriers">лише перевізники</option>
         </select>
         <select className="hr-inp" value={show} onChange={(e) => setShow(e.target.value)} aria-label="Показати">
           <option value="all">Показати: усіх</option><option value="new">лише нових (не у воронці)</option><option value="funnel">лише у воронці</option>
@@ -101,12 +106,14 @@ function Radar({ toast, nonce, onAdded, onOpenFunnel }: { toast: Toast; nonce: n
             <div className="kpi-card"><div className="kpi-label">Заявок за період</div><div className="kpi-value">{d.totals.offers.toLocaleString("uk-UA")}</div><div className="hr-muted">публікації й підняття</div></div>
             <div className="kpi-card"><div className="kpi-label">Активних менеджерів</div><div className="kpi-value">{d.totals.contacts}</div><div className="hr-muted">з {d.totals.companies} компаній · автоповтор {d.totals.bots}</div></div>
             <div className="kpi-card"><div className="kpi-label">Нових кандидатів</div><div className="kpi-value">{d.totals.notInFunnel}</div><div className="hr-muted">ще не у воронці</div></div>
-            <div className="kpi-card"><div className="kpi-label">У воронці зараз</div><div className="kpi-value">{d.totals.inFunnel}</div><div className="hr-muted">без відмов</div></div>
+            <button className="kpi-card" style={{ textAlign: "left", cursor: "pointer", font: "inherit" }} onClick={onShowFunnel} title="Відкрити воронку">
+              <div className="kpi-label">У воронці зараз</div><div className="kpi-value">{d.totals.inFunnel}</div><div className="hr-muted">без відмов · відкрити воронку →</div>
+            </button>
           </div>
           <div className="chart-card" style={{ padding: 0 }}>
             <div className="hr-tw">
               <table className="data-table compact" style={{ width: "100%" }}>
-                <thead><tr><th>#</th><th>Менеджер · компанія</th><th>Телефон</th><th className="num">Год.</th><th className="num">Сьогодні</th><th className="num">7 дн.</th><th className="num">30 дн.</th><th>Напрямки</th><th className="num">З ціною</th><th>Воронка</th></tr></thead>
+                <thead><tr><th>#</th><th>Менеджер · компанія</th><th className="num" title="Відгуки про компанію на Ларді: позитивні / негативні">Відгуки</th><th>Телефон</th><th className="num">Год.</th><th className="num">Сьогодні</th><th className="num">7 дн.</th><th className="num">30 дн.</th><th>Напрямки</th><th className="num">З ціною</th><th>Воронка</th></tr></thead>
                 <tbody>
                   {d.rows.map((r, i) => (
                     <tr key={r.key} style={{ cursor: "pointer", background: pick?.key === r.key ? "var(--surface-2)" : undefined }} onClick={() => setPick(r)}>
@@ -114,9 +121,11 @@ function Radar({ toast, nonce, onAdded, onOpenFunnel }: { toast: Toast; nonce: n
                       <td>
                         <b>{r.face}</b>
                         {r.bot && <span className="emp-pill warn" style={{ marginLeft: 6 }} title="Ларді: автоповтор, понад 20 подій за 10 хв або рівні інтервали">схоже на автоповтор</span>}
-                        {r.shipper && <span className="emp-pill" style={{ marginLeft: 6 }}>вантажовласник</span>}
+                        {r.shipper && <span className="emp-pill mute" style={{ marginLeft: 6 }}>вантажовласник</span>}
+                        {r.carrier && <span className="emp-pill mute" style={{ marginLeft: 6 }}>перевізник</span>}
                         <div className="hr-muted" style={{ fontSize: 12 }}>{r.company}{r.area ? ` · ${r.area}` : ""}{r.intl ? ` · міжнародні ${r.intl}` : ""}</div>
                       </td>
+                      <td className="num" style={{ whiteSpace: "nowrap" }}>{r.rating ? <><span style={{ color: "var(--ok)" }}>+{r.rating.pos}</span>{r.rating.neg ? <span style={{ color: "var(--warn)" }}> −{r.rating.neg}</span> : null}</> : <span className="hr-muted" title="рейтинг приходить лише з живого скану">—</span>}</td>
                       <td className="hr-muted" style={{ whiteSpace: "nowrap" }}>{r.phones[0] ?? "—"}</td>
                       {(["h1", "d1", "d7", "d30"] as const).map((k) => (
                         <td key={k} className="num" style={{ fontWeight: period === k ? 700 : undefined }}>{k === "h1" && !r.live ? <span className="hr-muted" title="лише з живого скану">·</span> : r[k] || "—"}</td>))}
@@ -127,7 +136,7 @@ function Radar({ toast, nonce, onAdded, onOpenFunnel }: { toast: Toast; nonce: n
                           : <button className="hr-btn xs" onClick={() => setPick(r)}>+ У воронку</button>}
                       </td>
                     </tr>))}
-                  {!d.rows.length && <tr><td colSpan={10} className="hr-muted" style={{ padding: 16 }}>За цей період активних менеджерів немає{liveStale ? " — живий скан Ларді зараз не працює." : "."}</td></tr>}
+                  {!d.rows.length && <tr><td colSpan={11} className="hr-muted" style={{ padding: 16 }}>За цей період активних менеджерів немає{liveStale ? " — живий скан Ларді зараз не працює." : "."}</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -198,6 +207,44 @@ function RadarCard({ row, toast, onClose, onAdded, onOpenFunnel }: { row: HuntRa
         )}
       </aside>
     </div>, document.body);
+}
+
+/* ─────────────────────────── Звіт ─────────────────────────── */
+
+function Report() {
+  const [d, setD] = useState<HuntReport | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { fetchHuntReport().then(setD).catch((e) => setErr(hiringError(e))); }, []);
+  if (err) return <div className="chart-card"><b>Звіт недоступний.</b> <span className="hr-muted">{err}</span></div>;
+  if (!d) return <p className="loading-text">Рахую воронку…</p>;
+  if (!d.total) return <div className="chart-card hr-muted">У воронці ще немає кандидатів — звіт зʼявиться після першого доданого з радару.</div>;
+  const max = Math.max(1, ...d.stages.map((s) => s.reached));
+  const reason = Object.fromEntries(d.reasons);
+  return (
+    <>
+      <div className="chart-card">
+        <h3 style={{ marginTop: 0 }}>Конверсія по етапах</h3>
+        <div className="hr-muted" style={{ fontSize: 12, marginBottom: 10 }}>«Дійшли» — за історією етапів: кандидат із відмовою після співбесіди у «Співбесіді» рахується. Відсоток — від попереднього етапу.</div>
+        <table className="data-table compact" style={{ width: "100%" }}>
+          <thead><tr><th>Етап</th><th className="num">Дійшли</th><th style={{ width: "40%" }} /><th className="num">Від попереднього</th><th className="num">Зараз на етапі</th></tr></thead>
+          <tbody>{d.stages.map((s, i) => (
+            <tr key={s.key}>
+              <td>{s.label}</td><td className="num"><b>{s.reached}</b></td>
+              <td><div style={{ height: 10, borderRadius: 5, background: "var(--accent, #c8102e)", width: `${(s.reached / max) * 100}%`, minWidth: s.reached ? 4 : 0 }} /></td>
+              <td className="num">{i === 0 || s.conversionPct == null ? "—" : `${s.conversionPct}%`}</td><td className="num">{s.now}</td>
+            </tr>))}</tbody>
+        </table>
+      </div>
+      <div className="chart-card">
+        <h3 style={{ marginTop: 0 }}>Відмови · {d.rejected}</h3>
+        {!d.rejects.length ? <div className="hr-muted">Відмов ще немає.</div> : (
+          <table className="data-table compact" style={{ width: "100%" }}>
+            <thead><tr><th>Причина</th><th>На якому етапі</th><th className="num">Кандидатів</th></tr></thead>
+            <tbody>{d.rejects.map((r) => <tr key={`${r.reason}-${r.from_stage ?? ""}`}><td>{reason[r.reason] ?? r.reason}</td><td>{r.from_stage ? STAGE_LABEL[r.from_stage] ?? r.from_stage : "—"}</td><td className="num">{r.n}</td></tr>)}</tbody>
+          </table>)}
+      </div>
+    </>
+  );
 }
 
 /* ─────────────────────────── Воронка ─────────────────────────── */
