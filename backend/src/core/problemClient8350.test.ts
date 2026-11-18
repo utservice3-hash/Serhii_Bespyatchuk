@@ -60,7 +60,8 @@ test("#3812 🪞 «НЕМАЄ РОБОТИ» / «БЕЗ ЗАДАЧІ»: проб
 test("#3813 ПРОВОДКА: список, реактивація, «передати», прапорці, роути, картка, матриця, фронт", () => {
   const dash = codeOnly(read("backend/src/routes/dashboard.ts"));
   const plans = dash.slice(dash.indexOf('dashboardRouter.get("/client-plans"'));
-  assert.match(plans, /problemClient\.problemActive\(m\.day, clientLeadRules\.lastOrderDate\(c\.last_paid, lastInvByKey\.get\(c\.client_key\) \?\? null\)\)/,
+  // 🧾 9045: замовлення після позначки — і підтверджена тімлідом поїздка поза CRM (третій аргумент).
+  assert.match(plans, /problemClient\.problemActive\(m\.day,\s*clientLeadRules\.lastOrderDate\(c\.last_paid, lastInvByKey\.get\(c\.client_key\) \?\? null, tripDayOf\(c\.client_key\)\)\)/,
     "🔴 позначка діє без огляду на замовлення після неї");
   assert.match(plans, /const inReactNow = \(key: string\) => !factsFor\(seg, key\)\.offSeason && !activeProblem\.has\(key\)/, "🔴 проблемний у реактивації");
   assert.match(plans, /handOver: !activeProblem\.has\(c\.client_key\) && clientLeadRules\.handOverDue\(/, "🔴 проблемного пропонують «передати іншому»");

@@ -70,8 +70,11 @@ test("#3815 ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДО�
   const dash = codeOnly(read("backend/src/routes/dashboard.ts"));
   assert.match(dash, /tabGroup: clientTabs\.clientTabGroup\(inReactNow\(c\.client_key\), leadByKey\.get\(c\.client_key\)!\.orderDays\)/,
     "🔴 група вкладки /client-plans рахується не від рахунку (п.4.1) або не від тієї дати, що «днів тому» (8333)");
-  assert.match(dash, /const inReactNow = \(key: string\) => !factsFor\(seg, key\)\.offSeason && !activeProblem\.has\(key\)\s*&& reactCycleRules\.inReact\(lastInvByKey\.get\(key\) \?\? null, nowYm\);/,
+  assert.match(dash, /const inReactNow = \(key: string\) => !factsFor\(seg, key\)\.offSeason && !activeProblem\.has\(key\)\s*&& reactCycleRules\.inReact\(reactInv\(key\), nowYm\);/,
     "🔴 «у реактивації» рахується не правилом ядра від дати останнього рахунку");
+  // 🧾 9045: `reactInv` = останній рахунок, а підтверджена тімлідом поїздка — лише за вимикачем `TRIP_CLEARS_REACT`.
+  assert.match(dash, /const reactInv = \(key: string\) => clientTripConfirm\.reactInvoiceDate\(lastInvByKey\.get\(key\) \?\? null, tripDayOf\(key\)\);/,
+    "🔴 «у реактивації» рахується не від дати останнього рахунку");
   assert.match(dash, /money\.lastInvoiceByClientKey\(clientKeys\)/, "🔴 дата останнього рахунку не з ядра грошей — розійдеться з фактом «з рахунку»");
   assert.match(dash, /tabGroupRank: clientTabs\.TAB_GROUP_RANK,/, "🔴 ранги груп не приходять із сервера");
   assert.match(dash, /inWork: clients\.filter\(\(c\) => c\.tabGroup === "react"\)\.length,/,

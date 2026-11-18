@@ -8468,3 +8468,39 @@ ALTER TABLE hunt_comments ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
 INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
  ('hunt.remind', 'Хантинг', false, 'Настав час нагадування з коментаря до кандидата', 'автор коментаря')
 ON CONFLICT (type) DO NOTHING;
+
+-- 🧾 ПОЇЗДКА ПОЗА CRM, ПІДТВЕРДЖЕНА ТІМЛІДОМ (задача 9045, ТЗ Юлі 16.11.2026; Роман 18.11 «роби»). Клієнт їздив за
+-- готівку чи без рахунку, і в Kommo угоди немає — на «З ким говорити» він жовтий, хоча працює. Тімлід своєї команди
+-- подає дату поїздки й обовʼязковий коментар (№ рахунку, як оплачено): дата рахується замовленням ЛИШЕ для кольору й
+-- циклу реактивації, у гроші не йде. Рядки не видаляються: «зняти» = `revoked_at`, тож видно, хто, коли і що подав.
+-- ⚠️ revert коду таблицю не прибирає, але без коду її ніхто не читає.
+CREATE TABLE IF NOT EXISTS client_trip_confirms (
+  id          SERIAL PRIMARY KEY,
+  client_key  TEXT NOT NULL,
+  trip_day    DATE NOT NULL,
+  note        TEXT NOT NULL,
+  created_by  INTEGER NOT NULL REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_by  INTEGER REFERENCES users(id),
+  revoked_at  TIMESTAMPTZ,
+  CONSTRAINT client_trip_confirms_note_chk CHECK (btrim(note) <> ''),
+  CONSTRAINT client_trip_confirms_revoke_chk CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_client_trip_confirms_live ON client_trip_confirms (client_key) WHERE revoked_at IS NULL;
+
+-- 📤 ОБЛІК «ЩО ВЖЕ У ВКЛАДЦІ Data» фінансів «💰UTS (CF, PL, BS)» (18.11.2026, `jobs/exportDataSheet.ts`). Рядок на
+-- банківську операцію, що лягла (або могла лягти) у Data. `pending` — записано перед запитом до Google; `done` —
+-- Google відповів успіхом. `pending`, що пережив прогін, = запит обірвався без відповіді: джоба падає, доки людина не
+-- звірить Data. `sheet_row` — номер рядка в мить запису (довідка: пізніші вставки його зсувають).
+-- `source = 'manual-2026-11-18'` — разовий перенос 01.07–17.11.2026 (засів `tools/seedDataSheetExports.ts`).
+-- Без FK на bank_transactions свідомо: інструменти дедупу Привату видаляють рядки, і облік не має їм заважати.
+-- ⚠️ revert коду таблицю не прибирає, а рядки, вже записані в Google-таблицю, — тим паче.
+CREATE TABLE IF NOT EXISTS data_sheet_exports (
+  tx_id      INTEGER PRIMARY KEY,
+  status     TEXT NOT NULL CHECK (status IN ('pending', 'done')),
+  run_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sheet_row  INTEGER,
+  source     TEXT NOT NULL DEFAULT 'job'
+);
+CREATE INDEX IF NOT EXISTS idx_data_sheet_exports_pending ON data_sheet_exports (run_at) WHERE status = 'pending';
+REVOKE ALL ON data_sheet_exports FROM ai_readonly;

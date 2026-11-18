@@ -84,6 +84,7 @@ import { syncOnecDeals } from "./jobs/syncOnecDeals.js";
 import { syncUnpaidInvoices } from "./jobs/syncUnpaidInvoices.js";
 import { syncDealFinance } from "./jobs/syncDealFinance.js";
 import { buildPaymentFile } from "./jobs/buildPaymentFile.js";
+import { exportDataSheet } from "./jobs/exportDataSheet.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
@@ -696,6 +697,10 @@ cron.schedule("5,35 * * * *", () => {
 // + фінальний о 16:55 у будні, щоб о 17:00 файл був готовий. У Kommo не пише.
 cron.schedule("40 * * * *", () => { void runJob("buildPaymentFile", () => buildPaymentFile()); }, { timezone: "Europe/Kyiv" });
 cron.schedule("55 16 * * 1-5", () => { void runJob("buildPaymentFile", () => buildPaymentFile()); }, { timezone: "Europe/Kyiv" });
+// 📤 Банківські операції → вкладка «Data» фінансів (18.11.2026, Роман + фінансист Олександр: «раз в день»). О 07:10 за
+// Києвом — повні дні до вчора; не :00/:30 (синк Kommo) і не :15 (банк). Режим DATA_SHEET_MODE (dry за замовчуванням).
+// Нагляд — MONITORED_JOBS (everyMin == крону).
+cron.schedule("10 7 * * *", () => { void runJob("exportDataSheet", () => exportDataSheet()); }, { timezone: "Europe/Kyiv" });
 
 // Prune stage events older than 24 months daily at 04:30 (bounded storage).
 cron.schedule("30 4 * * *", () => {
