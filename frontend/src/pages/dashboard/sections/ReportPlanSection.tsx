@@ -600,6 +600,8 @@ function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onSta
                 title={`очікуємо цього місяця (є планова дата оплати) — ${fmt(g.expectThisMonth)} ₴`} />}
               {data.scope.isCurrent && <em style={{ left: `${pace}%` }} title={`темп: ${pace}% робочих днів минуло`} />}
             </div>
+            {/* ↩️ Розклад факту й чек команди — рядком, як було до 13.11 (TOP Weekly 16.11, пункт 1; «роби» Романа 18.11). */}
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>= успішно {k(g.factSuccess)} + оплачено {k(g.factPaid)} · чек {g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"} <InfoHint text="Ср. чек Звіту = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період»; Σ суми ÷ Σ угод (не середнє середніх)." /></div>
           </div>
         </div>
         {/* 🔵 Три стани покривають УСІХ: Σ чипів = кількість менеджерів (рішення власника 07.08.2026). */}
