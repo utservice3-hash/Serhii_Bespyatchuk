@@ -10,6 +10,8 @@ import * as money from "../core/money.js";
  *                    АБО lead_channel='ad', без реактивації; created у періоді)
  *   leadgen_count  → metrics.createdSplitByManager (lead_channel='leadgen', FC-угоди,
  *                    створені у вікні) — ТЕ САМЕ, що показує Звіт
+ *   linkedin_count → metrics.createdSplitByManager(...).linkedinCount ┐ задача 9230 (18.11.2026): ТЕ САМЕ число,
+ *   prozorro_count → metrics.createdSplitByManager(...).prozorroCount ┘ що колонки Звіту «зі створених: LinkedIn / Prozorro»
  *   dispatch_count → metrics.dispatchedByManager (АВТО за load_at — фактична відправка)
  *   avg_check      → money.avgCheckByManager   (success_rev ÷ success_deals, 2600–2900)
  *   payment_amount → money.receivedByMgr        (received = 142∪етап9 — «Отримано»)
@@ -29,6 +31,10 @@ async function factFor(metric: string, managerId: number, day: string, adSources
     // 🤝 ЗМІНЕНО 05.10.2026 разом зі Звітом: угоди, створені Kommo з передачі лідгена (`#1259`).
     case "leadgen_count":
       return pick(await metrics.leadgenAcceptedByManager(scope))?.count ?? 0;
+    // 🔗 Задача 9230: факт плану = колонка Звіту «зі створених: LinkedIn / Prozorro» (той самий виклик ядра,
+    // те саме правило глосарію §20/§21). Своє означення тут розійшлося б з екраном поруч. Тримає `#9230f`.
+    case "linkedin_count": return pick(await metrics.createdSplitByManager(scope))?.linkedinCount ?? 0;
+    case "prozorro_count": return pick(await metrics.createdSplitByManager(scope))?.prozorroCount ?? 0;
     case "dispatch_count": return pick(await metrics.dispatchedByManager(scope))?.deals ?? 0;
     case "avg_check": return pick(await money.avgCheckByManager(scope))?.avgCheck ?? 0;
     case "payment_amount": return Math.round(pick(await money.receivedByMgr(scope))?.revenue ?? 0);

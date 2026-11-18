@@ -3789,6 +3789,8 @@ export async function createTaskPlan(payload: {
   days: string[];
   adsCount?: number;
   leadgenCount?: number;
+  linkedinCount?: number;
+  prozorroCount?: number;
   dispatchCount?: number;
   avgCheck?: number;
   conversion?: number;
