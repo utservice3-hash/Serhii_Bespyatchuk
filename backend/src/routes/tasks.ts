@@ -1012,6 +1012,33 @@ tasksRouter.post("/:id/comments", async (req, res) => {
   res.status(201).json(r.rows[0]);
 });
 
+/**
+ * 💬 СТРІЧКА КЛІЄНТА В ЗАДАЧІ РЕАКТИВАЦІЇ (задача 9224) — лише читання.
+ *
+ * Головне місце коментаря по клієнту — `client_comments` (пишуть «З ким говорити», «План місяця», постановка й
+ * закриття задачі). Тут задачник її лише показує, щоб тімлід бачив те саме, що в «Клієнтах».
+ *
+ * 🔒 МЕЖА — ВИДИМІСТЬ САМОЇ ЗАДАЧІ (`openTask(…, "see")`), а не `canSeeClient`: задачу на дзвінок буває веде не
+ * основний менеджер клієнта («передано в роботу Міші»), і виконавець мусить бачити, що писали про клієнта до нього.
+ * Хто задачу не бачить — 404, як на решті `/tasks/:id/*`.
+ */
+tasksRouter.get("/:id/client-comments", async (req, res) => {
+  const t = await openTask(req, res, "see");
+  if (!t) return;
+  if (t.meta.taskType !== REACTIVATION_CLIENT_TASK_TYPE) {
+    return res.status(400).json({ error: "Стрічка клієнта є лише в задачі реактивації" });
+  }
+  const k = await pool.query<{ client_key: string | null }>(`SELECT client_key FROM tasks WHERE id = $1`, [t.id]);
+  const clientKey = k.rows[0]?.client_key ?? null;
+  if (!clientKey) return res.json({ clientKey: null, comments: [] });
+  const r = await pool.query<{ id: number; body: string; created_at: string; author: string | null }>(
+    `SELECT c.id, c.body, c.created_at, COALESCE(u.full_name, u.email) AS author
+       FROM client_comments c LEFT JOIN users u ON u.id = c.author_id
+      WHERE c.client_key = $1 ORDER BY c.created_at DESC LIMIT 50`, [clientKey]);
+  // Явний список полів — та сама форма, що `GET /dashboard/client-comments`, щоб фронт мав один тип.
+  res.json({ clientKey, comments: r.rows.map((x) => ({ id: x.id, body: x.body, createdAt: x.created_at, author: x.author })) });
+});
+
 /** 📜 Історія статусу — хто й коли рухав задачу. */
 tasksRouter.get("/:id/history", async (req, res) => {
   const t = await openTask(req, res, "see");
