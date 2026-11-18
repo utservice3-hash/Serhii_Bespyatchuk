@@ -859,7 +859,7 @@ test("#7145 ПОЛЯ УГОДИ → РАХУНОК 1С ЯК У GENESIS: «Рас
   assert.match(src, /updateInvoiceIn1c\(onecServiceBase\(\), \{ invoice_uid: r\.invoice_uid, deal_fields: want \}\)/, "звірка шле в 1С більше, ніж поля угоди");
 });
 
-test("#7146 ІНОЗЕМНИЙ КЛІЄНТ: компанія з не-українським кодом (литовський 304210390) шукається в 1С за edrpou, а не відкидається; створення контрагента — як і раніше, лише за 8/10 цифрами", async () => {
+test("#7146 ІНОЗЕМНИЙ КЛІЄНТ: компанія з не-українським кодом (литовський 304210390, з літерами теж) шукається в 1С за кодом як є, а не відкидається; створення контрагента — як і раніше, лише за 8/10 цифрами", async () => {
   // 18.11.2026: Дмитрук не зміг виставити рахунок UAB «Brandelektra» (угода 62848799) — «код компанії не 8 і не 10 цифр».
   const urls: string[] = [];
   const fake = (async (u: string) => { urls.push(String(u));
@@ -868,6 +868,7 @@ test("#7146 ІНОЗЕМНИЙ КЛІЄНТ: компанія з не-украї
   assert.equal(c.found, true, "іноземного клієнта, який є в 1С, не знайдено");
   assert.match(urls[0], /customerInfo\?edrpou=304210390$/);
   assert.equal(codeKind("304210390"), null, "створення контрагента пустить не-український код");
-  const none = await customerInfoFrom1c("https://1c", "abc", fake);
-  assert.equal(none.found, false);
+  await customerInfoFrom1c("https://1c", "LT100010061716", fake);
+  assert.match(urls[1], /customerInfo\?edrpou=LT100010061716$/, "код з літерами не шукається");
+  assert.doesNotMatch(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "invoice.ts"), "utf8"), /customerInfo\?name=|`name=\$\{/, "пошук за назвою — у 1С дублі");
 });

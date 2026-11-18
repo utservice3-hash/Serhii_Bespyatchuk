@@ -101,8 +101,11 @@ export async function loadLead(leadId: number): Promise<LeadForInvoice> {
   let companyRaw: Record<string, string> = {};
   if (companyId) {
     const c = await kommoJson<any>(`/api/v4/companies/${companyId}`);
-    const edrpou = cfText(c.custom_fields_values, KOMMO_FIELDS.companyEdrpou).replace(/\D/g, "")
-      || cfText(c.custom_fields_values, KOMMO_FIELDS.companyInn).replace(/\D/g, "");
+    // Код — як записаний у компанії, без пробілів і розділових знаків. Літери лишаємо: іноземні коди бувають з ними
+    // (18.11.2026: UAB «Brandelektra» — 304210390); українські 8/10 цифр від цього не змінюються.
+    const clean = (v: string) => v.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+    const edrpou = clean(cfText(c.custom_fields_values, KOMMO_FIELDS.companyEdrpou))
+      || clean(cfText(c.custom_fields_values, KOMMO_FIELDS.companyInn));
     company = { id: companyId, name: String(c.name ?? ""), edrpou };
     companyRaw = { registration_type: cfText(c.custom_fields_values, KOMMO_FIELDS.companyRegType),
       registration_code: cfText(c.custom_fields_values, KOMMO_FIELDS.companyRegCode) };
