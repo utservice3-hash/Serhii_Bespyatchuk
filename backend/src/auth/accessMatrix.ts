@@ -914,6 +914,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-problem/clear", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🧾 «Поїздка була (поза CRM)» (9045): ЛИШЕ тімлід (`canConfirmTrip`) і лише свого клієнта (`canSeeClient`) — обидві
+  // перевірки ПЕРШИМ оператором, до тіла, тож проба безпечна. Тімліду проба з неіснуючим ключем дає 403 по клієнту, не
+  // по ролі — тому його в deny немає. ⚠️ Адмін-рівень (адмін, СЕО, ОД, КВП, фінансист) теж отримує 403, але в deny його
+  // не пишемо: проба рядків адмін-рівня вимагає права в ADMIN_DENIED_BY_PERM, а тут межа — роль, не право (як у
+  // `calls-norm`). Їх 403 стереже `#9045` (`canConfirmTrip`) і `#9045c` (живий виклик адміном). Розширити доступ
+  // (КВП/ОД, рішення Сергія) — `canConfirmTrip`.
+  { method: "POST", path: "/api/dashboard/client-trip-confirm", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/client-trip-confirm/clear", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   // 🚫 «Закрити» в «Нічийних» (задача 7187) — той самий допуск, що «Взяти в роботу»: менеджер без прапорця — 403.
   { method: "POST", path: "/api/dashboard/orphan-clients/close", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },

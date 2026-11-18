@@ -33,12 +33,18 @@ const toMs = (ymd: string) => Date.parse(`${ymd.slice(0, 10)}T00:00:00Z`);
 export const daysBetween = (a: string, b: string): number => Math.round((toMs(b) - toMs(a)) / dayMs);
 const addDays = (ymd: string, n: number): string => new Date(toMs(ymd) + n * dayMs).toISOString().slice(0, 10);
 
-/** Дата останнього замовлення = свіжіша з дати останньої оплати й останнього рахунку. `null` — немає жодної. */
-export function lastOrderDate(lastPaid: string | null, lastInvoice: string | null): string | null {
-  const a = lastPaid?.slice(0, 10) ?? null, b = lastInvoice?.slice(0, 10) ?? null;
-  if (!a) return b;
-  if (!b) return a;
-  return a > b ? a : b;
+/**
+ * Дата останнього замовлення = найсвіжіша з дати останньої оплати, останнього рахунку і (9045) поїздки поза CRM,
+ * яку підтвердив тімлід (`core/clientTripConfirm.ts`). `null` — немає жодної. Поїздка впливає лише на те, що
+ * читає цю дату (колір, «днів тому», «Проблемний»); у гроші не йде.
+ */
+export function lastOrderDate(lastPaid: string | null, lastInvoice: string | null, tripDay?: string | null): string | null {
+  let out: string | null = null;
+  for (const x of [lastPaid, lastInvoice, tripDay]) {
+    const d = x?.slice(0, 10) ?? null;
+    if (d && (!out || d > out)) out = d;
+  }
+  return out;
 }
 
 /**
