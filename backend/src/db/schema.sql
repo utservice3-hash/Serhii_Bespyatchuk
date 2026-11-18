@@ -4720,6 +4720,13 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS originals_received BOOLEAN;
 -- Читач — `core/linkedinDeals.ts` (тег «LinkedIn»). Історію до появи колонки добирає `jobs/backfillLinkedinTags.ts`.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS tags TEXT[];
 ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS ttn_by_docs INTEGER;
+-- 📑 ТТН «ЗА НАБОРОМ ДОКУМЕНТІВ» (задача Сергія 18.11.2026, запит Даші): угода без файла ТТН теж має ТТН, якщо перевізнику
+-- платили безготівкою (з ПДВ або без — `deal_fin_fields.out_vat/out_novat`) і в будь-якому іншому полі вкладки «Документы»
+-- є файл. Скільки там файлів — синк пише в `deals.doc_files` (поля — `FIELDS_OTHER_DOCS`); NULL = синк угоду ще не бачив
+-- після появи колонки, «не синхронізовано», НЕ 0. Дотягування старих угод — `tools/backfillTtnFiles.ts`.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS doc_files INTEGER;
+-- У знімку фіксації — скільки зараховано за набором документів (NULL у знімках до 18.11.2026 — правила тоді не було).
+ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS ttn_by_any_doc INTEGER;
 -- Угоди, де ТТН прикріплено, але маршрут у ній НЕ збігся з угодою (звіряє людина). Позначка —
 -- на угоді, а не на місяці: угода закривається один раз, і її місяць визначає дата закриття.
 CREATE TABLE IF NOT EXISTS ba_ttn_route_mismatch (
