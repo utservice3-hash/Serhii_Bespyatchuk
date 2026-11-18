@@ -37,7 +37,7 @@ export interface Proposal {
   company: string | null; face: string | null; phones: { n: string; m: unknown[] }[];
   fromTown: string | null; fromArea: string | null; fromCountry: string | null;
   toTown: string | null; toArea: string | null; toCountry: string | null;
-  price: number | null; currency: string | null; autoRepeat: boolean; repeatsToday: number;
+  price: number | null; currency: string | null; autoRepeat: boolean; repeatsToday: number; ratingPos: number | null; ratingNeg: number | null;
   createdAt: string; repeatedAt: string | null;
 }
 
@@ -53,6 +53,9 @@ export function parseProposal(kind: SyncKind, it: unknown): Proposal | null {
   if (!id || !refId || !createdAt) return null;
   const f = point(o.waypointListSource), t = point(o.waypointListTarget);
   const pay = obj(o.payment), rep = obj(o.repeat);
+  // Рейтинг — обʼєкт (звірено з живою відповіддю 18.11.2026); масив із документації теж приймаємо.
+  const rt = Array.isArray(owner.rating) ? obj(owner.rating[0]) : obj(owner.rating);
+  const cnt = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : null);
   const phones = arr(owner.phones).map((p) => ({ n: String(p.number ?? "").trim(), m: Array.isArray(p.messengers) ? p.messengers : [] })).filter((p) => p.n);
   const repeatedAt = lardiTime(o.dateRepeat);
   return {
@@ -60,6 +63,7 @@ export function parseProposal(kind: SyncKind, it: unknown): Proposal | null {
     fromTown: f.town, fromArea: f.area, fromCountry: f.country, toTown: t.town, toArea: t.area, toCountry: t.country,
     price: num(pay.value), currency: txt(obj(pay.currency).name), autoRepeat: rep.auto === true,
     repeatsToday: Math.max(0, Math.trunc(Number(rep.countToday) || 0)),
+    ratingPos: cnt(rt.positiveCommentCount), ratingNeg: cnt(rt.negativeCommentCount),
     // «Повтор» раніше створення — це не підняття, а та сама публікація.
     createdAt, repeatedAt: repeatedAt && repeatedAt > createdAt ? repeatedAt : null,
   };
@@ -135,14 +139,20 @@ export function hoursFromCounts(by: number[]): { from: number; to: number; n: nu
  * переліку фільтрів ТЗ). `directionFrom` у Ларді обовʼязковий, тож міжнародку «в Україну» скануємо від сусідів.
  */
 export const INBOUND_COUNTRIES = ["PL", "MD", "RO", "HU", "SK", "LT", "DE", "CZ"] as const;
-export interface ScanSpec { label: string; filter: Any; shippers?: boolean }
+export interface ScanSpec { label: string; filter: Any; shippers?: boolean; carriers?: boolean }
 export function scanPlan(): ScanSpec[] {
   const dir = (sign: string) => ({ directionRows: [{ countrySign: sign }] });
   return [
     { label: "з України", filter: { directionFrom: dir("UA") } },
+    // Ввіз з усіх країн одним пошуком: `directionFrom` на ділі необовʼязковий (звірено живим запитом 18.11.2026).
+    { label: "в Україну", filter: { directionTo: dir("UA") } },
     ...INBOUND_COUNTRIES.map((c) => ({ label: `${c} → Україна`, filter: { directionFrom: dir(c), directionTo: dir("UA") } })),
     // Вантажовласники: окремий скан з фільтром Ларді `onlyShippers` — лише щоб дізнатись їхні `refId`.
     { label: "вантажовласники з України", filter: { directionFrom: dir("UA"), onlyShippers: true }, shippers: true },
+    { label: "вантажовласники в Україну", filter: { directionTo: dir("UA"), onlyShippers: true }, shippers: true },
+    // Перевізники — так само, фільтром Ларді `onlyCarrier` (звірено живим запитом 18.11.2026).
+    { label: "перевізники з України", filter: { directionFrom: dir("UA"), onlyCarrier: true }, carriers: true },
+    { label: "перевізники в Україну", filter: { directionTo: dir("UA"), onlyCarrier: true }, carriers: true },
   ];
 }
 
@@ -156,7 +166,7 @@ export interface SyncDeps {
   search: (kind: SyncKind, filter: Any, page: number) => Promise<PageAnswer>;
   /** Записати сторінку; повертає, скільки заявок на ній ми бачили вперше. */
   record: (items: Proposal[]) => Promise<{ fresh: number; events: number }>;
-  shippers: (refIds: number[]) => Promise<void>;
+  shippers: (refIds: number[], kind: "shipper" | "carrier") => Promise<void>;
   sleep: (ms: number) => Promise<void>;
 }
 export interface SyncTally { requests: number; ok: number; seen: number; fresh: number; events: number; unparsed: number; shippers: number; retries: number }
@@ -169,7 +179,7 @@ export function lardiReason(detail: string): string {
 
 /**
  * Один прохід. Сторінки йдуть, поки на сторінці є хоч одна нова або піднята заявка (ТЗ: «до заявок, які вже бачили»), але не далі
- * `MAX_PAGES`. 401/402/403 — про обліковий запис, тож зупиняємось на першій і падаємо з текстом Ларді (→ «АВАРІЯ»).
+ * `MAX_PAGES` (на ділі Ларді віддає не більше 500 заявок на один пошук — заміряно 18.11.2026). 401/402/403 — про обліковий запис, тож зупиняємось на першій і падаємо з текстом Ларді (→ «АВАРІЯ»).
  * 429 — пауза 30/60/120 с і повтор; після третьої — падіння. Жодної 200 за прохід — теж падіння: нуль тут аварія.
  * Заявки, які не вдалось розібрати, рахуються окремо: якщо розібрано НУЛЬ із ненульової сторінки — падіння з назвою
  * полів (форма відповіді розійшлась із документацією — перше, що треба побачити після оплати пакета).
@@ -177,7 +187,8 @@ export function lardiReason(detail: string): string {
 export async function runLardiSync(deps: SyncDeps, plan: ScanSpec[] = scanPlan()): Promise<SyncTally> {
   const t: SyncTally = { requests: 0, ok: 0, seen: 0, fresh: 0, events: 0, unparsed: 0, shippers: 0, retries: 0 };
   for (const spec of plan) {
-    for (const kind of spec.shippers ? (["cargo"] as const) : SYNC_KINDS) {
+    const mark = spec.shippers ? "shipper" as const : spec.carriers ? "carrier" as const : null;
+    for (const kind of SYNC_KINDS) {
       for (let page = 1; page <= MAX_PAGES; page++) {
         let r: PageAnswer;
         for (let attempt = 0; ; attempt++) {
@@ -199,9 +210,9 @@ export async function runLardiSync(deps: SyncDeps, plan: ScanSpec[] = scanPlan()
           throw new Error(`Ларді: жодної заявки не розібрано (${spec.label}, ${kind}) — бракує id / owner.refId / dateCreate. Поля першої: ${keys}`);
         }
         t.seen += good.length;
-        if (spec.shippers) {
+        if (mark) {
           const ids = [...new Set(good.map((p) => p.refId))];
-          await deps.shippers(ids);
+          await deps.shippers(ids, mark);
           t.shippers += ids.length;
         } else {
           const w = await deps.record(good);

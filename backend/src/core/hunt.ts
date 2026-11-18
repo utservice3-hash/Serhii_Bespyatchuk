@@ -42,7 +42,8 @@ export const unentity = (s: string | null) => (s ?? "").replace(/&quot;/g, "\"")
 
 /** Свої компанії — поза радаром (ТЗ п.4). За назвою — завжди; за ID на Ларді — коли їх назвуть (ВІДКРИТЕ ПИТАННЯ ТЗ п.11). */
 export const OWN_COMPANY_SQL = `COALESCE(company, '') !~* '^\\s*(ютс|uts|автомув|automove)\\M'`;
-export const OWN_LARDI_REF_IDS: readonly number[] = [];
+// 18434519040 — «ЮТС, ТОВ» (знайдено за назвою в живому скані 18.11.2026: 356 заявок). АвтоМув на Ларді поки не траплявся.
+export const OWN_LARDI_REF_IDS: readonly number[] = [18434519040];
 
 // Події за 30 днів із полями заявки. Країна NULL (архів) читається як Україна: архів збирався лише по наших маршрутах.
 const EVENTS_CTE = `
@@ -50,9 +51,10 @@ k AS (
   SELECT e.kind AS side, e.type, e.at, e.source, p.id AS pid, p.ref_id, p.ckey, p.company, p.face, p.phones,
          p.from_town AS frm, p.to_town AS tox, p.from_area, p.price AS total, p.auto_repeat,
          (COALESCE(p.from_country, 'UA') <> 'UA' OR COALESCE(p.to_country, 'UA') <> 'UA') AS intl,
-         EXISTS (SELECT 1 FROM lardi_shippers s WHERE s.ref_id = p.ref_id) AS shipper
+         COALESCE(s.is_shipper, false) AS shipper, COALESCE(s.is_carrier, false) AS carrier, p.rating_pos, p.rating_neg
     FROM lardi_proposal_events e
     JOIN lardi_proposals p ON p.kind = e.kind AND p.id = e.proposal_id
+    LEFT JOIN lardi_shippers s ON s.ref_id = p.ref_id
    WHERE e.at >= now() - interval '30 days' AND ${OWN_COMPANY_SQL.replace("company", "p.company")}
      AND NOT (COALESCE(p.ref_id, 0) = ANY ($OWN::bigint[])))`;
 const ownIds = () => [...OWN_LARDI_REF_IDS];
@@ -62,7 +64,7 @@ const cte = (n: number) => EVENTS_CTE.replace("$OWN", `$${String(n)}`);
 export interface RadarRow {
   key: string; face: string; company: string; phones: string[]; h1: number; d1: number; d7: number; d30: number; cargo: number; lorry: number;
   pricePct: number; top: { dir: string; n: number }[]; lastSeen: string; candidate: { id: number; stage: HuntStage } | null;
-  intl: number; area: string | null; shipper: boolean; bot: boolean; hours: { from: number; to: number; n: number } | null; live: boolean;
+  intl: number; area: string | null; shipper: boolean; carrier: boolean; rating: { pos: number; neg: number } | null; bot: boolean; hours: { from: number; to: number; n: number } | null; live: boolean;
 }
 
 /** Топ-2 напрямки за кількістю — чиста, щоб гейт перевіряв саме правило. */
@@ -87,7 +89,8 @@ export async function radar(db: Db, opts: { period?: unknown; days?: unknown; sh
   const show = opts.show === "new" || opts.show === "funnel" ? opts.show : "all";
   const side = opts.side === "cargo" || opts.side === "lorry" ? opts.side : null;
   const dir = opts.dir === "ua" || opts.dir === "intl" ? opts.dir : null;
-  const ctype = opts.ctype === "no_shippers" || opts.ctype === "shippers" ? opts.ctype : null;
+  // «forwarders» — експедитори (ТЗ п.4): ні вантажовласник, ні перевізник за позначками Ларді.
+  const ctype = typeof opts.ctype === "string" && ["forwarders", "no_shippers", "shippers", "carriers"].includes(opts.ctype) ? opts.ctype : null;
   const area = typeof opts.area === "string" && opts.area.trim() ? opts.area.trim().slice(0, 80) : null;
   const hideBots = opts.hideBots === true || opts.hideBots === "1" || opts.hideBots === "true";
   const q = typeof opts.q === "string" ? opts.q.trim().toLowerCase().slice(0, 80) : "";
@@ -95,14 +98,14 @@ export async function radar(db: Db, opts: { period?: unknown; days?: unknown; sh
   // 🔴 Жодних масивів подій у відповіді бази: усе (вікна, топ напрямків, години, сплески, інтервали) рахує SQL, у процес
   // приходять ≤ 300 готових рядків. 18.11.2026 масиви часів/телефонів/напрямків по 300 тис. подій убили прод по памʼяті.
   const rows = (await db.query<{ ckey: string; face: string; company: string; h1: number; d1: number; d7: number; d30: number;
-    cargo: number; lorry: number; price_pct: number; last_seen: string; intl: number; area: string | null; shipper: boolean; auto: boolean;
+    cargo: number; lorry: number; price_pct: number; last_seen: string; intl: number; area: string | null; shipper: boolean; carrier: boolean; rating_pos: number | null; rating_neg: number | null; auto: boolean;
     live_n: number; phones: unknown; top: { dir: string; n: number }[] | null; hours: number[] | null;
     burst: number | null; gap_n: number | null; gap_mean: number | null; gap_sd: number | null }>(
     `WITH ${cte(6)}, f AS (
        SELECT * FROM k
         WHERE ($1::text IS NULL OR side = $1)
           AND ($2::text IS NULL OR ($2 = 'intl') = intl)
-          AND ($3::text IS NULL OR ($3 = 'shippers') = shipper)
+          AND ($3::text IS NULL OR CASE $3 WHEN 'shippers' THEN shipper WHEN 'carriers' THEN carrier WHEN 'no_shippers' THEN NOT shipper ELSE NOT shipper AND NOT carrier END)
           AND ($4::text IS NULL OR from_area ILIKE '%' || $4 || '%')
           AND ($5 = '' OR lower(COALESCE(face, '') || ' ' || COALESCE(company, '') || ' ' || ckey) LIKE '%' || $5 || '%')),
      agg AS (
@@ -112,7 +115,8 @@ export async function radar(db: Db, opts: { period?: unknown; days?: unknown; sh
               count(*) FILTER (WHERE side = 'cargo')::int AS cargo, count(*) FILTER (WHERE side = 'lorry')::int AS lorry,
               round(100.0 * count(DISTINCT (side, pid)) FILTER (WHERE total IS NOT NULL) / greatest(count(DISTINCT (side, pid)), 1))::int AS price_pct,
               max(at)::text AS last_seen, count(*) FILTER (WHERE intl)::int AS intl,
-              mode() WITHIN GROUP (ORDER BY from_area) AS area, bool_or(shipper) AS shipper, bool_or(auto_repeat) AS auto,
+              mode() WITHIN GROUP (ORDER BY from_area) AS area, bool_or(shipper) AS shipper, bool_or(carrier) AS carrier, bool_or(auto_repeat) AS auto,
+              max(rating_pos) AS rating_pos, max(rating_neg) AS rating_neg,
               count(*) FILTER (WHERE source = 'live')::int AS live_n
          FROM f GROUP BY ckey
        HAVING count(*) FILTER (WHERE at >= ${since}) > 0
@@ -152,7 +156,8 @@ export async function radar(db: Db, opts: { period?: unknown; days?: unknown; sh
     phones: (Array.isArray(r.phones) ? r.phones : []).map((p) => maskPhone(String((p as { n?: unknown }).n ?? ""))),
     h1: r.h1, d1: r.d1, d7: r.d7, d30: r.d30, cargo: r.cargo, lorry: r.lorry, pricePct: r.price_pct,
     top: r.top ?? [], lastSeen: r.last_seen, candidate: cands.get(r.ckey) ?? null,
-    intl: r.intl, area: r.area, shipper: r.shipper, live: r.live_n > 0,
+    intl: r.intl, area: r.area, shipper: r.shipper, carrier: r.carrier, live: r.live_n > 0,
+    rating: r.rating_pos == null && r.rating_neg == null ? null : { pos: r.rating_pos ?? 0, neg: r.rating_neg ?? 0 },
     bot: botFrom({ auto: r.auto, maxBurst: r.burst ?? 0, gapN: r.gap_n ?? 0, gapMean: r.gap_mean ?? 0, gapSd: r.gap_sd ?? 0 }),
     hours: r.hours ? hoursFromCounts(r.hours) : null,
   })).filter((r) => (show === "all" || (show === "new" ? !r.candidate : !!r.candidate)) && !(hideBots && r.bot));
@@ -318,4 +323,41 @@ export async function addComment(db: Db, userId: number, id: number, body: { tex
     [id, userId, text, when(body.remindAt)])).rows[0];
   await db.query(`UPDATE hunt_candidates SET updated_at = now() WHERE id = $1`, [id]);
   return { id: r.id };
+}
+
+/**
+ * «Звіт» (ТЗ п.2, п.10): конверсії по етапах і причини відмов. «Дійшов до етапу» — за історією (`hunt_stage_history`),
+ * а не за поточним станом: кандидат, що пройшов співбесіду й отримав відмову, у «Співбесіді» рахується.
+ * Конверсія етапу = дійшли до нього ÷ дійшли до попереднього; перший етап — 100%.
+ */
+export async function report(db: Db) {
+  const reached = new Map((await db.query<{ stage: string; n: number }>(
+    `SELECT to_stage AS stage, count(DISTINCT candidate_id)::int AS n FROM hunt_stage_history GROUP BY 1`)).rows.map((r) => [r.stage, r.n]));
+  const now = new Map((await db.query<{ stage: string; n: number }>(`SELECT stage, count(*)::int AS n FROM hunt_candidates GROUP BY 1`)).rows.map((r) => [r.stage, r.n]));
+  const stages = HUNT_STAGES.map(([key, label], i) => {
+    const n = reached.get(key) ?? 0, prev = i ? reached.get(HUNT_STAGES[i - 1][0]) ?? 0 : n;
+    return { key, label, reached: n, now: now.get(key) ?? 0, conversionPct: prev ? Math.round((100 * n) / prev) : null };
+  });
+  const rejects = (await db.query<{ reason: string; from_stage: string | null; n: number }>(
+    `SELECT COALESCE(c.reject_reason, 'other') AS reason,
+            (SELECT h.from_stage FROM hunt_stage_history h WHERE h.candidate_id = c.id AND h.to_stage = 'rejected' ORDER BY h.id DESC LIMIT 1) AS from_stage,
+            count(*)::int AS n
+       FROM hunt_candidates c WHERE c.stage = 'rejected' GROUP BY 1, 2 ORDER BY 3 DESC`)).rows;
+  const total = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM hunt_candidates`)).rows[0].n;
+  return { total, stages, rejected: now.get("rejected") ?? 0, rejects, reasons: REJECT_REASONS };
+}
+
+/**
+ * Нагадування, яким настав час (ТЗ п.8): коментарі з `remind_at ≤ зараз` без позначки. Кандидати у відмові — без
+ * нагадувань. Повертає рядки для сповіщення; позначку ставить `markReminded` ПІСЛЯ відправки — рівно один раз.
+ */
+export async function dueReminders(db: Db) {
+  return (await db.query<{ id: number; user_id: number; text: string; candidate_id: number; full_name: string; company: string | null }>(
+    `SELECT m.id, m.user_id, m.text, c.id AS candidate_id, c.full_name, c.company
+       FROM hunt_comments m JOIN hunt_candidates c ON c.id = m.candidate_id
+      WHERE m.remind_at <= now() AND m.reminded_at IS NULL AND m.user_id IS NOT NULL AND c.stage <> 'rejected'
+      ORDER BY m.remind_at LIMIT 50`)).rows;
+}
+export async function markReminded(db: Db, ids: number[]) {
+  if (ids.length) await db.query(`UPDATE hunt_comments SET reminded_at = now() WHERE id = ANY($1::int[])`, [ids]);
 }

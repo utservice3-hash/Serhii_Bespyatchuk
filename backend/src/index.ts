@@ -132,6 +132,7 @@ import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncLardi } from "./jobs/syncLardi.js";
+import { huntReminders } from "./jobs/huntReminders.js";
 import { buildLeadgenLtv } from "./jobs/buildLeadgenLtv.js";
 import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
@@ -921,6 +922,11 @@ cron.schedule("40 */3 * * *", () => {
 // і :40 `collectLardi`. Під наглядом (`monitoredJobs.ts`, everyMin 15): відмова Ларді (403 — пакет не оплачено) = «АВАРІЯ».
 cron.schedule("4,19,34,49 * * * *", () => {
   void runJob("syncLardi", () => syncLardi());
+});
+
+// 🔔 Нагадування «Хантингу» (ТЗ п.8): кожні 5 хв — коментар із нагадуванням → сповіщення авторові.
+cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 * * * *", () => {
+  void runJob("huntReminders", () => huntReminders());
 });
 
 // 📵 Довідник номерів перевізників (задача 7359): Lardi-машини + «Перевізник» в історії, мінус номери замовників.

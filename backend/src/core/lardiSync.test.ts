@@ -56,7 +56,7 @@ test("#3965 СКАН ЛАРДІ: розбір документованої за�
   const plan = scanPlan();
   assert.ok(plan.some((s) => JSON.stringify(s.filter) === JSON.stringify({ directionFrom: { directionRows: [{ countrySign: "UA" }] } })), "🔴 немає скану «з України»");
   assert.ok(plan.some((s) => JSON.stringify(s.filter.directionTo) === JSON.stringify({ directionRows: [{ countrySign: "UA" }] })), "🔴 немає ввозу в Україну");
-  assert.equal(plan.filter((s) => s.shippers && s.filter.onlyShippers === true).length, 1, "🔴 немає скану вантажовласників");
+  assert.equal(plan.filter((s) => s.shippers && s.filter.onlyShippers === true).length, 2, "🔴 немає сканів вантажовласників");
 });
 
 function fake(pages: PageAnswer[][]) {
@@ -132,4 +132,25 @@ test("#3976 РАДАР ХАНТИНГУ: без масивів подій у п�
   assert.doesNotMatch(src, /array_agg\((phones|at|COALESCE\(frm)\b/, "🔴 радар знову збирає масиви подій у процес");
   assert.match(src, /AND NOT \(\$7::boolean AND bool_or\(auto_repeat\)\)\s*ORDER BY \$\{period\} DESC, count\(\*\) DESC\s*LIMIT 300/,
     "🔴 «приховати автоповтор» не стоїть перед відбором топ-300");
+});
+
+/**
+ * #3978 — ДОВЕДЕННЯ ДО ТЗ, чисте: рейтинг компанії розбирається (обʼєкт із живої відповіді й масив із документації;
+ * немає — null, а не 0); план має ввіз з усіх країн і скани перевізників; нагадування в кроні; на екрані — «Відгуки»,
+ * «експедитори» за замовчуванням, підвкладка «Звіт».
+ * 🧨 Червоніє, якщо відсутній рейтинг читати нулем, прибрати скан перевізників чи зняти нагадування з розкладу.
+ */
+test("#3978 ХАНТИНГ ДО ТЗ: рейтинг із заявки, скани перевізників і ввозу, нагадування в кроні, екран", () => {
+  const withOwner = (rating: unknown) => parseProposal("cargo", item({ owner: { refId: 5, name: "А", face: "Б", phones: [], rating } }))!;
+  assert.deepEqual([withOwner({ positiveCommentCount: 327, negativeCommentCount: 0 }).ratingPos, withOwner({ positiveCommentCount: 327, negativeCommentCount: 0 }).ratingNeg], [327, 0]);
+  assert.equal(withOwner([{ positiveCommentCount: 12, negativeCommentCount: 3 }]).ratingNeg, 3, "🔴 рейтинг масивом не розібрано");
+  assert.equal(withOwner(undefined).ratingPos, null, "🔴 відсутній рейтинг прочитано як число");
+  const plan = scanPlan();
+  assert.ok(plan.some((s) => !s.shippers && !s.carriers && !s.filter.directionFrom && s.filter.directionTo), "🔴 немає ввозу в Україну з усіх країн");
+  assert.equal(plan.filter((s) => s.carriers && s.filter.onlyCarrier === true).length, 2, "🔴 немає сканів перевізників");
+  const idx = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "index.ts"), "utf8");
+  assert.match(idx, /cron\.schedule\("2,7,12,17,22,27,32,37,42,47,52,57 \* \* \* \*", \(\) => \{\s*void runJob\("huntReminders"/, "🔴 нагадування не в розкладі");
+  const ui = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "HiringHunt.tsx"), "utf8");
+  for (const [re, why] of [[/>Відгуки</, "колонка відгуків"], [/useState\("forwarders"\)/, "«експедитори» за замовчуванням"], [/>Звіт<\/button>/, "підвкладка «Звіт»"], [/"carriers"/, "фільтр перевізників"]] as [RegExp, string][])
+    assert.match(ui, re, `🔴 на екрані немає: ${why}`);
 });
