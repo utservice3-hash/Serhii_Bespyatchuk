@@ -131,6 +131,7 @@ export const MANIFEST_FILES: string[] = [
   "jobs/backupRotate.test.js",
   "db/copyStreamPatch.test.js",
   "core/stuckRule.test.js",
+  "core/hiddenOverviewFetch.test.js",
   "core/stuckTalk.test.js",
   "core/reactivation.test.js",
   "core/reactivationPack.test.js",
@@ -2131,6 +2132,8 @@ export const MANIFEST_TESTS: string[] = [
   "#72f СКОУП: до «Виставлення рахунку» включно, операційні — поза",
   "#72g ПОРІГ ЄДИНИЙ, ПАРАМЕТРОМ, поділу 7/21 більше немає",
   "#72h СИГНАЛИ — ОДИН ПЕРЕЛІК на годинник і на «угоду вели»",
+  // core/hiddenOverviewFetch.test.ts — запити прихованого «Огляду» (16.11.2026)
+  "#9961 ЗАПИТИ «ОГЛЯДУ» НЕ ЙДУТЬ З ІНШИХ ЕКРАНІВ — і йдуть з «Огляду»",
   // core/stuckTalk.test.ts — Фаза 3: поріг розмови, анкер від синку, Ringostat
   "#73 ДЗВІНОК КОРОТШИЙ ЗА 10 c НЕ Є АКТИВНІСТЮ",
   "#73b ВІК РАХУЄТЬСЯ ВІД СИНКУ: застарілий синк НЕ роздуває лічильник",

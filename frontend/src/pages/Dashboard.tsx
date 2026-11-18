@@ -846,6 +846,11 @@ export function Dashboard() {
 
 
   useEffect(() => {
+    // ⏱ ЦІ ШІСТЬ ЗАПИТІВ ЖИВЛЯТЬ ЛИШЕ «ОГЛЯД» (16.11.2026, `#9961`). Екран прихований
+    // (`HIDDEN_NAV`), а запити йшли на КОЖНОМУ відкритті будь-якого екрана і щопʼять хвилин
+    // у кожній вкладці: заміряно на проді — два `/overview` по 5,1 с поруч із `/report-plan`,
+    // чиїх даних ніхто не бачив. Повернуть «Огляд» — запити повернуться самі.
+    if (section !== "overview") return;
     setLoading(true);
     const params: Record<string, any> = {};
     if (teamId) params.teamId = teamId;
@@ -923,7 +928,7 @@ export function Dashboard() {
       })
       .catch(() => { setStages([]); setTimeseries([]); setPaidDynamics([]); })
       .finally(() => setLoading(false));
-  }, [teamId, granularity, dateRange, refreshNonce]);
+  }, [section, teamId, granularity, dateRange, refreshNonce]);
 
   // Order the funnel stages by their real pipeline sequence, not by whatever
   // order the SQL GROUP BY returned them in.
