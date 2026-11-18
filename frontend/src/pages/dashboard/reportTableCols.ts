@@ -325,16 +325,28 @@ export const isLockedCol = (k: ColKey): boolean => LOCKED_COLS.includes(k);
  */
 export const DEFAULT_OPT_ON: Record<string, boolean> = {
   /**
-   * 🧭 ТИПОВИЙ НАБІР — 12 КОЛОНОК (макет-ремейк, погоджено 13.11.2026). Було 21:
-   * таблиця не вміщалась і не підказувала, що є ще. Решта — у «Колонки».
-   * «Статус» окремою колонкою вимкнено: стан тепер — смужка й слово в клітинці
-   * «Менеджер». Збережений вибір людини НЕ губиться — див. `readColPrefs`.
+   * 🧭 ТИПОВИЙ НАБІР — 20 КОЛОНОК: 12 макета-ремейку (погоджено 13.11.2026) + 8, що були
+   * типовими до 13.11 (`RESTORED_1611`). Макет звузив набір до 12, і тімліди 16.11
+   * спитали «а де ці дані» (TOP Weekly 16.11, Сергій і Саша: «зафіксувати всі показники,
+   * які були, і повернути»). «Статус» окремою колонкою НЕ повертаємо: стан — смужка й
+   * слово в клітинці «Менеджер». Збережений вибір людини НЕ губиться — див. `readColPrefs`.
    */
   ...Object.fromEntries(REPORT_COLS.filter((c) => !isLockedCol(c.key)).map((c) => [c.key, false])),
   fact: true, plan: true, pct: true, projected: true, needPerDay: true, avgCheck: true,
   expectThisMonth: true, jam: true,
   missed: true, callbackMin: true, talks: true, firstTouch: true,
+  created: true, ads: true, leadgen: true, conv: true, dispatch: true,
+  awaitNoDate: true, jamDeals: true, responseTime: true,
 };
+
+/**
+ * ↩️ ВІСІМ КОЛОНОК, ЩО БУЛИ ТИПОВИМИ ДО 13.11 І ЗНИКЛИ З ЕКРАНА З РЕМЕЙКОМ (повернуто 18.11.2026,
+ * пункт 1 зустрічі TOP Weekly 16.11, «роби» Романа 18.11). Окремим переліком, бо його читає
+ * `restoreColsOnce`: людині, якій 13.11 скинуло вибір, їх треба ДОДАТИ, не чіпаючи решти.
+ */
+export const RESTORED_1611: readonly ColKey[] = [
+  "created", "ads", "leadgen", "conv", "dispatch", "awaitNoDate", "jamDeals", "responseTime",
+];
 
 /**
  * 🔴 ОСНОВА ДЛЯ ЗБЕРЕЖЕНОГО ВИБОРУ — НЕ НОВИЙ ТИПОВИЙ НАБІР. Хто вже обирав колонки,
@@ -422,6 +434,34 @@ export function writeColPrefs(store: ColsStore | null, userId: number | null | u
   try {
     if (!store) return false;
     store.setItem(colsStorageKey(userId), JSON.stringify(prefs));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ↩️ ОДИН РАЗ НА ЛЮДИНУ — ДОДАТИ 8 ПОВЕРНУТИХ КОЛОНОК (`RESTORED_1611`), НІЧОГО НЕ ХОВАЮЧИ.
+ *
+ * `remakeResetOnce` 13.11 переписав кожному вибір на 12 колонок макета — тож «Створено»,
+ * «Прийнято реклами», «Лідоген», «Авто» й решта зникли в усіх, хто їх мав. Тут їх лише
+ * ВМИКАЄМО поверх того, що людина має зараз: що вона ввімкнула чи вимкнула сама після
+ * 13.11 — лишається як є. Позначка `rptRestore1611:<id>` робить дію одноразовою: колонку,
+ * яку людина вимкне ПІСЛЯ повернення, ми вдруге не ввімкнемо.
+ * Порядок колонок не чіпаємо: повернуті стають на свої місця в збереженому порядку.
+ *
+ * Повертає `true`, якщо додавання сталось зараз. Зламане сховище — `false`, нічого не чіпаємо.
+ */
+export const RESTORE_FLAG = "rptRestore1611";
+export function restoreColsOnce(store: ColsStore | null, userId: number | null | undefined): boolean {
+  try {
+    if (!store) return false;
+    const flag = `${RESTORE_FLAG}:${userId ?? "anon"}`;
+    if (store.getItem(flag)) return false;
+    const now = readColPrefs(store, userId);
+    for (const k of RESTORED_1611) now[k] = true;
+    if (!writeColPrefs(store, userId, now)) return false;
+    store.setItem(flag, "1");
     return true;
   } catch {
     return false;
