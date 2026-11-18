@@ -14,7 +14,8 @@
 
 /**
  * ЧОТИРИ СТАНИ ДЖЕРЕЛА + `null`, і жоден не зводиться в інший. З 27.10.2026 — П'ЯТЬ:
- * додано `elogist` (окремий канал, не реклама UTS).
+ * додано `elogist` (окремий канал, не реклама UTS). З 18.11.2026 — СІМ: `linkedin` і `prozorro`
+ * (задача 9230; це НЕ канали, а кошики, вирізані з «інше» за міткою CRM).
  *
  * 🔴 ЩО ТУТ БУЛО ДО 24.08.2026. Стояло `'undef' → null`, «як і невизначена
  * новизна». Разом із тим, що чип малювався лише для `ad`/`leadgen`, це давало
@@ -32,7 +33,7 @@
  * «не показали», ніж «показали не тим станом»: нове значення в ядрі має спершу
  * зламати `#174c` (catch-all), а не тихо прикинутись відомим.
  */
-export type DealSourceState = "ad" | "leadgen" | "elogist" | "other" | "undef" | null;
+export type DealSourceState = "ad" | "leadgen" | "elogist" | "linkedin" | "prozorro" | "other" | "undef" | null;
 
 /**
  * 🟣 КАНАЛИ `deals.lead_channel` — ЧОТИРИ з 27.10.2026 (рішення власника: eLogist окремо від
@@ -45,6 +46,10 @@ export const sourceOf = (v: string | null): DealSourceState =>
   v === "ad" ? "ad"
     : v === "leadgen" ? "leadgen"
       : v === "elogist" ? "elogist"
+        // 🔗🏛 LinkedIn і Prozorro — кошики, вирізані з «інше» (задача 9230, 18.11.2026): без цих гілок
+        // чип такої угоди мовчки став би `null`, хоча колонка над розкриттям її рахує.
+        : v === "linkedin" ? "linkedin"
+        : v === "prozorro" ? "prozorro"
         : v === "other" ? "other"
           : v === "undef" ? "undef"
             : null;

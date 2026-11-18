@@ -1535,7 +1535,8 @@ export interface KvpDeptWeek { idx: number; from: string; to: string; plan: numb
  * `noChannel` = `lead_channel IS NULL`; на живих даних 0, але кошик існує в ядрі.
  */
 // 🟣 `elogist` — п'ятий кошик з 27.10.2026 (рішення власника: eLogist окремо від реклами UTS).
-export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; elogist: number; other: number; noChannel: number }
+// 🔗🏛 `linkedin`/`prozorro` — кошики, вирізані з «інше» (задача 9230, 18.11.2026).
+export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; elogist: number; linkedin: number; prozorro: number; other: number; noChannel: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
@@ -1552,7 +1553,7 @@ export interface KvpDetailCell {
   created: number; newCount: number; repeatCount: number; undefCount: number;
   // 🔴 crAd/crLeadgen/crOther — партиція СТВОРЕНОГО за каналом (Σ == created).
   // НЕ плутати з leadsAd/leadsLeadgen/leadsOther: ті рахують ЛІДИ — інша популяція.
-  crAd: number; crLeadgen: number; crElogist: number; crOther: number; crNoChannel: number;
+  crAd: number; crLeadgen: number; crElogist: number; crLinkedin: number; crProzorro: number; crOther: number; crNoChannel: number;
   leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
   // Розбивка відправлених авто за джерелом (постійний / лідоген / реклама / невизн). Σ = dispatched.
   dispRepeat: number; dispLeadgen: number; dispAd: number; dispElogist: number; dispUndef: number;
@@ -1663,9 +1664,9 @@ export interface ReportPlanKpi { fact: number | null; target: number; taken?: nu
   repeat?: number; leadgen?: number; ad?: number; elogist?: number; undef?: number;
   // Тільки для «avgCheck» (#4): пул reportChain — signed Σ÷count (revenue/deals для Σ/Σ).
   deals?: number }
-/** Розклад джерела всередині одного класу новизни (`created` == Σ п'яти; eLogist — з 27.10.2026). */
+/** Розклад джерела всередині одного класу новизни (`created` == Σ семи; eLogist — з 27.10.2026, LinkedIn/Prozorro — з 18.11.2026). */
 export interface SrcCounts {
-  created: number; adCount: number; leadgenCount: number; elogistCount: number; otherCount: number; noChannelCount: number;
+  created: number; adCount: number; leadgenCount: number; elogistCount: number; linkedinCount: number; prozorroCount: number; otherCount: number; noChannelCount: number;
 }
 /** Лічильники «першого дотику». `noRecord` — бот розмови не чув; у відсоток НЕ входить. */
 export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
@@ -1720,8 +1721,8 @@ export interface ReportPlanManager {
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
-  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ п'яти == created (гейт #174; eLogist — з 27.10.2026).
-  srcAd: number; srcLeadgen: number; srcElogist: number; srcOther: number; srcNoChannel: number;
+  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ семи == created (гейт #174; eLogist — з 27.10.2026; LinkedIn/Prozorro — з 18.11.2026).
+  srcAd: number; srcLeadgen: number; srcElogist: number; srcLinkedin: number; srcProzorro: number; srcOther: number; srcNoChannel: number;
   /**
    * 🔀 Той самий розклад ВСЕРЕДИНІ кожного класу новизни (Е3). Приїжджає разом
    * із рядком, бо перемикач НЕ ходить на сервер: `/overview` ×4 вже 4 940-5 168 мс
@@ -1804,7 +1805,7 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
  *  водночас `src:"rep"` і `source:"ad"` (постійний клієнт прийшов через рекламу). */
 // Джерело угоди — партиція з п'яти (див. metrics.dealSourceCase; `elogist` — з 27.10.2026). `null`
 // НЕ окремий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#175c`/`#2493`.
-export type DealSource = "ad" | "leadgen" | "elogist" | "other" | "undef" | null;
+export type DealSource = "ad" | "leadgen" | "elogist" | "linkedin" | "prozorro" | "other" | "undef" | null;
 /**
  * НОВИЗНА клієнта — ДЗЕРКАЛО `core/klassFilter.DealKlassState`. `"undef"` став
  * окремим станом 25.08.2026: до того сервер зводив його в `null`, тож 6 угод
@@ -3938,6 +3939,12 @@ export async function fetchTaskComments(taskId: number): Promise<TaskComment[]> 
 }
 export async function createTaskComment(taskId: number, body: string): Promise<TaskComment> {
   const { data } = await api.post<TaskComment>(`/tasks/${taskId}/comments`, { body });
+  return data;
+}
+
+/** 💬 9224: стрічка коментарів клієнта задачі реактивації — лише читання (та сама `client_comments`). */
+export async function fetchTaskClientComments(taskId: number): Promise<{ clientKey: string | null; comments: ClientComment[] }> {
+  const { data } = await api.get<{ clientKey: string | null; comments: ClientComment[] }>(`/tasks/${taskId}/client-comments`);
   return data;
 }
 
