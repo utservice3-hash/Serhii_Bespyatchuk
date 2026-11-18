@@ -4908,6 +4908,8 @@ export interface ClientPlanRow {
   lastTalkRecording?: string | null;
   lastTalkSec?: number | null;
   lastTalkBy?: string | null;
+  /** 📞 Розмова на спільному номері (задача 9061): скільки ЩЕ клієнтів має цей номер; 0 — номер лише цього клієнта. */
+  lastTalkSharedWith?: number;
   /** 🔗 Хто приєднаний до цього рядка (обʼєднання в CRM-ключах). Порожньо — ні з ким. */
   merged?: AliasName[];
   /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */
@@ -7020,7 +7022,7 @@ export type HuntStage = "picked" | "call" | "interview" | "approval" | "offer" |
 export interface HuntRadarRow {
   key: string; face: string; company: string; phones: string[]; h1: number; d1: number; d7: number; d30: number; cargo: number; lorry: number;
   pricePct: number; top: { dir: string; n: number }[]; lastSeen: string; candidate: { id: number; stage: HuntStage } | null;
-  intl: number; area: string | null; shipper: boolean; bot: boolean; hours: HuntHours | null; live: boolean;
+  intl: number; area: string | null; shipper: boolean; carrier: boolean; rating: { pos: number; neg: number } | null; bot: boolean; hours: HuntHours | null; live: boolean;
 }
 export interface HuntHours { from: number; to: number; n: number }
 export type HuntPeriod = "h1" | "d1" | "d7" | "d30";
@@ -7041,6 +7043,12 @@ export interface HuntCandidate extends HuntCandidateRow {
 export const fetchHuntAccess = async () => (await api.get<{ allowed: boolean }>("/hunt/access")).data.allowed;
 export const fetchHuntRadar = async (p: { period: HuntPeriod; show: string; q: string; side: string; dir: string; area: string; ctype: string; hideBots: boolean }) =>
   (await api.get<HuntRadar>("/hunt/radar", { params: { ...p, hideBots: p.hideBots ? "1" : "" } })).data;
+export interface HuntReport {
+  total: number; rejected: number; reasons: [string, string][];
+  stages: { key: string; label: string; reached: number; now: number; conversionPct: number | null }[];
+  rejects: { reason: string; from_stage: string | null; n: number }[];
+}
+export const fetchHuntReport = async () => (await api.get<HuntReport>("/hunt/report")).data;
 export const fetchHuntActivity = async (key: string) =>
   (await api.get<{ days: { d: string; n: number }[]; top: { dir: string; n: number }[]; hours: HuntHours | null; bot: boolean; live: boolean }>("/hunt/contacts/activity", { params: { key } })).data;
 export const revealHuntPhones = async (key: string) => (await api.post<{ phones: string[] }>("/hunt/contacts/phones", { key })).data.phones;

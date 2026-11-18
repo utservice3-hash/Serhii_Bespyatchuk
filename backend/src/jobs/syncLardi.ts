@@ -1,7 +1,7 @@
 import { pool } from "../db/pool.js";
 import { hasLardiToken, lardiPost, LANG } from "../lardi/client.js";
 import { runLardiSync, PAGE_SIZE, type Proposal, type SyncTally, type PageAnswer } from "../core/lardiSync.js";
-import { recordProposals } from "../core/lardiSyncDb.js";
+import { recordProposals, markCompanies, purgeStaleContacts } from "../core/lardiSyncDb.js";
 import type { Db } from "../core/secrets.js";
 
 /**
@@ -25,17 +25,16 @@ const record = async (items: Proposal[]) => {
   try { return await recordProposals(client as unknown as Db, items); } finally { client.release(); }
 };
 
-async function shippers(refIds: number[]): Promise<void> {
-  if (!refIds.length) return;
-  await pool.query(
-    `INSERT INTO lardi_shippers (ref_id) SELECT unnest($1::bigint[]) ON CONFLICT (ref_id) DO UPDATE SET seen_at = now()`, [refIds]);
-}
+const shippers = (refIds: number[], kind: "shipper" | "carrier") => markCompanies(pool as unknown as Db, refIds, kind);
 
 export async function syncLardi(): Promise<SyncTally | null> {
   if (!hasLardiToken()) return null;
+  // Строк зберігання (ТЗ п.9) — ДО скану: якщо Ларді відмовить, застарілі контакти однаково мають піти.
+  const purged = await purgeStaleContacts(pool as unknown as Db);
+  if (purged) console.log(`syncLardi: видалено ${String(purged)} заявок контактів, яких немає на Ларді понад 90 днів`);
   const t = await runLardiSync({ search, record, shippers, sleep });
   console.log(`syncLardi: запитів ${String(t.requests)} (200: ${String(t.ok)}), заявок ${String(t.seen)}, нових ${String(t.fresh)}, `
-    + `подій ${String(t.events)}, не розібрано ${String(t.unparsed)}, вантажовласників ${String(t.shippers)}, пауз 429: ${String(t.retries)}`);
+    + `подій ${String(t.events)}, не розібрано ${String(t.unparsed)}, позначено компаній ${String(t.shippers)}, пауз 429: ${String(t.retries)}`);
   return t;
 }
 

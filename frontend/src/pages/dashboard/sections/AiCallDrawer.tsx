@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, closeAiCallDeal, revertAiCallDeal, sendAiCallFeedback, type AiCallCardResp, type AiQuoted } from "../../../api";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, excludedLabel, PRICE_REASONS, PRICE_REASON_UA, priceNoteLine, priceNoteOwnText, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, WAIT_MANAGER_COMMENT_UA, PRICE_FORM_UI, PRICE_FORM_FROM_UA, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, excludedLabel, PRICE_REASONS, PRICE_REASON_UA, priceNoteLine, priceNoteOwnText, promisesLabel, deadlineBasisLabel, quoteTurnIndex, messengerVerdict, MESSENGER_VERDICT_UI, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, CLOSURE_UI, reviewNoteText, approveState, approveWaitText, APPROVE_LABEL_UA, PRICE_FORM_UI, PRICE_FORM_FROM_UA, TRANSPORT_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { ChecklistBlock } from "./FirstTouchChecklist";
 import "./hiring.css";
@@ -328,6 +328,9 @@ function ReviewBar({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
   if (c.reviewClosure === "invoice") return <div style={{ fontSize: 12.5, color: "var(--ok, #166534)", marginTop: 6 }}>Вийшла з черги: {CLOSURE_UI.invoice.hint.toLowerCase()}</div>;
   if (!c.needsReview || !c.canReview) return null;
   // ✍️ Задача 7351 (з 03.11.2026): тімлід погоджує лише коментар САМОГО менеджера розмови; без нього кнопки немає.
+  // ✅ Задача 9229: стан кнопки — одна функція на список, чергу й картку; коментар не від менеджера називає себе.
+  const ap = approveState({ ...c.row, needsReview: c.needsReview }, c.canReview);
+  if (!ap) return null;
   const go = async () => {
     setBusy(true); setMsg(null);
     try { await putAiCallNote(c.row.uniqueid, "review", reviewNoteText(true)); onDone(); } catch (e) { setMsg(hiringError(e)); }
@@ -335,10 +338,10 @@ function ReviewBar({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
   };
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
-      {c.row.managerCommented
+      {ap.kind === "can"
         ? <button type="button" className="hr-btn" disabled={busy} onClick={() => void go()} title="Менеджер пояснив — погодити й вивести з черги">
-          {busy ? "Зберігаю…" : "Погодити коментар"}</button>
-        : <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{WAIT_MANAGER_COMMENT_UA}</span>}
+          {busy ? "Зберігаю…" : APPROVE_LABEL_UA}</button>
+        : <span style={{ fontSize: 12.5, color: ap.kind === "notManager" ? "var(--warn-fg, #8a5a00)" : "var(--text-muted)" }}>{approveWaitText(ap)}</span>}
       {c.reviewReason && <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>у черзі розбору: {REVIEW_REASON_UI[c.reviewReason].label.toLowerCase()}</span>}
       {msg && <span style={{ fontSize: 12.5, color: "var(--danger)" }}>{msg}</span>}
     </div>
@@ -361,6 +364,25 @@ export function FeedbackButton({ uniqueid, small }: { uniqueid: string; small?: 
   };
   return <button type="button" className="hr-btn" disabled={busy} onClick={(e) => void go(e)} style={small ? { fontSize: 12, padding: "2px 8px" } : undefined}
     title="Система помилилась? Напишіть — це піде Роману разом із розмовою й угодою">{busy ? "Надсилаю…" : "Зворотний звʼязок"}</button>;
+}
+
+/**
+ * ✅ «Погоджую» прямо в списку розмов (задача 9229, 18.11.2026): тімлід погоджує коментар менеджера одним кліком, не
+ * відкриваючи черги чи картки. Той самий запис, що в черзі й картці (`review` + `reviewNoteText(true)`); сервер так само
+ * відмовляє без коментаря самого менеджера. Клік не відкриває картку рядка.
+ */
+export function ApproveButton({ uniqueid, onDone }: { uniqueid: string; onDone: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const go = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBusy(true);
+    try { await putAiCallNote(uniqueid, "review", reviewNoteText(true)); onDone(); } catch (err) { toast(hiringError(err)); }
+    setBusy(false);
+  };
+  return <button type="button" className="hr-btn" disabled={busy} onClick={(e) => void go(e)} onKeyDown={(e) => e.stopPropagation()}
+    style={{ fontSize: 12, padding: "2px 8px", background: "var(--ok, #166534)", color: "#fff", borderColor: "var(--ok, #166534)" }}
+    title="Менеджер пояснив — погодити й вивести з черги розбору">{busy ? "Зберігаю…" : `✓ ${APPROVE_LABEL_UA}`}</button>;
 }
 
 export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: string; onClose: () => void; onChanged?: () => void }) {

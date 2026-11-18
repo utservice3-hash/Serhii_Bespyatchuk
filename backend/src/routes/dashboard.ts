@@ -7006,6 +7006,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       lastTalkRecording: reactByKey.get(c.client_key)?.lastTalkRecording ?? null,
       lastTalkSec: reactByKey.get(c.client_key)?.lastTalkSec ?? null,
       lastTalkBy: reactByKey.get(c.client_key)?.lastTalkBy ?? null,
+      // 📞 Розмова на спільному номері (9061): скільки ще клієнтів має номер — щоб тімлід бачив, звідки розмова.
+      lastTalkSharedWith: reactByKey.get(c.client_key)?.lastTalkSharedWith ?? 0,
       attempts: reactByKey.get(c.client_key)?.attempts ?? 0,
       // 📱 Останній контакт = свіжіше з розмови Ringostat і ручного запису; джерело названо.
       lastContact: lastContactOf(reactByKey.get(c.client_key)?.lastTalk ?? null,

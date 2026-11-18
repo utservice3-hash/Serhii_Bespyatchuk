@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchAiCallCard, fetchAiCallRecording, putAiCallNote, hiringError, type AiCallCardResp, type AiCallRowT } from "../../../api";
-import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel, reviewNoteText, WAIT_MANAGER_COMMENT_UA, priceNoteLine } from "../aiCallsView";
+import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel, reviewNoteText, approveState, approveWaitText, APPROVE_LABEL_UA, priceNoteLine } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { Analysis, QuoteSeek, FeedbackButton } from "./AiCallDrawer";
 import { ChecklistBlock } from "./FirstTouchChecklist";
@@ -29,6 +29,8 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const seekRef = useRef<SeekFn | null>(null);
+  // ✅ Задача 9229: стан кнопки — та сама функція, що в списку й картці. Черга рендериться лише з правом розбору (`d.canReview`).
+  const ap = cur ? approveState(cur, true) : null;
 
   useEffect(() => {
     if (!open || !cur) return;
@@ -140,9 +142,9 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
                     placeholder={`Що сказати ${cur?.managerName ?? "менеджеру"} по цій розмові`}
                     style={{ minHeight: 60, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", font: "inherit", resize: "vertical", background: "var(--card-bg)", color: "var(--text)" }} />
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    {cur?.managerCommented
-                      ? <button type="button" className="ftd-btn dark" disabled={busy} onClick={() => void review()}>{busy ? "Зберігаю…" : "Погодити коментар · наступна ›"}</button>
-                      : <span className="ftd-sub" style={{ alignSelf: "center" }}>{WAIT_MANAGER_COMMENT_UA}</span>}
+                    {ap?.kind === "can"
+                      ? <button type="button" className="ftd-btn dark" disabled={busy} onClick={() => void review()}>{busy ? "Зберігаю…" : `${APPROVE_LABEL_UA} · наступна ›`}</button>
+                      : ap && <span className="ftd-sub" style={{ alignSelf: "center", color: ap.kind === "notManager" ? "var(--warn-fg, #8a5a00)" : undefined }}>{approveWaitText(ap)}</span>}
                     {cur?.reviewReason === "noCall" && c.noteRights.offline && (
                       <button type="button" className="ftd-btn" disabled={busy} onClick={() => void offline()}>Передзвонив поза телефонією</button>
                     )}

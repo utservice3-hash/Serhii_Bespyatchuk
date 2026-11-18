@@ -374,6 +374,34 @@ export const reviewNoteText = (hasManagerComment: boolean): string => (hasManage
  * «Зворотний звʼязок». Правило рахує сервер (`managerCommented`, `firstTouchTeamReport.canCloseReview`), тут — підпис.
  */
 export const WAIT_MANAGER_COMMENT_UA = "Чекає коментаря менеджера: закрити можна, коли менеджер напише, що було далі. Якщо помилився AI — «Зворотний звʼязок».";
+
+/**
+ * ✅ «ПОГОДЖУЮ» (задача 9229, 18.11.2026). Один стан кнопки для списку розмов, черги й бічної картки — щоб три місця не
+ * тримали кожне свою умову. Заміряно 18.11 (команда Безпамʼятного, 04–18.11): 15 коментарів у полі «Коментар менеджера»
+ * вписав сам тімлід, і на місці кнопки стояло «Чекає коментаря менеджера», хоча коментар видно вище — з тексту не
+ * зрозуміло, чому погодити не можна. Правило 7351 (погоджується лише коментар самого менеджера) НЕ змінюється: стан
+ * лише чесно називає причину. `null` — кнопки й підпису немає (немає права, або розмова не в черзі).
+ *   can        — менеджер розмови написав сам: кнопка «Погоджую»;
+ *   notManager — коментар є, але не з акаунта менеджера розмови (`author` — хто вписав);
+ *   wait       — коментаря немає.
+ */
+export const APPROVE_LABEL_UA = "Погоджую";
+export type ApproveState = { kind: "can" } | { kind: "wait" } | { kind: "notManager"; author: string };
+type ApproveNote = { byName: string | null } | null | undefined;
+export function approveState(r: { needsReview: boolean; managerCommented: boolean; explainNote?: ApproveNote; priceNote?: ApproveNote },
+  canReview: boolean): ApproveState | null {
+  if (!canReview || !r.needsReview) return null;
+  if (r.managerCommented) return { kind: "can" };
+  const note = r.explainNote ?? r.priceNote;
+  if (note) return { kind: "notManager", author: note.byName?.trim() || "невідомий акаунт" };
+  return { kind: "wait" };
+}
+/** Підпис на місці кнопки, коли погодити не можна; для `can` — `null` (там кнопка). */
+export function approveWaitText(s: ApproveState): string | null {
+  if (s.kind === "can") return null;
+  if (s.kind === "wait") return WAIT_MANAGER_COMMENT_UA;
+  return `Коментар вписав ${s.author} — це не акаунт менеджера розмови. Погодити можна лише коментар, який менеджер написав сам. Якщо помилився AI — «Зворотний звʼязок».`;
+}
 export const REVIEW_REASON_UI: Record<ReviewReasonT, { label: string; tone: Tone }> = {
   noCall: { label: "Немає дзвінка", tone: "bad" },
   late: { label: "Запізнився", tone: "warn" },

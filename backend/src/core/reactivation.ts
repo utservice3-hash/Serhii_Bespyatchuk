@@ -22,6 +22,7 @@ import { SLEEPING_DAYS, LOST_DAYS, valueScore, type ClientState,
 import { loadClientSegments, factsFor, inReactivationTab, inClientsScreen } from "./clientSegments.js";
 import { archivedSql, LAST_PAID_CTE, LAST_PAID_JOIN } from "./clientArchive.js";
 import { notCarrierCallSql } from "./carrierPhones.js";
+import { clientCallsSql, othersOnPhone } from "./sharedPhoneCalls.js";
 import { lastOrderCte, daysSinceOrderSql, PAID_DEAL_JOIN, PAID_DEAL_WHERE } from "./clientOrder.js";
 export type { ClientState, ClientSegment };
 void SLEEPING_DAYS; void LOST_DAYS;
@@ -128,6 +129,8 @@ export interface ReactivationClient {
   lastTalkRecording: string | null;
   lastTalkSec: number | null;
   lastTalkBy: string | null;
+  /** 📞 Розмова на спільному номері: скільки ще клієнтів має цей номер (0 = номер лише цього клієнта). Задача 9061. */
+  lastTalkSharedWith: number;
   /**
    * СПРОБИ — окремо від контакту: дзвінки без відповіді ПІСЛЯ останньої розмови
    * (а якщо розмови не було жодної — усі). Саме цим видно, що менеджер працює,
@@ -204,6 +207,7 @@ export async function clientStates(
     revenue_after_task: string | null;
     last_talk: string | null; last_talk_days: string | null; last_talk_type: string | null;
     last_talk_recording: string | null; last_talk_sec: number | null; last_talk_by: string | null;
+    last_talk_shared_n: number | null;
     attempts: string | null; last_attempt: string | null; last_attempt_days: string | null;
   }>(
     `WITH ${LAST_PAID_CTE},
@@ -235,6 +239,7 @@ export async function clientStates(
             lt.recording AS last_talk_recording,
             lt.billsec AS last_talk_sec,
             lt.talk_by AS last_talk_by,
+            lt.shared_n AS last_talk_shared_n,
             at.n AS attempts,
             to_char(at.last_at ${KYIV}, 'YYYY-MM-DD') AS last_attempt,
             (CURRENT_DATE - (at.last_at ${KYIV})::date)::int AS last_attempt_days
@@ -261,19 +266,20 @@ export async function clientStates(
        -- читанням на клієнта. LEFT JOIN — бо «розмов немає» це РЕЗУЛЬТАТ, а не
        -- привід викинути клієнта зі списку реактивації.
        -- 📵 Розмова на номер ПЕРЕВІЗНИКА — не розмова з клієнтом (задача 7359): той самий фільтр у спробах нижче.
+       -- 📞 Дзвінки клієнта — разом зі спільними номерами в межах стелі (задача 9061, core/sharedPhoneCalls.ts).
        LEFT JOIN LATERAL (
          SELECT rc.calldate, rc.call_type, rc.recording, rc.billsec,
-                COALESCE(mt.name, rc.employee_fio) AS talk_by
-           FROM ringostat_calls rc LEFT JOIN managers mt ON mt.id = rc.manager_id
-          WHERE rc.client_key = a.client_key AND rc.billsec > 0 AND ${notCarrierCallSql("rc")}
+                COALESCE(mt.name, rc.employee_fio) AS talk_by, rc.shared_n
+           FROM ${clientCallsSql("= a.client_key")} rc LEFT JOIN managers mt ON mt.id = rc.manager_id
+          WHERE rc.billsec > 0 AND ${notCarrierCallSql("rc")}
           ORDER BY rc.calldate DESC LIMIT 1
        ) lt ON true
        -- СПРОБИ — недодзвони ПІСЛЯ останньої розмови (без розмови — всі).
        -- Окремим підзапитом, бо це відповідь на ІНШЕ питання: не «чи є контакт»,
        -- а «чи його добиваються». Складати з розмовою в одну цифру заборонено.
        LEFT JOIN LATERAL (
-         SELECT COUNT(*)::int AS n, MAX(rc.calldate) AS last_at FROM ringostat_calls rc
-          WHERE rc.client_key = a.client_key AND rc.billsec = 0 AND ${notCarrierCallSql("rc")}
+         SELECT COUNT(*)::int AS n, MAX(rc.calldate) AS last_at FROM ${clientCallsSql("= a.client_key")} rc
+          WHERE rc.billsec = 0 AND ${notCarrierCallSql("rc")}
             AND (lt.calldate IS NULL OR rc.calldate > lt.calldate)
        ) at ON true
       -- 🗄 АРХІВ ЗАМІСТЬ hidden (рішення власника 05.08.2026). Два способи прибрати
@@ -319,6 +325,7 @@ export async function clientStates(
       lastTalkRecording: r.last_talk_recording ?? null,
       lastTalkSec: r.last_talk_sec == null ? null : Number(r.last_talk_sec),
       lastTalkBy: r.last_talk_by ?? null,
+      lastTalkSharedWith: othersOnPhone(r.last_talk_shared_n),
       attempts: Number(r.attempts ?? 0),
       lastAttempt: r.last_attempt,
       lastAttemptDays: r.last_attempt_days == null ? null : Number(r.last_attempt_days),

@@ -5,10 +5,14 @@
  *
  * Усі дати — київські `YYYY-MM-DD`. Кожен запит — один на весь список (стеля роуту 20 с), по індексах:
  * `idx_rc_client_key`, `uniq_deal_stage_event`, `call_transcripts(uniqueid, …)`.
+ *
+ * 📞 Розмови — разом зі спільними номерами в межах стелі (задача 9061, `core/sharedPhoneCalls.ts`): розмова на номер,
+ * який має ще 1-4 клієнти, — доказ «працюють» і для цього клієнта, нарівні з прямою.
  */
 import { REACT_STATUS_ID } from "./clientKommoTaskRules.js";
 import { notCarrierCallSql } from "./carrierPhones.js";
 import { TALK_MIN_SEC } from "./clientLeadRules.js";
+import { clientCallsSql } from "./sharedPhoneCalls.js";
 
 export interface Db {
   query: <R = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<{ rows: R[] }>;
@@ -37,18 +41,18 @@ export async function leadFactsFor(db: Db, keys: string[], stageSinceDays = 200)
   if (!keys.length) return out;
   const [talk, summ, stage, paid, lg, fresh] = await Promise.all([
     db.query<{ client_key: string; d: string }>(
-      `SELECT DISTINCT ON (rc.client_key) rc.client_key, ${KYIV_DAY("rc.calldate")} AS d
-         FROM ringostat_calls rc
-        WHERE rc.client_key = ANY($1) AND rc.billsec >= $2 AND ${notCarrierCallSql("rc")}
-        ORDER BY rc.client_key, rc.calldate DESC`, [keys, TALK_MIN_SEC]),
+      `SELECT DISTINCT ON (rc.ck) rc.ck AS client_key, ${KYIV_DAY("rc.calldate")} AS d
+         FROM ${clientCallsSql("= ANY($1)")} rc
+        WHERE rc.billsec >= $2 AND ${notCarrierCallSql("rc")}
+        ORDER BY rc.ck, rc.calldate DESC`, [keys, TALK_MIN_SEC]),
     db.query<{ client_key: string; d: string; text: string }>(
-      `SELECT DISTINCT ON (rc.client_key) rc.client_key, ${KYIV_DAY("rc.calldate")} AS d, ca.result->>'summary' AS text
-         FROM ringostat_calls rc
+      `SELECT DISTINCT ON (rc.ck) rc.ck AS client_key, ${KYIV_DAY("rc.calldate")} AS d, ca.result->>'summary' AS text
+         FROM ${clientCallsSql("= ANY($1)")} rc
          JOIN call_transcripts ct ON ct.uniqueid = rc.uniqueid
          JOIN call_analyses ca ON ca.transcript_id = ct.id AND ca.status = 'done'
-        WHERE rc.client_key = ANY($1) AND rc.billsec >= $2 AND ${notCarrierCallSql("rc")}
+        WHERE rc.billsec >= $2 AND ${notCarrierCallSql("rc")}
           AND COALESCE(btrim(ca.result->>'summary'), '') <> ''
-        ORDER BY rc.client_key, rc.calldate DESC, ca.id DESC`, [keys, TALK_MIN_SEC]),
+        ORDER BY rc.ck, rc.calldate DESC, ca.id DESC`, [keys, TALK_MIN_SEC]),
     db.query<{ client_key: string; d: string }>(
       `SELECT d.client_key, ${KYIV_DAY("max(e.changed_at)")} AS d
          FROM deal_stage_events e JOIN deals d ON d.kommo_id = e.kommo_id
