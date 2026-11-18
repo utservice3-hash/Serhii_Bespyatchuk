@@ -19,6 +19,8 @@ import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
 import { FC_PIPELINE_IDS } from "./moneyBuckets.js";
 import { elogistMarkSql, notElogistSql } from "./elogist.js";
+import { linkedinDealSql } from "./linkedinDeals.js";
+import { prozorroDealSql } from "./prozorroSource.js";
 import type { LeadChannel } from "./dealSourceState.js";
 
 /**
@@ -574,7 +576,10 @@ export interface CreatedBucketRow { bucket: string; deals: number }
  * Рядок розколу СТВОРЕНИХ — **ДВІ НЕЗАЛЕЖНІ ПАРТИЦІЇ ОДНОГО НАБОРУ**.
  *
  *   новизна : `newCount + repeatCount + undefCount   == created`
- *   джерело : `adCount + leadgenCount + elogistCount + otherCount + noChannelCount == created`
+ *   джерело : `adCount + leadgenCount + elogistCount + linkedinCount + prozorroCount + otherCount + noChannelCount == created`
+ *
+ * 🔗🏛 З 18.11.2026 кошиків джерела СІМ: LinkedIn і Prozorro вирізані з «інше» (задача 9230) —
+ * лише там, де канал «інше»; угода з реклами чи лідогену лишається у своєму каналі.
  *
  * 🟣 З 27.10.2026 кошиків джерела П'ЯТЬ: `elogistCount` — окремий канал eLogist (рішення
  * власника, `core/elogist.ts`). До того ці угоди сиділи в `adCount`.
@@ -606,6 +611,9 @@ export interface CreatedSplitRow {
   adCount: number;
   leadgenCount: number;
   elogistCount: number;
+  /** 🔗 LinkedIn (§20) і 🏛 Prozorro (§21) — вирізані з «інше» (задача 9230, 18.11.2026). */
+  linkedinCount: number;
+  prozorroCount: number;
   otherCount: number;
   noChannelCount: number;
   /**
@@ -625,18 +633,20 @@ export interface CreatedSplitRow {
   sourceByKlass: Record<"new" | "rep" | "undef", SourceCounts>;
 }
 
-/** Розклад джерела всередині одного класу новизни. `created` — Σ п'яти. */
+/** Розклад джерела всередині одного класу новизни. `created` — Σ семи (LinkedIn і Prozorro — з 18.11.2026). */
 export interface SourceCounts {
   created: number;
   adCount: number;
   leadgenCount: number;
   elogistCount: number;
+  linkedinCount: number;
+  prozorroCount: number;
   otherCount: number;
   noChannelCount: number;
 }
 export interface CreatedSplitBucketRow {
   bucket: string; created: number; newCount: number; repeatCount: number; undefCount: number;
-  adCount: number; leadgenCount: number; elogistCount: number; otherCount: number; noChannelCount: number;
+  adCount: number; leadgenCount: number; elogistCount: number; linkedinCount: number; prozorroCount: number; otherCount: number; noChannelCount: number;
 }
 
 // Дженерик/порожні client_key, що НЕ беруть участі в матчингу історії клієнта
@@ -754,15 +764,21 @@ export function createdKlassCase(ops: {
  * саме це й ховала стара перша гілка. `NULL` каналу читається як «невизначено», а
  * не зсипається в «інше»: невідоме має читатись як невідоме.
  */
-export function dealSourceCase(channel: string): string {
+export function dealSourceCase(channel: string, marks: { linkedin: string; prozorro: string }): string {
   // 🟣 'elogist' — власна гілка (рішення власника 27.10.2026): без неї eLogist мовчки осів би
   // в catch-all «без джерела», і партиція сходилась би, ховаючи цілий канал.
+  // 🔗🏛 'linkedin' / 'prozorro' (задача 9230, Роман 18.11.2026) — вирізаються ЛИШЕ з «інше»: канал
+  // (реклама / лідоген / eLogist, «останній дотик») їх перебиває, а невідомий канал лишається невідомим.
+  // Тому гілки стоять ПІСЛЯ каналів і `IS NULL`. Ознаки — лише з ядра (`linkedinDealSql`, `prozorroDealSql`);
+  // `marks` обовʼязковий, щоб жодна форма правила не забула нові кошики. LinkedIn перед Prozorro, якщо обидві мітки.
   return `
   CASE
     WHEN ${channel} = 'ad' THEN 'ad'
     WHEN ${channel} = 'leadgen' THEN 'leadgen'
     WHEN ${channel} = 'elogist' THEN 'elogist'
     WHEN ${channel} IS NULL THEN 'undef'
+    WHEN ${marks.linkedin} THEN 'linkedin'
+    WHEN ${marks.prozorro} THEN 'prozorro'
     ELSE 'other'
   END`;
 }
@@ -771,7 +787,7 @@ export function dealSourceCase(channel: string): string {
 const CREATED_KLASS_CASE = createdKlassCase({
   vkey: "vkey", hasPrior: "has_prior", salesChannel: "sales_channel",
 });
-const CREATED_SOURCE_CASE = dealSourceCase("lead_channel");
+const CREATED_SOURCE_CASE = dealSourceCase("lead_channel", { linkedin: "is_li", prozorro: "is_pz" });
 
 /**
  * ІНЛАЙН-форма ТОГО САМОГО правила — для запитів, що беруть угоди напряму з
@@ -792,7 +808,8 @@ export function dealKlassSql(alias = "d"): string {
 }
 
 /** ДЖЕРЕЛО угоди в інлайн-формі — пара до `dealKlassSql` (та сама угода, інший вимір). */
-export const dealSourceSql = (alias = "d"): string => dealSourceCase(`${alias}.lead_channel`);
+export const dealSourceSql = (alias = "d"): string => dealSourceCase(`${alias}.lead_channel`,
+  { linkedin: linkedinDealSql(alias), prozorro: prozorroDealSql(alias) });
 
 // РОЗБИВКА ЗА ДЖЕРЕЛОМ (реклама / лідоген / постійний / невизн) — ЧОТИРИ категорії за
 // ПОХОДЖЕННЯМ угоди. ⚠️ Цей вираз ЗМІШУЄ джерело з новизною (гілка 'repeat') і тому
@@ -848,12 +865,13 @@ function classifyCte(
   const vcarry = opts.carryVkey ? ", vkey" : ""; // vkey у final для COUNT(DISTINCT client) — repeatClientsByBucket
   return `base AS (
        SELECT d.kommo_id, d.manager_id, d.created_at_kommo, d.sales_channel, d.lead_channel${bcol}${pcol},
-              CASE WHEN d.client_key IS NULL OR d.client_key = ANY($2) THEN NULL ELSE d.client_key END AS vkey
+              CASE WHEN d.client_key IS NULL OR d.client_key = ANY($2) THEN NULL ELSE d.client_key END AS vkey,
+              ${linkedinDealSql("d")} AS is_li, ${prozorroDealSql("d")} AS is_pz
          FROM deals d LEFT JOIN managers m ON m.id = d.manager_id ${activeJoin}
         WHERE ${conds.join(" AND ")}
      ),
      classed AS (
-       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey${bcarry}${pcarry},
+       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey, b.is_li, b.is_pz${bcarry}${pcarry},
               ${priorClientSql({ vkey: "b.vkey", createdAt: "b.created_at_kommo", selfId: "b.kommo_id" })} AS has_prior
          FROM base b
      ),
@@ -924,8 +942,8 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   // 🔀 Зріз джерела всередині класу — ЧОТИРИ `FILTER` на кожен із трьох класів.
   // Пари (klass, source) перелічені ЯВНО, без циклу по рядку SQL: перелік має
   // збігатися з `dealSourceCase`, і `#212` це звіряє на живих даних.
-  const bySrc = (k: string): string => ["ad", "leadgen", "elogist", "other", "undef"]
-    .map((s, i) => `COUNT(*) FILTER (WHERE klass = '${k}' AND source = '${s}') AS ${k}_${["ad", "lg", "el", "oth", "nch"][i]}`)
+  const bySrc = (k: string): string => ["ad", "leadgen", "elogist", "linkedin", "prozorro", "other", "undef"]
+    .map((s, i) => `COUNT(*) FILTER (WHERE klass = '${k}' AND source = '${s}') AS ${k}_${["ad", "lg", "el", "li", "pz", "oth", "nch"][i]}`)
     .join(",\n            ");
   const r = await pool.query<Record<string, string> & { manager_id: number; name: string; team_id: number | null }>(
     `WITH ${cte}
@@ -937,6 +955,8 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
             COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
             COUNT(*) FILTER (WHERE source = 'elogist') AS elogist_count,
+            COUNT(*) FILTER (WHERE source = 'linkedin') AS linkedin_count,
+            COUNT(*) FILTER (WHERE source = 'prozorro') AS prozorro_count,
             COUNT(*) FILTER (WHERE source = 'other') AS other_count,
             COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count,
             ${bySrc("new")},
@@ -949,13 +969,15 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   );
   const slice = (x: Record<string, string>, k: string): SourceCounts => {
     const n = (suf: string): number => Number(x[`${k}_${suf}`]);
-    const ad = n("ad"), lg = n("lg"), el = n("el"), oth = n("oth"), nch = n("nch");
-    return { created: ad + lg + el + oth + nch, adCount: ad, leadgenCount: lg, elogistCount: el, otherCount: oth, noChannelCount: nch };
+    const ad = n("ad"), lg = n("lg"), el = n("el"), li = n("li"), pz = n("pz"), oth = n("oth"), nch = n("nch");
+    return { created: ad + lg + el + li + pz + oth + nch, adCount: ad, leadgenCount: lg, elogistCount: el,
+      linkedinCount: li, prozorroCount: pz, otherCount: oth, noChannelCount: nch };
   };
   return r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, teamId: x.team_id,
     created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
     adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count), elogistCount: Number(x.elogist_count),
+    linkedinCount: Number(x.linkedin_count), prozorroCount: Number(x.prozorro_count),
     otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
     sourceByKlass: { new: slice(x, "new"), rep: slice(x, "repeat"), undef: slice(x, "undef") },
   }));
@@ -974,7 +996,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
     : `to_char(date_trunc('${granularity === "month" ? "month" : "week"}', ${col})::date, 'YYYY-MM-DD')`;
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params, bucketExpr);
-  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; elogist_count: string; other_count: string; no_channel_count: string }>(
+  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; elogist_count: string; linkedin_count: string; prozorro_count: string; other_count: string; no_channel_count: string }>(
     `WITH ${cte}
      SELECT bucket,
             COUNT(*) AS created,
@@ -984,6 +1006,8 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
             COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
             COUNT(*) FILTER (WHERE source = 'elogist') AS elogist_count,
+            COUNT(*) FILTER (WHERE source = 'linkedin') AS linkedin_count,
+            COUNT(*) FILTER (WHERE source = 'prozorro') AS prozorro_count,
             COUNT(*) FILTER (WHERE source = 'other') AS other_count,
             COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count
        FROM final
@@ -993,6 +1017,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
   return r.rows.map((x) => ({
     bucket: x.bucket, created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
     adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count), elogistCount: Number(x.elogist_count),
+    linkedinCount: Number(x.linkedin_count), prozorroCount: Number(x.prozorro_count),
     otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
   }));
 }
@@ -1041,12 +1066,13 @@ function wonSplitCte(): string {
   return `base AS (
        SELECT dd.kommo_id, dd.manager_id, dd.created_at_kommo, dd.closed_at_kommo, dd.sales_channel,
               dd.lead_channel, dd.price, dd.client_key, dd.client_name,
-              CASE WHEN dd.client_key IS NULL OR dd.client_key = ANY($2) THEN NULL ELSE dd.client_key END AS vkey
+              CASE WHEN dd.client_key IS NULL OR dd.client_key = ANY($2) THEN NULL ELSE dd.client_key END AS vkey,
+              ${linkedinDealSql("dd")} AS is_li, ${prozorroDealSql("dd")} AS is_pz
          FROM deals dd JOIN managers m ON m.id = dd.manager_id AND m.is_active
         WHERE __CONDS__
      ),
      classed AS (
-       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey, b.price,
+       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey, b.price, b.is_li, b.is_pz,
               b.client_key, b.client_name, b.closed_at_kommo,
               ${priorClientSql({ vkey: "b.vkey", createdAt: "b.created_at_kommo", selfId: "b.kommo_id" })} AS has_prior
          FROM base b
