@@ -120,6 +120,8 @@ import { createFitBatch, fitHeights, type FitBatch } from "../fitBatch";
 const METRIC_LBL: Record<string, string> = {
   ads_count: "Реклама",
   leadgen_count: "Лідоген",
+  linkedin_count: "LinkedIn",
+  prozorro_count: "Prozorro",
   dispatch_count: "Авто",
   avg_check: "Сер. чек",
   conversion: "Конверсія",
@@ -127,7 +129,7 @@ const METRIC_LBL: Record<string, string> = {
 };
 const METRIC_UNIT: Record<string, string> = { avg_check: "₴", payment_amount: "₴", conversion: "%" };
 // Адитивні метрики (сумуються по днях у шапку парасольки); чек/конверсія — ставкові (по днях).
-const ADDITIVE_METRICS = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
+const ADDITIVE_METRICS = new Set(["ads_count", "leadgen_count", "linkedin_count", "prozorro_count", "dispatch_count", "payment_amount"]);
 
 // ── дати (Пн–Нд, UTC) для синтетичних парасольок сиріт-daily_kpi ──
 const tMondayOf = (s: string) => { const d = new Date(s + "T00:00:00Z"); const w = d.getUTCDay() === 0 ? 7 : d.getUTCDay(); d.setUTCDate(d.getUTCDate() - (w - 1)); return d.toISOString().slice(0, 10); };
@@ -2377,6 +2379,27 @@ export function TasksSection({
                         onChange={(e) => setTaskForm((f) => ({ ...f, leadgenCount: e.target.value }))}
                         placeholder="напр. 40"
                         title="Прийнято заявок від лідогенераторів (переданих і взятих у роботу менеджером — з Реєстру лідоген-бота). Доступно для всіх команд."
+                      />
+                    </label>
+                    {/* Задача 9230: факт — те саме число, що колонки Звіту «зі створених: LinkedIn / Prozorro». */}
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                      К-сть угод з LinkedIn
+                      <input
+                        type="number"
+                        value={taskForm.linkedinCount}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, linkedinCount: e.target.value }))}
+                        placeholder="напр. 3"
+                        title="Створені менеджером угоди з LinkedIn (джерело клієнта «LinkedIn» або тег «LinkedIn»). Те саме число, що колонка Звіту «зі створених: LinkedIn»."
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                      К-сть угод з Prozorro
+                      <input
+                        type="number"
+                        value={taskForm.prozorroCount}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, prozorroCount: e.target.value }))}
+                        placeholder="напр. 2"
+                        title="Створені менеджером угоди з Prozorro (джерело «AI тендер» або тег «AI тендер» / «Prozorro»). Те саме число, що колонка Звіту «зі створених: Prozorro»."
                       />
                     </label>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>

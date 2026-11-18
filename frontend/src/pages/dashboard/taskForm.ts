@@ -41,6 +41,8 @@ export type TaskForm = {
   weekdays: boolean[]; // Mon..Sun
   adsCount: string;
   leadgenCount: string;
+  linkedinCount: string; // задача 9230: угоди з LinkedIn за період
+  prozorroCount: string; // задача 9230: угоди з Prozorro за період
   dispatchCount: string; // к-сть авто (поставити)
   avgCheck: string;
   conversion: string;
@@ -69,6 +71,8 @@ export const emptyTaskForm: TaskForm = {
   weekdays: [true, true, true, true, true, false, false], // Mon..Sun
   adsCount: "",
   leadgenCount: "",
+  linkedinCount: "",
+  prozorroCount: "",
   dispatchCount: "",
   avgCheck: "",
   conversion: "",

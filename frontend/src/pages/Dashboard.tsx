@@ -708,6 +708,8 @@ export function Dashboard() {
         days,
         adsCount: taskForm.adsCount ? Number(taskForm.adsCount) : undefined,
         leadgenCount: taskForm.leadgenCount ? Number(taskForm.leadgenCount) : undefined,
+        linkedinCount: taskForm.linkedinCount ? Number(taskForm.linkedinCount) : undefined,
+        prozorroCount: taskForm.prozorroCount ? Number(taskForm.prozorroCount) : undefined,
         dispatchCount: taskForm.dispatchCount ? Number(taskForm.dispatchCount) : undefined,
         avgCheck: taskForm.avgCheck ? Number(taskForm.avgCheck) : undefined,
         conversion: taskForm.conversion ? Number(taskForm.conversion) : undefined,
