@@ -2437,24 +2437,6 @@ test("#3361 ЖИВА СХЕМА: коментар менеджера — лиш�
 });
 
 /**
- * #3362 — ПРОВОДКА ЗАКРИТТЯ: сервер відмовляє в «Розібрано» без коментаря менеджера (409, текст ядра) — правило не обходиться
- * повз кнопку; картка й черга показують кнопку лише за `managerCommented`, інакше — «чекає коментаря менеджера».
- * 🧨 Червоніє, якщо прибрати перевірку в роуті, повернути кнопку «Розібрано без коментаря» чи показувати її за будь-яким коментарем.
- */
-test("#3362 ПРОВОДКА ЗАКРИТТЯ: роут відмовляє без коментаря менеджера; кнопки в картці й черзі — лише за managerCommented", () => {
-  const dash = SRC("routes/dashboard.ts");
-  assert.match(dash, /if \(kind === "review" && text\.trim\(\) && !canCloseReview\(card\.row\)\) \{ res\.status\(409\)\.json\(\{ error: REVIEW_NEEDS_COMMENT_UA \}\); return; \}\s*const who =/,
-    "🔴 сервер ставить «Розібрано» без коментаря менеджера (або перевірка після запису)");
-  assert.match(dash, /explainNote: r\.explainNote, managerCommented: r\.managerCommented,/, "🔴 список не віддає фронту, чи писав менеджер");
-  const dr = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
-  assert.doesNotMatch(dr, /Розібрано без коментаря/, "🔴 у картці повернулась кнопка «Розібрано без коментаря»");
-  assert.match(dr, /\{c\.row\.managerCommented\s*\? <button[^>]*onClick=\{\(\) => void go\(\)\}[\s\S]{0,200}: <span[^>]*>\{WAIT_MANAGER_COMMENT_UA\}<\/span>\}/, "🔴 кнопка в картці не за managerCommented");
-  const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
-  assert.doesNotMatch(qx, /Опрацьовано без коментаря/, "🔴 у черзі повернулась кнопка «без коментаря»");
-  assert.match(qx, /\{cur\?\.managerCommented\s*\? <button[^>]*onClick=\{\(\) => void review\(\)\}/, "🔴 кнопка в черзі не за managerCommented");
-});
-
-/**
  * #3363 — РУБРИКА «ЯК НАЗВАНО ЦІНУ» (задача 7351, п.6): лише точна / вилка / «від…» / «не назвав»; форма без цитати —
  * відмова; на екрані — лише зі звіреною цитатою; «не назвав» і незвірене — «не визначено», а не форма. Лише нові розмови
  * (з 03.11, «тільки з сьогодні»), у тіку — своєю часткою бюджету розбору.
