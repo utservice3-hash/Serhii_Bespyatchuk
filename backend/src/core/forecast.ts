@@ -83,6 +83,29 @@ export function expectedSplitByMonth(
 }
 
 /**
+ * ⏳ ОЧІКУВАННЯ В МЕЖАХ ПЕРІОДУ — сума угод зони очікування, чия ПЛАНОВА дата оплати
+ * лежить у [from, to] включно з обома кінцями (TOP Weekly 16.11.2026, пункт 2: «з
+ * очікуваннями скільки ми виконали» — для тижня так само, як для місяця).
+ *
+ * Те саме правило, що `expectedSplitByMonth` для «цей міс» і `expectedPlanned` тижнів
+ * Звіту КВП: дні періоду, що вже минули, але оплата не прийшла, ВХОДЯТЬ (так само,
+ * як у місяці входять минулі дні місяця). Без меж періоду — порожньо, не «усе».
+ */
+export function expectedInRange(
+  rows: { managerId: number; day: string; sum: number }[],
+  from: string | null,
+  to: string | null
+): Map<number, number> {
+  const out = new Map<number, number>();
+  if (!from || !to) return out;
+  for (const r of rows) {
+    if (r.day < from || r.day > to) continue;
+    out.set(r.managerId, (out.get(r.managerId) ?? 0) + r.sum);
+  }
+  return out;
+}
+
+/**
  * ПРОГНОЗ = факт ② + очікування цього місяця (лише поки місяць НЕ завершився).
  *
  * 🔒 `monthInProgress = false` → прогноз дорівнює факту. Завершений місяць нічого
