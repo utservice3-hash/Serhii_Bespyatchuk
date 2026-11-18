@@ -11,7 +11,7 @@
  * Свої компанії (ЮТС, АвтоМув) — поза радаром за назвою і за `OWN_LARDI_REF_IDS`. Тримає #3960–#3969.
  */
 import type { Db } from "./secrets.js";
-import { botLike, typicalHours } from "./lardiSync.js";
+import { botFrom, hoursFromCounts } from "./lardiSync.js";
 
 export class HuntError extends Error { constructor(public status: number, message: string) { super(message); } }
 
@@ -72,6 +72,7 @@ export function topDirections(dirs: string[], n = 2): { dir: string; n: number }
   return [...m].map(([dir, c]) => ({ dir, n: c })).sort((a, b) => b.n - a.n || a.dir.localeCompare(b.dir, "uk")).slice(0, n);
 }
 
+const TODAY_SQL = `(date_trunc('day', now() AT TIME ZONE 'Europe/Kyiv') AT TIME ZONE 'Europe/Kyiv')`;
 export const PERIODS = { h1: "1 hour", d1: "today", d7: "7 days", d30: "30 days" } as const;
 type Period = keyof typeof PERIODS;
 
@@ -90,50 +91,77 @@ export async function radar(db: Db, opts: { period?: unknown; days?: unknown; sh
   const area = typeof opts.area === "string" && opts.area.trim() ? opts.area.trim().slice(0, 80) : null;
   const hideBots = opts.hideBots === true || opts.hideBots === "1" || opts.hideBots === "true";
   const q = typeof opts.q === "string" ? opts.q.trim().toLowerCase().slice(0, 80) : "";
-  const since = period === "h1" ? `now() - interval '1 hour'` : period === "d1" ? `(date_trunc('day', now() AT TIME ZONE 'Europe/Kyiv') AT TIME ZONE 'Europe/Kyiv')`
-    : period === "d7" ? `now() - interval '7 days'` : `now() - interval '30 days'`;
-  const rows = (await db.query<{ ckey: string; face: string; company: string; phones: unknown; h1: number; d1: number; d7: number; d30: number;
-    cargo: number; lorry: number; price_pct: number; dirs: string[]; last_seen: string; intl: number; area: string | null; shipper: boolean;
-    auto: boolean; live_times: string[] | null }>(
+  const since = period === "h1" ? `now() - interval '1 hour'` : period === "d1" ? TODAY_SQL : period === "d7" ? `now() - interval '7 days'` : `now() - interval '30 days'`;
+  // 🔴 Жодних масивів подій у відповіді бази: усе (вікна, топ напрямків, години, сплески, інтервали) рахує SQL, у процес
+  // приходять ≤ 300 готових рядків. 18.11.2026 масиви часів/телефонів/напрямків по 300 тис. подій убили прод по памʼяті.
+  const rows = (await db.query<{ ckey: string; face: string; company: string; h1: number; d1: number; d7: number; d30: number;
+    cargo: number; lorry: number; price_pct: number; last_seen: string; intl: number; area: string | null; shipper: boolean; auto: boolean;
+    live_n: number; phones: unknown; top: { dir: string; n: number }[] | null; hours: number[] | null;
+    burst: number | null; gap_n: number | null; gap_mean: number | null; gap_sd: number | null }>(
     `WITH ${cte(6)}, f AS (
        SELECT * FROM k
         WHERE ($1::text IS NULL OR side = $1)
           AND ($2::text IS NULL OR ($2 = 'intl') = intl)
           AND ($3::text IS NULL OR ($3 = 'shippers') = shipper)
           AND ($4::text IS NULL OR from_area ILIKE '%' || $4 || '%')
-          AND ($5 = '' OR lower(COALESCE(face, '') || ' ' || COALESCE(company, '') || ' ' || COALESCE(phones::text, '')) LIKE '%' || $5 || '%'))
-     SELECT ckey, max(face) AS face, max(company) AS company, (array_agg(phones ORDER BY at DESC))[1] AS phones,
-            count(*) FILTER (WHERE at >= now() - interval '1 hour')::int AS h1,
-            count(*) FILTER (WHERE at >= (date_trunc('day', now() AT TIME ZONE 'Europe/Kyiv') AT TIME ZONE 'Europe/Kyiv'))::int AS d1,
-            count(*) FILTER (WHERE at >= now() - interval '7 days')::int AS d7,
-            count(*)::int AS d30,
-            count(*) FILTER (WHERE side = 'cargo')::int AS cargo, count(*) FILTER (WHERE side = 'lorry')::int AS lorry,
-            round(100.0 * count(DISTINCT (side, pid)) FILTER (WHERE total IS NOT NULL) / greatest(count(DISTINCT (side, pid)), 1))::int AS price_pct,
-            array_agg(COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—')) AS dirs,
-            max(at)::text AS last_seen, count(*) FILTER (WHERE intl)::int AS intl,
-            mode() WITHIN GROUP (ORDER BY from_area) AS area, bool_or(shipper) AS shipper, bool_or(auto_repeat) AS auto,
-            array_agg(at::text ORDER BY at) FILTER (WHERE source = 'live') AS live_times
-       FROM f
-      GROUP BY ckey
-     HAVING count(*) FILTER (WHERE at >= ${since}) > 0
-      ORDER BY ${period} DESC, d30 DESC
-      LIMIT 300`, [side, dir, ctype, area, q, ownIds()])).rows;
+          AND ($5 = '' OR lower(COALESCE(face, '') || ' ' || COALESCE(company, '') || ' ' || ckey) LIKE '%' || $5 || '%')),
+     agg AS (
+       SELECT ckey, max(face) AS face, max(company) AS company,
+              count(*) FILTER (WHERE at >= now() - interval '1 hour')::int AS h1, count(*) FILTER (WHERE at >= ${TODAY_SQL})::int AS d1,
+              count(*) FILTER (WHERE at >= now() - interval '7 days')::int AS d7, count(*)::int AS d30,
+              count(*) FILTER (WHERE side = 'cargo')::int AS cargo, count(*) FILTER (WHERE side = 'lorry')::int AS lorry,
+              round(100.0 * count(DISTINCT (side, pid)) FILTER (WHERE total IS NOT NULL) / greatest(count(DISTINCT (side, pid)), 1))::int AS price_pct,
+              max(at)::text AS last_seen, count(*) FILTER (WHERE intl)::int AS intl,
+              mode() WITHIN GROUP (ORDER BY from_area) AS area, bool_or(shipper) AS shipper, bool_or(auto_repeat) AS auto,
+              count(*) FILTER (WHERE source = 'live')::int AS live_n
+         FROM f GROUP BY ckey
+       HAVING count(*) FILTER (WHERE at >= ${since}) > 0
+          -- «Приховати автоповтор» ДО відбору топу: інакше топ-300 майже весь із ботів, і після відсіву лишалось 13 рядків.
+          -- Тут лише ознака Ларді \`repeat.auto\`; сплески й рівні інтервали досіюються нижче, на готових рядках.
+          AND NOT ($7::boolean AND bool_or(auto_repeat))
+        ORDER BY ${period} DESC, count(*) DESC
+        LIMIT 300),
+     top AS (
+       SELECT ckey, json_agg(json_build_object('dir', dir, 'n', n) ORDER BY n DESC, dir) AS top FROM (
+         SELECT ckey, dir, n, row_number() OVER (PARTITION BY ckey ORDER BY n DESC, dir) AS rn FROM (
+           SELECT f.ckey, COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—') AS dir, count(*)::int AS n
+             FROM f JOIN agg USING (ckey) GROUP BY 1, 2) x) y
+        WHERE rn <= 2 GROUP BY ckey),
+     lv AS (SELECT f.ckey, f.at FROM f JOIN agg USING (ckey) WHERE f.source = 'live'),
+     hrs AS (
+       SELECT ckey, array_agg(n ORDER BY h) AS hours FROM (
+         SELECT a.ckey, g.h, count(lv.at)::int AS n FROM agg a CROSS JOIN generate_series(0, 23) g(h)
+           LEFT JOIN lv ON lv.ckey = a.ckey AND extract(hour FROM lv.at AT TIME ZONE 'Europe/Kyiv')::int = g.h
+          WHERE a.live_n > 0 GROUP BY 1, 2) z GROUP BY ckey),
+     burst AS (
+       SELECT ckey, max(c)::int AS burst FROM (
+         SELECT ckey, count(*) OVER (PARTITION BY ckey ORDER BY at RANGE BETWEEN interval '10 minutes' PRECEDING AND CURRENT ROW) AS c FROM lv) w
+        GROUP BY ckey),
+     gaps AS (
+       SELECT ckey, count(g)::int AS gap_n, avg(g)::float8 AS gap_mean, stddev_pop(g)::float8 AS gap_sd FROM (
+         SELECT ckey, extract(epoch FROM at - lag(at) OVER (PARTITION BY ckey ORDER BY at)) AS g FROM lv) d
+        WHERE g > 0 GROUP BY ckey)
+     SELECT agg.*, (SELECT p.phones FROM lardi_proposals p WHERE p.ckey = agg.ckey ORDER BY p.last_seen_at DESC LIMIT 1) AS phones,
+            top.top, hrs.hours, burst.burst, gaps.gap_n, gaps.gap_mean, gaps.gap_sd
+       FROM agg LEFT JOIN top USING (ckey) LEFT JOIN hrs USING (ckey) LEFT JOIN burst USING (ckey) LEFT JOIN gaps USING (ckey)
+      ORDER BY ${period} DESC, d30 DESC`, [side, dir, ctype, area, q, ownIds(), hideBots])).rows;
   const cands = new Map((await db.query<{ contact_key: string; id: number; stage: HuntStage }>(
     `SELECT contact_key, id, stage FROM hunt_candidates WHERE stage <> 'rejected'`)).rows.map((r) => [r.contact_key, { id: r.id, stage: r.stage }]));
-  const out: RadarRow[] = rows.map((r) => {
-    const live = r.live_times ?? [];
-    return {
-      key: r.ckey, face: unentity(r.face) || "без імені", company: unentity(r.company) || "без назви",
-      phones: (Array.isArray(r.phones) ? r.phones : []).map((p) => maskPhone(String((p as { n?: unknown }).n ?? ""))),
-      h1: r.h1, d1: r.d1, d7: r.d7, d30: r.d30, cargo: r.cargo, lorry: r.lorry, pricePct: r.price_pct,
-      top: topDirections(r.dirs), lastSeen: r.last_seen, candidate: cands.get(r.ckey) ?? null,
-      intl: r.intl, area: r.area, shipper: r.shipper, bot: botLike(live, r.auto), hours: typicalHours(live), live: live.length > 0,
-    };
-  }).filter((r) => (show === "all" || (show === "new" ? !r.candidate : !!r.candidate)) && !(hideBots && r.bot));
+  const out: RadarRow[] = rows.map((r) => ({
+    key: r.ckey, face: unentity(r.face) || "без імені", company: unentity(r.company) || "без назви",
+    phones: (Array.isArray(r.phones) ? r.phones : []).map((p) => maskPhone(String((p as { n?: unknown }).n ?? ""))),
+    h1: r.h1, d1: r.d1, d7: r.d7, d30: r.d30, cargo: r.cargo, lorry: r.lorry, pricePct: r.price_pct,
+    top: r.top ?? [], lastSeen: r.last_seen, candidate: cands.get(r.ckey) ?? null,
+    intl: r.intl, area: r.area, shipper: r.shipper, live: r.live_n > 0,
+    bot: botFrom({ auto: r.auto, maxBurst: r.burst ?? 0, gapN: r.gap_n ?? 0, gapMean: r.gap_mean ?? 0, gapSd: r.gap_sd ?? 0 }),
+    hours: r.hours ? hoursFromCounts(r.hours) : null,
+  })).filter((r) => (show === "all" || (show === "new" ? !r.candidate : !!r.candidate)) && !(hideBots && r.bot));
   const st = (await db.query<{ archive_until: string | null; live_until: string | null; live_since: string | null; err: string | null; err_at: string | null; ok_at: string | null }>(
     `SELECT (SELECT max(at)::text FROM lardi_proposal_events WHERE source = 'archive') AS archive_until,
             (SELECT max(last_seen_at)::text FROM lardi_proposals WHERE source = 'live') AS live_until,
-            (SELECT min(first_seen_at)::text FROM lardi_proposals WHERE source = 'live') AS live_since,
+            -- Початок живого скану — коли ми ВПЕРШЕ побачили заявку, якої не було в архіві (не \`dateCreate\` Ларді й не дата архіву).
+            (SELECT min(p.first_seen_at)::text FROM lardi_proposals p WHERE p.source = 'live'
+               AND NOT EXISTS (SELECT 1 FROM lardi_proposal_events e WHERE e.kind = p.kind AND e.proposal_id = p.id AND e.source = 'archive')) AS live_since,
             j.last_error AS err, j.last_error_at::text AS err_at, j.last_success_at::text AS ok_at
        FROM (SELECT 1) one LEFT JOIN job_runs j ON j.name = 'syncLardi'`)).rows[0];
   const areas = (await db.query<{ a: string }>(
@@ -153,15 +181,27 @@ export async function radar(db: Db, opts: { period?: unknown; days?: unknown; sh
   };
 }
 
-/** Активність контакту за 30 днів по днях + напрямки + години — для картки праворуч. Телефонів НЕ віддає. */
+/** Активність контакту за 30 днів по днях + напрямки + години — для картки праворуч. Телефонів НЕ віддає. Без масивів подій. */
 export async function contactActivity(db: Db, key: string) {
   const rows = (await db.query<{ d: string; n: number }>(
     `WITH ${cte(2)} SELECT ((at AT TIME ZONE 'Europe/Kyiv')::date)::text AS d, count(*)::int AS n FROM k WHERE ckey = $1 GROUP BY 1 ORDER BY 1`, [key, ownIds()])).rows;
-  const ev = (await db.query<{ dir: string; at: string; source: string; auto_repeat: boolean }>(
-    `WITH ${cte(2)} SELECT COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—') AS dir, at::text AS at, source, auto_repeat FROM k WHERE ckey = $1`, [key, ownIds()])).rows;
   if (!rows.length) throw new HuntError(404, "Контакт за 30 днів не знайдено");
-  const live = ev.filter((e) => e.source === "live").map((e) => e.at);
-  return { days: rows, top: topDirections(ev.map((e) => e.dir), 5), hours: typicalHours(live), bot: botLike(live, ev.some((e) => e.auto_repeat)), live: live.length > 0 };
+  const top = (await db.query<{ dir: string; n: number }>(
+    `WITH ${cte(2)} SELECT COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—') AS dir, count(*)::int AS n FROM k WHERE ckey = $1
+      GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 5`, [key, ownIds()])).rows;
+  const s = (await db.query<{ hours: number[]; live_n: number; auto: boolean; burst: number | null; gap_n: number | null; gap_mean: number | null; gap_sd: number | null }>(
+    `WITH ${cte(2)}, lv AS (SELECT at, auto_repeat FROM k WHERE ckey = $1 AND source = 'live')
+     SELECT (SELECT array_agg(n ORDER BY h) FROM (SELECT g.h, count(lv.at)::int AS n FROM generate_series(0, 23) g(h)
+               LEFT JOIN lv ON extract(hour FROM lv.at AT TIME ZONE 'Europe/Kyiv')::int = g.h GROUP BY 1) z) AS hours,
+            (SELECT count(*)::int FROM lv) AS live_n, COALESCE((SELECT bool_or(auto_repeat) FROM lv), false) AS auto,
+            (SELECT max(c)::int FROM (SELECT count(*) OVER (ORDER BY at RANGE BETWEEN interval '10 minutes' PRECEDING AND CURRENT ROW) AS c FROM lv) w) AS burst,
+            g.gap_n, g.gap_mean, g.gap_sd
+       FROM (SELECT count(x)::int AS gap_n, avg(x)::float8 AS gap_mean, stddev_pop(x)::float8 AS gap_sd FROM (
+               SELECT extract(epoch FROM at - lag(at) OVER (ORDER BY at)) AS x FROM lv) d WHERE x > 0) g`, [key, ownIds()])).rows[0];
+  return {
+    days: rows, top, hours: s.live_n > 0 ? hoursFromCounts(s.hours) : null, live: s.live_n > 0,
+    bot: botFrom({ auto: s.auto, maxBurst: s.burst ?? 0, gapN: s.gap_n ?? 0, gapMean: s.gap_mean ?? 0, gapSd: s.gap_sd ?? 0 }),
+  };
 }
 
 /** «Показати телефон»: повні номери + запис у журнал переглядів (ТЗ п.9). */
@@ -185,18 +225,21 @@ export async function addCandidate(db: Db, userId: number, body: { key?: unknown
   if (!key) throw new HuntError(400, "Не вказано контакт");
   if ((await db.query(`SELECT 1 FROM hunt_candidates WHERE contact_key = $1 AND stage <> 'rejected'`, [key])).rowCount)
     throw new HuntError(409, "Цей контакт уже у воронці");
-  const r = (await db.query<{ face: string; company: string; phones: unknown; d7: number; d30: number; dirs: string[] }>(
+  const r = (await db.query<{ face: string; company: string; d7: number; d30: number }>(
     `WITH ${cte(2)}
-     SELECT max(face) AS face, max(company) AS company, (array_agg(phones ORDER BY at DESC))[1] AS phones,
-            count(*) FILTER (WHERE at >= now() - interval '7 days')::int AS d7, count(*)::int AS d30,
-            array_agg(COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—')) AS dirs
+     SELECT max(face) AS face, max(company) AS company,
+            count(*) FILTER (WHERE at >= now() - interval '7 days')::int AS d7, count(*)::int AS d30
        FROM k WHERE ckey = $1`, [key, ownIds()])).rows[0];
   if (!r || r.d30 === 0) throw new HuntError(404, "Контакт за 30 днів не знайдено");
-  const source = { from: "lardi", d7: r.d7, d30: r.d30, top: topDirections(r.dirs), at: new Date().toISOString() };
+  const phones = (await db.query<{ phones: unknown }>(`SELECT phones FROM lardi_proposals WHERE ckey = $1 ORDER BY last_seen_at DESC LIMIT 1`, [key])).rows[0]?.phones;
+  const top = (await db.query<{ dir: string; n: number }>(
+    `WITH ${cte(2)} SELECT COALESCE(frm, '—') || ' → ' || COALESCE(tox, '—') AS dir, count(*)::int AS n FROM k WHERE ckey = $1
+      GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 2`, [key, ownIds()])).rows;
+  const source = { from: "lardi", d7: r.d7, d30: r.d30, top, at: new Date().toISOString() };
   const id = (await db.query<{ id: number }>(
     `INSERT INTO hunt_candidates (contact_key, full_name, company, phones, interest, source, created_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [key, unentity(r.face) || "без імені", unentity(r.company) || null, JSON.stringify(r.phones ?? []), str(body.interest, 1000), source, userId])).rows[0].id;
+    [key, unentity(r.face) || "без імені", unentity(r.company) || null, JSON.stringify(phones ?? []), str(body.interest, 1000), source, userId])).rows[0].id;
   await db.query(`INSERT INTO hunt_stage_history (candidate_id, from_stage, to_stage, user_id) VALUES ($1, NULL, 'picked', $2)`, [id, userId]);
   return { id };
 }

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { parseProposal, eventsFor, botLike, typicalHours, scanPlan, runLardiSync, lardiTime, type PageAnswer, type Proposal } from "./lardiSync.js";
+import { parseProposal, eventsFor, botLike, typicalHours, botFrom, hoursFromCounts, scanPlan, runLardiSync, lardiTime, type PageAnswer, type Proposal } from "./lardiSync.js";
 
 /**
  * 🛰 ЖИВИЙ СКАН ЛАРДІ («Хантинг», прохід 3, 16.11.2026) — чисті гейти `#3965`, `#3966`, `#3968`. Правила — `core/lardiSync.ts`.
@@ -111,4 +111,25 @@ test("#3968 СКАН ЛАРДІ: у кроні кожні 15 хв і під на
   assert.match(idx, /cron\.schedule\("4,19,34,49 \* \* \* \*", \(\) => \{\s*void runJob\("syncLardi", \(\) => syncLardi\(\)\);/, "🔴 syncLardi не в розкладі");
   const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
   assert.equal(MONITORED_JOBS.find((j) => j.name === "syncLardi")?.everyMin, 15, "🔴 syncLardi не під наглядом");
+});
+
+/**
+ * #3976 — РАДАР НЕ ТЯГНЕ ПОДІЇ В ПРОЦЕС (18.11.2026: масиви часів/телефонів/напрямків по 300 тис. живих подій убили прод
+ * по памʼяті, радар віддавав 502). Правило бота й годин над ГОТОВОЮ статистикою SQL дає те саме, що над подіями; запити
+ * радару, картки й «у воронку» не збирають `array_agg` по подіях; «приховати автоповтор» відсіює ДО відбору топу.
+ * 🧨 Червоніє, якщо повернути `array_agg(at …)`/`array_agg(phones …)` у `core/hunt.ts` або відсів ботів лише після LIMIT.
+ */
+test("#3976 РАДАР ХАНТИНГУ: без масивів подій у процесі, бот і години — над статистикою SQL, автоповтор відсіюється до топу", () => {
+  assert.equal(botFrom({ auto: false, maxBurst: 21, gapN: 0, gapMean: 0, gapSd: 0 }), true, "🔴 21 подія за 10 хв — не бот");
+  assert.equal(botFrom({ auto: false, maxBurst: 20, gapN: 0, gapMean: 0, gapSd: 0 }), false, "🔴 20 подій за 10 хв — бот");
+  assert.equal(botFrom({ auto: false, maxBurst: 2, gapN: 6, gapMean: 1800, gapSd: 100 }), true, "🔴 рівні інтервали — не бот");
+  assert.equal(botFrom({ auto: false, maxBurst: 2, gapN: 5, gapMean: 1800, gapSd: 0 }), false, "🔴 5 інтервалів — уже «рівні»");
+  const times = [9, 9, 10, 11, 12, 16, 17, 17, 17, 23].map((h) => new Date(Date.UTC(2026, 10, 16, h - 2, 15)).toISOString());
+  const by = new Array<number>(24).fill(0);
+  for (const h of [9, 9, 10, 11, 12, 16, 17, 17, 17, 23]) by[h]++;
+  assert.deepEqual(hoursFromCounts(by), typicalHours(times), "🔴 години з гістограми SQL розходяться з годинами з подій");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "core", "hunt.ts"), "utf8");
+  assert.doesNotMatch(src, /array_agg\((phones|at|COALESCE\(frm)\b/, "🔴 радар знову збирає масиви подій у процес");
+  assert.match(src, /AND NOT \(\$7::boolean AND bool_or\(auto_repeat\)\)\s*ORDER BY \$\{period\} DESC, count\(\*\) DESC\s*LIMIT 300/,
+    "🔴 «приховати автоповтор» не стоїть перед відбором топ-300");
 });

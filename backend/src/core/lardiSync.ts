@@ -85,31 +85,49 @@ export function eventsFor(p: Proposal, knownRepeatAt: string | null | undefined)
 export const BOT_BURST = 20;
 export const BOT_WINDOW_MS = 10 * 60_000;
 export function botLike(times: string[], autoFlag: boolean): boolean {
-  if (autoFlag) return true;
   const ts = times.map((t) => Date.parse(t)).filter(Number.isFinite).sort((a, b) => a - b);
+  let maxBurst = 0;
   for (let i = 0, j = 0; j < ts.length; j++) {
     while (ts[j] - ts[i] > BOT_WINDOW_MS) i++;
-    if (j - i + 1 > BOT_BURST) return true;
+    maxBurst = Math.max(maxBurst, j - i + 1);
   }
   const gaps = ts.slice(1).map((t, k) => t - ts[k]).filter((g) => g > 0);
-  if (gaps.length < 6) return false;
-  const mean = gaps.reduce((a, g) => a + g, 0) / gaps.length;
-  const sd = Math.sqrt(gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / gaps.length);
-  return sd / mean < 0.1;
+  const mean = gaps.length ? gaps.reduce((a, g) => a + g, 0) / gaps.length : 0;
+  const sd = gaps.length ? Math.sqrt(gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / gaps.length) : 0;
+  return botFrom({ auto: autoFlag, maxBurst, gapN: gaps.length, gapMean: mean, gapSd: sd });
+}
+
+/**
+ * Те саме правило над ГОТОВОЮ статистикою — її рахує SQL радару (вікно 10 хв, `lag` між подіями), щоб не тягнути в
+ * процес усі часи подій: бот із 3 000 підняттями на добу за 30 днів — це десятки тисяч рядків на ОДИН контакт.
+ * 📐 18.11.2026 саме це поклало прод: радар збирав масиви часів, телефонів і напрямків, і процес убило по памʼяті.
+ */
+export function botFrom(s: { auto: boolean; maxBurst: number; gapN: number; gapMean: number; gapSd: number }): boolean {
+  if (s.auto) return true;
+  if (s.maxBurst > BOT_BURST) return true;
+  if (s.gapN < 6 || !(s.gapMean > 0)) return false;
+  return s.gapSd / s.gapMean < 0.1;
 }
 
 /** «Зазвичай публікує з … до …» (ТЗ п.6): години Києва, що разом покривають ≥ 80% подій, від першої до останньої. */
 export function typicalHours(times: string[]): { from: number; to: number; n: number } | null {
-  const hours = times.map((t) => Number(new Intl.DateTimeFormat("uk-UA", { hour: "2-digit", hourCycle: "h23", timeZone: "Europe/Kyiv" }).format(new Date(t))))
-    .filter(Number.isFinite);
-  if (hours.length < 3) return null;
   const by = new Array<number>(24).fill(0);
-  for (const h of hours) by[h]++;
+  for (const t of times) {
+    const h = Number(new Intl.DateTimeFormat("uk-UA", { hour: "2-digit", hourCycle: "h23", timeZone: "Europe/Kyiv" }).format(new Date(t)));
+    if (Number.isFinite(h)) by[h]++;
+  }
+  return hoursFromCounts(by);
+}
+
+/** Те саме над гістограмою «година Києва → кількість» (її рахує SQL радару). */
+export function hoursFromCounts(by: number[]): { from: number; to: number; n: number } | null {
+  const total = by.reduce((a, n) => a + n, 0);
+  if (total < 3) return null;
   const ranked = by.map((n, h) => ({ h, n })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n || a.h - b.h);
   const keep: number[] = [];
   let acc = 0;
-  for (const x of ranked) { keep.push(x.h); acc += x.n; if (acc >= hours.length * 0.8) break; }
-  return { from: Math.min(...keep), to: Math.max(...keep) + 1, n: hours.length };
+  for (const x of ranked) { keep.push(x.h); acc += x.n; if (acc >= total * 0.8) break; }
+  return { from: Math.min(...keep), to: Math.max(...keep) + 1, n: total };
 }
 
 /**
@@ -160,7 +178,7 @@ export async function runLardiSync(deps: SyncDeps, plan: ScanSpec[] = scanPlan()
   const t: SyncTally = { requests: 0, ok: 0, seen: 0, fresh: 0, events: 0, unparsed: 0, shippers: 0, retries: 0 };
   for (const spec of plan) {
     for (const kind of spec.shippers ? (["cargo"] as const) : SYNC_KINDS) {
-      for (let page = 1; page <= (spec.shippers ? 5 : MAX_PAGES); page++) {
+      for (let page = 1; page <= MAX_PAGES; page++) {
         let r: PageAnswer;
         for (let attempt = 0; ; attempt++) {
           t.requests++;
