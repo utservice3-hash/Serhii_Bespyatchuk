@@ -10,7 +10,7 @@ import {
   fetchTaskComments, createTaskComment, fetchTaskHistory,
   fetchTaskFiles, uploadTaskFile, deleteTaskFile, fetchTaskFileBlobUrl,
   markTaskSeen, fetchTaskAssignees, fetchMyTeamInactive,
-  fetchReactivationCloseReasons, closeReactivationTask,
+  fetchReactivationCloseReasons, closeReactivationTask, fetchTaskClientComments,
   TASK_FILE_MAX_BYTES, TASK_FILES_PER_TASK,
   type ManagerOption,
   type ReactivationManager,
@@ -23,6 +23,7 @@ import {
   type TaskFile,
   type TaskHistoryEntry,
   type TaskAssignee,
+  type ClientComment,
 } from "../../../api";
 import { PRIORITY_LABELS } from "../constants";
 import { teamGroups } from "../assigneeGroups";
@@ -30,6 +31,51 @@ import { CommentField } from "../../../components/CommentField";
 
 /** Підзадачі задачі — довільний чекліст, кожен пункт трекається виконано/ні.
  *  Зберігається on-change у tasks.subtasks_json. */
+/**
+ * 💬 СТРІЧКА КЛІЄНТА В ЗАДАЧІ РЕАКТИВАЦІЇ (задача 9224) — лише читання.
+ *
+ * 🔴 Головне місце коментаря по клієнту — «Клієнти» (стрічка `client_comments`): «З ким говорити», «План місяця»,
+ * постановка й закриття задачі пишуть туди. Тому в задачі реактивації поля «Короткий коментар» немає — інакше
+ * менеджер знову писав би в третє місце, якого не бачить тімлід у «Клієнтах». Старий текст задачі (якщо був)
+ * видно нижче сірим, лише читання: він уже написаний і зникати не має.
+ */
+function ReactClientFeed({ task }: { task: Task }) {
+  const [items, setItems] = useState<ClientComment[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    setItems(null); setErr(null);
+    fetchTaskClientComments(task.id)
+      .then((r) => setItems(r.comments))
+      .catch(() => setErr("Коментарі клієнта не завантажились"));
+  }, [task.id]);
+  const day = (iso: string) => iso.slice(0, 10).split("-").reverse().slice(0, 2).join(".");
+  // «З ким говорити» тримає команду й менеджера в адресі (9225) — відкриваємо одразу список виконавця.
+  const href = task.assigneeId != null && task.assigneeTeamId != null
+    ? `/loyalty?tab=lead&team=${task.assigneeTeamId}&mgr=${task.assigneeId}` : "/loyalty?tab=lead";
+  const legacy = (task.comments ?? "").trim();
+  return (
+    <div data-testid="react-client-feed">
+      <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 6px" }}>💬 Коментарі по клієнту <span style={{ fontWeight: 400, opacity: .8 }}>· лише читання, пишуться в «Клієнтах»</span></h3>
+      {err ? <p style={{ fontSize: 12, color: "var(--danger)" }}>⚠️ {err}</p>
+        : items == null ? <p style={{ fontSize: 12, color: "var(--text-muted)" }}>завантаження…</p>
+        : items.length === 0 ? <p style={{ fontSize: 12, color: "var(--text-muted)" }}>коментарів по клієнту ще немає</p>
+        : items.slice(0, 10).map((c) => (
+          <div key={c.id} style={{ fontSize: 12.5, padding: "6px 0", borderBottom: "1px dashed var(--border)" }}>
+            <b>{c.author ?? "—"}</b><span style={{ color: "var(--text-muted)" }}> · {day(c.createdAt)} — </span>{c.body}
+          </div>
+        ))}
+      <a href={href} style={{ display: "inline-block", marginTop: 8, fontSize: 12, padding: "5px 10px", borderRadius: 7,
+        border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none" }}>✏️ Додати коментар — відкрити «З ким говорити»</a>
+      {legacy && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Коментар при постановці задачі (лише читання):</div>
+          <div style={{ fontSize: 12.5, padding: 8, borderRadius: 8, border: "1px solid var(--border)", color: "var(--text-muted)", whiteSpace: "pre-wrap" }}>{legacy}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SubtasksEditor({ task, patchTaskLocal, commitTask }: { task: Task; patchTaskLocal: (id: number, patch: Partial<Task>) => void; commitTask: (id: number, patch: Partial<Task>) => void }) {
   const list: Subtask[] = task.subtasksJson ?? [];
   const [draft, setDraft] = useState("");
@@ -1947,7 +1993,9 @@ export function TasksSection({
 
             <SubtasksEditor task={openTask} patchTaskLocal={patchTaskLocal} commitTask={commitTask} />
 
-            <div style={{ marginTop: 18 }}>
+            {openTask.taskType === "reactivation_client" ? (
+              <div style={{ marginTop: 18 }}><ReactClientFeed task={openTask} /></div>
+            ) : <div style={{ marginTop: 18 }}>
               {/* 🔴 ДВА РІЗНІ ПОЛЯ, І ПІДПИСИ ЦЕ НАЗИВАЮТЬ. Верхнє — КОРОТКИЙ
                   коментар у рядку таблиці, його перезаписують (так і було).
                   Нижче — СТРІЧКА: історія з автором і часом, якої наступне
@@ -1962,7 +2010,7 @@ export function TasksSection({
                 rows={3}
                 style={{ width: "100%", resize: "vertical", font: "inherit", padding: 10, lineHeight: 1.5, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
               />
-            </div>
+            </div>}
 
             {detailErr && (
               // Помилка й порожнеча — РІЗНІ стани. Поки видно цей рядок, «немає
