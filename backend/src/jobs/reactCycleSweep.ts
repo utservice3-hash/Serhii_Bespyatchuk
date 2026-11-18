@@ -24,6 +24,7 @@ import { lastInvoiceByClientKey } from "../core/money.js";
 import { kyivToday } from "../core/dates.js";
 import { planSweep, poolTransferOpen, weekMonday, type Candidate } from "../core/reactCycleRules.js";
 import { cyclesFor, openPool, closeRevived, poolAuto, autoPooledSince } from "../core/reactCycle.js";
+import { tripsFor, reactInvoiceDate } from "../core/clientTripConfirm.js";
 
 /** Добір екрана клієнтів + дата останнього рахунку + дебіторка — одним місцем для джоби й роутів. */
 export async function reactCandidates(): Promise<Candidate[]> {
@@ -31,13 +32,16 @@ export async function reactCandidates(): Promise<Candidate[]> {
   const base = await pool.query<{ client_key: string; manager_id: number }>(clientsListSql(""), [GENERIC_CLIENT_KEYS]);
   const rows = base.rows.filter((r) => inClientsScreen(factsFor(seg, r.client_key)));
   const keys = rows.map((r) => r.client_key);
-  const [inv, debt] = await Promise.all([
+  const [inv, trips, debt] = await Promise.all([
     lastInvoiceByClientKey(keys),
+    // 🧾 Підтверджена тімлідом поїздка поза CRM (9045) для циклу — рахунок (вимикач `TRIP_CLEARS_REACT`), як на екрані.
+    tripsFor(pool, keys),
     pool.query<{ client_key: string }>(
       `SELECT DISTINCT client_key FROM receivables WHERE overdue_days > 0 AND client_key = ANY($1)`, [keys]),
   ]);
   const debtKeys = new Set(debt.rows.map((r) => r.client_key));
-  return rows.map((r) => ({ clientKey: r.client_key, lastInvoice: inv.get(r.client_key) ?? null,
+  return rows.map((r) => ({ clientKey: r.client_key,
+    lastInvoice: reactInvoiceDate(inv.get(r.client_key) ?? null, trips.get(r.client_key)?.day ?? null),
     managerId: r.manager_id, debtHold: debtKeys.has(r.client_key) }));
 }
 
