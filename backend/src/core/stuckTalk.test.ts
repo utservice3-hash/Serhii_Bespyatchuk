@@ -243,7 +243,7 @@ test("#73c RINGOSTAT ГАСИТЬ, КОЛИ У КЛІЄНТА ОДНА ВІДК�
   });
 });
 
-test("#7735 РОЗМОВИ РАХУЮТЬСЯ ЛИШЕ ДЛЯ КЛІЄНТІВ ІЗ ВІДКРИТОЮ УГОДОЮ — і для всіх таких", async (t) => {
+test("#9960 РОЗМОВИ РАХУЮТЬСЯ ЛИШЕ ДЛЯ КЛІЄНТІВ ІЗ ВІДКРИТОЮ УГОДОЮ — і для всіх таких", async (t) => {
   await withScratch(t, async (c, now) => {
     // Двоє, кому в агрегаті робити нічого: клієнт без угод узагалі і клієнт, чия єдина угода закрита.
     await c.query(`INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,created_at_kommo)
