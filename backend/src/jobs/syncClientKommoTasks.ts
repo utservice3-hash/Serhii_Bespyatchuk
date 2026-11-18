@@ -22,7 +22,7 @@ const firstId = <K extends string>(r: Created<K>, key: K): number => {
 };
 
 export const kommoTaskDeps: KommoTaskDeps = {
-  fetchLeads: async (ids) => (await fetchLeadsByIds(ids)).map((l) => ({ id: l.id, status_id: l.status_id, created_at: l.created_at, _embedded: l._embedded })),
+  fetchLeads: async (ids) => (await fetchLeadsByIds(ids)).map((l) => ({ id: l.id, pipeline_id: l.pipeline_id, status_id: l.status_id, created_at: l.created_at, _embedded: l._embedded })),
   createLead: async (body) => firstId(await kommoWrite<Created<"leads">>("/api/v4/leads", body), "leads"),
   createTask: async (body) => firstId(await kommoWrite<Created<"tasks">>("/api/v4/tasks", body), "tasks"),
   closeTasks: async (body) => { await kommoWrite("/api/v4/tasks", body, "PATCH"); },
