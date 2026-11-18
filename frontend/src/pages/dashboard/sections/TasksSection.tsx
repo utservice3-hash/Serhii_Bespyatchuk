@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import { parseTaskIdParam, deepLinkState } from "../taskDeepLink";
@@ -115,6 +115,7 @@ import { TaskCreateDialog } from "./TaskCreateDialog";
 import { CloseTaskDialog } from "./ReactivationBits";
 import { needsCloseReason } from "../reactCloseRule";
 import { browserStorage, isSetByMe, kyivDate, readDesign, readOwnerGroupBy, writeDesign, writeOwnerGroupBy, type OwnerGroupBy, type TasksDesign } from "../tasksFocus";
+import { createFitBatch, fitHeights, type FitBatch } from "../fitBatch";
 
 const METRIC_LBL: Record<string, string> = {
   ads_count: "Реклама",
@@ -241,6 +242,19 @@ const priorityPillStyle = (p: TaskPriority): CSSProperties => ({
   appearance: "none", WebkitAppearance: "none", cursor: "pointer",
 });
 
+/**
+ * 📏 ТІЛО ТАБЛИЦІ ЗАДАЧ, ЯКЕ САМЕ ПІДГАНЯЄ ВИСОТУ СВОЇХ ПОЛІВ (задача 9227). Поля лише
+ * позначаються (`mark`), а підгонка йде ОДНА на всю таблицю - після того, як усі рядки
+ * намальовані: ефекти дітей React виконує раніше за ефект батька. Без цього 600 рядків
+ * давали 1 200 перерахунків розмітки, і «Командні задачі» тімліда зависали на хвилину.
+ */
+const FitBatchCtx = createContext<FitBatch | null>(null);
+function FitBatchBody({ children }: { children: ReactNode }) {
+  const [batch] = useState(() => createFitBatch((cb) => { requestAnimationFrame(cb); }));
+  useLayoutEffect(() => { batch.flush(); });
+  return <FitBatchCtx.Provider value={batch}><tbody>{children}</tbody></FitBatchCtx.Provider>;
+}
+
 /** Textarea that grows to fit its full content — never clips, no matter how
  *  narrow the column. onLocal updates the row live; onCommit persists on blur. */
 function AutoTextarea({ value, onLocal, onCommit, style, placeholder }: {
@@ -251,12 +265,14 @@ function AutoTextarea({ value, onLocal, onCommit, style, placeholder }: {
   placeholder?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  // 📏 У таблиці висоту підганяє таблиця, одним проходом на всі поля (9227); поза таблицею - саме поле.
+  const batch = useContext(FitBatchCtx);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [value]);
+    if (batch) batch.mark(el);
+    else fitHeights([el]);
+  }, [value, batch]);
   return (
     <textarea
       ref={ref}
@@ -1355,7 +1371,7 @@ export function TasksSection({
                 <th></th>
               </tr>
             </thead>
-            <tbody>
+            <FitBatchBody>
               {(() => {
                 const q = taskSearch.trim().toLowerCase();
                 // Діти KPI-періоду (parentId) НЕ показуємо окремими рядками — вони в
@@ -1749,7 +1765,7 @@ export function TasksSection({
                   </tr>
                 ); });
               })()}
-            </tbody>
+            </FitBatchBody>
           </table>
         </div>
       );

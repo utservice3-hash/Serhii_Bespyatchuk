@@ -914,6 +914,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-problem/clear", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🧾 «Поїздка була (поза CRM)» (9045): тімлід свого клієнта і адмін-рівень будь-якого (`canConfirmTrip` +
+  // `canSeeClient`, ПЕРШИМ оператором, до тіла). Менеджер і HR — 403 по ролі, тож проба безпечна. Тімліду проба з
+  // неіснуючим ключем дає 403 по клієнту, не по ролі, а адмін-рівень гейт проходить — тому їх у deny немає (проба
+  // дозволеної ролі записала б).
+  { method: "POST", path: "/api/dashboard/client-trip-confirm", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/client-trip-confirm/clear", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   // 🚫 «Закрити» в «Нічийних» (задача 7187) — той самий допуск, що «Взяти в роботу»: менеджер без прапорця — 403.
   { method: "POST", path: "/api/dashboard/orphan-clients/close", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },

@@ -87,6 +87,16 @@ export const config = {
   // GA4 (вище), таблиця не публікується. id не секрет — це адреса книги, доступ дає лише «Поділитися».
   /** 💸 Файл на оплату перевізникам (13.10.2026): таблиця Романа, сервісний акаунт — редактор. Порожньо — лише стан прогону. */
   paymentsSheet: { spreadsheetId: process.env.PAYMENTS_SHEET_ID ?? "" },
+  /**
+   * 📤 Вкладка «Data» фінансів «💰UTS (CF, PL, BS)» (18.11.2026): щоденне дописування банківських операцій
+   * (`jobs/exportDataSheet.ts`). id не секрет — адреса книги; писати дає лише «Поділитися» сервісному акаунту.
+   * Режим: `dry` (за замовчуванням) — рахує й звітує, у таблицю НЕ пише; `on` — пише; `off` — джоба спить (пропуск).
+   */
+  dataSheet: {
+    spreadsheetId: process.env.DATA_SHEET_ID ?? "1otIHQNs1ZaPt46mVEkT92J46KJhCpjeFu-GAYUEhcIM",
+    tab: process.env.DATA_SHEET_TAB ?? "Data",
+    mode: (process.env.DATA_SHEET_MODE ?? "dry").trim().toLowerCase(),
+  },
   // 🔗 Черга LinkedIn (задача 7361, `core/linkedinQueue.ts`): порожньо — пробний режим (лише журнал «кому віддав би»,
   // у Kommo й Telegram нічого); "off" — вимкнено; "live" — бойовий (прохід 2б, бот «UTS Заявки», токен LEADS_BOT_TOKEN).
   linkedinQueue: { mode: process.env.LINKEDIN_QUEUE ?? "", leadsBotToken: process.env.LEADS_BOT_TOKEN ?? "" },

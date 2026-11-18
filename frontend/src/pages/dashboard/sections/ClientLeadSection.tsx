@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { AuthPayload } from "../../../auth";
-import { fetchClientPlans, createClientReactivationTask, type ClientPlansResp, type ClientPlanRow } from "../../../api";
+import { fetchClientPlans, createClientReactivationTask, confirmClientTrip, clearClientTrip, type ClientPlansResp, type ClientPlanRow } from "../../../api";
 import { SegmentBadge } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
 import { CreateTaskDialog } from "./ReactivationBits";
@@ -51,6 +51,67 @@ const S = {
   btn: (primary?: boolean) => ({ fontSize: 12, fontWeight: primary ? 700 : 500, padding: "5px 10px", borderRadius: 8, cursor: "pointer",
     border: primary ? "none" : "1px solid #d1d5db", background: primary ? "#111827" : "#fff", color: primary ? "#fff" : "#374151" } as const),
 };
+
+/** Київське «сьогодні» `YYYY-MM-DD` — межа поля дати (майбутню поїздку сервер однаково не прийме). */
+const kyivDay = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date());
+const errText = (e: unknown, fb: string) => (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? fb;
+
+/**
+ * 🧾 «ПОЇЗДКА БУЛА (ПОЗА CRM)» (задача 9045). Тімлід підтверджує поїздку, якої немає в Kommo: дата + коментар
+ * (№ рахунку, як оплачено) → «Подати». Колір і «днів тому» рахує сервер; тут лише форма, позначка і «зняти».
+ * Право (`canConfirm`) віддає сервер — та сама функція, що гейтить роут.
+ */
+function TripBox({ row, canConfirm, onDone }: { row: Row; canConfirm: boolean; onDone: () => void }) {
+  const trip = row.lead.trip ?? null;
+  const [form, setForm] = useState(false);
+  const [day, setDay] = useState(kyivDay);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async (f: () => Promise<void>) => {
+    setBusy(true); setErr(null);
+    try { await f(); setForm(false); setNote(""); onDone(); }
+    catch (e) { setErr(errText(e, "не збережено: сервер відмовив")); }
+    finally { setBusy(false); }
+  };
+  if (trip) {
+    return (
+      <div style={{ marginTop: 5, fontSize: 12 }}>
+        <span style={S.chip("#dcfce7", "#166534")} title={`«${trip.note}»`}>🧾 поїздка {dm(trip.day)} поза CRM · підтвердив {trip.byName ?? "тімлід"}, {dm(trip.at)}</span>
+        {canConfirm && (
+          <button type="button" disabled={busy} onClick={() => run(() => clearClientTrip(row.clientKey))}
+            style={{ marginLeft: 6, border: "none", background: "none", color: "#6b7280", textDecoration: "underline", cursor: "pointer", fontSize: 11, padding: 0 }}>зняти</button>
+        )}
+        {err && <div style={{ color: "#b91c1c" }}>{err}</div>}
+      </div>
+    );
+  }
+  if (!canConfirm || row.lead.problem || row.lead.color === "green") return null;
+  if (!form) {
+    return (
+      <button type="button" onClick={() => setForm(true)} style={{ ...S.btn(), marginTop: 5, display: "block" }}
+        title="поїздка була, але в CRM її немає (наприклад, за готівку): після підтвердження дата рахується замовленням для кольору, у гроші не йде">
+        ✓ Поїздка була (поза CRM)
+      </button>
+    );
+  }
+  return (
+    <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 6, padding: 8, border: "1px solid #d1d5db", borderRadius: 8, background: "#fff", display: "flex", flexDirection: "column", gap: 6, maxWidth: 280 }}>
+      <label style={{ fontSize: 11, color: "#6b7280" }}>Дата поїздки
+        <input type="date" value={day} max={kyivDay()} onChange={(e) => setDay(e.target.value)} style={{ display: "block", fontSize: 12, marginTop: 2 }} />
+      </label>
+      <label style={{ fontSize: 11, color: "#6b7280" }}>Коментар (обовʼязково)
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="№ рахунку, як оплачено (готівка…)"
+          style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2, boxSizing: "border-box" }} />
+      </label>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button type="button" disabled={busy || !note.trim()} style={S.btn(true)} onClick={() => run(() => confirmClientTrip(row.clientKey, day, note))}>Подати</button>
+        <button type="button" disabled={busy} style={S.btn()} onClick={() => { setForm(false); setErr(null); }}>Скасувати</button>
+      </div>
+      {err && <div style={{ fontSize: 12, color: "#b91c1c" }}>{err}</div>}
+    </div>
+  );
+}
 
 /** Підсумок набору рядків — одне місце для команди, менеджера й шапки. */
 function stats(rows: Row[]) {
@@ -229,7 +290,8 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
           </td>
           <td style={S.td}>
             <div>{L.orderDays == null ? "замовлень не було" : L.orderDays === 0 ? "замовив сьогодні" : `не замовляв ${L.orderDays} дн.`}</div>
-            <div style={grey} title="замовлення = рахунок («Виставлення рахунку» і далі) або оплата — що свіжіше">{L.lastOrder ? `останнє ${dm(L.lastOrder)}.${L.lastOrder.slice(2, 4)}` : ""}</div>
+            <div style={grey} title="замовлення = рахунок («Виставлення рахунку» і далі), оплата або поїздка поза CRM, яку підтвердив тімлід — що свіжіше">{L.lastOrder ? `останнє ${dm(L.lastOrder)}.${L.lastOrder.slice(2, 4)}` : ""}</div>
+            <TripBox row={c} canConfirm={data.canConfirmTrip === true} onDone={load} />
           </td>
           <td style={S.td}>
             {L.problem
@@ -319,7 +381,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
       <div>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>З ким з постійних говорити</h2>
         <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-          Колір — лише від замовлення (рахунок або оплата) і звичного ритму клієнта: ВІП 14 днів, регулярний 30, епізодичний і без історії 60; червоний — 180.
+          Колір — лише від замовлення (рахунок, оплата або поїздка поза CRM, яку підтвердив тімлід) і звичного ритму клієнта: ВІП 14 днів, регулярний 30, епізодичний і без історії 60; червоний — 180.
           «Працюють» — розмова від 10 с, рух угоди, коментар, контакт або оплата у Виписці за ритм сегмента; колір від цього не змінюється.
         </div>
       </div>
