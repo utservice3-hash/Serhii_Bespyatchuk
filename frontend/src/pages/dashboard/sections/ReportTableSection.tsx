@@ -537,6 +537,8 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
     case "srcAd": return <td style={st}>{m.srcAd || none}</td>;
     case "srcLeadgen": return <td style={st}>{m.srcLeadgen || none}</td>;
     case "srcElogist": return <td style={st}>{m.srcElogist || none}</td>;
+    case "srcLinkedin": return <td style={st}>{m.srcLinkedin || none}</td>;
+    case "srcProzorro": return <td style={st}>{m.srcProzorro || none}</td>;
     case "srcOther": return <td style={st}>{m.srcOther || none}</td>;
     case "srcNoChannel": return <td style={st}>{m.srcNoChannel || none}</td>;
     case "dispRevenue":
