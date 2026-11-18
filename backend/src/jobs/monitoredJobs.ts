@@ -35,6 +35,7 @@ export const MONITORED_JOBS: { name: string; everyMin: number; why: string }[] =
   // 💱 Неоплачені рахунки 1С (26.10.2026). everyMin == крону «15 * * * *»: мовчання = «Валютна дебіторка» порожніє за добу.
   { name: "syncUnpaidInvoices", everyMin: 60, why: "неоплачені рахунки 1С з 2026 року → «Валютна дебіторка» в «Тиждень і місяць» і список рахунків під нею" },
   { name: "buildPaymentFile", everyMin: 60, why: "файл на оплату перевізникам (готівка) до 17:00" },
+  { name: "exportDataSheet", everyMin: 1440, why: "банківські операції → «Data» фінансів: мовчання = CF/PL без руху грошей за нові дні, а фінансист цього не бачить" },
   { name: "syncDealActivity", everyMin: 180, why: "живить «застряглі угоди»" },
   { name: "recomputeStatistics", everyMin: 60, why: "розділ «Статистики (відділи)»" },
   { name: "syncAdBudget", everyMin: 60, why: "рекламний бюджет → CPL/ROMI" },

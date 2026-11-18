@@ -8487,3 +8487,20 @@ CREATE TABLE IF NOT EXISTS client_trip_confirms (
   CONSTRAINT client_trip_confirms_revoke_chk CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_client_trip_confirms_live ON client_trip_confirms (client_key) WHERE revoked_at IS NULL;
+
+-- 📤 ОБЛІК «ЩО ВЖЕ У ВКЛАДЦІ Data» фінансів «💰UTS (CF, PL, BS)» (18.11.2026, `jobs/exportDataSheet.ts`). Рядок на
+-- банківську операцію, що лягла (або могла лягти) у Data. `pending` — записано перед запитом до Google; `done` —
+-- Google відповів успіхом. `pending`, що пережив прогін, = запит обірвався без відповіді: джоба падає, доки людина не
+-- звірить Data. `sheet_row` — номер рядка в мить запису (довідка: пізніші вставки його зсувають).
+-- `source = 'manual-2026-11-18'` — разовий перенос 01.07–17.11.2026 (засів `tools/seedDataSheetExports.ts`).
+-- Без FK на bank_transactions свідомо: інструменти дедупу Привату видаляють рядки, і облік не має їм заважати.
+-- ⚠️ revert коду таблицю не прибирає, а рядки, вже записані в Google-таблицю, — тим паче.
+CREATE TABLE IF NOT EXISTS data_sheet_exports (
+  tx_id      INTEGER PRIMARY KEY,
+  status     TEXT NOT NULL CHECK (status IN ('pending', 'done')),
+  run_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sheet_row  INTEGER,
+  source     TEXT NOT NULL DEFAULT 'job'
+);
+CREATE INDEX IF NOT EXISTS idx_data_sheet_exports_pending ON data_sheet_exports (run_at) WHERE status = 'pending';
+REVOKE ALL ON data_sheet_exports FROM ai_readonly;
