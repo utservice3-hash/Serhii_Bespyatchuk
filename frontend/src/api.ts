@@ -4902,6 +4902,8 @@ export interface ClientPlanRow {
   lastTalkRecording?: string | null;
   lastTalkSec?: number | null;
   lastTalkBy?: string | null;
+  /** 📞 Розмова на спільному номері (задача 9061): скільки ЩЕ клієнтів має цей номер; 0 — номер лише цього клієнта. */
+  lastTalkSharedWith?: number;
   /** 🔗 Хто приєднаний до цього рядка (обʼєднання в CRM-ключах). Порожньо — ні з ким. */
   merged?: AliasName[];
   /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */

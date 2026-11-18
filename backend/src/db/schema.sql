@@ -873,6 +873,20 @@ CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, ca
 CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_manager    ON ringostat_calls(manager_id, calldate DESC) WHERE manager_id IS NOT NULL;
 
+-- 📞 СПІЛЬНІ НОМЕРИ (задача 9061, 18.11.2026). Номер, що є в контактах угод 2+ клієнтів: по рядку на (клієнт,
+-- номер) і скільки всього клієнтів у номера (`n`). `ringostat_calls.client_key` віддає дзвінок ОДНОМУ клієнту
+-- (з найпізніше закритою угодою); ця таблиця дає екранам клієнтів побачити розмову й у решти (`core/sharedPhoneCalls.ts`).
+-- Повний перерахунок — у годинному `linkCalls` одним оператором (`jobs/callLinkSql.ts`). Зріз поточного стану:
+-- історії немає й не треба, бо номер→клієнти перераховується з контактів щоразу. Порожня таблиця = поведінка до 9061.
+CREATE TABLE IF NOT EXISTS shared_phone_clients (
+  client_key  TEXT NOT NULL,
+  phone       TEXT NOT NULL,                -- той самий нормалізований вигляд, що `ringostat_calls.client_phone`
+  n           INTEGER NOT NULL CHECK (n >= 2),  -- скільки клієнтів має цей номер (разом із цим)
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (client_key, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_spc_phone ON shared_phone_clients(phone);
+
 -- 📵 ЖУРНАЛ СИГНАЛІВ ПО ПРОПУЩЕНИХ (ТЗ-1, прохід 3, 16.09.2026). Одна задача на
 -- менеджера + номер + київський день — рішення власника. Логіка — `core/missedCallSignal.ts`.
 -- 🔴 АНТИ-ДУБЛЬ ТРИМАЄ PRIMARY KEY, А НЕ ПОШУК ЗА ЗАГОЛОВКОМ. Сусідні джоби шукають
