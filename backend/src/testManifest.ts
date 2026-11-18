@@ -134,6 +134,7 @@ export const MANIFEST_FILES: string[] = [
   "jobs/backupRotate.test.js",
   "db/copyStreamPatch.test.js",
   "core/stuckRule.test.js",
+  "routes/repeatPlansPrimaryMgr.test.js",
   "core/hiddenOverviewFetch.test.js",
   "core/stuckTalk.test.js",
   "core/reactivation.test.js",
@@ -2145,6 +2146,10 @@ export const MANIFEST_TESTS: string[] = [
   "#72f СКОУП: до «Виставлення рахунку» включно, операційні — поза",
   "#72g ПОРІГ ЄДИНИЙ, ПАРАМЕТРОМ, поділу 7/21 більше немає",
   "#72h СИГНАЛИ — ОДИН ПЕРЕЛІК на годинник і на «угоду вели»",
+  // routes/repeatPlansPrimaryMgr.test.ts — основний менеджер у «Планах по постійних» (18.11.2026)
+  "#9962 ЧИСТА ЗВІРКА основного менеджера ловить чужого, дубль і невідомого — і мовчить на рівних",
+  "#9962b ЖИВИЙ: основний менеджер на екрані «Плани по постійних» == правило, поіменно",
+  "#9963 ЖИВИЙ: кандидати на реактивацію для ВСІХ команд відповідають, менеджер — за правилом",
   // core/hiddenOverviewFetch.test.ts — запити прихованого «Огляду» (16.11.2026)
   "#9961 ЗАПИТИ «ОГЛЯДУ» НЕ ЙДУТЬ З ІНШИХ ЕКРАНІВ — і йдуть з «Огляду»",
   // core/stuckTalk.test.ts — Фаза 3: поріг розмови, анкер від синку, Ringostat

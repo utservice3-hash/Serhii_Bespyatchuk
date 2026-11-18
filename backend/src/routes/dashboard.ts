@@ -9309,8 +9309,15 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   // client shows under exactly one manager — same identity rule as /loyalty.
   const activeMonths = (await getSettings()).sleepingWindowMonths;
   const clientsRes = await pool.query<{ manager_id: number; client_key: string; name: string; orders: string; revenue: string; last_paid: string }>(
+    // ⏱ ОСНОВНИЙ МЕНЕДЖЕР РАХУЄТЬСЯ В ТОМУ САМОМУ ПРОХОДІ, ЩО Й АГРЕГАТ КЛІЄНТА (18.11.2026, `#9962`).
+    // Було: окремий підзапит `primary_mgr` з ROW_NUMBER, приєднаний до `agg`. Плановик оцінював
+    // його в один рядок і перераховував віконну функцію НА КОЖНОГО клієнта: заміряно на проді
+    // 3,3 млн відкинутих пар і 0,9–1,6 с (з «замовклими» — понад 10 с). Правило те саме:
+    // менеджер із найбільшою кількістю оплачених угод клієнта, при рівності — з найсвіжішою.
     `WITH scoped AS (
-       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price
+       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price,
+              COUNT(*) OVER (PARTITION BY d.client_key, d.manager_id) AS mgr_orders,
+              MAX(d.created_at_kommo) OVER (PARTITION BY d.client_key, d.manager_id) AS mgr_last
        FROM deals d
        JOIN managers m ON m.id = d.manager_id AND m.is_active
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -9320,18 +9327,12 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
        SELECT client_key,
               (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS name,
               COUNT(*) AS orders, COALESCE(SUM(price),0) AS revenue,
-              MAX(created_at_kommo) AS last_paid
+              MAX(created_at_kommo) AS last_paid,
+              (array_agg(manager_id ORDER BY mgr_orders DESC, mgr_last DESC))[1] AS manager_id
        FROM scoped GROUP BY client_key
-     ),
-     primary_mgr AS (
-       SELECT client_key, manager_id FROM (
-         SELECT client_key, manager_id,
-                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(created_at_kommo) DESC) AS rn
-         FROM scoped GROUP BY client_key, manager_id
-       ) z WHERE rn = 1
      )
-     SELECT pm.manager_id, a.client_key, a.name, a.orders, a.revenue, a.last_paid
-     FROM agg a JOIN primary_mgr pm ON pm.client_key = a.client_key
+     SELECT a.manager_id, a.client_key, a.name, a.orders, a.revenue, a.last_paid
+     FROM agg a
      WHERE a.orders >= 2 ${includeInactive ? "" : `AND a.last_paid >= now() - interval '${activeMonths} months'`}
      ORDER BY a.revenue DESC`
   );
