@@ -8,6 +8,7 @@ import { parseEnpsRange, granularityFor, summarizeEnps, buildEnpsSeries } from "
 import * as signals from "../core/oneOnOneSignals.js";
 import * as managerState from "../core/managerState.js";
 import { activeManagerSql } from "../core/activeManager.js";
+import { tasksSetAtMeeting, type O2OTaskRow } from "../oneOnOne/meetingTasks.js";
 
 /**
  * Ван-ту-вани (1×1) — три типи (A: тімлід→менеджер, B: керівник→тімлід, V: HR→всі).
@@ -213,18 +214,26 @@ oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
       WHERE o.subject_manager_id=$1 AND o.type=$2 AND o.meeting_date=$3`,
     [managerId, type, meetingDate]);
   const rec = r.rows[0];
+  // ➕ Задачі, поставлені на ЦІЙ зустрічі, — щоб після перезавантаження на формі лишався їхній слід (Сергій 19.11).
+  // Відбір дати й видимості — `tasksSetAtMeeting` (гейт `#9991`); SQL лише звужує до людини й типу.
+  const tasksSet = async () => tasksSetAtMeeting((await pool.query<O2OTaskRow>(
+    `SELECT t.id, t.title, to_char(t.deadline,'YYYY-MM-DD') AS deadline, t.status, t.o2o_resolution, t.created_by,
+            to_char(t.o2o_meeting_date,'YYYY-MM-DD') AS meeting_date
+       FROM tasks t
+      WHERE t.task_type = 'oneonone' AND t.assignee_id = $1 AND t.o2o_type = $2 AND t.o2o_meeting_date = $3`,
+    [managerId, type, meetingDate])).rows, { date: meetingDate, viewerId: req.auth!.userId, crossview: crossview(req.auth!) });
   if (rec) {
     if (!crossview(req.auth!) && rec.conducted_by !== req.auth!.userId) {
       return res.status(403).json({ error: "Цей запис проводив інший" });
     }
-    return res.json(rec);
+    return res.json({ ...rec, tasks_set: await tasksSet() });
   }
   // немає запису → віддаємо порожній шаблон, лише якщо цей користувач може проводити цей тип
   if (!canConduct(req.auth!, type)) return res.status(403).json({ error: "Немає доступу" });
   const form = await activeForm(type);
   res.json({ subject_manager_id: managerId, type, meeting_date: meetingDate, form_version: form?.version ?? 1,
     answers: {}, overall: null, satisfaction_score: null, enps_score: null, enps_reason: null,
-    notes: null, task_reviews: null, conducted_by: null });
+    notes: null, task_reviews: null, conducted_by: null, tasks_set: await tasksSet() });
 });
 
 /** Зберегти запис (upsert). Ставить conducted_by=я, form_version=активна. */

@@ -1,4 +1,4 @@
-import type { OneOnOneAnswers, O2ONotes } from "../../../api";
+import type { OneOnOneAnswers, O2ONotes, O2OTaskReview } from "../../../api";
 
 /**
  * 💾 ЗБЕРЕЖЕННЯ 1×1: ПОМИЛКА МУСИТЬ БУТИ ВИДИМОЮ, А НЕЗБЕРЕЖЕНЕ — НЕ ЗНИКАТИ МОВЧКИ.
@@ -117,7 +117,12 @@ export function draftStoreKey(userId: number, type: string, subjectId: number, d
   return `${DRAFT_PREFIX}${userId}:${type}:${subjectId}:${date}`;
 }
 
-export interface StoredDraft { at: string; draft: O2ODraft }
+/**
+ * `base` — відбиток (`draftKey`) СЕРВЕРНИХ відповідей, від яких чернетка почалась (19.11.2026). Без нього єдиною
+ * мірою «чи не затре чернетка свіжіше» був час запису на сервері — а його посуває й рев'ю задачі, яке відповідей не
+ * чіпає. Старі чернетки без `base` живуть за старим правилом.
+ */
+export interface StoredDraft { at: string; draft: O2ODraft; base?: string }
 
 /** Розбір того, що лежить у сховищі. Сміття (чужий формат, обрізаний JSON) — `null`, а не виняток посеред екрана. */
 export function parseStoredDraft(raw: string | null): StoredDraft | null {
@@ -125,7 +130,7 @@ export function parseStoredDraft(raw: string | null): StoredDraft | null {
   try {
     const v = JSON.parse(raw) as Partial<StoredDraft>;
     if (typeof v?.at !== "string" || Number.isNaN(Date.parse(v.at)) || !v.draft || typeof v.draft !== "object") return null;
-    return { at: v.at, draft: v.draft };
+    return typeof v.base === "string" ? { at: v.at, draft: v.draft, base: v.base } : { at: v.at, draft: v.draft };
   } catch { return null; }
 }
 
@@ -144,6 +149,40 @@ export function draftExpired(at: string, now: Date): boolean {
 export function draftToRestore(stored: StoredDraft | null, serverKey: string, serverUpdatedAt: string | null, now: Date): O2ODraft | null {
   if (!stored || draftExpired(stored.at, now)) return null;
   if (draftKey(stored.draft) === serverKey) return null;
+  // 🔁 ЧЕРНЕТКА ЗНАЄ, ВІД ЧОГО ПОЧАЛАСЬ (19.11.2026). Відповіді на сервері ті самі, що були, коли почали набирати, —
+  // отже ніхто їх не перезаписав, і чернетка повертається, навіть якщо час запису посунуло рев'ю задачі («✓ Виконано»
+  // пише в той самий запис і оновлює `updated_at`). Відповіді змінились — хтось зберіг інше, і перемагає сервер.
+  if (typeof stored.base === "string") return stored.base === serverKey ? stored.draft : null;
   if (serverUpdatedAt && Date.parse(serverUpdatedAt) >= Date.parse(stored.at)) return null;
   return stored.draft;
+}
+
+// ── КУДИ ПОВЕРТАТИСЬ ПІСЛЯ ПЕРЕЗАВАНТАЖЕННЯ (19.11.2026) ─────────────────────────────────────────────────────────────
+// Досі місяць лежав у сховищі НАЗАВЖДИ (`o2oMonth`): хто колись глянув вересень, той і в листопаді відкривав вересень —
+// а сьогоднішня зустріч тоді виглядала зниклою. Тепер місце (тип, людина, дата) повертається лише свіжим; старше —
+// екран відкривається на сьогодні.
+
+/** Скільки годин місце на екрані вважається «щойно був тут». */
+export const SEL_FRESH_HOURS = 12;
+
+/** Чи ще свіже збережене місце. Без часу (запис старого формату) — не свіже. */
+export function selStillFresh(at: string | null | undefined, now: Date): boolean {
+  if (typeof at !== "string" || Number.isNaN(Date.parse(at))) return false;
+  const age = now.getTime() - Date.parse(at);
+  return age >= 0 && age <= SEL_FRESH_HOURS * 3_600_000;
+}
+
+// ── ЩО ВИРІШИЛИ НА ЦІЙ ЗУСТРІЧІ (19.11.2026) ──────────────────────────────────────────────────────────────────────────
+// «✓ Виконано / ✗ Ні / ✗ Знято» одразу пишеться в запис зустрічі (`task_reviews`), але на формі ніде не показувалось:
+// позначена задача просто зникала з блоку, і після перезавантаження не лишалось сліду, що її обговорили.
+
+/** Останнє рішення по кожній задачі цієї зустрічі (позначку могли змінити — показується підсумок), у порядку дій. */
+export function reviewsOfMeeting(reviews: readonly O2OTaskReview[] | null | undefined): O2OTaskReview[] {
+  const last = new Map<number, O2OTaskReview>();
+  for (const r of reviews ?? []) {
+    if (!r || typeof r.taskId !== "number") continue;
+    const prev = last.get(r.taskId);
+    if (!prev || Date.parse(r.at) >= Date.parse(prev.at)) last.set(r.taskId, r);
+  }
+  return [...last.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }

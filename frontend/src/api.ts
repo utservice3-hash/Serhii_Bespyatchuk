@@ -4443,7 +4443,15 @@ export interface OneOnOneRecord {
   // окремий показник, НЕ входить в overall (для типу В дорівнює enps_score)
   satisfaction_score: number | null;
   notes: O2ONotes | null; conducted_by: number | null; conducted_by_name?: string | null; updated_at?: string;
+  /** Рішення по задачах з минулого 1×1, ухвалені НА ЦІЙ зустрічі (кожна позначка — окремий запис, у порядку дій). */
+  task_reviews?: O2OTaskReview[] | null;
+  /** Задачі, поставлені на ЦІЙ зустрічі (сервер уже відібрав за датою й видимістю, `oneOnOne/meetingTasks.ts`). */
+  tasks_set?: O2OMeetingTask[];
 }
+export interface O2OTaskReview {
+  taskId: number; title: string; outcome: O2OTaskOutcome; at: string; byUserId?: number | null; byName?: string | null;
+}
+export interface O2OMeetingTask { id: number; title: string; deadline: string | null; status: string; resolution: string | null }
 export interface O2OMeeting {
   meeting_date: string; overall: number | null; enps_score: number | null; satisfaction_score: number | null;
   form_version: number; conducted_by: number | null; conducted_by_name: string | null; updated_at: string;
