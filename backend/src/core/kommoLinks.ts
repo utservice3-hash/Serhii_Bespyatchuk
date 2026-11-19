@@ -17,3 +17,13 @@ import { config } from "../config.js";
  */
 export const kommoLeadUrl = (kommoId: number): string =>
   `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
+
+/**
+ * 🔗 Картки КОМПАНІЇ й КОНТАКТУ — та сама база, що в угоди (таблиця «Клієнти з реклами», Роман 19.11.2026: «коли
+ * нажимаєш на назву клієнта — відкривалось його Kommo»). Форма шляху — стандартна для Kommo: `/companies/detail/<id>`,
+ * `/contacts/detail/<id>`.
+ */
+export const kommoCompanyUrl = (companyId: number): string =>
+  `${config.kommo.baseUrl.replace(/\/$/, "")}/companies/detail/${companyId}`;
+export const kommoContactUrl = (contactId: number): string =>
+  `${config.kommo.baseUrl.replace(/\/$/, "")}/contacts/detail/${contactId}`;

@@ -273,3 +273,35 @@ test("#3316 ЖИВА БД: клієнти з реклами — кампанії
   assert.ok(r.clients.every((c) => c.firstMargin < 0 || c.repeatMargin <= c.margin + 0.01), "🔴 повторні більші за LTV при невідʼємній першій угоді");
   assert.equal(r.cohorts.reduce((s, c) => s + c.clients, 0), r.totals.clients, "🔴 когорти не сходяться з плиткою");
 });
+
+/**
+ * #3318c — ПОСИЛАННЯ НА KOMMO НА ЖИВІЙ БАЗІ (Роман 19.11.2026: назва клієнта відкриває його Kommo). Для КОЖНОГО клієнта
+ * вікна вид посилання == тому, що є в CRM, порахованому НЕЗАЛЕЖНО (EXISTS, а не ORDER BY … LIMIT 1): є компанія хоч в одній
+ * угоді → компанія; нема компанії, є контакт → контакт; нема обох → угода. Рівність, а не «≥ N»: істинне при будь-якому складі.
+ * 🧨 Червоніє, якщо прибрати запасний контакт (фізособи підуть на угоду) чи компанію (усі підуть на контакт).
+ */
+test("#3318c ЖИВА БД: посилання кожного клієнта з реклами == тому, що є в CRM (компанія → контакт → угода)", needsBackendEnv(), async (t) => {
+  const { getSettings } = await import("../routes/settings.js");
+  const { adClients } = await import("./adClients.js");
+  const { adClientLinks } = await import("./adClientLinks.js");
+  const { emptyPeriodSkip } = await import("../testMode.js");
+  const { pool } = await import("../db/pool.js");
+  const { adSources } = await getSettings();
+  const r = await adClients(FROM, TO, adSources);
+  const skip = emptyPeriodSkip("клієнтів з першим рекламним лідом у вікні заміру", r.totals.clients, `${FROM}..${TO}`);
+  if (skip) return t.skip(skip);
+  const keys = r.clients.map((c) => c.clientKey);
+  const links = await adClientLinks(keys);
+  const ind = await pool.query<{ key: string; has_company: boolean; has_contact: boolean }>(
+    `SELECT k.key,
+            EXISTS (SELECT 1 FROM deals x JOIN deal_companies dc ON dc.deal_kommo_id = x.kommo_id WHERE x.client_key = k.key) AS has_company,
+            EXISTS (SELECT 1 FROM deals x JOIN deal_contacts ct ON ct.deal_kommo_id = x.kommo_id WHERE x.client_key = k.key) AS has_contact
+       FROM unnest($1::text[]) AS k(key)`, [keys]);
+  assert.equal(ind.rows.length, keys.length, "🔴 незалежний замір загубив клієнтів");
+  const wrong = ind.rows.filter((x) => {
+    const want = x.has_company ? "company" : x.has_contact ? "contact" : "deal";
+    return links.get(x.key)?.kind !== want;
+  });
+  assert.deepEqual(wrong.slice(0, 5).map((x) => [x.key, links.get(x.key)?.kind ?? null]), [],
+    `🔴 ${wrong.length} із ${keys.length} клієнтів ведуть не туди, де вони є в CRM`);
+});
