@@ -475,11 +475,9 @@ export interface SpreadExemption { file: string; frag: string; why: string }
  * акумулятори.
  */
 export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
-  // 🤝 1×1 (19.11.2026, Сергій «нічого не зникає» + «підв'яжи до найму»): обидва рядки — ЯВНИЙ SELECT у тому ж обробнику.
+  // 🤝 1×1 (19.11.2026, Сергій «нічого не зникає» + «підв'яжи до найму»): рядок — ЯВНИЙ SELECT у тому ж обробнику.
   { file: "routes/oneOnOnes.ts", frag: "return res.json({ ...rec, tasks_set",
     why: "`rec` — рядок `GET /record` з явним переліком колонок `one_on_ones`; `tasks_set` — відбір `tasksSetAtMeeting` (гейт `#9991`)." },
-  { file: "routes/oneOnOnes.ts", frag: "return { ...row, name: hr?.fullName",
-    why: "`row` — рядок `GET /subjects` з явним переліком колонок; ім'я й картка — з ростера Найму `oneOnOne/roster.ts` (гейт `#9994`)." },
   // 📈 Калькулятор, ринкова ціна (прохід A, 30.10.2026): `v` — варіант маршруту `RouteVariantOut` з чистого ядра
   // `core/roadRoute.ts → toVariants` (поля перелічені в типі), не рядок БД; дописуються ринок і показана ставка.
   { file: "routes/rates.ts", frag: "return { ...v, market_price: market, price: priceView",

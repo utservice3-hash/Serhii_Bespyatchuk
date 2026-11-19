@@ -4426,15 +4426,17 @@ export interface O2OFormBody { sections: O2OSection[]; enps?: boolean; notes?: b
   satisfaction?: boolean }
 export interface O2OForm { type: string; version: number; questions: O2OFormBody; is_active?: boolean }
 export interface OneOnOneSubject {
+  /** Номер КАРТКИ в «Найм → Співробітники» (`employees.id`): на ній тримаються запис 1×1 і задача (19.11.2026). */
   id: number; name: string; team_id: number | null; team_name: string | null;
+  position: string | null;
+  /** Є пара в Kommo. Без неї 1×1 проводиться так само, задача йде на акаунт дашборду. */
+  has_kommo: boolean;
+  /** Чи є кому поставити задачу: менеджер Kommo або активний акаунт дашборду. */
+  can_take_task: boolean;
   is_team_lead: boolean; overall: number | null; done: boolean; updated_at: string | null;
   // зустрічей у вибраному місяці (їх може бути кілька) + дата ОСТАННЬОЇ
   meetings: number; last_meeting_date: string | null;
-  /** Картка людини в «Найм → Співробітники» (список 1×1 береться звідти, 19.11.2026). */
-  employee_id?: number | null;
 }
-/** Працює в Найм, але запис 1×1 зберегти не можна: немає пари в Kommo або менеджер у Kommo/дашборді вимкнений. */
-export interface O2OUnlinked { employeeId: number; fullName: string; position: string | null; reason: "no_kommo" | "kommo_off" }
 export type OneOnOneAnswers = Record<string, { score?: number; text?: string }>;
 export interface O2ONotes {
   mood?: string; likes?: string; pains?: string; ideas?: string;
@@ -4442,7 +4444,7 @@ export interface O2ONotes {
 }
 export interface OneOnOneRecord {
   // meeting_date — АВТОРИТЕТНА дата зустрічі: саме вона визначає запис (не місяць).
-  subject_manager_id: number; type: string; meeting_date: string; form_version: number;
+  subject_id: number; type: string; meeting_date: string; form_version: number;
   answers: OneOnOneAnswers; overall: number | null; enps_score: number | null; enps_reason: string | null;
   // окремий показник, НЕ входить в overall (для типу В дорівнює enps_score)
   satisfaction_score: number | null;
@@ -4476,22 +4478,22 @@ export async function saveO2OForm(type: string, questions: O2OFormBody): Promise
   const { data } = await api.put(`/one-on-ones/forms/${type}`, { questions });
   return { version: data?.version };
 }
-export async function fetchOneOnOneSubjects(type: string, month: string): Promise<{ subjects: OneOnOneSubject[]; unlinked: O2OUnlinked[] }> {
+export async function fetchOneOnOneSubjects(type: string, month: string): Promise<OneOnOneSubject[]> {
   const { data } = await api.get("/one-on-ones/subjects", { params: { type, month } });
-  return { subjects: data?.subjects ?? [], unlinked: data?.unlinked ?? [] };
+  return data?.subjects ?? [];
 }
 /** Журнал зустрічей субʼєкта (кожна зустріч — окремий запис). */
-export async function fetchO2OMeetings(type: string, managerId: number, months = 12): Promise<O2OMeeting[]> {
-  const { data } = await api.get(`/one-on-ones/meetings/${type}/${managerId}`, { params: { months } });
+export async function fetchO2OMeetings(type: string, subjectId: number, months = 12): Promise<O2OMeeting[]> {
+  const { data } = await api.get(`/one-on-ones/meetings/${type}/${subjectId}`, { params: { months } });
   return data?.meetings ?? [];
 }
 /** Запис КОНКРЕТНОЇ зустрічі за датою. Без дати — сьогоднішня (нова зустріч). */
-export async function fetchOneOnOne(type: string, managerId: number, date: string): Promise<OneOnOneRecord> {
-  const { data } = await api.get<OneOnOneRecord>(`/one-on-ones/record/${type}/${managerId}`, { params: { date } });
+export async function fetchOneOnOne(type: string, subjectId: number, date: string): Promise<OneOnOneRecord> {
+  const { data } = await api.get<OneOnOneRecord>(`/one-on-ones/record/${type}/${subjectId}`, { params: { date } });
   return data;
 }
 export async function saveOneOnOne(p: {
-  type: string; subjectManagerId: number; meetingDate: string; answers: OneOnOneAnswers;
+  type: string; subjectId: number; meetingDate: string; answers: OneOnOneAnswers;
   enpsScore?: number | null; enpsReason?: string | null; notes?: O2ONotes | null;
   satisfactionScore?: number | null;
 }): Promise<{ overall: number | null }> {
@@ -4512,6 +4514,7 @@ export async function fetchOneOnOneStats(type: string, months = 6, month?: strin
 export type O2OSignalKey = "missed" | "never" | "avgLow" | "drop" | "enpsLow" | "answerLow" | "tasksOpen";
 export interface O2OSignalHit { key: O2OSignalKey; value: number | null; detail: string }
 export interface O2OPersonFinding {
+  /** Номер картки Найму (субʼєкт 1×1), попри назву поля ядра сигналів. */
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   owed: string; hits: O2OSignalHit[];
 }
@@ -4548,14 +4551,14 @@ export interface O2OOpenTask {
 export type O2OTaskOutcome = "done" | "carried" | "cancelled";
 /** Поставити задачу субʼєкту внизу форми зустрічі (закріплена, знімає лише ведучий). */
 export async function createO2OTask(p: {
-  type: string; subjectManagerId: number; meetingDate: string; title: string; deadline?: string | null;
+  type: string; subjectId: number; meetingDate: string; title: string; deadline?: string | null;
 }): Promise<{ id: number }> {
   const { data } = await api.post("/one-on-ones/task", p);
   return { id: data?.id };
 }
 /** Відкриті задачі з МИНУЛИХ зустрічей (для блоку рев'ю вгорі форми). */
-export async function fetchO2OOpenTasks(type: string, managerId: number, before: string): Promise<O2OOpenTask[]> {
-  const { data } = await api.get(`/one-on-ones/open-tasks/${type}/${managerId}`, { params: { before } });
+export async function fetchO2OOpenTasks(type: string, subjectId: number, before: string): Promise<O2OOpenTask[]> {
+  const { data } = await api.get(`/one-on-ones/open-tasks/${type}/${subjectId}`, { params: { before } });
   return data?.tasks ?? [];
 }
 /** Позначити задачу на зустрічі: виконано / переноситься / знято. */

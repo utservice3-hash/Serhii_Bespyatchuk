@@ -6,10 +6,8 @@ import { ONE_ON_ONE_TYPES, type OneOnOneType } from "../oneOnOne/catalog.js";
 import { viewDenied } from "../oneOnOne/visibility.js";
 import { parseEnpsRange, granularityFor, summarizeEnps, buildEnpsSeries } from "../oneOnOne/enps.js";
 import * as signals from "../core/oneOnOneSignals.js";
-import * as managerState from "../core/managerState.js";
-import { activeManagerSql } from "../core/activeManager.js";
 import { tasksSetAtMeeting, type O2OTaskRow } from "../oneOnOne/meetingTasks.js";
-import { rosterOf, ROSTER_SQL, type RosterCandidate } from "../oneOnOne/roster.js";
+import { rosterOf, canTakeTask, ROSTER_SQL, type RosterCandidate, type RosterSubject } from "../oneOnOne/roster.js";
 
 /**
  * Ван-ту-вани (1×1) — три типи (A: тімлід→менеджер, B: керівник→тімлід, V: HR→всі).
@@ -42,20 +40,17 @@ function canConduct(auth: { role: string; roleKey: string }, type: OneOnOneType)
 
 /**
  * Хто «працює» для 1×1 і в якому типі — з «Найм → Співробітники» (Сергій 19.11.2026, `oneOnOne/roster.ts`).
- * Стан менеджера в дашборді (`SUBJECT_WORKS`, задача 8249) лишається другим запобіжником усередині ростера.
+ * Субʼєкт 1×1 — КАРТКА Найму (`employees.id`): її номер їде в адресах і тілах запитів замість менеджера Kommo.
  */
-async function rosterFor(type: OneOnOneType) {
+async function rosterFor(type: OneOnOneType): Promise<RosterSubject[]> {
   return rosterOf((await pool.query<RosterCandidate>(ROSTER_SQL)).rows, type);
 }
 
-/** WHERE для субʼєктів, яких дозволено проводити (за типом і скоупом). Люди — з Найму; тімлід у «A» — своя команда Kommo. */
-async function conductSubjectScope(auth: { role: string; roleKey: string; teamId: number | null }, type: OneOnOneType) {
+/** Кого дозволено проводити (за типом і скоупом): наскрізний — увесь ростер типу; тімлід у «A» — лише своя команда. */
+async function conductSubjects(auth: { role: string; roleKey: string; teamId: number | null }, type: OneOnOneType) {
   const roster = await rosterFor(type);
-  const ids = roster.subjects.map((s) => s.managerId);
-  if (type === "A" && !crossview(auth)) {
-    return { where: `m.team_id = $1 AND m.id = ANY($2::int[])`, params: [auth.teamId, ids] as unknown[], roster };
-  }
-  return { where: `m.id = ANY($1::int[])`, params: [ids] as unknown[], roster };
+  const mine = type === "A" && !crossview(auth) ? roster.filter((s) => s.teamId !== null && s.teamId === auth.teamId) : roster;
+  return new Map(mine.map((s) => [s.employeeId, s]));
 }
 
 /** WHERE-фрагмент для VIEW-скоупу (історія/аналітика): наскрізний → усе; інакше лише свої проведені. */
@@ -146,52 +141,44 @@ oneOnOnesRouter.get("/subjects", async (req, res) => {
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
   if (!canConduct(req.auth!, type)) return res.status(403).json({ error: "Немає доступу до проведення цього типу" });
   const month = monthOf(req.query.month);
-  const { where, params, roster } = await conductSubjectScope(req.auth!, type);
-  // conductSubjectScope використовує $1/$2 → його параметри мають іти ПЕРШИМИ.
-  const p: unknown[] = [...params];
-  const push = (v: unknown) => { p.push(v); return `$${p.length}`; };
-  const typeP = push(type), monthP = push(month);
+  const allowed = [...(await conductSubjects(req.auth!, type)).values()];
+  const p: unknown[] = [allowed.map((x) => x.employeeId), type, month];
   // видимість запису: наскрізний → усі; інакше лише мною проведені (статус чесний).
-  const vsFrag = crossview(req.auth!) ? "TRUE" : `x.conducted_by = ${push(req.auth!.userId)}`;
-  const inMonth = `x.subject_manager_id = m.id AND x.type = ${typeP}
-                   AND date_trunc('month', x.meeting_date) = ${monthP}::date AND (${vsFrag})`;
-  const r = await pool.query(
-    `SELECT m.id, m.name, m.team_id, m.is_team_lead, t.name AS team_name,
-            last.overall, to_char(last.meeting_date,'YYYY-MM-DD') AS last_meeting_date,
-            last.updated_at, agg.meetings, (agg.meetings > 0) AS done
-       FROM managers m
-       LEFT JOIN teams t ON t.id = m.team_id
-       LEFT JOIN LATERAL (SELECT count(*)::int AS meetings FROM one_on_ones x WHERE ${inMonth}) agg ON TRUE
-       LEFT JOIN LATERAL (SELECT x.overall, x.meeting_date, x.updated_at FROM one_on_ones x
-                           WHERE ${inMonth} ORDER BY x.meeting_date DESC LIMIT 1) last ON TRUE
-      WHERE ${where}
-      ORDER BY t.name NULLS LAST, m.is_team_lead DESC, m.name`,
-    p
-  );
+  const vsFrag = crossview(req.auth!) ? "TRUE" : `x.conducted_by = $${p.push(req.auth!.userId)}`;
+  const r = await pool.query<{ id: number; meetings: number; overall: string | null; last_meeting_date: string | null; updated_at: string | null }>(
+    `SELECT x.subject_employee_id AS id, count(*)::int AS meetings,
+            (array_agg(x.overall ORDER BY x.meeting_date DESC))[1] AS overall,
+            to_char(max(x.meeting_date),'YYYY-MM-DD') AS last_meeting_date,
+            (array_agg(x.updated_at ORDER BY x.meeting_date DESC))[1] AS updated_at
+       FROM one_on_ones x
+      WHERE x.subject_employee_id = ANY($1::int[]) AND x.type = $2
+        AND date_trunc('month', x.meeting_date) = $3::date AND (${vsFrag})
+      GROUP BY x.subject_employee_id`, p);
+  const met = new Map(r.rows.map((x) => [x.id, x]));
   // Ім'я — ПІБ із Найму; посилання на картку будує фронт (лише тим, хто бачить «Найм → Співробітники»).
-  const byMgr = new Map(roster.subjects.map((x) => [x.managerId, x]));
-  const subjects = r.rows.map((row) => {
-    const hr = byMgr.get(row.id);
-    return { ...row, name: hr?.fullName ?? row.name, employee_id: hr?.employeeId ?? null,
-      is_team_lead: hr ? hr.category === "teamlead" : row.is_team_lead };
+  const subjects = allowed.map((s) => {
+    const m = met.get(s.employeeId);
+    return {
+      id: s.employeeId, name: s.fullName, position: s.position, team_id: s.teamId, team_name: s.teamName,
+      is_team_lead: s.category === "teamlead", has_kommo: s.managerId !== null, can_take_task: canTakeTask(s),
+      overall: m?.overall ?? null, last_meeting_date: m?.last_meeting_date ?? null, updated_at: m?.updated_at ?? null,
+      meetings: m?.meetings ?? 0, done: (m?.meetings ?? 0) > 0,
+    };
   }).sort((a, b) => (a.team_name === null ? 1 : 0) - (b.team_name === null ? 1 : 0)
     || String(a.team_name ?? "").localeCompare(String(b.team_name ?? ""), "uk")
-    || Number(b.is_team_lead) - Number(a.is_team_lead) || String(a.name).localeCompare(String(b.name), "uk"));
-  // Працюють у Найм, але запис 1×1 зберегти не можна (немає пари в Kommo) — сірими. Командного зрізу в них
-  // немає, тож тімліду, що бачить лише свою команду, їх не показуємо.
-  const unlinked = type === "A" && !crossview(req.auth!) ? [] : roster.unlinked;
-  res.json({ type, month, subjects, unlinked });
+    || Number(b.is_team_lead) - Number(a.is_team_lead) || a.name.localeCompare(b.name, "uk"));
+  res.json({ type, month, subjects });
 });
 
 /** Журнал зустрічей одного субʼєкта за N місяців (view-скоуп). Кожна зустріч — окремий рядок. */
-oneOnOnesRouter.get("/meetings/:type/:managerId", async (req, res) => {
+oneOnOnesRouter.get("/meetings/:type/:subjectId", async (req, res) => {
   const type = req.params.type;
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
   const deny = viewDenied(crossview(req.auth!), canConduct(req.auth!, type));
   if (deny) return res.status(403).json({ error: deny });
-  const managerId = Number(req.params.managerId);
+  const subjectId = Number(req.params.subjectId);
   const months = Math.min(36, Math.max(1, Number(req.query.months) || 12));
-  const p: unknown[] = [managerId, type];
+  const p: unknown[] = [subjectId, type];
   const push = (v: unknown) => { p.push(v); return `$${p.length}`; };
   const vsFrag = crossview(req.auth!) ? "TRUE" : `o.conducted_by = ${push(req.auth!.userId)}`;
   const monthsP = push(months - 1);
@@ -202,32 +189,32 @@ oneOnOnesRouter.get("/meetings/:type/:managerId", async (req, res) => {
        FROM one_on_ones o
        LEFT JOIN users u ON u.id = o.conducted_by
        LEFT JOIN managers mm ON mm.id = u.manager_id
-      WHERE o.subject_manager_id=$1 AND o.type=$2 AND (${vsFrag})
+      WHERE o.subject_employee_id=$1 AND o.type=$2 AND (${vsFrag})
         AND o.meeting_date >= (date_trunc('month', now()) - make_interval(months => ${monthsP}))
       ORDER BY o.meeting_date DESC`,
     p
   );
-  res.json({ type, subject_manager_id: managerId, meetings: r.rows });
+  res.json({ type, subject_id: subjectId, meetings: r.rows });
 });
 
 /** Один запис ЗУСТРІЧІ за датою (для проведення або перегляду). Дата — авторитетна:
  *  ?date=YYYY-MM-DD визначає КОНКРЕТНУ зустріч. Без дати — сьогоднішня (нова зустріч).
  *  Порожній шаблон — якщо на цю дату ще не проводили. */
-oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
+oneOnOnesRouter.get("/record/:type/:subjectId", async (req, res) => {
   const type = req.params.type;
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
-  const managerId = Number(req.params.managerId);
+  const subjectId = Number(req.params.subjectId);
   const meetingDate = dateOf(req.query.date) ?? kyivToday();
   const r = await pool.query(
-    `SELECT o.subject_manager_id, o.type, to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
+    `SELECT o.subject_employee_id AS subject_id, o.type, to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
             o.form_version, o.answers, o.overall, o.satisfaction_score, o.task_reviews,
             o.enps_score, o.enps_reason, o.notes, o.conducted_by, o.updated_at,
             COALESCE(mm.name, u.email) AS conducted_by_name
        FROM one_on_ones o
        LEFT JOIN users u ON u.id = o.conducted_by
        LEFT JOIN managers mm ON mm.id = u.manager_id
-      WHERE o.subject_manager_id=$1 AND o.type=$2 AND o.meeting_date=$3`,
-    [managerId, type, meetingDate]);
+      WHERE o.subject_employee_id=$1 AND o.type=$2 AND o.meeting_date=$3`,
+    [subjectId, type, meetingDate]);
   const rec = r.rows[0];
   // ➕ Задачі, поставлені на ЦІЙ зустрічі, — щоб після перезавантаження на формі лишався їхній слід (Сергій 19.11).
   // Відбір дати й видимості — `tasksSetAtMeeting` (гейт `#9991`); SQL лише звужує до людини й типу.
@@ -235,8 +222,8 @@ oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
     `SELECT t.id, t.title, to_char(t.deadline,'YYYY-MM-DD') AS deadline, t.status, t.o2o_resolution, t.created_by,
             to_char(t.o2o_meeting_date,'YYYY-MM-DD') AS meeting_date
        FROM tasks t
-      WHERE t.task_type = 'oneonone' AND t.assignee_id = $1 AND t.o2o_type = $2 AND t.o2o_meeting_date = $3`,
-    [managerId, type, meetingDate])).rows, { date: meetingDate, viewerId: req.auth!.userId, crossview: crossview(req.auth!) });
+      WHERE t.task_type = 'oneonone' AND t.o2o_employee_id = $1 AND t.o2o_type = $2 AND t.o2o_meeting_date = $3`,
+    [subjectId, type, meetingDate])).rows, { date: meetingDate, viewerId: req.auth!.userId, crossview: crossview(req.auth!) });
   if (rec) {
     if (!crossview(req.auth!) && rec.conducted_by !== req.auth!.userId) {
       return res.status(403).json({ error: "Цей запис проводив інший" });
@@ -246,7 +233,7 @@ oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
   // немає запису → віддаємо порожній шаблон, лише якщо цей користувач може проводити цей тип
   if (!canConduct(req.auth!, type)) return res.status(403).json({ error: "Немає доступу" });
   const form = await activeForm(type);
-  res.json({ subject_manager_id: managerId, type, meeting_date: meetingDate, form_version: form?.version ?? 1,
+  res.json({ subject_id: subjectId, type, meeting_date: meetingDate, form_version: form?.version ?? 1,
     answers: {}, overall: null, satisfaction_score: null, enps_score: null, enps_reason: null,
     notes: null, task_reviews: null, conducted_by: null, tasks_set: await tasksSet() });
 });
@@ -257,19 +244,18 @@ oneOnOnesRouter.post("/record", async (req, res) => {
   const type = String(req.body?.type || "");
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
   if (!canConduct(auth, type)) return res.status(403).json({ error: "Немає доступу до проведення цього типу" });
-  const managerId = Number(req.body?.subjectManagerId);
+  const subjectId = Number(req.body?.subjectId);
   // ДАТА ЗУСТРІЧІ — авторитетна: визначає, який саме запис створюється/оновлюється.
   const meetingDate = dateOf(req.body?.meetingDate) ?? kyivToday();
   const answers = (req.body?.answers ?? {}) as Record<string, { score?: number; text?: string }>;
-  if (!managerId || typeof answers !== "object") return res.status(400).json({ error: "subjectManagerId та answers обовʼязкові" });
+  if (!subjectId || typeof answers !== "object") return res.status(400).json({ error: "subjectId та answers обовʼязкові" });
   // субʼєкт має бути в conduct-скоупі цього типу
-  const { where, params } = await conductSubjectScope(auth, type);
-  const inScope = await pool.query(`SELECT 1 FROM managers m WHERE m.id=$${params.length + 1} AND (${where})`, [...params, managerId]);
-  if (!inScope.rowCount) return res.status(403).json({ error: "Субʼєкт поза вашим скоупом" });
+  const subject = (await conductSubjects(auth, type)).get(subjectId);
+  if (!subject) return res.status(403).json({ error: "Субʼєкт поза вашим скоупом" });
   // не можна перезаписувати чужий запис (лише свій або наскрізний)
   const ex = await pool.query<{ conducted_by: number | null }>(
-    "SELECT conducted_by FROM one_on_ones WHERE subject_manager_id=$1 AND type=$2 AND meeting_date=$3",
-    [managerId, type, meetingDate]);
+    "SELECT conducted_by FROM one_on_ones WHERE subject_employee_id=$1 AND type=$2 AND meeting_date=$3",
+    [subjectId, type, meetingDate]);
   if (ex.rows[0] && !crossview(auth) && ex.rows[0].conducted_by !== auth.userId) {
     return res.status(403).json({ error: "Цей запис проводив інший" });
   }
@@ -284,27 +270,25 @@ oneOnOnesRouter.post("/record", async (req, res) => {
     : (Number.isInteger(rawSat) && rawSat >= 1 && rawSat <= 10 ? rawSat : null);
   const overall = overallFrom(type, answers, enpsScore);
   const form = await activeForm(type);
+  // Менеджер Kommo пишеться довідково, де пара є: на ньому тримається відкат ключа (`docs/sql/1x1-employee-rollback.sql`).
   await pool.query(
-    `INSERT INTO one_on_ones (subject_manager_id, type, meeting_date, form_version, conducted_by, answers, overall, enps_score, enps_reason, notes, satisfaction_score, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
-     ON CONFLICT (subject_manager_id, type, meeting_date) DO UPDATE SET
+    `INSERT INTO one_on_ones (subject_employee_id, subject_manager_id, type, meeting_date, form_version, conducted_by, answers, overall, enps_score, enps_reason, notes, satisfaction_score, updated_at)
+     VALUES ($1,$12,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+     ON CONFLICT (subject_employee_id, type, meeting_date) DO UPDATE SET
        answers=EXCLUDED.answers, overall=EXCLUDED.overall, enps_score=EXCLUDED.enps_score,
        enps_reason=EXCLUDED.enps_reason, notes=EXCLUDED.notes, conducted_by=EXCLUDED.conducted_by,
        satisfaction_score=EXCLUDED.satisfaction_score,
        form_version=EXCLUDED.form_version, updated_at=now()`,
-    [managerId, type, meetingDate, form?.version ?? 1, auth.userId, JSON.stringify(answers), overall,
-     enpsScore, enpsReason, notes ? JSON.stringify(notes) : null, satisfaction]);
+    [subjectId, type, meetingDate, form?.version ?? 1, auth.userId, JSON.stringify(answers), overall,
+     enpsScore, enpsReason, notes ? JSON.stringify(notes) : null, satisfaction, subject.managerId]);
   res.json({ ok: true, overall, satisfaction, meetingDate });
 });
 
 // ── Задачі з 1×1 ─────────────────────────────────────────────────────────────
-/** Чи може цей користувач ставити/знімати задачі по цьому субʼєкту (ведучий типу або наскрізний). */
-async function canManageTasks(auth: Express.Request["auth"] & object, type: OneOnOneType, managerId: number) {
-  if (!canConduct(auth, type)) return false;
-  const { where, params } = await conductSubjectScope(auth, type);
-  const r = await pool.query(`SELECT 1 FROM managers m WHERE m.id=$${params.length + 1} AND (${where})`,
-    [...params, managerId]);
-  return !!r.rowCount;
+/** Субʼєкт, по якому цей користувач може ставити/знімати задачі (ведучий типу або наскрізний), або `null`. */
+async function taskSubject(auth: Express.Request["auth"] & object, type: OneOnOneType, subjectId: number): Promise<RosterSubject | null> {
+  if (!canConduct(auth, type)) return null;
+  return (await conductSubjects(auth, type)).get(subjectId) ?? null;
 }
 
 /** Поставити задачу субʼєкту внизу форми зустрічі. Закріплена, знімає лише ведучий. */
@@ -312,48 +296,51 @@ oneOnOnesRouter.post("/task", async (req, res) => {
   const auth = req.auth!;
   const type = String(req.body?.type || "");
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
-  const managerId = Number(req.body?.subjectManagerId);
+  const subjectId = Number(req.body?.subjectId);
   const title = String(req.body?.title ?? "").trim();
   const deadline = dateOf(req.body?.deadline);
   const meetingDate = dateOf(req.body?.meetingDate) ?? kyivToday();
-  if (!managerId || !title) return res.status(400).json({ error: "subjectManagerId і title обовʼязкові" });
-  if (!(await canManageTasks(auth, type, managerId))) {
-    return res.status(403).json({ error: "Немає доступу ставити задачі цьому субʼєкту" });
+  if (!subjectId || !title) return res.status(400).json({ error: "subjectId і title обовʼязкові" });
+  const subject = await taskSubject(auth, type, subjectId);
+  if (!subject) return res.status(403).json({ error: "Немає доступу ставити задачі цьому субʼєкту" });
+  // Виконавець у Задачнику: менеджер Kommo, а без Kommo — акаунт дашборду (`assignee_user_id`, як у бухгалтерії й HR).
+  // Ні того, ні іншого — задачу побачити нікому, тож відмовляємо словами, а не створюємо сироту (гейт `#9998`).
+  if (!canTakeTask(subject)) {
+    return res.status(400).json({ error: `У ${subject.fullName} немає ні Kommo, ні акаунта в дашборді — задачу не поставити. Заведіть акаунт у Налаштуваннях → Користувачі.` });
   }
   // департамент — з команди виконавця (як і в решті задачника)
-  const dep = await pool.query<{ department: string | null }>(
-    "SELECT t.name AS department FROM managers m LEFT JOIN teams t ON t.id=m.team_id WHERE m.id=$1", [managerId]);
   const r = await pool.query<{ id: number }>(
-    `INSERT INTO tasks (title, status, deadline, assignee_id, created_by, priority, department,
-                        task_type, pinned, o2o_type, o2o_meeting_date)
-     VALUES ($1,'not_started',$2,$3,$4,'high',$5,'oneonone',true,$6,$7) RETURNING id`,
-    [title, deadline, managerId, auth.userId, dep.rows[0]?.department ?? null, type, meetingDate]);
+    `INSERT INTO tasks (title, status, deadline, assignee_id, assignee_user_id, created_by, priority, department,
+                        task_type, pinned, o2o_type, o2o_meeting_date, o2o_employee_id)
+     VALUES ($1,'not_started',$2,$3,$4,$5,'high',$6,'oneonone',true,$7,$8,$9) RETURNING id`,
+    [title, deadline, subject.managerId, subject.managerId === null ? subject.taskUserId : null, auth.userId,
+     subject.teamName, type, meetingDate, subjectId]);
   res.status(201).json({ id: r.rows[0].id });
 });
 
 /** ВІДКРИТІ задачі з МИНУЛИХ зустрічей цього субʼєкта/типу — блок рев'ю вгорі форми.
  *  Задачі, поставлені на ЦІЙ же зустрічі, у власне рев'ю не потрапляють (?before=дата). */
-oneOnOnesRouter.get("/open-tasks/:type/:managerId", async (req, res) => {
+oneOnOnesRouter.get("/open-tasks/:type/:subjectId", async (req, res) => {
   const type = req.params.type;
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
-  const managerId = Number(req.params.managerId);
-  if (!(await canManageTasks(req.auth!, type, managerId))) {
+  const subjectId = Number(req.params.subjectId);
+  if (!(await taskSubject(req.auth!, type, subjectId))) {
     return res.status(403).json({ error: "Немає доступу" });
   }
   const before = dateOf(req.query.before);
-  const p: unknown[] = [managerId, type];
+  const p: unknown[] = [subjectId, type];
   if (before) p.push(before);
   const r = await pool.query(
     `SELECT t.id, t.title, to_char(t.deadline,'YYYY-MM-DD') AS deadline,
             to_char(t.o2o_meeting_date,'YYYY-MM-DD') AS "setAt", t.status, t.created_by AS "createdById",
             COALESCE(cm.name, cu.email) AS "createdByName",
             (SELECT count(*)::int FROM one_on_ones o
-              WHERE o.subject_manager_id = t.assignee_id AND o.type = t.o2o_type
+              WHERE o.subject_employee_id = t.o2o_employee_id AND o.type = t.o2o_type
                 AND o.task_reviews @> jsonb_build_array(jsonb_build_object('taskId', t.id))) AS "carriedTimes"
        FROM tasks t
        LEFT JOIN users cu ON cu.id = t.created_by
        LEFT JOIN managers cm ON cm.id = cu.manager_id
-      WHERE t.task_type='oneonone' AND t.assignee_id=$1 AND t.o2o_type=$2
+      WHERE t.task_type='oneonone' AND t.o2o_employee_id=$1 AND t.o2o_type=$2
         AND t.o2o_resolution IS NULL AND t.status <> 'done'
         ${before ? "AND t.o2o_meeting_date < $3" : ""}
       ORDER BY t.o2o_meeting_date, t.id`, p);
@@ -369,12 +356,13 @@ oneOnOnesRouter.post("/task/:id/review", async (req, res) => {
   const outcome = String(req.body?.outcome || "");
   if (!OUTCOMES.has(outcome)) return res.status(400).json({ error: "outcome: done | carried | cancelled" });
   const meetingDate = dateOf(req.body?.meetingDate) ?? kyivToday();
-  const t = await pool.query<{ assignee_id: number; o2o_type: OneOnOneType; title: string; created_by: number | null }>(
-    "SELECT assignee_id, o2o_type, title, created_by FROM tasks WHERE id=$1 AND task_type='oneonone'", [id]);
+  const t = await pool.query<{ o2o_employee_id: number | null; o2o_type: OneOnOneType; title: string; created_by: number | null }>(
+    "SELECT o2o_employee_id, o2o_type, title, created_by FROM tasks WHERE id=$1 AND task_type='oneonone'", [id]);
   const task = t.rows[0];
   if (!task) return res.status(404).json({ error: "Задачу з 1×1 не знайдено" });
   // позначати може ЛИШЕ ведучий цього типу (у чиєму скоупі субʼєкт) або наскрізний
-  if (!(await canManageTasks(auth, task.o2o_type, task.assignee_id))) {
+  const subject = task.o2o_employee_id === null ? null : await taskSubject(auth, task.o2o_type, task.o2o_employee_id);
+  if (!subject) {
     return res.status(403).json({ error: "Позначати може лише ведучий цього типу" });
   }
   const client = await pool.connect();
@@ -397,12 +385,12 @@ oneOnOnesRouter.post("/task/:id/review", async (req, res) => {
       byUserId: auth.userId, byName: who.rows[0]?.name ?? null };
     // запис зустрічі може ще не існувати (рев'ю до збереження анкети) — створюємо кістяк
     await client.query(
-      `INSERT INTO one_on_ones (subject_manager_id, type, meeting_date, conducted_by, task_reviews)
-       VALUES ($1,$2,$3,$4, jsonb_build_array($5::jsonb))
-       ON CONFLICT (subject_manager_id, type, meeting_date) DO UPDATE
+      `INSERT INTO one_on_ones (subject_employee_id, subject_manager_id, type, meeting_date, conducted_by, task_reviews)
+       VALUES ($1,$6,$2,$3,$4, jsonb_build_array($5::jsonb))
+       ON CONFLICT (subject_employee_id, type, meeting_date) DO UPDATE
          SET task_reviews = COALESCE(one_on_ones.task_reviews,'[]'::jsonb) || jsonb_build_array($5::jsonb),
              updated_at = now()`,
-      [task.assignee_id, task.o2o_type, meetingDate, auth.userId, JSON.stringify(entry)]);
+      [subject.employeeId, task.o2o_type, meetingDate, auth.userId, JSON.stringify(entry), subject.managerId]);
     await client.query("COMMIT");
     res.json({ ok: true, outcome });
   } catch (e) {
@@ -435,18 +423,19 @@ oneOnOnesRouter.get("/stats/scores", async (req, res) => {
   if (vs.params.length) { params.push(vs.params[0]); vsFrag = vs.frag.replace("$P", `$${params.length}`); }
   params.push(oneMonth ? `${month}-01` : months - 1);
   const r = await pool.query(
-    `SELECT m.id, m.name, m.team_id, t.name AS team_name,
+    `SELECT e.id, e.full_name AS name, COALESCE(m.team_id, e.team_id) AS team_id, t.name AS team_name,
             to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
             to_char(date_trunc('month', o.meeting_date),'YYYY-MM') AS month,
             o.overall, o.enps_score, o.satisfaction_score, o.form_version, o.answers
        FROM one_on_ones o
-       JOIN managers m ON m.id = o.subject_manager_id
-       LEFT JOIN teams t ON t.id = m.team_id
+       JOIN employees e ON e.id = o.subject_employee_id
+       LEFT JOIN managers m ON m.id = o.subject_manager_id
+       LEFT JOIN teams t ON t.id = COALESCE(m.team_id, e.team_id)
       WHERE o.type=$1 AND (${vsFrag})
         AND ${oneMonth
               ? `date_trunc('month', o.meeting_date) = $${params.length}::date`
               : `o.meeting_date >= (date_trunc('month', now()) - make_interval(months => $${params.length}))`}
-      ORDER BY t.name NULLS LAST, m.name, o.meeting_date`, params);
+      ORDER BY t.name NULLS LAST, e.full_name, o.meeting_date`, params);
   res.json({ type, month: oneMonth ? month : null, rows: r.rows });
 });
 
@@ -499,41 +488,46 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
   const mP = q0.add(month), pP = q0.add(prev), vs0 = q0.scope();
   // Ростер: ті, кому належить 1×1 «A» або «Б» за Найм (`oneOnOne/roster.ts`, 19.11.2026) — той самий список, що й
   // у «Провести», І є команда. Тімлід бачить лише свою команду — той самий скоуп, що й у «Провести».
-  // Тип, який людині «винні», — за категорією в Найм: тім-лід — «Б», решта — «A».
+  // Тип, який людині «винні», — за категорією в Найм: тім-лід — «Б», решта — «A» (типи не перетинаються).
+  // «Завершує» в Найм сюди не йде — дзеркало `hasPlanSql`, яким цей ростер звужувався, поки стояв на Kommo:
+  // людині, що йде, «не проведено 1×1» — не сигнал.
   const candidates = (await pool.query<RosterCandidate>(ROSTER_SQL)).rows;
-  const leadIds = rosterOf(candidates, "B").subjects.map((x) => x.managerId);
-  const owedIds = [...rosterOf(candidates, "A").subjects.map((x) => x.managerId), ...leadIds];
-  const hrName = new Map([...rosterOf(candidates, "V").subjects].map((x) => [x.managerId, x.fullName]));
-  const rosterConds = [managerState.hasPlanSql("m", activeManagerSql("m")), "m.team_id IS NOT NULL",
-    `m.id = ANY(${q0.add(owedIds)}::int[])`];
-  const leadP = q0.add(leadIds);
-  if (!cross) rosterConds.push(`m.team_id = ${q0.add(auth.teamId)}`);
+  const owedOf = new Map<number, { s: RosterSubject; owed: OneOnOneType }>();
+  for (const t of ["A", "B"] as const) {
+    for (const x of rosterOf(candidates, t)) {
+      if (x.status !== "active" || x.teamId === null) continue;
+      if (!cross && x.teamId !== auth.teamId) continue;
+      owedOf.set(x.employeeId, { s: x, owed: t });
+    }
+  }
+  const owedRows = [...owedOf.values()];
 
-  const roster = await pool.query<{
-    id: number; name: string; team_id: number | null; team_name: string | null;
-    is_team_lead: boolean; owed: OneOnOneType;
-    met_this_month: boolean; met_ever: boolean;
-    avg_this: string | null; avg_prev: string | null;
+  const metRows = await pool.query<{
+    id: number; met_this_month: boolean; met_ever: boolean; avg_this: string | null; avg_prev: string | null;
   }>(
-    `WITH r AS (
-       SELECT m.id, m.name, m.team_id, (m.id = ANY(${leadP}::int[])) AS is_team_lead, t.name AS team_name,
-              CASE WHEN m.id = ANY(${leadP}::int[]) THEN 'B' ELSE 'A' END AS owed
-         FROM managers m
-         LEFT JOIN teams t ON t.id = m.team_id
-         ${managerState.stateJoinSql("m")}
-        WHERE ${rosterConds.join(" AND ")}
-     )
-     SELECT r.id AS id, r.name AS name, r.team_id AS team_id, r.team_name AS team_name,
-            r.is_team_lead AS is_team_lead, r.owed AS owed,
-            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
+    `SELECT r.id AS id,
+            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_employee_id = r.id AND o.type = r.owed
                       AND date_trunc('month', o.meeting_date) = ${mP}::date AND (${vs0})) AS met_this_month,
-            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
+            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_employee_id = r.id AND o.type = r.owed
                       AND (${vs0})) AS met_ever,
-            (SELECT avg(o.overall) FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
+            (SELECT avg(o.overall) FROM one_on_ones o WHERE o.subject_employee_id = r.id AND o.type = r.owed
                AND date_trunc('month', o.meeting_date) = ${mP}::date AND (${vs0})) AS avg_this,
-            (SELECT avg(o.overall) FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
+            (SELECT avg(o.overall) FROM one_on_ones o WHERE o.subject_employee_id = r.id AND o.type = r.owed
                AND date_trunc('month', o.meeting_date) = ${pP}::date AND (${vs0})) AS avg_prev
-       FROM r ORDER BY r.name`, q0.p);
+       FROM unnest(${q0.add(owedRows.map((x) => x.s.employeeId))}::int[], ${q0.add(owedRows.map((x) => x.owed))}::text[]) AS r(id, owed)`,
+    q0.p);
+  const metOf = new Map(metRows.rows.map((r) => [r.id, r]));
+  const roster = {
+    rows: owedRows.map(({ s: x }) => {
+      const m = metOf.get(x.employeeId);
+      return {
+        id: x.employeeId, name: x.fullName, team_id: x.teamId, team_name: x.teamName,
+        is_team_lead: x.category === "teamlead",
+        met_this_month: m?.met_this_month ?? false, met_ever: m?.met_ever ?? false,
+        avg_this: m?.avg_this ?? null, avg_prev: m?.avg_prev ?? null,
+      };
+    }).sort((a, b) => a.name.localeCompare(b.name, "uk")),
+  };
 
   const ids = roster.rows.map((r) => r.id);
   const num = (x: string | null) => (x === null ? null : Number(x));
@@ -542,23 +536,23 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
   const q1 = mk();
   const m1 = q1.add(month), vs1 = q1.scope(), lo1 = q1.add(signals.SIGNAL_THRESHOLDS.enpsLow), id1 = q1.add(ids);
   const enps = await pool.query<{ manager_id: number; enps_score: number; enps_reason: string | null }>(
-    `SELECT o.subject_manager_id AS manager_id, o.enps_score AS enps_score, o.enps_reason AS enps_reason
+    `SELECT o.subject_employee_id AS manager_id, o.enps_score AS enps_score, o.enps_reason AS enps_reason
        FROM one_on_ones o
       WHERE o.type='V' AND date_trunc('month', o.meeting_date) = ${m1}::date AND (${vs1})
         AND o.enps_score IS NOT NULL AND o.enps_score <= ${lo1}
-        AND o.subject_manager_id = ANY(${id1}::int[])
+        AND o.subject_employee_id = ANY(${id1}::int[])
       ORDER BY o.enps_score`, q1.p);
 
   // Окремі низькі відповіді — середнє їх ховає, тому дивимось на кожну оцінку зустрічі.
   const q2 = mk();
   const m2 = q2.add(month), vs2 = q2.scope(), lo2 = q2.add(signals.SIGNAL_THRESHOLDS.answerLow), id2 = q2.add(ids);
   const lows = await pool.query<{ manager_id: number; qkey: string; score: string }>(
-    `SELECT o.subject_manager_id AS manager_id, e.k AS qkey, (e.v->>'score') AS score
+    `SELECT o.subject_employee_id AS manager_id, e.k AS qkey, (e.v->>'score') AS score
        FROM one_on_ones o, jsonb_each(o.answers) e(k, v)
       WHERE o.type IN ('A','B') AND date_trunc('month', o.meeting_date) = ${m2}::date AND (${vs2})
         AND (e.v->>'score') ~ '^[0-9.]+$' AND (e.v->>'score')::numeric > 0
         AND (e.v->>'score')::numeric <= ${lo2}
-        AND o.subject_manager_id = ANY(${id2}::int[])`, q2.p);
+        AND o.subject_employee_id = ANY(${id2}::int[])`, q2.p);
 
   // Найслабші питання по відділу — без порогу, це відповідь на «що покращити».
   const q3 = mk();
@@ -568,7 +562,7 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
        FROM one_on_ones o, jsonb_each(o.answers) e(k, v)
       WHERE o.type='A' AND date_trunc('month', o.meeting_date) = ${m3}::date AND (${vs3})
         AND (e.v->>'score') ~ '^[0-9.]+$' AND (e.v->>'score')::numeric > 0
-        AND o.subject_manager_id = ANY(${id3}::int[])
+        AND o.subject_employee_id = ANY(${id3}::int[])
       GROUP BY 1`, q3.p);
 
   // Підписи питань — з АКТИВНОЇ форми типу A. qKey, якого там уже немає (питання зняли),
@@ -584,12 +578,12 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
   // Задачі скоупляться ВИКОНАВЦЕМ (ростер), а не автором: тімлід уже звужений своєю
   // командою вище, а задача, поставлена іншим ведучим, однаково лишається невиконаною.
   const tasks = await pool.query<{ id: number; manager_id: number; title: string; deadline: string | null; status: string }>(
-    `SELECT t.id, t.assignee_id AS manager_id, t.title,
+    `SELECT t.id, t.o2o_employee_id AS manager_id, t.title,
             to_char(t.deadline,'YYYY-MM-DD') AS deadline, t.status
        FROM tasks t
       WHERE t.task_type='oneonone' AND t.o2o_resolution IS NULL AND t.status <> 'done'
         AND t.deadline >= $1::date AND t.deadline < ($1::date + interval '1 month')
-        AND t.assignee_id = ANY($2::int[])`, [month, ids]);
+        AND t.o2o_employee_id = ANY($2::int[])`, [month, ids]);
 
   /* ⚠️ ЗАДАЧА БЕЗ ДЕДЛАЙНУ НЕ НАЛЕЖИТЬ ЖОДНОМУ МІСЯЦЮ — і мовчки випала б із сигналу.
      Заміряно на проді 09.09.2026: таких відкритих задач 1×1 — 2. Тому їх кількість їде
@@ -597,7 +591,7 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
   const noDeadline = await pool.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM tasks
       WHERE task_type='oneonone' AND o2o_resolution IS NULL AND status <> 'done'
-        AND deadline IS NULL AND assignee_id = ANY($1::int[])`, [ids]);
+        AND deadline IS NULL AND o2o_employee_id = ANY($1::int[])`, [ids]);
 
   const byMgr = <T extends { manager_id: number }>(rows: T[]) => {
     const m = new Map<number, T[]>();
@@ -611,7 +605,8 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
     // проблему, а середнє її б згладило.
     const e = (enpsBy.get(r.id) ?? []).slice().sort((a, b) => a.enps_score - b.enps_score)[0];
     return {
-      managerId: r.id, name: hrName.get(r.id) ?? r.name, teamId: r.team_id, teamName: r.team_name,
+      // `managerId` ядра сигналів тут — номер КАРТКИ Найму (субʼєкт 1×1), а не менеджер Kommo.
+      managerId: r.id, name: r.name, teamId: r.team_id, teamName: r.team_name,
       isTeamLead: r.is_team_lead,
       metThisMonth: r.met_this_month, metEver: r.met_ever,
       avgThisMonth: num(r.avg_this), avgPrevMonth: num(r.avg_prev),

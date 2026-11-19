@@ -114,7 +114,9 @@ export const DRAFT_PREFIX = "o2oDraft:";
  * зустрічі з однією людиною відкрилась би в анкеті іншої.
  */
 export function draftStoreKey(userId: number, type: string, subjectId: number, date: string): string {
-  return `${DRAFT_PREFIX}${userId}:${type}:${subjectId}:${date}`;
+  // `emp` — субʼєкт тут номер КАРТКИ Найму (19.11.2026). До того в цьому місці стояв менеджер Kommo, і стара чернетка з
+  // тим самим числом відкрилась би в анкеті ІНШОЇ людини; без маркера вони не розрізняються. Старі ключі доживають TTL.
+  return `${DRAFT_PREFIX}${userId}:${type}:emp${subjectId}:${date}`;
 }
 
 /**

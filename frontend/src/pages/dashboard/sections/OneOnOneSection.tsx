@@ -6,7 +6,7 @@ import {
   fetchO2OMeetings, fetchO2OOpenTasks, createO2OTask, reviewO2OTask,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type OneOnOneRecord,
   type O2OMeeting, type O2OOpenTask, type O2OTaskOutcome, type O2OEnpsResponse, type O2OEnpsSummary,
-  type O2OTaskReview, type O2OMeetingTask, type O2OUnlinked, fetchSecretsStatus,
+  type O2OTaskReview, type O2OMeetingTask, fetchSecretsStatus,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { useToast } from "../../../components/Toasts";
@@ -139,7 +139,9 @@ const REVIEW_CHIP: Record<O2OTaskOutcome, CSSProperties> = {
   cancelled: { background: "#e2e8f0", color: "#475569" },
 };
 /** Вибір екрана (тип, людина, дата) — щоб після перезавантаження повернутись туди, де був (задача 5760). */
-const SEL_KEY = "o2oSel";
+// `Emp` — у `selId` номер КАРТКИ Найму (19.11.2026); старий `o2oSel` тримав менеджера Kommo, і те саме число
+// відкрило б іншу людину. Старий ключ просто більше не читається.
+const SEL_KEY = "o2oSelEmp";
 type SavedSel = { type: O2OType; selId: number; date: string; at?: string };
 /** Місце повертається лише СВІЖИМ (`selStillFresh`, 19.11.2026): старше — екран відкривається на сьогодні, а не на
  *  місяці, який колись переглядали (там сьогоднішня зустріч виглядала зниклою). */
@@ -168,8 +170,6 @@ export function OneOnOneSection() {
   const [monthSel, setMonthSel] = useState<string>(() => restoreSel.current?.date.slice(0, 7) ?? curMonthStr());
   const [form, setForm] = useState<O2OForm | null>(null);
   const [subjects, setSubjects] = useState<OneOnOneSubject[]>([]);
-  // Працюють у Найм, але 1×1 не зберегти (немає пари в Kommo) — показуємо сірими, щоб людина не «зникала» (19.11.2026).
-  const [unlinked, setUnlinked] = useState<O2OUnlinked[]>([]);
   // «Картка в Найм ↗» — лише тим, кому сервер відкриває «Найм → Співробітники» (право сейфу), як у самому Наймі.
   const [canHiringCard, setCanHiringCard] = useState(false);
   useEffect(() => { fetchSecretsStatus().then(() => setCanHiringCard(true)).catch(() => setCanHiringCard(false)); }, []);
@@ -226,8 +226,8 @@ export function OneOnOneSection() {
   }, []);
 
   const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel)
-    .then((d) => { setSubjects(d.subjects); setUnlinked(d.unlinked); })
-    .catch(() => { setSubjects([]); setUnlinked([]); });
+    .then(setSubjects)
+    .catch(() => setSubjects([]));
   const loadMeetings = (mgrId: number) => fetchO2OMeetings(type, mgrId, 24).then(setMeetings).catch(() => setMeetings([]));
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
   useEffect(() => { setSelId(null); setMeetings([]); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
@@ -305,7 +305,7 @@ export function OneOnOneSection() {
     if (selId == null || !newTask.trim()) return;
     setTaskBusy(true); setErr(null);
     try {
-      await createO2OTask({ type, subjectManagerId: selId, meetingDate: dateSel, title: newTask.trim(), deadline: newTaskDue || null });
+      await createO2OTask({ type, subjectId: selId, meetingDate: dateSel, title: newTask.trim(), deadline: newTaskDue || null });
       // Раніше лише очищалось поле — і не було видно, чи задача десь зʼявилась (30.09.2026).
       const who = subjects.find((s) => s.id === selId)?.name;
       toast(`«${newTask.trim()}» — у Задачнику${who ? ` у ${who}` : ""}.`, { head: "Задачу поставлено" });
@@ -435,7 +435,7 @@ export function OneOnOneSection() {
     if (selId == null) return;
     setSaving(true); setErr(null);
     try {
-      await saveOneOnOne({ type, subjectManagerId: selId, meetingDate: dateSel, answers,
+      await saveOneOnOne({ type, subjectId: selId, meetingDate: dateSel, answers,
         enpsScore: type === "V" ? enpsScore : null, enpsReason: type === "V" ? enpsReason : null, notes: type === "V" ? notes : null,
         satisfactionScore: type === "V" ? null : satisfaction });
       setSavedAt(new Date().toISOString());
@@ -517,25 +517,6 @@ export function OneOnOneSection() {
                 ))}
               </div>
             ))}
-            {unlinked.length > 0 && (
-              <div data-testid="o2o-unlinked" style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--border, rgba(128,128,128,.3))" }}>
-                <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", fontWeight: 700, margin: "6px 8px 4px" }}>
-                  Працюють у Найм, 1×1 не зберегти
-                </div>
-                {unlinked.map((u) => (
-                  <div key={u.employeeId} title={u.reason === "no_kommo" ? "Немає пари в Kommo: запис 1×1 поки тримається на менеджері Kommo" : "У Kommo або в дашборді людина вимкнена"}
-                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", opacity: 0.55, cursor: "default" }}>
-                    <Avatar name={u.fullName} size={28} />
-                    <span style={{ fontSize: 13, flex: 1 }}>
-                      {canHiringCard ? <a href={`/hiring?tab=emp&employee=${u.employeeId}`} style={{ color: "inherit" }}>{u.fullName}</a> : u.fullName}
-                      <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>
-                        {u.reason === "no_kommo" ? "немає Kommo" : "у Kommo вимкнено"} · 1×1 не зберегти
-                      </span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* Анкета */}
@@ -552,10 +533,11 @@ export function OneOnOneSection() {
                     <div>
                       <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>{selected.is_team_lead ? "👑 " : ""}{selected.name}</h2>
                       <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
-                        <Chip>{selected.is_team_lead ? "тімлід" : "менеджер"}</Chip>
+                        <Chip>{selected.position ?? (selected.is_team_lead ? "тімлід" : "посада не вказана в Найм")}</Chip>
+                        {!selected.has_kommo && <Chip>без Kommo</Chip>}
                         {selected.team_name && <Chip>команда {selected.team_name}</Chip>}
-                        {canHiringCard && selected.employee_id != null && (
-                          <a data-testid="o2o-hiring-card" href={`/hiring?tab=emp&employee=${selected.employee_id}`} target="_blank" rel="noreferrer"
+                        {canHiringCard && (
+                          <a data-testid="o2o-hiring-card" href={`/hiring?tab=emp&employee=${selected.id}`} target="_blank" rel="noreferrer"
                             title="Відкрити картку в «Найм → Співробітники»" style={{ fontSize: 12, color: "#2563eb", alignSelf: "center" }}>Картка в Найм ↗</a>
                         )}
                       </div>
@@ -741,6 +723,12 @@ export function OneOnOneSection() {
                     <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, margin: "0 0 10px", fontWeight: 800 }}>
                       ➕ Поставити задачу {selected.is_team_lead ? "тімліду" : "менеджеру"}
                     </h3>
+                    {!selected.can_take_task ? (
+                      <div data-testid="o2o-no-task-target" style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+                        У {selected.name} немає ні Kommo, ні акаунта в дашборді — задачу поставити нікому. Заведіть акаунт у
+                        Налаштуваннях → Користувачі, і задача піде на нього.
+                      </div>
+                    ) : (<>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                       <input value={newTask} onChange={(e) => setNewTask(e.target.value)}
                         placeholder="Напр.: підготувати шаблони КП до кінця місяця…"
@@ -753,6 +741,7 @@ export function OneOnOneSection() {
                     <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 8 }}>
                       Задача одразу зʼявиться в Задачнику з позначкою «Задача з 1×1», <b>закріпленою вгорі й без можливості видалення</b>. Її статус ти переглянеш і закриєш на <b>наступному 1×1</b>.
                     </div>
+                    </>)}
                   </div>
                 )}
 
