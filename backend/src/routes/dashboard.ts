@@ -28,7 +28,8 @@ import { overviewCache } from "../core/lazyCache.js";
 
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, linkedinCount: 0, prozorroCount: 0, otherCount: 0, noChannelCount: 0 } as const;
-import { kommoLeadUrl } from "../core/kommoLinks.js";
+import { kommoLeadUrl, kommoCompanyUrl, kommoContactUrl } from "../core/kommoLinks.js";
+import { adClientLinks, type AdClientKommoTarget } from "../core/adClientLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
 import { canCloseDeal } from "../core/firstTouchClose.js";
 import { checkPriceNote } from "../core/firstTouchPriceReasons.js";
@@ -6239,6 +6240,10 @@ dashboardRouter.get("/ads/clients", async (req, res) => {
   const to = dateParam(req.query.to) ?? today;
   const { adSources } = await getSettings();
   const r = await adClients(from, to, adSources);
+  // 🔗 19.11.2026 (Роман): назва клієнта веде в Kommo — компанія / контакт / угода (`core/adClientLinks.ts`, `#3318`).
+  const links = await adClientLinks(r.clients.map((c) => c.clientKey));
+  const linkUrl = (t: AdClientKommoTarget | null | undefined): string | null =>
+    !t ? null : t.kind === "company" ? kommoCompanyUrl(t.id) : t.kind === "contact" ? kommoContactUrl(t.id) : kommoLeadUrl(t.id);
   // 🔁 #8704: клієнти (не лише постійні) — для фільтрів «Стали постійними / Працюють зараз», як у блоці LTV лідгенів.
   res.json({
     from: r.from, to: r.to, campaigns: r.campaigns, cohorts: r.cohorts, totals: r.totals,
@@ -6246,6 +6251,7 @@ dashboardRouter.get("/ads/clients", async (req, res) => {
       clientKey: c.clientKey, name: c.name, campaign: c.campaign, firstLead: c.firstLead,
       segment: c.segment, state: c.state, qualified: c.qualified, group: c.group,
       deals: c.deals, margin: c.margin, repeatMargin: c.repeatMargin,
+      kommoUrl: linkUrl(links.get(c.clientKey)), kommoKind: links.get(c.clientKey)?.kind ?? null,
     })),
   });
 });
