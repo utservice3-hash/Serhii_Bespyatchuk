@@ -9,6 +9,7 @@ import * as signals from "../core/oneOnOneSignals.js";
 import * as managerState from "../core/managerState.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { tasksSetAtMeeting, type O2OTaskRow } from "../oneOnOne/meetingTasks.js";
+import { rosterOf, ROSTER_SQL, type RosterCandidate } from "../oneOnOne/roster.js";
 
 /**
  * Ван-ту-вани (1×1) — три типи (A: тімлід→менеджер, B: керівник→тімлід, V: HR→всі).
@@ -40,19 +41,21 @@ function canConduct(auth: { role: string; roleKey: string }, type: OneOnOneType)
 }
 
 /**
- * Хто «працює» для 1×1 — той самий стан, що й у ростері аналітики нижче (`/analytics`): звільнений (накладка
- * адміна або обидва прапорці) — ні, «завершує» — так. Досі тут стояло голе `m.is_active` (лише Kommo), і
- * звільнений у дашборді, але активний у Kommo лишався в ростері (задача 8249).
+ * Хто «працює» для 1×1 і в якому типі — з «Найм → Співробітники» (Сергій 19.11.2026, `oneOnOne/roster.ts`).
+ * Стан менеджера в дашборді (`SUBJECT_WORKS`, задача 8249) лишається другим запобіжником усередині ростера.
  */
-const SUBJECT_WORKS = managerState.inOwnWorkListsSql("m", activeManagerSql("m"));
+async function rosterFor(type: OneOnOneType) {
+  return rosterOf((await pool.query<RosterCandidate>(ROSTER_SQL)).rows, type);
+}
 
-/** WHERE для субʼєктів, яких дозволено проводити (за типом і скоупом). */
-function conductSubjectScope(auth: { role: string; roleKey: string; teamId: number | null }, type: OneOnOneType) {
-  if (type === "B") return { where: `m.is_team_lead AND ${SUBJECT_WORKS}`, params: [] as unknown[] };
-  if (type === "V") return { where: SUBJECT_WORKS, params: [] as unknown[] };
-  // type A
-  if (crossview(auth)) return { where: SUBJECT_WORKS, params: [] as unknown[] };
-  return { where: `m.team_id = $1 AND ${SUBJECT_WORKS}`, params: [auth.teamId] as unknown[] };
+/** WHERE для субʼєктів, яких дозволено проводити (за типом і скоупом). Люди — з Найму; тімлід у «A» — своя команда Kommo. */
+async function conductSubjectScope(auth: { role: string; roleKey: string; teamId: number | null }, type: OneOnOneType) {
+  const roster = await rosterFor(type);
+  const ids = roster.subjects.map((s) => s.managerId);
+  if (type === "A" && !crossview(auth)) {
+    return { where: `m.team_id = $1 AND m.id = ANY($2::int[])`, params: [auth.teamId, ids] as unknown[], roster };
+  }
+  return { where: `m.id = ANY($1::int[])`, params: [ids] as unknown[], roster };
 }
 
 /** WHERE-фрагмент для VIEW-скоупу (історія/аналітика): наскрізний → усе; інакше лише свої проведені. */
@@ -143,8 +146,8 @@ oneOnOnesRouter.get("/subjects", async (req, res) => {
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
   if (!canConduct(req.auth!, type)) return res.status(403).json({ error: "Немає доступу до проведення цього типу" });
   const month = monthOf(req.query.month);
-  const { where, params } = conductSubjectScope(req.auth!, type);
-  // conductSubjectScope для типу A використовує $1 → його параметри мають іти ПЕРШИМИ.
+  const { where, params, roster } = await conductSubjectScope(req.auth!, type);
+  // conductSubjectScope використовує $1/$2 → його параметри мають іти ПЕРШИМИ.
   const p: unknown[] = [...params];
   const push = (v: unknown) => { p.push(v); return `$${p.length}`; };
   const typeP = push(type), monthP = push(month);
@@ -165,7 +168,19 @@ oneOnOnesRouter.get("/subjects", async (req, res) => {
       ORDER BY t.name NULLS LAST, m.is_team_lead DESC, m.name`,
     p
   );
-  res.json({ type, month, subjects: r.rows });
+  // Ім'я — ПІБ із Найму; посилання на картку будує фронт (лише тим, хто бачить «Найм → Співробітники»).
+  const byMgr = new Map(roster.subjects.map((x) => [x.managerId, x]));
+  const subjects = r.rows.map((row) => {
+    const hr = byMgr.get(row.id);
+    return { ...row, name: hr?.fullName ?? row.name, employee_id: hr?.employeeId ?? null,
+      is_team_lead: hr ? hr.category === "teamlead" : row.is_team_lead };
+  }).sort((a, b) => (a.team_name === null ? 1 : 0) - (b.team_name === null ? 1 : 0)
+    || String(a.team_name ?? "").localeCompare(String(b.team_name ?? ""), "uk")
+    || Number(b.is_team_lead) - Number(a.is_team_lead) || String(a.name).localeCompare(String(b.name), "uk"));
+  // Працюють у Найм, але запис 1×1 зберегти не можна (немає пари в Kommo) — сірими. Командного зрізу в них
+  // немає, тож тімліду, що бачить лише свою команду, їх не показуємо.
+  const unlinked = type === "A" && !crossview(req.auth!) ? [] : roster.unlinked;
+  res.json({ type, month, subjects, unlinked });
 });
 
 /** Журнал зустрічей одного субʼєкта за N місяців (view-скоуп). Кожна зустріч — окремий рядок. */
@@ -248,7 +263,7 @@ oneOnOnesRouter.post("/record", async (req, res) => {
   const answers = (req.body?.answers ?? {}) as Record<string, { score?: number; text?: string }>;
   if (!managerId || typeof answers !== "object") return res.status(400).json({ error: "subjectManagerId та answers обовʼязкові" });
   // субʼєкт має бути в conduct-скоупі цього типу
-  const { where, params } = conductSubjectScope(auth, type);
+  const { where, params } = await conductSubjectScope(auth, type);
   const inScope = await pool.query(`SELECT 1 FROM managers m WHERE m.id=$${params.length + 1} AND (${where})`, [...params, managerId]);
   if (!inScope.rowCount) return res.status(403).json({ error: "Субʼєкт поза вашим скоупом" });
   // не можна перезаписувати чужий запис (лише свій або наскрізний)
@@ -286,7 +301,7 @@ oneOnOnesRouter.post("/record", async (req, res) => {
 /** Чи може цей користувач ставити/знімати задачі по цьому субʼєкту (ведучий типу або наскрізний). */
 async function canManageTasks(auth: Express.Request["auth"] & object, type: OneOnOneType, managerId: number) {
   if (!canConduct(auth, type)) return false;
-  const { where, params } = conductSubjectScope(auth, type);
+  const { where, params } = await conductSubjectScope(auth, type);
   const r = await pool.query(`SELECT 1 FROM managers m WHERE m.id=$${params.length + 1} AND (${where})`,
     [...params, managerId]);
   return !!r.rowCount;
@@ -482,9 +497,16 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
 
   const q0 = mk();
   const mP = q0.add(month), pP = q0.add(prev), vs0 = q0.scope();
-  // Ростер: стан `active` (двопрапорцева активність + накладка «завершує»/«звільнений»)
-  // І є команда. Тімлід бачить лише свою команду — той самий скоуп, що й у «Провести».
-  const rosterConds = [managerState.hasPlanSql("m", activeManagerSql("m")), "m.team_id IS NOT NULL"];
+  // Ростер: ті, кому належить 1×1 «A» або «Б» за Найм (`oneOnOne/roster.ts`, 19.11.2026) — той самий список, що й
+  // у «Провести», І є команда. Тімлід бачить лише свою команду — той самий скоуп, що й у «Провести».
+  // Тип, який людині «винні», — за категорією в Найм: тім-лід — «Б», решта — «A».
+  const candidates = (await pool.query<RosterCandidate>(ROSTER_SQL)).rows;
+  const leadIds = rosterOf(candidates, "B").subjects.map((x) => x.managerId);
+  const owedIds = [...rosterOf(candidates, "A").subjects.map((x) => x.managerId), ...leadIds];
+  const hrName = new Map([...rosterOf(candidates, "V").subjects].map((x) => [x.managerId, x.fullName]));
+  const rosterConds = [managerState.hasPlanSql("m", activeManagerSql("m")), "m.team_id IS NOT NULL",
+    `m.id = ANY(${q0.add(owedIds)}::int[])`];
+  const leadP = q0.add(leadIds);
   if (!cross) rosterConds.push(`m.team_id = ${q0.add(auth.teamId)}`);
 
   const roster = await pool.query<{
@@ -494,8 +516,8 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
     avg_this: string | null; avg_prev: string | null;
   }>(
     `WITH r AS (
-       SELECT m.id, m.name, m.team_id, m.is_team_lead, t.name AS team_name,
-              CASE WHEN m.is_team_lead THEN 'B' ELSE 'A' END AS owed
+       SELECT m.id, m.name, m.team_id, (m.id = ANY(${leadP}::int[])) AS is_team_lead, t.name AS team_name,
+              CASE WHEN m.id = ANY(${leadP}::int[]) THEN 'B' ELSE 'A' END AS owed
          FROM managers m
          LEFT JOIN teams t ON t.id = m.team_id
          ${managerState.stateJoinSql("m")}
@@ -589,7 +611,7 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
     // проблему, а середнє її б згладило.
     const e = (enpsBy.get(r.id) ?? []).slice().sort((a, b) => a.enps_score - b.enps_score)[0];
     return {
-      managerId: r.id, name: r.name, teamId: r.team_id, teamName: r.team_name,
+      managerId: r.id, name: hrName.get(r.id) ?? r.name, teamId: r.team_id, teamName: r.team_name,
       isTeamLead: r.is_team_lead,
       metThisMonth: r.met_this_month, metEver: r.met_ever,
       avgThisMonth: num(r.avg_this), avgPrevMonth: num(r.avg_prev),

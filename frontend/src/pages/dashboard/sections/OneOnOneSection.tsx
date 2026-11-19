@@ -6,7 +6,7 @@ import {
   fetchO2OMeetings, fetchO2OOpenTasks, createO2OTask, reviewO2OTask,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type OneOnOneRecord,
   type O2OMeeting, type O2OOpenTask, type O2OTaskOutcome, type O2OEnpsResponse, type O2OEnpsSummary,
-  type O2OTaskReview, type O2OMeetingTask,
+  type O2OTaskReview, type O2OMeetingTask, type O2OUnlinked, fetchSecretsStatus,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { useToast } from "../../../components/Toasts";
@@ -168,6 +168,11 @@ export function OneOnOneSection() {
   const [monthSel, setMonthSel] = useState<string>(() => restoreSel.current?.date.slice(0, 7) ?? curMonthStr());
   const [form, setForm] = useState<O2OForm | null>(null);
   const [subjects, setSubjects] = useState<OneOnOneSubject[]>([]);
+  // Працюють у Найм, але 1×1 не зберегти (немає пари в Kommo) — показуємо сірими, щоб людина не «зникала» (19.11.2026).
+  const [unlinked, setUnlinked] = useState<O2OUnlinked[]>([]);
+  // «Картка в Найм ↗» — лише тим, кому сервер відкриває «Найм → Співробітники» (право сейфу), як у самому Наймі.
+  const [canHiringCard, setCanHiringCard] = useState(false);
+  useEffect(() => { fetchSecretsStatus().then(() => setCanHiringCard(true)).catch(() => setCanHiringCard(false)); }, []);
   const [selId, setSelId] = useState<number | null>(null);
   const [answers, setAnswers] = useState<OneOnOneAnswers>({});
   const [enpsScore, setEnpsScore] = useState<number | null>(null);
@@ -220,7 +225,9 @@ export function OneOnOneSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel).then((d) => setSubjects(d.subjects)).catch(() => setSubjects([]));
+  const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel)
+    .then((d) => { setSubjects(d.subjects); setUnlinked(d.unlinked); })
+    .catch(() => { setSubjects([]); setUnlinked([]); });
   const loadMeetings = (mgrId: number) => fetchO2OMeetings(type, mgrId, 24).then(setMeetings).catch(() => setMeetings([]));
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
   useEffect(() => { setSelId(null); setMeetings([]); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
@@ -510,6 +517,25 @@ export function OneOnOneSection() {
                 ))}
               </div>
             ))}
+            {unlinked.length > 0 && (
+              <div data-testid="o2o-unlinked" style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--border, rgba(128,128,128,.3))" }}>
+                <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", fontWeight: 700, margin: "6px 8px 4px" }}>
+                  Працюють у Найм, 1×1 не зберегти
+                </div>
+                {unlinked.map((u) => (
+                  <div key={u.employeeId} title={u.reason === "no_kommo" ? "Немає пари в Kommo: запис 1×1 поки тримається на менеджері Kommo" : "У Kommo або в дашборді людина вимкнена"}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", opacity: 0.55, cursor: "default" }}>
+                    <Avatar name={u.fullName} size={28} />
+                    <span style={{ fontSize: 13, flex: 1 }}>
+                      {canHiringCard ? <a href={`/hiring?tab=emp&employee=${u.employeeId}`} style={{ color: "inherit" }}>{u.fullName}</a> : u.fullName}
+                      <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>
+                        {u.reason === "no_kommo" ? "немає Kommo" : "у Kommo вимкнено"} · 1×1 не зберегти
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Анкета */}
@@ -528,6 +554,10 @@ export function OneOnOneSection() {
                       <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                         <Chip>{selected.is_team_lead ? "тімлід" : "менеджер"}</Chip>
                         {selected.team_name && <Chip>команда {selected.team_name}</Chip>}
+                        {canHiringCard && selected.employee_id != null && (
+                          <a data-testid="o2o-hiring-card" href={`/hiring?tab=emp&employee=${selected.employee_id}`} target="_blank" rel="noreferrer"
+                            title="Відкрити картку в «Найм → Співробітники»" style={{ fontSize: 12, color: "#2563eb", alignSelf: "center" }}>Картка в Найм ↗</a>
+                        )}
                       </div>
                     </div>
                   </div>

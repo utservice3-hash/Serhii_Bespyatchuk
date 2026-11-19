@@ -4430,7 +4430,11 @@ export interface OneOnOneSubject {
   is_team_lead: boolean; overall: number | null; done: boolean; updated_at: string | null;
   // зустрічей у вибраному місяці (їх може бути кілька) + дата ОСТАННЬОЇ
   meetings: number; last_meeting_date: string | null;
+  /** Картка людини в «Найм → Співробітники» (список 1×1 береться звідти, 19.11.2026). */
+  employee_id?: number | null;
 }
+/** Працює в Найм, але запис 1×1 зберегти не можна: немає пари в Kommo або менеджер у Kommo/дашборді вимкнений. */
+export interface O2OUnlinked { employeeId: number; fullName: string; position: string | null; reason: "no_kommo" | "kommo_off" }
 export type OneOnOneAnswers = Record<string, { score?: number; text?: string }>;
 export interface O2ONotes {
   mood?: string; likes?: string; pains?: string; ideas?: string;
@@ -4472,9 +4476,9 @@ export async function saveO2OForm(type: string, questions: O2OFormBody): Promise
   const { data } = await api.put(`/one-on-ones/forms/${type}`, { questions });
   return { version: data?.version };
 }
-export async function fetchOneOnOneSubjects(type: string, month: string): Promise<{ subjects: OneOnOneSubject[] }> {
+export async function fetchOneOnOneSubjects(type: string, month: string): Promise<{ subjects: OneOnOneSubject[]; unlinked: O2OUnlinked[] }> {
   const { data } = await api.get("/one-on-ones/subjects", { params: { type, month } });
-  return { subjects: data?.subjects ?? [] };
+  return { subjects: data?.subjects ?? [], unlinked: data?.unlinked ?? [] };
 }
 /** Журнал зустрічей субʼєкта (кожна зустріч — окремий запис). */
 export async function fetchO2OMeetings(type: string, managerId: number, months = 12): Promise<O2OMeeting[]> {
