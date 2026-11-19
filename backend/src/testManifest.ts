@@ -137,6 +137,8 @@ export const MANIFEST_FILES: string[] = [
   "routes/repeatPlansPrimaryMgr.test.js",
   "core/hiddenOverviewFetch.test.js",
   "db/callsKyivDayIndex.test.js",
+  "core/kvpCacheArgs.test.js",
+  "core/singleFlight.test.js",
   "core/stuckTalk.test.js",
   "core/reactivation.test.js",
   "core/reactivationPack.test.js",
@@ -2163,6 +2165,11 @@ export const MANIFEST_TESTS: string[] = [
   "#9961 ЗАПИТИ «ОГЛЯДУ» НЕ ЙДУТЬ З ІНШИХ ЕКРАНІВ — і йдуть з «Огляду»",
   // db/callsKyivDayIndex.test.ts — індекс «дата дзвінка по-Києву» (19.11.2026)
   "#9964 ІНДЕКС «ДАТА ДЗВІНКА ПО-КИЄВУ»: є в схемі, і фільтр періоду ним користується",
+  // core/singleFlight.test.ts — спільний запит для одночасних однакових викликів (19.11.2026)
+  "#9965 СПІЛЬНИЙ ЗАПИТ: одночасні однакові виклики — один запит; після завершення — новий",
+  "#9965b СПІЛЬНИЙ ЗАПИТ: помилка дістається всім, хто чекав, і сліду не лишає",
+  // core/kvpCacheArgs.test.ts — кеш періодонезалежних викликів «Звіту КВП» (19.11.2026)
+  "#9966 КЕШ У «ЗВІТІ КВП»: лише виклики з порожнім скоупом, і їх рівно сім",
   // core/stuckTalk.test.ts — Фаза 3: поріг розмови, анкер від синку, Ringostat
   "#73 ДЗВІНОК КОРОТШИЙ ЗА 10 c НЕ Є АКТИВНІСТЮ",
   "#73b ВІК РАХУЄТЬСЯ ВІД СИНКУ: застарілий синк НЕ роздуває лічильник",

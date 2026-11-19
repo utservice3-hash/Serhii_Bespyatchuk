@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { singleFlight } from "./singleFlight.js";
 import { FX_UAH_SQL, FX_BY_CURRENCY_SQL } from "./receivablesFxSql.js";
 import { cohortPct } from "./cohortRule.js";
 import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckClock,
@@ -2581,6 +2582,7 @@ export async function conversionAdsByManager(s: MetricScope, adSources: string[]
  * — групуються за командою на дату, тож вересневі ліди того, хто з 01.10 перейшов, лишаються у вересневій
  * команді. Без переходів кожен менеджер дає рівно один рядок — числа як до зміни.
  */
+const adsConvFlying = new Map<string, Promise<{ manager_id: number; name: string; team_id: number | null; at_team: number | null; entered: string; won: string }[]>>();
 async function adsConvRows(s: MetricScope, adSources: string[]): Promise<(MgrConversion & { atTeam: number | null })[]> {
   // $1 MONEY_ZONE (won), $2 FC, $3 ADZONE (вхід), $4 adSources — контракт dealCohortCte.
   const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
@@ -2591,17 +2593,20 @@ async function adsConvRows(s: MetricScope, adSources: string[]): Promise<(MgrCon
   const toRef = (params.push(s.to ?? null), `$${params.length}`);
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
-  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; at_team: number | null; entered: string; won: string }>(
+  // ⏱ `/kvp-report` кличе цей запит двічі водночас (по командах і по менеджерах), 0,68 с кожен.
+  // Одночасні однакові виклики ділять один запит (`singleFlight`, `#9965`); обʼєкти кожен будує свої.
+  type AdsConvRaw = { manager_id: number; name: string; team_id: number | null; at_team: number | null; entered: string; won: string };
+  const sql =
     `WITH ${dealCohortCte("$3", "$4", scopeWhere)}
      SELECT mm.id AS manager_id, mm.name, mm.team_id, pop.team_id AS at_team,
             COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won
        FROM pop JOIN managers mm ON mm.id = pop.manager_id
       WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
         AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
-      GROUP BY mm.id, mm.name, mm.team_id, pop.team_id`,
-    params
-  );
-  return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, atTeam: x.at_team,
+      GROUP BY mm.id, mm.name, mm.team_id, pop.team_id`;
+  const rows = await singleFlight(adsConvFlying, `${sql}|${JSON.stringify(params)}`,
+    () => pool.query<AdsConvRaw>(sql, params).then((r) => r.rows));
+  return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, atTeam: x.at_team,
     entered: Number(x.entered), won: Number(x.won), cohortPct: null }));
 }
 

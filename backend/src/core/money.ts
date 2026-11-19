@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { singleFlight } from "./singleFlight.js";
 // 🔴 Канонічний рекламний предикат — ЄДИНЕ джерело (metrics.adDealSql). Імпорт створює
 // циклічну залежність money↔metrics, але вона РАНТАЙМ-безпечна: обидва модулі викликають
 // одне одного лише всередині функцій (не на рівні модуля), тож ESM-live-binding резолвиться
@@ -195,6 +196,8 @@ function scopeClause(s: MoneyScope, p: unknown[], extraSelect: string, groupBy: 
   };
 }
 
+const moneyFlying = new Map<string, Promise<unknown[]>>();
+
 async function query<T>(kind: Kind, s: MoneyScope, extraSelect: string, groupBy: string): Promise<T[]> {
   const p: unknown[] = [];
   const src = sourceSql(kind, p);
@@ -213,8 +216,10 @@ async function query<T>(kind: Kind, s: MoneyScope, extraSelect: string, groupBy:
     ${joins}
     ${where}
     ${groupBy}`;
-  const r = await pool.query(sql, p);
-  return r.rows as T[];
+  // ⏱ Одночасні однакові виклики ділять один запит (`singleFlight`, `#9965`): ключ — сам SQL із
+  // параметрами, тож інший скоуп чи період — це інший ключ. Кожен викликач дістає СВІЙ масив.
+  const rows = await singleFlight(moneyFlying, `${sql}|${JSON.stringify(p)}`, () => pool.query(sql, p).then((r) => r.rows as unknown[]));
+  return rows.slice() as T[];
 }
 
 /**

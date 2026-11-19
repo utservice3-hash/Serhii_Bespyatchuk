@@ -10921,6 +10921,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const { adSources } = await getSettings();
   const months = monthsInRange(from, to);
 
+  // ⏱ ПЕРІОДОНЕЗАЛЕЖНІ ВИКЛИКИ — ЧЕРЕЗ ТОЙ САМИЙ ЛІНИВИЙ КЕШ, ЩО В «ОГЛЯДІ» (19.11.2026, `#9966`).
+  // Сім викликів нижче беруть аргументом порожній скоуп `{}`: їхня відповідь не залежить ні від
+  // обраного періоду, ні від того, хто дивиться (екран лише для адмін-рівня). Перемикання
+  // день/тиждень/місяць перезапитувало їх щоразу. Ключ кешу будується з аргументів виклику
+  // (`overviewCache.call`), TTL 60 с — дані в базі оновлюються раз на 30 хв.
   const [
     received, receivedPrev, success, paidOnly, expectedZone, awaitingNow, expectedSplit,
     projection, receivedTeams, expectedTeams, convTeams, convMgrs,
@@ -10935,10 +10940,10 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
-    metrics.expectedPaymentsByPlanned({}), money.awaitingNowSnapshot(mScope),
-    expectSplit.expectedZoneSplit({}),
+    overviewCache.call("expectedPaymentsByPlanned", metrics.expectedPaymentsByPlanned, {}), money.awaitingNowSnapshot(mScope),
+    overviewCache.call("expectedZoneSplit", expectSplit.expectedZoneSplit, {}),
     metrics.buildProjection({ from, to, granularity: "month" }, null),
-    money.receivedByTeam(mScope), metrics.expectedZoneByScope({}, "team"),
+    money.receivedByTeam(mScope), overviewCache.call("expectedZoneByScope:team", metrics.expectedZoneByScope, {}, "team"),
     metrics.conversionAdsByTeam(scope, adSources), metrics.conversionAdsByManager(scope, adSources),
     metrics.newRepeatTotals(scope), metrics.newRepeatByScope(scope, "manager"), metrics.newRepeatByScope(scope, "team"),
     money.receivedByChannel(mScope, adSources),
@@ -10949,7 +10954,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     //    (заміряно на проді: серпень 652/1 745 882 і липень 1149/3 285 249 обома шляхами,
     //    лідоген 66/270 194 і 107/339 203 — байт у байт), тож джерело одне на всі пресети.
     metrics.dispatchedByLoadBucket(scope, "month"), metrics.dispatchedByLoadBucket(scope, "month", "leadgen"), metrics.conversionTransferredByMonth(scope),
-    metrics.newToRepeatByMonth({}), metrics.activeBaseByMonth({}), metrics.weeklyRegulars({}),
+    overviewCache.call("newToRepeatByMonth", metrics.newToRepeatByMonth, {}), overviewCache.call("activeBaseByMonth", metrics.activeBaseByMonth, {}), overviewCache.call("weeklyRegulars", metrics.weeklyRegulars, {}),
     metrics.nonTargetLeads(scope, adSources),
     Promise.all(months.map((m) => plans.managerPlan({ month: m }))),
     metrics.funnelByStage(scope),
@@ -11091,7 +11096,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const succByMgr = new Map((await money.successByMgr(mScope)).map((x) => [x.managerId, x]));
   const recvByMgr = new Map((await money.receivedByMgr(mScope)).map((x) => [x.managerId, x]));
   const convByMgr = new Map(convMgrs.map((x) => [x.managerId, x]));
-  const expByMgr = new Map((await metrics.expectedZoneByScope({}, "manager")).map((x) => [x.id, x]));
+  const expByMgr = new Map((await overviewCache.call("expectedZoneByScope:manager", metrics.expectedZoneByScope, {}, "manager")).map((x) => [x.id, x]));
   // #4 два середні чеки (одна параметризована avgCheck): «успішно» = success за період
   // (= succByMgr), «в очікуванні оплат» = ЗНІМОК chainInflight станом на зараз (per mgr+team).
   // #2 очікування за плановою датою — per manager (цей / наступний календарний місяць).

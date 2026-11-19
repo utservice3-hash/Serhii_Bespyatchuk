@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { singleFlight } from "./singleFlight.js";
 import { kyivToday } from "./dates.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING, GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
@@ -310,16 +311,23 @@ function historyFor(links: readonly HandoffLinkInfo[]) {
 }
 
 /** Входи в 142 періоду з угодою менеджера й описом обох угод — усе, крім грошей (їх дає `money.ts`). */
+type HandoffLinkRaw = { pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
+  pz_name: string | null; pz_client: string | null; client_key: string | null; deal_id: string | null; deal_name: string | null;
+  deal_client: string | null; sales_manager: string | null; deal_reason: string | null;
+  closed_day: string | null; plan_pay_day: string | null };
+// ⏱ Три з чотирьох запитів екрана «Лідогенерація» просять передачі за ТЕ САМЕ вікно (початок журналу …
+// кінець періоду): 0,5–0,6 с і 8 195 рядків кожен. Одночасні однакові виклики ділять один запит
+// (`singleFlight`, `#9965`). Скоупу в цієї функції немає — він звужує відповідь пізніше.
+const handoffLinksFlying = new Map<string, Promise<HandoffLinkRaw[]>>();
+
 async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]> {
   const q = handoffLinkQuery(from, to,
     { pz: LEADGEN_STAGE_IDS.pz, qualified: LEADGEN_STAGE_IDS.qualified,
       managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES], genericClientKeys: GENERIC_CLIENT_KEYS, duplicateReason: DUPLICATE_REASON },
     { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC, noteAfterSec: LINK_NOTE_AFTER_SEC });
-  const r = await pool.query<{ pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
-    pz_name: string | null; pz_client: string | null; client_key: string | null; deal_id: string | null; deal_name: string | null;
-    deal_client: string | null; sales_manager: string | null; deal_reason: string | null;
-    closed_day: string | null; plan_pay_day: string | null }>(q.text, q.values);
-  return r.rows.map((x) => ({
+  const rows = await singleFlight(handoffLinksFlying, `${q.text}|${JSON.stringify(q.values)}`,
+    () => pool.query<HandoffLinkRaw>(q.text, q.values).then((r) => r.rows));
+  return rows.map((x) => ({
     pzId: Number(x.pz_id), lgId: x.lg_id, lgTeamId: x.lg_team_id, at: new Date(x.at).getTime(), day: x.day,
     dealId: x.deal_id == null ? null : Number(x.deal_id), clientKey: x.client_key,
     pzName: x.pz_name, pzClient: x.pz_client, dealName: x.deal_name, dealClient: x.deal_client,
