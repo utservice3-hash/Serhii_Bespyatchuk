@@ -4081,8 +4081,15 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
   if (teamId != null) { params.push(teamId); teamAnd = `AND m.team_id = $${params.length}`; }
 
   const r = await pool.query<{ manager_id: number; manager_name: string; client_key: string; name: string; orders: string; revenue: string; last_paid: string; last_activity: string | null; category: string; payment_type: string | null }>(
+    // ⏱ ОСНОВНИЙ МЕНЕДЖЕР — У ТОМУ САМОМУ ПРОХОДІ, ЩО Й АГРЕГАТ КЛІЄНТА (18.11.2026, `#9963`).
+    // Було: підзапит `primary_mgr` з ROW_NUMBER, приєднаний до `agg`; плановик перераховував
+    // віконну функцію на кожного клієнта. Заміряно на проді 16.11.2026: без команди запит не
+    // завершувався за 100 с, тобто «усі команди» в задачі реактивації віддавали 503 після 20 с.
+    // Правило те саме, що в `/repeat-plans-grid` (`#9962`): більше оплачених угод, при рівності — свіжіша.
     `WITH scoped AS (
-       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price, d.payment_type
+       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price, d.payment_type,
+              COUNT(*) OVER (PARTITION BY d.client_key, d.manager_id) AS mgr_orders,
+              MAX(d.created_at_kommo) OVER (PARTITION BY d.client_key, d.manager_id) AS mgr_last
        FROM deals d
        JOIN managers m ON m.id = d.manager_id AND m.is_active
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -4092,30 +4099,23 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
        SELECT client_key,
               (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS name,
               COUNT(*) AS orders, COALESCE(SUM(price),0) AS revenue, MAX(created_at_kommo) AS last_paid,
-              (array_agg(payment_type ORDER BY created_at_kommo DESC))[1] AS payment_type
+              (array_agg(payment_type ORDER BY created_at_kommo DESC))[1] AS payment_type,
+              (array_agg(manager_id ORDER BY mgr_orders DESC, mgr_last DESC))[1] AS manager_id
        FROM scoped GROUP BY client_key
-     ),
-     primary_mgr AS (
-       SELECT client_key, manager_id FROM (
-         SELECT client_key, manager_id,
-                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(created_at_kommo) DESC) AS rn
-         FROM scoped GROUP BY client_key, manager_id
-       ) z WHERE rn = 1
      )
      -- 🔴 ВІДПОВІДАЛЬНИЙ — COALESCE(ЗАКРІПЛЕНИЙ, основний за оплатами), як і скрізь на
      -- екрані клієнтів (рішення власника 04.09.2026: «менеджер, який був зафіксований»).
      -- До 05.09.2026 тут стояв ЛИШЕ основний із угод, тож клієнта з вручну закріпленим
      -- менеджером пропонували НЕ тому — і «менеджер біля клієнта» розходився з
      -- «виконавцем задачі», причому кожна відповідь окремо виглядала правильною.
-     SELECT ${effectiveManagerSql("lo", "pm")} AS manager_id,
+     SELECT ${effectiveManagerSql("lo", "a")} AS manager_id,
             mm.name AS manager_name, a.client_key, a.name, a.orders, a.revenue, a.last_paid,
             a.payment_type,
             (SELECT MAX(last_activity_at) FROM deals dd WHERE dd.client_key = a.client_key) AS last_activity,
             CASE WHEN a.orders = 1 THEN 'oneshot_bg' ELSE 'lapsed' END AS category
      FROM agg a
-     JOIN primary_mgr pm ON pm.client_key = a.client_key
      LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
-     JOIN managers mm ON mm.id = ${effectiveManagerSql("lo", "pm")} AND mm.is_active
+     JOIN managers mm ON mm.id = ${effectiveManagerSql("lo", "a")} AND mm.is_active
      -- ЛИШЕ компанії (ключ по назві). Фізосіб (ключ по телефону) не пропонуємо.
      WHERE a.client_key !~ '^\\d{9,}$'
        AND a.client_key NOT IN (SELECT client_key FROM receivables WHERE client_key IS NOT NULL)

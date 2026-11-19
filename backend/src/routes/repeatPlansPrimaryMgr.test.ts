@@ -78,3 +78,39 @@ test("#9962b ЖИВИЙ: основний менеджер на екрані «�
   assert.deepEqual(r.missing, [], "🔴 на екрані клієнти, яких правило не знає");
   assert.deepEqual(r.wrong, [], "🔴 основний менеджер на екрані не той, що за правилом «більше оплачених угод, при рівності — свіжіша»");
 });
+
+/**
+ * #9963 — КАНДИДАТИ НА РЕАКТИВАЦІЮ ДЛЯ ВСІХ КОМАНД: відповідь Є, і менеджер — за правилом.
+ *
+ * До 18.11.2026 запит без команди не завершувався за 100 с (той самий підзапит `primary_mgr`,
+ * перерахований на кожного клієнта), тобто адмін у задачі реактивації отримував 503 після 20 с.
+ * Закріплених вручну клієнтів оракул пропускає: там менеджера дає `loyalty_overrides`, а не угоди.
+ */
+test("#9963 ЖИВИЙ: кандидати на реактивацію для ВСІХ команд відповідають, менеджер — за правилом", needsApi(), async () => {
+  const { signToken } = await import("../auth/auth.js"); const rbac = await import("../auth/rbac.js");
+  const { pool } = await import("../db/pool.js");
+  await rbac.refreshRoles();
+  const token = signToken({ userId: 0, role: rbac.scopeCompatRole("admin", rbac.getRoleDef("admin")), roleKey: "admin", managerId: null, teamId: null });
+  const res = await fetch(`${API_BASE}/api/dashboard/reactivation-candidates`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(res.status, 200, "🔴 кандидати для всіх команд не відповіли 200 — запит знову не вкладається в тайм-аут");
+  const body = await res.json() as { managers: { managerId: number; clients: { clientKey: string }[] }[] };
+  const o = await pool.query<{ client_key: string; manager_id: number; tie: boolean; mgrs: string }>(
+    `WITH cm AS (
+       SELECT d.client_key, d.manager_id, COUNT(*) AS c, MAX(d.created_at_kommo) AS mx
+         FROM deals d
+         JOIN managers m ON m.id = d.manager_id AND m.is_active
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE d.client_key IS NOT NULL AND psm.funnel_stage = 'paid'
+        GROUP BY d.client_key, d.manager_id),
+     r AS (SELECT cm.*, ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY c DESC, mx DESC) AS rn,
+                  COUNT(*) OVER (PARTITION BY client_key) AS mgrs,
+                  COUNT(*) OVER (PARTITION BY client_key, c, mx) AS same FROM cm)
+     SELECT r.client_key, r.manager_id, (r.same > 1 OR lo.pinned_manager_id IS NOT NULL) AS tie, r.mgrs
+       FROM r LEFT JOIN loyalty_overrides lo ON lo.client_key = r.client_key WHERE r.rn = 1`);
+  const oracle = o.rows.map((x) => ({ ...x, mgrs: Number(x.mgrs) }));
+  const r = primaryMgrMismatches({ teams: [{ managers: body.managers }] }, oracle);
+  assert.ok(r.seen >= 100, `🔴 кандидатів лише ${r.seen} — звіряти нема чого, це провал, а не успіх`);
+  assert.deepEqual(r.dup, [], "🔴 кандидат стоїть під двома менеджерами");
+  assert.deepEqual(r.missing, [], "🔴 серед кандидатів клієнти, яких правило не знає");
+  assert.deepEqual(r.wrong, [], "🔴 кандидата пропонують не тому менеджеру, що за правилом");
+});
