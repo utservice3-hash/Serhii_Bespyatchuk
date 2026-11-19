@@ -7,8 +7,8 @@
  * три плитки «Рахунок → Оплата → Документи», форма відкривається кнопкою «Виставити рахунок». Правила форми
  * (організації, ПДВ, послуги, дати) приходять із сервера, і сервер перевіряє їх ще раз — вікно лише підказує.
  * Версія 0.4 (доробки 1С від 29.10.2026): кілька рахунків в угоді (кожна форма — свій `requestId`), «Змінити» в день
- * виставлення без оплати, ФОП Беспятчук з вибором банку з 1С, акт з реалізації. В угоді, яку веде Genesis, вікно рахунку
- * не виставляє (одна угода — одна система). ТТН у вікні немає: її формують у Конструкторі дашборда (Роман, 30.10.2026).
+ * виставлення без оплати, ФОП Беспятчук з вибором банку з 1С, акт з реалізації. З 0.6.6 (19.11.2026, Genesis упав)
+ * угода, де працював Genesis, — звичайна: рахунки Genesis зверху окремою плиткою (рахунок і акт з 1С), нові — тут. ТТН у вікні немає: її формують у Конструкторі дашборда (Роман, 30.10.2026).
  * Версія 0.6.0 (доробки 1С від 11.11.2026): «Фізособа без коду» — ПІБ і телефон з контакту угоди, 1С шукає клієнта за
  * телефоном; дата акту — з поля угоди «Дата выгрузки (Дата акта)» і з плитки «Документи», коли завгодно, навіть після
  * оплати (у формі рахунку її більше немає).
@@ -460,23 +460,27 @@ define(["jquery"], function ($) {
         + "<button class='btn main' data-z1c='reqsend'>" + (m.manual ? "Надіслав" : "Скопіювати для Telegram") + "</button></span></div></div></div>";
     }
 
-    /** Угода Genesis: лише пояснення й номер рахунку Genesis — без плиток «рахунку немає» і без кнопок. */
+    /**
+     * Рахунки Genesis цієї угоди (0.6.6, 19.11.2026: Genesis упав, звернення №124). Кожен — рахунок і акт з 1С,
+     * з печаткою й без; лише скачати. Нові рахунки в цій угоді виставляються тут же, плитками нижче.
+     */
     function genesisView() {
-      var d = state.data, nums = d.genesisNumbers || [];
-      return "<div class='step' style='margin-top:4px'><div class='h'><span>Рахунок через Genesis</span>" + chip({ k: "wait", t: "Genesis" }) + "</div>"
-        + (nums.length ? "<div class='big'>№" + nums.map(esc).join(", №") + "</div>" : "")
-        + "<div class='mut'>Рахунки, оплати й акти цієї угоди — у вкладці «Заказ 1С» (Genesis).</div></div>";
+      var nums = state.data.genesisNumbers || [];
+      if (!nums.length) return "";
+      return "<div class='step' style='margin:4px 0 12px'><div class='h'><span>Рахунки Genesis</span>" + chip({ k: "wait", t: "Genesis" }) + "</div>"
+        + nums.map(function (n) {
+          var b = function (doc, stamp, t) { return "<button class='btn sm' data-z1c='gdoc' data-num='" + esc(n) + "' data-doc='" + doc + "' data-stamp='" + stamp + "'>" + t + "</button>"; };
+          return "<div class='row' style='gap:6px;flex-wrap:wrap;align-items:center'><b>№" + esc(n) + "</b>"
+            + b("pdf", 1, "Рахунок") + b("pdf", 0, "без печатки") + b("act", 1, "Акт") + b("act", 0, "Акт без печатки") + "</div>";
+        }).join("")
+        + "<div class='mut'>Рахунки, виставлені раніше через Genesis: файли беремо з 1С. Новий рахунок виставляйте тут.</div></div>";
     }
 
     function render() {
       var d = state.data;
       if (!d) return;
-      if (d.owner === "genesis") {
-        root().html("<div class='" + NS + (isDark() ? " dark" : "") + "'><style>" + CSS + "</style>" + head() + genesisView() + "</div>");
-        return;
-      }
       var many = invoices().length > 1;
-      root().html("<div class='" + NS + (isDark() ? " dark" : "") + "'><style>" + CSS + "</style>" + head() + steps()
+      root().html("<div class='" + NS + (isDark() ? " dark" : "") + "'><style>" + CSS + "</style>" + head() + genesisView() + steps()
         + (state.form ? formHtml() : "")
         + (state.msg ? "<div class='msg " + state.msg.kind + "'>" + esc(state.msg.text) + "</div>" : "")
         + (many ? "<div style='margin-top:16px'><b>Усі рахунки угоди</b><table><tr><th>№</th><th>Дата</th><th>Організація</th><th>Сума</th><th>Оплата</th><th></th></tr>"
@@ -670,6 +674,7 @@ define(["jquery"], function ($) {
       else if (a === "reattach") { reattach(String(b.data("uid"))); return; }
       else if (a === "pdf") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/pdf?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "act") { download("/lead/" + leadId() + "/invoice/" + b.data("uid") + "/act?stamp=" + b.data("stamp"), "application/pdf"); return; }
+      else if (a === "gdoc") { download("/lead/" + leadId() + "/genesis/" + encodeURIComponent(String(b.data("num"))) + "/" + b.data("doc") + "?stamp=" + b.data("stamp"), "application/pdf"); return; }
       else if (a === "req") state.modal = { uid: String(b.data("uid")), text: "" };
       else if (a === "mclose") state.modal = null;
       else if (a === "reqsend") { sendRequest(); return; }

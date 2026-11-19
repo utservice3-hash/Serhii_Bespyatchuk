@@ -5,7 +5,7 @@ import path from "node:path";
 import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
 import { KOMMO_FIELDS, moneyOf } from "./kommoApi.js";
-import { genesisDealFields as gdf, codeKind } from "./invoice.js";
+import { genesisDealFields as gdf, codeKind, invoiceUidByNumber } from "./invoice.js";
 import { sameDealFields } from "./dealFields.js";
 import {
   actPdfFrom1c, actRefusal, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, canEdit, customerInfoFrom1c, dealFieldsOf,
@@ -451,7 +451,7 @@ test("#7121 ДАТА АКТУ Й КОМЕНТАР → 1С (deal_fields): дат�
     "порожній deal_fields пішов у 1С");
 });
 
-test("#7122 ОДНА УГОДА — ОДНА СИСТЕМА: чужий «Номер заказа» або чужий рахунок 1С → Genesis; сервер відмовляє до запиту в 1С; своя угода — номер і тег", () => {
+test("#7122 УГОДА GENESIS: чужий «Номер заказа» або чужий рахунок 1С → Genesis лише для автозапису оплати; з 19.11.2026 виставляти не заважає; своя угода — номер (номер Genesis не перетираємо) і тег", () => {
   assert.equal(dealOwner({ orderNo: "", ourNumbers: [], onecNumbers: [] }), "free");
   assert.equal(dealOwner({ orderNo: "000009043", ourNumbers: ["000009043"], onecNumbers: ["9043"] }), "widget", "своя угода визнана чужою");
   assert.equal(dealOwner({ orderNo: "000008587", ourNumbers: [], onecNumbers: [] }), "genesis", "угода з «Номером заказа» Genesis визнана вільною");
@@ -459,11 +459,9 @@ test("#7122 ОДНА УГОДА — ОДНА СИСТЕМА: чужий «Ном
   assert.equal(dealOwner({ orderNo: "000009043", ourNumbers: ["000009043"], onecNumbers: ["000009043", "000009100"] }), "genesis",
     "угода, куди Genesis дописав свій рахунок, лишилась за віджетом");
   const m = MOUNT();
-  for (const [from, to, call] of [['r.post("/lead/:leadId/invoice"', "r.post(", "createInvoiceIn1c("], ['r.post("/lead/:leadId/customer"', "r.post(", "createCustomerIn1c("]] as const) {
-    const src = routeSrc(m, from, to);
-    const guard = src.indexOf('=== "genesis") return res.status(409)');
-    assert.ok(guard > 0 && guard < src.indexOf(call), `${from}: угода Genesis не відсікається до запиту в 1С`);
-  }
+  // 19.11.2026 Genesis упав, Роман: «давай дозволяти виставляти угоду де працював генезис».
+  assert.doesNotMatch(m, /=== "genesis"\) return res\.status\(409\)/, "угоду, де працював Genesis, досі не пускають виставити рахунок");
+  assert.doesNotMatch(m, /canCreate: allowed\.ok && owner/, "кнопку «Виставити» досі вимикає угода Genesis");
   assert.deepEqual(claimPatch(5, { orderNo: "", tags: [] }, "000009043"), { id: 5,
     custom_fields_values: [{ field_id: 2096315, values: [{ value: "000009043" }] }], tags_to_add: [{ name: WIDGET_TAG }] });
   assert.equal(claimPatch(5, { orderNo: "000009043", tags: [WIDGET_TAG] }, "000009100"), null, "«Номер заказа» перетерто другим рахунком");
@@ -577,7 +575,7 @@ test("#7131 ПЛИТКА «ОПЛАТА» — ВСЯ УГОДА: сума всі
   const steps = js.slice(js.indexOf("function steps()"), js.indexOf("function seg("));
   assert.match(steps, /var dp = inv \? dealPay\(\) : null;/, "плитка оплати рахує лише останній рахунок");
   assert.doesNotMatch(steps, /chip\(payChip\(p\)\)/, "у плитці лишився стан одного рахунку");
-  assert.match(js, /if \(d\.owner === "genesis"\) \{[\s\S]{0,200}genesisView\(\)/, "угода Genesis показує плитки «рахунку немає»");
+  assert.match(js, /head\(\) \+ genesisView\(\) \+ steps\(\)/, "рахунки Genesis не над плитками віджета");
 });
 
 test("#7132 ОБРИВ ЗВʼЯЗКУ: PDF — ще одна спроба після «fetch failed»; відповідь Kommo з кодом не повторюємо; друга невдача — помилка", async () => {
@@ -731,8 +729,7 @@ test("#7138 ФІЗОСОБА БЕЗ КОДУ: ПІБ і телефон — як 
   assert.match(urls[0], /customerInfo\?uid=U-1$/);
   const m = MOUNT();
   const person = routeSrc(m, 'r.post("/lead/:leadId/person"', "r.post(");
-  const guard = person.indexOf('=== "genesis") return res.status(409)');
-  assert.ok(guard > 0 && guard < person.indexOf("createCustomerIn1c("), "угода Genesis не відсікається до створення фізособи в 1С");
+  // Угода Genesis з 19.11.2026 фізособу не блокує — див. #7122.
   assert.ok(person.indexOf("buildPersonCustomerBody(") < person.indexOf("createCustomerIn1c("), "ПІБ не перевіряється до запиту в 1С");
   const create = routeSrc(m, 'r.post("/lead/:leadId/invoice"', "r.post(");
   assert.match(create, /if \(isPerson\) \{\s*const p = await personOfLead\(pool, leadId\);/, "uid фізособи береться не з журналу угоди");
@@ -808,7 +805,7 @@ test("#7143 PDF ЗНОВУ В УГОДУ: примітку з рахунком �
   assert.match(route, /noteInvoice\(/, "примітка не тим самим підписом, що при виставленні");
   assert.match(route, /markInvoiceAttached\(/, "помилка прикріплення не знімається після успіху");
   assert.doesNotMatch(route, /createInvoiceIn1c|updateInvoiceIn1c/, "повтор PDF чіпає рахунок у 1С");
-  assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.3");
+  assert.match(JSON.parse(WIDGET("manifest.json")).widget.version, /^0\.6\.[3-9]$/);
   assert.doesNotMatch(srv, /attachError = attachError \?\? `угода Kommo/, "збій полів угоди знову показується як «PDF немає» (№9696)");
   assert.match(js, /reattachBtn\(inv, "link mut"\)/, "кнопка не внизу плитки рахунку");
   assert.match(js, /"Повернути PDF рахунку в угоду<\/button>"/, "назва кнопки незрозуміла");
@@ -871,4 +868,30 @@ test("#7146 ІНОЗЕМНИЙ КЛІЄНТ: компанія з не-украї
   await customerInfoFrom1c("https://1c", "LT100010061716", fake);
   assert.match(urls[1], /customerInfo\?edrpou=LT100010061716$/, "код з літерами не шукається");
   assert.doesNotMatch(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "zakaz1c", "invoice.ts"), "utf8"), /customerInfo\?name=|`name=\$\{/, "пошук за назвою — у 1С дублі");
+});
+
+test("#7147 РАХУНКИ GENESIS У ВІКНІ: рахунок і акт з 1С з печаткою й без — лише номери цієї угоди, лише скачати (ні в угоду, ні в 1С); код рахунку 1С — за номером; версія архіву 0.6.6", async () => {
+  // 17.11.2026, звернення №124 (Гаркушина): Genesis упав — у старих угодах ні рахунку, ні акта, ні «без печатки».
+  const urls: string[] = [];
+  const fake = (async (u: string) => { urls.push(String(u));
+    return new Response(JSON.stringify({ state: true, invoice_uid: "d50cb101-df3f-11f1-b5e8-000d181848ac", invoice_number: "000009567" }), { status: 200 }); }) as never;
+  const ok = await invoiceUidByNumber("https://1c", "000009567", fake);
+  assert.ok(ok.ok && ok.uid === "d50cb101-df3f-11f1-b5e8-000d181848ac");
+  assert.match(urls[0], /\/invoicePdf\?number=000009567$/, "код рахунку шукаємо не за номером або тягнемо цілий PDF");
+  const miss = await invoiceUidByNumber("https://1c", "1", (async () => new Response(JSON.stringify({ state: false, message: "Не знайдено" }), { status: 200 })) as never);
+  assert.ok(!miss.ok && /Не знайдено/.test(miss.why));
+  const m = MOUNT();
+  const route = routeSrc(m, 'r.get("/lead/:leadId/genesis/:number/:doc"', "r.post(");
+  assert.ok(route.length > 100, "маршруту рахунків Genesis немає");
+  assert.match(route, /\(await ownerInfo\(leadId, lead\)\)\.foreign\.includes\(number\)\) return res\.status\(404\)/, "можна скачати рахунок не з цієї угоди");
+  assert.doesNotMatch(route, /attachActOnce|attachPdfToLead|patchLeads|addLeadNote|createInvoiceIn1c|updateInvoiceIn1c/, "скачування рахунку Genesis щось пише");
+  assert.match(route, /actPdfFrom1c\(onecServiceBase\(\), found\.uid, stamp\)/);
+  assert.match(route, /invoicePdfFrom1c\(onecServiceBase\(\), found\.uid, stamp\)/);
+  assert.match(m, /genesisNumbers: info\.foreign,/, "номери Genesis показуються лише в «чужій» угоді");
+  const js = WIDGET("script.js");
+  assert.match(js, /data-z1c='gdoc'/);
+  for (const t of ["Рахунок", "без печатки", "Акт", "Акт без печатки"]) assert.ok(js.includes(`, "${t}")`), `немає кнопки «${t}»`);
+  assert.match(js, /"\/genesis\/" \+ encodeURIComponent\(String\(b\.data\("num"\)\)\)/);
+  assert.doesNotMatch(js, /у вкладці «Заказ 1С»/, "вікно досі шле у вкладку Genesis, якої вже немає");
+  assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.6");
 });
