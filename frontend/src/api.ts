@@ -1419,6 +1419,9 @@ export interface AdsClient {
   deals: number;                  // успішних угод від першого ліда
   margin: number;                 // LTV: маржа від першого ліда до сьогодні — і не з реклами теж
   repeatMargin: number;           // з неї — повторні замовлення (усе після першої оплаченої угоди)
+  /** Картка клієнта в Kommo: компанія → контакт → угода (`core/adClientLinks.ts`); null — у CRM нічого не знайдено. */
+  kommoUrl: string | null;
+  kommoKind: "company" | "contact" | "deal" | null;
 }
 /** Агрегат групи клієнтів (кампанія / когорта / разом) — рахує сервер (`core/adClientsFold.ts`). */
 export interface AdsClientsAgg {
