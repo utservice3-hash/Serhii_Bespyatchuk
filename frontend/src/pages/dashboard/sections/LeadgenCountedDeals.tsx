@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchLeadgenStageDeals, fetchLeadgenLtvClients, type LeadgenStageDeal, type LeadgenStageDealsResp, type LeadgenLtvClientsResp } from "../../../api";
-import { ClientTable } from "./LeadgenLtvBlock";
+import { ClientTable, SourcePick } from "./LeadgenLtvBlock";
 
 /**
  * 🔎 «ЯКІ УГОДИ РАХУЄМО» (рішення власника 16.10.2026, регламент лідгенів §14, §16): окремий екран вкладки «Лідогенерація»
@@ -33,9 +33,11 @@ export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, peo
   // 💎 «Клієнти LTV» (ТЗ LTV 28.10.2026, п. 5.4) — за весь час, від періоду не залежить; без вибраного лідгена — усі.
   const [ltv, setLtv] = useState<LeadgenLtvClientsResp | null>(null);
   const [ltvErr, setLtvErr] = useState<string | null>(null);
+  /** Фільтр «Джерело» у «Клієнтах LTV» (задача 8719). */
+  const [ltvSrc, setLtvSrc] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    setLtvErr(null);
+    setLtvErr(null); setLtvSrc(null);
     fetchLeadgenLtvClients({ managerId: own || managerId == null ? undefined : managerId })
       .then((r) => { if (alive) setLtv(r); })
       .catch((e) => { if (alive) { setLtv(null); setLtvErr(e?.response?.data?.error ?? "Не вдалося завантажити клієнтів LTV."); } });
@@ -115,7 +117,10 @@ export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, peo
           {ltvErr && <div style={{ color: "var(--danger)", fontSize: 13 }}>{ltvErr}</div>}
           {!ltv && !ltvErr && <div style={{ color: MUTED, fontSize: 13 }}>Завантажую…</div>}
           {ltv && ltv.clients.length === 0 && <div style={{ color: MUTED, fontSize: 13 }}>Клієнтів, приведених цим лідгеном, ще немає.</div>}
-          {ltv && ltv.clients.length > 0 && <ClientTable rows={ltv.clients} wide />}
+          {ltv && ltv.clients.length > 0 && <>
+            <div><SourcePick rows={ltv.clients} value={ltvSrc} onChange={setLtvSrc} /></div>
+            <ClientTable rows={ltvSrc == null ? ltv.clients : ltv.clients.filter((c) => c.source === ltvSrc)} wide />
+          </>}
           {ltv && ltv.pool.length > 0 && <>
             <div style={{ fontWeight: 650, marginTop: 6 }}>Повернуті з пулу <span style={{ color: MUTED, fontWeight: 400, fontSize: 12.5 }}>· маржа лише після повернення, в основний LTV не входить</span></div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>

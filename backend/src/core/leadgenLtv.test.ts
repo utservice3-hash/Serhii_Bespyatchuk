@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   pickHandoffActor, pickLeadgenClients, firstSuccessOf, aggLtv, cohortsOf, unlinkedByMonth, ltvAccess, kyivDay, ltvGroupOf, type LtvRow,
+  ltvSourceLabel, bySourceOf, SOURCE_UNSET, SOURCE_NO_LEAD,
 } from "./leadgenLtvRules.js";
 
 /**
@@ -229,4 +230,100 @@ test("#3775 ЖИВИЙ SQL LTV: люди + «Інші» = відділ, пул �
   await c.query(`INSERT INTO deal_fin_fields (kommo_id, income) VALUES (9001, 15000)`);
   const { successIncomeByClientKey } = await import("./money.js");
   assert.deepEqual(await successIncomeByClientKey(["a"]).then((m) => m.get("a")), { income: 15000, missing: 1 }, "🔴 оборот не сума рахунку тих самих угод або без сум мовчить");
+});
+
+/**
+ * #8719 — ЗВІДКИ ПРИЙШОВ КЛІЄНТ ЛІДГЕНА: підпис джерела по обидва боки кожної межі. Ліда немає → «лід не знайдено»; поле
+ * порожнє чи з пробілів → «не проставлене» (два невідомі різні); LinkedIn / Prozorro — за мітками ядра, і мітка перебиває текст
+ * поля; LinkedIn перед Prozorro; решта — текст поля як у Kommo, без зведення реактивацій. «За джерелом»: кожен клієнт рівно раз,
+ * Σ рядків = `aggLtv` усіх (клієнти, LTV, постійні, працюють, склад); невідомі — внизу.
+ * 🧨 Червоніє, якщо порожнє джерело лишити порожнім, злити два невідомі, ігнорувати тег, звести реактивації або загубити клієнта.
+ */
+test("#8719 ДЖЕРЕЛО КЛІЄНТА ЛІДГЕНА: невідоме словами, LinkedIn/Prozorro за міткою, Σ «За джерелом» = шапка", () => {
+  const L = (o: Partial<{ found: boolean; linkedin: boolean; prozorro: boolean; source: string | null }>) =>
+    ltvSourceLabel({ found: true, linkedin: false, prozorro: false, source: null, ...o });
+  assert.equal(L({ found: false, source: "Холодная база" }), SOURCE_NO_LEAD, "🔴 лід, якого немає в дашборді, отримав джерело");
+  assert.equal(L({ source: null }), SOURCE_UNSET, "🔴 порожнє джерело не підписане словами");
+  assert.equal(L({ source: "   " }), SOURCE_UNSET, "🔴 джерело з пробілів прочиталось як значення");
+  assert.notEqual(SOURCE_UNSET, SOURCE_NO_LEAD, "🔴 два різні невідомі злиті в один підпис");
+  assert.equal(L({ source: " Холодная база " }), "Холодная база", "🔴 текст поля не той (пробіли по краях)");
+  assert.equal(L({ source: null, linkedin: true }), "LinkedIn", "🔴 лід з тегом LinkedIn і порожнім полем — «не проставлене»");
+  assert.equal(L({ source: "Реактивация звонком", linkedin: true }), "LinkedIn", "🔴 мітка LinkedIn не перебила текст поля");
+  assert.equal(L({ source: "AI тендер", prozorro: true }), "Prozorro", "🔴 Prozorro не за міткою ядра");
+  assert.equal(L({ linkedin: true, prozorro: true }), "LinkedIn", "🔴 LinkedIn і Prozorro разом — не LinkedIn, як у Звіті");
+  assert.equal(L({ source: "Реактивація закриті" }), "Реактивація закриті", "🔴 реактивації зведені в одне значення");
+
+  const R = (k: string, source: string, ltv: number, deals: number, state: string | null): LtvRow & { source: string } =>
+    ({ clientKey: k, ltv, deals, turnover: 0, firstDay: "2026-10-05", growth: 0, state, source });
+  const rows = [R("a", "Холодная база", 500, 2, "active"), R("b", SOURCE_UNSET, 9000, 3, "sleeping"), R("c", "Реактивация звонком", 3000, 1, "active"),
+    R("d", "Холодная база", 700, 1, null), R("e", "Реактивація закриті", 100, 2, "lost"), R("f", SOURCE_NO_LEAD, 50, 1, null)];
+  const all = aggLtv(rows, "2026-10-01", "2026-10-31");
+  const by = bySourceOf(rows, "2026-10-01", "2026-10-31");
+  const sum = (f: (x: typeof by[number]) => number) => by.reduce((x, r) => x + f(r), 0);
+  assert.deepEqual([sum((r) => r.clients), sum((r) => r.ltv), sum((r) => r.repeat), sum((r) => r.activeNow)], [all.clients, all.ltv, all.repeat, all.activeNow],
+    "🔴 Σ «За джерелом» ≠ шапці (клієнти, LTV, постійні, працюють)");
+  for (const g of ["rw", "rs", "ow", "os"] as const) assert.equal(sum((r) => r.mix[g]), all.mix[g], `🔴 склад «${g}» не сходиться`);
+  assert.deepEqual(by.map((r) => r.source), ["Реактивация звонком", "Холодная база", "Реактивація закриті", SOURCE_UNSET, SOURCE_NO_LEAD],
+    "🔴 порядок: більший LTV вище, невідомі внизу (навіть із найбільшим LTV)");
+  assert.deepEqual(by.find((r) => r.source === "Холодная база")!.repeatPct, 50, "🔴 % повторних джерела не той");
+  assert.deepEqual(by.map((r) => r.known), [true, true, true, false, false], "🔴 невідоме не позначене як невідоме");
+});
+
+/**
+ * #8719b — ЖИВИЙ SQL ДЖЕРЕЛА: джерело береться з ліда, який лідген ПЕРЕДАВ (`pz_id`), а не з першої угоди менеджера
+ * (`first_deal_id`), — у фікстурі в них різні джерела; тег LinkedIn на ліді з порожнім полем → LinkedIn; «AI тендер» → Prozorro;
+ * ліда в базі немає → «лід не знайдено». «За джерелом» у відповіді блока: Σ = `totals` і для відділу, і для лідгена (межа та сама).
+ * 🧨 Червоніє, якщо джойнити `first_deal_id`, писати свою перевірку LinkedIn за текстом поля або загубити рядок розкладу.
+ */
+test("#8719b ЖИВИЙ SQL ДЖЕРЕЛА: з ліда передачі (pz_id), не з першої угоди; мітки ядра; Σ «За джерелом» = totals", async (t) => {
+  const l = await liveDb();
+  if ("skip" in l) return t.skip(l.skip);
+  const { c } = l;
+  await c.query(`INSERT INTO managers (id, name, kommo_user_id, team_id, is_active) VALUES (8719, 'Лідген 8719', 87190, 50011, true) ON CONFLICT (id) DO NOTHING`);
+  await c.query(`INSERT INTO deals (kommo_id, pipeline_id, status_id, client_source, tags) VALUES
+    (871901, 8921936, 142, 'Холодная база', NULL), (871902, 8921932, 142, 'uts.ua', NULL),
+    (871903, 8921936, 142, '', ARRAY['LinkedIn']), (871904, 8921936, 142, 'AI тендер', NULL), (871906, 8921936, 142, NULL, NULL)`);
+  const ins = (k: string, pz: number, first: number) =>
+    c.query(`INSERT INTO leadgen_ltv_clients (client_key, lg_manager_id, actor_kommo_user_id, pz_id, handoff_day, first_deal_id, first_day, deals, ltv, turnover)
+             VALUES ($1, 8719, 87190, $2, '2026-10-01', $3, '2026-10-02', 2, 1000, 0)`, [k, pz, first]);
+  await ins("s8719a", 871901, 871902);   // лід — «Холодная база», перша угода менеджера — «uts.ua»
+  await ins("s8719b", 871903, 871902);   // тег LinkedIn, поле порожнє
+  await ins("s8719c", 871904, 871902);   // «AI тендер»
+  await ins("s8719d", 871905, 871902);   // ліда в базі немає
+  await ins("s8719e", 871906, 871902);   // поле NULL
+  const { leadgenLtvClients, leadgenLtvView } = await import("./leadgenLtv.js");
+  const cl = await leadgenLtvClients({ kind: "all" }, 8719);
+  const src = Object.fromEntries(cl.clients.map((x) => [x.clientKey, x.source]));
+  assert.deepEqual(src, { s8719a: "Холодная база", s8719b: "LinkedIn", s8719c: "Prozorro", s8719d: SOURCE_NO_LEAD, s8719e: SOURCE_UNSET },
+    "🔴 джерело не з ліда передачі або мітки не ядра");
+  assert.deepEqual(cl.clients.filter((x) => !x.sourceKnown).map((x) => x.clientKey).sort(), ["s8719d", "s8719e"], "🔴 невідоме не позначене");
+  for (const [scope, pick] of [[{ kind: "all" } as const, null], [{ kind: "own", managerId: 8719 } as const, null]] as const) {
+    const v = await leadgenLtvView(scope, "2026-10-01", "2026-10-31", pick);
+    const sum = (f: (x: typeof v.bySource[number]) => number) => v.bySource.reduce((a, r) => a + f(r), 0);
+    assert.deepEqual([sum((r) => r.clients), sum((r) => r.ltv), sum((r) => r.repeat), sum((r) => r.activeNow)],
+      [v.totals.clients, v.totals.ltv, v.totals.repeat, v.totals.activeNow], `🔴 ${scope.kind}: Σ «За джерелом» ≠ totals`);
+    assert.ok(v.bySource.length > 0, `🔴 ${scope.kind}: розкладу немає`);
+  }
+  const own = await leadgenLtvView({ kind: "own", managerId: 8719 }, "2026-10-01", "2026-10-31", null);
+  assert.equal(own.bySource.find((r) => r.source === "Холодная база")?.clients, 1, "🔴 лідген не бачить свого клієнта в розкладі");
+  assert.ok(!own.bySource.some((r) => r.source === "uts.ua"), "🔴 у розклад потрапило джерело першої угоди менеджера");
+});
+
+/**
+ * #8719c — ФРОНТ ДЖЕРЕЛА: колонка «Звідки прийшов» у спільній таблиці клієнтів (блок і вкладка «Клієнти LTV»), фільтр «Джерело»
+ * в обох місцях, таблиця «За джерелом» з рядком «Разом» перед «По лідгенах». Підпис невідомого фронт НЕ пише сам — лише сервер.
+ * 🧨 Червоніє, якщо прибрати колонку, фільтр чи таблицю або завести на фронті свою копію «не проставлене».
+ */
+test("#8719c ФРОНТ ДЖЕРЕЛА: колонка, фільтр у блоці й «Клієнтах LTV», таблиця «За джерелом»; підпис невідомого — з сервера", () => {
+  const blk = FSRC("pages/dashboard/sections/LeadgenLtvBlock.tsx");
+  assert.match(blk, /<th style=\{th\}>Звідки прийшов<\/th>/, "🔴 у таблиці клієнтів немає колонки «Звідки прийшов»");
+  assert.match(blk, /\{c\.source\}<\/td>/, "🔴 колонка не показує джерело клієнта");
+  assert.match(blk, /<SourcePick rows=\{base\}/, "🔴 немає фільтра «Джерело» у списку клієнтів лідгена");
+  const st = blk.indexOf("<SourceTable rows={d.bySource}"), lg = blk.indexOf("По лідгенах");
+  assert.ok(st > 0 && st < lg, "🔴 таблиця «За джерелом» не перед «По лідгенах»");
+  assert.match(blk, /line\("total", "Разом", total/, "🔴 у таблиці «За джерелом» немає рядка «Разом»");
+  const cd = FSRC("pages/dashboard/sections/LeadgenCountedDeals.tsx");
+  assert.match(cd, /<SourcePick rows=\{ltv\.clients\}/, "🔴 немає фільтра «Джерело» у вкладці «Клієнти LTV»");
+  for (const [f, src] of [["LeadgenLtvBlock.tsx", blk], ["LeadgenCountedDeals.tsx", cd]] as const)
+    assert.ok(!/не проставлен/.test(src), `🔴 ${f}: своя копія підпису невідомого джерела (має йти з сервера)`);
 });

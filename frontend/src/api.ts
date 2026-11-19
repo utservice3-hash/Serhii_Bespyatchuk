@@ -253,13 +253,18 @@ export interface LtvClient {
   clientKey: string; name: string; firstDay: string; firstDealId: number; firstDealUrl: string; handoffDay: string;
   handedBy: string; deals: number; ltv: number; turnover: number; ownerName: string | null; segment: string | null; state: string | null;
   marks: ("merged" | "pool")[];
+  /** Звідки прийшов: «Источник клиента» ліда, який передав лідген (задача 8719); невідоме — словами з сервера. */
+  source: string; sourceKnown: boolean;
 }
+/** Рядок «За джерелом» (задача 8719): той самий підсумок, що й шапка блока; Σ рядків = `totals`. */
+export interface LtvSourceRow extends LtvAgg { source: string; known: boolean }
 export interface LtvPerson { managerId: number | null; name: string; dismissed: boolean; agg: LtvAgg; pool: { clients: number; ltv: number }; top: LtvClient[] }
 export interface LtvCohort extends LtvAgg { ym: string; warn: boolean; unlinkedPct: number | null }
 export interface LeadgenLtvResp {
   builtAt: string | null; from: string; to: string; totals: LtvAgg; pool: { clients: number; ltv: number };
   people: LtvPerson[]; others: { agg: LtvAgg; pool: { clients: number; ltv: number }; people: LtvPerson[] } | null;
   cohorts: LtvCohort[]; unknownActors: number; turnoverMissing: number;
+  bySource: LtvSourceRow[];
 }
 export async function fetchLeadgenLtv(params: { from: string; to: string; managerId?: number }): Promise<LeadgenLtvResp> {
   const { data } = await api.get<LeadgenLtvResp>("/dashboard/leadgen-ltv", { params });
