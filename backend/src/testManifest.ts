@@ -136,6 +136,7 @@ export const MANIFEST_FILES: string[] = [
   "core/stuckRule.test.js",
   "routes/repeatPlansPrimaryMgr.test.js",
   "core/hiddenOverviewFetch.test.js",
+  "db/callsKyivDayIndex.test.js",
   "core/stuckTalk.test.js",
   "core/reactivation.test.js",
   "core/reactivationPack.test.js",
@@ -2160,6 +2161,8 @@ export const MANIFEST_TESTS: string[] = [
   "#9963 ЖИВИЙ: кандидати на реактивацію для ВСІХ команд відповідають, менеджер — за правилом",
   // core/hiddenOverviewFetch.test.ts — запити прихованого «Огляду» (16.11.2026)
   "#9961 ЗАПИТИ «ОГЛЯДУ» НЕ ЙДУТЬ З ІНШИХ ЕКРАНІВ — і йдуть з «Огляду»",
+  // db/callsKyivDayIndex.test.ts — індекс «дата дзвінка по-Києву» (19.11.2026)
+  "#9964 ІНДЕКС «ДАТА ДЗВІНКА ПО-КИЄВУ»: є в схемі, і фільтр періоду ним користується",
   // core/stuckTalk.test.ts — Фаза 3: поріг розмови, анкер від синку, Ringostat
   "#73 ДЗВІНОК КОРОТШИЙ ЗА 10 c НЕ Є АКТИВНІСТЮ",
   "#73b ВІК РАХУЄТЬСЯ ВІД СИНКУ: застарілий синк НЕ роздуває лічильник",

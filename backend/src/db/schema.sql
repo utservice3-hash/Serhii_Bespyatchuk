@@ -872,6 +872,13 @@ CREATE INDEX IF NOT EXISTS idx_rc_client_key ON ringostat_calls(client_key, call
 CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_manager    ON ringostat_calls(manager_id, calldate DESC) WHERE manager_id IS NOT NULL;
+-- ⏱ «ДАТА ДЗВІНКА ПО-КИЄВУ» (19.11.2026, гейт #9964). Усі фільтри періоду пишуться як
+-- `(calldate AT TIME ZONE 'Europe/Kyiv')::date BETWEEN …`, і жоден з індексів вище цей вираз не
+-- обслуговує: заміряно на проді 16.11.2026 — кожен такий запит читав усю таблицю (23–25 тис.
+-- блоків, 529 тис. рядків) заради ~15 тис. рядків місяця; у `/report-plan` таких запитів 3–4.
+-- Вираз індексу мусить збігатися з виразом у запитах ДОСЛІВНО — інакше плановик його не візьме.
+-- 🔴 Revert коду індекс НЕ прибирає: відкат — лише `DROP INDEX idx_rc_kyiv_day`.
+CREATE INDEX IF NOT EXISTS idx_rc_kyiv_day ON ringostat_calls (((calldate AT TIME ZONE 'Europe/Kyiv')::date));
 
 -- 📞 СПІЛЬНІ НОМЕРИ (задача 9061, 18.11.2026). Номер, що є в контактах угод 2+ клієнтів: по рядку на (клієнт,
 -- номер) і скільки всього клієнтів у номера (`n`). `ringostat_calls.client_key` віддає дзвінок ОДНОМУ клієнту
