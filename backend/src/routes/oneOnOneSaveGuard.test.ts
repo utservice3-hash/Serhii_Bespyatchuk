@@ -221,7 +221,8 @@ test("#1761b ЧЕРНЕТКА В СЕКЦІЇ: звірка на заванта�
   assert.match(src, /const restore = draftToRestore\(stored, draftKey\(loaded\), r\.updated_at \?\? null, new Date\(\)\);/, "🔴 завантаження не звіряється з чернеткою");
   assert.match(src, /setNotes\(shown\.notes\); setSavedAt\(r\.updated_at \?\? null\); snap\(loaded\);/, "🔴 знімок узято з відновленого, а не з сервера — відновлене виглядає збереженим");
   assert.match(src, /if \(!key \|\| draftFor\.current !== key\) return;/, "🔴 чернетка пишеться під ключ запису, який ще не звірено");
-  assert.match(src, /setTimeout\(\(\) => ls\.set\(key, JSON\.stringify\(\{ at: new Date\(\)\.toISOString\(\), draft \}\)\)/, "🔴 набране не пишеться в браузер");
+  // 19.11.2026: у записі зʼявилась `base` (від яких серверних відповідей почалась чернетка, `#9992`); твердження те саме.
+  assert.match(src, /setTimeout\(\(\) => ls\.set\(key, JSON\.stringify\(\{ at: new Date\(\)\.toISOString\(\), draft(, base)? \}\)\)/, "🔴 набране не пишеться в браузер");
   assert.match(bodyOf(src, "save"), /ls\.del\(draftStoreKey\(userId, type, selId, dateSel\)\)/, "🔴 «Зберегти» лишає чернетку — вона «відновиться» поверх збереженого");
   assert.match(bodyOf(src, "leaveGuard"), /ls\.del\(draftFor\.current\)/, "🔴 «перейти й втратити» лишає чернетку — вона воскресне");
   assert.match(src, /\{restoredAt && dirty && \(/, "🔴 немає плашки «відновлено» — людина не знає, що це ще не збережено");
