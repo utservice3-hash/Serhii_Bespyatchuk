@@ -2549,21 +2549,6 @@ test("#3720 РОЗБІР ПО КОМАНДАХ: треба = розібрано 
 });
 
 /**
- * #3721 — ПРОВОДКА БЛОКУ: «Розбір по командах» стоїть на екрані «Перший дотик · AI» (тим, хто розбирає — `canReview`,
- * перечитується після розбору) і у Звіті КВП (тим, у кого є вкладка AI); блок вантажить тиждень своїм вікном і рахує
- * `reviewByTeam`. 🧨 Червоніє, якщо блок відʼєднати від одного з екранів чи від спільного правила.
- */
-test("#3721 ПРОВОДКА БЛОКУ: екран AI (canReview, перечитується) і Звіт КВП; запит — вікно тижня, числа — reviewByTeam", () => {
-  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /\{d\.canReview && <ReviewByTeamBlock variant="ftd" refresh=\{reload\} \/>\}/, "🔴 блоку немає на екрані AI або він не перечитується після розбору");
-  const kvp = readFileSync(FE("pages/dashboard/sections/KvpReportSection.tsx"), "utf8");
-  assert.match(kvp, /\{canSeeFirstTouch && <div[^>]*><ReviewByTeamBlock variant="kvp" anchor=\{rep\.scope\.to\} \/><\/div>\}/, "🔴 блоку немає у Звіті КВП");
-  const blk = readFileSync(FE("pages/dashboard/sections/ReviewByTeamBlock.tsx"), "utf8");
-  assert.match(blk, /fetchAiCalls\(reviewWeekWindow\(monday\)\)/, "🔴 блок вантажить не вікно тижня");
-  assert.match(blk, /reviewByTeam\(d\.data\.rows, monday\)/, "🔴 блок рахує не спільним правилом");
-});
-
-/**
  * #3722 — ПЛАН АВТОЗАДАЧ (задача 7238, пп.2–3): «погодився, а втрачено» — задача тімліду команди на КОЖНУ угоду, текст ТЗ,
  * високий пріоритет, наступний робочий день; без тімліда — нікому, але названо; «погодився», а угода відкрита, чи «відмовив»
  * і втрачено, чи виключена розмова — без задачі. «Аналіз не вдався» — Роману з причиною; позначено «не запит» — без задачі й

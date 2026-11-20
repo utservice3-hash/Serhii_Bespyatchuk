@@ -55,38 +55,5 @@ export function withExpected(plan: number, fact: number, expected: number): { su
   return { sum, pct: pctOfPlan(sum, plan) };
 }
 
-// ───────────── 🎧 «ПЕРШИЙ ДОТИК» У ЯДРІ: сортування й фільтр таблиці менеджерів (ТЗ 12.10, розділ 4) ─────────────
-
-export type FtSortKey = "calls" | "score" | "price" | "promise" | "objection" | "agreed" | "success";
-export interface FtLineLike { calls: number; score: number | null; price: number | null; promise: number | null;
-  objection: number | null; decided: number; agreed: number; success: number }
-
-/** Значення колонки для сортування; `null` — «не рахується» («—»), і воно завжди внизу, в обидва боки. */
-export function ftSortVal(l: FtLineLike, k: FtSortKey): number | null {
-  if (k === "agreed") return l.decided ? l.agreed / l.decided : null;
-  if (k === "success") return l.success;
-  if (k === "calls") return l.calls;
-  return l[k];
-}
-
-export function sortFtLines<T extends FtLineLike>(lines: readonly T[], key: FtSortKey | null, dir: "asc" | "desc"): T[] {
-  if (!key) return [...lines];
-  return [...lines].sort((a, b) => {
-    const x = ftSortVal(a, key), y = ftSortVal(b, key);
-    if (x == null && y == null) return 0;
-    if (x == null) return 1;
-    if (y == null) return -1;
-    return dir === "asc" ? x - y : y - x;
-  });
-}
-
-/**
- * Клік по картці = фільтр таблиці (ТЗ 12.10, розділ 4): лишаються менеджери, у яких Є розмови цієї картки, і поруч —
- * скільки таких. Статистика рядка — по ВСІХ його розмовах (інакше «ціна %» серед розмов без ціни була б завжди 0%).
- */
-export function tileCountsByManager<R extends { managerId: number | null }>(rows: readonly R[], match: ((r: R) => boolean) | null): Map<number | null, number> | null {
-  if (!match) return null;
-  const m = new Map<number | null, number>();
-  for (const r of rows) if (match(r)) m.set(r.managerId, (m.get(r.managerId) ?? 0) + 1);
-  return m;
-}
+// 🎧 Сортування й фільтр таблиці менеджерів «Першого дотику» (sortFtLines / tileCountsByManager, ТЗ 12.10, розділ 4)
+// ПРИБРАНО разом із самою таблицею (правки зустрічі 17.11.2026): у Звіті КВП лишились лише картки, клік веде на екран AI.

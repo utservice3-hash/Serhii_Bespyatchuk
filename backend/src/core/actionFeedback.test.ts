@@ -98,7 +98,7 @@ test("#1102b ↩ ПОЛЯ «НА ЛЬОТУ» ЙДУТЬ ЧЕРЕЗ commitOptimi
   // «Звіт» живе в `ReportPlanSection`), а гейт на мертвий код стеріг би те, чого людина не бачить.
   const sites: [string, string][] = [
     ["pages/dashboard/sections/ReceivablesSection.tsx", "saveReceivableInvoiceNote("],
-    ["pages/dashboard/sections/KvpReportSection.tsx", "saveKvpPlan(monthSel, { [k]: val })"],
+    ["pages/dashboard/sections/KvpPlansTab.tsx", "saveKvpPlan(month, { [k]: val })"],
   ];
   for (const [file, call] of sites) {
     const src = readFileSync(FE(file), "utf8");
