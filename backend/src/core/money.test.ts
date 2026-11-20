@@ -166,6 +166,13 @@ test("expected (етап 8) рахується і не змішується з r
  * джерелі каси рівно один рядок із датою. Знаменник береться з `deals` напряму, тому це не
  * «A = A». Дірку синку (історія є, а входу в етап немає) гейт теж покаже — свідомо: створенням
  * її не маскуємо.
+ *
+ * ⏱ ЗАТРИМКА МІЖ ДВОМА СИНКАМИ — НЕ ДІРКА. `syncKommo` оновлює етап угоди раніше, ніж
+ * `syncStageEvents` (раз на 30 хв) запише подію входу. 📐 Спіймано на прийманні 20.11.2026:
+ * угода 62860379 зайшла у «Виставлення рахунку» о 16:24, `deals` знав це о 16:42, а подія
+ * зʼявилась лише до повторного кола — перше коло червоніло без жодного дефекту. Тому угода з
+ * історією, оновлена в Kommo менш ніж 2 год тому, у перевірку не входить; створені одразу в
+ * етапі (подій немає взагалі) входять завжди — їх синк подій не наздоганяє.
  */
 test("#10170 ЖИВА БД: кожна угода в етапі 8 / 9 / «з рахунку і далі» має в джерелі каси рівно один рядок із датою, створені одразу в етапі — теж", needsDb(), async () => {
   const M = await loadMoney();
@@ -182,7 +189,9 @@ test("#10170 ЖИВА БД: кожна угода в етапі 8 / 9 / «з р�
                            COALESCE(c.n, 0) AS n
                       FROM deals d LEFT JOIN c ON c.kommo_id = d.kommo_id
                      WHERE d.pipeline_id = ANY(${fc}) AND d.status_id = ANY(${st})
-                       AND (d.status_id <> 142 OR d.closed_at_kommo IS NOT NULL))
+                       AND (d.status_id <> 142 OR d.closed_at_kommo IS NOT NULL)
+                       AND NOT (d.updated_at_kommo > now() - interval '2 hours'
+                                AND EXISTS (SELECT 1 FROM deal_stage_events e1 WHERE e1.kommo_id = d.kommo_id)))
        SELECT count(*) total, count(*) FILTER (WHERE born) born, count(*) FILTER (WHERE n <> 1) bad,
               string_agg(kommo_id::text, ',') FILTER (WHERE n <> 1) sample
          FROM cur`, p);
