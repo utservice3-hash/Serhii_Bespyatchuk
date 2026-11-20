@@ -1,87 +1,91 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, ReferenceDot, Brush,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, ReferenceDot, Brush,
 } from "recharts";
 import { effGranOf } from "../statsGran";
 import { MAX_METRICS, canAdd, drawnScopes, multiLines, multiRows } from "../statsMulti";
+import { cardFigures, parseMine, periodStartOf, MINE_KEY, MINE_MAX, type CardGran } from "../statsCards";
 import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
 import { InfoHint } from "../widgets";
 import { ChartSkeleton, SkelBox, TableSkeleton } from "../Skeleton";
+import { StatsMiniChart } from "./StatsMiniChart";
 
-const SEAM = "2026-07-01";
 // dataviz категорійна палітра (фіксований порядок; компанія завжди [0]). CVD-safe рампи.
 export const COLORS = ["#2f6fdb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#db2777", "#65a30d"];
 const MUTED = "var(--text-muted)";
 
-type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; weekOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string };
-type Cat = { key: string; icon: string; label: string; metrics: Metric[]; manualForm?: boolean; depstats?: boolean };
+/** `companyOnly` — показник рахується лише по компанії (по командах його не розрізає джерело): картка тімліда й менеджера
+ *  каже це словами, а не показує порожнечу. `src` — звідки число, підписом на картці. */
+type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; weekOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string; companyOnly?: boolean; src?: string };
+type Cat = { key: string; icon: string; label: string; metrics: Metric[]; manualForm?: boolean };
 
-const SEAM_CARS = "До лип 2026 — ручний лічильник таблиці; з лип 2026 — точний підрахунок CRM (тому рівень міг зміститись).";
-const CALLS_HINT = "Результативні дзвінки Ringostat (billsec>0); історія до лип 2026 — з таблиці (визначення могло відрізнятись).";
-const FINHR_HINT = "Історія з таблиці; оновиться після внесення через депстат-ввід.";
+const CALLS_HINT = "Результативні дзвінки Ringostat (billsec>0); у дашборді вони є з 09.2025 — раніше ряду немає.";
 /* ⏱ «Час опрацювання заявки» — той самий розрахунок, що вікно в Звіті (ядро `core/leadTake.ts`). */
-const LEAD_TAKE_HINT = "те саме ядро, що вікно «Час опрацювання заявки» у Звіті: «взято в роботу» — перша з подій (зміна етапу, вихідний дзвінок, поле «Взято в работу»); заявки з реклами, сайту й лідгенів, ЛИШЕ в робочий час (пн–пт 8:00–18:00; у вікні Звіту — фільтр «Час: Робочий»); дата — створення заявки за Києвом; історії в ручній таблиці немає — ряд починається з 01.07.2026 · до вересня поле «Взято в роботу» й нотатки-дзвінки майже порожні — частка «взято» тоді спиралась на етап і Ringostat";
+const LEAD_TAKE_HINT = "те саме ядро, що вікно «Час опрацювання заявки» у Звіті: «взято в роботу» — перша з подій (зміна етапу, вихідний дзвінок, поле «Взято в работу»); заявки з реклами, сайту й лідгенів, ЛИШЕ в робочий час (пн–пт 8:00–18:00; у вікні Звіту — фільтр «Час: Робочий»); дата — створення заявки за Києвом · до вересня поле «Взято в роботу» й нотатки-дзвінки майже порожні — частка «взято» тоді спиралась на етап і Ringostat";
 const LEAD_TAKE_MEDIAN_HINT = `медіана хвилин від створення заявки до «взято в роботу» серед узятих — окремо за кожну точку (медіана точки — з угод, не середнє); ${LEAD_TAKE_HINT}`;
 const LEAD_TAKE_SHARE_HINT = `частка заявок, узятих у роботу не пізніше 5 хв («до 1 хв» включно), від усіх заявок точки; ${LEAD_TAKE_HINT}`;
-const DIR_HINT = "Напрямок (unit-серія). Історія з таблиці; CRM-продовження по sales_channel — у розробці (де ще нема — показуємо історію до шва). Лише для КВП/адміна.";
+const AD_HINT = "ті самі гроші, що плитка «Надійшло» на екрані «Реклама» (ядро `money.adReceivedByDay`): оплата отримана ∪ успішно реалізовано угод рекламних клієнтів (правило Сергія: клієнт прийшов з реклами — далі всі його угоди реклама), за датою надходження; лише компанія";
+const LG_HINT = "гроші й машини з екрана «Лідогенерація» (правило Ярослава, словник §13): угоди менеджерів із передач лідгена будь-якої давності; лише компанія і лише помісячно, як тренд того екрана";
+const FIN_HINT = "рядок екрана «Фінанси → Тиждень і місяць» тим самим ядром (`core/financeKpiRefs.ts`); бачать ті, кому відкрито «Фінанси»";
+const HR_HINT = "реєстр людей, та сама формула, що «Плинність» на екрані «Люди» (`core/churn.ts`): працювали в місяці = прийняті до його кінця і не звільнені до його початку; бачать ті, кому відкрито реєстр людей";
 
+/**
+ * 🧱 ВІДДІЛИ СТІНИ (погоджений макет 20.11.2026, Продажі · Реклама · Лідогенерація · Тендери і LinkedIn · Логістика ·
+ * Фінанси · HR). Кожен ряд — з CRM або з розділу дашборда (Роман 20.11: «всі дані з CRM і дашборду, інших немає»);
+ * ручна таблиця з екрана прибрана. Показники, які жили лише в таблиці (готівкові, напрямки, тендерні заявки / авто /
+ * комісія, Cash flow, «Дохід (акт)»), зняті, а не лишені порожніми.
+ */
 const CATS: Cat[] = [
-  { key: "money", icon: "💰", label: "Гроші", metrics: [
-    /* 4367 (ТЗ Юлії): з підказки мусить бути видно, ЗА ЯКИЙ ПЕРІОД і ЗА ЯКОЮ ДАТОЮ угоди. Перевірено в ядрі
-       (`money.successByBucket`): анкер — дата переходу угоди в «Успішно реалізовано» (142) за Києвом, не дата
-       оплати й не відвантаження; кожна точка — чек саме за свій день / тиждень / місяць. */
-    { key: "avg_check", block: "sales", label: "Середній чек", unit: "₴", hint: "виручка «успішно реалізовано» ÷ кількість таких угод — окремо за кожну точку (день, тиждень чи місяць — за «Кроком»); дата угоди — день переходу в «Успішно реалізовано», за Києвом (не дата оплати й не відвантаження)", seamHint: SEAM_CARS },
-    { key: "revenue_success", block: "sales", label: "Дохід (успіх)", unit: "₴", hint: "успішні угоди (142) за датою закриття, signed" },
+  { key: "sales", icon: "💰", label: "Продажі", metrics: [
     { key: "payment_received", block: "sales", label: "Отримані кошти", unit: "₴", hint: "оплата отримана ∪ успішно реалізовано, без подвоєння — ті самі гроші, що «Отримані кошти» на Звіті" },
-    { key: "cash_deals_sum", block: "sales", label: "Готівкові", unit: "₴", hint: "сума готівкових угод — лише історія ручної таблиці до 01.07.2026; з CRM цей показник не продовжується, тому після шва точок немає" },
-  ] },
-  { key: "auto", icon: "🚚", label: "Авто", metrics: [
-    { key: "cars_success", block: "sales", label: "Успішні", hint: "кількість угод, що перейшли в «Успішно реалізовано», за датою переходу (Київ), кожна раз", seamHint: SEAM_CARS },
-    { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "авто за датою завантаження — те саме, що «Відправлені авто» на Звіті; company включає поставки поза 6 командами (~0.5%)", seamHint: SEAM_CARS },
-  ] },
-  { key: "leads", icon: "📈", label: "Ліди й канали", metrics: [
-    { key: "ad_leads", block: "marketing", label: "Ліди з реклами", hint: "угоди з каналом «реклама», за першим входом у «Взято в роботу» в межах періоду — кожна угода раз" },
-    { key: "lg_transfers", block: "marketing", label: "Прорахунки лідгенів", hint: "входи угод у «Кваліфіковано» — як на екрані «Лідогенерація»; лише компанія, по командах не розрізається" },
+    { key: "revenue_success", block: "sales", label: "Дохід (успіх)", unit: "₴", hint: "успішні угоди (142) за датою закриття, signed" },
+    /* 4367 (ТЗ Юлі): з підказки мусить бути видно, ЗА ЯКИЙ ПЕРІОД і ЗА ЯКОЮ ДАТОЮ угоди. Анкер — дата переходу угоди
+       в «Успішно реалізовано» (142) за Києвом, не дата оплати й не відвантаження. */
+    { key: "avg_check", block: "sales", label: "Середній чек", unit: "₴", hint: "виручка «успішно реалізовано» ÷ кількість таких угод — окремо за кожну точку (день, тиждень чи місяць — за «Кроком»); дата угоди — день переходу в «Успішно реалізовано», за Києвом (не дата оплати й не відвантаження)" },
+    { key: "cars_success", block: "sales", label: "Успішні", hint: "кількість угод, що перейшли в «Успішно реалізовано», за датою переходу (Київ), кожна раз" },
+    { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "авто за датою завантаження — те саме, що «Відправлені авто» на Звіті; company включає поставки поза 6 командами (~0.5%)" },
+    { key: "calls", block: "sales", label: "Результативні дзвінки", hint: CALLS_HINT, src: "Ringostat" },
     /* Медіана, не середнє (рішення власника 26.10.2026): медіана кошика — з угод, а не медіана медіан. Лінії цілі немає (5708). */
     { key: "lead_take_median", block: "sales", label: "Медіана часу опрацювання заявки, хв", unit: "хв", hint: LEAD_TAKE_MEDIAN_HINT },
     { key: "lead_take_m5_pct", block: "sales", label: "Взято до 5 хв, %", unit: "%", hint: LEAD_TAKE_SHARE_HINT },
   ] },
-  { key: "clients", icon: "👥", label: "Клієнти", metrics: [
+  { key: "ads", icon: "📣", label: "Реклама", metrics: [
+    { key: "ad_leads", block: "marketing", label: "Ліди з реклами", hint: "угоди з каналом «реклама», за першим входом у «Взято в роботу» в межах періоду — кожна угода раз" },
+    { key: "ad_received_sum", block: "marketing", label: "Надійшло з реклами", unit: "₴", companyOnly: true, hint: AD_HINT },
+    { key: "ad_received_deals", block: "marketing", label: "Оплачені угоди з реклами", companyOnly: true, hint: "кількість угод у сумі «Надійшло з реклами»; " + AD_HINT },
+    { key: "ad_received_avg", block: "marketing", label: "Чек оплачених з реклами", unit: "₴", companyOnly: true, hint: "надійшло з реклами ÷ ці угоди — окремо за кожну точку; " + AD_HINT },
+  ] },
+  { key: "leadgen", icon: "🎯", label: "Лідогенерація", metrics: [
+    { key: "lg_transfers", block: "marketing", label: "Прорахунки лідгенів", companyOnly: true, hint: "входи угод у «Кваліфіковано» — як на екрані «Лідогенерація»; лише компанія, по командах не розрізається" },
+    { key: "lg_earned_sum", block: "marketing", label: "Успішні з лідгену", unit: "₴", monthOnly: true, companyOnly: true, hint: "«Успішні»: угоди, що стали «Успішна угода» в цьому місяці; " + LG_HINT },
+    { key: "lg_earned_deals", block: "marketing", label: "Угоди «Успішні» з лідгену", monthOnly: true, companyOnly: true, hint: "кількість угод у сумі «Успішні з лідгену»; " + LG_HINT },
+    { key: "lg_machines", block: "marketing", label: "Машини з лідгену", monthOnly: true, companyOnly: true, hint: "«Машин» за «Датою загрузки» в місяці, як «Відправлені авто» КВП; " + LG_HINT },
+  ] },
+  { key: "tenders", icon: "🏛", label: "Тендери і LinkedIn", metrics: [
+    { key: "prozorro_deals", block: "sales", label: "Угоди Prozorro (створено)", hint: "угоди Повного циклу, створені в періоді, з міткою Prozorro (словник §21) — та сама колонка «зі створених: Prozorro», що у Звіті (`metrics.createdSplitByBucket`)" },
+    { key: "linkedin_deals", block: "sales", label: "Угоди LinkedIn (створено)", hint: "угоди Повного циклу, створені в періоді, з міткою LinkedIn (словник §20) — та сама колонка «зі створених: LinkedIn», що у Звіті (`metrics.createdSplitByBucket`)" },
+  ] },
+  { key: "logistics", icon: "🚚", label: "Логістика", metrics: [
+    { key: "cars_delivered_all", block: "logistics", label: "Відправлені авто всього", hint: "авто за датою завантаження — те саме число, що «Поставлені» в Продажах і «Відправлені авто» на Звіті" },
+    { key: "new_clients_cars", block: "logistics", label: "Машини нових клієнтів", hint: "відправлені авто всього мінус машини постійних (словник §22): клієнт без жодної попередньої виграної угоди, джерело не важливе — реклама, лідоген і решта теж нові" },
     { key: "repeat_clients_active", block: "logistics", label: "Постійні в роботі", hint: "постійний = has_prior (≥1 попередня виграна)" },
     { key: "repeat_clients_cars", block: "logistics", label: "Машини постійних", hint: "відправлені авто клієнтів, у яких уже була виграна угода, — за датою завантаження" },
     { key: "repeat_clients_sum", block: "logistics", label: "Сума постійних", unit: "₴", hint: "сума угод (ціна) тих самих авто постійних клієнтів, за датою завантаження" },
     { key: "repeat_avg_check", block: "logistics", label: "Чек постійних", unit: "₴", hint: "сума постійних ÷ машини постійних — окремо за кожну точку" },
   ] },
-  { key: "calls", icon: "☎️", label: "Дзвінки", metrics: [
-    { key: "calls", block: "sales", label: "Результативні", hint: CALLS_HINT },
+  { key: "finance", icon: "💵", label: "Фінанси", metrics: [
+    { key: "fin_bank_in", block: "finance", label: "Надходження", unit: "₴", companyOnly: true, src: "Фінанси", hint: "«Надходження» — банк, словник §18; банк у дашборді з 10.2026; " + FIN_HINT },
+    { key: "fin_bank_out", block: "finance", label: "Витрати загальні", unit: "₴", companyOnly: true, src: "Фінанси", hint: "«Витрати загальні» — банк, словник §18; банк у дашборді з 10.2026; " + FIN_HINT },
+    { key: "fin_receivables", block: "finance", label: "Дебіторка", unit: "₴", companyOnly: true, src: "Фінанси", hint: "«Дебіторка»: на кінець періоду з журналу, для періоду, що йде, — станом на зараз; ряд з 10.2026; " + FIN_HINT },
+    { key: "fin_delivered_income", block: "finance", label: "Дохід поставлених", unit: "₴", companyOnly: true, src: "Фінанси", hint: "«Дохід поставлених» за фільтрами фінансиста (`core/money.ts`); ряд з 09.2026; " + FIN_HINT },
   ] },
-  { key: "intl", icon: "🌍", label: "Напрямки", metrics: [
-    // Кожен напрямок — unit-серія (scope_type='unit'). Історія з таблиці; CRM-обчислювачі
-    // напрямків у хвості 2b → показуємо історію (мітка «історія до…»), не порожнечу.
-    { key: "intl_delivered_sum", block: "intl", unitScope: "Міжнародка", label: "Міжнародка: дохід", unit: "₴", hint: DIR_HINT },
-    { key: "intl_delivered_cars", block: "intl", unitScope: "Міжнародка", label: "Міжнародка: авто", hint: DIR_HINT },
-    { key: "intl_avg_check", block: "intl", unitScope: "Міжнародка", label: "Міжнародка: чек", unit: "₴", hint: DIR_HINT },
-    { key: "tender_requests", block: "tenders", unitScope: "Тендери", label: "Тендери: заявки", hint: DIR_HINT },
-    { key: "tender_cars", block: "tenders", unitScope: "Тендери", label: "Тендери: авто", hint: DIR_HINT },
-    { key: "tender_commission", block: "tenders", unitScope: "Тендери", label: "Тендери: комісія", unit: "₴", hint: DIR_HINT },
-    { key: "lgintl_transfers", block: "lgintl", unitScope: "ЛідгенМіжн", label: "ЛідгенМіжн: передачі", hint: DIR_HINT },
-    { key: "lgintl_revenue", block: "lgintl", unitScope: "ЛідгенМіжн", label: "ЛідгенМіжн: дохід", unit: "₴", hint: DIR_HINT },
-    { key: "cars_delivered_all", block: "logistics", unitScope: "ВЛТ", label: "ВЛТ: поставлені авто", weekOnly: true, hint: DIR_HINT },
-    { key: "repeat_clients_sum", block: "logistics", unitScope: "ВЛТ", label: "ВЛТ: сума постійних", unit: "₴", weekOnly: true, hint: DIR_HINT },
+  { key: "hr", icon: "🧑‍💼", label: "HR", metrics: [
+    { key: "hr_headcount", block: "hr", label: "Штат", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "скільки людей працювали в місяці; " + HR_HINT },
+    { key: "hr_hired", block: "hr", label: "Прийнято", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "прийняті в місяці за датою прийому; " + HR_HINT },
+    { key: "hr_fired", block: "hr", label: "Звільнено", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "звільнені в місяці за датою звільнення (з невідомою датою — поза розрахунком); " + HR_HINT },
+    { key: "hr_turnover_total", block: "hr", label: "Плинність", unit: "%", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "звільнено ÷ працювали в місяці × 100 — уже у відсотках (20 = 20%), а не частка; " + HR_HINT },
   ] },
-  { key: "finance", icon: "💵", label: "Фінанси", depstats: true, metrics: [
-    { key: "cashflow", block: "finance", label: "Cash flow", unit: "₴", hint: FINHR_HINT },
-    { key: "acted_income", block: "finance", label: "Дохід (акт)", unit: "₴", hint: FINHR_HINT },
-    { key: "receivables", block: "finance", label: "Дебіторка", unit: "₴", hint: FINHR_HINT },
-    { key: "expenses_total", block: "finance", label: "Витрати загальні", unit: "₴", hint: FINHR_HINT },
-  ] },
-  { key: "hr", icon: "🧑‍💼", label: "HR", depstats: true, metrics: [
-    { key: "hr_headcount", block: "hr", label: "Штат", hint: FINHR_HINT },
-    { key: "hr_hired", block: "hr", label: "Найнято", hint: FINHR_HINT },
-    { key: "hr_fired", block: "hr", label: "Звільнено", hint: FINHR_HINT },
-    { key: "hr_turnover_total", block: "hr", label: "Плинність", unit: "%", hint: FINHR_HINT },
-  ] },
-  /* 📣 «Реклама» переїхала окремим розділом меню (ТЗ 28.09, блок 4, п.6) — див. `AdsPage.tsx`. */
+  /* 📣 Окремий розділ меню «Реклама» (ТЗ 28.09, блок 4, п.6) — див. `AdsPage.tsx`; тут лише його числа картками. */
   { key: "manual", icon: "✍️", label: "Ручні", manualForm: true, metrics: [
     { key: "budget_yalogist", block: "marketing", label: "Бюджет Ялогист", unit: "₴", manual: true },
     { key: "budget_uts", block: "marketing", label: "Бюджет ЮТС", unit: "₴", manual: true },
@@ -93,9 +97,11 @@ const CATS: Cat[] = [
   ] },
 ];
 
-/** 📈 Показники, які можна додати на графік (5707 п.2): усі групи екрана, крім напрямків (власний розріз) і ручних. */
+/** 📈 Показники, які можна додати на графік з БУДЬ-ЯКОГО відділу (зустріч 20.11, Саша: «щоб накладались графіки»). */
 const MULTI_POOL: { cat: Cat; m: Metric }[] = CATS.filter((c) => !c.manualForm)
   .flatMap((c) => c.metrics.filter((m) => !m.unitScope).map((m) => ({ cat: c, m })));
+/** Усі показники стіни — для «★ Мій набір» і для розгортання показника з будь-якого відділу. Ключ унікальний. */
+const WALL_POOL: Metric[] = MULTI_POOL.map((x) => x.m);
 const MULTI_NOTE = "Збіг ліній не доводить, що один показник впливає на інший.";
 
 const fmt = (n: number, unit?: string) => {
@@ -138,24 +144,54 @@ const axisFmt = (v: number, unit?: string) => {
   if (Math.abs(v) >= 1e3) return `${(v / 1e3).toLocaleString("uk-UA", { maximumFractionDigits: 1 })}к`;
   return String(v);
 };
-const SEAM_NOTE = "До 01.07.2026 — історія з ручної таблиці, з 01.07 — точні дані CRM. Рівні до і після шва не порівнюються: це зміна джерела, а не обвал чи стрибок.";
+/* 🗓 ГЛИБИНА РЯДУ (було «шов 01.07», доки історія йшла з ручної таблиці). Імʼя константи лишилось, зміст — новий: таблиці
+   на екрані більше немає, ряд — лише CRM і розділи дашборда, і він починається там, де CRM має повну історію.
+   Заміряно 20.11.2026 на проді (місяць за місяцем проти ручного підрахунку): з 06.2025 гроші й угоди сходяться в межах
+   0–10% (це відомий розрив мінусових угод), раніше CRM має лише 12–48% угод. Межа — `STATS_CRM_FROM` на сервері. */
+const SEAM_NOTE = "Ряд — лише з CRM і розділів дашборда, від 06.2025: раніше CRM має лише частину угод (12–48% від ручного підрахунку), тож довший ряд показав би «зростання», якого не було. Команди до 14.07.2026 — за поточним складом (Kommo не зберігає історії переходів).";
+/** ⓘ біля перемикача карток: як читати картку. */
+const WALL_NOTE = "Картка — останній ПОВНИЙ місяць (тиждень) і зміна до попереднього повного. Період, що йде, — окремим рядком «станом на» і в порівняння не потрапляє: половина місяця проти цілого читалась би як обвал. На графіку він — пунктиром із порожньою точкою. " + SEAM_NOTE;
+
+/** Сьогодні за Києвом — межа «повний період / період, що йде» на картках і на графіку. */
+const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+const MONTHS = ["січень", "лютий", "березень", "квітень", "травень", "червень", "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"];
+const MONTHS_GEN = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"];
+const dm = (p: string) => `${p.slice(8, 10)}.${p.slice(5, 7)}`;
+const addDays = (p: string, n: number) => { const d = new Date(`${p}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+/** Підпис періоду картки: місяць — «жовтень 2026», тиждень — «09.11–15.11». */
+const periodLabel = (p: string, g: CardGran) => (g === "month" ? `${MONTHS[Number(p.slice(5, 7)) - 1]} ${p.slice(0, 4)}` : `${dm(p)}–${dm(addDays(p, 6))}`);
+const prevLabel = (p: string, g: CardGran) => (g === "month" ? `до ${MONTHS_GEN[Number(p.slice(5, 7)) - 1]}` : `до тижня ${dm(p)}`);
+const errText = (e: any) => e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером");
+/** Звідки число — підпис на картці. */
+const srcOf = (m: Metric) => m.src ?? "CRM";
 
 /**
- * 📊 «СТАТИСТИКИ» — ЛИШЕ ГРАФІКИ (ТЗ Юлі 14.10.2026, п.1; TOP Weekly 12.10: «нечитабельні, багато тексту й плашок,
- * дублюють Звіт і Звіт КВП»). Повернуто вигляд до задач 4367 і 4632: без плиток, таблиці «Команди», вкладки
- * «План-факт», лінії плану й пояснень під графіком. На екрані — назва показника, осі, дати; як рахується — у ⓘ.
- * План і факт дивимось у Звіті та Звіті КВП. `StatisticsSummary` / `StatisticsPlanFact` і їхні роути лишились у
- * коді без входу з цього екрана — прибирати їх окреме рішення.
+ * 📊 «СТАТИСТИКИ» — СТІНА ГРАФІКІВ ПО ВІДДІЛАХ (погоджений макет, зустріч 20.11.2026: Саша «як у Looker — багато
+ * графіків, натискаєш, вони розкриваються»; Роман 20.11: картки з цифрами — так, ТЗ 14.10 «лише графіки» скасовано).
+ *
+ * Ліворуч відділи (і «★ Мій набір»), праворуч усі показники відділу картками: останній повний період, зміна до
+ * попереднього повного, період, що йде, «станом на» (`statsCards.cardFigures`). Клік по картці розгортає показник —
+ * той самий графік, що був (команди, браш, «＋ Показник» уже з будь-якого відділу) і таблиця значень.
+ * Картки тягнуть легкий запит (`scope=main`: лише головна серія глядача), команди — лише в розгорнутому показнику.
+ * План на графіку й надалі не малюється (ТЗ 14.10). `StatisticsSummary` / `StatisticsPlanFact` лишаються без входу.
  */
 export default function StatisticsChartsSection({ role }: { role?: string }) {
-  const [catKey, setCatKey] = useState("money");
-  const cat = CATS.find((c) => c.key === catKey)!;
-  /* 🎯 Дефолт — «Отримані кошти»: головні гроші компанії, ті самі, що на Звіті. */
-  const [metricKey, setMetricKey] = useState("payment_received");
-  /* 📣 Категорія може НЕ мати метрик — тип пишемо ЯВНО: без `noUncheckedIndexedAccess` вираз
+  const [catKey, setCatKey] = useState("sales");
+  /* ★ «Мій набір» — у браузері (Роман 20.11). Сміття в ключі не кладе екран: `parseMine` лишає лише відомі ключі. */
+  const [mine, setMine] = useState<string[]>(() => {
+    try { return parseMine(localStorage.getItem(MINE_KEY), WALL_POOL.map((m) => m.key)); } catch { return []; }
+  });
+  const saveMine = (ks: string[]) => { setMine(ks); try { localStorage.setItem(MINE_KEY, JSON.stringify(ks)); } catch { /* приватний режим — набір живе до перезавантаження */ } };
+  const mineMetrics: Metric[] = mine.flatMap((k) => WALL_POOL.filter((m) => m.key === k).slice(0, 1));
+  const cat: Cat = catKey === "mine" ? { key: "mine", icon: "★", label: "Мій набір", metrics: mineMetrics } : (CATS.find((c) => c.key === catKey) ?? CATS[0]);
+  /* 🎯 null — стіна відділу; ключ — розгорнутий показник (з будь-якого відділу, тож шукаємо і в усьому пулі). */
+  const [metricKey, setMetricKey] = useState<string | null>(null);
+  /* 📣 Метрики може НЕ бути (стіна, порожній «Мій набір») — тип пишемо ЯВНО: без `noUncheckedIndexedAccess` вираз
      `cat.metrics[0]` типізується як `Metric`, тож компілятор мовчить, а падає рантайм.
      Саме так 08.09.2026 клік по «Рекламі» клав увесь екран Статистик на `metric.monthOnly`. */
-  const metric: Metric | undefined = cat.metrics.find((m) => m.key === metricKey) ?? cat.metrics[0];
+  const metric: Metric | undefined = metricKey == null ? undefined : (cat.metrics.find((m) => m.key === metricKey) ?? WALL_POOL.find((m) => m.key === metricKey));
+  const today = kyivToday();
+  const [cardGran, setCardGran] = useState<CardGran>("month");
   const [gran, setGran] = useState<"day" | "week" | "month">("week");
   /* 🗓 Дефолт — 3 місяці (ТЗ, блок 4, п.1); було 12 місяців і 7 ліній. */
   const [range, setRange] = useState("3м");
@@ -181,7 +217,9 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const chosen: Metric[] = metric ? [metric, ...extras] : [];
   const multi = extras.length > 0;
 
-  const effGran = effGranOf(metric, gran); // напрямок без місячних (ВЛТ) → тиждень
+  const effGran = effGranOf(metric, gran); // показник лише помісячно (HR, гроші лідгену) → місяць
+  /** Початок періоду, що йде: на графіку — пунктир і підпис «іде, станом на» у підказці. */
+  const curStart = effGran === "day" ? today : periodStartOf(today, effGran);
   useEffect(() => {
     let alive = true; setChartLoading(true); setLoadErr(null); setWin(null);
     if (!metric) return; // категорія без метрик серій не тягне
@@ -301,27 +339,47 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const segBtn = (on: boolean, disabled = false) => ({ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: disabled ? "not-allowed" : "pointer", border: "none",
     opacity: disabled ? 0.4 : 1, background: on ? "#1f2330" : "var(--card-bg)", color: on ? "#fff" : "var(--text)" } as const);
 
+  /* 🧭 Розгорнути показник з картки: крок графіка — той самий, що в картки (місяць / тиждень). */
+  const openMetric = (k: string) => { setMetricKey(k); setGran(cardGran); setShown(null); setRange(cardGran === "month" ? "12м" : "3м"); };
+  const railBtn = (on: boolean) => ({ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left" as const, fontSize: 14, fontWeight: 700,
+    padding: "9px 12px", borderRadius: 11, cursor: "pointer", border: on ? "1px solid #1f2330" : "1px solid var(--border)",
+    background: on ? "#1f2330" : "var(--card-bg)", color: on ? "#fff" : "var(--text)" });
+
   return (
     <div>
       <h1 className="page-title">📊 Статистики</h1>
 
-      {/* Категорії */}
+      <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap", marginTop: 18 }}>
+      {/* Відділи — ліворуч (погоджений макет «стіна графіків»). */}
       {/* 🙈 ВКЛАДКА «Ручні» (✍️) НЕ ПОКАЗУЄТЬСЯ — рішення власника 08.09.2026: «щоб у
           ручному нічого не заповнювали». 🔴 ЗАПИС У `CATS` ЛИШАЄТЬСЯ, ПРИБРАНО ЛИШЕ ВХІД: на нього
           спирається `ManualForm` (`CATS.find(c => c.key === "manual")!`).
           ⚠️ МЕЖА, НАЗВАНА ВГОЛОС: це фронт, тож `POST /statistics/manual` лишається
           живим для адміна. Тобто вхід прибрано з ЕКРАНА, а не з API. */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "22px 0 12px" }}>
+      <nav style={{ flex: "0 0 210px", display: "flex", flexDirection: "column", gap: 6 }}>
+        <button type="button" onClick={() => { setCatKey("mine"); setMetricKey(null); setShown(null); }} style={railBtn(catKey === "mine")}>
+          <span>★</span> Мій набір <span style={{ marginLeft: "auto", fontSize: 12, opacity: 0.7 }}>{mine.length || ""}</span>
+        </button>
         {/* ⚠️ ЛАНЦЮГ `CATS.filter((c) => !c.manualForm).map(` НЕ РОЗРИВАТИ: його читає гейт #363b. */}
         {CATS.filter((c) => !c.manualForm).map((c) => (
-          <button key={c.key} onClick={() => { setCatKey(c.key); if (c.metrics.length) setMetricKey(c.metrics[0].key); setShown(null); }}
-            style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 14, fontWeight: 700, padding: "9px 15px", borderRadius: 11, cursor: "pointer",
-              border: catKey === c.key ? "1px solid #1f2330" : "1px solid var(--border)", background: catKey === c.key ? "#1f2330" : "var(--card-bg)", color: catKey === c.key ? "#fff" : "var(--text)" }}>
-            <span>{c.icon}</span> {c.label} {c.depstats && "✍️"}
+          <button key={c.key} onClick={() => { setCatKey(c.key); setMetricKey(null); setShown(null); }} style={railBtn(catKey === c.key)}>
+            <span>{c.icon}</span> {c.label} <span style={{ marginLeft: "auto", fontSize: 12, opacity: 0.7 }}>{c.metrics.length}</span>
           </button>
         ))}
-      </div>
+      </nav>
 
+      <div style={{ flex: "1 1 620px", minWidth: 0 }}>
+      {!cat.manualForm && !metric && (
+        <StatsWall cat={cat} gran={cardGran} setGran={setCardGran} today={today} onOpen={openMetric}
+          mine={mine} saveMine={saveMine} isMine={catKey === "mine"} />
+      )}
+
+      {!cat.manualForm && metric && (
+        <button type="button" onClick={() => setMetricKey(null)}
+          style={{ fontSize: 13, fontWeight: 650, padding: "6px 12px", borderRadius: 9, cursor: "pointer", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", marginBottom: 10 }}>
+          ← {cat.icon} {cat.label}: усі показники
+        </button>
+      )}
       {!cat.manualForm && metric && (
         <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px" }}>
           {/* Чипи метрик. Формула — у ⓘ біля назви графіка (ТЗ 14.10, п.1: «тексту на екрані немає»). */}
@@ -339,7 +397,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
               <span style={{ position: "relative" }}>
                 <button type="button" onClick={() => setPickerOpen((o) => !o)} title={`до ${MAX_METRICS} показників на одному графіку`}
                   style={{ fontSize: 13, fontWeight: 650, padding: "7px 13px", borderRadius: 20, cursor: "pointer", border: "1px dashed var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
-                  ＋ Показник{extras.length ? ` (${chosen.length} з ${MAX_METRICS})` : ""}
+                  ＋ Показник з будь-якого відділу{extras.length ? ` (${chosen.length} з ${MAX_METRICS})` : ""}
                 </button>
                 {pickerOpen && (
                   <div role="dialog" style={{ position: "absolute", zIndex: 30, top: "110%", left: 0, width: 340, maxWidth: "calc(100vw - 32px)", maxHeight: 380, overflowY: "auto", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 12px", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
@@ -473,7 +531,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                         const an = anomalyAt(String(label));
                         return (
                           <div style={{ fontSize: 12, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", padding: "8px 10px", maxWidth: 320 }}>
-                            <b>{shortDate(String(label))}</b>{String(label) < SEAM && <span style={{ color: MUTED }}> · ручна таблиця</span>}
+                            <b>{shortDate(String(label))}</b>{String(label) >= curStart && <span style={{ color: MUTED }}> · іде, станом на {shortDate(today)}</span>}
                             {payload.map((p: any) => <div key={p.dataKey} style={{ color: p.stroke }}>{p.name}: {fmt(Number(p.value), unitOfKey(String(p.dataKey)))}</div>)}
                             {an.map((a, k) => (
                               <div key={k} style={{ marginTop: 4, color: a.kind === "real" ? "#b45309" : a.kind === "corrected" ? "#1d4ed8" : "#b91c1c" }}>{a.kind === "corrected" ? "✏️" : "⚠️"} {a.note}<br /><span style={{ color: MUTED }}>{a.crm}</span></div>
@@ -481,12 +539,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                           </div>
                         );
                       }} />
-                    {/* 🪡 ШОВ ДАНИХ — ПІДПИСАНИЙ НА ГРАФІКУ (ТЗ, блок 4, п.3), а не дрібним текстом унизу сторінки.
-                        Лише коли шов ВСЕРЕДИНІ вікна: на самому краю (вікно «3 міс» з 06.07) підпис налазив на вісь Y і обрізався. */}
-                    {rows[eff.lo]?.period < SEAM && (rows[eff.hi]?.period ?? "") >= SEAM && (
-                      <ReferenceLine yAxisId={refAxis} x={rows.find((r) => r.period >= SEAM)?.period} stroke="#94a3b8" strokeDasharray="5 4"
-                        label={{ value: "01.07", position: "insideTopRight", fontSize: 10.5, fill: MUTED }} />
-                    )}
+                    {/* 🪡 Підпису шва 01.07 більше немає: таблиці на графіку немає, тож і зміни джерела всередині ряду немає. */}
                     {/* Кілька показників: лінія на показник, вісь — за ОДИНИЦЕЮ показника (`multiLines`). */}
                     {multi && lines.map((l, j) => (
                       <Line key={l.dataKey} yAxisId={l.yAxisId} type="monotone" dataKey={l.dataKey} name={l.label}
@@ -524,15 +577,168 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
               </div>
               {!hasPoints && <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>У вибраному вікні немає точок для цього показника.</div>}
               {multi && <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>{MULTI_NOTE}</div>}
+              {/* 🔢 Таблиця значень (макет, п.3): ті самі точки, що в видимому вікні графіка, нові — зверху. */}
+              <ValuesTable rows={rows.slice(eff.lo, eff.hi + 1)} curStart={curStart}
+                cols={multi
+                  ? lines.map((l, j) => ({ key: l.dataKey, label: l.label, unit: l.unit, color: color(j) }))
+                  : visibleSeries.map(({ s, i }) => ({ key: `s${i}`, label: s.scopeName, unit: metric.unit, color: s.benchmark ? "#94a3b8" : color(i) }))} />
             </>
           )}
         </div>
       )}
 
-      {cat.manualForm && <ManualForm onClose={() => { setCatKey("money"); setMetricKey("payment_received"); }} isAdmin={role === "admin"} />}
+      {cat.manualForm && <ManualForm onClose={() => { setCatKey("sales"); setMetricKey(null); }} isAdmin={role === "admin"} />}
 
-      {catKey === "clients" && <LapsedClientsBlock />}
+      {/* 📉 «Купував минулого місяця, не купив у цьому» — у Логістиці, поруч із постійними клієнтами. */}
+      {catKey === "logistics" && !metric && <LapsedClientsBlock />}
+      </div>
+      </div>
     </div>
+  );
+}
+
+/** 🔢 Значення по періодах — під розгорнутим графіком. Період, що йде, підписаний: його число ще росте. */
+function ValuesTable({ rows, cols, curStart }: { rows: any[]; cols: { key: string; label: string; unit?: string; color: string }[]; curStart: string }) {
+  if (!rows.length || !cols.length) return null;
+  const list = [...rows].reverse().slice(0, 24);
+  return (
+    <div style={{ marginTop: 12, maxHeight: 320, overflow: "auto", border: "1px solid var(--border)", borderRadius: 10 }}>
+      <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
+        <thead><tr><th style={{ textAlign: "left" }}>Період</th>{cols.map((c) => (
+          <th key={c.key} style={{ textAlign: "right" }}><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: c.color, marginRight: 5 }} />{c.label}</th>
+        ))}</tr></thead>
+        <tbody>{list.map((r) => (
+          <tr key={r.period}>
+            <td>{shortDate(r.period)}{r.period >= curStart && <span style={{ color: MUTED }}> · іде</span>}</td>
+            {cols.map((c) => <td key={c.key} style={{ textAlign: "right" }}>{typeof r[c.key] === "number" ? fmt(r[c.key], c.unit) : <span style={{ color: MUTED }}>—</span>}</td>)}
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+type CardState = { resp?: StatsSeriesResp; err?: string };
+/** Звідки починати ряд картки: 13 місяців / 13 тижнів — досить для малого графіка й порівняння, і запит легкий. */
+const cardFrom = (today: string, g: CardGran) => {
+  const d = new Date(`${today}T00:00:00Z`);
+  if (g === "month") { d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - 13); } else d.setUTCDate(d.getUTCDate() - 7 * 13);
+  return d.toISOString().slice(0, 10);
+};
+
+/**
+ * 🧱 СТІНА ВІДДІЛУ: усі показники картками одразу. Кожна картка — свій легкий запит (`scope=main`), тож одна повільна
+ * чи заборонена не тримає інших. Цифри — `cardFigures` (останній повний період, попередній повний, той, що йде).
+ */
+function StatsWall({ cat, gran, setGran, today, onOpen, mine, saveMine, isMine }: {
+  cat: Cat; gran: CardGran; setGran: (g: CardGran) => void; today: string; onOpen: (k: string) => void;
+  mine: string[]; saveMine: (ks: string[]) => void; isMine: boolean;
+}) {
+  const [cards, setCards] = useState<Record<string, CardState>>({});
+  const [editing, setEditing] = useState(false);
+  const keyList = cat.metrics.map((m) => m.key).join("|");
+  useEffect(() => {
+    let alive = true; setCards({});
+    for (const m of cat.metrics) {
+      const g = effGranOf(m, gran);
+      fetchStatsSeries({ block: m.block, metric: m.key, granularity: g, from: cardFrom(today, g === "week" ? "week" : "month"), scope: "main" })
+        .then((d) => alive && setCards((c) => ({ ...c, [m.key]: { resp: d } })))
+        .catch((e) => alive && setCards((c) => ({ ...c, [m.key]: { err: errText(e) } })));
+    }
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyList, gran, today]);
+  const seg = (on: boolean) => ({ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", border: "none",
+    background: on ? "#1f2330" : "var(--card-bg)", color: on ? "#fff" : "var(--text)" } as const);
+  const toggleMine = (k: string) => saveMine(mine.includes(k) ? mine.filter((x) => x !== k) : [...mine, k].slice(0, MINE_MAX));
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontSize: 17, fontWeight: 800 }}>{cat.icon} {cat.label}</span>
+        <span style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
+          <button type="button" onClick={() => setGran("month")} style={seg(gran === "month")}>Місяць</button>
+          <button type="button" onClick={() => setGran("week")} style={seg(gran === "week")}>Тиждень</button>
+        </span>
+        <InfoHint text={WALL_NOTE} />
+        {isMine && (
+          <button type="button" onClick={() => setEditing((e) => !e)}
+            style={{ marginLeft: "auto", fontSize: 13, fontWeight: 650, padding: "6px 12px", borderRadius: 9, cursor: "pointer", border: "1px dashed var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+            {editing ? "Готово" : "Обрати показники"}
+          </button>
+        )}
+      </div>
+
+      {isMine && (editing || !mine.length) && (
+        <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 8 }}>
+            Галочками — будь-які показники з усіх відділів (до {MINE_MAX}). Набір зберігається в цьому браузері.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "4px 18px" }}>
+            {CATS.filter((c) => !c.manualForm).map((c) => (
+              <div key={c.key}>
+                <div style={{ fontSize: 12, fontWeight: 750, margin: "6px 0 2px" }}>{c.icon} {c.label}</div>
+                {c.metrics.map((m) => (
+                  <label key={m.key} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, padding: "2px 0", cursor: "pointer" }}>
+                    <input type="checkbox" checked={mine.includes(m.key)} onChange={() => toggleMine(m.key)} /> {m.label}
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 }}>
+        {cat.metrics.map((m) => <WallCard key={m.key} m={m} st={cards[m.key]} gran={gran} today={today} onOpen={() => onOpen(m.key)} />)}
+      </div>
+    </div>
+  );
+}
+
+function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; gran: CardGran; today: string; onOpen: () => void }) {
+  const g: CardGran = effGranOf(m, gran) === "week" ? "week" : "month";
+  const series = st?.resp?.series[0];
+  const points = series?.points ?? [];
+  const f = cardFigures(points, g, today);
+  const box = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", cursor: "pointer", textAlign: "left" as const, color: "var(--text)", font: "inherit" };
+  const up = f.deltaPct != null && f.deltaPct > 0, down = f.deltaPct != null && f.deltaPct < 0;
+  return (
+    <button type="button" onClick={onOpen} style={box} title="клік — розгорнути: графік, команди, таблиця значень">
+      <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25 }}>{m.label}</span>
+        <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "rgba(47,111,219,0.1)", color: "#2f6fdb", whiteSpace: "nowrap" }}>{srcOf(m)}</span>
+      </div>
+      {st?.err ? (
+        <div role="alert" style={{ color: "#b91c1c", fontSize: 12.5, marginTop: 8 }}>⚠️ {st.err}</div>
+      ) : !st ? (
+        <SkelBox w="70%" h={26} style={{ marginTop: 10 }} />
+      ) : !series ? (
+        <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>у вашому розрізі цього показника немає</div>
+      ) : !points.length ? (
+        <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>
+          {m.companyOnly && series.scopeType !== "company" ? "лише по компанії — по команді не розрізається" : "за останні періоди точок немає"}
+        </div>
+      ) : (
+        <>
+          {f.last ? (
+            <>
+              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(f.last.value, m.unit)}</div>
+              <div style={{ fontSize: 12, color: MUTED }}>{periodLabel(f.last.period, g)}{series.scopeType !== "company" ? ` · ${series.scopeName}` : ""}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, color: up ? "#16a34a" : down ? "#dc2626" : MUTED }}>
+                {f.deltaPct == null ? "немає з чим порівняти" : `${up ? "▲" : down ? "▼" : "="} ${Math.abs(f.deltaPct).toLocaleString("uk-UA")}% ${prevLabel(f.prev!.period, g)}`}
+              </div>
+              {f.missingSince && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3 }}>після {periodLabel(f.missingSince, g)} даних немає</div>}
+            </>
+          ) : <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>повних періодів ще немає</div>}
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
+            {g === "month" ? MONTHS[Number(f.currentStart.slice(5, 7)) - 1] : `тиждень ${dm(f.currentStart)}`} іде:{" "}
+            {f.current ? <b style={{ color: "var(--text)" }}>{fmt(f.current.value, m.unit)}</b> : "точок ще немає"} станом на {dm(today)}
+          </div>
+          <StatsMiniChart points={points} currentStart={f.currentStart} />
+        </>
+      )}
+    </button>
   );
 }
 
