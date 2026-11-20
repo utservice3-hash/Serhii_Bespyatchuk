@@ -106,8 +106,8 @@ type Kind = "received" | "success" | "paidOnly" | "expected" | "fromInvoice";
 /**
  * Джерело угод для метрики — по одному рядку на угоду з ЄДИНИМ анкером:
  *   success  — ЗАРАЗ 142, anchor = closed_at.
- *   paidOnly — ЗАРАЗ у етапі 9, anchor = MAX(вхід у етап 9).
- *   expected — ЗАРАЗ у етапі 8, anchor = MAX(вхід у етап 8).
+ *   paidOnly — ЗАРАЗ у етапі 9, anchor = MAX(вхід у етап 9); створена одразу в етапі — created_at.
+ *   expected — ЗАРАЗ у етапі 8, anchor = MAX(вхід у етап 8); створена одразу в етапі — created_at.
  *   received — success ⊎ paidOnly.
  * price береться з `deals` (уже збережено МІНУСОМ для мінус-угод → SUM уже нетто).
  */
@@ -140,31 +140,43 @@ function sourceSql(kind: Kind, p: unknown[]): string {
     `SELECT d.kommo_id, d.closed_at_kommo AS anchor_at, d.manager_id, d.price
        FROM deals d
       WHERE d.status_id = 142 AND d.pipeline_id = ANY(${fc}) AND d.closed_at_kommo IS NOT NULL`;
+  // 🐣 Угода, СТВОРЕНА одразу в етапі, не має жодної події зміни етапу — ні в Kommo, ні в
+  // `deal_stage_events`. Датою входу для неї береться дата створення (рішення Сергія 20.11.2026).
+  // Предикат — «подій НЕМАЄ ВЗАГАЛІ», а не «немає події входу в цей етап»: угода з історією, у
+  // якій пропущено вхід, — це дірка синку, і створенням її не маскуємо (гейт #10170 її покаже).
+  const bornAt = `CASE WHEN NOT EXISTS (SELECT 1 FROM deal_stage_events e0 WHERE e0.kommo_id = d.kommo_id)
+                       THEN d.created_at_kommo END`;
   const currentStageSrc = (stages: number[]): string => {
     p.push(stages);
     const st = `$${p.length}`;
-    return `SELECT d.kommo_id, a.anchor_at, d.manager_id, d.price
+    return `SELECT x.* FROM (
+            SELECT d.kommo_id, COALESCE(a.anchor_at, ${bornAt}) AS anchor_at, d.manager_id, d.price
               FROM deals d
-              JOIN (SELECT kommo_id, MAX(changed_at) AS anchor_at
+              LEFT JOIN (SELECT kommo_id, MAX(changed_at) AS anchor_at
                       FROM deal_stage_events
                      WHERE pipeline_id = ANY(${fc}) AND status_id = ANY(${st})
                      GROUP BY kommo_id) a ON a.kommo_id = d.kommo_id
-             WHERE d.status_id = ANY(${st}) AND d.pipeline_id = ANY(${fc})`;
+             WHERE d.status_id = ANY(${st}) AND d.pipeline_id = ANY(${fc})
+            ) x WHERE x.anchor_at IS NOT NULL`;
   };
   if (kind === "fromInvoice") {
     // Анкер — ПЕРШИЙ вхід у «Виставлення рахунку» або будь-який етап після нього. Угода 142 без
     // жодної події (1 на серпень 2026) анкериться закриттям, щоб успіх не губився з факту.
+    // Угода, створена одразу в одному з цих етапів (подій немає взагалі), — датою створення.
     // Програні (143) не рахуються: рахунок був, грошей не буде.
     p.push(STAGE_FROM_INVOICE);
     const st = `$${p.length}`;
-    const anchor = "COALESCE(f.first_at, CASE WHEN d.status_id = 142 THEN d.closed_at_kommo END)";
-    return `SELECT d.kommo_id, ${anchor} AS anchor_at, d.manager_id, d.price
+    const anchor = `COALESCE(f.first_at, CASE WHEN d.status_id = 142 THEN d.closed_at_kommo END,
+                             CASE WHEN d.status_id = ANY(${st}) THEN ${bornAt} END)`;
+    return `SELECT x.* FROM (
+            SELECT d.kommo_id, ${anchor} AS anchor_at, d.manager_id, d.price
               FROM deals d
               LEFT JOIN (SELECT kommo_id, MIN(changed_at) AS first_at
                            FROM deal_stage_events
                           WHERE pipeline_id = ANY(${fc}) AND status_id = ANY(${st})
                           GROUP BY kommo_id) f ON f.kommo_id = d.kommo_id
-             WHERE d.pipeline_id = ANY(${fc}) AND d.status_id <> 143 AND ${anchor} IS NOT NULL`;
+             WHERE d.pipeline_id = ANY(${fc}) AND d.status_id <> 143
+            ) x WHERE x.anchor_at IS NOT NULL`;
   }
   if (kind === "success") return successSrc;
   if (kind === "paidOnly") return currentStageSrc(STAGE_PAID);

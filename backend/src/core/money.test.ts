@@ -154,6 +154,76 @@ test("expected (етап 8) рахується і не змішується з r
   assert.ok(e.deals >= 0, "expected рахується (0 у старому місяці — норма, етап 8 уже пройдено)");
 });
 
+/**
+ * 🐣 УГОДА, СТВОРЕНА ОДРАЗУ В ЕТАПІ, НЕ ВИПАДАЄ З ГРОШЕЙ (рішення Сергія 20.11.2026).
+ *
+ * Такі угоди не мають жодної події зміни етапу (у Kommo теж — перевірено на 62834307 і
+ * 62841989), тож анкер «дата входу в етап» для них порожній, і раніше вони не потрапляли в
+ * ЖОДЕН місяць. 📐 Заміряно 20.11.2026: 5 угод в етапах 8/9 (усі Семенюка, 18 930 ₴) і 32 угоди
+ * в зоні «з рахунку і далі» (75 376 ₴).
+ *
+ * Твердження — ПОКРИТТЯ, а не сума: кожна угода, що ЗАРАЗ стоїть у грошовому етапі, має в
+ * джерелі каси рівно один рядок із датою. Знаменник береться з `deals` напряму, тому це не
+ * «A = A». Дірку синку (історія є, а входу в етап немає) гейт теж покаже — свідомо: створенням
+ * її не маскуємо.
+ */
+test("#10170 ЖИВА БД: кожна угода в етапі 8 / 9 / «з рахунку і далі» має в джерелі каси рівно один рядок із датою, створені одразу в етапі — теж", needsDb(), async () => {
+  const M = await loadMoney();
+  const { pool } = await import("../db/pool.js");
+  const check = async (kind: "paidOnly" | "expected" | "fromInvoice", stages: number[], label: string) => {
+    const p: unknown[] = [];
+    const src = M.moneySourceSql(kind, p);
+    p.push(M.FC_PIPELINES); const fc = `$${p.length}`;
+    p.push(stages); const st = `$${p.length}`;
+    const r = await pool.query<{ total: string; born: string; bad: string; sample: string | null }>(
+      `WITH c AS (SELECT kommo_id, count(*) AS n FROM (${src}) s WHERE s.anchor_at IS NOT NULL GROUP BY kommo_id),
+            cur AS (SELECT d.kommo_id,
+                           NOT EXISTS (SELECT 1 FROM deal_stage_events e WHERE e.kommo_id = d.kommo_id) AS born,
+                           COALESCE(c.n, 0) AS n
+                      FROM deals d LEFT JOIN c ON c.kommo_id = d.kommo_id
+                     WHERE d.pipeline_id = ANY(${fc}) AND d.status_id = ANY(${st})
+                       AND (d.status_id <> 142 OR d.closed_at_kommo IS NOT NULL))
+       SELECT count(*) total, count(*) FILTER (WHERE born) born, count(*) FILTER (WHERE n <> 1) bad,
+              string_agg(kommo_id::text, ',') FILTER (WHERE n <> 1) sample
+         FROM cur`, p);
+    const x = r.rows[0];
+    assert.ok(Number(x.total) > 0, `${label}: угод у етапі немає — перевірці нічого знаходити, це провал, а не зелене`);
+    assert.equal(Number(x.bad), 0,
+      `${label}: ${x.bad} із ${x.total} угод не мають рівно одного рядка з датою в джерелі каси `
+      + `(створених одразу в етапі — ${x.born}); угоди: ${(x.sample ?? "").slice(0, 200)}`);
+  };
+  await check("paidOnly", M.STAGE_PAID, "етап 9 «Оплата отримана»");
+  await check("expected", M.STAGE_EXPECTED, "етап 8 «Очікуємо оплату»");
+  await check("fromInvoice", M.STAGE_FROM_INVOICE, "«з рахунку і далі»");
+});
+
+/**
+ * 🪞 ДЗЕРКАЛО #10170: запасна дата НЕ перекриває справжню. Угода, у якої подія входу в етап
+ * Є, анкериться останньою подією, а не датою створення. Без цього #10170 зеленів би й тоді,
+ * коли датою створення анкерили б УСІХ.
+ */
+test("#10170b ЖИВА БД: угода з подією входу в етап 9 / 8 анкериться подією, а не датою створення", needsDb(), async () => {
+  const M = await loadMoney();
+  const { pool } = await import("../db/pool.js");
+  for (const [kind, stages] of [["paidOnly", M.STAGE_PAID], ["expected", M.STAGE_EXPECTED]] as const) {
+    const p: unknown[] = [];
+    const src = M.moneySourceSql(kind, p);
+    p.push(M.FC_PIPELINES); const fc = `$${p.length}`;
+    p.push(stages); const st = `$${p.length}`;
+    const r = await pool.query<{ total: string; differs: string; bad: string }>(
+      `WITH src AS (${src}),
+            ev AS (SELECT kommo_id, MAX(changed_at) AS at FROM deal_stage_events
+                    WHERE pipeline_id = ANY(${fc}) AND status_id = ANY(${st}) GROUP BY kommo_id)
+       SELECT count(*) total,
+              count(*) FILTER (WHERE ev.at <> d.created_at_kommo) differs,
+              count(*) FILTER (WHERE src.anchor_at IS DISTINCT FROM ev.at) bad
+         FROM src JOIN ev ON ev.kommo_id = src.kommo_id JOIN deals d ON d.kommo_id = src.kommo_id`, p);
+    const x = r.rows[0];
+    assert.ok(Number(x.differs) > 0, `${kind}: немає угод, де подія входу ≠ даті створення — дзеркалу нічого розрізняти`);
+    assert.equal(Number(x.bad), 0, `${kind}: ${x.bad} із ${x.total} угод з подією входу анкеряться НЕ подією`);
+  }
+});
+
 test.after(async () => {
   if (!HAS_DB) return;
   const { pool } = await import("../db/pool.js");
