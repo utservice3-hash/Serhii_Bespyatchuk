@@ -35,6 +35,8 @@ export async function missedAutomation(today: string, s: MissedScope = {}): Prom
 
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
+  /** Пропущені від номерів перевізників (довідник `carrier_phones`) — у `missed` НЕ входять, показуються підписом (20.11.2026). */
+  carriers: number;
   callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number; medianMin: number | null;
   buckets: Record<DayBucket, number>;
@@ -43,7 +45,7 @@ export interface MissedSummary {
 interface SummaryRaw {
   missed: number; excluded: number; ownerless: number; callback: number;
   callback_attempt: number; callback_self: number; callback_colleague: number;
-  client_self: number; median_min: string | null;
+  client_self: number; median_min: string | null; carriers: number;
   b_work: number; b_evening: number; b_weekend: number; b_night: number;
 }
 
@@ -59,7 +61,7 @@ export async function missedSummary(from: string, to: string, s: MissedScope = {
   const x = r.rows[0];
   const n = (v: number | undefined): number => Number(v ?? 0);
   return {
-    missed: n(x?.missed), excluded: n(x?.excluded), ownerless: n(x?.ownerless),
+    missed: n(x?.missed), excluded: n(x?.excluded), ownerless: n(x?.ownerless), carriers: n(x?.carriers),
     callback: n(x?.callback), callbackAttempt: n(x?.callback_attempt),
     callbackSelf: n(x?.callback_self), callbackColleague: n(x?.callback_colleague),
     clientSelf: n(x?.client_self),
