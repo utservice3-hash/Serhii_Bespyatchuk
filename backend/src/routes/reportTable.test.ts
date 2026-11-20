@@ -1233,6 +1233,7 @@ test("#9510 ШИРИНА КОЛОНОК ЗВІТУ: межі 44…360, ключ 
   assert.equal(st.getItem("rptColWidths:42"), null, "🔴 «як було» лишило запис");
   assert.deepEqual(readColWidths({ getItem: () => "[1,2]", setItem() {} }, 1), {}, "🔴 сміття у сховищі прочитано як ширини");
   assert.deepEqual(readColWidths({ getItem: () => "{\"fact\":\"abc\",\"rank\":50}", setItem() {} }, 1), {}, "🔴 нечислову ширину або «#» прочитано");
+  assert.deepEqual(readColWidths({ getItem: () => "{\"name\":200,\"fact\":90}", setItem() {} }, 1), { fact: 90 }, "🔴 ширину «Менеджер» прочитано з чужого ключа — у неї свій механізм");
   assert.deepEqual(readColWidths({ getItem: () => { throw new Error("private"); }, setItem() {} }, 1), {}, "🔴 недоступне сховище ламає таблицю");
   // CSS: позиція = індекс ключа в ПОТОЧНОМУ порядку (+1), лише для колонок із записом.
   const a = colWidthCss(".t", ["rank", "name", "fact", "plan"], { plan: 100 });
