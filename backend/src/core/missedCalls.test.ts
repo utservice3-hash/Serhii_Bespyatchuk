@@ -896,7 +896,8 @@ test("#1773 ФРОНТ · ПРОВОДКА: фільтр їде в КОЖЕН з
     "🔴 запит екрана пішов без фільтра — блок показує весь відділ під обраною командою");
   const tz = FE("pages/dashboard/sections/MissedCallsTzBlocks.tsx");
   assert.match(tz, /fetchMissedNoCallback\(\{ from, to, \.\.\.fp \}\)/);
-  assert.match(tz, /fetchMissedWeek\(\{ week: monday, \.\.\.fp \}\)/);
+  // «Звіт тижня» (fetchMissedWeek) знято редизайном 20.11.2026: тиждень — перемикач «Тиждень» у шапці + колонка «Зміна».
+  // Його запиту на екрані більше немає, тож і перевіряти нема чого; решта запитів екрана — у `calls` вище.
   assert.match(tz, /\/tasks\?id=/, "🔴 «Задача вже є» без посилання на задачу");
 });
 
@@ -1125,8 +1126,10 @@ test("#10143 📄 ПРОПУЩЕНІ УГОДИ: 5 хв без розмови й
 test("#10144 ФРОНТ · ВКЛАДКА «Пропущені угоди»: кнопка → блок → fetchMissedDeals → роут; поля рядка роуту == тип", () => {
   const F = (...p: string[]) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", ...p), "utf8");
   const front = F("frontend", "src", "pages", "dashboard", "sections", "MissedCallsSection.tsx");
-  assert.match(front, /tabBtn\("deals", "📄 Пропущені угоди"\)/, "🔴 кнопки вкладки «Пропущені угоди» немає");
-  assert.match(front, /if \(tab === "deals"\) return <MissedDealsBlock\b/, "🔴 вкладка не відкриває блок пропущених угод");
+  // Редизайн 20.11.2026 (Роман: прототип «окей виглядає супер» + «давай викочувати»): кнопка вкладки стоїть у шапці
+  // перемикачем «Дзвінки / Угоди» (той самий `rv-view`, що у Звіті), а гілка обгортає блок шапкою екрана. Твердження те саме.
+  assert.match(front, /tabBtn\("deals", "Угоди"\)/, "🔴 кнопки вкладки «Пропущені угоди» немає");
+  assert.match(front, /if \(tab === "deals"\) return [^;]*<MissedDealsBlock\b/, "🔴 вкладка не відкриває блок пропущених угод");
   assert.match(front, /fetchMissedDeals\(\{ from, to, \.\.\.fp \}\)/, "🔴 блок не кличе fetchMissedDeals з періодом і фільтром екрана");
   const api = F("frontend", "src", "api.ts");
   assert.match(api, /api\.get<MissedDealsResp>\("\/dashboard\/missed-calls\/deals"/, "🔴 fetchMissedDeals ходить не в /missed-calls/deals");
@@ -1141,4 +1144,95 @@ test("#10144 ФРОНТ · ВКЛАДКА «Пропущені угоди»: к�
   const typeKeys = [...typeBody[1].matchAll(/\b([a-zA-Z]+):/g)].map((m) => m[1]).sort();
   assert.ok(routeKeys.length >= 9, `🔴 у роуті знайдено лише ${String(routeKeys.length)} полів рядка`);
   assert.deepEqual(routeKeys, typeKeys, "🔴 поля рядка роуту розійшлись із типом фронта");
+});
+
+/* ═══════════════ 🎨 РЕДИЗАЙН ЕКРАНА (Роман 20.11.2026: прототип прийнято, «давай викочувати») ═══════════════ */
+
+/**
+ * #10145 — 📱 «НА МОБІЛЬНІ» = ДЗВІНОК, У ЯКОГО ВСІ ПЛЕЧІ «Вхідний перехоплений» (`transitin`); решта — «на лінію».
+ * Рішення Романа 20.11.2026 «Рахувати з розбивкою» (звірка Юлі 55 проти 90: 48 на лінію + 42 на мобільні).
+ * Фікстура — три пропущені дзвінки: M1 лише з плеча `transitin`, M2 з двох плечей (`transitin` + `in` за 20 с — ОДИН дзвінок),
+ * M3 лише `in`. Червоніє, якщо: рахувати мобільним дзвінок, де хоч одне плече пішло на лінію (`bool_and` → `bool_or` дає 2);
+ * не рахувати M1; розбивка не дає в сумі «Пропущено»; позначка в списку стоїть не на тому рядку.
+ */
+test("#10145 📱 НА МОБІЛЬНІ: усі плечі transitin — мобільний, змішаний і лінія — ні; лінія + мобільні = пропущено; позначка в списку та сама", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO managers(id,name,is_active) VALUES (1,'Яцик',true) ON CONFLICT DO NOTHING");
+    let seq = 0;
+    const leg = (at: string, type: string, phone: string) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone)
+               VALUES ($1,$2,$3,'NO ANSWER',0,1,$4)`, [`m${String(++seq)}`, at, type, phone]);
+    const D = "2026-11-19";
+    const M1 = "380501014501", M2 = "380501014502", M3 = "380501014503";
+    await leg(`${D} 10:00:00+02`, "transitin", M1);
+    await leg(`${D} 11:00:00+02`, "transitin", M2);
+    await leg(`${D} 11:00:20+02`, "in", M2);             // той самий дзвінок (розрив ≤ 60 с), але одне плече — на лінію
+    await leg(`${D} 12:00:00+02`, "in", M3);
+
+    const sq = R.missedSummarySql(D, D, {});
+    const sum = (await c.query(sq.sql, sq.params)).rows[0] as Record<string, number>;
+    assert.equal(Number(sum.missed), 3, `🔴 пропущено ${String(sum.missed)}, а дзвінків 3 (два плечі M2 — один дзвінок)`);
+    assert.equal(Number(sum.missed_mobile), 1, `🔴 «на мобільні» ${String(sum.missed_mobile)}, а мало бути 1: змішаний дзвінок M2 пішов і на лінію`);
+    assert.ok(Number(sum.missed_mobile) <= Number(sum.missed), "🔴 мобільних більше, ніж пропущених — розбивка не з тих самих дзвінків");
+    const lq = R.missedListSql(D, {});
+    const list = (await c.query(lq.sql, lq.params)).rows as { client_phone: string; mobile: boolean }[];
+    assert.equal(list.length, Number(sum.missed), "🔴 список дня розійшовся з числом");
+    assert.deepEqual(list.filter((r) => r.mobile).map((r) => r.client_phone), [M1], "🔴 позначка «мобільний» у списку не на тому дзвінку");
+    assert.equal(list.filter((r) => r.mobile).length, Number(sum.missed_mobile), "🔴 позначок у списку не стільки, скільки «на мобільні» в числі");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+/**
+ * #10146 — ⏳ «ЧЕКАЮТЬ ПЕРЕДЗВОНУ» ОДНИМ ВИРАЗОМ: смуга чисел == позначки в списку == Σ колонки «Чекають» по людях.
+ * Рішення Романа 20.11.2026 (картка «Досі без розмови (38)»): «чекають» — з номером ДОСІ не було розмови від 10 с.
+ * Фікстура (день у минулому): W1 — нічого; W2 — наша розмова 40 с через 30 год (поза вікном 24 год, тож `cb_at` порожній);
+ * W3 — розмова 9 с; W4 — без відповідального, нічого; W5 — розмова була ДО пропущеного. Чекають: W1, W3, W4, W5.
+ * Червоніє, якщо будь-де підмінити «досі без розмови» на «не передзвонили за 24 год» (W2 повертається) чи прибрати межу 10 с
+ * (W3 зникає), або рахувати розмову до дзвінка (W5 зникає); якщо список і число розійдуться.
+ */
+test("#10146 ⏳ ЧЕКАЮТЬ: смуга чисел = позначки в списку = Σ по людях; розмова через 30 год прибирає, 9 с і розмова ДО — ні", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO managers(id,name,is_active) VALUES (1,'Яцик',true) ON CONFLICT DO NOTHING");
+    let seq = 0;
+    const call = (at: string, type: string, disp: string, sec: number, mgr: number | null, phone: string) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)`, [`w${String(++seq)}`, at, type, disp, sec, mgr, phone]);
+    const D = "2026-11-17";
+    const W1 = "380501014601", W2 = "380501014602", W3 = "380501014603", W4 = "380501014604", W5 = "380501014605";
+    for (const p of [W1, W2, W3, W5]) await call(`${D} 10:00:00+02`, "in", "NO ANSWER", 0, 1, p);
+    await call(`${D} 10:00:00+02`, "in", "NO ANSWER", 0, null, W4);
+    await call("2026-11-18 16:00:00+02", "out", "ANSWERED", 40, 1, W2);   // через 30 год → більше не чекає
+    await call(`${D} 12:00:00+02`, "out", "ANSWERED", 9, 1, W3);          // 9 с — не розмова → чекає
+    await call(`${D} 09:00:00+02`, "out", "ANSWERED", 60, 1, W5);         // розмова ДО пропущеного → чекає
+
+    const one = async (q: { sql: string; params: unknown[] }) => (await c.query(q.sql, q.params)).rows as Record<string, unknown>[];
+    const sum = (await one(R.missedSummarySql(D, D, {})))[0];
+    assert.equal(Number(sum.missed), 5);
+    assert.equal(Number(sum.waiting), 4, `🔴 «Чекають» ${String(sum.waiting)}, а мало бути 4 (W1, W3, W4, W5)`);
+    assert.equal(Number(sum.waiting_over_day), 4, "🔴 день у минулому, а «довше доби» чекають не всі");
+    const list = await one(R.missedListSql(D, {}));
+    assert.deepEqual(list.filter((r) => r.waiting === true).map((r) => r.client_phone).sort(), [W1, W3, W4, W5].sort(),
+      "🔴 позначка «чекає» в списку не на тих дзвінках");
+    const only = await one(R.missedListSql(D, {}, true));
+    assert.equal(only.length, Number(sum.waiting), "🔴 чип «Чекають» показує не стільки рядків, скільки число в смузі");
+    const mgr = await one(R.missedByManagerSql(D, D, {}));
+    assert.equal(mgr.reduce((a, r) => a + Number(r.waiting), 0), Number(sum.waiting), "🔴 Σ колонки «Чекають» по людях ≠ число в смузі");
+    assert.equal(Number(mgr.find((r) => r.manager_id === null)?.waiting), 1, "🔴 «без відповідального» загубив свій дзвінок, що чекає");
+  } finally { await c.end(); scratch.dispose(); }
 });

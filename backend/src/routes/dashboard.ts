@@ -12456,6 +12456,7 @@ dashboardRouter.get("/missed-calls/list", async (req, res) => {
       managerId: r.managerId, managerName: r.managerName, bucket: r.bucket,
       next: r.next, nextMin: r.nextMin, dealId: r.dealId,
       dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId),
+      mobile: r.mobile, waiting: r.waiting, waitH: r.waitH,
     })),
   });
 });

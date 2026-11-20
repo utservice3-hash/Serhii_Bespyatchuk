@@ -1,4 +1,4 @@
-import { addDays, type PeriodState } from "./periodRules";
+import { addDays, navBy, periodOf, type PeriodState } from "./periodRules";
 
 /**
  * 📵 ЧИСТІ ПРАВИЛА ВКЛАДКИ «ПРОПУЩЕНІ ДЗВІНКИ» — без React, щоб гейти бекенду їх ВИКОНУВАЛИ
@@ -120,4 +120,54 @@ export function normLabel(pct: number | null, norm: number | null): string {
   if (norm == null) return "ціль не задана";
   if (pct == null) return `ціль ${String(norm)}%`;
   return pct >= norm ? `ціль ${String(norm)}% · у нормі` : `ціль ${String(norm)}% · нижче норми`;
+}
+
+/* ═══════════════ РЕДИЗАЙН ЕКРАНА 20.11.2026 (план `plans/missed-calls/redesign/redesign-plan.md`) ═══════════════ */
+
+/**
+ * 📱 РОЗБИВКА «НА ЛІНІЮ / НА МОБІЛЬНІ» (рішення Романа 20.11.2026). Дві частини ОДНІЄЇ множини: Σ частин = «Пропущено»
+ * за побудовою. «На лінію» збігається з фільтром Юлі в Ringostat. Відсоток — для ширини смужки.
+ */
+export function mobileSplit(missed: number, missedMobile: number): { line: number; mobile: number; linePct: number } {
+  const mobile = Math.max(0, Math.min(missed, missedMobile));
+  const line = missed - mobile;
+  return { line, mobile, linePct: missed > 0 ? Math.round((line / missed) * 100) : 0 };
+}
+
+/** % передзвону за 24 год від пропущених; `null` — пропущених немає, рахувати нема з чого (не «0 %»). */
+export function callbackPct(r: { missed: number; callbackSelf: number; callbackColleague: number }): number | null {
+  return r.missed > 0 ? Math.round(((r.callbackSelf + r.callbackColleague) / r.missed) * 100) : null;
+}
+
+/**
+ * Попередній ТАКИЙ САМИЙ період — для колонки «Зміна»: вчора для дня, минулий тиждень для тижня, минулий місяць для
+ * місяця, відрізок тієї ж довжини одразу перед діапазоном. Той самий крок, що в стрілки «‹» (`navBy`), тож «зміна»
+ * завжди порівнює з тим, що людина побачить, натиснувши «‹». `null` — діапазон зіпсований.
+ */
+export function prevPeriodOf(s: PeriodState): { from: string; to: string } | null {
+  const patch = navBy(s, -1);
+  return patch ? periodOf({ ...s, ...patch }) : null;
+}
+
+/** Слово для підпису колонки «Зміна»: «до попереднього дня / тижня / місяця / періоду». */
+export function prevPeriodWord(mode: PeriodState["mode"]): string {
+  return mode === "day" ? "дня" : mode === "week" ? "тижня" : mode === "month" ? "місяця" : "періоду";
+}
+
+/** Зміна % передзвону в п.п.; `null`, коли хоча б з одного боку відсотка немає (порожній період ≠ нуль). */
+export function changePp(cur: number | null, prev: number | null): number | null {
+  return cur == null || prev == null ? null : cur - prev;
+}
+
+export interface CopyRow { name: string; missed: number; pct: number | null; medianMin: number | null; waiting: number; change: number | null }
+/**
+ * Текст «Скопіювати для звіту» — з ТИХ САМИХ рядків, що на екрані таблиці «По командах» (замість окремого блоку «Звіт
+ * тижня», питання 2 плану): тиждень = перемикач «Тиждень», «зміна» = до попереднього такого самого періоду.
+ */
+export function teamsCopyText(title: string, rows: readonly CopyRow[]): string {
+  const p = (v: number | null) => (v == null ? "—" : `${String(v)}%`);
+  const ch = (v: number | null) => (v == null ? "" : ` (${v > 0 ? "+" : ""}${String(v)} п.п.)`);
+  return [`📵 Пропущені дзвінки, ${title}`, ...rows.map((r) =>
+    `${r.name}: пропущено ${String(r.missed)}, передзвонили за 24 год ${p(r.pct)}${ch(r.change)}`
+    + `${r.medianMin != null ? `, час до передзвону ${String(r.medianMin)} хв` : ""}, чекають ${String(r.waiting)}`)].join("\n");
 }

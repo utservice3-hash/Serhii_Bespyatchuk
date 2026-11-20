@@ -9,26 +9,30 @@ import {
   type MissedNextStep, type NoDealCounts, type NoDealState, type NoDealListRow, type MissedTeamRow,
 } from "../../../api";
 import { InfoHint } from "../widgets";
-import { PeriodNav } from "../PeriodNav";
+import { PeriodStepper } from "../PeriodStepper";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { missedDefaultPeriod, groupByTeam, clientCell, clampListDay, SERIES_METRICS, type SeriesMetric,
-  MISSED_FILTER_KEY, EMPTY_MISSED_FILTER, parseMissedFilter, missedFilterParams, normLabel, type MissedFilter } from "../missedCallsView";
+  MISSED_FILTER_KEY, EMPTY_MISSED_FILTER, parseMissedFilter, missedFilterParams, normLabel, type MissedFilter,
+  mobileSplit, callbackPct, prevPeriodOf, prevPeriodWord, changePp, teamsCopyText, type CopyRow } from "../missedCallsView";
 import { fetchMissedNorm, type MissedFilterParams } from "../../../api";
-import { MissedFilterBar, NoCallbackBlock, MissedWeekBlock } from "./MissedCallsTzBlocks";
+import { MissedFilterMenu, useMissedTasks, taskAssignable, TaskCell, ManagerName } from "./MissedCallsTzBlocks";
+import { Fold, CountUp } from "./MissedFold";
 import { RANGES, MIN_WIN, rangeWindow, shortDate, COLORS } from "./StatisticsChartsSection";
 import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
- * 📵 «ПРОПУЩЕНІ ДЗВІНКИ» — ТЗ-1 від 14.09.2026, блоки A (підсумок) і B (по менеджерах).
+ * 📵 «ПРОПУЩЕНІ ДЗВІНКИ» — ТЗ-1 від 14.09.2026; ВИГЛЯД — РЕДИЗАЙН 20.11.2026 (прохання Романа: «дуже багато даних, треба
+ * спростити й зробити гарним», план `plans/missed-calls/redesign/redesign-plan.md`, прототип погоджено).
  *
- * Замінює ручний збір: доти Юля щодня збирала пропущені сама й кидала в чат «Керівники».
- * Усі означення — рішення власника 15.09.2026, закриті гейтами `#431`-`#440` на бекенді:
- * BUSY рахується, CLIENT NO ANSWER — ні; передзвін у вікні 24 год будь-ким; плечі одного
- * дзвінка склеєні.
+ * Перший екран відповідає на два питання: «скільки пропустили і як швидко передзвонюємо» (смуга з чотирьох чисел) і
+ * «кому передзвонити просто зараз» (один список). Решта лишається на екрані, але згорнута, і в заголовку кожного
+ * згорнутого блоку стоїть його число. ЧИСЛА НЕ ЗМІНЮЮТЬСЯ — міняється лише вигляд, порядок і що відкрито одразу.
+ * Єдине нове число — розбивка «на лінію / на мобільні» (рішення Романа 20.11.2026); «чекають» = досі без розмови
+ * від 10 с СКРІЗЬ (рішення Романа 20.11.2026, картка «Досі без розмови (38)»).
  *
- * 🔴 «БЕЗ ВІДПОВІДАЛЬНОГО» — ПОЛОВИНА ПРЕДМЕТА, І ВОНА НЕ ХОВАЄТЬСЯ. Правило фронту:
- * коли невідомих БІЛЬШІСТЬ, прогалина стає числом у шапці, а не підписом у кожному рядку.
- * Тому тут обидва: плитка в блоці A і один чесний рядок у таблиці B.
+ * Шапка — та сама, що у Звіті (`rv-head`, `PeriodStepper`, `rv-sel`, `rv-view`): людина вже знає цей контрол.
+ *
+ * 🔴 «БЕЗ ВІДПОВІДАЛЬНОГО» — ПОЛОВИНА ПРЕДМЕТА, І ВОНА НЕ ХОВАЄТЬСЯ: число в рядку під смугою і рядок у таблиці команд.
  */
 
 /** Порядок і підписи відер — ті самі, що в ядрі (`core/dayBuckets.ts`, `DAY_BUCKETS`). */
@@ -39,12 +43,11 @@ const BUCKETS: { key: MissedDayBucket; label: string; hint: string }[] = [
   { key: "night", label: "Ніч", hint: "Будні 21:00–9:00 за Києвом." },
 ];
 
-type SortKey = "missed" | "callbackSelf" | "callbackColleague" | "noCallback" | "medianMin" | "clientSelf";
-
 /** «—», а не «0 %»: нульовий знаменник — це «нема з чого рахувати», а не провал. */
 function pct(part: number, whole: number): string {
   return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
 }
+const num = (v: number | null) => (v == null ? "—" : v.toLocaleString("uk-UA"));
 
 /**
  * @param canOpenClient чи віддасть сервер картку клієнта (вкладка «Клієнти»). Без неї в списку
@@ -57,10 +60,9 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
   const { from, to } = periodOf(nav);
   const [d, setD] = useState<MissedCallsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [sort, setSort] = useState<SortKey>("missed");
   // 📄 Дві вкладки одного екрана (рішення Романа 20.11.2026): період і фільтр — спільні.
   const [tab, setTab] = useState<"calls" | "deals">("calls");
-  // День списку живе ТУТ, а не в блоці C: блок перемонтовується на кожному запиті, і день
+  // День списку живе ТУТ, а не в блоці списку: блок перемонтовується на кожному запиті, і день
   // скидався б на кінець періоду, зокрема на майбутній (рецензія 17.09.2026).
   const [listDay, setListDay] = useState<string>(() => clampListDay(null, from, to, today));
   useEffect(() => { setListDay((cur) => clampListDay(cur, from, to, today)); }, [from, to, today]);
@@ -85,11 +87,12 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
     let alive = true;
     fetchMissedCalls({ from, to })
       .then((x) => { if (alive) setOpts({ teams: x.teams, managers: x.managers }); })
-      // Не завантажились — панель однаково малюється (з «Скинути»), щоб збережений фільтр не став пасткою без виходу.
+      // Не завантажились — меню однаково малюється (з «Скинути»), щоб збережений фільтр не став пасткою без виходу.
       .catch(() => { if (alive) setOpts((o) => o ?? { teams: [], managers: [] }); });
     return () => { alive = false; };
   }, [from, to, filtered, isManager]);
-  // 🎯 Ціль із Налаштувань (ТЗ, розділ 7); не прийшла — «ціль не задана», а не «у нормі».
+  // 🎯 Ціль із Налаштувань (ТЗ, розділ 7). Не задана — колонку «Статус» не малюємо взагалі (п.7 плану редизайну):
+  // однакова фраза «ціль не задана» в кожному рядку нічого не казала.
   const [norm, setNorm] = useState<number | null>(null);
   useEffect(() => { fetchMissedNorm().then((x) => setNorm(x.norm)).catch(() => setNorm(null)); }, []);
 
@@ -105,210 +108,424 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, fpKey, tab]);
 
-  /**
-   * Сортуємо лише ЛЮДЕЙ. «Без відповідального» лишається внизу за будь-якого сортування:
-   * це не людина, і поставити «нікого» на перше місце рейтингу означало б сказати
-   * неправду про роботу відділу — саме так упорядковує і ядро (`foldManagerRows`).
-   */
-  const table = useMemo(() => {
-    if (!d) return { groups: [] as { team: MissedTeamRow; people: MissedManagerRow[] }[], orphans: [] as MissedManagerRow[], ownerless: [] as MissedManagerRow[] };
-    const val = (r: { [k in SortKey]: number | null } & { name: string }) => r[sort] ?? -1;
-    const byVal = <R extends { [k in SortKey]: number | null } & { name: string }>(a: R, b: R) =>
-      val(b) - val(a) || a.name.localeCompare(b.name, "uk");
-    // Команди — за тією ж колонкою, «Поза командами» лишається останньою, як і в ядрі.
-    const teams = [...d.teams].sort((a, b) => (a.teamId === null ? 1 : 0) - (b.teamId === null ? 1 : 0) || byVal(a, b));
-    const { groups, orphans } = groupByTeam(teams, d.managers);
-    for (const g of groups) g.people.sort(byVal);
-    return { groups, orphans: orphans.sort(byVal), ownerless: d.managers.filter((r) => r.managerId === null) };
-  }, [d, sort]);
+  // 📈 Колонка «Зміна» — той самий запит за попередній ТАКИЙ САМИЙ період (крок стрілки «‹»), той самий фільтр.
+  // Не прийшов — колонка пише «—», а не «0»: невідома зміна ≠ відсутність зміни.
+  const prevP = prevPeriodOf(nav);
+  const [prev, setPrev] = useState<MissedCallsResp | null>(null);
+  useEffect(() => {
+    if (!prevP || tab !== "calls") return;
+    let alive = true;
+    setPrev(null);
+    fetchMissedCalls({ from: prevP.from, to: prevP.to, ...fp })
+      .then((x) => { if (alive) setPrev(x); })
+      .catch(() => { if (alive) setPrev(null); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prevP?.from, prevP?.to, fpKey, tab]);
 
   const tabBtn = (k: "calls" | "deals", label: string) => (
-    <button type="button" onClick={() => setTab(k)} aria-pressed={tab === k}
-      style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer", font: "inherit", fontWeight: tab === k ? 700 : 400,
-        background: tab === k ? "var(--text, #222)" : "transparent", color: tab === k ? "var(--bg, #fff)" : "inherit" }}>{label}</button>
+    <button type="button" onClick={() => setTab(k)} aria-pressed={tab === k}>{label}</button>
   );
-  const navBar = <>
-    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-      {tabBtn("calls", "📵 Пропущені дзвінки")}
-      {tabBtn("deals", "📄 Пропущені угоди")}
-    </div>
-    <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />
-    {!isManager && opts && <MissedFilterBar filter={filter} onChange={setFilter} teams={opts.teams} managers={opts.managers} teamLocked={roleKey === "team_lead"} />}
-  </>;
-  if (tab === "deals") return <MissedDealsBlock from={from} to={to} fp={fp} head={navBar} />;
-  if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p></div>;
-  if (!d) return <div className="chart-card">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
+  const navBar = (
+    <header className="rv-head">
+      <h1>Пропущені</h1>
+      <PeriodStepper state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />
+      <div className="rv-grow" />
+      {!isManager && opts && <MissedFilterMenu filter={filter} onChange={setFilter} teams={opts.teams} managers={opts.managers} teamLocked={roleKey === "team_lead"} />}
+      <div className="rv-seg rv-view" role="group" aria-label="Вкладка">
+        {tabBtn("calls", "Дзвінки")}
+        {tabBtn("deals", "Угоди")}
+      </div>
+    </header>
+  );
+  if (tab === "deals") return <div className="rv mc">{navBar}<div className="mc-view" key="deals"><MissedDealsBlock from={from} to={to} fp={fp} /></div></div>;
+  if (err) return <div className="rv mc">{navBar}<p className="mc-err">{err}</p></div>;
+  if (!d) return <div className="rv mc">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
 
   const s = d.summary;
-  const cell: React.CSSProperties = { padding: "8px 10px", textAlign: "right", whiteSpace: "nowrap" };
-  const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: "var(--text-muted)", cursor: "pointer", userSelect: "none" };
-  const cols: { key: SortKey; label: string; hint: string }[] = [
-    { key: "missed", label: "Пропущено", hint: "Вхідні без розмови з відповіддю NO ANSWER або BUSY, плечі одного дзвінка склеєні." },
-    { key: "callbackSelf", label: "Передзвонив сам", hint: "Перший вихідний із розмовою від 10 с на той самий номер протягом 24 год зробив той самий менеджер." },
-    { key: "callbackColleague", label: "Передзвонив колега", hint: "Перший вихідний із розмовою від 10 с протягом 24 год зробив інший менеджер. Для рядка «Без відповідального» будь-хто — колега." },
-    { key: "noCallback", label: "Не передзвонили", hint: "Жодної розмови від 10 с на цей номер за 24 год. Сюди входять і ті, кому набирали, але не додзвонились." },
-    { key: "medianMin", label: "Медіана, хв", hint: "Медіана, а не середнє: поодинокі передзвони наступного дня тягнуть середнє вдесятеро вгору." },
-    { key: "clientSelf", label: "Клієнт сам", hint: "Клієнт передзвонив сам і дочекався відповіді. НЕ зараховується як наш передзвін." },
-  ];
-  const num = (v: number | null) => (v == null ? "—" : v.toLocaleString("uk-UA"));
+  const split = mobileSplit(s.missed, s.missedMobile);
+  const cbPct = s.missed > 0 ? Math.round((s.callback / s.missed) * 100) : null;
+  const ownerless = d.managers.filter((r) => r.managerId === null);
 
   return (
-    <>
-      <div className="chart-card">
-        {navBar}
-        <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
-          📵 Пропущені дзвінки
-          <InfoHint text={
-            "Дані з Ringostat. Пропущений = вхідний без розмови з відповіддю «не відповіли» або «зайнято». "
-            + "Не враховуються: голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою. "
-            + "Передзвін — перший вихідний на той самий номер протягом 24 годин, у якому була розмова від 10 с. Набрали й не додзвонились — це спроба, а не передзвін."
-          } />
-        </h3>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>
-          Період: {d.period.from} — {d.period.to}
-        </p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
-          <Tile label="Пропущено" value={num(s.missed)} sub={`не враховано: ${num(s.excluded)} · перевізники: ${num(s.carriers)}`}
-            hint="Не враховано — голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою. Перевізники — дзвінки з номерів, які в CRM закривали як «Перевізник» або які виставляють машини на Ларді (крім номерів з угодою замовника): їх немає ніде на цій вкладці і в колонці Звіту. Обидва числа показані окремо, щоб їх не шукали як зниклі." />
-          <Tile label="Передзвонили за 24 год" value={pct(s.callback, s.missed)}
-            sub={`${num(s.callback)} із ${num(s.missed)} · ${normLabel(s.missed > 0 ? Math.round((s.callback / s.missed) * 100) : null, norm)}`}
-            hint={`Передзвін — вихідний із розмовою від 10 с. Сам відповідальний — ${num(s.callbackSelf)}, колега — ${num(s.callbackColleague)}. Ще ${num(s.callbackAttempt)} — лише спроби без розмови від 10 с: набирали, але не додзвонились; передзвоном не рахуються.`} />
-          <Tile label="Медіана передзвону" value={s.medianMin == null ? "—" : `${s.medianMin} хв`} sub="від пропущеного до першої розмови від 10 с"
-            hint="Медіана, а не середнє: розподіл хвостатий, і поодинокі «передзвонили наступного дня» тягнуть середнє вдесятеро вгору." />
-          <Tile label="Клієнт передзвонив сам" value={pct(s.clientSelf, s.missed)} sub={`${num(s.clientSelf)} дзвінків`}
-            hint="Клієнт сам набрав знову й дочекався відповіді. Це НЕ наш передзвін і в нього не зараховується." />
-          {/* 🔴 У зрізі команди чи менеджера «без відповідального» не входить за побудовою — тут
-              був би нуль, що читається «у вас таких немає». Правило 7: порожній скоуп не нуль. */}
-          {d.ownerlessInScope
-            ? <Tile label="Без відповідального" value={pct(s.ownerless, s.missed)} sub={`${num(s.ownerless)} дзвінків`}
-                hint="Ringostat не віддав менеджера: дзвінок не дійшов до людини (черга, IVR). Такі дзвінки не приписуються нікому — ні командам, ні черговому." />
-            : <Tile label="Без відповідального" value="—" sub="не входять у зріз команди"
-                hint="Дзвінки без відповідального не належать жодній команді й жодному менеджеру, тому в цьому зрізі їх немає — це не нуль. Повне число видно в зрізі всієї компанії." />}
+    <div className="rv mc">
+      {navBar}
+      <div className="mc-view" key="calls">
+        {/* ① СМУГА З ЧОТИРЬОХ ЧИСЕЛ (п.1 плану): замість 25 плиток — те, що читається за 2 секунди. */}
+        <div className="mc-card">
+          <div className="mc-hero">
+            <div className="mc-k">
+              <div className="mc-kl">Пропущено <InfoHint text={
+                "Дані з Ringostat. Пропущений = вхідний без розмови з відповіддю «не відповіли» або «зайнято»; плечі одного дзвінка склеєні. "
+                + "«На лінію» — дзвінок мав хоча б одне плече «Вхідний»: саме їх показує фільтр у Ringostat. «На мобільні» — усі плечі "
+                + "«Вхідний перехоплений»: Ringostat переадресував дзвінок на мобільний менеджера. Разом — рівно «Пропущено»."} /></div>
+              <div className="mc-kv"><CountUp value={s.missed} /></div>
+              <div className="mc-bar" aria-hidden="true"><i className="ln" style={{ width: `${String(split.linePct)}%` }} /><i className="mb" style={{ width: `${String(100 - split.linePct)}%` }} /></div>
+              <div className="mc-ks"><b>{num(split.line)}</b> на лінію, <b>{num(split.mobile)}</b> на мобільні</div>
+            </div>
+            <div className="mc-k">
+              <div className="mc-kl">Передзвонили за 24 год <InfoHint text={`Передзвін — перший вихідний на той самий номер протягом 24 год із розмовою від 10 с. Набрали й не додзвонились — це спроба, а не передзвін: таких ще ${num(s.callbackAttempt)}.`} /></div>
+              <div className={`mc-kv${norm != null && cbPct != null ? (cbPct >= norm ? " mc-ok" : " mc-bad") : ""}`}>
+                {cbPct == null ? "—" : <CountUp value={cbPct} fmt={(n) => `${String(n)}%`} />}
+              </div>
+              <div className="mc-ks">{num(s.callback)} з {num(s.missed)}: сам {num(s.callbackSelf)}, колега {num(s.callbackColleague)}
+                {norm != null && <> · {normLabel(cbPct, norm)}</>}</div>
+            </div>
+            <div className="mc-k">
+              <div className="mc-kl">Час до передзвону <InfoHint text="Медіана, а не середнє: від пропущеного до першої розмови від 10 с. Поодинокі «передзвонили наступного дня» тягнуть середнє вдесятеро вгору." /></div>
+              <div className="mc-kv">{s.medianMin == null ? "—" : <CountUp value={s.medianMin} fmt={(n) => `${String(n)} хв`} />}</div>
+              <div className="mc-ks">медіана, до розмови від 10 с</div>
+            </div>
+            <div className="mc-k mc-act">
+              <div className="mc-kl">Чекають передзвону <InfoHint text="З номером досі немає розмови від 10 с — ні нашої, ні коли клієнт передзвонив сам. Без межі 24 год: щойно поговорили, дзвінок звідси зникає. Те саме число — у колонці «Чекають» таблиці команд і в списку нижче." /></div>
+              <div className="mc-kv"><CountUp value={s.waiting} /></div>
+              <div className="mc-ks">{num(s.waitingOverDay)} з них довше доби</div>
+            </div>
+          </div>
+          {/* Не входять у «Пропущено» — числом, щоб їх не шукали як зниклі (правило проєкту). */}
+          <div className="mc-foot">
+            Не входять у {num(s.missed)}: {`перевізники: ${num(s.carriers)}`} <InfoHint text="Перевізники — номери, які в CRM закривали як «Перевізник» або які виставляють машини на Ларді (крім номерів з угодою замовника): їх немає ніде на цій вкладці і в колонці Звіту." />,
+            {" "}голосова пошта та інше: {num(s.excluded)} <InfoHint text="Голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою." />.
+            {" "}Клієнт передзвонив сам: {num(s.clientSelf)} (у передзвін не входить).
+            {" "}{d.ownerlessInScope
+              ? <>Без відповідального: {num(s.ownerless)} <InfoHint text="Ringostat не віддав менеджера: дзвінок не дійшов до людини (черга, IVR). Такі дзвінки не приписуються нікому — ні командам, ні черговому." /></>
+              : <>Без відповідального — не входять у зріз команди <InfoHint text="Дзвінки без відповідального не належать жодній команді й жодному менеджеру, тому в цьому зрізі їх немає — це не нуль. Повне число видно в зрізі всієї компанії." /></>}
+          </div>
         </div>
 
-        <h4 style={{ margin: "18px 0 8px", fontSize: 14 }}>Коли пропускаємо</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12 }}>
-          {BUCKETS.map((b) => (
-            <Tile key={b.key} label={b.label} value={num(s.buckets[b.key])} sub={pct(s.buckets[b.key], s.missed)} hint={b.hint} />
-          ))}
-        </div>
-        {/* ТЗ §1.2: «вихідні = Сб/Нд, і це написано на екрані у виносці» — видимо, а не лише в підказці. */}
-        <p style={{ margin: "8px 0 0", fontSize: 12.5, color: "var(--text-muted)" }}>
-          Час — за Києвом. Вихідні — субота й неділя; державні свята не враховуються (календар свят порожній),
-          тож свято в будній день рахується як звичайний день.
-        </p>
-        {/* 🤖 Контроль ТЗ «автозакриття пропущених» (задача 4373): «скільки задач не створилось і скільки закрилось
-            автоматом за тиждень». Завжди 7 днів від сьогодні — не обраний період, і це сказано в заголовку. */}
-        {d.automation && (
-          <>
-            <h4 style={{ margin: "18px 0 8px", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
-              Автоматика за {d.automation.days} днів
-              <InfoHint text="Завжди останні 7 днів до сьогодні, незалежно від обраного періоду. Перевізник за історією CRM — номер уже закривали як «Перевізник» і немає угоди замовника в «Успіх» чи в роботі. Біржа Lardi-Trans не відповідає з 28.09, тож частина перевізників сюди не потрапляє." />
-            </h4>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
-              <Tile label="Не поставлено: перевізник" value={num(d.automation.skippedCarrier)} sub="задач «передзвони»"
-                hint="Пропущений від номера, який у CRM уже закривали як «Перевізник», — задачу менеджеру не ставили." />
-              <Tile label="Закрито: передзвонили" value={num(d.automation.closedCallback)} sub="розмова від 10 с"
-                hint="Задача закрилась сама: з номера компанії поговорили з клієнтом від 10 с. Хто й коли — у самій задачі." />
-              <Tile label="Закрито: перевізник" value={num(d.automation.closedCarrier)} sub="за історією CRM"
-                hint="Відкриту задачу закрито: номер виявився перевізником за історією CRM. Помилка — відкрийте задачу знову." />
-              <Tile label="Закрито: клієнт сам" value={num(d.automation.closedClientSelf)} sub={`ще в «Успіху»: ${num(d.automation.closedSuccess)}`}
-                hint="Відкриту задачу «передзвонити» закрито: клієнт сам передзвонив і з ним поговорили від 10 с, або угода цього номера після пропущеного перейшла в «Успішно реалізовано». У відсоток «Передзвонили за 24 год» це НЕ входить — це не наш передзвін." />
-              <Tile label="Відкрито зараз" value={num(d.automation.openNow)} sub="задач «передзвони»"
-                hint="Задачі «передзвони», які зараз чекають на передзвін — у вашому зрізі." />
-              {d.automation.dealsHistory != null && (
-                <Tile label="Угоди: історія CRM" value={num(d.automation.dealsHistory)} sub="у журналі «Відсіву»"
-                  hint="Угоди етапу «Дзвінки на мобільні» з вердиктом «історія CRM». Список — вкладка «Перевізники за розмовою»: джерело «історія CRM»." />
-              )}
-            </div>
-          </>
+        {/* ② КОМУ ПЕРЕДЗВОНИТИ (п.4–5 плану): один список замість «Не передзвонили за 24 год» і «Списку дзвінків». */}
+        <MissedListBlock from={d.period.from} to={d.period.to} day={listDay} setDay={setListDay} canOpenClient={canOpenClient} fp={fp}
+          managers={opts?.managers ?? d.managers} />
+
+        {/* ③ ПО КОМАНДАХ (п.6 плану): одна таблиця замість «Звіту тижня» і «По менеджерах». */}
+        <TeamsBlock d={d} prev={prev} nav={nav} norm={norm} ownerless={ownerless} />
+
+        {/* ④ ДЕТАЛЬНІШЕ (п.8 плану): для розбору, а не на щодень. Кожен підблок — зі своїм числом у заголовку. */}
+        <DetailsBlock d={d} fp={fp} />
+      </div>
+    </div>
+  );
+}
+
+/* ───────────── ② КОМУ ПЕРЕДЗВОНИТИ ───────────── */
+
+/** Текст «що сталось далі». Невдалий передзвін — ОКРЕМО від вдалого: це різна робота. */
+function nextLabel(kind: MissedNextStep, min: number | null): { text: string; bad: boolean } {
+  const m = min == null ? "" : ` через ${String(min)} хв`;
+  switch (kind) {
+    case "callback_talked": return { text: `передзвонили${m}, додзвонились`, bad: false };
+    case "callback_no_answer": return { text: `набирали${m}, без розмови`, bad: false };
+    case "client_self": return { text: `клієнт передзвонив сам${m}`, bad: false };
+    case "nothing": return { text: "нічого", bad: true };
+  }
+}
+
+const waitText = (h: number) => (h >= 48 ? `${String(Math.floor(h / 24))} д ${String(h % 24)} год` : `${String(h)} год`);
+
+/**
+ * 📋 СПИСОК ЗА ОДИН ДЕНЬ. Рахується тим самим виразом, що й «пропущено» (гейт `#452`), а «чекають» — тим самим
+ * `stillWaitingSql`, що й число в смузі (гейт `#10146`): розкриття пояснює число, а не сперечається з ним.
+ * Перемикач «Чекають / Усі / Лише мобільні» — над ОДНИМ завантаженим списком, тож лічильники на кнопках чесні ще до кліку.
+ * 👤 Картка клієнта відкривається тут же, під рядком (`ClientCardPanel`); без права — «є в CRM», а не кнопка.
+ */
+function MissedListBlock({ from, to, day, setDay, canOpenClient, fp, managers }: {
+  from: string; to: string; day: string; setDay: (d: string) => void; canOpenClient: boolean; fp: MissedFilterParams;
+  managers: { managerId: number | null; name: string }[];
+}) {
+  const [view, setView] = useState<"waiting" | "all" | "mobile">("waiting");
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  const [d, setD] = useState<MissedListResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [pick, setPick] = useState<Record<string, number>>({});
+  const t = useMissedTasks(day, day, fp);
+
+  useEffect(() => {
+    if (!day) return;
+    let alive = true;
+    setD(null); setErr(null); setSel(new Set());
+    fetchMissedList({ day, ...fp })
+      .then((x) => { if (alive) setD(x); })
+      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day, JSON.stringify(fp)]);
+
+  const all = d?.rows ?? [];
+  const waiting = all.filter((r) => r.waiting);
+  const mobile = all.filter((r) => r.mobile);
+  // «Чекають» — найдовше очікування зверху: кому дзвонити першим.
+  const rows = view === "waiting" ? [...waiting].sort((a, b) => b.waitH - a.waitH) : view === "mobile" ? mobile : all;
+  const overDay = waiting.filter((r) => r.waitH >= 24).length;
+  const assignable = rows.filter((r) => taskAssignable(t, r.uniqueid));
+  const picked = [...sel].filter((u) => assignable.some((r) => r.uniqueid === u));
+  const multiDay = from !== to;
+
+  const chip = (k: typeof view, label: string, n: number) => (
+    <button type="button" className="mc-chip" aria-pressed={view === k} onClick={() => setView(k)}>{label} {num(n)}</button>
+  );
+  return (
+    <Fold id="c-list" defaultOpen title="Кому передзвонити"
+      summary={d ? <><b className="mc-red">{num(waiting.length)}</b> чекають{overDay > 0 ? `, ${num(overDay)} довше доби` : ""}{multiDay ? ` · за ${day.slice(8)}.${day.slice(5, 7)}` : ""}</> : null}>
+      <div className="mc-tools">
+        {chip("waiting", "Чекають", waiting.length)}
+        {chip("all", "Усі", all.length)}
+        {chip("mobile", "Лише мобільні", mobile.length)}
+        <InfoHint text="«Чекають» — з номером досі немає розмови від 10 с (ні нашої, ні коли клієнт передзвонив сам); щойно поговорили, рядок зникає. «Що далі» — НАЙРАНІША подія після дзвінка. «Мобільний» — Ringostat переадресував дзвінок на мобільний менеджера. Кнопка «Задача» з'являється, коли минула доба без розмови. Дзвінків з номерів перевізників тут немає." />
+        {multiDay && (
+          <label className="mc-day">День
+            <input id="missed-list-day" type="date" value={day} min={from} max={to} onChange={(e) => setDay(e.target.value)} />
+          </label>
+        )}
+        <div className="rv-grow" />
+        {t.canAssign && (
+          <button type="button" className="mc-btn" disabled={t.busy || picked.length === 0}
+            onClick={() => { void t.assign(picked.map((u) => ({ uniqueid: u, ...(pick[u] ? { managerId: pick[u] } : {}) }))); setSel(new Set()); }}>
+            Поставити задачі обраним{picked.length ? ` (${String(picked.length)})` : ""}
+          </button>
         )}
       </div>
-
-      {/* 🔝 «Дзвінок був, а угоди немає» — ОДРАЗУ ПІД ПІДСУМКОМ (прохання власника 17.09.2026): унизу
-          його не було видно за довгою таблицею й списком дзвінків. Далі — динаміка, як на Статистиках. */}
-      {/* 📞 5148: «один екран по швидкості реакції» — відповідь на заявку поруч із передзвоном на пропущені. */}
-      {/* 📵 ТЗ 12.10, розділ 4: що робити просто зараз — одразу під підсумком; за ним звіт тижня (розділ 6). */}
-      <NoCallbackBlock from={d.period.from} to={d.period.to} fp={fp} managers={opts?.managers ?? d.managers} />
-      <MissedWeekBlock today={today} fp={fp} />
-      <ResponseTimeBlock from={d.period.from} to={d.period.to} filtered={filtered} />
-      <NoDealBlock from={d.period.from} to={d.period.to} fp={fp} />
-      <MissedDynamicsBlock fp={fp} />
-
-      <div className="chart-card" style={{ marginTop: 16 }}>
-        <h3 style={{ margin: "0 0 12px" }}>По менеджерах</h3>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                <th style={{ ...head, textAlign: "left", cursor: "default" }}>Менеджер</th>
-                {cols.map((c) => (
-                  <th key={c.key} style={head} onClick={() => setSort(c.key)} title="Сортувати">
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      {c.label}{sort === c.key ? " ↓" : ""} <InfoHint text={c.hint} />
-                    </span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
+      {t.err && <p role="alert" className="mc-err mc-pad">⚠️ {t.err}</p>}
+      {err && <p className="mc-err mc-pad">{err}</p>}
+      {!err && !d && <p className="loading-text mc-pad">Завантаження…</p>}
+      {d && d.truncated && <p className="mc-err mc-pad">Показано перші {num(all.length)} — список за цей день довший і обрізаний.</p>}
+      {d && rows.length === 0 && (
+        <div className="mc-empty">
+          {view === "waiting" ? (all.length ? "Усім передзвонили. Нових пропущених немає." : "Пропущених за цей день немає.")
+            : view === "mobile" ? "Пропущених на мобільні за цей день немає." : "Пропущених за цей день немає."}
+        </div>
+      )}
+      {d && rows.length > 0 && (
+        <div className="mc-scroll">
+          <table className="mc-tbl mc-list">
+            <thead><tr>
+              {t.canAssign && <th className="mc-cb"><input type="checkbox" aria-label="Обрати всі"
+                checked={assignable.length > 0 && assignable.every((r) => sel.has(r.uniqueid))}
+                onChange={(e) => setSel(e.target.checked ? new Set(assignable.map((r) => r.uniqueid)) : new Set())} /></th>}
+              <th>Дзвінок</th><th>Клієнт</th><th>Відповідальний</th><th className="mc-hm">Що далі</th><th className="r">Чекає</th><th />
+            </tr></thead>
             <tbody>
-              {/* ТЗ §1.4 B: кожен менеджер + рядок команди + «без відповідального» + «всього».
-                  Рядок команди — з ядра (медіана по дзвінках команди), а не Σ людей на фронті. */}
-              {table.groups.map((g) => (
-                <Fragment key={`team-${String(g.team.teamId)}`}>
-                  {g.people.map((r) => <MgrRow key={r.managerId ?? "x"} r={r} cell={cell} num={num} indent />)}
-                  <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg)", fontWeight: 600 }}>
-                    <td style={{ ...cell, textAlign: "left" }}>Команда: {g.team.name}</td>
-                    <td style={cell}>{num(g.team.missed)}</td>
-                    <td style={cell}>{num(g.team.callbackSelf)}</td>
-                    <td style={cell}>{num(g.team.callbackColleague)}</td>
-                    <td style={cell}>{num(g.team.noCallback)}</td>
-                    <td style={cell}>{num(g.team.medianMin)}</td>
-                    <td style={cell}>{num(g.team.clientSelf)}</td>
-                  </tr>
-                </Fragment>
-              ))}
-              {table.orphans.map((r) => <MgrRow key={r.managerId ?? "x"} r={r} cell={cell} num={num} />)}
-              {table.ownerless.map((r) => <MgrRow key="ownerless" r={r} cell={cell} num={num} />)}
-              <tr style={{ fontWeight: 700 }}>
-                <td style={{ ...cell, textAlign: "left" }}>{d.total.name}</td>
-                <td style={cell}>{num(d.total.missed)}</td>
-                <td style={cell}>{num(d.total.callbackSelf)}</td>
-                <td style={cell}>{num(d.total.callbackColleague)}</td>
-                <td style={cell}>{num(d.total.noCallback)}</td>
-                {/* Медіани не додаються: справжня медіана періоду стоїть у плитці вище. */}
-                <td style={cell} title="Медіана періоду — у плитці «Медіана передзвону» вище">{s.medianMin == null ? "—" : s.medianMin}</td>
-                <td style={cell}>{num(d.total.clientSelf)}</td>
-              </tr>
+              {rows.map((r) => {
+                const n = nextLabel(r.next, r.nextMin);
+                const cc = clientCell(r.clientKey, canOpenClient);
+                const isOpen = openRow === r.uniqueid;
+                const can = taskAssignable(t, r.uniqueid);
+                return (
+                  <Fragment key={r.uniqueid}>
+                    <tr>
+                      {t.canAssign && <td className="mc-cb">{can && <input type="checkbox" aria-label="Обрати" checked={sel.has(r.uniqueid)}
+                        onChange={(e) => setSel((x) => { const y = new Set(x); if (e.target.checked) y.add(r.uniqueid); else y.delete(r.uniqueid); return y; })} />}</td>}
+                      <td className="mc-nw">{r.at}{r.mobile && <span className="mc-tag" title="Усі плечі «Вхідний перехоплений»: дзвінок ішов на мобільний менеджера">мобільний</span>}</td>
+                      <td className="mc-nw">
+                        {r.phone ?? <span className="mc-m">номер не визначено</span>}
+                        {r.dealUrl && <> · <a href={r.dealUrl} target="_blank" rel="noreferrer">угода</a></>}
+                        {cc === "open" && <> · <button type="button" className="mc-link" onClick={() => setOpenRow(isOpen ? null : r.uniqueid)}>{isOpen ? "сховати картку" : "картка"}</button></>}
+                        {cc === "unknown" && <span className="mc-m"> · не впізнано в CRM</span>}
+                      </td>
+                      <td><ManagerName managerId={r.managerId} name={r.managerName} /></td>
+                      <td className={`mc-hm${n.bad ? " mc-m" : ""}`}>{n.text}</td>
+                      <td className="r mc-nw">{r.waiting ? <b className="mc-red">{waitText(r.waitH)}</b> : <span className="mc-m" title="З номером уже була розмова від 10 с">—</span>}</td>
+                      <td className="r"><TaskCell uniqueid={r.uniqueid} managerId={r.managerId} t={t} pick={pick[r.uniqueid]}
+                        onPick={(id) => setPick((p) => ({ ...p, [r.uniqueid]: id }))} managers={managers} /></td>
+                    </tr>
+                    {isOpen && r.clientKey && (
+                      <tr><td colSpan={t.canAssign ? 7 : 6} className="mc-cardrow"><ClientCardPanel clientKey={r.clientKey} /></td></tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
-      </div>
-
-      <MissedListBlock from={d.period.from} to={d.period.to} day={listDay} setDay={setListDay} canOpenClient={canOpenClient} fp={fp} />
-    </>
+      )}
+    </Fold>
   );
 }
 
-function MgrRow({ r, cell, num, indent = false }: {
-  r: MissedManagerRow; cell: React.CSSProperties; num: (v: number | null) => string; indent?: boolean;
+/* ───────────── ③ ПО КОМАНДАХ ───────────── */
+
+type SortKey = "missed" | "pct" | "medianMin" | "waiting";
+
+/**
+ * 👥 ОДНА ТАБЛИЦЯ ЗАМІСТЬ ДВОХ (п.6 плану). Команди згорнуті, клік або Enter розгортає менеджерів. «Чекають» — те саме
+ * число, що в смузі (`stillWaitingSql`). «Зміна» — п.п. % передзвону до попереднього такого самого періоду.
+ * Рядок команди — з ядра (медіана по дзвінках команди), а не Σ людей на фронті: медіани не додаються.
+ * «Без відповідального» — свій рядок унизу за будь-якого сортування: це не людина й не команда.
+ */
+function TeamsBlock({ d, prev, nav, norm, ownerless }: {
+  d: MissedCallsResp; prev: MissedCallsResp | null; nav: PeriodState; norm: number | null; ownerless: MissedManagerRow[];
 }) {
-  return (
-    <tr style={{
-      borderBottom: "1px solid var(--border)",
-      color: r.managerId === null ? "var(--text-muted)" : "inherit",
-      fontStyle: r.managerId === null ? "italic" : "normal",
-    }}>
-      <td style={{ ...cell, textAlign: "left", paddingLeft: indent ? 22 : 10 }}>{r.name}</td>
-      <td style={cell}>{num(r.missed)}</td>
-      <td style={cell}>{num(r.callbackSelf)}</td>
-      <td style={cell}>{num(r.callbackColleague)}</td>
-      <td style={cell}>{num(r.noCallback)}</td>
-      <td style={cell}>{num(r.medianMin)}</td>
-      <td style={cell}>{num(r.clientSelf)}</td>
+  const [sort, setSort] = useState<SortKey>("missed");
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [copied, setCopied] = useState<string | null>(null);
+  const s = d.summary;
+  type Row = { missed: number; callbackSelf: number; callbackColleague: number; medianMin: number | null; waiting: number; name: string };
+  const val = (r: Row): number => (sort === "pct" ? callbackPct(r) ?? -1 : sort === "medianMin" ? r.medianMin ?? -1 : r[sort]);
+  const byVal = (a: Row, b: Row) => val(b) - val(a) || a.name.localeCompare(b.name, "uk");
+  const table = useMemo(() => {
+    const teams = [...d.teams].sort((a, b) => (a.teamId === null ? 1 : 0) - (b.teamId === null ? 1 : 0) || byVal(a, b));
+    const { groups, orphans } = groupByTeam(teams, d.managers);
+    for (const g of groups) g.people.sort(byVal);
+    return { groups, orphans: orphans.sort(byVal) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d, sort]);
+  const prevTeam = new Map((prev?.teams ?? []).map((t) => [t.teamId, t]));
+  const prevMgr = new Map((prev?.managers ?? []).map((m) => [m.managerId, m]));
+  const totalPct = s.missed > 0 ? Math.round((s.callback / s.missed) * 100) : null;
+  const prevTotalPct = prev && prev.summary.missed > 0 ? Math.round((prev.summary.callback / prev.summary.missed) * 100) : null;
+  const ch = (cur: number | null, p: number | null | undefined) => {
+    const v = prev ? changePp(cur, p ?? null) : null;
+    return v == null ? <span className="mc-m">—</span> : <span className={v > 0 ? "mc-up" : v < 0 ? "mc-down" : "mc-m"}>{v > 0 ? "+" : v < 0 ? "−" : ""}{String(Math.abs(v))} п.п.</span>;
+  };
+  const pctCell = (p: number | null) => (
+    <span className={norm != null && p != null ? (p >= norm ? "mc-up" : "mc-down") : undefined} title={norm != null ? normLabel(p, norm) : undefined}>{p == null ? "—" : `${String(p)}%`}</span>
+  );
+  const toggle = (k: string) => setOpen((x) => { const y = new Set(x); if (y.has(k)) y.delete(k); else y.add(k); return y; });
+  const word = prevPeriodWord(nav.mode);
+  const top = table.groups.filter((g) => g.team.teamId != null).sort((a, b) => b.team.missed - a.team.missed)[0];
+
+  const copyRows: CopyRow[] = [
+    { name: "Відділ", missed: s.missed, pct: totalPct, medianMin: s.medianMin, waiting: s.waiting, change: prev ? changePp(totalPct, prevTotalPct) : null },
+    ...table.groups.map((g) => ({ name: g.team.name, missed: g.team.missed, pct: callbackPct(g.team), medianMin: g.team.medianMin, waiting: g.team.waiting,
+      change: prev ? changePp(callbackPct(g.team), (() => { const p = prevTeam.get(g.team.teamId); return p ? callbackPct(p) : null; })()) : null })),
+    ...ownerless.map((r) => ({ name: r.name, missed: r.missed, pct: callbackPct(r), medianMin: r.medianMin, waiting: r.waiting,
+      change: prev ? changePp(callbackPct(r), (() => { const p = prevMgr.get(null); return p ? callbackPct(p) : null; })()) : null })),
+  ];
+  const copy = async () => {
+    const text = teamsCopyText(d.period.from === d.period.to ? d.period.from : `${d.period.from} — ${d.period.to}`, copyRows);
+    try { await navigator.clipboard.writeText(text); setCopied("ok"); } catch { setCopied(text); }
+  };
+  const th = (k: SortKey | null, label: string, hint?: string) => (
+    <th className="r">{k ? <button type="button" className="mc-sort" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}{sort === k ? " ↓" : ""}</button> : label}
+      {hint && <> <InfoHint text={hint} /></>}</th>
+  );
+  const mgrRow = (r: MissedManagerRow, k: string, i = -1) => (
+    <tr key={k} className={`mc-mgr${i >= 0 ? " mc-in" : ""}`} style={i >= 0 ? { animationDelay: `${String(i * 30)}ms` } : undefined}>
+      <td><ManagerName managerId={r.managerId} name={r.name} /></td>
+      <td className="r">{num(r.missed)}</td><td className="r">{pctCell(callbackPct(r))}</td>
+      <td className="r">{r.medianMin == null ? "—" : `${String(r.medianMin)} хв`}</td>
+      <td className="r">{num(r.waiting)}</td><td className="r">{ch(callbackPct(r), (() => { const p = prevMgr.get(r.managerId); return p ? callbackPct(p) : null; })())}</td>
     </tr>
   );
+  return (
+    <Fold id="c-teams" defaultOpen title="По командах"
+      summary={top ? <>найбільше пропущених: {top.team.name} <b>{num(top.team.missed)}</b> · клік по команді — менеджери</> : "клік по команді — менеджери"}
+      tools={<button type="button" className="mc-btn2" onClick={() => { void copy(); }}>Скопіювати для звіту</button>}>
+      <p className="mc-note mc-pad">«Зміна» — до попереднього {word}. Тиждень для звіту — перемикач «Тиждень» угорі й стрілка «‹».</p>
+      {copied === "ok" && <p className="mc-ok mc-pad" role="status">Скопійовано — вставте в чат.</p>}
+      {copied && copied !== "ok" && <textarea readOnly value={copied} className="mc-copy" />}
+      <div className="mc-scroll mc-noscroll">
+        <table className="mc-tbl mc-teams">
+          <thead><tr>
+            <th>Команда</th>
+            {th("missed", "Пропущено")}
+            {th("pct", "Передзвонили", "Частка пропущених, яким за 24 год передзвонили з розмовою від 10 с: сам відповідальний або колега.")}
+            {th("medianMin", "Медіана", "Час до передзвону, медіана по дзвінках команди. Медіани не додаються, тому в рядку «Відділ» — медіана всього періоду.")}
+            {th("waiting", "Чекають", "З номером досі немає розмови від 10 с — те саме число, що в смузі вгорі.")}
+            <th className="r">Зміна <InfoHint text={`Різниця % передзвону з попереднім ${word === "періоду" ? "таким самим періодом" : word} (п.п.). «—» — порівнювати нема з чим.`} /></th>
+          </tr></thead>
+          <tbody>
+            {table.groups.map((g) => {
+              const k = `team-${String(g.team.teamId)}`;
+              const isOpen = open.has(k);
+              const p = prevTeam.get(g.team.teamId);
+              return (
+                <Fragment key={k}>
+                  <tr className="mc-team" tabIndex={0} role="button" aria-expanded={isOpen} onClick={() => toggle(k)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(k); } }}>
+                    <td><span className="mc-tchev" aria-hidden="true">▸</span>{g.team.name}</td>
+                    <td className="r">{num(g.team.missed)}</td><td className="r">{pctCell(callbackPct(g.team))}</td>
+                    <td className="r">{g.team.medianMin == null ? "—" : `${String(g.team.medianMin)} хв`}</td>
+                    <td className="r">{g.team.waiting > 0 ? <b className="mc-red">{num(g.team.waiting)}</b> : num(g.team.waiting)}</td>
+                    <td className="r">{ch(callbackPct(g.team), p ? callbackPct(p) : null)}</td>
+                  </tr>
+                  {isOpen && g.people.map((r, i) => mgrRow(r, `m-${String(r.managerId)}`, i))}
+                </Fragment>
+              );
+            })}
+            {table.orphans.map((r) => mgrRow(r, `o-${String(r.managerId)}`))}
+            {ownerless.map((r) => (
+              <tr key="ownerless" className="mc-mrow">
+                <td className="mc-m">{r.name}</td>
+                <td className="r">{num(r.missed)}</td><td className="r">{pctCell(callbackPct(r))}</td>
+                <td className="r">{r.medianMin == null ? "—" : `${String(r.medianMin)} хв`}</td>
+                <td className="r">{r.waiting > 0 ? <b className="mc-red">{num(r.waiting)}</b> : num(r.waiting)}</td>
+                <td className="r">{ch(callbackPct(r), (() => { const p = prevMgr.get(null); return p ? callbackPct(p) : null; })())}</td>
+              </tr>
+            ))}
+            <tr className="mc-total">
+              <td>Відділ</td><td className="r">{num(s.missed)}</td><td className="r">{pctCell(totalPct)}</td>
+              {/* Медіани не додаються: тут медіана всього періоду з підсумку, а не з рядків. */}
+              <td className="r">{s.medianMin == null ? "—" : `${String(s.medianMin)} хв`}</td>
+              <td className="r">{num(s.waiting)}</td><td className="r">{ch(totalPct, prevTotalPct)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Fold>
+  );
 }
+
+/* ───────────── ④ ДЕТАЛЬНІШЕ ───────────── */
+
+function DetailsBlock({ d, fp }: { d: MissedCallsResp; fp: MissedFilterParams }) {
+  const s = d.summary;
+  const [nd, setNd] = useState<NoDealCounts | null>(null);
+  const a = d.automation;
+  const closed = a ? a.closedCallback + a.closedCarrier + a.closedClientSelf : 0;
+  return (
+    <Fold id="c-more" title="Детальніше" summary="динаміка, години, дзвінок без угоди, автозадачі">
+      <div className="mc-more">
+        <Fold id="m-dyn" nested lazy title="Динаміка" summary="графік по днях, тижнях і місяцях за всю історію">
+          <MissedDynamicsBlock fp={fp} />
+        </Fold>
+        <Fold id="m-hours" nested title="Коли пропускаємо"
+          summary={<>робочий час <b>{num(s.buckets.work)}</b>, вечір {num(s.buckets.evening)}, ніч {num(s.buckets.night)}, вихідні {num(s.buckets.weekend)}</>}>
+          <div className="mc-inner">
+            <div className="mc-minis">
+              {BUCKETS.map((b) => (
+                <Tile key={b.key} label={b.label} value={num(s.buckets[b.key])} sub={pct(s.buckets[b.key], s.missed)} hint={b.hint} />
+              ))}
+            </div>
+            {/* ТЗ §1.2: «вихідні = Сб/Нд, і це написано на екрані у виносці» — видимо, а не лише в підказці. */}
+            <p className="mc-note">
+              Час — за Києвом. Вихідні — субота й неділя; державні свята не враховуються (календар свят порожній),
+              тож свято в будній день рахується як звичайний день.
+            </p>
+          </div>
+        </Fold>
+        <Fold id="m-nodeal" nested title="Дзвінок був, а угоди немає"
+          summary={nd ? <><b>{num(nd.noDeal)}</b> без заявки за тиждень, {num(nd.unknown)} номерів не знайдено в CRM</> : null}>
+          <NoDealBlock from={d.period.from} to={d.period.to} fp={fp} onCounts={setNd} />
+        </Fold>
+        {/* 🤖 Контроль ТЗ «автозакриття пропущених» (задача 4373): завжди 7 днів від сьогодні — не обраний період, і це в заголовку. */}
+        {a && (
+          <Fold id="m-auto" nested title={`Автозадачі за ${String(a.days)} днів`}
+            summary={<>відкрито <b>{num(a.openNow)}</b>, закрито автоматично {num(closed)}</>}>
+            <div className="mc-inner">
+              <p className="mc-note">Завжди останні 7 днів до сьогодні, незалежно від обраного періоду.
+                <InfoHint text="Перевізник за історією CRM — номер уже закривали як «Перевізник» і немає угоди замовника в «Успіх» чи в роботі. Біржа Lardi-Trans не відповідає з 28.09, тож частина перевізників сюди не потрапляє." /></p>
+              <div className="mc-minis">
+                <Tile label="Відкрито зараз" value={num(a.openNow)} sub="задач «передзвони»" hint="Задачі «передзвони», які зараз чекають на передзвін — у вашому зрізі." />
+                <Tile label="Закрито: передзвонили" value={num(a.closedCallback)} sub="розмова від 10 с" hint="Задача закрилась сама: з номера компанії поговорили з клієнтом від 10 с. Хто й коли — у самій задачі." />
+                <Tile label="Закрито: клієнт сам" value={num(a.closedClientSelf)} sub={`ще в «Успіху»: ${num(a.closedSuccess)}`}
+                  hint="Відкриту задачу «передзвонити» закрито: клієнт сам передзвонив і з ним поговорили від 10 с, або угода цього номера після пропущеного перейшла в «Успішно реалізовано». У відсоток «Передзвонили за 24 год» це НЕ входить — це не наш передзвін." />
+                <Tile label="Закрито: перевізник" value={num(a.closedCarrier)} sub="за історією CRM" hint="Відкриту задачу закрито: номер виявився перевізником за історією CRM. Помилка — відкрийте задачу знову." />
+                <Tile label="Не поставлено: перевізник" value={num(a.skippedCarrier)} sub="задач «передзвони»" hint="Пропущений від номера, який у CRM уже закривали як «Перевізник», — задачу менеджеру не ставили." />
+                {a.dealsHistory != null && (
+                  <Tile label="Угоди: історія CRM" value={num(a.dealsHistory)} sub="у журналі «Відсіву»"
+                    hint="Угоди етапу «Дзвінки на мобільні» з вердиктом «історія CRM». Список — вкладка «Перевізники за розмовою»: джерело «історія CRM»." />
+                )}
+              </div>
+            </div>
+          </Fold>
+        )}
+      </div>
+    </Fold>
+  );
+}
+
+/* ───────────── блоки «Детальніше» і «Відповідь на заявку» ───────────── */
 
 /**
  * 📈 ДИНАМІКА — «статистика по днях», як на сторінках Статистик (прохання власника 17.09.2026):
@@ -394,12 +611,12 @@ function MissedDynamicsBlock({ fp }: { fp: MissedFilterParams }) {
   const MUTED = "var(--text-muted)";
 
   return (
-    <div className="chart-card" style={{ marginTop: 16 }}>
-      <h3 style={{ margin: "0 0 10px", display: "flex", alignItems: "center", gap: 8 }}>
-        📈 Динаміка
+    <div className="mc-inner">
+      <p className="mc-note">
+        Уся історія дзвінків; від періоду вгорі не залежить.
         <InfoHint text={"Пропущені по днях, тижнях чи місяцях за всю історію дзвінків (з 01.09.2025). Остання точка — вчора: частка «не передзвонили» за останню добу ще може зменшитись, доки не мине 24 години на передзвін. "
           + "Серії — уся компанія (або ваш зріз), кожна команда за поточним складом, «Поза командами» і «Без відповідального»; у кожній точці Σ серій = «Усього»."} />
-      </h3>
+      </p>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {SERIES_METRICS.map((mm) => (
@@ -491,137 +708,6 @@ function MissedDynamicsBlock({ fp }: { fp: MissedFilterParams }) {
   );
 }
 
-const BUCKET_LABEL: Record<MissedDayBucket, string> = Object.fromEntries(BUCKETS.map((b) => [b.key, b.label])) as Record<MissedDayBucket, string>;
-
-/** Текст «що сталось далі». Невдалий передзвін — ОКРЕМО від вдалого: це різна робота. */
-function nextLabel(kind: MissedNextStep, min: number | null): { text: string; bad: boolean } {
-  const m = min == null ? "" : ` через ${String(min)} хв`;
-  switch (kind) {
-    case "callback_talked": return { text: `передзвонили${m}, додзвонились`, bad: false };
-    case "callback_no_answer": return { text: `передзвонили${m}, не додзвонились`, bad: false };
-    case "client_self": return { text: `клієнт передзвонив сам${m}`, bad: false };
-    case "nothing": return { text: "нічого за 24 год", bad: true };
-  }
-}
-
-/**
- * 📋 БЛОК C — пропущені за ОДИН день.
- * Список рахується тим самим виразом, що й «пропущено» в блоці A (гейт `#452`), тож за той
- * самий день рядків тут рівно стільки, скільки в числі.
- * 👤 КЛІЄНТ (ТЗ §1.4 C, хвіст звірки 16.09.2026): адреси картки клієнта в продукті немає, тож
- * картка відкривається ТУТ ЖЕ, під рядком — той самий `ClientCardPanel`, що на екрані планів
- * клієнтів. Хто картку не отримає від сервера, бачить «є в CRM», а не кнопку.
- */
-function MissedListBlock({ from, to, day, setDay, canOpenClient, fp }: {
-  from: string; to: string; day: string; setDay: (d: string) => void; canOpenClient: boolean; fp: MissedFilterParams;
-}) {
-  // 5824: за замовчуванням — лише ті, з ким після пропущеного ще ніхто не поговорив (знімається галочкою — «усі»).
-  const [onlyNo, setOnlyNo] = useState(true);
-  const [openRow, setOpenRow] = useState<string | null>(null);
-  const [d, setD] = useState<MissedListResp | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!day) return;
-    let alive = true;
-    setD(null); setErr(null);
-    fetchMissedList({ day, ...(onlyNo ? { noCallback: "1" as const } : {}), ...fp })
-      .then((x) => { if (alive) setD(x); })
-      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [day, onlyNo, JSON.stringify(fp)]);
-
-  const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "left", whiteSpace: "nowrap" };
-  const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: "var(--text-muted)" };
-
-  return (
-    <div className="chart-card" style={{ marginTop: 16 }}>
-      <h3 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
-        📋 Список дзвінків
-        <InfoHint text="Кожен пропущений за обраний день і що сталось одразу після нього. «Що сталось далі» — НАЙРАНІША подія: якщо клієнт передзвонив сам раніше, ніж ми, рядок покаже саме це. Дзвінків з номерів перевізників тут немає." />
-      </h3>
-      <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12, fontSize: 14 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          День
-          <input id="missed-list-day" type="date" value={day} min={from} max={to} onChange={(e) => setDay(e.target.value)} />
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input id="missed-list-only-no" type="checkbox" checked={onlyNo} onChange={(e) => setOnlyNo(e.target.checked)} />
-          лише непередзвонені — з номером досі немає розмови від 10 с (ні нашої, ні коли клієнт передзвонив сам)
-        </label>
-      </div>
-
-      {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
-      {!err && !d && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
-      {d && d.rows.length === 0 && (
-        <p style={{ margin: 0, color: "var(--text-muted)" }}>
-          {onlyNo ? `За ${day} непередзвонених немає — з усіма поговорили. Зніміть галочку, щоб побачити всі пропущені.` : `За ${day} пропущених немає.`}
-        </p>
-      )}
-      {d && d.rows.length > 0 && (
-        <>
-          {d.truncated && (
-            <p style={{ margin: "0 0 8px", color: "var(--danger, #c8102e)", fontSize: 13 }}>
-              Показано перші {d.rows.length.toLocaleString("uk-UA")} — список за цей день довший і обрізаний.
-            </p>
-          )}
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  <th style={head}>Час</th><th style={head}>Номер</th><th style={head}>Менеджер</th>
-                  <th style={head}>Коли</th><th style={head}>Що сталось далі</th><th style={head}>Клієнт</th><th style={head}>Угода</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.rows.map((r) => {
-                  const n = nextLabel(r.next, r.nextMin);
-                  const cc = clientCell(r.clientKey, canOpenClient);
-                  const isOpen = openRow === r.uniqueid;
-                  return (
-                    <Fragment key={r.uniqueid}>
-                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td style={cell}>{r.at}</td>
-                      <td style={cell}>{r.phone ?? "номер не визначено"}</td>
-                      <td style={{ ...cell, color: r.managerId === null ? "var(--text-muted)" : "inherit", fontStyle: r.managerId === null ? "italic" : "normal" }}>{r.managerName}</td>
-                      <td style={cell}>{BUCKET_LABEL[r.bucket]}</td>
-                      <td style={{ ...cell, color: n.bad ? "var(--danger, #c8102e)" : "inherit" }}>{n.text}</td>
-                      <td style={cell}>
-                        {cc === "open" && (
-                          <button type="button" onClick={() => setOpenRow(isOpen ? null : r.uniqueid)}
-                            style={{ background: "none", border: "none", padding: 0, color: "var(--link, #2f5d8a)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}>
-                            {isOpen ? "сховати картку" : "картка клієнта"}
-                          </button>
-                        )}
-                        {cc === "known" && <span style={{ color: "var(--text-muted)" }}>є в CRM</span>}
-                        {cc === "unknown" && <span style={{ color: "var(--text-muted)" }}>не впізнано в CRM</span>}
-                      </td>
-                      <td style={cell}>
-                        {r.dealUrl
-                          ? <a href={r.dealUrl} target="_blank" rel="noreferrer">угода в CRM</a>
-                          : <span style={{ color: "var(--text-muted)" }}>немає</span>}
-                      </td>
-                    </tr>
-                    {isOpen && r.clientKey && (
-                      <tr>
-                        <td colSpan={7} style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
-                          <ClientCardPanel clientKey={r.clientKey} />
-                        </td>
-                      </tr>
-                    )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 /** Підписи трьох станів — ОДИН підпис на одне значення (правило проєкту). */
 const NO_DEAL_TILES: { state: NoDealState; key: keyof NoDealCounts; label: string; hint: string }[] = [
   { state: "unknown", key: "unknown", label: "Номер не знайдено в CRM",
@@ -636,7 +722,7 @@ const NO_DEAL_TILES: { state: NoDealState; key: keyof NoDealCounts; label: strin
  * 🧾 БЛОК D — «дзвінок був, а угоди немає». Три числа, і кожне розкривається списком,
  * порахованим ТИМ САМИМ запитом (гейт `#452`: рядків у розкритті рівно стільки, скільки в числі).
  */
-function NoDealBlock({ from, to, fp }: { from: string; to: string; fp: MissedFilterParams }) {
+function NoDealBlock({ from, to, fp, onCounts }: { from: string; to: string; fp: MissedFilterParams; onCounts?: (c: NoDealCounts | null) => void }) {
   const [c, setC] = useState<NoDealCounts | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<NoDealState | null>(null);
@@ -654,6 +740,10 @@ function NoDealBlock({ from, to, fp }: { from: string; to: string; fp: MissedFil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, JSON.stringify(fp)]);
 
+  // Число в заголовку згорнутого блоку — з тієї самої відповіді, що й плитки (без другого запиту).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { onCounts?.(c); }, [c]);
+
   useEffect(() => {
     if (!open) return;
     let alive = true;
@@ -670,18 +760,16 @@ function NoDealBlock({ from, to, fp }: { from: string; to: string; fp: MissedFil
   const talk = (sec: number) => `${String(Math.floor(sec / 60))}:${String(sec % 60).padStart(2, "0")}`;
 
   return (
-    <div className="chart-card" style={{ marginTop: 16 }}>
-      <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
-        🧾 Дзвінок був, а угоди немає
+    <div className="mc-inner">
+      <p className="mc-note">
+        Вхідні, на які відповіли, у трьох станах. Натисніть на число, щоб побачити дзвінки.
         <InfoHint text="Вхідні дзвінки, на які відповіли, розкладені на три стани. Натисніть на число, щоб побачити самі дзвінки." />
-      </h3>
+      </p>
       {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
       {!err && !c && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
       {c && (
         <>
-          <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>
-            Відповіданих вхідних за період: {c.answered.toLocaleString("uk-UA")}
-          </p>
+          <p className="mc-note">Відповіданих вхідних за період: {c.answered.toLocaleString("uk-UA")}</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 }}>
             {NO_DEAL_TILES.map((t) => {
               const n = c[t.key];
@@ -795,12 +883,12 @@ function ResponseTimeBlock({ from, to, filtered }: { from: string; to: string; f
     </Fragment>
   );
   return (
-    <div className="chart-card" style={{ marginTop: 16 }}>
-      <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
-        Відповідь на заявку
+    <div className="mc-inner">
+      <p className="mc-note">
+        Від створення заявки до першого набору менеджера.
         <InfoHint text="Від створення заявки до ПЕРШОГО набору менеджера, навіть якщо клієнт не взяв трубку. Медіана, а не середнє: кілька заявок, яким передзвонили через дні, тягнуть середнє в десятки разів угору. Заявка, створена в неробочий час, рахується від 08:15 найближчого робочого дня — як у вікні «Час опрацювання заявки». Заявки — реклама (uts.ua) і сайт (yalogist); лідгени — окремим рядком і в медіану відділу не входять." />
-      </h3>
-      <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>Період: {from} — {to} · за датою створення заявки · команда — на дату створення
+      </p>
+      <p className="mc-note">Період: {from} — {to} · за датою створення заявки · команда — на дату створення
         {filtered && <b style={{ color: "var(--text)" }}> · фільтр команд екрана на цей блок не діє — розбивка по командах нижче</b>}</p>
       {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
       {!r && !err && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
@@ -847,13 +935,139 @@ function ResponseTimeBlock({ from, to, filtered }: { from: string; to: string; f
 
 function Tile({ label, value, sub, hint }: { label: string; value: string; sub?: string; hint: string }) {
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px" }}>
-      <div style={{ fontSize: 12.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
-        {label} <InfoHint text={hint} />
-      </div>
-      <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{value}</div>
-      {sub && <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 2 }}>{sub}</div>}
+    <div className="mc-mini">
+      <div className="mc-kl">{label} <InfoHint text={hint} /></div>
+      <b>{value}</b>
+      {sub && <div className="mc-ks">{sub}</div>}
     </div>
+  );
+}
+
+/**
+ * 📄 «ПРОПУЩЕНІ УГОДИ» — друга вкладка екрана (рішення Романа 20.11.2026, «правильні пропущені» п.5; словник §11a).
+ * Пропущена угода — угода Kommo, яку створив вхідний дзвінок, а за 5 хв від нього не було ні розмови, ні нового
+ * дзвінка (нашого будь-якого чи нового вхідного). Число, таблиця і список приходять ОДНИМ запитом і одним правилом.
+ * Вигляд — той самий, що на вкладці дзвінків (редизайн 20.11.2026): смуга чисел, список, згорнуті таблиця й
+ * «Відповідь на заявку» (п.9 плану: це швидкість реакції на заявку, тобто на угоду, тож блок стоїть тут).
+ */
+function MissedDealsBlock({ from, to, fp }: { from: string; to: string; fp: MissedFilterParams }) {
+  const [d, setD] = useState<MissedDealsResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [view, setView] = useState<"open" | "all">("open");
+  const fpKey = JSON.stringify(fp);
+  const filtered = fpKey !== "{}";
+  useEffect(() => {
+    if (!from || !to) return;
+    let alive = true;
+    setD(null); setErr(null);
+    fetchMissedDeals({ from, to, ...fp })
+      .then((x) => { if (alive) setD(x); })
+      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to, fpKey]);
+  if (err) return <p className="mc-err">{err}</p>;
+  if (!d) return <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>;
+  const s = d.summary;
+  const missedPct = s.deals > 0 ? Math.round((s.missed / s.deals) * 100) : null;
+  const open = d.rows.filter((r) => r.next !== "talked");
+  const rows = view === "open" ? open : d.rows;
+  const top = d.managers.filter((m) => m.managerId != null).sort((a, b) => b.missed - a.missed)[0];
+  return (
+    <>
+      <div className="mc-card">
+        <div className="mc-hero">
+          <div className="mc-k">
+            <div className="mc-kl">Угод із вхідного дзвінка <InfoHint text="Угоди, створені вхідним дзвінком за період (Kommo створює угоду одразу на дзвінок)." /></div>
+            <div className="mc-kv"><CountUp value={s.deals} /></div>
+            <div className="mc-ks">за обраний період</div>
+          </div>
+          <div className="mc-k mc-act">
+            <div className="mc-kl">Пропущені угоди <InfoHint text={
+              "Угода, яку створив вхідний дзвінок, а за 5 хвилин від дзвінка з цим номером не було ні розмови, ні нового дзвінка: "
+              + "ні нашого вихідного (навіть без відповіді), ні нового вхідного. Відповідальний — відповідальний за угоду в Kommo."} /></div>
+            <div className="mc-kv"><CountUp value={s.missed} /></div>
+            <div className="mc-ks">{missedPct == null ? "—" : `${String(missedPct)}%`}: за 5 хв ні розмови, ні нового дзвінка</div>
+          </div>
+          <div className="mc-k">
+            <div className="mc-kl">Поговорили пізніше <InfoHint text="З пропущених угод — скільки разом із номером згодом була розмова від 10 с (до сьогодні)." /></div>
+            <div className="mc-kv"><CountUp value={s.talkedLater} /></div>
+            <div className="mc-ks">з {num(s.missed)} пропущених ({pct(s.talkedLater, s.missed)})</div>
+          </div>
+          <div className="mc-k">
+            <div className="mc-kl">Досі без розмови <InfoHint text="Пропущені угоди, з номером яких досі не було розмови від 10 с — ні нашої, ні вхідної." /></div>
+            <div className="mc-kv">{num(open.length)}</div>
+            <div className="mc-ks">{d.truncated ? "у показаній частині списку" : "кому передзвонити"}</div>
+          </div>
+        </div>
+        <div className="mc-foot">
+          Не входять: угоди перевізників {num(s.carriers)}. Ще рахуються (менше 5 хв від дзвінка): {num(s.pending)}.
+          {" "}{d.ownerlessInScope ? <>Без відповідального: {num(s.ownerless)}.</> : <>Без відповідального — не входять у зріз команди.</>}
+        </div>
+      </div>
+
+      <Fold id="d-list" defaultOpen title="Пропущені угоди" summary={<><b className="mc-red">{num(open.length)}</b> досі без розмови</>}>
+        <div className="mc-tools">
+          <button type="button" className="mc-chip" aria-pressed={view === "open"} onClick={() => setView("open")}>Досі без розмови {num(open.length)}</button>
+          <button type="button" className="mc-chip" aria-pressed={view === "all"} onClick={() => setView("all")}>Усі {num(d.rows.length)}</button>
+          <InfoHint text="Кожна пропущена угода періоду, від найновішої. «Що далі» — перша розмова від 10 с з номером після дзвінка, або лише наш набір без розмови, або нічого досі." />
+        </div>
+        {d.truncated && <p className="mc-err mc-pad">Показано перші {num(d.rows.length)} — список за період довший і обрізаний. Звузьте період.</p>}
+        {rows.length === 0 ? <div className="mc-empty">{view === "open" ? "З усіма поговорили." : "Пропущених угод за період немає."}</div> : (
+          <div className="mc-scroll">
+            <table className="mc-tbl mc-list">
+              <thead><tr><th>Дзвінок</th><th>Номер</th><th>Відповідальний</th><th>Що далі</th><th className="r">Угода</th></tr></thead>
+              <tbody>
+                {rows.map((r) => {
+                  const n = dealNextLabel(r.next, r.nextMin);
+                  return (
+                    <tr key={r.dealId}>
+                      <td className="mc-nw">{r.at}</td><td className="mc-nw">{r.phone}</td>
+                      <td>{r.managerId === null ? <span className="mc-m">{r.managerName}</span> : r.managerName}</td>
+                      <td className={n.bad ? "mc-m" : undefined}>{n.text}</td>
+                      <td className="r"><a href={r.dealUrl} target="_blank" rel="noreferrer">угода в CRM</a></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Fold>
+
+      <Fold id="d-mgr" title="По менеджерах" summary={top ? <>найбільше пропущених: {top.name} <b>{num(top.missed)}</b></> : "за період угод із дзвінка немає"}>
+        {d.managers.length === 0 ? <div className="mc-empty">За період угод із вхідного дзвінка немає.</div> : (
+          <div className="mc-scroll mc-noscroll">
+            <table className="mc-tbl">
+              <thead><tr>
+                <th>Менеджер</th><th className="mc-hm">Команда</th>
+                <th className="r">Угод із дзвінка</th><th className="r">Пропущено</th><th className="r">%</th><th className="r">Поговорили пізніше</th>
+              </tr></thead>
+              <tbody>
+                {d.managers.map((r) => (
+                  <tr key={r.managerId ?? "ownerless"}>
+                    <td>{r.managerId === null ? <span className="mc-m">{r.name}</span> : r.name}</td>
+                    <td className="mc-hm mc-m">{r.teamName ?? (r.managerId === null ? "—" : "поза командами")}</td>
+                    <td className="r">{num(r.deals)}</td><td className="r">{num(r.missed)}</td>
+                    <td className="r">{pct(r.missed, r.deals)}</td><td className="r">{num(r.talkedLater)}</td>
+                  </tr>
+                ))}
+                <tr className="mc-total">
+                  <td>Усього</td><td className="mc-hm" />
+                  <td className="r">{num(s.deals)}</td><td className="r">{num(s.missed)}</td>
+                  <td className="r">{pct(s.missed, s.deals)}</td><td className="r">{num(s.talkedLater)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Fold>
+
+      {/* 📞 5148: «один екран по швидкості реакції». Тут — бо це реакція на заявку, тобто на угоду (п.9 плану). */}
+      <Fold id="d-resp" title="Відповідь на заявку" summary="медіана від заявки до першого набору, по командах">
+        <ResponseTimeBlock from={d.period.from} to={d.period.to} filtered={filtered} />
+      </Fold>
+    </>
   );
 }
 
@@ -866,126 +1080,3 @@ function dealNextLabel(kind: MissedDealNext, min: number | null): { text: string
   }
 }
 
-/**
- * 📄 «ПРОПУЩЕНІ УГОДИ» — друга вкладка екрана (рішення Романа 20.11.2026, «правильні пропущені» п.5; словник §11a).
- * Пропущена угода — угода Kommo, яку створив вхідний дзвінок, а за 5 хв від нього не було ні розмови, ні нового
- * дзвінка (нашого будь-якого чи нового вхідного). Число, таблиця і список приходять ОДНИМ запитом і одним правилом.
- */
-function MissedDealsBlock({ from, to, fp, head }: { from: string; to: string; fp: MissedFilterParams; head: React.ReactNode }) {
-  const [d, setD] = useState<MissedDealsResp | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const fpKey = JSON.stringify(fp);
-  useEffect(() => {
-    if (!from || !to) return;
-    let alive = true;
-    setD(null); setErr(null);
-    fetchMissedDeals({ from, to, ...fp })
-      .then((x) => { if (alive) setD(x); })
-      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, fpKey]);
-  const num = (v: number) => v.toLocaleString("uk-UA");
-  const cell: React.CSSProperties = { padding: "8px 10px", textAlign: "right", whiteSpace: "nowrap" };
-  const th: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: "var(--text-muted)" };
-  const left: React.CSSProperties = { ...cell, textAlign: "left" };
-  if (err) return <div className="chart-card">{head}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p></div>;
-  if (!d) return <div className="chart-card">{head}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
-  const s = d.summary;
-  return (
-    <>
-      <div className="chart-card">
-        {head}
-        <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
-          📄 Пропущені угоди
-          <InfoHint text={
-            "Угода, яку створив вхідний дзвінок (Kommo створює її одразу на дзвінок), а за 5 хвилин від дзвінка з цим номером "
-            + "не було ні розмови, ні нового дзвінка: ні нашого вихідного (навіть без відповіді), ні нового вхідного. "
-            + "Перевізників тут немає, як і в пропущених дзвінках. Відповідальний — відповідальний за угоду в Kommo."
-          } />
-        </h3>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>Період: {d.period.from} — {d.period.to}</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
-          <Tile label="Угод із вхідного дзвінка" value={num(s.deals)} sub={`ще рахуються: ${num(s.pending)} · перевізники: ${num(s.carriers)}`}
-            hint="Угоди, створені вхідним дзвінком за період. «Ще рахуються» — від дзвінка ще не минуло 5 хвилин, тож вони поки ні пропущені, ні ні. Перевізники — номери з довідника перевізників, у числа не входять." />
-          <Tile label="Пропущені угоди" value={pct(s.missed, s.deals)} sub={`${num(s.missed)} із ${num(s.deals)}`}
-            hint="За 5 хвилин від дзвінка — ні розмови, ні нового дзвінка з цим номером." />
-          <Tile label="Поговорили пізніше" value={pct(s.talkedLater, s.missed)} sub={`${num(s.talkedLater)} пропущених угод`}
-            hint="З пропущених угод — скільки разом із номером згодом була розмова від 10 с (до сьогодні)." />
-          {d.ownerlessInScope
-            ? <Tile label="Без відповідального" value={num(s.ownerless)} sub="пропущених угод"
-                hint="Пропущені угоди, у яких у Kommo немає відповідального." />
-            : <Tile label="Без відповідального" value="—" sub="не входять у зріз команди"
-                hint="Угоди без відповідального не належать жодній команді, тому в цьому зрізі їх немає — це не нуль." />}
-        </div>
-      </div>
-
-      <div className="chart-card" style={{ marginTop: 16 }}>
-        <h3 style={{ margin: "0 0 12px" }}>По менеджерах</h3>
-        {d.managers.length === 0
-          ? <p style={{ margin: 0, color: "var(--text-muted)" }}>За період угод із вхідного дзвінка немає.</p>
-          : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-                <thead><tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  <th style={{ ...th, textAlign: "left" }}>Менеджер</th><th style={{ ...th, textAlign: "left" }}>Команда</th>
-                  <th style={th}>Угод із дзвінка</th><th style={th}>Пропущено</th><th style={th}>%</th><th style={th}>Поговорили пізніше</th>
-                </tr></thead>
-                <tbody>
-                  {d.managers.map((r) => (
-                    <tr key={r.managerId ?? "ownerless"} style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td style={{ ...left, fontStyle: r.managerId === null ? "italic" : "normal" }}>{r.name}</td>
-                      <td style={{ ...left, color: "var(--text-muted)" }}>{r.teamName ?? (r.managerId === null ? "—" : "поза командами")}</td>
-                      <td style={cell}>{num(r.deals)}</td><td style={cell}>{num(r.missed)}</td>
-                      <td style={cell}>{pct(r.missed, r.deals)}</td><td style={cell}>{num(r.talkedLater)}</td>
-                    </tr>
-                  ))}
-                  <tr style={{ fontWeight: 700 }}>
-                    <td style={left}>Усього</td><td style={left} />
-                    <td style={cell}>{num(s.deals)}</td><td style={cell}>{num(s.missed)}</td>
-                    <td style={cell}>{pct(s.missed, s.deals)}</td><td style={cell}>{num(s.talkedLater)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          )}
-      </div>
-
-      <div className="chart-card" style={{ marginTop: 16 }}>
-        <h3 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
-          📋 Список пропущених угод
-          <InfoHint text="Кожна пропущена угода періоду, від найновішої. «Що далі» — перша розмова від 10 с з номером після дзвінка, або лише наш набір без розмови, або нічого досі." />
-        </h3>
-        {d.rows.length === 0 && <p style={{ margin: 0, color: "var(--text-muted)" }}>Пропущених угод за період немає.</p>}
-        {d.truncated && (
-          <p style={{ margin: "0 0 8px", color: "var(--danger, #c8102e)", fontSize: 13 }}>
-            Показано перші {num(d.rows.length)} — список за період довший і обрізаний. Звузьте період.
-          </p>
-        )}
-        {d.rows.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-              <thead><tr style={{ borderBottom: "1px solid var(--border)" }}>
-                <th style={{ ...th, textAlign: "left" }}>Дзвінок</th><th style={{ ...th, textAlign: "left" }}>Номер</th>
-                <th style={{ ...th, textAlign: "left" }}>Відповідальний</th><th style={{ ...th, textAlign: "left" }}>Що далі</th><th style={th}>Угода</th>
-              </tr></thead>
-              <tbody>
-                {d.rows.map((r) => {
-                  const n = dealNextLabel(r.next, r.nextMin);
-                  return (
-                    <tr key={r.dealId} style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td style={left}>{r.at}</td><td style={left}>{r.phone}</td>
-                      <td style={{ ...left, fontStyle: r.managerId === null ? "italic" : "normal" }}>{r.managerName}</td>
-                      <td style={{ ...left, color: n.bad ? "var(--danger, #c8102e)" : "inherit" }}>{n.text}</td>
-                      <td style={cell}><a href={r.dealUrl} target="_blank" rel="noreferrer">угода в CRM</a></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
