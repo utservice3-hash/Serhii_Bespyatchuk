@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * 🪗 ЗГОРТАННЯ ЕКРАНА «ПРОПУЩЕНІ» (прохання Романа 20.11.2026: «списки, які згортаються… найкращі принципи UX»).
@@ -76,4 +77,49 @@ export function useCountUp(target: number, ms = 700): number {
 /** Ціле число, що набігає; `fmt` — як його написати (відсоток, «хв»). */
 export function CountUp({ value, fmt = (n) => n.toLocaleString("uk-UA") }: { value: number; fmt?: (n: number) => string }) {
   return <>{fmt(useCountUp(value))}</>;
+}
+
+/**
+ * ⓘ ПІДКАЗКА, ЯКУ НІЩО НЕ ОБРІЗАЄ (баг, знайдений Романом 20.11.2026 на проді: підказку «Чекають передзвону» накрила шапка).
+ * Звичайний `InfoHint` малює спливашку всередині свого блоку, тож її ховали: липка шапка екрана (смуга чисел під нею),
+ * `overflow: hidden` згортного блоку (без нього не працює плавне згортання) і прокрутка таблиць. Заміряно на проді:
+ * 38 підказок із 39 на обох вкладках були закриті хоч частково.
+ * Тут спливашка йде в `document.body` (портал) з `position: fixed` за координатами значка: над усім, що є на сторінці.
+ * Місце обирає сама: зверху, якщо там вистачає місця нижче шапки, інакше знизу; по горизонталі не виходить за екран.
+ * Той самий вигляд і поведінка, що в `InfoHint`: наведення показує, клік закріплює (на телефоні — дотик).
+ */
+export function Hint({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const icon = useRef<HTMLSpanElement | null>(null);
+  const pop = useRef<HTMLSpanElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); return; }
+    const place = () => {
+      const a = icon.current?.getBoundingClientRect(), p = pop.current?.getBoundingClientRect();
+      if (!a || !p) return;
+      // Шапка екрана липка: спливашка зверху не має залазити під неї.
+      const head = document.querySelector(".rv-head")?.getBoundingClientRect().bottom ?? 0;
+      const gap = 8, edge = 8;
+      const above = a.top - gap - p.height;
+      const top = above >= Math.max(head, 0) + edge ? above : a.bottom + gap;
+      const left = Math.min(Math.max(edge, a.left + a.width / 2 - p.width / 2), window.innerWidth - p.width - edge);
+      setPos({ left, top });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [open]);
+  return (
+    <span className="info-hint" ref={icon}
+      onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); }}>
+      <span className="info-hint-icon" aria-label="Звідки дані">ⓘ</span>
+      {open && createPortal(
+        <span ref={pop} className="info-hint-pop mc-hint-pop" role="tooltip"
+          style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: 0, visibility: "hidden" }}>{text}</span>,
+        document.body)}
+    </span>
+  );
 }

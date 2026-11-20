@@ -2038,3 +2038,6 @@ tr.mc-total td { font-weight: 700; border-top: 1px solid var(--rv-line); }
 @media (prefers-reduced-motion: reduce) {
   .mc *, .mc *::before, .mc { animation: none !important; transition: none !important; }
 }
+/* ⓘ «Пропущені»: спливашка через портал (`Hint` у MissedFold.tsx) — фіксована, над шапкою й поза обрізанням блоків. */
+.info-hint-pop.mc-hint-pop { position: fixed; bottom: auto; transform: none; z-index: 1000; }
+.mc-why { font-size: 12.5px; white-space: nowrap; }

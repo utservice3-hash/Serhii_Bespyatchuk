@@ -1236,3 +1236,52 @@ test("#10146 ⏳ ЧЕКАЮТЬ: смуга чисел = позначки в с�
     assert.equal(Number(mgr.find((r) => r.manager_id === null)?.waiting), 1, "🔴 «без відповідального» загубив свій дзвінок, що чекає");
   } finally { await c.end(); scratch.dispose(); }
 });
+
+/**
+ * #10148 — 📅 СПИСОК «КОМУ ПЕРЕДЗВОНИТИ» ЗА ПЕРІОД = ЧИСЛО В СМУЗІ ЗА ТОЙ САМИЙ ПЕРІОД (баг 20.11.2026, прохід по екрану на проді:
+ * за тиждень смуга казала «Чекають 131», а список — 38 за один день). Фікстура: три дні, у кожному пропущені, частина вже
+ * з розмовою. Червоніє, якщо: список за період бере лише перший день (`baseCte(day, day)`); рядків або «чекають» не стільки,
+ * скільки в `missedSummarySql` за ті самі дати; у кількох днях «Дзвінок» без дати (два 09:10 різних днів не розрізнити);
+ * ДЗЕРКАЛО — без `to` список, як і раніше, за один день і час без дати.
+ */
+test("#10148 📅 СПИСОК ЗА ПЕРІОД: рядки й «чекають» = смуга за ті самі дати; у кількох днях дата в «Дзвінку»; без `to` — один день", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO managers(id,name,is_active) VALUES (1,'Яцик',true) ON CONFLICT DO NOTHING");
+    let seq = 0;
+    const call = (at: string, type: string, disp: string, sec: number, phone: string) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone)
+               VALUES ($1,$2,$3,$4,$5,1,$6)`, [`p${String(++seq)}`, at, type, disp, sec, phone]);
+    const days = ["2026-11-16", "2026-11-17", "2026-11-18"];
+    let k = 0;
+    for (const d of days) {
+      for (const h of ["09", "10", "11"]) await call(`${d} ${h}:10:00+02`, "in", "NO ANSWER", 0, `38050101480${String(++k)}`);
+    }
+    await call("2026-11-19 10:00:00+02", "out", "ANSWERED", 40, "380501014801");   // день 1 — поговорили
+    await call("2026-11-19 10:00:00+02", "out", "ANSWERED", 40, "380501014805");   // день 2 — поговорили
+    const [F, , T] = days;
+    const sq = R.missedSummarySql(F, T, {});
+    const sum = (await c.query(sq.sql, sq.params)).rows[0] as Record<string, number>;
+    assert.equal(Number(sum.missed), 9);
+    assert.equal(Number(sum.waiting), 7);
+    const lq = R.missedListSql(F, {}, false, T);
+    const list = (await c.query(lq.sql, lq.params)).rows as { at: string; waiting: boolean }[];
+    assert.equal(list.length, Number(sum.missed), `🔴 список за період ${String(list.length)} рядків, а в смузі пропущено ${String(sum.missed)}`);
+    assert.equal(list.filter((r) => r.waiting).length, Number(sum.waiting), "🔴 «чекають» у списку за період ≠ число в смузі");
+    assert.ok(list.every((r) => /^\d\d\.\d\d \d\d:\d\d$/.test(r.at)), `🔴 у списку за кілька днів «Дзвінок» без дати: ${list[0]?.at ?? "—"}`);
+    const oq = R.missedListSql(F, {}, true, T);
+    assert.equal((await c.query(oq.sql, oq.params)).rows.length, Number(sum.waiting), "🔴 «лише ті, що чекають» за період ≠ смуга");
+    // ДЗЕРКАЛО: без `to` — рівно один день і час без дати, як до 20.11.
+    const dq = R.missedListSql(F, {});
+    const one = (await c.query(dq.sql, dq.params)).rows as { at: string }[];
+    assert.equal(one.length, 3, "🔴 список без `to` вийшов за межі одного дня");
+    assert.ok(one.every((r) => /^\d\d:\d\d$/.test(r.at)), "🔴 список за один день отримав дату в «Дзвінку»");
+  } finally { await c.end(); scratch.dispose(); }
+});

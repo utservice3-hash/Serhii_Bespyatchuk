@@ -12447,9 +12447,14 @@ dashboardRouter.get("/missed-calls/list", async (req, res) => {
   const day = dateParam(req.query.day) ?? kyivToday();
   const scope = missedScopeFor(req.auth!, req.query);
   const onlyNoCallback = req.query.noCallback === "1";
-  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback);
+  // 20.11.2026: `to` — список за весь обраний період (тиждень, місяць), щоб «Кому передзвонити» збігався з числом у смузі.
+  // Не довше 31 дня і не раніше `day`; інакше — один день, як і було. Стеля рядків і `truncated` — ті самі.
+  const toQ = dateParam(req.query.to);
+  const spanDays = toQ ? (Date.parse(toQ) - Date.parse(day)) / 86_400_000 : -1;
+  const to = toQ && spanDays >= 0 && spanDays <= 31 ? toQ : day;
+  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback, to);
   res.json({
-    day, onlyNoCallback, truncated,
+    day, to, onlyNoCallback, truncated,
     // Явний перелік полів, а не `...r`: нова властивість рядка не поїде назовні сама (#17e2).
     rows: rows.map((r) => ({
       uniqueid: r.uniqueid, at: r.at, phone: r.phone, clientKey: r.clientKey,

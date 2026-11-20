@@ -159,6 +159,21 @@ export function changePp(cur: number | null, prev: number | null): number | null
   return cur == null || prev == null ? null : cur - prev;
 }
 
+/**
+ * ⏱ ТРИВАЛІСТЬ СЛОВАМИ: до години — хвилини, далі — години й хвилини, від доби — дні й години.
+ * Баг 20.11.2026 (прохід по екрану на проді): «1334 хв» і «через 790 хв» читались як шум — ніхто не ділить на 60 в голові.
+ * Число те саме, змінюється лише запис; `null` — «—» (рахувати не було з чого), а не «0 хв».
+ */
+export function durText(min: number | null): string {
+  if (min == null || !Number.isFinite(min)) return "—";
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `${String(m)} хв`;
+  const h = Math.floor(m / 60), r = m % 60;
+  if (h < 24) return r ? `${String(h)} год ${String(r)} хв` : `${String(h)} год`;
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh ? `${String(d)} д ${String(rh)} год` : `${String(d)} д`;
+}
+
 export interface CopyRow { name: string; missed: number; pct: number | null; medianMin: number | null; waiting: number; change: number | null }
 /**
  * Текст «Скопіювати для звіту» — з ТИХ САМИХ рядків, що на екрані таблиці «По командах» (замість окремого блоку «Звіт
@@ -169,5 +184,31 @@ export function teamsCopyText(title: string, rows: readonly CopyRow[]): string {
   const ch = (v: number | null) => (v == null ? "" : ` (${v > 0 ? "+" : ""}${String(v)} п.п.)`);
   return [`📵 Пропущені дзвінки, ${title}`, ...rows.map((r) =>
     `${r.name}: пропущено ${String(r.missed)}, передзвонили за 24 год ${p(r.pct)}${ch(r.change)}`
-    + `${r.medianMin != null ? `, час до передзвону ${String(r.medianMin)} хв` : ""}, чекають ${String(r.waiting)}`)].join("\n");
+    + `${r.medianMin != null ? `, час до передзвону ${durText(r.medianMin)}` : ""}, чекають ${String(r.waiting)}`)].join("\n");
+}
+
+/**
+ * 🕳 ЧОМУ В РЯДКУ, ЩО ЧЕКАЄ, НЕМАЄ КНОПКИ «ЗАДАЧА» (баг 20.11.2026: клітинка була порожня, без пояснення).
+ * Причини — рівно ті умови, якими сервер відбирає рядки під задачу (`noCallbackSql`), по черзі:
+ * ще не минула доба · номер невідомий · задача вже стоїть на інший дзвінок того самого номера · номер — перевізник за
+ * історією CRM (єдина умова, що лишається, коли попередні не спрацювали). `null` — пояснювати нема чого.
+ */
+export interface TaskLookup {
+  loaded: boolean;
+  /** Список під задачі обрізано стелею — тоді «немає в списку» нічого не доводить, і причину не вигадуємо. */
+  truncated: boolean;
+  byId: { has: (uniqueid: string) => boolean };
+  byPhone: { get: (phone: string) => { at: string } | undefined };
+  res: Record<string, unknown>;
+}
+export function noTaskReason(t: TaskLookup, r: { uniqueid: string; phone: string | null; waiting: boolean; waitH: number }): string | null {
+  if (!r.waiting || !t.loaded || t.byId.has(r.uniqueid) || t.res[r.uniqueid]) return null;
+  if (r.waitH < 24) return "задача — коли мине доба";
+  if (r.phone == null) return "номер невідомий";
+  const other = t.byPhone.get(r.phone);
+  if (other) {
+    const at = new Date(other.at).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    return `задача — на дзвінок ${at}`;
+  }
+  return t.truncated ? null : "перевізник за історією CRM";
 }
