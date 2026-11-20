@@ -2836,6 +2836,7 @@ export const MANIFEST_TESTS: string[] = [
   "#235b 🔴 ДЗЕРКАЛО: дозвіл ПОІМЕННИЙ — чуже зникнення реєстр НЕ покриває",
   "#235c 🔴 ЗАПИС ПРО ЖИВИЙ ГЕЙТ — ЧЕРВОНЕ, і це гірша помилка за незаявлене зникнення",
   "#235d ЗАПИС БЕЗ ПРИЧИНИ (або без дати) не приймається",
+  "#9515 ТЕСТ БЕЗ «#» ЗНІМАЄТЬСЯ ЛИШЕ ЧЕРЕЗ РЕЄСТР: названий — приймається, неназваний — ні, живий — дефект реєстру",
   // 🈳 ПОРОЖНІЙ ПЕРІОД (01.09.2026): 11 із 17 падінь приймання були наші гейти,
   // що червоніли від відсутності даних вересня. Дозвіл двоскладовий: імʼя + маркер.
   "#236 порожній період: імʼя в реєстрі + маркер = дозволений скіп",
@@ -4688,7 +4689,9 @@ export function acceptRetired(
   lost: readonly string[], alive: readonly string[], registry: readonly RetiredGate[] = RETIRED_GATES,
 ): RetireVerdict {
   const problems: string[] = [];
-  const liveNames = new Set(gateNames(alive));
+  // 🔤 «Живий» звіряється за ПОВНИМ іменем серед УСІХ тестів дерева, а не лише серед гейтів із «#»: із 20.11.2026
+  // реєстр знімає й тести без номера (див. `diffGates`), і запис про такий ЖИВИЙ тест — та сама ковдра.
+  const liveNames = new Set(alive);
   const allowed = new Set<string>();
   for (const r of registry) {
     if (!r.reason.trim()) {
@@ -4713,10 +4716,25 @@ export function acceptRetired(
   };
 }
 
-export function diffGates(before: readonly string[], after: readonly string[]): {
+/**
+ * 🔤 ТЕСТ БЕЗ «#» ТЕЖ МОЖНА ЗНЯТИ — АЛЕ ЛИШЕ ЧЕРЕЗ РЕЄСТР (20.11.2026, рішення Романа «так фікси»).
+ *
+ * 🔴 ДІРА, ЗНАЙДЕНА ВИКАТОМ. Старі тести Звіту КВП звуться `K7 …`, `K9 …` — без «#». `gateNames` їх гейтами не
+ * вважає, тож у «зниклі» вони не потрапляли, реєстр їх не бачив, а критерій ② («перестали виконуватись») спиняв
+ * ланцюг на будь-якому такому знятті. Зняти ненумерований тест було НЕМОЖЛИВО в принципі — навіть із записом про
+ * причину. Блоки «Тримають» і «Структура виручки» зі Звіту КВП прибрано рішенням зустрічі 17.11, а їхні тести
+ * лишились би вічними.
+ *
+ * ⚠️ Вузько: у порівняння додаються РІВНО ті ненумеровані імена, що НАЗВАНІ в реєстрі знятих. Ненумерований тест,
+ * якого в реєстрі немає, як і раніше не «гейт»: його зникнення ловить ② і спиняє ланцюг. Для дерев, де таких імен
+ * немає, рахунок гейтів не змінюється.
+ */
+export function diffGates(before: readonly string[], after: readonly string[], registry: readonly RetiredGate[] = RETIRED_GATES): {
   onlyBefore: string[]; onlyAfter: string[]; countBefore: number; countAfter: number;
 } {
-  const a = new Set(gateNames(before)), b = new Set(gateNames(after));
+  const plain = new Set(registry.map((r) => r.name).filter((n) => !n.startsWith("#")));
+  const pick = (xs: readonly string[]): Set<string> => new Set([...gateNames(xs), ...xs.filter((n) => plain.has(n))]);
+  const a = pick(before), b = pick(after);
   return {
     onlyBefore: [...a].filter((n) => !b.has(n)),
     onlyAfter: [...b].filter((n) => !a.has(n)),
