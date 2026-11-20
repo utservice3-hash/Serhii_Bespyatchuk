@@ -200,3 +200,52 @@ test("#9509 СМУГА >100%: ширина обрізана, підпис — н
   assert.match(fe, /fmtPct\(v\.projection\.projectedPct\)/, "🔴 верхня смуга не показує прогнозного відсотка");
   assert.match(fe, /fmtPct\(t\.forecastPct\)/, "🔴 рядок команди не показує прогнозного відсотка");
 });
+
+// ───────────── 📅 Навігація періодом у стилі Звіту на Звіті КВП і в «Плани КВП» (Роман 20.11.2026) ─────────────
+
+/** Транспілює чистий фронтовий модуль без імпортів і повертає його експорти. */
+async function loadFe(rel: string): Promise<any> {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE(rel), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  return import(`data:text/javascript,${encodeURIComponent(js)}`);
+}
+
+/**
+ * #9512 — ПЕРІОД ЗВІТУ КВП З НАВІГАТОРА: день і тиждень якоряться ФОКУС-ДНЕМ, який людина бачить у назві, місяць —
+ * пресетом із 1-го числа (сервер тоді віддає тижні Т1–Т5), довільний період — межами; план — місяця, де період
+ * починається. Наступник `K5`: правило якоря переїхало з `anchorFor` у чисту функцію `kvpReportParams`.
+ * 🧨 Червоніє, якщо тиждень знову якоритиметься 1-м числом місяця (тиждень «серпня» показував липень), місяць
+ * піде межами замість пресета (зникнуть тижні й «з очікуваннями») або план візьметься не з того місяця.
+ */
+test("#9512 ПЕРІОД ЗВІТУ КВП: день/тиждень — фокус-день, місяць — пресет з 1-го числа, період — межі; план — місяця початку", async () => {
+  const r = await loadFe("pages/dashboard/kvpCoreRules.ts");
+  const st = (mode: string, over: Record<string, string> = {}) => ({ mode, anchor: "2026-08-20", focusDay: "2026-08-12", rangeFrom: "2026-07-28", rangeTo: "2026-08-03", ...over });
+  assert.deepEqual(r.kvpReportParams(st("week")), { preset: "week", date: "2026-08-12" }, "🔴 тиждень якориться не фокус-днем");
+  assert.deepEqual(r.kvpReportParams(st("day")), { preset: "day", date: "2026-08-12" }, "🔴 день якориться не фокус-днем");
+  assert.deepEqual(r.kvpReportParams(st("month")), { preset: "month", date: "2026-08-01" }, "🔴 місяць іде не пресетом з 1-го числа");
+  assert.deepEqual(r.kvpReportParams(st("range")), { from: "2026-07-28", to: "2026-08-03" }, "🔴 довільний період іде не межами");
+  // Фокус-день і якір у РІЗНИХ місяцях — саме тут стара плутанина й жила.
+  assert.deepEqual(r.kvpReportParams(st("week", { anchor: "2026-08-31", focusDay: "2026-09-02" })), { preset: "week", date: "2026-09-02" });
+  assert.deepEqual([r.kvpPlanMonth(st("month")), r.kvpPlanMonth(st("week")), r.kvpPlanMonth(st("range"))], ["2026-08", "2026-08", "2026-07"], "🔴 план береться не з місяця початку періоду");
+});
+
+/**
+ * #9513 — ОДИН НАВІГАТОР ПЕРІОДУ НА ЗВІТІ, ЗВІТІ КВП І В «ПЛАНИ КВП». Усі три малюють `PeriodStepper`; своїх кнопок
+ * «День/Тиждень/…» і полів дат на Звіті КВП більше немає; «Плани КВП» — лише місяць і з майбутніми місяцями;
+ * Звіт кличе контрол без нових параметрів (його поведінка не змінилась).
+ * 🧨 Червоніє, якщо Звіт КВП поверне власні кнопки періоду чи `DatePicker`, запит піде повз `kvpReportParams`,
+ * «Плани КВП» втратять майбутні місяці, або Звіт отримає `allowFuture`.
+ */
+test("#9513 ОДИН НАВІГАТОР ПЕРІОДУ: Звіт КВП і «Плани КВП» малюють PeriodStepper; Звіт — без нових параметрів", () => {
+  const kvp = FE(KVP);
+  assert.match(kvp, /<PeriodStepper state=\{nav\} onPatch=\{\(patch\) => setNav\(\(st\) => \(\{ \.\.\.st, \.\.\.patch \}\)\)\} today=\{today\} \/>/, "🔴 Звіт КВП малює не навігатор Звіту");
+  assert.doesNotMatch(kvp, /DatePicker|"quarter"|kvpDPreset|setPresetP/, "🔴 на Звіті КВП лишились старі кнопки періоду або поля дат");
+  assert.match(kvp, /fetchKvpReport\(kvpReportParams\(nav\)\)/, "🔴 запит Звіту КВП збирається повз kvpReportParams");
+  assert.match(kvp, /const planMonth = kvpPlanMonth\(nav\);/, "🔴 місяць плану не з навігатора");
+  const tab = FE("pages/dashboard/sections/KvpPlansTab.tsx");
+  assert.match(tab, /<PeriodStepper state=\{nav\} onPatch=\{[^\n]*\} today=\{today\} modes=\{\["month"\]\} allowFuture \/>/, "🔴 «Плани КВП»: не місячний навігатор або без майбутніх місяців");
+  assert.doesNotMatch(tab, /DatePicker/, "🔴 у «Плани КВП» лишився старий вибір місяця");
+  // 🪞 Дзеркало: Звіт кличе той самий контрол БЕЗ нових параметрів — майбутнє там закрите, довжин чотири.
+  const rep = FE("pages/dashboard/sections/ReportPlanSection.tsx");
+  assert.match(rep, /<PeriodStepper state=\{navState\} onPatch=\{applyNav\} today=\{today\} \/>/, "🔴 Звіт кличе навігатор інакше, ніж до 20.11");
+});

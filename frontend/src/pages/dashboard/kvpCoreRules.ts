@@ -57,3 +57,22 @@ export function withExpected(plan: number, fact: number, expected: number): { su
 
 // 🎧 Сортування й фільтр таблиці менеджерів «Першого дотику» (sortFtLines / tileCountsByManager, ТЗ 12.10, розділ 4)
 // ПРИБРАНО разом із самою таблицею (правки зустрічі 17.11.2026): у Звіті КВП лишились лише картки, клік веде на екран AI.
+
+// ───────────── 📅 ПЕРІОД ЗВІТУ КВП З НАВІГАТОРА «‹ назва ›» (20.11.2026) ─────────────
+
+/** Стан навігатора — рівно поля `PeriodState` (periodRules.ts); описані тут, щоб модуль лишався без імпортів. */
+export interface KvpNavLike { mode: string; anchor: string; focusDay: string; rangeFrom: string; rangeTo: string }
+
+/**
+ * Що просити в `/kvp-report` для обраного періоду. День і тиждень якоряться ФОКУС-ДНЕМ, який людина бачить у назві
+ * («10–16 листопада»), а не 1-м числом місяця: саме та плутанина, через яку тиждень «серпня» колись показував липень.
+ * Місяць іде пресетом (сервер тоді віддає тижні Т1–Т5 і «з очікуваннями»), довільний період — межами.
+ */
+export function kvpReportParams(nav: KvpNavLike): { preset?: string; date?: string; from?: string; to?: string } {
+  if (nav.mode === "range") return { from: nav.rangeFrom, to: nav.rangeTo };
+  if (nav.mode === "month") return { preset: "month", date: `${nav.anchor.slice(0, 7)}-01` };
+  return { preset: nav.mode, date: nav.focusDay };
+}
+/** Місяць, план якого показує блок «Показники»: місяць, у якому починається обраний період. */
+export const kvpPlanMonth = (nav: KvpNavLike): string =>
+  (nav.mode === "range" ? nav.rangeFrom : nav.mode === "month" ? nav.anchor : nav.focusDay).slice(0, 7);

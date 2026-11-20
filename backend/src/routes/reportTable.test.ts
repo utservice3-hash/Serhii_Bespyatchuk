@@ -1171,11 +1171,14 @@ test("#7892 ОДИН РАЗ НА ЛЮДИНУ — +8 КОЛОНОК, ЗНИКЛ�
 });
 
 /**
- * #7730 — ВИБІР ПЕРІОДУ «А»: НАЗВА СЛОВАМИ, МАЙБУТНЄ НЕ ОБИРАЄТЬСЯ. Підпис рахується виконанням
- * (`stepperLabel`), а «›» вимикається, коли наступний період починається після сьогодні.
- * 🧨 Червоніє, якщо підпис брехатиме про день/місяць або «›» пустить у майбутнє.
+ * #9514 — ВИБІР ПЕРІОДУ «А»: НАЗВА СЛОВАМИ, МАЙБУТНЄ НЕ ОБИРАЄТЬСЯ — крім МІСЯЦІВ там, де екран прямо просить
+ * (`allowFuture`: «Плани КВП», план ставлять наперед). Підпис рахується виконанням (`stepperLabel`). Типові значення
+ * параметрів — поведінка Звіту: усі чотири довжини, майбутнє закрите. Наступник `#7730` (20.11.2026): твердження
+ * розширилось двома параметрами, тому номер новий.
+ * 🧨 Червоніє, якщо підпис брехатиме про день/місяць, «›» пустить у майбутнє без `allowFuture`, майбутній ДЕНЬ стане
+ * обираним узагалі, типове значення `allowFuture` стане true, або одна довжина малюватиме перемикач.
  */
-test("#7730 ВИБІР ПЕРІОДУ «А»: назва словами за режимом; «›» не веде в майбутнє; «Період» — з початку місяця", async () => {
+test("#9514 ВИБІР ПЕРІОДУ «А»: назва словами; «›» і календар не ведуть у майбутнє, крім місяців з allowFuture; одна довжина — без перемикача", async () => {
   const ts = (await import("typescript")).default;
   const rulesJs = ts.transpileModule(readFileSync(path.join(FE, "periodRules.ts"), "utf8"),
     { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -1194,7 +1197,12 @@ test("#7730 ВИБІР ПЕРІОДУ «А»: назва словами за р�
   assert.equal(stepperLabel(st("month", T), T), "Листопад 2026");
   assert.equal(stepperLabel(st("week", T), T), "9–15 листопада", "🔴 тиждень — не Пн–Нд дня");
   assert.equal(stepperLabel(st("range", T, "2026-10-28", "2026-11-03"), T), "28 жовт – 3 лист");
-  assert.match(src, /const canNext = nextFrom != null && nextFrom <= today;/, "🔴 «›» не вимикається перед майбутнім періодом");
+  assert.match(src, /const canNext = nextFrom != null && \(allowFuture \|\| nextFrom <= today\);/, "🔴 «›» не вимикається перед майбутнім періодом (або вимикається й там, де майбутнє дозволене)");
+  assert.match(src, /modes = ALL_MODES, allowFuture = false \}/, "🔴 типові значення змінились — Звіт поводитиметься інакше");
+  assert.match(src, /const ALL_MODES: PeriodMode\[\] = \["day", "week", "month", "range"\];/, "🔴 типовий набір довжин — не чотири");
+  assert.match(src, /disabled=\{!allowFuture && first > today\}/, "🔴 майбутній місяць обирається без дозволу (або не обирається з ним)");
+  assert.match(src, /\{modes\.length > 1 && \(\s*<div className="rv-seg"/, "🔴 одна довжина періоду малює перемикач");
+  assert.match(src, /const day = monthStart\(patch\.anchor\) > today \? monthStart\(patch\.anchor\) : end > today \? today : end;/, "🔴 крок у майбутній місяць лишає якір на сьогодні — місяць не зміниться");
   assert.match(src, /disabled=\{!canNext\}/, "🔴 умова «›» не підключена до кнопки");
   assert.match(src, /disabled=\{d > today\}/, "🔴 у календарі можна обрати майбутній день");
   assert.match(src, /if \(mo === "range"\) onPatch\(\{ mode: mo, rangeFrom: monthStart\(today\), rangeTo: today \}\)/, "🔴 «Період» стартує не з початку місяця");

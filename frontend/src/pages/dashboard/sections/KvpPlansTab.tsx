@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, type KvpReport, type KvpPlans } from "../../../api";
 import { useToast } from "../../../components/Toasts";
 import { commitOptimistic, failureReason } from "../../../actionFeedback";
-import { DatePicker } from "../../../components/DatePicker";
+import { PeriodStepper } from "../PeriodStepper";
+import { monthStart, todayKyiv, type PeriodState } from "../periodRules";
 import { KvpPlanTable } from "./KvpReportSection";
-
-const curMonth = () => { const d = new Date(); return `${String(d.getFullYear())}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 
 /**
  * 🎯 «ПЛАНИ КВП» у розділі «Плани» (правки зустрічі 17.11.2026: «В планах можливість повну виставляти — повна таблиця
@@ -17,7 +16,11 @@ const curMonth = () => { const d = new Date(); return `${String(d.getFullYear())
  */
 export function KvpPlansTab() {
   const toast = useToast();
-  const [month, setMonth] = useState<string>(curMonth);
+  // 📅 Місяць — тим самим контролом «‹ назва ›», що у Звіті, лише без перемикача довжини; майбутні місяці
+  // дозволені, бо план ставлять наперед (20.11.2026).
+  const today = todayKyiv();
+  const [nav, setNav] = useState<PeriodState>(() => ({ mode: "month", anchor: today, focusDay: today, rangeFrom: monthStart(today), rangeTo: today }));
+  const month = nav.anchor.slice(0, 7);
   const [rep, setRep] = useState<KvpReport | null>(null);
   const [plans, setPlans] = useState<KvpPlans>({});
   const [err, setErr] = useState<string | null>(null);
@@ -43,10 +46,12 @@ export function KvpPlansTab() {
 
   return (
     <div className="chart-card" style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 8 }}>
         <h2 className="chart-title" style={{ margin: 0 }}>🎯 Плани КВП
           <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}> · ✎ — ціль місяця; Звіт КВП показує її в «Показниках місяця»</span></h2>
-        <DatePicker mode="month" value={month} onChange={(x) => x && setMonth(x.slice(0, 7))} minWidth={140} />
+        <div className="rv" style={{ maxWidth: "none", margin: 0 }}>
+          <PeriodStepper state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} modes={["month"]} allowFuture />
+        </div>
       </div>
       {err && <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>}
       {!rep && !err && <p className="loading-text">Завантаження…</p>}

@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useState, type CSSProperties } from "react";
 import { fetchKvpReport, fetchKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek, type KvpShipWeek, type CreatedSplit } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
-import { DatePicker } from "../../../components/DatePicker";
+import { PeriodStepper } from "../PeriodStepper";
+import { monthStart, todayKyiv, type PeriodState } from "../periodRules";
 import { InfoHint } from "../widgets";
 import { KvpFirstTouchBlock } from "./KvpFirstTouchBlock";
-import { weekCloseStatus, closeNote, withExpected, CLOSE_LABEL, type CloseKind } from "../kvpCoreRules";
+import { weekCloseStatus, closeNote, withExpected, CLOSE_LABEL, kvpReportParams, kvpPlanMonth, type CloseKind } from "../kvpCoreRules";
 import { VacationMark } from "../VacationMark";
 
 // ── Статус-палітра (зарезервована, НЕ дата-серія): good/warning/serious/critical ──
@@ -150,36 +151,14 @@ function Stat({ label, value, sub, hint, color, note }: { label: string; value: 
   );
 }
 
-const curMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
-/** Сьогодні за КИЄВОМ — той самий часовий пояс, у якому сервер рахує `isCurrent`. */
-const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
-
-/**
- * 📅 ЯКІР ПРЕСЕТА. Місячний селектор задає МІСЯЦЬ, а не день, тож для «Дня» і «Тижня»
- * його перше число — неправильний якір.
- *
- * 🔴 ЩО ЦЕ ЛАМАЛО (живий клік власника): при вибраному «Серпень 2026» перемикач
- * «Тиждень» надсилав `date=2026-08-01` — суботу, — і сервер брав тиждень, що її
- * містить, тобто **27.07-02.08**. Заголовок казав «Тиждень 2026-07-27» поруч із
- * селектором «Серпень 2026»: два керма на один діапазон, і обидва показували правду
- * про різні речі.
- *
- * Правило: день/тиждень — якір СЬОГОДНІ, якщо сьогодні всередині обраного місяця
- * (типовий випадок «дивлюсь поточний період»), інакше — 1-ше число обраного місяця,
- * щоб історичний місяць лишався досяжним. Місяць/квартал/рік якорем не переймаються:
- * вони month-aligned за побудовою.
- */
-function anchorFor(preset: string, monthSel: string): string {
-  if (preset !== "day" && preset !== "week") return monthSel + "-01";
-  const today = kyivToday();
-  return today.slice(0, 7) === monthSel ? today : monthSel + "-01";
-}
-
 /** `canSeeFirstTouch` — у ролі є вкладка «Перший дотик · AI»; без неї блок не показується (фінансист: Звіт КВП є, AI — ні). */
 export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouch?: boolean } = {}) {
-  const [preset, setPreset] = useState<string>(() => localStorage.getItem("kvpDPreset") || "month");
-  const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("kvpDMonth") || curMonth());
-  const [range, setRange] = useState<{ from: string; to: string }>(() => { try { return JSON.parse(localStorage.getItem("kvpDRange") || "null") || { from: "", to: "" }; } catch { return { from: "", to: "" }; } });
+  // 📅 Період — тим самим навігатором, що у Звіті (`PeriodStepper`: День · Тиждень · Місяць · Період, ‹ назва ›).
+  // Правки 20.11.2026: старі кнопки День/Тиждень/Місяць/Квартал/Рік і три поля дат прибрано; квартал і рік —
+  // через «Період». Відкривається завжди на поточному місяці.
+  const today = todayKyiv();
+  const [nav, setNav] = useState<PeriodState>(() => ({ mode: "month", anchor: today, focusDay: today, rangeFrom: monthStart(today), rangeTo: today }));
+  const planMonth = kvpPlanMonth(nav);
   const [rep, setRep] = useState<KvpReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [plans, setPlans] = useState<KvpPlans>({});
@@ -192,18 +171,12 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
   const [openWeekDrill, setOpenWeekDrill] = useState<{ teamId: number; weekIdx: number } | null>(null);
   const [openMgr, setOpenMgr] = useState<number | null>(null);   // денний дрил менеджера (weeks→days)
 
-  const rangeMode = !!(range.from && range.to);
   useEffect(() => {
     let alive = true; setRep(null); setErr(null);
-    const params = rangeMode ? { from: range.from, to: range.to } : { preset, date: anchorFor(preset, monthSel) };
-    fetchKvpReport(params).then((r) => { if (alive) setRep(r); }).catch(() => { if (alive) setErr("Не вдалося завантажити звіт КВП."); });
+    fetchKvpReport(kvpReportParams(nav)).then((r) => { if (alive) setRep(r); }).catch(() => { if (alive) setErr("Не вдалося завантажити звіт КВП."); });
     return () => { alive = false; };
-  }, [preset, monthSel, rangeMode, range.from, range.to]);
-  useEffect(() => { fetchKvpPlan(monthSel).then(setPlans).catch(() => setPlans({})); }, [monthSel]);
-
-  const setPresetP = (p: string) => { setPreset(p); localStorage.setItem("kvpDPreset", p); setRange({ from: "", to: "" }); localStorage.removeItem("kvpDRange"); };
-  const setRangeP = (r: { from: string; to: string }) => { setRange(r); localStorage.setItem("kvpDRange", JSON.stringify(r)); };
-  const pickMonth = (v: string) => { const mm = v.slice(0, 7); setMonthSel(mm); localStorage.setItem("kvpDMonth", mm); };
+  }, [nav.mode, nav.anchor, nav.focusDay, nav.rangeFrom, nav.rangeTo]);
+  useEffect(() => { fetchKvpPlan(planMonth).then(setPlans).catch(() => setPlans({})); }, [planMonth]);
 
   const v = rep?.verdict;
   const delta = v ? v.received.revenue - v.receivedPrev.revenue : 0;
@@ -212,21 +185,12 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
 
   return (
     <>
-      <div className="page-header">
-        <h1 className="page-title">🏆 Звіт КВП</h1>
-        <div className="page-filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          {[["day", "День"], ["week", "Тиждень"], ["month", "Місяць"], ["quarter", "Квартал"], ["year", "Рік"]].map(([k, lbl]) => (
-            <button key={k} onClick={() => setPresetP(k)}
-              style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer",
-                background: !rangeMode && preset === k ? "#c5141c" : "var(--card-bg)", color: !rangeMode && preset === k ? "#fff" : "var(--text)", fontWeight: !rangeMode && preset === k ? 600 : 400 }}>{lbl}</button>
-          ))}
-          <DatePicker mode="month" value={monthSel} onChange={(x) => x && pickMonth(x)} minWidth={140} />
-          <span style={{ color: MUTED, margin: "0 2px" }}>|</span>
-          <DatePicker value={range.from} onChange={(x) => setRangeP({ ...range, from: x })} placeholder="від" minWidth={120} />
-          <span style={{ color: MUTED }}>—</span>
-          <DatePicker value={range.to} onChange={(x) => setRangeP({ ...range, to: x })} placeholder="до" minWidth={120} />
-          {rangeMode && <button onClick={() => { setRange({ from: "", to: "" }); localStorage.removeItem("kvpDRange"); }} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>✕</button>}
-        </div>
+      {/* Шапка в стилі Звіту: назва · період. `.rv` дає токени контролу; ширину не обмежуємо — екран ширший за Звіт. */}
+      <div className="rv" style={{ maxWidth: "none" }}>
+        <header className="rv-head">
+          <h1>Звіт КВП</h1>
+          <PeriodStepper state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />
+        </header>
       </div>
 
       {err && <p className="loading-text" style={{ color: RED }}>{err}</p>}
