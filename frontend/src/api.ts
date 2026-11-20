@@ -415,6 +415,10 @@ export interface MissedSummary {
   /** `null` — передзвонів за період не було, тобто медіану нема з чого рахувати. */
   medianMin: number | null;
   buckets: Record<MissedDayBucket, number>;
+  /** 📱 З `missed` — усі плечі «Вхідний перехоплений» (на мобільні менеджерів). «На лінію» = `missed − missedMobile`. */
+  missedMobile: number;
+  /** ⏳ З `missed` — з номером досі немає розмови від 10 с («чекають передзвону», рішення Романа 20.11.2026); з них старші за добу. */
+  waiting: number; waitingOverDay: number;
 }
 export interface MissedManagerRow {
   /** `null` — рядок «Без відповідального»: дзвінок не дійшов до людини. */
@@ -424,6 +428,8 @@ export interface MissedManagerRow {
   teamId: number | null;
   missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
   noCallback: number;
+  /** «Чекають передзвону»: з номером досі немає розмови від 10 с — те саме, що `summary.waiting`. */
+  waiting: number;
   /** У підсумковому рядку ЗАВЖДИ `null`: медіани не додаються й не усереднюються. */
   medianMin: number | null;
 }
@@ -433,6 +439,7 @@ export interface MissedTeamRow {
   name: string;
   missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
   noCallback: number;
+  waiting: number;
   medianMin: number | null;
 }
 export interface MissedCallsResp {
@@ -903,6 +910,10 @@ export interface MissedListRow {
   /** НАЙРАНІША подія після пропущеного — не «чи був передзвін узагалі». */
   next: MissedNextStep; nextMin: number | null;
   dealId: number | null; dealUrl: string | null;
+  /** 📱 Усі плечі «Вхідний перехоплений» — дзвінок ішов на мобільний менеджера. */
+  mobile: boolean;
+  /** ⏳ З номером досі немає розмови від 10 с; `waitH` — скільки годин минуло від дзвінка. */
+  waiting: boolean; waitH: number;
 }
 export interface MissedListResp {
   day: string; onlyNoCallback: boolean;
