@@ -12,6 +12,7 @@ import { HiringEmployees } from "./HiringEmployees";
 import { HiringTeam } from "./HiringTeam";
 import { HiringSummary } from "./HiringSummary";
 import { OfferTemplatesTab } from "./HiringOffer";
+import { HiringEmployeesView } from "./HiringEmployeesView";
 import { HiringChurnTab, HiringExitTab } from "./HiringChurn";
 import { HiringHunt } from "./HiringHunt";
 import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
@@ -66,12 +67,14 @@ export function HiringSection() {
   // (прохання Романа 17.09): людина бачить повну картину, а не гадає, чи вкладку забули.
   const tabs: [Tab, string][] = meta.access === "edit"
     ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["daily", "Щоденний звіт"], ["tpl", "Шаблони"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
+    // 👁 «Перегляд» (фінансист, 20.11.2026, #4153): без статистик («Щоденний звіт», «Зведення», «Плинність», «Exit») і без редагувань.
+    : meta.access === "view" ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["tpl", "Шаблони"], ["emp", "Співробітники"]]
     : [["base", "Кандидати"], ["train", "На навчанні"], ["emp", "Співробітники"]];
   if (canHunt) tabs.push(["hunt", "Хантинг"]);
   // «Співробітники» живі для тих, хто має право сейфу (імпорт кладе паролі туди); решті — пояснення.
   // «Зведення» живе (етап 2, 18.09.2026) для тих, хто редагує «Найм»; «Співробітники» — з правом сейфу.
   // «Плинність» і «Exit» (етап 5, 18.09.2026) — з реєстру, тож для тих самих, хто бачить «Співробітників».
-  const planned = new Set<Tab>([...(canSecrets ? [] : [...(canTeam ? [] : ["emp" as Tab]), "churn" as Tab, "exit" as Tab]), ...(meta.access === "edit" ? [] : ["sum" as Tab])]);
+  const planned = new Set<Tab>([...(canSecrets ? [] : [...(canTeam || meta.access === "view" ? [] : ["emp" as Tab]), "churn" as Tab, "exit" as Tab]), ...(meta.access === "edit" ? [] : ["sum" as Tab])]);
   // «Доступи» злиті в «Співробітники» (18.09.2026): збережена стара вкладка веде туди.
   const want: Tab = tab === "acc" ? "emp" : tab;
   const active = tabs.some(([k]) => k === want) ? want : tabs[0][0];
@@ -81,7 +84,9 @@ export function HiringSection() {
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Найм</h1>
       <p className="hr-muted" style={{ margin: "0 0 14px", fontSize: 13 }}>
-        {meta.access === "edit"
+        {meta.access === "view"
+          ? "Лише перегляд: кандидати, графік, вакансії, навчання, шаблони оферів і співробітники. Змінювати тут нічого не можна."
+          : meta.access === "edit"
           ? "Графік відкривається на сьогодні; клітинки редагуються на місці. Стрілки й смуга тижня ведуть на інші дні."
           : "Кандидати вашої команди після співбесіди з вами: прогрес і рішення «кандидат», «на навчанні», «менеджер»."}
       </p>
@@ -100,8 +105,9 @@ export function HiringSection() {
         onOpenCandidates={(id) => { setVacFilter({ id, seq: Date.now() }); pick("base"); }} />}
       {active === "emp" && canSecrets && <HiringEmployees toast={toast} />}
       {active === "emp" && !canSecrets && canTeam && <HiringTeam toast={toast} />}
+      {active === "emp" && !canSecrets && !canTeam && meta.access === "view" && <HiringEmployeesView />}
       {active === "sum" && meta.access === "edit" && <HiringSummary />}
-      {active === "tpl" && meta.access === "edit" && <OfferTemplatesTab toast={toast} />}
+      {active === "tpl" && (meta.access === "edit" || meta.access === "view") && <OfferTemplatesTab toast={toast} readOnly={meta.access === "view"} />}
       {active === "churn" && canSecrets && <HiringChurnTab toast={toast} />}
       {active === "exit" && canSecrets && <HiringExitTab toast={toast} />}
       {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}

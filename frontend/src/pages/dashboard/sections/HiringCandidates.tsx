@@ -201,6 +201,8 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
   const [fileErr, setFileErr] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ url: string; name: string; mime: string } | null>(null);
   const edit = meta.access === "edit";
+  // 👁 «Перегляд» (фінансист, #4153): ні статусів, ні коментарів в історію — лише читання.
+  const ro = meta.access === "view";
 
   const load = useCallback(() => {
     fetchHiringCard(id).then((c) => { setCard(c); setErr(null); }).catch((e) => setErr(hiringError(e)));
@@ -351,7 +353,7 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
 
             <TrainingAccessBlock key={c.status} version={card.events.length} meta={meta} id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />
 
-            {(next.length > 0 || undo) && (
+            {!ro && (next.length > 0 || undo) && (
               <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
                 <h4>Змінити статус</h4>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -403,13 +405,13 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
               )}
             </div>
 
-            <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
+            {!ro && <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
               <h4>Коментар в історію</h4>
               <div style={{ display: "flex", gap: 6 }}>
                 <input className="hr-inp" style={{ flex: 1 }} value={note} placeholder="Що сталось, домовленості…" onChange={(e) => setNote(e.target.value)} />
                 <button className="hr-btn" disabled={!note.trim()} onClick={() => void run(() => addHiringComment(id, note.trim())).then(() => setNote(""))}>Додати</button>
               </div>
-            </div>
+            </div>}
 
             <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
               <h4>Співбесіди</h4>

@@ -13,6 +13,7 @@ import {
   OVERRIDE_METRICS, PLAN_METRICS, WEEK_OVERRIDE_METRICS, weekStartOf, dailyTotals, attendancePct,
   type OverrideMetric, type PlanMetric, type WeekOverrideMetric, type DailyCounts,
   refusalVerdict, messengerLinks, vacancyCloseStatus, VACANCY_STATUSES, REFUSAL_SIDES, type RefusalSide, type VacancyStatus,
+  seesAll,
 } from "./hiringRules.js";
 import { ensureCandidateAccount, closeCandidateAccess, undoPromotion, hasAccount, issueCandidatePassword, syncCandidateLogin } from "./hiringTraining.js";
 import { cleanCandidateEmail } from "./hiringTrainingRules.js";
@@ -338,7 +339,7 @@ export interface CandidateFilters {
 export async function listCandidates(db: Db, f: CandidateFilters, access: HiringAccess, leadTeamId: number | null) {
   const where: string[] = []; const params: unknown[] = [];
   if (access === "lead") { params.push(leadTeamId ?? -1); where.push(LEAD_VISIBLE_SQL(`$${params.length}`)); }
-  else if (access !== "edit") where.push("false");
+  else if (!seesAll(access)) where.push("false");
   if (f.q) {
     params.push(`%${f.q.toLowerCase()}%`);
     const digits = f.q.replace(/\D/g, "");
@@ -356,7 +357,7 @@ export async function listCandidates(db: Db, f: CandidateFilters, access: Hiring
   const heads = (await db.query<{ no_vacancy: number; in_reserve: number }>(
     `SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM hiring_candidate_vacancies cv WHERE cv.candidate_id = c.id))::int AS no_vacancy,
             count(*) FILTER (WHERE c.reserved_at IS NOT NULL)::int AS in_reserve
-       FROM hiring_candidates c WHERE ${access === "lead" || access !== "edit" ? visWhere : "true"}`, visParams)).rows[0];
+       FROM hiring_candidates c WHERE ${access === "lead" || !seesAll(access) ? visWhere : "true"}`, visParams)).rows[0];
   if (f.vacancyId) { params.push(f.vacancyId); where.push(`EXISTS (SELECT 1 FROM hiring_candidate_vacancies cv WHERE cv.candidate_id = c.id AND cv.vacancy_id = $${params.length})`); }
   if (f.noVacancy) where.push(`NOT EXISTS (SELECT 1 FROM hiring_candidate_vacancies cv WHERE cv.candidate_id = c.id)`);
   if (f.reserve === "yes") where.push(`c.reserved_at IS NOT NULL`);
@@ -383,7 +384,7 @@ export async function candidateCard(db: Db, id: number, access: HiringAccess, le
   const params: unknown[] = [id];
   let vis = "";
   if (access === "lead") { params.push(leadTeamId ?? -1); vis = ` AND ${LEAD_VISIBLE_SQL("$2")}`; }
-  else if (access !== "edit") vis = " AND false";
+  else if (!seesAll(access)) vis = " AND false";
   const c = (await db.query(`SELECT ${CANDIDATE_COLS} FROM hiring_candidates c LEFT JOIN teams t ON t.id = c.team_id WHERE c.id = $1${vis}`, params)).rows[0];
   if (!c) throw new HiringError(404, "Кандидата не знайдено");
   const interviews = (await db.query(
@@ -451,7 +452,7 @@ export async function changeStatus(
   const params: unknown[] = [id];
   let vis = "";
   if (access === "lead") { params.push(leadTeamId ?? -1); vis = ` AND ${LEAD_VISIBLE_SQL("$2")}`; }
-  else if (access !== "edit") vis = " AND false";
+  else if (!seesAll(access)) vis = " AND false";
   const c = (await db.query<{ status: HiringStatus; team_id: number | null }>(
     `SELECT c.status, c.team_id FROM hiring_candidates c WHERE c.id = $1${vis} FOR UPDATE`, params)).rows[0];
   if (!c) throw new HiringError(404, "Кандидата не знайдено");
@@ -710,7 +711,7 @@ async function lockCandidate(db: Db, id: number, access: HiringAccess, leadTeamI
   const params: unknown[] = [id];
   let vis = "";
   if (access === "lead") { params.push(leadTeamId ?? -1); vis = ` AND ${LEAD_VISIBLE_SQL("$2")}`; }
-  else if (access !== "edit") vis = " AND false";
+  else if (!seesAll(access)) vis = " AND false";
   const c = (await db.query<{ id: number; status: HiringStatus; team_id: number | null; reserved_at: string | null }>(
     `SELECT c.id, c.status, c.team_id, c.reserved_at FROM hiring_candidates c WHERE c.id = $1${vis} FOR UPDATE`, params)).rows[0];
   if (!c) throw new HiringError(404, "Кандидата не знайдено");

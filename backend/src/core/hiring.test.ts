@@ -235,12 +235,12 @@ test("#505 НАЙМ: таблиці кандидатів відібрані в a
 });
 
 /**
- * #506 — МЕЖА ПЕРШИМ ОПЕРАТОРОМ КОЖНОГО ОБРОБНИКА. На цьому стоїть безпека проб `deny-only`
+ * #4154 (був #506, змінено 20.11.2026 рівнем «перегляд») — МЕЖА ПЕРШИМ ОПЕРАТОРОМ КОЖНОГО ОБРОБНИКА. На цьому стоїть безпека проб `deny-only`
  * у матриці: тімлід із пробою POST мусить отримати 403 ДО будь-якого запису. Запис графіка,
  * бази й звіту — лише `onlyEdit`; статус і коментар — `anyAccess` (тімлід у своїх межах).
  * 🧨 Червоніє, якщо переставити перевірку нижче `tx(` або дати запису графіка `anyAccess`.
  */
-test("#506 НАЙМ: перевірка доступу — перший оператор кожного обробника", () => {
+test("#4154 НАЙМ: перевірка доступу — перший оператор; читання «перегляду» — readAccess/readEdit, звіт — лише рекрутер", () => {
   const src = SRC("routes/hiring.ts");
   const handlers = [...src.matchAll(/hiringRouter\.(get|post|patch|delete|put)\("([^"]+)", async \(req, res\) => \{\s*try \{\s*([^\n;]+);/g)];
   assert.ok(handlers.length >= 14, `🔴 знайдено лише ${handlers.length} обробників — гейт нічого не перевіряє`);
@@ -252,10 +252,13 @@ test("#506 НАЙМ: перевірка доступу — перший опер
     "/candidates/:id/quiz/:materialId/grant"]);
   for (const [, method, p, first] of handlers) {
     const isWrite = method !== "get";
-    const expected = isWrite && !LEAD_WRITES.has(p) ? /^onlyEdit\(req\)$/ : /^(onlyEdit\(req\)|const access = anyAccess\(req\))$/;
+    // 👁 Читання для «перегляду» (фінансист, 20.11.2026) — `readAccess`/`readEdit`; запис їх не бере ніколи (#4151).
+    const expected = isWrite && !LEAD_WRITES.has(p) ? /^onlyEdit\(req\)$/
+      : isWrite ? /^(onlyEdit\(req\)|const access = anyAccess\(req\))$/
+      : /^(onlyEdit\(req\)|readEdit\(req\)|const access = anyAccess\(req\)|const access = readAccess\(req\)|const access = readEdit\(req\))$/;
     assert.match(first.trim(), expected, `🔴 ${method.toUpperCase()} ${p}: першим стоїть «${first.trim()}»`);
   }
-  for (const p of ["/schedule", "/daily"])
+  for (const p of ["/daily"])
     assert.ok(handlers.some(([, m, hp, first]) => m === "get" && hp === p && /onlyEdit/.test(first)), `🔴 GET ${p} відкритий не лише рекрутеру`);
 });
 
@@ -473,4 +476,63 @@ test("#527 ФАЙЛИ: тип за першими байтами — PNG/JPG/WEB
   assert.equal(sniffFileMime(b(0x25, 0x50, 0x44, 0x46, 0x2d)), "application/pdf");
   assert.equal(sniffFileMime(b(0x4d, 0x5a, 0x90, 0x00)), null, "🔴 виконуваний файл (MZ) пройшов");
   assert.equal(sniffFileMime(new TextEncoder().encode("image/png але насправді текст")), null, "🔴 текст пройшов як картинка");
+});
+
+/**
+ * #4150 — РІВЕНЬ «ПЕРЕГЛЯД» (фінансист, 20.11.2026, рішення Романа: «лише перегляд… без статистик і жодних редагувань»).
+ * Фінансист → «view»; «view» бачить УСІХ кандидатів (як HR), але жоден перехід чи відмова йому не дозволені. Дзеркало:
+ * HR лишається «edit» з переходами, тімлід — «lead» зі звуженням, менеджер — «none».
+ * 🧨 Червоніє, якщо «view» пустити в `canTransition`/`refusalVerdict` або звузити його до команди.
+ */
+test("#4150 НАЙМ «ПЕРЕГЛЯД»: фінансист бачить усіх, але не змінює статусів і не відмовляє", async () => {
+  const R = await import("./hiringRules.js");
+  assert.equal(hiringAccess({ roleKey: "financier", adminScope: false }), "view");
+  assert.equal(hiringAccess({ roleKey: "hr", adminScope: false }), "edit");
+  assert.equal(hiringAccess({ roleKey: "team_lead", adminScope: false }), "lead");
+  assert.equal(hiringAccess({ roleKey: "manager", adminScope: false }), "none");
+  assert.deepEqual([R.seesAll("view"), R.seesAll("edit"), R.seesAll("lead"), R.seesAll("none")], [true, true, false, false]);
+  assert.equal(canTransition("done", "lead", "view", null).ok, false, "🔴 «перегляд» змінює статус");
+  assert.equal(canTransition("done", "lead", "edit", null).ok, true, "🔴 дзеркало: HR перестав змінювати статус");
+  assert.equal(refusalVerdict({ from: "done", access: "view", reasonSide: "company", blacklist: false }).ok, false, "🔴 «перегляд» відмовляє");
+});
+
+/**
+ * #4151 — ЗАПИС У «НАЙМІ» ЗАКРИТИЙ ДЛЯ «ПЕРЕГЛЯДУ» ЗА ПОБУДОВОЮ. Кожен не-GET роут бере `anyAccess`/`onlyEdit`/`decides`
+ * (вони відбивають «view»), і жоден — `readAccess`/`readEdit`. Перелік GET, відкритих «перегляду», — рівно затверджений:
+ * без статистик («Зведення», «Щоденний звіт», план тижня) і службового (tl;dv, work.ua, вільні акаунти).
+ * 🧨 Червоніє, якщо дати запису `readAccess` або відкрити «перегляду» статистику.
+ */
+test("#4151 НАЙМ «ПЕРЕГЛЯД»: запис — лише через замки, що відбивають «view»; відкриті GET — рівно затверджені", () => {
+  const src = SRC("routes/hiring.ts");
+  const routes = [...src.matchAll(/hiringRouter\.(get|post|put|patch|delete)\("([^"]+)"[\s\S]*?(?=\nhiringRouter\.|\n\/\*\*|\n\/\*|$)/g)]
+    .map((m) => ({ method: m[1], path: m[2], body: m[0] }));
+  assert.ok(routes.length > 40, `🔴 парсер бачить лише ${routes.length} роутів — гейт осліп`);
+  const writesOpen = routes.filter((r) => r.method !== "get" && /\b(readAccess|readEdit)\(/.test(r.body)).map((r) => `${r.method} ${r.path}`);
+  assert.deepEqual(writesOpen, [], "🔴 дія запису відкрита «перегляду»");
+  const viewGets = routes.filter((r) => r.method === "get" && /\b(readAccess|readEdit)\(/.test(r.body)).map((r) => r.path).sort();
+  assert.deepEqual(viewGets, ["/candidates", "/candidates/:id", "/candidates/:id/files/:fileId", "/candidates/:id/offer", "/employees", "/meta",
+    "/offer-templates", "/offers/states", "/schedule", "/training", "/training/:id", "/vacancies"], "🔴 «перегляду» відкрито не той набір читання");
+  const anyBody = /const anyAccess = \(req: Request\) => \{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+  assert.match(anyBody, /a === "view"\) throw/, "🔴 `anyAccess` більше не відбиває «перегляд»");
+});
+
+/**
+ * #4152 — «СПІВРОБІТНИКИ» ДЛЯ ПЕРЕГЛЯДУ БЕЗ ПАРОЛІВ. Роут віддає поля поіменно, і серед них немає сейфу, документів, контактів
+ * чи акаунта; у матриці фінансист читає його, менеджер — ні; на фронті «перегляд» не має вкладок статистик.
+ * 🧨 Червоніє, якщо віддати `secrets`/`phone`/`email`/`user_id` або дати «перегляду» «Щоденний звіт».
+ */
+test("#4152 НАЙМ «ПЕРЕГЛЯД»: співробітники без паролів і контактів; вкладок статистик немає", () => {
+  const src = SRC("routes/hiring.ts");
+  const route = /hiringRouter\.get\("\/employees"[\s\S]*?\n\}\);/.exec(src)?.[0] ?? "";
+  assert.ok(route, "🔴 роут /employees не знайдено");
+  const fields = [...route.matchAll(/\b([a-z_]+): r\.[a-z_]+/g)].map((m) => m[1]);
+  assert.ok(fields.includes("full_name") && fields.includes("position"), "🔴 список без ПІБ/посади — порожня правда");
+  for (const bad of ["secrets", "phone", "email", "telegram", "user_id", "account_name", "extra", "docs", "birth_date", "note"])
+    assert.ok(!fields.includes(bad), `🔴 «перегляду» віддається ${bad}`);
+  const row = /path: "\/api\/hiring\/employees", cls: "GET",\s*allow: \[([^\]]*)\], deny: \[([^\]]*)\]/.exec(SRC("auth/accessMatrix.ts"));
+  assert.ok(row && row[1].includes('"financier"') && row[2].includes('"manager"'), "🔴 матриця не каже: фінансист читає, менеджер — ні");
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "HiringSection.tsx"), "utf8");
+  const viewTabs = /meta\.access === "view" \? (\[\[.*?\]\])/.exec(fe)?.[1] ?? "";
+  assert.ok(viewTabs.includes('"base"') && viewTabs.includes('"emp"'), "🔴 у «перегляду» немає кандидатів чи співробітників");
+  for (const stat of ['"daily"', '"sum"', '"churn"', '"exit"']) assert.ok(!viewTabs.includes(stat), `🔴 «перегляду» відкрито статистику ${stat}`);
 });

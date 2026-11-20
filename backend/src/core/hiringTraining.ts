@@ -11,6 +11,7 @@ import { HiringError, LEAD_VISIBLE_SQL, type Db } from "./hiring.js";
 import { ensureEmployeeFromCandidate } from "./employeeAdd.js";
 import { shortKey } from "./employeeImport.js";
 import type { HiringAccess, HiringStatus } from "./hiringRules.js";
+import { seesAll } from "./hiringRules.js";
 import {
   CANDIDATE_ACCESS, CLOSE_REASON_LABEL, accessDeadline, accessToClose, trainingDay, trainingHealth, promoteVerdict,
   inviteState, INVITE_STATE_TEXT, newInviteToken, hashInviteToken, looksLikeInviteToken, candidateLogin, passwordProblem, newCandidatePassword,
@@ -42,7 +43,7 @@ async function lockAccount(db: Db, id: number, access: HiringAccess, leadTeamId:
   const params: unknown[] = [id];
   let vis = "";
   if (access === "lead") { params.push(leadTeamId ?? -1); vis = ` AND ${LEAD_VISIBLE_SQL("$2")}`; }
-  else if (access !== "edit") vis = " AND false";
+  else if (!seesAll(access)) vis = " AND false";
   const c = (await db.query<AccountRow>(`SELECT ${ACCOUNT_COLS} FROM hiring_candidates c WHERE c.id = $1${vis} FOR UPDATE`, params)).rows[0];
   if (!c) throw new HiringError(404, "Кандидата не знайдено");
   return c;

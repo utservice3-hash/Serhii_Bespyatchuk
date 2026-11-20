@@ -5640,7 +5640,12 @@ export type HiringStatus =
 export type HiringVacancyStatus = "open" | "in_work" | "paused" | "closed" | "cancelled";
 export type HiringRefusalSide = "candidate" | "company";
 export interface HiringVacancyRef { id: number; title: string; status: HiringVacancyStatus }
-export type HiringAccessLevel = "edit" | "lead" | "none";
+/** `view` — лише перегляд (фінансист, 20.11.2026, #4153): читає, нічого не змінює. */
+export type HiringAccessLevel = "edit" | "lead" | "view" | "none";
+/** 👥 «Співробітники» для перегляду: реєстр без паролів, сейфу, документів і контактів (#4152). */
+export interface HiringEmployeeViewRow { id: number; full_name: string; status: string; position: string | null; category: string | null; level: string | null;
+  team_name: string | null; hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null }
+export const fetchHiringEmployeesView = async () => (await api.get<{ rows: HiringEmployeeViewRow[] }>("/hiring/employees")).data.rows;
 
 export interface HiringMeta {
   access: HiringAccessLevel;
