@@ -1063,7 +1063,7 @@ export function Dashboard() {
       {section === "kvp" && auth?.role === "admin" && <KvpReportSection canSeeFirstTouch={!!screens?.includes("ai-calls")} />}
 
       {section === "plans" && (auth?.role === "admin" || auth?.role === "team_lead") && (
-        <PlansTabs auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }} teams={teams} />
+        <PlansTabs auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }} teams={teams} canKvp={!!screens?.includes("kvp")} />
       )}
 
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}

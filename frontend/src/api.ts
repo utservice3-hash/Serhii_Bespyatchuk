@@ -1614,6 +1614,8 @@ export interface KvpReport {
     overduePayments: { count: number; sum: number };
     cac: number | null; cacBudget: number; cacNewClients: number;
     avgCycleDays: number | null;
+    /** Середній чек фактичний (отримано ÷ угоди) і той самий по нових клієнтах; null — угод немає. */
+    avgCheck: number | null; avgCheckNew: number | null;
     lost: { deals: number; sum: number; nonTargetLeads: number | null };
   };
   verdict: {

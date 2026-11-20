@@ -11517,6 +11517,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
         cac: newClients > 0 ? Math.round(budgetFact / newClients) : null,
         cacBudget: Math.round(budgetFact), cacNewClients: newClients,
         avgCycleDays: avgCycle,
+        // 🧾 Середній чек ФАКТИЧНИЙ (METRICS_GLOSSARY §5) = отримані кошти ÷ угоди тієї самої множини;
+        // «нових» — та сама формула над сегментом нових клієнтів тієї ж каси (receivedSeg, ядро money).
+        // Правки 17.11.2026: Звіт КВП показує обидва в блоці «Показники місяця». Ділення на нуль → null, не 0.
+        avgCheck: received.deals > 0 ? Math.round(received.revenue / received.deals) : null,
+        avgCheckNew: receivedSeg.newSeg.deals > 0 ? Math.round(receivedSeg.newSeg.revenue / receivedSeg.newSeg.deals) : null,
         lost: { deals: lost.count, sum: lost.sum, nonTargetLeads: nonTarget },
       };
     })(),
