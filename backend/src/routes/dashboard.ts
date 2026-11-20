@@ -10,6 +10,8 @@ import { countsAsContactSql, KOMMO_CHANNEL, SCREEN_MAX_BYTES } from "../core/kom
 import { kommoDriveFile, KommoFileError } from "../kommo/client.js";
 import * as carrierPhones from "../core/carrierPhones.js";
 import { stepState, stepVerdict, phoneState } from "../core/clientNextStep.js";
+import { hideKvpTeamRow, kvpTeamRowName } from "../core/kvpTeamRows.js";
+import { KVP_DEPT_TEAM_ID } from "../core/prozorroAssign.js";
 import { isReturned, RETURN_GAP_DAYS } from "../core/reactivationFilters.js";
 import { mergeNoteComment } from "../core/receivableNoteMerge.js";
 import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
@@ -11121,13 +11123,19 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // 4289 (канал), тобто ×4.3. Рядок вище раніше стверджував «чисельник того самого
   // каналу, що знаменник» — це було НЕПРАВДОЮ; тепер стало правдою. Тримає `#143`.
   // per-manager → команда = Σ (Σ-інваріант). Тонкий знаменник (0) → «—», не «0%».
-  const [reachedAuto, adsAllTime, lgAllTime, mgrTeamRows] = await Promise.all([
+  const [reachedAuto, adsAllTime, lgAllTime, mgrTeamRows, teamNameRows] = await Promise.all([
     metrics.reachedAutoByManager(adSources),
     metrics.adsAcceptedByMgr({}, adSources),
     metrics.conversionByManager({}, "leadgen"),
     pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers WHERE is_active`),
+    // 🏷 Назви команд: команду без грошей у періоді заводить рядок плану менеджера, і до 20.11.2026 — з ПОРОЖНІМ
+    // імʼям (три безіменні рядки на екрані Романа). Назва береться з `teams`, а не з того, хто першим згадав команду.
+    pool.query<{ id: number; name: string }>(`SELECT id, name FROM teams`),
   ]);
   const teamOfMgr = new Map(mgrTeamRows.rows.map((r) => [r.id, r.team_id]));
+  const teamNameById = new Map(teamNameRows.rows.map((r) => [r.id, r.name]));
+  /** Команди, де є хоч один активний менеджер, — від цього залежить, чи показувати порожній рядок (`core/kvpTeamRows.ts`). */
+  const teamsWithActive = new Set(mgrTeamRows.rows.map((r) => r.team_id).filter((x): x is number => x != null));
   const adsByMgr = new Map(adsAllTime.map((x) => [x.managerId, x.count]));
   const lgByMgr = new Map(lgAllTime.map((x) => [x.managerId, x.taken]));
   const convLT = new Map<number, { numAd: number; numLg: number; adsDen: number; lgDen: number }>();
@@ -11146,7 +11154,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
 
   for (const [mid, mp] of mgrPlan) {
     if (mp.teamId == null) continue;
-    const e = teamGet(mp.teamId, "");
+    const e = teamGet(mp.teamId, kvpTeamRowName(teamNameById.get(mp.teamId), mp.teamId));
     const rev = recvByMgr.get(mid)?.revenue ?? 0;
     const su = succByMgr.get(mid); const cv = convByMgr.get(mid);
     e.plan += mp.plan;
@@ -11209,7 +11217,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       remainingToPlan: kvpWholeMonth ? t.plan - t.revenue : null,
       managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
     };
-  }).sort((a, b) => b.revenue - a.revenue);
+  })
+    // 🧹 Порожній рядок команди без активних менеджерів (стара команда 11) і порожній рядок відділу КВП (37283,
+    // одна Левентова без CRM) не показуються — рішення Романа 20.11.2026. Рядок із грошима чи планом не ховається ніколи.
+    .filter((t) => !hideKvpTeamRow(t, teamsWithActive.has(t.teamId), KVP_DEPT_TEAM_ID))
+    .sort((a, b) => b.revenue - a.revenue);
 
   // Стратегічний план (🔒 read-only) = Σ планів команд у таблиці — ОДНЕ джерело з
   // рядками дашборда. Раніше strategicRevenuePlac фільтрував m.is_active і мовчки
