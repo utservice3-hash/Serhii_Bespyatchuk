@@ -447,6 +447,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/missed-calls/norm", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  // 📄 «Пропущені угоди» (рішення Романа 20.11.2026) — ТІ САМІ межі, що в екрана: той самий tab-гейт. Звіряє #449.
+  { method: "GET", path: "/api/dashboard/missed-calls/deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   /* Кнопка задачі: керівництво й тімлід (своя команда) — першим оператором; менеджер вкладку має, але кнопки ні. */
   { method: "POST", path: "/api/dashboard/missed-calls/no-callback/task", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },

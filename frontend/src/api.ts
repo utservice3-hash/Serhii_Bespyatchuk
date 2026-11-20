@@ -408,6 +408,8 @@ export async function fetchLeadgenStats(params: { from: string; to: string; grai
 export type MissedDayBucket = "work" | "evening" | "weekend" | "night";
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
+  /** Пропущені від номерів перевізників — у `missed` НЕ входять (20.11.2026), показуються підписом під плиткою. */
+  carriers: number;
   callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number;
   /** `null` — передзвонів за період не було, тобто медіану нема з чого рахувати. */
@@ -7102,3 +7104,26 @@ export const fetchHuntCandidate = async (id: number) => (await api.get<HuntCandi
 export const updateHuntCandidate = async (id: number, b: Record<string, string | null>) => (await api.patch(`/hunt/candidates/${id}`, b)).data;
 export const moveHuntCandidate = async (id: number, to: HuntStage, reason?: string) => (await api.post(`/hunt/candidates/${id}/stage`, { to, reason })).data;
 export const commentHuntCandidate = async (id: number, text: string, remindAt: string | null) => (await api.post(`/hunt/candidates/${id}/comments`, { text, remindAt })).data;
+
+/**
+ * 📄 «ПРОПУЩЕНІ УГОДИ» (рішення Романа 20.11.2026, словник §11a). Типи — дзеркало `core/missedDeals.ts` + `dealUrl` з роуту.
+ * Пропущена = угода, яку створив вхідний дзвінок, а за 5 хв від нього не було ні розмови, ні нового дзвінка.
+ */
+export interface MissedDealsSummary { deals: number; missed: number; talkedLater: number; ownerless: number; carriers: number; pending: number }
+export interface MissedDealsManagerRow {
+  managerId: number | null; name: string; teamId: number | null; teamName: string | null;
+  deals: number; missed: number; talkedLater: number;
+}
+export type MissedDealNext = "talked" | "attempt" | "nothing";
+export interface MissedDealsListRow {
+  dealId: number; dealUrl: string; at: string; phone: string; managerId: number | null; managerName: string;
+  teamName: string | null; next: MissedDealNext; nextMin: number | null;
+}
+export interface MissedDealsResp {
+  period: { from: string; to: string }; summary: MissedDealsSummary; managers: MissedDealsManagerRow[];
+  rows: MissedDealsListRow[]; truncated: boolean; ownerlessInScope: boolean;
+}
+export async function fetchMissedDeals(params: { from: string; to: string } & MissedFilterParams): Promise<MissedDealsResp> {
+  const { data } = await api.get<MissedDealsResp>("/dashboard/missed-calls/deals", { params });
+  return data;
+}
