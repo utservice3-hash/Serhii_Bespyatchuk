@@ -726,6 +726,61 @@ export function writeMgrWidth(store: ColsStore | null, userId: number | null | u
   }
 }
 
+/**
+ * ↔️ ШИРИНА БУДЬ-ЯКОЇ КОЛОНКИ — ЯК У «МЕНЕДЖЕР» (правки зустрічі 17.11.2026: «Звіт — табличка, зробити динамічний
+ * розмір колонок»). Тягнеш правий край заголовка — колонка ширшає або вужчає; подвійний клік — як було.
+ * Особисто, окремим ключем `rptColWidths:<userId>` (JSON `{ключ: px}`), як вибір, порядок і ширина «Менеджер».
+ * Колонки без запису мають природну ширину; «Менеджер» і «#» сюди не входять — у «Менеджер» своя ширина вище.
+ */
+export const COL_W_MIN = 44;
+export const COL_W_MAX = 360;
+export const clampColWidth = (w: number): number => Math.max(COL_W_MIN, Math.min(COL_W_MAX, Math.round(w)));
+export const COL_W_LS = "rptColWidths";
+export const colWidthsKey = (userId: number | null | undefined): string =>
+  userId != null ? `${COL_W_LS}:${String(userId)}` : COL_W_LS;
+export function readColWidths(store: ColsStore | null, userId: number | null | undefined): Record<string, number> {
+  try {
+    const raw = store?.getItem(colWidthsKey(userId));
+    if (raw == null) return {};
+    const obj = JSON.parse(raw) as unknown;
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (k === "name" || k === "rank") continue;
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) out[k] = clampColWidth(n);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+export function writeColWidths(store: ColsStore | null, userId: number | null | undefined, w: Record<string, number>): boolean {
+  try {
+    if (!store) return false;
+    const clean = Object.fromEntries(Object.entries(w).filter(([k, v]) => k !== "name" && k !== "rank" && Number.isFinite(v) && v > 0)
+      .map(([k, v]) => [k, clampColWidth(v)]));
+    if (Object.keys(clean).length === 0) store.removeItem?.(colWidthsKey(userId));
+    else store.setItem(colWidthsKey(userId), JSON.stringify(clean));
+    return true;
+  } catch {
+    return false;
+  }
+}
+/**
+ * CSS ширин для ПОТОЧНОГО порядку колонок: колонка → її позиція в рядку (`nth-child`), тож перестановка колонок
+ * несе ширину з собою. Рядок груп (`tr.g`) і розгортки на всю ширину (`[colspan]`) не зачіпаються — у них позиції
+ * клітинок не збігаються з колонками. Вужча за вміст колонка обрізає текст «…», а не розпирається назад.
+ */
+export function colWidthCss(scope: string, keys: readonly string[], w: Record<string, number>): string {
+  return keys.map((k, i) => {
+    const px = w[k];
+    if (px == null || k === "name" || k === "rank") return "";
+    const v = String(clampColWidth(px));
+    return `${scope} tr:not(.g) > :nth-child(${String(i + 1)}):not([colspan]) { width: ${v}px; min-width: ${v}px; max-width: ${v}px; overflow: hidden; text-overflow: ellipsis; }`;
+  }).filter(Boolean).join("\n");
+}
+
 /** ⏱ «Передзвін» у клітинці: до години — хвилини, далі — години й хвилини. `null` — «—». */
 export const fmtCallback = (min: number | null): string =>
   min == null ? "—" : min < 60 ? `${String(min)} хв` : `${String(Math.floor(min / 60))} год ${String(min % 60)} хв`;

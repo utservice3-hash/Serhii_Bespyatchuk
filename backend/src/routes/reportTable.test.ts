@@ -1213,3 +1213,46 @@ test("#7731 ПЛИТКА ДНЯ = ОСТАННІЙ ДЕНЬ ПЕРІОДУ (≤ 
   assert.match(r, /<Glance data=\{data\} focus=\{focus\} focusDay=\{dayShown\}/, "🔴 плитка дня отримує не той день");
   assert.match(r, /fetchScoped\(\{ from: focusDay, to: focusDay \}\)/, "🔴 числа плитки дня тягнуться не за тим днем");
 });
+
+/**
+ * #9510 — ↔️ ШИРИНА БУДЬ-ЯКОЇ КОЛОНКИ (правки зустрічі 17.11.2026: «динамічний розмір колонок»): межі 44…360,
+ * особистий ключ `rptColWidths:<userId>`, «як було» = відсутність запису; CSS іде за ПОТОЧНОЮ позицією колонки
+ * й не чіпає рядок груп і розгортки на всю ширину; «Менеджер» і «#» сюди не входять (у «Менеджер» своя ширина).
+ * 🧨 Червоніє, якщо ширину не обмежити, писати спільним ключем, читати сміття як число, привʼязати ширину до
+ * позиції замість ключа (перестановка колонок віддала б ширину сусідові) або зачепити `[colspan]`-рядки.
+ */
+test("#9510 ШИРИНА КОЛОНОК ЗВІТУ: межі 44…360, ключ rptColWidths:<userId>, CSS за поточним порядком, без рядка груп і розгорток", async () => {
+  const { readColWidths, writeColWidths, clampColWidth, colWidthCss, COL_W_MIN, COL_W_MAX } = await loadCols();
+  assert.deepEqual([clampColWidth(5), clampColWidth(120.4), clampColWidth(5000)], [COL_W_MIN, 120, COL_W_MAX]);
+  const st: any = { ...memStore(), removeItem(k: string) { st.data.delete(k); } };
+  assert.deepEqual(readColWidths(st, 42), {}, "🔴 без запису ширини не «природні»");
+  writeColWidths(st, 42, { fact: 10, plan: 900, name: 300 });
+  assert.deepEqual(JSON.parse(st.getItem("rptColWidths:42")), { fact: COL_W_MIN, plan: COL_W_MAX }, "🔴 ширини пишуться не особистим ключем, без меж або з «Менеджер»");
+  assert.deepEqual(readColWidths(st, 7), {}, "🔴 ширини одного користувача дістались іншому");
+  writeColWidths(st, 42, {});
+  assert.equal(st.getItem("rptColWidths:42"), null, "🔴 «як було» лишило запис");
+  assert.deepEqual(readColWidths({ getItem: () => "[1,2]", setItem() {} }, 1), {}, "🔴 сміття у сховищі прочитано як ширини");
+  assert.deepEqual(readColWidths({ getItem: () => "{\"fact\":\"abc\",\"rank\":50}", setItem() {} }, 1), {}, "🔴 нечислову ширину або «#» прочитано");
+  assert.deepEqual(readColWidths({ getItem: () => { throw new Error("private"); }, setItem() {} }, 1), {}, "🔴 недоступне сховище ламає таблицю");
+  // CSS: позиція = індекс ключа в ПОТОЧНОМУ порядку (+1), лише для колонок із записом.
+  const a = colWidthCss(".t", ["rank", "name", "fact", "plan"], { plan: 100 });
+  assert.match(a, /^\.t tr:not\(\.g\) > :nth-child\(4\):not\(\[colspan\]\) \{ width: 100px; min-width: 100px; max-width: 100px;/, "🔴 ширина не на позиції колонки або без обрізання");
+  const b = colWidthCss(".t", ["rank", "name", "plan", "fact"], { plan: 100 });
+  assert.match(b, /:nth-child\(3\)/, "🔴 після перестановки ширина лишилась на старій позиції — дісталась сусідові");
+  assert.equal(colWidthCss(".t", ["rank", "name", "fact"], { name: 200, rank: 50 }), "", "🔴 «Менеджер» або «#» отримали ширину з цього механізму");
+});
+
+/**
+ * #9511 — ПРОВОДКА ШИРИНИ: кожна НЕзакріплена колонка має ручку зміни ширини, подвійний клік скидає саме її,
+ * поки тягнеш — колонка не перетягується, і CSS ширин будується за тим самим `colKeys`, що шапка й рядки.
+ * 🧨 Червоніє, якщо ручку прибрати, CSS брати з іншого порядку, ніж `cols`, або перетягування колонки
+ * спрацьовуватиме під час зміни ширини.
+ */
+test("#9511 ПРОВОДКА ШИРИНИ: ручка на кожній незакріпленій колонці, скидання по одній, CSS за colKeys, без перетягування під час зміни", () => {
+  const t = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(t, /\{!isPinnedCol\(c\.key\) && \(\s*<span role="separator"[^>]*?onPointerDown=\{startColResize\(c\.key\)\}/s, "🔴 у незакріпленої колонки немає ручки ширини");
+  assert.match(t, /onDoubleClick=\{\(e\) => \{ e\.stopPropagation\(\); resetColWidth\(c\.key\); \}\}/, "🔴 подвійний клік не скидає ширину саме цієї колонки");
+  assert.match(t, /<style>\{colWidthCss\("table\.rpt-table", colKeys, colW\)\}<\/style>/, "🔴 CSS ширин не за поточним порядком колонок");
+  assert.match(t, /onDragStart: \(e: React\.DragEvent\) => \{\s*if \(resizing\.current\) \{ e\.preventDefault\(\); return; \}/, "🔴 під час зміни ширини колонка ще й перетягується");
+  assert.match(t, /const \[colW, setColW\] = useState<Record<string, number>>\(\(\) => readColWidths\(colStore\(\), userId\)\);/, "🔴 ширини не читаються з особистого сховища");
+});
