@@ -125,6 +125,7 @@ test("#10403 ЕКРАН: стіна карток (scope=main, cardFigures), ре
   assert.match(fe, /Показник з будь-якого відділу/, "🔴 «＋ Показник» знову лише з поточного відділу");
   assert.match(fe, /<LineChart data=\{rows\}/, "🔴 розгорнутого графіка немає");
   assert.match(fe, /<ValuesTable rows=\{rows\.slice\(eff\.lo, eff\.hi \+ 1\)\}/, "🔴 таблиці значень під графіком немає");
+  assert.match(fe, /return last && prev && String\(last\.period\) >= curStart\s*\? <ReferenceArea [^>]*label=\{\{ value: "іде"/, "🔴 період, що йде, на великому графіку не позначений — неповний місяць читається як обвал");
   assert.match(read("frontend/src/pages/Dashboard.tsx"), /section === "statistics" && <StatisticsChartsSection role=\{auth\?\.role\} \/>/);
   assert.match(read("frontend/src/api.ts"), /scope\?: "main"/, "🔴 клієнт API не передає scope");
   assert.doesNotMatch(fe, /<StatisticsSummary\b|from "\.\/StatisticsSummary"|<StatisticsPlanFact\b/, "🔴 повернулись старі плитки / «План-факт»");

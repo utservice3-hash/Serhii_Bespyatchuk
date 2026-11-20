@@ -560,6 +560,13 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                       return typeof v === "number" ? [<ReferenceDot key={`an${k}`} yAxisId={refAxis} x={a.period} y={v} r={6} fill={fill} stroke="#fff"
                         label={{ value: a.kind === "corrected" ? "✎" : "!", position: "top", fontSize: 12, fontWeight: 800, fill }} />] : [];
                     })}
+                    {/* ⏳ Період, що йде, — затінений і підписаний «іде»: інакше неповний місяць на великому графіку читається як обвал. */}
+                    {(() => {
+                      const last = rows[eff.hi], prev = rows[eff.hi - 1];
+                      return last && prev && String(last.period) >= curStart
+                        ? <ReferenceArea yAxisId={refAxis} x1={prev.period} x2={last.period} fill="#94a3b8" fillOpacity={0.12} label={{ value: "іде", position: "insideTop", fontSize: 11, fill: MUTED }} />
+                        : null;
+                    })()}
                     {drag.a && drag.b && <ReferenceArea yAxisId={refAxis} x1={drag.a} x2={drag.b} fill="#2f6fdb" fillOpacity={0.08} />}
                     <Brush dataKey="period" height={24} travellerWidth={9} stroke="#94a3b8" tickFormatter={shortDate}
                       startIndex={eff.lo} endIndex={eff.hi} gap={1}
