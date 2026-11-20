@@ -227,3 +227,20 @@ test("#9513 ОДИН НАВІГАТОР ПЕРІОДУ: Звіт КВП і «П�
   const rep = FE("pages/dashboard/sections/ReportPlanSection.tsx");
   assert.match(rep, /<PeriodStepper state=\{navState\} onPatch=\{applyNav\} today=\{today\} \/>/, "🔴 Звіт кличе навігатор інакше, ніж до 20.11");
 });
+
+/**
+ * #9518 — «ДЕТАЛЬНИЙ ЗВІТ» ВІДКРИВАЄТЬСЯ ЯВНОЮ КНОПКОЮ (Роман 20.11.2026: «не зрозуміло, коли і як відкривається»).
+ * На рядку стоїть кнопка з підписом стану — «Показати ▾» / «Згорнути ▴», а не лише трикутник у заголовку; кнопка і
+ * рядок перемикають ТОЙ САМИЙ стан.
+ * 🧨 Червоніє, якщо кнопку прибрати, підпис перестане залежати від стану або кнопка й рядок перемикатимуть двічі.
+ */
+test("#9518 «ДЕТАЛЬНИЙ ЗВІТ»: явна кнопка «Показати ▾ / Згорнути ▴», той самий стан, що й клік по рядку", () => {
+  const body = screenBody();
+  const a = body.indexOf("📂 Детальний звіт");
+  const hdr = body.slice(body.lastIndexOf("<div className=\"chart-card\"", a), body.indexOf("{showDetails && (<>", a));
+  assert.ok(a > 0 && hdr.length > 200, "🔴 рядок «Детальний звіт» не знайдено");
+  assert.match(hdr, /\{showDetails \? "Згорнути ▴" : "Показати ▾"\}<\/button>/, "🔴 немає кнопки з підписом стану");
+  assert.match(hdr, /<button type="button" onClick=\{\(e\) => \{ e\.stopPropagation\(\); toggleDetails\(\); \}\}/, "🔴 кнопка не перемикає детальний звіт або клік спливе до рядка й перемкне двічі");
+  assert.match(hdr, /role="button" aria-expanded=\{showDetails\} onClick=\{toggleDetails\}/, "🔴 клік по рядку більше не відкриває детальний звіт");
+  assert.doesNotMatch(hdr, /\{showDetails \? "▾" : "▸"\}/, "🔴 повернувся голий трикутник у заголовку");
+});

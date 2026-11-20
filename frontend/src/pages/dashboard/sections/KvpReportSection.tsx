@@ -322,10 +322,16 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               ставиться він у «Плани» → «🎯 Плани КВП» (туди переїхала колишня «Повна таблиця»). ── */}
           <MonthMetrics rep={rep} plans={plans} />
 
-          {/* ▸ ДЕТАЛЬНИЙ ЗВІТ — усе, що було до ядра; згорнуте за замовчуванням. */}
-          <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title" style={{ cursor: "pointer", margin: 0 }} onClick={toggleDetails}>{showDetails ? "▾" : "▸"} 📂 Детальний звіт
+          {/* ▸ ДЕТАЛЬНИЙ ЗВІТ — згорнутий за замовчуванням. Відкривається ЯВНОЮ кнопкою «Показати ▾ / Згорнути ▴»
+              (Роман 20.11.2026: «не зрозуміло, коли і як відкривається» — раніше це був лише трикутник у заголовку);
+              клік по всьому рядку робить те саме. */}
+          <div className="chart-card" role="button" aria-expanded={showDetails} onClick={toggleDetails}
+            style={{ marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", cursor: "pointer" }}>
+            <h2 className="chart-title" style={{ margin: 0 }}>📂 Детальний звіт
               <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> — зміна до минулого періоду, темп і життєвий цикл грошей</span></h2>
+            <button type="button" onClick={(e) => { e.stopPropagation(); toggleDetails(); }}
+              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
+              {showDetails ? "Згорнути ▴" : "Показати ▾"}</button>
           </div>
           {showDetails && (<>
           {/* ── ТЕМП І ЖИТТЄВИЙ ЦИКЛ (були у «де ми зараз»; чотири картки грошей — у ядрі вище, тут не дублюються) ── */}
