@@ -4,7 +4,7 @@ import {
 } from "recharts";
 import { effGranOf } from "../statsGran";
 import { MAX_METRICS, canAdd, drawnScopes, multiLines, multiRows } from "../statsMulti";
-import { cardFigures, parseMine, periodStartOf, MINE_KEY, MINE_MAX, type CardGran } from "../statsCards";
+import { cardFigures, cardDelta, parseMine, periodStartOf, MINE_KEY, MINE_MAX, type Better, type CardGran } from "../statsCards";
 import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
 import { InfoHint } from "../widgets";
 import { ChartSkeleton, SkelBox, TableSkeleton } from "../Skeleton";
@@ -16,7 +16,7 @@ const MUTED = "var(--text-muted)";
 
 /** `companyOnly` — показник рахується лише по компанії (по командах його не розрізає джерело): картка тімліда й менеджера
  *  каже це словами, а не показує порожнечу. `src` — звідки число, підписом на картці. */
-type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; weekOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string; companyOnly?: boolean; src?: string };
+type Metric = { key: string; block: string; label: string; unit?: string; better?: Better; monthOnly?: boolean; weekOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string; companyOnly?: boolean; src?: string };
 type Cat = { key: string; icon: string; label: string; metrics: Metric[]; manualForm?: boolean };
 
 const CALLS_HINT = "Результативні дзвінки Ringostat (billsec>0); у дашборді вони є з 09.2025 — раніше ряду немає.";
@@ -46,7 +46,7 @@ const CATS: Cat[] = [
     { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "авто за датою завантаження — те саме, що «Відправлені авто» на Звіті; company включає поставки поза 6 командами (~0.5%)" },
     { key: "calls", block: "sales", label: "Результативні дзвінки", hint: CALLS_HINT, src: "Ringostat" },
     /* Медіана, не середнє (рішення власника 26.10.2026): медіана кошика — з угод, а не медіана медіан. Лінії цілі немає (5708). */
-    { key: "lead_take_median", block: "sales", label: "Медіана часу опрацювання заявки, хв", unit: "хв", hint: LEAD_TAKE_MEDIAN_HINT },
+    { key: "lead_take_median", block: "sales", label: "Медіана часу опрацювання заявки, хв", unit: "хв", better: "down", hint: LEAD_TAKE_MEDIAN_HINT },
     { key: "lead_take_m5_pct", block: "sales", label: "Взято до 5 хв, %", unit: "%", hint: LEAD_TAKE_SHARE_HINT },
   ] },
   { key: "ads", icon: "📣", label: "Реклама", metrics: [
@@ -75,15 +75,15 @@ const CATS: Cat[] = [
   ] },
   { key: "finance", icon: "💵", label: "Фінанси", metrics: [
     { key: "fin_bank_in", block: "finance", label: "Надходження", unit: "₴", companyOnly: true, src: "Фінанси", hint: "«Надходження» — банк, словник §18; банк у дашборді з 10.2026; " + FIN_HINT },
-    { key: "fin_bank_out", block: "finance", label: "Витрати загальні", unit: "₴", companyOnly: true, src: "Фінанси", hint: "«Витрати загальні» — банк, словник §18; банк у дашборді з 10.2026; " + FIN_HINT },
-    { key: "fin_receivables", block: "finance", label: "Дебіторка", unit: "₴", companyOnly: true, src: "Фінанси", hint: "«Дебіторка»: на кінець періоду з журналу, для періоду, що йде, — станом на зараз; ряд з 10.2026; " + FIN_HINT },
+    { key: "fin_bank_out", block: "finance", label: "Витрати загальні", unit: "₴", better: "neutral", companyOnly: true, src: "Фінанси", hint: "«Витрати загальні» — банк, словник §18; банк у дашборді з 10.2026; " + FIN_HINT },
+    { key: "fin_receivables", block: "finance", label: "Дебіторка", unit: "₴", better: "neutral", companyOnly: true, src: "Фінанси", hint: "«Дебіторка»: на кінець періоду з журналу, для періоду, що йде, — станом на зараз; ряд з 10.2026; " + FIN_HINT },
     { key: "fin_delivered_income", block: "finance", label: "Дохід поставлених", unit: "₴", companyOnly: true, src: "Фінанси", hint: "«Дохід поставлених» за фільтрами фінансиста (`core/money.ts`); ряд з 09.2026; " + FIN_HINT },
   ] },
   { key: "hr", icon: "🧑‍💼", label: "HR", metrics: [
     { key: "hr_headcount", block: "hr", label: "Штат", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "скільки людей працювали в місяці; " + HR_HINT },
     { key: "hr_hired", block: "hr", label: "Прийнято", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "прийняті в місяці за датою прийому; " + HR_HINT },
-    { key: "hr_fired", block: "hr", label: "Звільнено", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "звільнені в місяці за датою звільнення (з невідомою датою — поза розрахунком); " + HR_HINT },
-    { key: "hr_turnover_total", block: "hr", label: "Плинність", unit: "%", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "звільнено ÷ працювали в місяці × 100 — уже у відсотках (20 = 20%), а не частка; " + HR_HINT },
+    { key: "hr_fired", block: "hr", label: "Звільнено", better: "down", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "звільнені в місяці за датою звільнення (з невідомою датою — поза розрахунком); " + HR_HINT },
+    { key: "hr_turnover_total", block: "hr", label: "Плинність", unit: "%", better: "down", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "звільнено ÷ працювали в місяці × 100 — уже у відсотках (20 = 20%), а не частка; " + HR_HINT },
   ] },
   /* 📣 Окремий розділ меню «Реклама» (ТЗ 28.09, блок 4, п.6) — див. `AdsPage.tsx`; тут лише його числа картками. */
   { key: "manual", icon: "✍️", label: "Ручні", manualForm: true, metrics: [
@@ -105,7 +105,8 @@ const WALL_POOL: Metric[] = MULTI_POOL.map((x) => x.m);
 const MULTI_NOTE = "Збіг ліній не доводить, що один показник впливає на інший.";
 
 const fmt = (n: number, unit?: string) => {
-  if (unit === "%") return Math.round(n) + "%";
+  // 0,2% плинності — не «0%»: до 10% показуємо один знак після коми.
+  if (unit === "%") return n.toLocaleString("uk-UA", { maximumFractionDigits: Math.abs(n) < 10 ? 1 : 0 }) + "%";
   if (unit === "хв") return `${Math.round(n * 10) / 10} хв`;
   const r = Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + " млн" : Math.abs(n) >= 1e3 ? Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ") : String(Math.round(n));
   return unit === "₴" ? r + " ₴" : r;
@@ -709,7 +710,7 @@ function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; g
   const points = series?.points ?? [];
   const f = cardFigures(points, g, today);
   const box = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", cursor: "pointer", textAlign: "left" as const, color: "var(--text)", font: "inherit" };
-  const up = f.deltaPct != null && f.deltaPct > 0, down = f.deltaPct != null && f.deltaPct < 0;
+  const dl = cardDelta(f.last, f.prev, m.unit, m.better);
   return (
     <button type="button" onClick={onOpen} style={box} title="клік — розгорнути: графік, команди, таблиця значень">
       <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
@@ -732,8 +733,8 @@ function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; g
             <>
               <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(f.last.value, m.unit)}</div>
               <div style={{ fontSize: 12, color: MUTED }}>{periodLabel(f.last.period, g)}{series.scopeType !== "company" ? ` · ${series.scopeName}` : ""}</div>
-              <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, color: up ? "#16a34a" : down ? "#dc2626" : MUTED }}>
-                {f.deltaPct == null ? "немає з чим порівняти" : `${up ? "▲" : down ? "▼" : "="} ${Math.abs(f.deltaPct).toLocaleString("uk-UA")}% ${prevLabel(f.prev!.period, g)}`}
+              <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, color: dl?.tone === "good" ? "#16a34a" : dl?.tone === "bad" ? "#dc2626" : MUTED }}>
+                {dl == null ? "немає з чим порівняти" : `${dl.text} ${prevLabel(f.prev!.period, g)}`}
               </div>
               {f.missingSince && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3 }}>після {periodLabel(f.missingSince, g)} даних немає</div>}
             </>

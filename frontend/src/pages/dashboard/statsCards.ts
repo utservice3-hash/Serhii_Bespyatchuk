@@ -60,6 +60,28 @@ export function cardFigures(points: readonly Pt[], g: CardGran, today: string): 
 }
 
 /**
+ * 🔺 ЯК КАРТКА КАЖЕ «ЗМІНИЛОСЬ» (заміри 20.11.2026 на проді, після викату стіни).
+ *  • Показник САМ у відсотках (`unit === "%"`, напр. «Частка до 5 хв», «Плинність») — різниця у ВІДСОТКОВИХ ПУНКТАХ:
+ *    30% → 68% — це «▲ 38 п.п.», а не «▲ 126,7%». Відсоток від відсотка на проді читався як «частка виросла вдвічі з
+ *    гаком», хоча вона виросла на 38 пунктів.
+ *  • Решта — відносна зміна, % (як `deltaPct`); попереднє = 0 — порівнювати нема з чим.
+ *  • Колір — НАПРЯМОК, а не знак: для «менше — краще» (медіана хвилин, звільнені, плинність) падіння зелене; для
+ *    нейтральних (витрати, дебіторка) — сірий, бо «більше» там саме по собі не добре й не погане.
+ */
+export type Better = "up" | "down" | "neutral";
+export interface CardDelta { dir: "up" | "down" | "same"; text: string; tone: "good" | "bad" | "neutral" }
+export function cardDelta(last: Pt | null, prev: Pt | null, unit: string | undefined, better: Better = "up"): CardDelta | null {
+  if (!last || !prev) return null;
+  const pp = unit === "%";
+  if (!pp && prev.value === 0) return null;
+  const v = pp ? Math.round((last.value - prev.value) * 10) / 10 : Math.round(((last.value - prev.value) / Math.abs(prev.value)) * 1000) / 10;
+  const dir = v > 0 ? "up" : v < 0 ? "down" : "same";
+  const text = `${dir === "up" ? "▲" : dir === "down" ? "▼" : "="} ${Math.abs(v).toLocaleString("uk-UA")}${pp ? " п.п." : "%"}`;
+  const tone = dir === "same" || better === "neutral" ? "neutral" : dir === better ? "good" : "bad";
+  return { dir, text, tone };
+}
+
+/**
  * ★ «МІЙ НАБІР» (Сашин «Кастом», Роман 20.11: «у браузері») — ключі показників у `localStorage`. Вміст сховища —
  * чужий текст: старий формат, ручна правка, показник, якого вже немає. Тож розбір ніколи не кидає і лишає лише
  * відомі ключі, без повторів, не більше `MINE_MAX`.

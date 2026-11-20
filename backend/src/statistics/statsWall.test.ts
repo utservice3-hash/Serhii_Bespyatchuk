@@ -6,13 +6,15 @@ import { mainSpec, bucketOfDay, sumIntoBuckets, periodStarts, blockDenied } from
 import { STATS_CRM_FROM, hasDepstats } from "./seriesCatalog.js";
 import { clipPointsToToday } from "./statsCompare.js";
 import { needsApi, API_BASE } from "../testMode.js";
+import { memoize, SERIES_MEMO_TTL_MS } from "./seriesMemo.js";
 
 /**
- * 🧱 #10400–#10416 — ЕКРАН «СТАТИСТИКИ» = СТІНА КАРТОК + ЛИШЕ CRM І ДАШБОРД (зустріч 20.11.2026).
+ * 🧱 #10400–#10418 — ЕКРАН «СТАТИСТИКИ» = СТІНА КАРТОК + ЛИШЕ CRM І ДАШБОРД (зустріч 20.11.2026).
  * Рішення Романа 20.11: «картки з цифрами — так» (ТЗ 14.10 «лише графіки» скасовано); «всі дані з CRM — дашборду, немає
  * ніяких інших даних»; «Мій набір» — у браузері; машини нових = повністю нові клієнти, джерело не важливе.
  *
- * Прохід А — стіна (`#10400`–`#10406`), прохід Б — ряди (`#10410`–`#10416`). Правила фронту ВИКОНУЮТЬСЯ (транспіляція
+ * Прохід А — стіна (`#10400`–`#10406`), прохід Б — ряди (`#10410`–`#10416`), після викату — швидкість і зміна на картці
+ * (`#10417`, `#10418`). Правила фронту ВИКОНУЮТЬСЯ (транспіляція
  * `statsCards.ts`), а не читаються очима; джерело звіряється лише там, де твердження — про проводку.
  */
 
@@ -288,14 +290,92 @@ test("#10416 ДЖЕРЕЛА: кожен показник меню — у COMPUTE
   const src: [string, RegExp][] = [
     ["prozorro_deals", /prozorro_deals: async[^\n]*\n\s*\(await createdSplitByBucket\(\{ from, to, teamId, managerId \}, g\)\)\.map\(\(x\) => P\(x\.bucket, x\.prozorroCount\)\)/],
     ["linkedin_deals", /linkedin_deals: async[^\n]*\n\s*\(await createdSplitByBucket\(\{ from, to, teamId, managerId \}, g\)\)\.map\(\(x\) => P\(x\.bucket, x\.linkedinCount\)\)/],
-    ["ad (Реклама «Надійшло»)", /const days = await money\.adReceivedByDay\(\{ from, to \}, \(await getSettings\(\)\)\.adSources\);/],
+    ["ad (Реклама «Надійшло»)", /const days = await adReceivedByDay\(\{ from, to \}, \(await getSettings\(\)\)\.adSources\);/],
+    ["ad — спільний виклик того самого ядра", /const adReceivedByDay = memoize\("adReceivedByDay", money\.adReceivedByDay\);/],
     ["lg (тренд «Лідогенерації»)", /const t = await leadgenTrend\(to, months, \{ teamId: null, managerId: null \}\);/],
     ["fin (Фінанси → Тиждень і місяць)", /refs: \(await fmRefsFor\(g, st\)\)/],
-    ["hr (плинність реєстру)", /await churnReport\(pool as unknown as Db, from\.slice\(0, 7\), to\.slice\(0, 7\)\)/],
+    ["hr (плинність реєстру)", /await churnOf\(from\.slice\(0, 7\), to\.slice\(0, 7\)\)/],
+    ["hr — спільний виклик того самого ядра", /const churnOf = memoize\("churnReport", \(fromYm: string, toYm: string\) => churnReport\(pool as unknown as Db, fromYm, toYm\)\);/],
     ["hr_turnover_total", /hr_turnover_total: hrC\(\(m\) => m\.turnover\),/],
   ];
   for (const [name, re] of src) assert.match(route, re, `🔴 ${name}: обчислювач іде не через функцію свого екрана`);
   assert.doesNotMatch(route, /m\.turnover \* 100|turnover \* 100/, "🔴 плинність знову множиться на 100 — уже у відсотках");
+});
+
+// ─────────────────────────────── ПІСЛЯ ВИКАТУ · ШВИДКІСТЬ І ЗМІНА ───────────────────────────────
+
+/**
+ * #10417 — КАРТКИ ОДНОГО ВІДДІЛУ ДІЛЯТЬ ОДИН ВИКЛИК ЯДРА, АЛЕ НІКОЛИ — ЧУЖИЙ РОЗРІЗ. Заміри 20.11.2026 на проді: «Продажі»
+ * відкривались 10 с, бо «Поставлені», «Відправлені всього» й «Машини нових» тричі паралельно рахували той самий
+ * `dispatchedByLoadBucket`, дві картки часу — той самий `leadTakeSeries` (5 с кожен) і так далі.
+ * 🧨 Червоніє, якщо: з ключа зникнуть аргументи (тімлід отримав би числа компанії — правило власника 25.08 «у ключі все,
+ * що змінює відповідь»); одночасні картки запустять свій запит кожна; помилка закешується; число житиме довше за TTL;
+ * обчислювач покличе ядро повз спільний виклик; дві функції візьмуть одне імʼя (ключі зіллються).
+ */
+test("#10417 СПІЛЬНИЙ ВИКЛИК: однакові аргументи — один запит, інший розріз — свій; помилка і старе не кешуються", async () => {
+  let clock = 1_000, calls = 0;
+  const store = new Map<string, { at: number; v: Promise<unknown> }>();
+  const core = async (s: { from: string; teamId: number | null }, g: string) => { calls++; await Promise.resolve(); return [`${s.teamId}|${g}|${calls}`]; };
+  const m = memoize("core", core, { now: () => clock, store });
+  const [a, b, c] = await Promise.all([m({ from: "2026-10-01", teamId: null }, "month"), m({ from: "2026-10-01", teamId: null }, "month"), m({ from: "2026-10-01", teamId: null }, "month")]);
+  assert.equal(calls, 1, "🔴 три одночасні картки запустили ядро не один раз");
+  assert.ok(a === b && b === c, "🔴 одночасні картки отримали різні результати");
+  assert.deepEqual(await m({ from: "2026-10-01", teamId: 14 }, "month"), ["14|month|2"], "🔴 команда 14 отримала числа компанії — розріз випав із ключа");
+  await m({ from: "2026-10-01", teamId: null }, "week"); assert.equal(calls, 3, "🔴 тиждень отримав місячний ряд — гранулярність випала з ключа");
+  await m({ from: "2026-09-01", teamId: null }, "month"); assert.equal(calls, 4, "🔴 інший період отримав той самий ряд");
+  clock += SERIES_MEMO_TTL_MS - 1; await m({ from: "2026-10-01", teamId: null }, "month"); assert.equal(calls, 4, "🔴 у межах TTL ядро покликано знову — спільного виклику немає");
+  clock += 1; await m({ from: "2026-10-01", teamId: null }, "month"); assert.equal(calls, 5, "🔴 після TTL віддано старе число");
+  assert.ok(SERIES_MEMO_TTL_MS <= 120_000, "🔴 TTL понад 2 хв — «станом на» відставатиме помітно; це рішення власника, не технічна правка");
+  // Інша функція з ТИМИ САМИМИ аргументами — свій запит (імʼя в ключі).
+  const other = memoize("other", async (_s: { from: string; teamId: number | null }, _g: string) => ["other"], { now: () => clock, store });
+  assert.deepEqual(await other({ from: "2026-10-01", teamId: null }, "month"), ["other"], "🔴 інша функція отримала чужий результат — імʼя випало з ключа");
+  // Помилка не кешується: наступна картка пробує знову.
+  let fail = true, tries = 0;
+  const flaky = memoize("flaky", async (_x: number) => { tries++; if (fail) throw new Error("neon"); return 7; }, { now: () => clock, store });
+  await assert.rejects(flaky(1), /neon/); fail = false;
+  await new Promise((r) => setImmediate(r));
+  assert.equal(await flaky(1), 7, "🔴 помилка закешувалась — картка хвилину показує чужу відмову");
+  assert.equal(tries, 2);
+
+  // Проводка: кожен важкий виклик ядра в роуті йде через спільний виклик, і жоден — повз нього.
+  const route = codeOnly(read(ROUTE));
+  const names = ["successByBucket", "receivedByBucket", "dispatchedByLoadBucket", "repeatClientsByBucket", "createdSplitByBucket", "leadTakeSeries", "leadgenTrend"];
+  for (const n of names) assert.ok(route.includes(`const ${n} = memoize("${n}", ${n}Raw);`), `🔴 ${n}: обчислювачі кличуть ядро напряму — картки відділу знову рахують те саме паралельно`);
+  const direct = [...route.matchAll(/\b(\w+Raw)\(/g)].map((x) => x[1]);
+  assert.deepEqual(direct, [], `🔴 ядро покликано повз спільний виклик: ${direct.join(", ")}`);
+  assert.doesNotMatch(route.replace(/memoize\("adReceivedByDay", money\.adReceivedByDay\)/, ""), /money\.adReceivedByDay|await churnReport\(/, "🔴 реклама або плинність рахуються повз спільний виклик");
+  const keys = [...route.matchAll(/memoize\("(\w+)"/g)].map((x) => x[1]);
+  assert.ok(keys.length >= 9, `🔴 знайдено лише ${keys.length} спільних викликів — зріз зламався`);
+  assert.equal(new Set(keys).size, keys.length, `🔴 дві функції під одним імʼям — їхні ключі зіллються: ${keys.join(", ")}`);
+});
+
+/**
+ * #10418 — ЗМІНА НА КАРТЦІ: ВІДСОТКОВИЙ ПОКАЗНИК — У ПУНКТАХ, КОЛІР — ЗА ЗМІСТОМ. На проді 20.11 «Частка до 5 хв»
+ * показувала «68% ▲ 126,8%» (30% → 68%): відсоток від відсотка читається як «виросла більш ніж удвічі», а виросла вона на
+ * 38 пунктів. І падіння медіани хвилин горіло червоним, хоча це покращення.
+ * 🧨 Червоніє, якщо «%»-показник знову порівнюється відсотком, якщо «менше — краще» фарбується як погіршення, якщо
+ * нейтральний показник (витрати) отримає зелений / червоний, або картка перестане брати зміну з цієї функції.
+ */
+test("#10418 ЗМІНА: показник у % — різницею в п.п.; «менше — краще» зелене на падінні; нейтральні — сірі", async () => {
+  const { cardDelta } = await loadCards();
+  assert.deepEqual(cardDelta(P("2026-10-01", 68), P("2026-09-01", 30), "%"), { dir: "up", text: "▲ 38 п.п.", tone: "good" }, "🔴 відсоток від відсотка замість пунктів");
+  assert.deepEqual(cardDelta(P("2026-10-01", 2.1), P("2026-09-01", 0), "%", "down"), { dir: "up", text: "▲ 2,1 п.п.", tone: "bad" }, "🔴 плинність 0% → 2,1% мусить показати пункти, а не «немає з чим порівняти»");
+  assert.deepEqual(cardDelta(P("2026-10-01", 120), P("2026-09-01", 100), "₴"), { dir: "up", text: "▲ 20%", tone: "good" });
+  assert.deepEqual(cardDelta(P("2026-10-01", 80), P("2026-09-01", 100), undefined), { dir: "down", text: "▼ 20%", tone: "bad" });
+  assert.deepEqual(cardDelta(P("2026-10-01", 6), P("2026-09-01", 12), "хв", "down"), { dir: "down", text: "▼ 50%", tone: "good" }, "🔴 медіана хвилин упала — це покращення");
+  assert.equal(cardDelta(P("2026-10-01", 9), P("2026-09-01", 6), "хв", "down")?.tone, "bad");
+  assert.equal(cardDelta(P("2026-10-01", 9), P("2026-09-01", 6), "₴", "neutral")?.tone, "neutral", "🔴 витрати отримали «добре / погано»");
+  assert.deepEqual(cardDelta(P("2026-10-01", 5), P("2026-09-01", 5), "₴"), { dir: "same", text: "= 0%", tone: "neutral" });
+  assert.equal(cardDelta(P("2026-10-01", 5), P("2026-09-01", 0), "₴"), null, "🔴 ділення на нуль у зміні");
+  assert.equal(cardDelta(P("2026-10-01", 5), null, "₴"), null);
+  assert.equal(cardDelta(null, null, "%"), null);
+
+  const fe = read(`${SEC}/StatisticsChartsSection.tsx`);
+  assert.match(fe, /const dl = cardDelta\(f\.last, f\.prev, m\.unit, m\.better\);/, "🔴 картка рахує зміну не цією функцією");
+  assert.match(fe, /\{dl == null \? "немає з чим порівняти" : `\$\{dl\.text\} \$\{prevLabel\(f\.prev!\.period, g\)\}`\}/, "🔴 картка показує не текст функції");
+  assert.match(fe, /color: dl\?\.tone === "good" \? "#16a34a" : dl\?\.tone === "bad" \? "#dc2626" : MUTED/, "🔴 колір береться не з тону");
+  for (const k of ["lead_take_median", "hr_fired", "hr_turnover_total"]) assert.match(fe, new RegExp(`\\{ key: "${k}",[^\\n]*better: "down"`), `🔴 ${k}: падіння знову читається як погіршення`);
+  for (const k of ["fin_bank_out", "fin_receivables"]) assert.match(fe, new RegExp(`\\{ key: "${k}",[^\\n]*better: "neutral"`), `🔴 ${k}: зміна знову фарбується як добре / погано`);
 });
 
 // ─────────────────────────────── ЖИВІ (test:prod) ───────────────────────────────
