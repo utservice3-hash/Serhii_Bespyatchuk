@@ -2,21 +2,24 @@ import { Router } from "express";
 import { isAdminScope, isAdminOrLead, roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
-import { successByBucket, receivedByBucket, type MoneyScope } from "../core/money.js";
+import { successByBucket as successByBucketRaw, receivedByBucket as receivedByBucketRaw, type MoneyScope } from "../core/money.js";
 import * as money from "../core/money.js";
 import { lapsedFrom, prevMonthOf } from "../core/lapsedClients.js";
 import { clientOwnersFor } from "../core/clientOwner.js";
 import { kyivToday } from "../core/dates.js";
-import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, createdSplitByBucket, type MetricScope } from "../core/metrics.js";
+import {
+  dispatchedByLoadBucket as dispatchedByLoadBucketRaw, leadsTakenByBucket, repeatClientsByBucket as repeatClientsByBucketRaw,
+  createdSplitByBucket as createdSplitByBucketRaw, type MetricScope,
+} from "../core/metrics.js";
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
 import { teamAtSql } from "../core/teamAt.js";
-import { leadgenBuckets, sumBuckets, leadgenTrend } from "../core/leadgenStats.js";
+import { leadgenBuckets, sumBuckets, leadgenTrend as leadgenTrendRaw } from "../core/leadgenStats.js";
 import { getSettings } from "./settings.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 import { FM_KOMMO_FROM } from "../core/financeKpi.js";
 import { churnReport } from "../core/churn.js";
 import type { Db } from "../core/secrets.js";
-import { leadTakeSeries, SERIES_TAKE_FILTER } from "../core/leadTake.js";
+import { leadTakeSeries as leadTakeSeriesRaw, SERIES_TAKE_FILTER } from "../core/leadTake.js";
 import type { TakeStats } from "../core/leadTakeRules.js";
 import {
   STATS_SEAM, STATS_CRM_FROM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
@@ -26,6 +29,7 @@ import { anomaliesFor } from "../statistics/anomalies.js";
 import { mainSpec, sumIntoBuckets, periodStarts, blockDenied } from "../statistics/statsBuckets.js";
 import { buildSummary, buildPlanFact, planSeries, dispatchPlanSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
 import type { AuthPayload } from "../auth/auth.js";
+import { memoize } from "../statistics/seriesMemo.js";
 
 /**
  * Вкладка «Статистики» (стіна графіків). Кожна серія — ЛИШЕ з CRM (ядро) або з розділу дашборда («Фінанси», реєстр
@@ -46,6 +50,19 @@ interface ScopeSpec { scopeType: string; scopeKey: string; scopeName: string; te
 type Computer = (g: Gran, from: string, to: string, teamId: number | null, managerId: number | null) => Promise<Point[]>;
 const P = (period: string, value: number): Point => ({ period, value, source: "crm" });
 
+/* ⚡ Виклики ядра, які ділять кілька карток одного відділу, — спільні на `SERIES_MEMO_TTL_MS` (`seriesMemo.ts`): ключ — усі
+   аргументи виклику, тож скоуп (`teamId`/`managerId`) і період у ньому завжди. Імена ті самі, що в ядрі, — обчислювачі нижче
+   не змінились, змінилось лише те, скільки разів ядро рахує одне й те саме. */
+const successByBucket = memoize("successByBucket", successByBucketRaw);
+const receivedByBucket = memoize("receivedByBucket", receivedByBucketRaw);
+const dispatchedByLoadBucket = memoize("dispatchedByLoadBucket", dispatchedByLoadBucketRaw);
+const repeatClientsByBucket = memoize("repeatClientsByBucket", repeatClientsByBucketRaw);
+const createdSplitByBucket = memoize("createdSplitByBucket", createdSplitByBucketRaw);
+const leadTakeSeries = memoize("leadTakeSeries", leadTakeSeriesRaw);
+const leadgenTrend = memoize("leadgenTrend", leadgenTrendRaw);
+const adReceivedByDay = memoize("adReceivedByDay", money.adReceivedByDay);
+const churnOf = memoize("churnReport", (fromYm: string, toYm: string) => churnReport(pool as unknown as Db, fromYm, toYm));
+
 const moneyC = (kind: "rev" | "deals" | "avg" | "recv"): Computer => async (g, from, to, teamId, managerId) => {
   const s: MoneyScope = { from, to, teamId, managerId };
   const rows = kind === "recv" ? await receivedByBucket(s, g) : await successByBucket(s, g);
@@ -64,7 +81,7 @@ const leadTakeC = (pick: (s: TakeStats) => number | null): Computer => async (g,
 /** 📣 Гроші з реклами по кошиках — лише компанія (ядро не розрізає «Надійшло» по командах). */
 const adC = (pick: (x: { revenue: number; deals: number }) => number): Computer => async (g, from, to, teamId, managerId) => {
   if (teamId != null || managerId != null) return [];
-  const days = await money.adReceivedByDay({ from, to }, (await getSettings()).adSources);
+  const days = await adReceivedByDay({ from, to }, (await getSettings()).adSources);
   return sumIntoBuckets(days, g, pick).map((x) => P(x.bucket, x.value));
 };
 type LgMoney = Awaited<ReturnType<typeof leadgenTrend>>["money"][number]["totals"];
@@ -99,7 +116,7 @@ type ChurnM = Awaited<ReturnType<typeof churnReport>>["months"][number];
 /** 🧑‍💼 Плинність реєстру людей помісячно — `churnReport` (та сама `monthRow`, що екран «Люди»); `null` плинності — без точки. */
 const hrC = (pick: (m: ChurnM) => number | null): Computer => async (g, from, to, teamId, managerId) => {
   if (g !== "month" || teamId != null || managerId != null) return [];
-  const r = await churnReport(pool as unknown as Db, from.slice(0, 7), to.slice(0, 7));
+  const r = await churnOf(from.slice(0, 7), to.slice(0, 7));
   return r.months.flatMap((m) => { const v = pick(m); return v == null ? [] : [P(`${m.month}-01`, v)]; });
 };
 
@@ -165,7 +182,7 @@ export const COMPUTERS: Record<string, Computer> = {
   ad_received_deals: adC((x) => x.deals),
   ad_received_avg: async (g, from, to, teamId, managerId) => {
     if (teamId != null || managerId != null) return [];
-    const days = await money.adReceivedByDay({ from, to }, (await getSettings()).adSources);
+    const days = await adReceivedByDay({ from, to }, (await getSettings()).adSources);
     const rev = sumIntoBuckets(days, g, (x) => x.revenue), n = new Map(sumIntoBuckets(days, g, (x) => x.deals).map((x) => [x.bucket, x.value]));
     return rev.filter((x) => (n.get(x.bucket) ?? 0) > 0).map((x) => P(x.bucket, x.value / n.get(x.bucket)!));
   },
