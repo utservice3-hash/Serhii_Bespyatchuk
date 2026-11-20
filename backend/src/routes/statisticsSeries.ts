@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
+import { isAdminScope, isAdminOrLead, roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { successByBucket, receivedByBucket, type MoneyScope } from "../core/money.js";
@@ -7,25 +7,31 @@ import * as money from "../core/money.js";
 import { lapsedFrom, prevMonthOf } from "../core/lapsedClients.js";
 import { clientOwnersFor } from "../core/clientOwner.js";
 import { kyivToday } from "../core/dates.js";
-import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, type MetricScope } from "../core/metrics.js";
+import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, createdSplitByBucket, type MetricScope } from "../core/metrics.js";
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
 import { teamAtSql } from "../core/teamAt.js";
-import { leadgenBuckets, sumBuckets } from "../core/leadgenStats.js";
+import { leadgenBuckets, sumBuckets, leadgenTrend } from "../core/leadgenStats.js";
+import { getSettings } from "./settings.js";
+import { fmRefsFor } from "../core/financeKpiRefs.js";
+import { FM_KOMMO_FROM } from "../core/financeKpi.js";
+import { churnReport } from "../core/churn.js";
+import type { Db } from "../core/secrets.js";
 import { leadTakeSeries, SERIES_TAKE_FILTER } from "../core/leadTake.js";
 import type { TakeStats } from "../core/leadTakeRules.js";
 import {
-  STATS_SEAM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
+  STATS_SEAM, STATS_CRM_FROM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
 } from "../statistics/seriesCatalog.js";
-import { sheetWeekToMonday, clipPlanToToday, clipPointsToToday } from "../statistics/statsCompare.js";
-import { anomaliesFor, applyCorrections } from "../statistics/anomalies.js";
+import { clipPlanToToday, clipPointsToToday } from "../statistics/statsCompare.js";
+import { anomaliesFor } from "../statistics/anomalies.js";
+import { mainSpec, sumIntoBuckets, periodStarts, blockDenied } from "../statistics/statsBuckets.js";
 import { buildSummary, buildPlanFact, planSeries, dispatchPlanSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
 import type { AuthPayload } from "../auth/auth.js";
 
 /**
- * Вкладка «Статистики» (діаграми). Зшивка на серію: sheet (stats_series, <шов) +
- * crm (live з ядра / depstats-read, ≥шов) + manual (stats_series). Кожна точка з source.
- * Company для sales — похідна (Σ team_leads; avg = Σrev÷Σcars). Роль-скоуп на сервері.
- * Монтується на /api/statistics ПОРЯД із депстат-роутом (/series* не перетинаються).
+ * Вкладка «Статистики» (стіна графіків). Кожна серія — ЛИШЕ з CRM (ядро) або з розділу дашборда («Фінанси», реєстр
+ * людей, Ringostat через депстат-авто), від `STATS_CRM_FROM` (Роман 20.11.2026: «всі дані з CRM і дашборду, інших немає»).
+ * Ручна таблиця (`stats_series`, source sheet/manual) екраном БІЛЬШЕ НЕ ЧИТАЄТЬСЯ; дані в базі лишились (revert коду
+ * повертає історію). Роль-скоуп на сервері. Монтується на /api/statistics ПОРЯД із депстат-роутом.
  */
 export const statsSeriesRouter = Router();
 statsSeriesRouter.use(requireAuth);
@@ -54,6 +60,48 @@ const moneyC = (kind: "rev" | "deals" | "avg" | "recv"): Computer => async (g, f
 const leadTakeC = (pick: (s: TakeStats) => number | null): Computer => async (g, from, to, teamId, managerId) =>
   (await leadTakeSeries({ from, to, ...SERIES_TAKE_FILTER, teamId, managerId }, g))
     .flatMap((x) => { const v = pick(x.stats); return v == null ? [] : [P(x.bucket, v)]; });
+
+/** 📣 Гроші з реклами по кошиках — лише компанія (ядро не розрізає «Надійшло» по командах). */
+const adC = (pick: (x: { revenue: number; deals: number }) => number): Computer => async (g, from, to, teamId, managerId) => {
+  if (teamId != null || managerId != null) return [];
+  const days = await money.adReceivedByDay({ from, to }, (await getSettings()).adSources);
+  return sumIntoBuckets(days, g, pick).map((x) => P(x.bucket, x.value));
+};
+type LgMoney = Awaited<ReturnType<typeof leadgenTrend>>["money"][number]["totals"];
+/** 🎯 Тренд «Лідогенерації» — помісячно, як на тому екрані; місяці, яких журнал не памʼятає, точок не дають. */
+const lgC = (pick: (m: LgMoney) => number): Computer => async (g, from, to, teamId, managerId) => {
+  if (g !== "month" || teamId != null || managerId != null) return [];
+  const months = (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5, 7)) - Number(from.slice(5, 7)) + 1;
+  const t = await leadgenTrend(to, months, { teamId: null, managerId: null });
+  const remembered = new Set(t.monthStarts);
+  return t.money.filter((b) => remembered.has(b.bucket) && b.bucket >= from).map((b) => P(b.bucket, pick(b.totals)));
+};
+/**
+ * 💵 Рядок «Фінансів» за кожен період — ТІЄЮ САМОЮ функцією, що екран «Фінанси → Тиждень і місяць» (`fmRefsFor`).
+ * Періоди до старту автоматики (`FM_KOMMO_FROM`) рядків не мають — і точок теж (не нуль). Кеш на хвилину: чотири картки
+ * відділу питають ті самі періоди, а `fmRefsFor` — це кілька запитів на період.
+ */
+const finCache = new Map<string, { at: number; v: Promise<{ start: string; refs: Record<string, number> }[]> }>();
+function finRows(g: "week" | "month", from: string, to: string) {
+  const k = `${g}|${from}|${to}`, hit = finCache.get(k);
+  if (hit && Date.now() - hit.at < 60_000) return hit.v;
+  const starts = periodStarts(g, from > FM_KOMMO_FROM[g] ? from : FM_KOMMO_FROM[g], to);
+  const v = Promise.all(starts.map(async (st) => ({ start: st, refs: (await fmRefsFor(g, st)) as Record<string, number> })));
+  v.catch(() => finCache.delete(k));
+  finCache.set(k, { at: Date.now(), v });
+  return v;
+}
+const finC = (ref: string): Computer => async (g, from, to, teamId, managerId) => {
+  if (g === "day" || teamId != null || managerId != null) return [];
+  return (await finRows(g, from, to)).flatMap((r) => (typeof r.refs[ref] === "number" ? [P(r.start, r.refs[ref])] : []));
+};
+type ChurnM = Awaited<ReturnType<typeof churnReport>>["months"][number];
+/** 🧑‍💼 Плинність реєстру людей помісячно — `churnReport` (та сама `monthRow`, що екран «Люди»); `null` плинності — без точки. */
+const hrC = (pick: (m: ChurnM) => number | null): Computer => async (g, from, to, teamId, managerId) => {
+  if (g !== "month" || teamId != null || managerId != null) return [];
+  const r = await churnReport(pool as unknown as Db, from.slice(0, 7), to.slice(0, 7));
+  return r.months.flatMap((m) => { const v = pick(m); return v == null ? [] : [P(`${m.month}-01`, v)]; });
+};
 
 export const COMPUTERS: Record<string, Computer> = {
   // Медіана, а не середнє (рішення власника): один «забутий» лід на добу тягнув би середнє на години.
@@ -101,6 +149,40 @@ export const COMPUTERS: Record<string, Computer> = {
     (await repeatClientsByBucket({ from, to, teamId, managerId, activeOnly: true }, g)).map((x) => P(x.bucket, x.revenue)),
   repeat_avg_check: async (g, from, to, teamId, managerId) =>
     (await repeatClientsByBucket({ from, to, teamId, managerId, activeOnly: true }, g)).map((x) => P(x.bucket, x.cars ? x.revenue / x.cars : 0)),
+  // 🆕 «Машини нових клієнтів» (Роман 20.11.2026, словник §22): відправлені авто клієнтів без жодної попередньої
+  //    виграної угоди, джерело не важливе = усі відправлені мінус постійні. ТОЙ САМИЙ виклик ядра, що «Відправлені авто
+  //    всього» й «Машини постійних», тож Σ нових + постійних == всього за побудовою.
+  new_clients_cars: async (g, from, to, teamId, managerId) =>
+    (await dispatchedByLoadBucket({ from, to, teamId, managerId, activeOnly: true }, g)).map((x) => P(x.ym, x.deals - x.repeat)),
+  // 🏛 Тендери і LinkedIn (Сергій 20.11): колонки Звіту «зі створених: Prozorro / LinkedIn» — ядро `createdSplitByBucket`
+  //    (словник §20, §21), без нового правила.
+  prozorro_deals: async (g, from, to, teamId, managerId) =>
+    (await createdSplitByBucket({ from, to, teamId, managerId }, g)).map((x) => P(x.bucket, x.prozorroCount)),
+  linkedin_deals: async (g, from, to, teamId, managerId) =>
+    (await createdSplitByBucket({ from, to, teamId, managerId }, g)).map((x) => P(x.bucket, x.linkedinCount)),
+  // 📣 Реклама: плитка «Надійшло» екрана «Реклама» (`money.adReceivedByDay`), поденні суми ядра → кошики. Лише компанія.
+  ad_received_sum: adC((x) => x.revenue),
+  ad_received_deals: adC((x) => x.deals),
+  ad_received_avg: async (g, from, to, teamId, managerId) => {
+    if (teamId != null || managerId != null) return [];
+    const days = await money.adReceivedByDay({ from, to }, (await getSettings()).adSources);
+    const rev = sumIntoBuckets(days, g, (x) => x.revenue), n = new Map(sumIntoBuckets(days, g, (x) => x.deals).map((x) => [x.bucket, x.value]));
+    return rev.filter((x) => (n.get(x.bucket) ?? 0) > 0).map((x) => P(x.bucket, x.value / n.get(x.bucket)!));
+  },
+  // 🎯 Лідогенерація: гроші й машини тренду екрана «Лідогенерація» (`leadgenTrend`, правило Ярослава). Лише місяць і компанія.
+  lg_earned_sum: lgC((m) => m.earned.sum),
+  lg_earned_deals: lgC((m) => m.earned.n),
+  lg_machines: lgC((m) => m.machines),
+  // 💵 Фінанси: рядки екрана «Фінанси → Тиждень і місяць» (`fmRefsFor`) — період за періодом. Лише компанія.
+  fin_bank_in: finC("bank_in"),
+  fin_bank_out: finC("bank_out"),
+  fin_receivables: finC("receivables"),
+  fin_delivered_income: finC("delivered_income"),
+  // 🧑‍💼 HR: помісячна плинність реєстру людей (`churnReport` → `monthRow`), уже у відсотках. Лише компанія.
+  hr_headcount: hrC((m) => m.headcount),
+  hr_hired: hrC((m) => m.hired),
+  hr_fired: hrC((m) => m.dismissed),
+  hr_turnover_total: hrC((m) => m.turnover),
   // План/факт: місячна серія «% виконання» = received-fact ÷ plan (payment_amount). Тижневих планів нема.
   plan_execution: async (g, from, to, teamId, managerId) => {
     if (g !== "month") return [];
@@ -133,8 +215,7 @@ async function depstatsRead(block: string, metric: string, g: Gran, from: string
   if (scope.scopeType === "manager") return [];   // депстат per-manager нема
   const dept = DEPSTATS_DEPT[block], sv = DEPSTATS_METRIC_MAP[metric];
   if (!dept || !sv) return [];
-  const cf = from > STATS_SEAM ? from : STATS_SEAM;
-  const params: unknown[] = [dept, sv, g, cf, to];
+  const params: unknown[] = [dept, sv, g, from, to]; // `from` уже не раніше `STATS_CRM_FROM` (кламп у `stitch`)
   // sales·calls зберігається ПО team_lead (company-рядка NULL нема) → company = Σ лідів.
   // finance/hr — company-level (team_lead IS NULL). Per-team — конкретний team_lead.
   const salesLeadSum = block === "sales" && scope.scopeType === "company";
@@ -154,67 +235,21 @@ async function depstatsRead(block: string, metric: string, g: Gran, from: string
 }
 
 /**
- * 🗓 ТИЖДЕНЬ — ПОНЕДІЛКОМ (4367: «тиждень пн–нд»). Тижні з ручної таблиці датовані НЕДІЛЕЮ (кінцем), а
- * CRM — понеділком (`date_trunc('week')`). На одній осі вони стояли зі зсувом у 6 днів, і точка
- * «тиждень 18.01» насправді означала 12–18.01, а сусідня CRM-точка — тиждень, що ПОЧИНАЄТЬСЯ з дати.
- * Зводимо тижні таблиці до понеділка — лише підпис періоду, значення не змінюється.
+ * 🧵 СЕРІЯ = ЛИШЕ CRM / ДАШБОРД (Роман 20.11.2026). Була зшивка «таблиця до шва 01.07 + CRM після + ручні точки»;
+ * таблиця й ручні точки з екрана прибрані. Ряд рахується від `STATS_CRM_FROM` (з якого місяця CRM має повну історію —
+ * замір у `seriesCatalog.ts`), а не від шва: CRM_ABLE-показники тепер мають CRM-історію на всю цю глибину.
+ * ⚠️ `stats_series` у базі НЕ видаляли: revert коду повертає таблицю на графік.
  */
-const weekLabel = (g: Gran, period: string) => (g === "week" ? sheetWeekToMonday(period) : period);
-
-// ── sheet/manual точки однієї серії з stats_series ──
-async function storedPoints(metric: string, g: Gran, scopeType: string, scopeKey: string, source: "sheet" | "manual"): Promise<Point[]> {
-  const r = await pool.query<{ period: string; value: string }>(
-    `SELECT to_char(period_date,'YYYY-MM-DD') period, value::float value
-       FROM stats_series WHERE metric_key=$1 AND granularity=$2 AND scope_type=$3 AND scope_key=$4 AND source=$5
-      ORDER BY period_date`,
-    [metric, g, scopeType, scopeKey, source]
-  );
-  return r.rows.map((x) => ({ period: weekLabel(g, x.period), value: Number(x.value), source }));
-}
-
-// ── company sheet-історія для SALES (похідна: Σ team_leads; avg = Σrev÷Σcars) ──
-async function companySalesSheet(metric: string, g: Gran): Promise<Point[]> {
-  if (metric === "avg_check") {
-    const r = await pool.query<{ period: string; v: string }>(
-      `SELECT to_char(rev.period_date,'YYYY-MM-DD') period, (SUM(rev.value)/NULLIF(SUM(car.value),0))::float v
-         FROM stats_series rev
-         JOIN stats_series car ON car.metric_key='cars_success' AND car.granularity=rev.granularity
-          AND car.scope_type='team_lead' AND car.scope_key=rev.scope_key AND car.period_date=rev.period_date AND car.source='sheet'
-        WHERE rev.metric_key='revenue_success' AND rev.granularity=$1 AND rev.scope_type='team_lead' AND rev.source='sheet'
-        GROUP BY rev.period_date ORDER BY rev.period_date`, [g]);
-    return r.rows.filter((x) => x.v != null).map((x) => ({ period: weekLabel(g, x.period), value: Number(x.v), source: "sheet" as const }));
-  }
-  const r = await pool.query<{ period: string; v: string }>(
-    `SELECT to_char(period_date,'YYYY-MM-DD') period, SUM(value)::float v
-       FROM stats_series WHERE metric_key=$1 AND granularity=$2 AND scope_type='team_lead' AND source='sheet'
-      GROUP BY period_date ORDER BY period_date`, [metric, g]);
-  return r.rows.map((x) => ({ period: weekLabel(g, x.period), value: Number(x.v), source: "sheet" as const }));
-}
-
-// ── зшивка однієї серії ──
 async function stitch(block: string, metric: string, g: Gran, from: string, to: string, sc: ScopeSpec): Promise<Series> {
-  const crmAble = isCrmAble(block, metric);
-  let sheet: Point[] = (sc.scopeType === "company" && block === "sales")
-    ? await companySalesSheet(metric, g)
-    : await storedPoints(metric, g, sc.scopeType, sc.scopeKey, "sheet");
-  if (crmAble) sheet = sheet.filter((p) => p.period < STATS_SEAM);
-  // ✏️ Відомі помилки ручної таблиці — замінені числами CRM (реєстр `statistics/anomalies.ts`, рішення Романа 02.10).
-  sheet = applyCorrections(metric, g, sc.scopeKey, sheet);
-
+  const cf = from > STATS_CRM_FROM ? from : STATS_CRM_FROM;
   let crm: Point[] = [];
   const liveScope = sc.scopeType === "company" || sc.teamId != null || sc.managerId != null;
-  if (liveScope && to >= STATS_SEAM) {
-    if (metric in COMPUTERS) crm = await COMPUTERS[metric](g, from > STATS_SEAM ? from : STATS_SEAM, to, sc.teamId, sc.managerId);
-    else if (hasDepstats(block, metric)) crm = await depstatsRead(block, metric, g, from, to, sc);
-    crm = crm.filter((p) => p.period >= STATS_SEAM);
+  if (liveScope && to >= cf) {
+    if (metric in COMPUTERS) crm = await COMPUTERS[metric](g, cf, to, sc.teamId, sc.managerId);
+    else if (hasDepstats(block, metric)) crm = await depstatsRead(block, metric, g, cf, to, sc);
   }
-  const manual = await storedPoints(metric, g, sc.scopeType, sc.scopeKey, "manual");
-
-  const byPeriod = new Map<string, Point>();       // пріоритет crm > sheet > manual (шов не дає перетину для CRM_ABLE)
-  for (const p of manual) byPeriod.set(p.period, p);
-  for (const p of sheet) byPeriod.set(p.period, p);
-  for (const p of crm) byPeriod.set(p.period, p);
-  const points = [...byPeriod.values()].filter((p) => p.period >= from && p.period <= to).sort((a, b) => a.period.localeCompare(b.period));
+  // Кошик, що почався ДО `cf` (тиждень через межу), — неповний: не показуємо його як повний період.
+  const points = crm.filter((p) => p.period >= cf && p.period <= to).sort((a, b) => a.period.localeCompare(b.period));
   return { scopeType: sc.scopeType, scopeKey: sc.scopeKey, scopeName: sc.scopeName, points, ...(sc.benchmark ? { benchmark: true } : {}),
     ...(sc.teamId != null && ARCHIVED_TEAM_IDS.has(sc.teamId) ? { archived: true } : {}) };
 }
@@ -255,8 +290,15 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const from = String(req.query.from ?? "2024-07-01");
   const to = String(req.query.to ?? "2026-12-31");
   if (!metric) return res.status(400).json({ error: "metric обовʼязковий" });
+  // 🔒 «Фінанси» і HR — числа закритих екранів: та сама межа, що в їхніх джерел (`blockDenied`).
+  const denied = blockDenied(block, { tab: (t) => roleHasTab(auth.roleKey, t), perm: (p) => roleHasPerm(auth.roleKey, p) });
+  if (denied) return res.status(403).json({ error: denied });
   const unit = req.query.unit ? String(req.query.unit) : null; // напрямок (unit-scope)
-  const set = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
+  const full = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
+  // 🧱 Картки стіни (20.11.2026): `scope=main` — лише головна серія глядача з УЖЕ обрізаного набору (`mainSpec`),
+  //    без команд і без плану. 8 карток відділу × (компанія + 6 команд) вантажились 8,2 с; картці потрібне одне число.
+  const lite = req.query.scope === "main";
+  const set = lite ? mainSpec(full) : full;
   const today = kyivToday();
   const series = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
   for (const s of series) s.points = clipPointsToToday(s.points, today); // обчислений обʼєкт stitch, не рядок БД
@@ -266,11 +308,13 @@ statsSeriesRouter.get("/series", async (req, res) => {
   let plan: Awaited<ReturnType<typeof planSeries>> = [];
   const keys = new Set(set.map((s) => s.scopeKey));
   const inScope = (p: { scopeKey: string }) => keys.has(p.scopeKey) && !(set.find((s) => s.scopeKey === p.scopeKey)?.benchmark);
-  if (metric === "payment_received" && block === "sales") plan = (await planSeries(g, from, to)).filter(inScope);
+  if (lite) plan = [];
+  else if (metric === "payment_received" && block === "sales") plan = (await planSeries(g, from, to)).filter(inScope);
   else if (metric === "cars_delivered" && block === "sales") plan = (await dispatchPlanSeries(g, from > STATS_SEAM ? from : STATS_SEAM, to)).filter(inScope);
   plan = clipPlanToToday(plan, today);
-  res.json({ block, metric, granularity: g, seam: STATS_SEAM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series,
-    anomalies: anomaliesFor(metric, g), plan });
+  // ✏️ «Виправлено CRM» і «помилка таблиці» стосувались ТОЧОК ТАБЛИЦІ — таблиці на графіку немає, лишаються лише справжні події.
+  res.json({ block, metric, granularity: g, crmFrom: STATS_CRM_FROM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series,
+    anomalies: anomaliesFor(metric, g).filter((a) => a.kind === "real"), plan });
 });
 
 /**
