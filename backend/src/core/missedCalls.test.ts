@@ -913,3 +913,109 @@ test("#1779 КЛІЄНТ У «НЕ ПЕРЕДЗВОНИЛИ»: назва уго
   const routes = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
   assert.match(routes, /clientName: r\.dealId != null \? clientNameOf\(names\.get\(r\.dealId\)\) : null,/, "🔴 роут блоку віддає назву угоди без перевірки");
 });
+
+/* ═══════════════ 🚚 «ПРАВИЛЬНІ ПРОПУЩЕНІ» (рішення Романа 20.11.2026): перевізників не рахувати, поговорили — зникає ═══════════════ */
+
+/**
+ * #10140 — ПЕРЕВІЗНИК ПОЗА ПРОПУЩЕНИМИ НА ВСІЙ ВКЛАДЦІ, І ЙОГО ВИДНО ЧИСЛОМ.
+ * Фікстура: звичайний номер (Pn), номер із довідника `carrier_phones` (Pc), номер довідника в іншому форматі запису
+ * (довідник — останні 9 цифр) і дзвінок без номера. Червоніє, якщо: прибрати відсів перевізника з основи (плитка, таблиця,
+ * команди, графік, список, «Не передзвонили» знову рахують Pc); відсіяти не той номер (дзеркало: Pn і дзвінок без номера
+ * лишаються); загубити дзвінок між «пропущено» і «перевізники» (Σ мусить дорівнювати числу з порожнім довідником).
+ */
+test("#10140 🚚 ПЕРЕВІЗНИК ПОЗА ПРОПУЩЕНИМИ: плитка, таблиця, команди, графік, список, «не передзвонили» — без нього; Σ із підписом = ціле", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const N = await import("./missedNoCallbackRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO teams(id,name) VALUES (1,'РПК') ON CONFLICT DO NOTHING");
+    await c.query("INSERT INTO managers(id,name,team_id,is_active) VALUES (1,'Яцик',1,true) ON CONFLICT DO NOTHING");
+    let seq = 0;
+    const call = (at: string, mgr: number | null, phone: string | null) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone)
+               VALUES ($1,$2,'in','NO ANSWER',0,$3,$4)`, [`c${String(++seq)}`, at, mgr, phone]);
+    const Pn = "380501014001", Pc = "380671014002";
+    const D = "2026-11-19";
+    await call(`${D} 10:00:00+02`, 1, Pn);       // звичайний — рахується
+    await call(`${D} 11:00:00+02`, 1, Pc);       // перевізник — ні
+    await call(`${D} 12:00:00+02`, null, Pc);    // перевізник без відповідального — теж ні
+    await call(`${D} 13:00:00+02`, null, null);  // без номера — рахується: невідомий номер не доказ перевізника
+    await c.query("INSERT INTO carrier_phones(p9, via_lardi, via_history) VALUES ($1, true, false)", [Pc.slice(-9)]);
+
+    const one = async (q: { sql: string; params: unknown[] }) => (await c.query(q.sql, q.params)).rows as Record<string, unknown>[];
+    const sum = (await one(R.missedSummarySql(D, D, {})))[0];
+    assert.equal(sum.missed, 2, `🔴 «Пропущено» ${String(sum.missed)}, а мало бути 2 (звичайний + без номера): перевізник рахується або відсіяно зайве`);
+    assert.equal(sum.carriers, 2, `🔴 підпис «перевізники» ${String(sum.carriers)}, а відсіяно 2 дзвінки`);
+    assert.equal(sum.ownerless, 1, "🔴 «Без відповідального» рахує перевізника (мав лишитись лише дзвінок без номера)");
+    const mgr = await one(R.missedByManagerSql(D, D, {}));
+    assert.equal(mgr.reduce((a, r) => a + Number(r.missed), 0), 2, "🔴 таблиця по менеджерах рахує перевізника");
+    const tm = await one(R.missedByTeamSql(D, D, {}));
+    assert.equal(tm.reduce((a, r) => a + Number(r.missed), 0), 1, "🔴 рядок команди рахує перевізника");
+    const ser = (await one(R.missedSeriesSql("day", D, D, {}))).filter((r) => r.skey === "total");
+    assert.equal(Number(ser[0]?.missed), 2, "🔴 графік динаміки рахує перевізника");
+    const list = await one(R.missedListSql(D, {}));
+    assert.ok(!list.some((r) => r.client_phone === Pc), "🔴 перевізник у списку дня");
+    assert.ok(list.some((r) => r.client_phone === Pn), "🔴 ДЗЕРКАЛО: звичайний номер зник зі списку разом із перевізником");
+    assert.equal(list.length, sum.missed, "🔴 список дня розійшовся з плиткою");
+    const nc = await one(N.noCallbackSql(D, D, {}, "2026-11-21T12:00:00Z"));
+    assert.deepEqual(nc.map((r) => r.client_phone), [Pn], "🔴 «Не передзвонили» показує перевізника з довідника (або загубив звичайний номер)");
+
+    // Σ: без довідника ті самі дзвінки рахуються всі — нічого не загубилось між «пропущено» і «перевізники».
+    await c.query("DELETE FROM carrier_phones");
+    const raw = (await one(R.missedSummarySql(D, D, {})))[0];
+    assert.equal(Number(raw.carriers), 0, "🔴 порожній довідник, а підпис «перевізники» не нуль");
+    assert.equal(Number(raw.missed), Number(sum.missed) + Number(sum.carriers), "🔴 пропущено + перевізники ≠ усі пропущені — дзвінок загубився");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+/**
+ * #10141 — «ЛИШЕ НЕПЕРЕДЗВОНЕНІ»: РОЗМОВА БУДЬ-КОЛИ ПІЗНІШЕ ПРИБИРАЄ РЯДОК, НЕ ЛИШЕ ЗА 24 ГОД (п.4, 20.11.2026).
+ * Червоніє, якщо: повернути вікно 24 год (A — розмова через 30 год — знову видно); прибирати рядок спробою або розмовою
+ * коротше 10 с (B, C); прибирати рядок розмовою, що була ДО пропущеного (E); не показувати всіх без галочки (дзеркало).
+ */
+test("#10141 СПИСОК «ЛИШЕ НЕПЕРЕДЗВОНЕНІ»: розмова від 10 с через 30 год прибирає рядок; 9 с, спроба і розмова ДО — ні", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO managers(id,name,is_active) VALUES (1,'Яцик',true) ON CONFLICT DO NOTHING");
+    let seq = 0;
+    const call = (at: string, type: string, disp: string, sec: number, phone: string) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone)
+               VALUES ($1,$2,$3,$4,$5,1,$6)`, [`l${String(++seq)}`, at, type, disp, sec, phone]);
+    const D = "2026-11-18";
+    const A = "380501014101", B = "380501014102", C = "380501014103", E = "380501014104", F = "380501014105", G = "380501014106";
+    for (const p of [A, B, C, E, F, G]) await call(`${D} 18:00:00+02`, "in", "NO ANSWER", 0, p);
+    await call("2026-11-20 00:00:00+02", "out", "ANSWERED", 40, A);   // наш передзвін через 30 год → рядок зникає
+    await call("2026-11-20 00:00:00+02", "out", "ANSWERED", 9, B);    // 9 с — не розмова → лишається
+    await call("2026-11-19 09:00:00+02", "out", "NO ANSWER", 0, C);   // спроба → лишається
+    await call(`${D} 17:00:00+02`, "out", "ANSWERED", 60, E);         // розмова ДО пропущеного → лишається
+    await call("2026-11-19 20:00:00+02", "in", "ANSWERED", 25, F);    // клієнт сам через 26 год → зникає
+    const run = async (only: boolean) => {
+      const q = R.missedListSql(D, {}, only);
+      return (await c.query<{ client_phone: string }>(q.sql, q.params)).rows.map((r) => r.client_phone).sort();
+    };
+    assert.deepEqual(await run(false), [A, B, C, E, F, G].sort(), "🔴 ДЗЕРКАЛО: без галочки список загубив пропущені");
+    assert.deepEqual(await run(true), [B, C, E, G].sort(),
+      "🔴 «лише непередзвонені» розійшлись: розмова пізніше 24 год не прибирає рядок, або прибирає спроба / 9 с / розмова до дзвінка");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+/** #10142 — плитка «Пропущено» несе підпис «перевізники: N» із поля ядра. Червоніє, якщо підпис прибрати або взяти інше поле. */
+test("#10142 ФРОНТ · ПЛИТКА: «перевізники: N» з `summary.carriers`, тип у api.ts", () => {
+  const front = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "MissedCallsSection.tsx"), "utf8");
+  assert.match(front, /перевізники: \$\{num\(s\.carriers\)\}/, "🔴 під «Пропущено» немає підпису «перевізники: N» — відсіяні зникли мовчки");
+  const api = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "api.ts"), "utf8");
+  assert.match(api, /\bcarriers: number;/, "🔴 у типі MissedSummary немає `carriers`");
+});

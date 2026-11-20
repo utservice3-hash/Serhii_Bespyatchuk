@@ -408,6 +408,8 @@ export async function fetchLeadgenStats(params: { from: string; to: string; grai
 export type MissedDayBucket = "work" | "evening" | "weekend" | "night";
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
+  /** Пропущені від номерів перевізників — у `missed` НЕ входять (20.11.2026), показуються підписом під плиткою. */
+  carriers: number;
   callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number;
   /** `null` — передзвонів за період не було, тобто медіану нема з чого рахувати. */

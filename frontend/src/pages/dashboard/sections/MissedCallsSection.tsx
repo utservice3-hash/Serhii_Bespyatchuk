@@ -155,8 +155,8 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
           Період: {d.period.from} — {d.period.to}
         </p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
-          <Tile label="Пропущено" value={num(s.missed)} sub={`не враховано: ${num(s.excluded)}`}
-            hint="Не враховано — голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою. Показані окремо, щоб їх не шукали як зниклі." />
+          <Tile label="Пропущено" value={num(s.missed)} sub={`не враховано: ${num(s.excluded)} · перевізники: ${num(s.carriers)}`}
+            hint="Не враховано — голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою. Перевізники — дзвінки з номерів, які в CRM закривали як «Перевізник» або які виставляють машини на Ларді (крім номерів з угодою замовника): їх немає ніде на цій вкладці і в колонці Звіту. Обидва числа показані окремо, щоб їх не шукали як зниклі." />
           <Tile label="Передзвонили за 24 год" value={pct(s.callback, s.missed)}
             sub={`${num(s.callback)} із ${num(s.missed)} · ${normLabel(s.missed > 0 ? Math.round((s.callback / s.missed) * 100) : null, norm)}`}
             hint={`Передзвін — вихідний із розмовою від 10 с. Сам відповідальний — ${num(s.callbackSelf)}, колега — ${num(s.callbackColleague)}. Ще ${num(s.callbackAttempt)} — лише спроби без розмови від 10 с: набирали, але не додзвонились; передзвоном не рахуються.`} />
@@ -526,7 +526,7 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp }: {
     <div className="chart-card" style={{ marginTop: 16 }}>
       <h3 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
         📋 Список дзвінків
-        <InfoHint text="Кожен пропущений за обраний день і що сталось одразу після нього. «Що сталось далі» — НАЙРАНІША подія: якщо клієнт передзвонив сам раніше, ніж ми, рядок покаже саме це." />
+        <InfoHint text="Кожен пропущений за обраний день і що сталось одразу після нього. «Що сталось далі» — НАЙРАНІША подія: якщо клієнт передзвонив сам раніше, ніж ми, рядок покаже саме це. Дзвінків з номерів перевізників тут немає." />
       </h3>
       <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12, fontSize: 14 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -535,7 +535,7 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp }: {
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input id="missed-list-only-no" type="checkbox" checked={onlyNo} onChange={(e) => setOnlyNo(e.target.checked)} />
-          лише непередзвонені — без розмови від 10 с (ні нашої, ні коли клієнт передзвонив сам)
+          лише непередзвонені — з номером досі немає розмови від 10 с (ні нашої, ні коли клієнт передзвонив сам)
         </label>
       </div>
 
