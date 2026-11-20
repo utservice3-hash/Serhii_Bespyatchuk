@@ -487,6 +487,11 @@ test("#527 ФАЙЛИ: тип за першими байтами — PNG/JPG/WEB
 test("#4150 НАЙМ «ПЕРЕГЛЯД»: фінансист бачить усіх, але не змінює статусів і не відмовляє", async () => {
   const R = await import("./hiringRules.js");
   assert.equal(hiringAccess({ roleKey: "financier", adminScope: false }), "view");
+  // 🔴 На проді в ролі фінансиста є `admin_scope` — і з ним він мусить лишатись «переглядом», без рішень після навчання.
+  assert.equal(hiringAccess({ roleKey: "financier", adminScope: true }), "view", "🔴 admin_scope дав фінансисту повне редагування «Найму»");
+  const { canDecideTraining } = await import("./hiringTrainingRules.js");
+  assert.equal(canDecideTraining({ roleKey: "financier", adminScope: true }), false, "🔴 фінансист приймає рішення «менеджер / відмова»");
+  assert.equal(canDecideTraining({ roleKey: "admin", adminScope: true }), true, "🔴 дзеркало: адмін утратив рішення");
   assert.equal(hiringAccess({ roleKey: "hr", adminScope: false }), "edit");
   assert.equal(hiringAccess({ roleKey: "team_lead", adminScope: false }), "lead");
   assert.equal(hiringAccess({ roleKey: "manager", adminScope: false }), "none");

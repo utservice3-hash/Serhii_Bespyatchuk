@@ -163,9 +163,11 @@ export type HiringAccess = "edit" | "lead" | "view" | "none";
  *   (fail-closed: тумблер дає пункт меню, а не право бачити телефони кандидатів).
  */
 export function hiringAccess(a: { roleKey: string; adminScope: boolean }): HiringAccess {
+  // 🔴 Фінансист ПЕРШИМ: у його ролі є `admin_scope` (заміряно на проді 20.11.2026), і перевірка нижче дала б йому повне
+  // редагування «Найму» замість перегляду. Тримає #4150.
+  if (a.roleKey === "financier") return "view";
   if (a.adminScope || a.roleKey === "hr") return "edit";
   if (a.roleKey === "team_lead") return "lead";
-  if (a.roleKey === "financier") return "view";
   return "none";
 }
 

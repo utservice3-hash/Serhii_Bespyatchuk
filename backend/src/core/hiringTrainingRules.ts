@@ -113,8 +113,9 @@ export function trainingHealth(p: {
 }
 
 /** Рішення «менеджер / відмова» і відповідь на питання — тімлід своєї команди або адмін-рівень (макет). */
+// 👁 Фінансист має `admin_scope`, але в «Наймі» він лише переглядає (20.11.2026) — рішень не приймає. Тримає #4150.
 export const canDecideTraining = (a: { roleKey: string; adminScope: boolean }): boolean =>
-  a.adminScope || a.roleKey === "team_lead";
+  a.roleKey !== "financier" && (a.adminScope || a.roleKey === "team_lead");
 
 /**
  * «Перевести в менеджери». До екзамену (прохід 2c) умова — усі обовʼязкові кроки пройдено.
