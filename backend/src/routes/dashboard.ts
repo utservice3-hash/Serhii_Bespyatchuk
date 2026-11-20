@@ -64,6 +64,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
+import { missedDeals } from "../core/missedDeals.js";
 import { levelByManager } from "../core/employeeLevel.js";
 import { canAssignMissedTask, LEADERSHIP_ROLES, hoursSince, taskState, buttonTaskTitle, buttonTaskDescription, mondayOf, canSetCallbackNorm, callbackNormVerdict, clientNameOf } from "../core/missedNoCallbackRules.js";
 import { missedPeriod, missedScopeFor, ownerlessInScope, dealInWindowLateral, NO_DEAL_STATES, SERIES_GRANULARITIES, type NoDealState, type SeriesGranularity } from "../core/missedCallsRules.js";
@@ -12438,6 +12439,26 @@ dashboardRouter.get("/missed-calls/list", async (req, res) => {
       managerId: r.managerId, managerName: r.managerName, bucket: r.bucket,
       next: r.next, nextMin: r.nextMin, dealId: r.dealId,
       dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId),
+    })),
+  });
+});
+
+/**
+ * 📄 ПРОПУЩЕНІ УГОДИ (рішення Романа 20.11.2026, словник §11a) — вкладка поруч із пропущеними дзвінками.
+ * Межа — той самий `pre("/api/dashboard/missed-calls")`, кламп — той самий `missedScopeFor`.
+ * Підсумок, таблиця й список — одним викликом і від однієї миті «зараз».
+ */
+dashboardRouter.get("/missed-calls/deals", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(req.auth!, req.query);
+  const r = await missedDeals(from, to, scope, new Date());
+  res.json({
+    period: { from, to }, summary: r.summary, managers: r.managers, truncated: r.truncated,
+    ownerlessInScope: ownerlessInScope(scope),
+    // Явний перелік полів, а не `...r`: нова властивість рядка не поїде назовні сама (#17e2).
+    rows: r.rows.map((x) => ({
+      dealId: x.dealId, dealUrl: kommoLeadUrl(x.dealId), at: x.at, phone: x.phone,
+      managerId: x.managerId, managerName: x.managerName, teamName: x.teamName, next: x.next, nextMin: x.nextMin,
     })),
   });
 });
