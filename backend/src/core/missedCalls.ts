@@ -138,9 +138,9 @@ export interface MissedListRow {
  * Блок C. `truncated` — не прикраса: без нього стеля `MISSED_LIST_LIMIT` мовчки обрізала
  * б список, і екран показав би «ось усі», хоча показав лише частину.
  */
-export async function missedList(day: string, s: MissedScope = {}, onlyNoCallback = false):
+export async function missedList(day: string, s: MissedScope = {}, onlyNoCallback = false, to: string = day):
 Promise<{ rows: MissedListRow[]; truncated: boolean }> {
-  const { sql, params } = missedListSql(day, s, onlyNoCallback);
+  const { sql, params } = missedListSql(day, s, onlyNoCallback, to);
   const r = await pool.query<{
     uniqueid: string; at: string; client_phone: string | null; client_key: string | null;
     manager_id: number | null; manager_name: string | null; bucket: DayBucket;

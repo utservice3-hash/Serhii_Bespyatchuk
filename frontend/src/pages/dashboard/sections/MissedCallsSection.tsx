@@ -8,15 +8,14 @@ import {
   type MissedCallsResp, type MissedDayBucket, type MissedManagerRow, type MissedListResp,
   type MissedNextStep, type NoDealCounts, type NoDealState, type NoDealListRow, type MissedTeamRow,
 } from "../../../api";
-import { InfoHint } from "../widgets";
 import { PeriodStepper } from "../PeriodStepper";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { missedDefaultPeriod, groupByTeam, clientCell, clampListDay, SERIES_METRICS, type SeriesMetric,
   MISSED_FILTER_KEY, EMPTY_MISSED_FILTER, parseMissedFilter, missedFilterParams, normLabel, type MissedFilter,
-  mobileSplit, callbackPct, prevPeriodOf, prevPeriodWord, changePp, teamsCopyText, type CopyRow } from "../missedCallsView";
+  mobileSplit, durText, noTaskReason, callbackPct, prevPeriodOf, prevPeriodWord, changePp, teamsCopyText, type CopyRow } from "../missedCallsView";
 import { fetchMissedNorm, type MissedFilterParams } from "../../../api";
 import { MissedFilterMenu, useMissedTasks, taskAssignable, TaskCell, ManagerName } from "./MissedCallsTzBlocks";
-import { Fold, CountUp } from "./MissedFold";
+import { Fold, CountUp, Hint } from "./MissedFold";
 import { RANGES, MIN_WIN, rangeWindow, shortDate, COLORS } from "./StatisticsChartsSection";
 import { ClientCardPanel } from "./ClientCardPanel";
 
@@ -155,7 +154,7 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
         <div className="mc-card">
           <div className="mc-hero">
             <div className="mc-k">
-              <div className="mc-kl">Пропущено <InfoHint text={
+              <div className="mc-kl">Пропущено <Hint text={
                 "Дані з Ringostat. Пропущений = вхідний без розмови з відповіддю «не відповіли» або «зайнято»; плечі одного дзвінка склеєні. "
                 + "«На лінію» — дзвінок мав хоча б одне плече «Вхідний»: саме їх показує фільтр у Ringostat. «На мобільні» — усі плечі "
                 + "«Вхідний перехоплений»: Ringostat переадресував дзвінок на мобільний менеджера. Разом — рівно «Пропущено»."} /></div>
@@ -164,7 +163,7 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
               <div className="mc-ks"><b>{num(split.line)}</b> на лінію, <b>{num(split.mobile)}</b> на мобільні</div>
             </div>
             <div className="mc-k">
-              <div className="mc-kl">Передзвонили за 24 год <InfoHint text={`Передзвін — перший вихідний на той самий номер протягом 24 год із розмовою від 10 с. Набрали й не додзвонились — це спроба, а не передзвін: таких ще ${num(s.callbackAttempt)}.`} /></div>
+              <div className="mc-kl">Передзвонили за 24 год <Hint text={`Передзвін — перший вихідний на той самий номер протягом 24 год із розмовою від 10 с. Набрали й не додзвонились — це спроба, а не передзвін: таких ще ${num(s.callbackAttempt)}.`} /></div>
               <div className={`mc-kv${norm != null && cbPct != null ? (cbPct >= norm ? " mc-ok" : " mc-bad") : ""}`}>
                 {cbPct == null ? "—" : <CountUp value={cbPct} fmt={(n) => `${String(n)}%`} />}
               </div>
@@ -172,24 +171,24 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
                 {norm != null && <> · {normLabel(cbPct, norm)}</>}</div>
             </div>
             <div className="mc-k">
-              <div className="mc-kl">Час до передзвону <InfoHint text="Медіана, а не середнє: від пропущеного до першої розмови від 10 с. Поодинокі «передзвонили наступного дня» тягнуть середнє вдесятеро вгору." /></div>
-              <div className="mc-kv">{s.medianMin == null ? "—" : <CountUp value={s.medianMin} fmt={(n) => `${String(n)} хв`} />}</div>
+              <div className="mc-kl">Час до передзвону <Hint text="Медіана, а не середнє: від пропущеного до першої розмови від 10 с. Поодинокі «передзвонили наступного дня» тягнуть середнє вдесятеро вгору." /></div>
+              <div className="mc-kv">{s.medianMin == null ? "—" : <CountUp value={s.medianMin} fmt={durText} />}</div>
               <div className="mc-ks">медіана, до розмови від 10 с</div>
             </div>
             <div className="mc-k mc-act">
-              <div className="mc-kl">Чекають передзвону <InfoHint text="З номером досі немає розмови від 10 с — ні нашої, ні коли клієнт передзвонив сам. Без межі 24 год: щойно поговорили, дзвінок звідси зникає. Те саме число — у колонці «Чекають» таблиці команд і в списку нижче." /></div>
+              <div className="mc-kl">Чекають передзвону <Hint text="З номером досі немає розмови від 10 с — ні нашої, ні коли клієнт передзвонив сам. Без межі 24 год: щойно поговорили, дзвінок звідси зникає. Те саме число — у колонці «Чекають» таблиці команд і в списку нижче." /></div>
               <div className="mc-kv"><CountUp value={s.waiting} /></div>
               <div className="mc-ks">{num(s.waitingOverDay)} з них довше доби</div>
             </div>
           </div>
           {/* Не входять у «Пропущено» — числом, щоб їх не шукали як зниклі (правило проєкту). */}
           <div className="mc-foot">
-            Не входять у {num(s.missed)}: {`перевізники: ${num(s.carriers)}`} <InfoHint text="Перевізники — номери, які в CRM закривали як «Перевізник» або які виставляють машини на Ларді (крім номерів з угодою замовника): їх немає ніде на цій вкладці і в колонці Звіту." />,
-            {" "}голосова пошта та інше: {num(s.excluded)} <InfoHint text="Голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою." />.
+            Не входять у {num(s.missed)}: {`перевізники: ${num(s.carriers)}`} <Hint text="Перевізники — номери, які в CRM закривали як «Перевізник» або які виставляють машини на Ларді (крім номерів з угодою замовника): їх немає ніде на цій вкладці і в колонці Звіту." />,
+            {" "}голосова пошта та інше: {num(s.excluded)} <Hint text="Голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою." />.
             {" "}Клієнт передзвонив сам: {num(s.clientSelf)} (у передзвін не входить).
             {" "}{d.ownerlessInScope
-              ? <>Без відповідального: {num(s.ownerless)} <InfoHint text="Ringostat не віддав менеджера: дзвінок не дійшов до людини (черга, IVR). Такі дзвінки не приписуються нікому — ні командам, ні черговому." /></>
-              : <>Без відповідального — не входять у зріз команди <InfoHint text="Дзвінки без відповідального не належать жодній команді й жодному менеджеру, тому в цьому зрізі їх немає — це не нуль. Повне число видно в зрізі всієї компанії." /></>}
+              ? <>Без відповідального: {num(s.ownerless)} <Hint text="Ringostat не віддав менеджера: дзвінок не дійшов до людини (черга, IVR). Такі дзвінки не приписуються нікому — ні командам, ні черговому." /></>
+              : <>Без відповідального — не входять у зріз команди <Hint text="Дзвінки без відповідального не належать жодній команді й жодному менеджеру, тому в цьому зрізі їх немає — це не нуль. Повне число видно в зрізі всієї компанії." /></>}
           </div>
         </div>
 
@@ -211,7 +210,7 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
 
 /** Текст «що сталось далі». Невдалий передзвін — ОКРЕМО від вдалого: це різна робота. */
 function nextLabel(kind: MissedNextStep, min: number | null): { text: string; bad: boolean } {
-  const m = min == null ? "" : ` через ${String(min)} хв`;
+  const m = min == null ? "" : ` через ${durText(min)}`;
   switch (kind) {
     case "callback_talked": return { text: `передзвонили${m}, додзвонились`, bad: false };
     case "callback_no_answer": return { text: `набирали${m}, без розмови`, bad: false };
@@ -238,18 +237,27 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp, managers }:
   const [err, setErr] = useState<string | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [pick, setPick] = useState<Record<string, number>>({});
-  const t = useMissedTasks(day, day, fp);
+  // 📅 Кілька днів у періоді — список за ВЕСЬ період (як число «Чекають» у смузі); «День» звужує до одного дня.
+  // Баг 20.11.2026: за тиждень смуга казала 131, а список — 38 за один день.
+  const multiDay = from !== to;
+  const [span, setSpan] = useState<"period" | "day">("period");
+  useEffect(() => { setSpan("period"); }, [from, to]);
+  const whole = multiDay && span === "period";
+  const qFrom = whole ? from : day, qTo = whole ? to : day;
+  const t = useMissedTasks(qFrom, qTo, fp);
 
   useEffect(() => {
-    if (!day) return;
+    if (!qFrom) return;
     let alive = true;
     setD(null); setErr(null); setSel(new Set());
-    fetchMissedList({ day, ...fp })
+    const q = qTo !== qFrom ? { day: qFrom, to: qTo } : { day: qFrom };
+    fetchMissedList({ ...q, ...fp })
       .then((x) => { if (alive) setD(x); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [day, JSON.stringify(fp)]);
+  }, [qFrom, qTo, JSON.stringify(fp)]);
+  const scopeWord = qFrom === qTo ? "за цей день" : "за період";
 
   const all = d?.rows ?? [];
   const waiting = all.filter((r) => r.waiting);
@@ -259,23 +267,26 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp, managers }:
   const overDay = waiting.filter((r) => r.waitH >= 24).length;
   const assignable = rows.filter((r) => taskAssignable(t, r.uniqueid));
   const picked = [...sel].filter((u) => assignable.some((r) => r.uniqueid === u));
-  const multiDay = from !== to;
 
   const chip = (k: typeof view, label: string, n: number) => (
     <button type="button" className="mc-chip" aria-pressed={view === k} onClick={() => setView(k)}>{label} {num(n)}</button>
   );
   return (
     <Fold id="c-list" defaultOpen title="Кому передзвонити"
-      summary={d ? <><b className="mc-red">{num(waiting.length)}</b> чекають{overDay > 0 ? `, ${num(overDay)} довше доби` : ""}{multiDay ? ` · за ${day.slice(8)}.${day.slice(5, 7)}` : ""}</> : null}>
+      summary={d ? <><b className="mc-red">{num(waiting.length)}</b> чекають{overDay > 0 ? `, ${num(overDay)} довше доби` : ""}{multiDay && !whole ? ` · за ${day.slice(8)}.${day.slice(5, 7)}` : ""}</> : null}>
       <div className="mc-tools">
         {chip("waiting", "Чекають", waiting.length)}
         {chip("all", "Усі", all.length)}
         {chip("mobile", "Лише мобільні", mobile.length)}
-        <InfoHint text="«Чекають» — з номером досі немає розмови від 10 с (ні нашої, ні коли клієнт передзвонив сам); щойно поговорили, рядок зникає. «Що далі» — НАЙРАНІША подія після дзвінка. «Мобільний» — Ringostat переадресував дзвінок на мобільний менеджера. Кнопка «Задача» з'являється, коли минула доба без розмови. Дзвінків з номерів перевізників тут немає." />
+        <Hint text="«Чекають» — з номером досі немає розмови від 10 с (ні нашої, ні коли клієнт передзвонив сам); щойно поговорили, рядок зникає. «Що далі» — НАЙРАНІША подія після дзвінка. «Мобільний» — Ringostat переадресував дзвінок на мобільний менеджера. Кнопка «Задача» з'являється, коли минула доба без розмови. Дзвінків з номерів перевізників тут немає." />
         {multiDay && (
-          <label className="mc-day">День
-            <input id="missed-list-day" type="date" value={day} min={from} max={to} onChange={(e) => setDay(e.target.value)} />
-          </label>
+          <span className="mc-day">
+            <button type="button" className="mc-chip" aria-pressed={whole} onClick={() => setSpan("period")}>Увесь період</button>
+            <label className="mc-day">або день
+              <input id="missed-list-day" type="date" value={whole ? "" : day} min={from} max={to}
+                onChange={(e) => { if (e.target.value) { setDay(e.target.value); setSpan("day"); } }} />
+            </label>
+          </span>
         )}
         <div className="rv-grow" />
         {t.canAssign && (
@@ -288,11 +299,11 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp, managers }:
       {t.err && <p role="alert" className="mc-err mc-pad">⚠️ {t.err}</p>}
       {err && <p className="mc-err mc-pad">{err}</p>}
       {!err && !d && <p className="loading-text mc-pad">Завантаження…</p>}
-      {d && d.truncated && <p className="mc-err mc-pad">Показано перші {num(all.length)} — список за цей день довший і обрізаний.</p>}
+      {d && d.truncated && <p className="mc-err mc-pad">Показано перші {num(all.length)} — список {scopeWord} довший і обрізаний{whole ? ". Оберіть день" : ""}.</p>}
       {d && rows.length === 0 && (
         <div className="mc-empty">
-          {view === "waiting" ? (all.length ? "Усім передзвонили. Нових пропущених немає." : "Пропущених за цей день немає.")
-            : view === "mobile" ? "Пропущених на мобільні за цей день немає." : "Пропущених за цей день немає."}
+          {view === "waiting" ? (all.length ? "Усім передзвонили. Нових пропущених немає." : `Пропущених ${scopeWord} немає.`)
+            : view === "mobile" ? `Пропущених на мобільні ${scopeWord} немає.` : `Пропущених ${scopeWord} немає.`}
         </div>
       )}
       {d && rows.length > 0 && (
@@ -310,6 +321,7 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp, managers }:
                 const cc = clientCell(r.clientKey, canOpenClient);
                 const isOpen = openRow === r.uniqueid;
                 const can = taskAssignable(t, r.uniqueid);
+                const noTask = noTaskReason(t, r);
                 return (
                   <Fragment key={r.uniqueid}>
                     <tr>
@@ -325,8 +337,9 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp, managers }:
                       <td><ManagerName managerId={r.managerId} name={r.managerName} /></td>
                       <td className={`mc-hm${n.bad ? " mc-m" : ""}`}>{n.text}</td>
                       <td className="r mc-nw">{r.waiting ? <b className="mc-red">{waitText(r.waitH)}</b> : <span className="mc-m" title="З номером уже була розмова від 10 с">—</span>}</td>
-                      <td className="r"><TaskCell uniqueid={r.uniqueid} managerId={r.managerId} t={t} pick={pick[r.uniqueid]}
-                        onPick={(id) => setPick((p) => ({ ...p, [r.uniqueid]: id }))} managers={managers} /></td>
+                      <td className="r">{noTask ? <span className="mc-m mc-why">{noTask}</span>
+                        : <TaskCell uniqueid={r.uniqueid} managerId={r.managerId} t={t} pick={pick[r.uniqueid]}
+                          onPick={(id) => setPick((p) => ({ ...p, [r.uniqueid]: id }))} managers={managers} />}</td>
                     </tr>
                     {isOpen && r.clientKey && (
                       <tr><td colSpan={t.canAssign ? 7 : 6} className="mc-cardrow"><ClientCardPanel clientKey={r.clientKey} /></td></tr>
@@ -397,13 +410,13 @@ function TeamsBlock({ d, prev, nav, norm, ownerless }: {
   };
   const th = (k: SortKey | null, label: string, hint?: string) => (
     <th className="r">{k ? <button type="button" className="mc-sort" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}{sort === k ? " ↓" : ""}</button> : label}
-      {hint && <> <InfoHint text={hint} /></>}</th>
+      {hint && <> <Hint text={hint} /></>}</th>
   );
   const mgrRow = (r: MissedManagerRow, k: string, i = -1) => (
     <tr key={k} className={`mc-mgr${i >= 0 ? " mc-in" : ""}`} style={i >= 0 ? { animationDelay: `${String(i * 30)}ms` } : undefined}>
       <td><ManagerName managerId={r.managerId} name={r.name} /></td>
       <td className="r">{num(r.missed)}</td><td className="r">{pctCell(callbackPct(r))}</td>
-      <td className="r">{r.medianMin == null ? "—" : `${String(r.medianMin)} хв`}</td>
+      <td className="r">{durText(r.medianMin)}</td>
       <td className="r">{num(r.waiting)}</td><td className="r">{ch(callbackPct(r), (() => { const p = prevMgr.get(r.managerId); return p ? callbackPct(p) : null; })())}</td>
     </tr>
   );
@@ -422,7 +435,7 @@ function TeamsBlock({ d, prev, nav, norm, ownerless }: {
             {th("pct", "Передзвонили", "Частка пропущених, яким за 24 год передзвонили з розмовою від 10 с: сам відповідальний або колега.")}
             {th("medianMin", "Медіана", "Час до передзвону, медіана по дзвінках команди. Медіани не додаються, тому в рядку «Відділ» — медіана всього періоду.")}
             {th("waiting", "Чекають", "З номером досі немає розмови від 10 с — те саме число, що в смузі вгорі.")}
-            <th className="r">Зміна <InfoHint text={`Різниця % передзвону з попереднім ${word === "періоду" ? "таким самим періодом" : word} (п.п.). «—» — порівнювати нема з чим.`} /></th>
+            <th className="r">Зміна <Hint text={`Різниця % передзвону з попереднім ${word === "періоду" ? "таким самим періодом" : word} (п.п.). «—» — порівнювати нема з чим.`} /></th>
           </tr></thead>
           <tbody>
             {table.groups.map((g) => {
@@ -435,7 +448,7 @@ function TeamsBlock({ d, prev, nav, norm, ownerless }: {
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(k); } }}>
                     <td><span className="mc-tchev" aria-hidden="true">▸</span>{g.team.name}</td>
                     <td className="r">{num(g.team.missed)}</td><td className="r">{pctCell(callbackPct(g.team))}</td>
-                    <td className="r">{g.team.medianMin == null ? "—" : `${String(g.team.medianMin)} хв`}</td>
+                    <td className="r">{durText(g.team.medianMin)}</td>
                     <td className="r">{g.team.waiting > 0 ? <b className="mc-red">{num(g.team.waiting)}</b> : num(g.team.waiting)}</td>
                     <td className="r">{ch(callbackPct(g.team), p ? callbackPct(p) : null)}</td>
                   </tr>
@@ -448,7 +461,7 @@ function TeamsBlock({ d, prev, nav, norm, ownerless }: {
               <tr key="ownerless" className="mc-mrow">
                 <td className="mc-m">{r.name}</td>
                 <td className="r">{num(r.missed)}</td><td className="r">{pctCell(callbackPct(r))}</td>
-                <td className="r">{r.medianMin == null ? "—" : `${String(r.medianMin)} хв`}</td>
+                <td className="r">{durText(r.medianMin)}</td>
                 <td className="r">{r.waiting > 0 ? <b className="mc-red">{num(r.waiting)}</b> : num(r.waiting)}</td>
                 <td className="r">{ch(callbackPct(r), (() => { const p = prevMgr.get(null); return p ? callbackPct(p) : null; })())}</td>
               </tr>
@@ -456,7 +469,7 @@ function TeamsBlock({ d, prev, nav, norm, ownerless }: {
             <tr className="mc-total">
               <td>Відділ</td><td className="r">{num(s.missed)}</td><td className="r">{pctCell(totalPct)}</td>
               {/* Медіани не додаються: тут медіана всього періоду з підсумку, а не з рядків. */}
-              <td className="r">{s.medianMin == null ? "—" : `${String(s.medianMin)} хв`}</td>
+              <td className="r">{durText(s.medianMin)}</td>
               <td className="r">{num(s.waiting)}</td><td className="r">{ch(totalPct, prevTotalPct)}</td>
             </tr>
           </tbody>
@@ -504,7 +517,7 @@ function DetailsBlock({ d, fp }: { d: MissedCallsResp; fp: MissedFilterParams })
             summary={<>відкрито <b>{num(a.openNow)}</b>, закрито автоматично {num(closed)}</>}>
             <div className="mc-inner">
               <p className="mc-note">Завжди останні 7 днів до сьогодні, незалежно від обраного періоду.
-                <InfoHint text="Перевізник за історією CRM — номер уже закривали як «Перевізник» і немає угоди замовника в «Успіх» чи в роботі. Біржа Lardi-Trans не відповідає з 28.09, тож частина перевізників сюди не потрапляє." /></p>
+                <Hint text="Перевізник за історією CRM — номер уже закривали як «Перевізник» і немає угоди замовника в «Успіх» чи в роботі. Біржа Lardi-Trans не відповідає з 28.09, тож частина перевізників сюди не потрапляє." /></p>
               <div className="mc-minis">
                 <Tile label="Відкрито зараз" value={num(a.openNow)} sub="задач «передзвони»" hint="Задачі «передзвони», які зараз чекають на передзвін — у вашому зрізі." />
                 <Tile label="Закрито: передзвонили" value={num(a.closedCallback)} sub="розмова від 10 с" hint="Задача закрилась сама: з номера компанії поговорили з клієнтом від 10 с. Хто й коли — у самій задачі." />
@@ -614,7 +627,7 @@ function MissedDynamicsBlock({ fp }: { fp: MissedFilterParams }) {
     <div className="mc-inner">
       <p className="mc-note">
         Уся історія дзвінків; від періоду вгорі не залежить.
-        <InfoHint text={"Пропущені по днях, тижнях чи місяцях за всю історію дзвінків (з 01.09.2025). Остання точка — вчора: частка «не передзвонили» за останню добу ще може зменшитись, доки не мине 24 години на передзвін. "
+        <Hint text={"Пропущені по днях, тижнях чи місяцях за всю історію дзвінків (з 01.09.2025). Остання точка — вчора: частка «не передзвонили» за останню добу ще може зменшитись, доки не мине 24 години на передзвін. "
           + "Серії — уся компанія (або ваш зріз), кожна команда за поточним складом, «Поза командами» і «Без відповідального»; у кожній точці Σ серій = «Усього»."} />
       </p>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
@@ -763,7 +776,7 @@ function NoDealBlock({ from, to, fp, onCounts }: { from: string; to: string; fp:
     <div className="mc-inner">
       <p className="mc-note">
         Вхідні, на які відповіли, у трьох станах. Натисніть на число, щоб побачити дзвінки.
-        <InfoHint text="Вхідні дзвінки, на які відповіли, розкладені на три стани. Натисніть на число, щоб побачити самі дзвінки." />
+        <Hint text="Вхідні дзвінки, на які відповіли, розкладені на три стани. Натисніть на число, щоб побачити самі дзвінки." />
       </p>
       {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
       {!err && !c && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
@@ -782,7 +795,7 @@ function NoDealBlock({ from, to, fp, onCounts }: { from: string; to: string; fp:
                     border: `1px solid ${active ? "var(--text-muted)" : "var(--border)"}`, borderRadius: 10, padding: "12px 14px",
                   }}>
                   <div style={{ fontSize: 12.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
-                    {t.label} <InfoHint text={t.hint} />
+                    {t.label} <Hint text={t.hint} />
                   </div>
                   <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{n.toLocaleString("uk-UA")}</div>
                   <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 2 }}>
@@ -886,7 +899,7 @@ function ResponseTimeBlock({ from, to, filtered }: { from: string; to: string; f
     <div className="mc-inner">
       <p className="mc-note">
         Від створення заявки до першого набору менеджера.
-        <InfoHint text="Від створення заявки до ПЕРШОГО набору менеджера, навіть якщо клієнт не взяв трубку. Медіана, а не середнє: кілька заявок, яким передзвонили через дні, тягнуть середнє в десятки разів угору. Заявка, створена в неробочий час, рахується від 08:15 найближчого робочого дня — як у вікні «Час опрацювання заявки». Заявки — реклама (uts.ua) і сайт (yalogist); лідгени — окремим рядком і в медіану відділу не входять." />
+        <Hint text="Від створення заявки до ПЕРШОГО набору менеджера, навіть якщо клієнт не взяв трубку. Медіана, а не середнє: кілька заявок, яким передзвонили через дні, тягнуть середнє в десятки разів угору. Заявка, створена в неробочий час, рахується від 08:15 найближчого робочого дня — як у вікні «Час опрацювання заявки». Заявки — реклама (uts.ua) і сайт (yalogist); лідгени — окремим рядком і в медіану відділу не входять." />
       </p>
       <p className="mc-note">Період: {from} — {to} · за датою створення заявки · команда — на дату створення
         {filtered && <b style={{ color: "var(--text)" }}> · фільтр команд екрана на цей блок не діє — розбивка по командах нижче</b>}</p>
@@ -936,7 +949,7 @@ function ResponseTimeBlock({ from, to, filtered }: { from: string; to: string; f
 function Tile({ label, value, sub, hint }: { label: string; value: string; sub?: string; hint: string }) {
   return (
     <div className="mc-mini">
-      <div className="mc-kl">{label} <InfoHint text={hint} /></div>
+      <div className="mc-kl">{label} <Hint text={hint} /></div>
       <b>{value}</b>
       {sub && <div className="mc-ks">{sub}</div>}
     </div>
@@ -978,24 +991,24 @@ function MissedDealsBlock({ from, to, fp }: { from: string; to: string; fp: Miss
       <div className="mc-card">
         <div className="mc-hero">
           <div className="mc-k">
-            <div className="mc-kl">Угод із вхідного дзвінка <InfoHint text="Угоди, створені вхідним дзвінком за період (Kommo створює угоду одразу на дзвінок)." /></div>
+            <div className="mc-kl">Угод із вхідного дзвінка <Hint text="Угоди, створені вхідним дзвінком за період (Kommo створює угоду одразу на дзвінок)." /></div>
             <div className="mc-kv"><CountUp value={s.deals} /></div>
             <div className="mc-ks">за обраний період</div>
           </div>
           <div className="mc-k mc-act">
-            <div className="mc-kl">Пропущені угоди <InfoHint text={
+            <div className="mc-kl">Пропущені угоди <Hint text={
               "Угода, яку створив вхідний дзвінок, а за 5 хвилин від дзвінка з цим номером не було ні розмови, ні нового дзвінка: "
               + "ні нашого вихідного (навіть без відповіді), ні нового вхідного. Відповідальний — відповідальний за угоду в Kommo."} /></div>
             <div className="mc-kv"><CountUp value={s.missed} /></div>
             <div className="mc-ks">{missedPct == null ? "—" : `${String(missedPct)}%`}: за 5 хв ні розмови, ні нового дзвінка</div>
           </div>
           <div className="mc-k">
-            <div className="mc-kl">Поговорили пізніше <InfoHint text="З пропущених угод — скільки разом із номером згодом була розмова від 10 с (до сьогодні)." /></div>
+            <div className="mc-kl">Поговорили пізніше <Hint text="З пропущених угод — скільки разом із номером згодом була розмова від 10 с (до сьогодні)." /></div>
             <div className="mc-kv"><CountUp value={s.talkedLater} /></div>
             <div className="mc-ks">з {num(s.missed)} пропущених ({pct(s.talkedLater, s.missed)})</div>
           </div>
           <div className="mc-k">
-            <div className="mc-kl">Досі без розмови <InfoHint text="Пропущені угоди, з номером яких досі не було розмови від 10 с — ні нашої, ні вхідної." /></div>
+            <div className="mc-kl">Досі без розмови <Hint text="Пропущені угоди, з номером яких досі не було розмови від 10 с — ні нашої, ні вхідної." /></div>
             <div className="mc-kv">{num(open.length)}</div>
             <div className="mc-ks">{d.truncated ? "у показаній частині списку" : "кому передзвонити"}</div>
           </div>
@@ -1010,7 +1023,7 @@ function MissedDealsBlock({ from, to, fp }: { from: string; to: string; fp: Miss
         <div className="mc-tools">
           <button type="button" className="mc-chip" aria-pressed={view === "open"} onClick={() => setView("open")}>Досі без розмови {num(open.length)}</button>
           <button type="button" className="mc-chip" aria-pressed={view === "all"} onClick={() => setView("all")}>Усі {num(d.rows.length)}</button>
-          <InfoHint text="Кожна пропущена угода періоду, від найновішої. «Що далі» — перша розмова від 10 с з номером після дзвінка, або лише наш набір без розмови, або нічого досі." />
+          <Hint text="Кожна пропущена угода періоду, від найновішої. «Що далі» — перша розмова від 10 с з номером після дзвінка, або лише наш набір без розмови, або нічого досі." />
         </div>
         {d.truncated && <p className="mc-err mc-pad">Показано перші {num(d.rows.length)} — список за період довший і обрізаний. Звузьте період.</p>}
         {rows.length === 0 ? <div className="mc-empty">{view === "open" ? "З усіма поговорили." : "Пропущених угод за період немає."}</div> : (
@@ -1072,7 +1085,7 @@ function MissedDealsBlock({ from, to, fp }: { from: string; to: string; fp: Miss
 }
 
 function dealNextLabel(kind: MissedDealNext, min: number | null): { text: string; bad: boolean } {
-  const m = min == null ? "" : ` через ${String(min)} хв`;
+  const m = min == null ? "" : ` через ${durText(min)}`;
   switch (kind) {
     case "talked": return { text: `поговорили${m}`, bad: false };
     case "attempt": return { text: `набирали${m}, без розмови`, bad: true };

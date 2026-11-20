@@ -588,8 +588,14 @@ export function capRows<T>(rows: T[], limit = MISSED_LIST_LIMIT): { rows: T[]; t
  * те, чим `missedSummarySql` рахує «пропущено». Для одного дня кількість рядків
  * списку дорівнює `summary.missed` за той самий день — це й стереже `#450`.
  */
-export function missedListSql(day: string, s: MissedScope, onlyNoCallback = false): { sql: string; params: unknown[] } {
-  const { cte, params } = baseCte(day, day, s);
+/**
+ * 📅 ПЕРІОД (баг 20.11.2026, прохід по екрану на проді): за тиждень смуга казала «Чекають 131», а список «Кому передзвонити»
+ * показував лише один день (38). Тепер список можна взяти за весь період тим самим виразом (`to`); без `to` — один день,
+ * як і було. У кількох днях «Дзвінок» несе дату (`DD.MM HH:MM`), інакше два дзвінки о 09:10 різних днів не розрізнити.
+ */
+export function missedListSql(day: string, s: MissedScope, onlyNoCallback = false, to: string = day): { sql: string; params: unknown[] } {
+  const { cte, params } = baseCte(day, to, s);
+  const atFmt = to === day ? "HH24:MI" : "DD.MM HH24:MI";
   // «Лише непередзвонені» (5824): з цим номером ДОСІ не було розмови від 10 с — ні нашої, ні коли клієнт передзвонив сам.
   // 🔴 БЕЗ МЕЖІ 24 ГОД (рішення Романа 20.11.2026, «правильні пропущені», п.4: «якщо менеджер передзвонив, пропущений має
   // зникати зі списку»). До 20.11 вікно було 24 год, і дзвінок, якому передзвонили наступного ранку, висів «нічого за 24 год»
@@ -598,7 +604,7 @@ export function missedListSql(day: string, s: MissedScope, onlyNoCallback = fals
   const extra = onlyNoCallback ? ` AND ${stillWaitingSql("w")}` : "";
   const sql = `${cte}
     SELECT w.uniqueid,
-           to_char(w.calldate AT TIME ZONE 'Europe/Kyiv', 'HH24:MI') AS at,
+           to_char(w.calldate AT TIME ZONE 'Europe/Kyiv', '${atFmt}') AS at,
            w.client_phone, w.client_key, w.manager_id, mg.name AS manager_name, w.bucket,
            EXTRACT(EPOCH FROM (COALESCE(w.cb_at, w.ca_at) - w.calldate))/60.0 AS cb_min,
            (w.cb_at IS NOT NULL) AS cb_talked,

@@ -107,6 +107,9 @@ export function useMissedTasks(from: string, to: string, fp: MissedFilterParams)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, fpKey, rev]);
   const byId = useMemo(() => new Map((d?.rows ?? []).map((r) => [r.uniqueid, r])), [d]);
+  // Задача ставиться на НОМЕР (один рядок на номер — найстаріший пропущений без розмови), тож повторний дзвінок того
+  // самого номера бачить свою задачу через цей мап, а не порожню клітинку (баг 20.11.2026).
+  const byPhone = useMemo(() => new Map((d?.rows ?? []).map((r) => [r.phone, r])), [d]);
   const assign = async (items: { uniqueid: string; managerId?: number }[]) => {
     if (!items.length) return;
     setBusy(true);
@@ -117,7 +120,7 @@ export function useMissedTasks(from: string, to: string, fp: MissedFilterParams)
     } catch (e) { setErr(errText(e)); }
     finally { setBusy(false); }
   };
-  return { byId, canAssign: d?.canAssign ?? false, assign, res, busy, err };
+  return { byId, byPhone, loaded: d != null, truncated: d?.truncated ?? false, canAssign: d?.canAssign ?? false, assign, res, busy, err };
 }
 export type MissedTasks = ReturnType<typeof useMissedTasks>;
 

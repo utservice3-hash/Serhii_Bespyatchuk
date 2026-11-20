@@ -916,12 +916,13 @@ export interface MissedListRow {
   waiting: boolean; waitH: number;
 }
 export interface MissedListResp {
-  day: string; onlyNoCallback: boolean;
+  /** `to` — кінець періоду списку (= `day`, якщо список за один день). */
+  day: string; to: string; onlyNoCallback: boolean;
   /** true — список обрізано стелею; екран мусить це сказати, а не вдавати повноту. */
   truncated: boolean;
   rows: MissedListRow[];
 }
-export async function fetchMissedList(params: { day: string; noCallback?: "1" } & MissedFilterParams): Promise<MissedListResp> {
+export async function fetchMissedList(params: { day: string; to?: string; noCallback?: "1" } & MissedFilterParams): Promise<MissedListResp> {
   const { data } = await api.get<MissedListResp>("/dashboard/missed-calls/list", { params });
   return data;
 }

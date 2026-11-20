@@ -288,3 +288,55 @@ test("#1774 ФІЛЬТР І ЦІЛЬ · ФРОНТ: збережене сміт�
   assert.equal(V.normLabel(79, 80), "ціль 80% · нижче норми");
   assert.equal(V.normLabel(null, 80), "ціль 80%", "🔴 без даних показано вердикт");
 });
+
+interface FixMod {
+  durText: (min: number | null) => string;
+  noTaskReason: (t: { loaded: boolean; truncated: boolean; byId: { has: (u: string) => boolean }; byPhone: { get: (p: string) => { at: string } | undefined }; res: Record<string, unknown> },
+    r: { uniqueid: string; phone: string | null; waiting: boolean; waitH: number }) => string | null;
+}
+
+/**
+ * #10149 — БАГИ ПРОХОДУ ПО ЕКРАНУ НА ПРОДІ (Роман 20.11.2026: «перейдися по всій сторінці і знайди всі баги»).
+ * ① Підказки ⓘ: на проді 38 з 39 закривала липка шапка або обрізав край згортного блоку / таблиці — тепер усі через `Hint`
+ *    (портал у `document.body`, `position: fixed`). Червоніє, якщо на екрані знову з'явиться `InfoHint` або `Hint` перестане
+ *    виносити спливашку з блоку.
+ * ② Тривалість: «1334 хв» → «22 год 14 хв»; червоніє, якщо медіану чи «через N» знову писати сирими хвилинами.
+ * ③ Порожня клітинка «Задача» в рядку, що чекає: кожна причина названа (доба, номер, задача на інший дзвінок, перевізник);
+ *    поки задачі не завантажились чи список обрізано — нічого не вигадуємо.
+ * ④ Список за період: запит несе `to`, задачі — за ті самі дати, роут передає `to` в ядро.
+ */
+test("#10149 ПРОХІД ПО ЕКРАНУ: підказки не обрізаються, тривалість годинами, причина без задачі названа, список за весь період", async () => {
+  const periodUrl = await transpile("pages/dashboard/periodRules.ts");
+  const V = await load<FixMod>("pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
+  const cases: [number | null, string][] = [[null, "—"], [5, "5 хв"], [59, "59 хв"], [60, "1 год"], [241, "4 год 1 хв"], [1334, "22 год 14 хв"], [1440, "1 д"], [3000, "2 д 2 год"]];
+  for (const [m, want] of cases) assert.equal(V.durText(m), want, `🔴 ${String(m)} хв записано як «${V.durText(m)}», а не «${want}»`);
+
+  const t = (o: Partial<Parameters<FixMod["noTaskReason"]>[0]> = {}) => ({
+    loaded: true, truncated: false, byId: new Set<string>(), byPhone: new Map<string, { at: string }>(), res: {}, ...o });
+  const r = (o: Partial<Parameters<FixMod["noTaskReason"]>[1]> = {}) => ({ uniqueid: "u1", phone: "380501112233", waiting: true, waitH: 30, ...o });
+  assert.equal(V.noTaskReason(t(), r({ waiting: false })), null, "🔴 рядок, з яким уже поговорили, отримав пояснення про задачу");
+  assert.equal(V.noTaskReason(t({ loaded: false }), r()), null, "🔴 поки задачі вантажаться, причину вигадано");
+  assert.equal(V.noTaskReason(t({ byId: new Set(["u1"]) }), r()), null, "🔴 рядок із задачею отримав пояснення замість кнопки");
+  assert.equal(V.noTaskReason(t(), r({ waitH: 23 })), "задача — коли мине доба");
+  assert.equal(V.noTaskReason(t(), r({ phone: null })), "номер невідомий");
+  assert.match(V.noTaskReason(t({ byPhone: new Map([["380501112233", { at: "2026-11-19T06:33:00Z" }]]) }), r()) ?? "", /^задача — на дзвінок 19\.11, 08:33$/,
+    "🔴 повторний дзвінок номера не каже, на який дзвінок стоїть задача");
+  assert.equal(V.noTaskReason(t(), r()), "перевізник за історією CRM");
+  assert.equal(V.noTaskReason(t({ truncated: true }), r()), null, "🔴 список під задачі обрізано, а причину «перевізник» вигадано");
+
+  const sec = stripComments(readFileSync(FE("pages/dashboard/sections/MissedCallsSection.tsx"), "utf8"));
+  assert.doesNotMatch(sec, /\bInfoHint\b/, "🔴 на екрані знову InfoHint — його спливашку закриває шапка й обрізає край блоку");
+  assert.ok((sec.match(/<Hint /g) ?? []).length >= 20, "🔴 підказок `Hint` на екрані підозріло мало — розбір зламався");
+  const fold = readFileSync(FE("pages/dashboard/sections/MissedFold.tsx"), "utf8");
+  assert.match(fold, /createPortal\([\s\S]*?className="info-hint-pop mc-hint-pop"[\s\S]*?document\.body\)/, "🔴 спливашка `Hint` не виноситься в document.body");
+  const css = readFileSync(FE("index.css"), "utf8");
+  assert.match(css, /\.info-hint-pop\.mc-hint-pop \{ position: fixed;/, "🔴 спливашка `Hint` не фіксована — її знову обріже край блоку");
+  // «Відповідь на заявку» (ResponseTimeBlock) пише свої медіани хвилинами свідомо — там вони короткі; тут лише екран пропущених.
+  assert.doesNotMatch(sec, /`\$\{String\((?:s|r|g\.team)\.medianMin\)\} хв`|через \$\{String\(min\)\} хв|fmt=\{\(n\) => `\$\{String\(n\)\} хв`\}/, "🔴 тривалість знову сирими хвилинами");
+  assert.ok((sec.match(/durText\(/g) ?? []).length >= 5, "🔴 тривалість на екрані пишеться не через durText");
+
+  assert.match(sec, /const q = qTo !== qFrom \? \{ day: qFrom, to: qTo \} : \{ day: qFrom \};/, "🔴 список не бере кінець періоду");
+  assert.match(sec, /const t = useMissedTasks\(qFrom, qTo, fp\);/, "🔴 задачі списку — не за ті самі дати, що й рядки");
+  const route = readFileSync(fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
+  assert.match(route, /await missedCalls\.missedList\(day, scope, onlyNoCallback, to\)/, "🔴 роут списку не передає `to` в ядро");
+});
