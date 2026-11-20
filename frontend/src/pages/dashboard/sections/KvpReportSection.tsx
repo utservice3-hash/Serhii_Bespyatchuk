@@ -1,20 +1,15 @@
-import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek, type KvpShipWeek, type CreatedSplit } from "../../../api";
+import { Fragment, useEffect, useState, type CSSProperties } from "react";
+import { fetchKvpReport, fetchKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek, type KvpShipWeek, type CreatedSplit } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
-import { useToast } from "../../../components/Toasts";
-import { commitOptimistic, failureReason } from "../../../actionFeedback";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
-import { LeadgenRegularsCard } from "./LeadgenRegularsCard";
 import { KvpFirstTouchBlock } from "./KvpFirstTouchBlock";
-import { ReviewByTeamBlock } from "./ReviewByTeamBlock";
 import { weekCloseStatus, closeNote, withExpected, CLOSE_LABEL, type CloseKind } from "../kvpCoreRules";
 import { VacationMark } from "../VacationMark";
 
 // ── Статус-палітра (зарезервована, НЕ дата-серія): good/warning/serious/critical ──
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BLUE = "#2563eb", MUTED = "var(--text-muted)";
 const pctColor = (p: number | null) => (p == null ? MUTED : p >= 100 ? GREEN : p >= 85 ? BLUE : p >= 70 ? AMBER : RED);
-const sevColor: Record<string, string> = { critical: RED, serious: RED, warning: AMBER, info: BLUE };
 const fmtMoney = (v: number) => formatAmount(v);
 const fmtFull = (v: number) => formatAmountFull(v);
 const fmtNum = (v: number | null) => (v == null ? "—" : Number(v).toLocaleString("uk-UA"));
@@ -101,113 +96,6 @@ const HINT: Record<string, string> = {
 
 const teamKindLabel: Record<string, string> = { rpk: "Повний цикл", rnk: "Реклама", leadgen: "Лідогенерація" };
 
-// Блок B — секція «Логістика». Чесні мітки: ✓ пряме джерело · ~ проксі/наближення · ✗ нема даних.
-// ⓘ у ТІЙ САМІЙ позиції, що в решті звіту (поряд із заголовком, у flex-лейблі) — тултіп працює.
-const MK: Record<string, { c: string; ch: string }> = { ok: { c: GREEN, ch: "✓" }, proxy: { c: AMBER, ch: "~" }, none: { c: RED, ch: "✗" } };
-function LogiCard({ title, kind, hint, children }: { title: string; kind: "ok" | "proxy" | "none"; hint: string; children: ReactNode }) {
-  return (
-    <div style={{ padding: 12, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 8 }}>
-        <b style={{ fontSize: 13 }}>{title}</b>
-        <span style={{ color: MK[kind].c, fontWeight: 700, fontSize: 12 }} title={MK[kind].ch === "✓" ? "пряме джерело" : MK[kind].ch === "~" ? "проксі/наближення" : "нема даних"}>{MK[kind].ch}</span>
-        <InfoHint text={hint} />
-      </div>
-      {children}
-    </div>
-  );
-}
-function ShareBar({ pct, color }: { pct: number; color: string }) {
-  return <div style={{ height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden", marginTop: 3 }}><div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: color, borderRadius: 3 }} /></div>;
-}
-function LogisticsSection({ rep }: { rep: KvpReport }) {
-  const L = rep.logistics;
-  const totalDir = L.direction.reduce((a, d) => a + d.revenue, 0) || 1;
-  const totalChan = L.salesChannel.reduce((a, c) => a + c.revenue, 0) || 1;
-  const agingDebt = L.aging.buckets.reduce((a, b) => a + b.sum, 0);
-  const agingCnt = L.aging.buckets.reduce((a, b) => a + b.count, 0);
-  const tile = (label: string, val: string, sub: string) => (
-    <div style={{ padding: "8px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, textAlign: "center" }}>
-      <div style={{ fontSize: 11, color: MUTED }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 700 }}>{val}</div>
-      <div style={{ fontSize: 10, color: MUTED }}>{sub}</div>
-    </div>
-  );
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
-      {/* Напрямок — КАРТКИ з барами частки */}
-      <LogiCard title="🧭 Напрямок (Тип запиту)" kind={L.fillRates.requestType >= 90 ? "ok" : "proxy"}
-        hint={`Розклад отриманої виручки за «Тип запиту» (напрямок). Σ по напрямках == отримано. Fill-rate поля: ${L.fillRates.requestType}%. Конверсія = ad-new когорта (вхід→гроші) цього напрямку; ⏳ якщо <10 у зоні.`}>
-        <div style={{ display: "grid", gap: 8 }}>
-          {L.direction.map((d) => { const share = Math.round(d.revenue / totalDir * 100); return (
-            <div key={d.key}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}><b style={{ ...clip }}>{d.key}</b><span style={{ fontWeight: 700 }}>{fmtMoney(d.revenue)}</span></div>
-              <div style={{ fontSize: 10, color: MUTED }}>{fmtNum(d.deals)} авто · чек {d.deals > 0 ? fmtFull(Math.round(d.revenue / d.deals)) : "—"} · конв. {d.conversion == null ? "⏳" : `${d.conversion}%`} · {share}%</div>
-              <ShareBar pct={share} color={BLUE} />
-            </div>
-          ); })}
-        </div>
-      </LogiCard>
-
-      {/* Канал продажу — рядки з барами, Тендерний виділено */}
-      <LogiCard title="🏷 Канал продажу" kind={L.fillRates.salesChannel >= 90 ? "ok" : "proxy"}
-        hint={`Розклад отриманої виручки за «Канал продажу». Σ == отримано. Fill-rate поля: ${L.fillRates.salesChannel}%.`}>
-        <div style={{ display: "grid", gap: 8 }}>
-          {L.salesChannel.map((c) => { const share = Math.round(c.revenue / totalChan * 100); const solo = /самостій/i.test(c.key); return (
-            <div key={c.key}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}><span style={{ ...clip, fontWeight: solo ? 700 : 400, color: solo ? AMBER : undefined }}>{c.key}{solo ? " ⭐" : ""}</span><span style={{ fontWeight: 600 }}>{fmtMoney(c.revenue)} · {share}%</span></div>
-              <ShareBar pct={share} color={solo ? AMBER : GREEN} />
-            </div>
-          ); })}
-        </div>
-      </LogiCard>
-
-      {/* Швидкість — плитки транзит / DSO / прострочено */}
-      <LogiCard title="⚡ Швидкість грошей" kind="proxy"
-        hint="Транзит: load_at→unload_at (unload=ДАТА АКТА, не фізичне розвантаження ~). DSO: unload→closed(142) — реальної банк-дати оплати в CRM нема, проксі по даті закриття ~. Прострочено: борг зі знімка aging.">
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-          {tile("Транзит", L.transit.n === 0 ? "—" : `${L.transit.avg} дн`, L.transit.n === 0 ? "" : `медіана ${L.transit.median}`)}
-          {tile("DSO ~", L.dso.n === 0 ? "—" : `${L.dso.avg} дн`, L.dso.n === 0 ? "" : `медіана ${L.dso.median}`)}
-          {tile("Прострочено", fmtMoney(agingDebt), `${agingCnt} угод`)}
-        </div>
-      </LogiCard>
-
-      {/* Концентрація — % + ТОП-5 список */}
-      <LogiCard title="🧮 Концентрація клієнтів" kind="ok"
-        hint={`Топ-${L.concentration.topN} клієнтів як % отриманої виручки (${L.concentration.clients} клієнтів з іменем у періоді).`}>
-        <div style={{ fontSize: 20, fontWeight: 700, color: (L.concentration.pct ?? 0) > 50 ? AMBER : "var(--text)" }}>{L.concentration.pct == null ? "—" : `${L.concentration.pct}%`}<span style={{ fontSize: 11, fontWeight: 400, color: MUTED }}> топ-{L.concentration.topN} ({fmtMoney(L.concentration.topRevenue)} з {fmtMoney(L.concentration.totalRevenue)})</span></div>
-        <table className="data-table" style={{ width: "100%", margin: "6px 0 0", fontSize: 12 }}>
-          <tbody>{L.concentration.topClients.map((c, i) => (
-            <tr key={c.key}><td style={{ color: MUTED, width: 18 }}>{i + 1}</td><td style={clip}>{c.key}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(c.revenue)}</td><td style={{ textAlign: "right", color: MUTED }}>{fmtNum(c.deals)}р</td></tr>
-          ))}</tbody>
-        </table>
-      </LogiCard>
-
-      {/* Повторні рейси */}
-      <LogiCard title="🔁 Повторні рейси" kind="ok" hint="Клієнти з оплатою в періоді, згруповані за к-тю оплачених рейсів (1 / 2-3 / 4+).">
-        <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Рейсів</th><th style={{ textAlign: "right" }}>Клієнтів</th><th style={{ textAlign: "right" }}>Виручка</th></tr></thead>
-          <tbody>{L.repeatRides.map((r) => <tr key={r.bucket}><td>{r.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(r.clients)}</td><td style={{ textAlign: "right" }}>{fmtMoney(r.revenue)}</td></tr>)}</tbody></table>
-      </LogiCard>
-
-      {/* Aging */}
-      <LogiCard title="📅 Прострочена дебіторка (aging)" kind="ok"
-        hint="Неоплачені угоди з простроченою планова датою, по кошиках днів. Кошики = реальний борг до стягнення (позитивні); сторно/коригування (повернення) — окремим рядком, не борг.">
-        <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Днів</th><th style={{ textAlign: "right" }}>Угод</th><th style={{ textAlign: "right" }}>Борг</th></tr></thead>
-          <tbody>
-            {L.aging.buckets.map((a) => <tr key={a.bucket}><td>{a.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(a.count)}</td><td style={{ textAlign: "right" }}>{fmtMoney(a.sum)}</td></tr>)}
-            <tr style={{ borderTop: "1px solid var(--border)", fontWeight: 600 }}><td>Разом борг</td><td style={{ textAlign: "right" }}>{fmtNum(agingCnt)}</td><td style={{ textAlign: "right", color: GREEN }}>{fmtMoney(agingDebt)}</td></tr>
-            {L.aging.reversals.count > 0 && <tr style={{ color: MUTED }}><td>сторно/коригування</td><td style={{ textAlign: "right" }}>{fmtNum(L.aging.reversals.count)}</td><td style={{ textAlign: "right" }}>{fmtMoney(L.aging.reversals.sum)}</td></tr>}
-          </tbody></table>
-      </LogiCard>
-
-      {/* Маржа LOCKED */}
-      <LogiCard title="💰 Маржа на авто" kind="none"
-        hint="🔒 Заблоковано: собівартість (Видаток/Оплата перевізнику) заповнена ~0%. Поле в Kommo Є — потрібне заповнення менеджерами, не нове поле.">
-        <div style={{ fontSize: 12, color: MUTED }}>🔒 Недоступно — заповніть собівартість рейсу в CRM.</div>
-      </LogiCard>
-    </div>
-  );
-}
-
 /** Горизонтальний div-бар (magnitude), 4px заокруглені кінці, статус-колір по %. */
 /**
  * 📊 ДВОСЕГМЕНТНА СМУГА ВИКОНАННЯ ПЛАНУ (рішення власника 20.08.2026).
@@ -289,7 +177,6 @@ function anchorFor(preset: string, monthSel: string): string {
 
 /** `canSeeFirstTouch` — у ролі є вкладка «Перший дотик · AI»; без неї блок не показується (фінансист: Звіт КВП є, AI — ні). */
 export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouch?: boolean } = {}) {
-  const toast = useToast();
   const [preset, setPreset] = useState<string>(() => localStorage.getItem("kvpDPreset") || "month");
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("kvpDMonth") || curMonth());
   const [range, setRange] = useState<{ from: string; to: string }>(() => { try { return JSON.parse(localStorage.getItem("kvpDRange") || "null") || { from: "", to: "" }; } catch { return { from: "", to: "" }; } });
@@ -297,8 +184,6 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
   const [err, setErr] = useState<string | null>(null);
   const [plans, setPlans] = useState<KvpPlans>({});
   const [openTeam, setOpenTeam] = useState<number | null>(null);
-  const [showFull, setShowFull] = useState(false);
-  const [showLogi, setShowLogi] = useState(false);
   /** ▸ «Детальний звіт» — усе, що було на екрані до ядра (ТЗ 12.10: «Звіт КВП перевантажений»), згорнуте, але не видалене. */
   const [showDetails, setShowDetails] = useState(() => { try { return localStorage.getItem("kvpDetails") === "1"; } catch { return false; } });
   const toggleDetails = () => setShowDetails((x) => { try { localStorage.setItem("kvpDetails", x ? "0" : "1"); } catch { /* сховище недоступне */ } return !x; });
@@ -355,15 +240,33 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
           <div className="chart-card" style={{ marginBottom: 16, borderTop: "3px solid #c5141c" }}>
             <h2 className="chart-title">💰 Гроші за {rep.scope.label.toLowerCase()} {rep.scope.isCurrent && <span style={{ fontSize: 12, color: MUTED }}>(період триває)</span>}</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-              <Stat label="Отримані кошти" value={fmtMoney(v.received.revenue)} hint={HINT.received}
+              <Stat label="Отримані кошти" value={fmtFull(v.received.revenue)} hint={HINT.received}
                 note="гроші, що вже надійшли: оплачено або успішно реалізовано" />
-              <Stat label="Стратегічний план 🔒" value={fmtMoney(v.strategicPlan)} hint={HINT.strategic}
+              <Stat label="Стратегічний план 🔒" value={fmtFull(v.strategicPlan)} hint={HINT.strategic}
                 note={`план відділу на місяць; виконано ${fmtPct(v.planPct)}`} />
-              <Stat label="Прогноз місяця" value={fmtMoney(v.projection.projected)} hint={HINT.projection}
-                note={`факт ${fmtMoney(v.projection.fact)} + ${fmtMoney(v.projection.expectedThisMonth)}, які чекаємо за плановою датою оплати; ${fmtPct(v.projection.projectedPct)} плану`} />
+              <Stat label="Прогноз місяця" value={fmtFull(v.projection.projected)} hint={HINT.projection}
+                note={`факт ${fmtFull(v.projection.fact)} + ${fmtFull(v.projection.expectedThisMonth)}, які чекаємо за плановою датою оплати; ${fmtPct(v.projection.projectedPct)} плану`} />
               <Stat label="Робочі дні" value={`${String(v.projection.elapsedWorkingDays)} з ${String(v.projection.totalWorkingDays)}`}
                 note="скільки робочих днів місяця вже минуло" />
             </div>
+              {/* 📊 ШКАЛА ВИКОНАННЯ ПЛАНУ — у ядрі, під картками грошей (правки зустрічі 17.11.2026: «шкалу наверх,
+                  знизу прибрати»). Суми — повністю, без «3.1M» (там же: «менше заокруглення»); прогноз названо числом. */}
+              <div style={{ marginTop: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: MUTED, marginBottom: 4 }}>
+                  <span>Виконання плану</span>
+                  <span>
+                    <span style={{ color: pctColor(v.planPct), fontWeight: 600 }}>{fmtPct(v.planPct)}</span>
+                    <span style={{ color: MUTED }}> факт · </span>
+                    <span style={{ color: pctColor(v.projection.projectedPct), fontWeight: 600 }}>{fmtPct(v.projection.projectedPct)}</span>
+                    <span style={{ color: MUTED }}> з очікуванням</span>
+                  </span>
+                </div>
+                <PlanBar factPct={v.planPct} forecastPct={v.projection.projectedPct} color={pctColor(v.planPct)} h={10} />
+                <div style={{ fontSize: 11, color: MUTED, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                  ▉ факт {fmtFull(v.received.revenue)} · ▨ очікуємо {fmtFull(v.projection.expectedThisMonth)} за план. датою = прогноз <b style={{ color: "var(--text)" }}>{fmtFull(v.projection.projected)}</b> із плану {fmtFull(v.strategicPlan)}
+                  <InfoHint text={HINT.planBar} />
+                </div>
+              </div>
           </div>
 
           {/* ── 🏅 КОМАНДИ → менеджери drill. Задача 6442 (Юля 21.10.2026): «на екрані одна таблиця команд» — верхній блок
@@ -448,43 +351,30 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
 
           {/* ── 🎧 ПЕРШИЙ ДОТИК (задача 5314): одразу під «де ми зараз», як у макеті «Звіт КВП - ядро». ── */}
           {canSeeFirstTouch && <KvpFirstTouchBlock from={rep.scope.from} to={rep.scope.to} />}
-          {/* 📋 Задача 7238: розбір перших розмов по командах — той самий блок, що на екрані AI; тиждень — кінця періоду Звіту. */}
-          {canSeeFirstTouch && <div style={{ marginBottom: 16 }}><ReviewByTeamBlock variant="kvp" anchor={rep.scope.to} /></div>}
+          {/* 📋 Розбір перших розмов по командах (7238) зі Звіту КВП ПРИБРАНО (правки зустрічі 17.11.2026);
+              він лишається на екрані «Перший дотик · AI». */}
+
+          {/* ── 📊 ПОКАЗНИКИ МІСЯЦЯ: те, що зустріч 17.11.2026 веліла ЗАЛИШИТИ. План тут лише видно —
+              ставиться він у «Плани» → «🎯 Плани КВП» (туди переїхала колишня «Повна таблиця»). ── */}
+          <MonthMetrics rep={rep} plans={plans} />
 
           {/* ▸ ДЕТАЛЬНИЙ ЗВІТ — усе, що було до ядра; згорнуте за замовчуванням. */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ cursor: "pointer", margin: 0 }} onClick={toggleDetails}>{showDetails ? "▾" : "▸"} 📂 Детальний звіт
-              <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> — темп, життєвий цикл грошей, сигнали, двигуни, структура, ризики, повна таблиця, логістика</span></h2>
+              <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> — зміна до минулого періоду, темп і життєвий цикл грошей</span></h2>
           </div>
           {showDetails && (<>
           {/* ── ТЕМП І ЖИТТЄВИЙ ЦИКЛ (були у «де ми зараз»; чотири картки грошей — у ядрі вище, тут не дублюються) ── */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">📍 {rep.scope.label} — темп і життєвий цикл грошей</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 14 }}>
-              <Stat label="Зміна до мин. періоду" value={`${delta >= 0 ? "▲" : "▼"} ${fmtMoney(Math.abs(delta))}`} color={delta >= 0 ? GREEN : RED}
+              <Stat label="Зміна до мин. періоду" value={`${delta >= 0 ? "▲" : "▼"} ${fmtFull(Math.abs(delta))}`} color={delta >= 0 ? GREEN : RED}
                 sub="отримані кошти проти попереднього періоду" />
               {/* ⏱ ТЕМП — окрема плитка, бо це ІНШЕ питання: «що вийде, якщо нічого не
                   зміниться», проти «що вже домовлено». Розрив між ними і є вердикт. */}
-              <Stat label="При поточному темпі" value={v.projection.pace == null ? "—" : fmtMoney(v.projection.pace)} hint={HINT.pace}
-                sub={v.projection.pace == null ? "робочі дні ще не минули" : `${fmtPct(v.projection.pacePct)} плану · зазвичай добирає ${fmtMoney(v.projection.dobir)}`}
+              <Stat label="При поточному темпі" value={v.projection.pace == null ? "—" : fmtFull(v.projection.pace)} hint={HINT.pace}
+                sub={v.projection.pace == null ? "робочі дні ще не минули" : `${fmtPct(v.projection.pacePct)} плану · зазвичай добирає ${fmtFull(v.projection.dobir)}`}
                 color={pctColor(v.projection.pacePct)} />
-            </div>
-            {/* прогрес до плану */}
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: MUTED, marginBottom: 4 }}>
-                <span>Виконання плану</span>
-                <span>
-                  <span style={{ color: pctColor(v.planPct), fontWeight: 600 }}>{fmtPct(v.planPct)}</span>
-                  <span style={{ color: MUTED }}> факт · </span>
-                  <span style={{ color: pctColor(v.projection.projectedPct), fontWeight: 600 }}>{fmtPct(v.projection.projectedPct)}</span>
-                  <span style={{ color: MUTED }}> з очікуванням</span>
-                </span>
-              </div>
-              <PlanBar factPct={v.planPct} forecastPct={v.projection.projectedPct} color={pctColor(v.planPct)} h={10} />
-              <div style={{ fontSize: 11, color: MUTED, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
-                ▉ факт {fmtMoney(v.received.revenue)} · ▨ очікуємо {fmtMoney(v.projection.expectedThisMonth)} за план. датою = прогноз {fmtMoney(v.projection.projected)}
-                <InfoHint text={HINT.planBar} />
-              </div>
             </div>
             {/* lifecycle-смуга */}
             <div style={{ fontSize: 12, color: MUTED, display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>Життєвий цикл грошей<InfoHint text={HINT.lifecycle} /></div>
@@ -497,7 +387,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                  ["Отримано", "за період", v.lifecycle.received, GREEN, HINT.received]] as const).map(([lbl, scopeLbl, agg, col, h]) => (
                 <div key={lbl} style={{ padding: 10, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10 }}>
                   <div style={{ fontSize: 11, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>{lbl}<InfoHint text={h} /></div>
-                  <div style={{ fontSize: 17, fontWeight: 700, color: col }}>{fmtMoney(agg.revenue)}</div>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: col }}>{fmtFull(agg.revenue)}</div>
                   <div style={{ fontSize: 11, color: MUTED }}>{agg.deals} авто</div>
                   {/* 🔴 РОЗБИВКА ЗОНИ — ЧОТИРИ ВІДРА, І ПОРОЖНЄ ТЕЖ ПОКАЗУЄТЬСЯ.
                       «Без дати» сьогодні нуль, але сховати його означало б показати
@@ -509,7 +399,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                         <div key={bk} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5 }}>
                           <span style={{ color: c }}>{ttl}</span>
                           <span style={{ color: MUTED }}>
-                            {agg.split[bk].deals} · {fmtMoney(agg.split[bk].sum)}
+                            {agg.split[bk].deals} · {fmtFull(agg.split[bk].sum)}
                           </span>
                         </div>
                       ))}
@@ -521,120 +411,6 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
             </div>
           </div>
 
-          {/* ── СИГНАЛИ ── */}
-          {rep.signals.length > 0 && (
-            <div className="chart-card" style={{ marginBottom: 16 }}>
-              <h2 className="chart-title">🚨 Сигнали (за гостротою)</h2>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {rep.signals.map((s, i) => (
-                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 12px", borderLeft: `3px solid ${sevColor[s.severity]}`, background: "var(--card-bg)", borderRadius: 8 }}>
-                    <span style={{ fontSize: 18 }}>{s.icon}</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, color: sevColor[s.severity] }}>{s.title}</div>
-                      <div style={{ fontSize: 13, color: "var(--text)" }}>{s.detail}</div>
-                      {s.expectedThisMonth != null && <div style={{ fontSize: 12, color: AMBER, marginTop: 2 }}>Очікування: цей міс {fmtMoney(s.expectedThisMonth)} · наступний {fmtMoney(s.expectedNextMonth ?? 0)}</div>}
-                      <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>→ {s.action}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── 🏆 ТРИМАЮТЬ ──
-              Екран КВП складався з самих проблем: «Сигнали» показують лише падіння.
-              Тут — хто попереду. Порогу «лідера» НЕМАЄ навмисно: заміряно 20.08.2026,
-              що з 29 менеджерів із планом ≥100% має РІВНО ОДИН, тож умова «показувати
-              тих, хто перевиконав» лишала б блок майже завжди порожнім.
-              АБСОЛЮТ ПОРУЧ ІЗ ВІДСОТКОМ обовʼязковий: 97% на плані 39к і 64% на плані
-              300к без нього читаються навпаки. */}
-          {rep.topPerformers.length > 0 && (
-            <div className="chart-card" style={{ marginBottom: 16 }}>
-              <h2 className="chart-title">🏆 Тримають
-                <span style={{ fontSize: 12, fontWeight: 400, color: MUTED }}> · топ-3 за виконанням плану</span>
-              </h2>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {rep.topPerformers.map((m, i) => (
-                  <div key={m.name} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderLeft: `3px solid ${GREEN}`, background: "var(--card-bg)", borderRadius: 8 }}>
-                    <span style={{ fontSize: 18 }}>{["🥇", "🥈", "🥉"][i] ?? "•"}</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600 }}>{m.name} <span style={{ fontSize: 12, fontWeight: 400, color: MUTED }}>· {m.team}</span></div>
-                      <div style={{ fontSize: 13, color: "var(--text)" }}>
-                        <b style={{ color: pctColor(m.pct) }}>{m.pct}%</b> — {fmtMoney(m.fact)} з {fmtMoney(m.plan)}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── ДВИГУНИ (4) ── */}
-          <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
-            {([["🏭 Повний цикл", rep.engines.rpk, false], ["📢 Реклама", rep.engines.rnk, true]] as const).map(([lbl, e, showConv]) => (
-              <div key={lbl} className="chart-card">
-                <h2 className="chart-title">{lbl}</h2>
-                <Stat label="Факт / план" value={`${fmtMoney(e.revenue)}`} sub={`план ${fmtMoney(e.plan)} · ${fmtPct(e.pct)}`} color={pctColor(e.pct)} hint={HINT.teamPlan} />
-                <div style={{ margin: "8px 0" }}><PlanBar factPct={e.pct} forecastPct={e.forecastPct} color={pctColor(e.pct)} /></div>
-                <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>▉ факт {fmtPct(e.pct)} · ▨ з очікуванням <b style={{ color: pctColor(e.forecastPct) }}>{fmtPct(e.forecastPct)}</b></div>
-                <div style={{ fontSize: 12, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>
-                  Очікуємо: {fmtMoney(e.expectedThisMonth)} <span style={{ fontSize: 11 }}>за плановою датою цього місяця</span>
-                  <InfoHint text={`Це очікування, що ВХОДИТЬ у прогноз: угоди з плановою датою оплати в цьому місяці. Уся зона визнання, без прив'язки до дати, — ${fmtMoney(e.expected)}; вона ширша (туди входять наступний місяць і прострочені домовленості) і в прогноз НЕ береться. Два різні «очікуємо» — тому кожне підписане своїм.`} />
-                </div>
-                {showConv && <div style={{ fontSize: 12, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>Конверсія: {fmtPct(e.conversion)} {e.entered < 10 && "(<10 лідів)"}<InfoHint text={HINT.conversion} /></div>}
-              </div>
-            ))}
-            <div className="chart-card">
-              <h2 className="chart-title">🎯 Реклама</h2>
-              <Stat label="ROMI" value={fmtPct(rep.engines.ad.romi)} sub={`бюджет ${fmtMoney(rep.engines.ad.budget)} · дохід ${fmtMoney(rep.engines.ad.revenue)}`} hint={HINT.romi} />
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 6, display: "grid", gap: 2 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>CPA: {rep.engines.ad.cpa == null ? "—" : fmtMoney(rep.engines.ad.cpa)} {!rep.engines.ad.mature && "⏳"}<InfoHint text={HINT.cpa} /></span>
-                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>CPL(GA): {rep.engines.ad.cplGa == null ? "—" : fmtMoney(rep.engines.ad.cplGa)}<InfoHint text={HINT.cplGa} /></span>
-                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Конверсія: {fmtPct(rep.engines.ad.conversion)} {!rep.engines.ad.mature && "⏳"}<InfoHint text={HINT.conversion} /></span>
-              </div>
-            </div>
-            <div className="chart-card">
-              <h2 className="chart-title">📞 Лідген (3 якорі)</h2>
-              <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Передані: <b>{fmtNum(rep.engines.leadgen.transferred)}</b>{!rep.scope.monthAligned && <span style={{ color: MUTED, fontSize: 11 }}> (за місяці)</span>}<InfoHint text={HINT.transferred + (rep.scope.monthAligned ? "" : " ⚠️ Обраний період НЕ збігається з календарним місяцем, а денного розрізу для переданих заявок немає — це число описує МІСЯЦІ, що перетинаються з періодом, а не сам період.")} /></span>
-                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Поїхали: <b>{fmtNum(rep.engines.leadgen.dispatched)}</b> ({fmtMoney(rep.engines.leadgen.dispatchedRevenue)})<InfoHint text={HINT.lgDispatched} /></span>
-                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Дохід: <b>{fmtMoney(rep.engines.leadgen.revenue)}</b><InfoHint text={HINT.lgRevenue} /></span>
-              </div>
-              <p style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>Три якорі не зводяться в межах місяця.</p>
-            </div>
-          </div>
-
-          {/* ── ЯКІСТЬ / ЛОЯЛЬНІСТЬ + РИЗИКИ ── */}
-          <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginBottom: 16 }}>
-            <div className="chart-card"><StructureBlock rep={rep} /></div>
-            <div className="chart-card">
-              <h2 className="chart-title">🔁 Ризики / retention</h2>
-              <RetentionBlock rep={rep} />
-            </div>
-          </div>
-
-          <LeadgenRegularsCard />
-
-          {/* ── ПОВНА ТАБЛИЦЯ (під катом) ── */}
-          <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title" style={{ cursor: "pointer" }} onClick={() => setShowFull(!showFull)}>{showFull ? "▾" : "▸"} 📋 Повна таблиця</h2>
-            {showFull && <FullTable rep={rep} plans={plans} onSave={(k, val) => {
-              // ↩ При помилці клітинка повертається до збереженого, а не бреше (30.09.2026, `#1102`).
-              const before = plans;
-              void commitOptimistic({
-                apply: () => setPlans((p) => { const n = { ...p }; if (val == null) delete n[k]; else n[k] = val; return n; }),
-                save: () => saveKvpPlan(monthSel, { [k]: val }),
-                revert: () => setPlans(before),
-                onError: (e) => toast(`План не збережено — ${failureReason(e, "помилка сервера")}. Повернуто попереднє значення.`, { error: true }),
-              });
-            }} />}
-          </div>
-
-          {/* ── 🚚 ЛОГІСТИКА (під катом) ── */}
-          <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title" style={{ cursor: "pointer" }} onClick={() => setShowLogi(!showLogi)}>{showLogi ? "▾" : "▸"} 🚚 Логістика</h2>
-            {showLogi && <LogisticsSection rep={rep} />}
-          </div>
           </>)}
         </>
       )}
@@ -1127,59 +903,65 @@ function WeekManagerDrill({ team, weekIdx, weekBlocks }: { team: KvpTeam; weekId
   );
 }
 
-function StructureBlock({ rep }: { rep: KvpReport }) {
-  const rs = rep.revenueStructure;
-  const rTotal = rs.received.total.revenue;
-  const sumSeg = rs.received.new.revenue + rs.received.repeat.revenue + rs.received.unattributed.revenue;
-  const reconcilesOk = Math.abs(sumSeg - rTotal) < 1;
-  const seg = (label: string, recv: { deals: number; revenue: number }, exp: { deals: number; sum: number }, color: string) => (
-    <div style={{ padding: 10, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10 }}>
-      <div style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>{label}</div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-        <span style={{ fontSize: 11, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>Отримано<InfoHint text={HINT.structReceived} /></span>
-        <span style={{ fontWeight: 700, color }}>{fmtMoney(recv.revenue)}</span>
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 11, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>В очікуванні<InfoHint text={HINT.structExpected} /></span>
-        <span style={{ fontWeight: 600, color: AMBER }}>{fmtMoney(exp.sum)}</span>
+/**
+ * 📊 ПОКАЗНИКИ МІСЯЦЯ (правки зустрічі 17.11.2026). Перелік — дослівно те, що зустріч веліла ЗАЛИШИТИ на Звіті КВП;
+ * усе інше («Сигнали», «Тримають», двигуни, структура, ризики, логістика, повна таблиця) прибрано.
+ *
+ * 🔴 Своїх формул тут НЕМАЄ: кожне число — те саме поле відповіді `/kvp-report`, яким жила «Повна таблиця»
+ * (тепер вона в «Плани» → «🎯 Плани КВП»), плюс два поля ядра: середній чек і середній чек нових
+ * (`newMetrics.avgCheck/avgCheckNew`), і кошики LinkedIn / Prozorro партиції «Створено» (задача 9230).
+ * План лише показується; ставиться він там, де раніше стояв ✎ у повній таблиці, — та сама таблиця `kvp_plans`.
+ */
+function MonthMetrics({ rep, plans }: { rep: KvpReport; plans: KvpPlans }) {
+  const nm = rep.newMetrics, en = rep.engines, cs = rep.createdSplit.totals;
+  const sumDW = (k: "leadsAd" | "leadsLeadgen" | "lostDeals" | "lostSum") => rep.deptWeeks.reduce((a, w) => a + (w[k] || 0), 0);
+  const plan = (k: string): number | null => plans[k] ?? null;
+  type Row = { label: string; hint: string; fact: string; factNum?: number | null; planKey?: string; planFmt?: (v: number) => string; lowerIsBetter?: boolean };
+  const money = (v: number | null) => (v == null ? "—" : fmtFull(v));
+  const rows: Row[] = [
+    { label: "Поставлені авто (план-факт)", hint: HINT.sent, fact: fmtNum(rep.verdict.lifecycle.sent.deals), factNum: rep.verdict.lifecycle.sent.deals, planKey: "dispatched_cars", planFmt: (v) => fmtNum(v) },
+    { label: "Ліди з реклами", hint: "Рекламні ліди Кваліфікації за період (та сама величина, що «Ліди реклама» в тижнях Звіту КВП).", fact: fmtNum(sumDW("leadsAd")), factNum: sumDW("leadsAd"), planKey: "ad_leads", planFmt: (v) => fmtNum(v) },
+    { label: "Ліди з лідогену", hint: HINT.transferred, fact: fmtNum(sumDW("leadsLeadgen")) },
+    { label: "Ліди з LinkedIn", hint: "Угоди Повного циклу з LinkedIn (джерело або тег, METRICS_GLOSSARY §20), створені в періоді; канал не реклама / лідоген / eLogist. Те саме число, що колонка «зі створених: LinkedIn» у Звіті (задача 9230). Плану по LinkedIn немає.", fact: fmtNum(cs.linkedin) },
+    { label: "Ліди з Prozorro", hint: "Угоди Повного циклу з Prozorro (джерело або тег «AI тендер» / «Prozorro», METRICS_GLOSSARY §21), створені в періоді. Те саме число, що колонка «зі створених: Prozorro» у Звіті (задача 9230). Плану по Prozorro немає.", fact: fmtNum(cs.prozorro) },
+    { label: "Втрачені", hint: "Що це: угоди Повного циклу, які закрили як «Закрито і не реалізовано» (статус 143) — клієнт не поїхав. Рахуються за датою закриття в періоді: кількість угод і сума, на яку вони були. Не плутати з нецільовими лідами реклами.", fact: `${fmtNum(sumDW("lostDeals"))} угод · ${fmtFull(sumDW("lostSum"))}` },
+    { label: "Середній чек", hint: "Чек фактичний (METRICS_GLOSSARY §5) = отримані кошти ÷ угоди тієї самої множини (етапи «Оплата отримана» ∪ «Успішна», раз на угоду). Ціль — з «Плани КВП».", fact: money(nm.avgCheck), factNum: nm.avgCheck, planKey: "avg_check", planFmt: fmtFull },
+    { label: "Середній чек нових", hint: "Та сама формула над новими клієнтами: каса нових клієнтів ÷ їхні угоди за період (сегмент «нові» з «Отриманих коштів»). Плану немає.", fact: money(nm.avgCheckNew) },
+    { label: "Вартість клієнта", hint: `CAC = рекламний бюджет ${fmtFull(nm.cacBudget)} ÷ ${String(nm.cacNewClients)} нових клієнтів. Ціль — з «Плани КВП»; менше — краще.`, fact: money(nm.cac), factNum: nm.cac, planKey: "cac_target", planFmt: fmtFull, lowerIsBetter: true },
+    { label: "Середній цикл угоди", hint: "Днів від створення до «Успішна» (142), середнє по угодах, закритих у періоді. Ціль — з «Плани КВП»; менше — краще.", fact: nm.avgCycleDays == null ? "—" : `${String(nm.avgCycleDays)} дн`, factNum: nm.avgCycleDays, planKey: "cycle_target", planFmt: (v) => `${String(v)} дн`, lowerIsBetter: true },
+    { label: "Конверсія реклами", hint: HINT.conversion, fact: en.ad.conversion == null ? "—" : `${String(en.ad.conversion)}%${en.ad.mature ? "" : " ⏳"}`, factNum: en.ad.conversion, planKey: "conversion_target", planFmt: (v) => `${String(v)}%` },
+  ];
+  return (
+    <div className="chart-card" style={{ marginBottom: 16 }}>
+      <h2 className="chart-title">📊 Показники {rep.scope.label.toLowerCase()}
+        <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> · план ставиться у «Плани» → «🎯 Плани КВП»</span></h2>
+      <div style={{ overflowX: "auto" }}>
+        <table className="data-table" style={{ width: "100%" }}>
+          <thead><tr><th>Показник</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>%</th></tr></thead>
+          <tbody>
+            {rows.map((r) => {
+              const p = r.planKey ? plan(r.planKey) : null;
+              const pct = p != null && r.factNum != null && !r.lowerIsBetter ? pctOf(r.factNum, p) : null;
+              return (
+                <tr key={r.label}>
+                  <td><span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{r.label}<InfoHint text={r.hint} /></span></td>
+                  <td style={{ textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{r.fact}</td>
+                  <td style={{ textAlign: "right", color: MUTED, whiteSpace: "nowrap" }}>{p == null ? "—" : (r.planFmt ?? fmtFull)(p)}</td>
+                  <td style={{ textAlign: "right" }}>{pct == null ? <span style={{ color: MUTED }}>—</span> : <span style={{ color: pctColor(pct), fontWeight: 600 }}>{pct}%</span>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
-  return (
-    <>
-      <h2 className="chart-title">💎 Структура виручки — 2 етапи <InfoHint text={HINT.newRepeat} /></h2>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        {seg("Нові клієнти", rs.received.new, rs.expected.new, BLUE)}
-        {seg("Постійні клієнти", rs.received.repeat, rs.expected.repeat, GREEN)}
-      </div>
-      <div style={{ marginTop: 8, fontSize: 12, color: MUTED, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Не віднесено (без клієнта): отримано <b style={{ color: "var(--text)" }}>{fmtMoney(rs.received.unattributed.revenue)}</b> <span style={{ color: MUTED }}>({rs.received.unattributed.deals} уг.)</span> · в очікуванні <b style={{ color: "var(--text)" }}>{fmtMoney(rs.expected.unattributed.sum)}</b> <span style={{ color: MUTED }}>({rs.expected.unattributed.deals} уг.)</span>{(rs.received.unattributed.revenue < 0 || rs.expected.unattributed.sum < 0) && <span style={{ color: MUTED }}> — мінус тут нормальний: у групі є сторно, і воно нетиться</span>}<InfoHint text={HINT.unattributed} /></span>
-      </div>
-      <div style={{ marginTop: 4, fontSize: 12, color: reconcilesOk ? GREEN : RED }}>
-        {reconcilesOk ? "✅" : "⚠️"} Σ отримано (нові {fmtMoney(rs.received.new.revenue)} + постійні {fmtMoney(rs.received.repeat.revenue)} + залишок {fmtMoney(rs.received.unattributed.revenue)}) = {fmtMoney(sumSeg)} {reconcilesOk ? "==" : "≠"} каса {fmtMoney(rTotal)}
-      </div>
-    </>
-  );
 }
 
-function RetentionBlock({ rep }: { rep: KvpReport }) {
-  const mature = rep.retention.newToRepeat.filter((r) => r.mature).slice(-1)[0];
-  const ab = rep.retention.activeBase.slice(-1)[0];
-  return (
-    <div style={{ display: "grid", gap: 8, fontSize: 13 }}>
-      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>% нових→постійних: <b>{mature ? fmtPct(mature.pct) : "⏳"}</b> {mature && <span style={{ color: MUTED }}>({mature.ym}, зрілий)</span>}<InfoHint text={HINT.newToRepeat} /></span>
-      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>Активність бази: <b>{fmtNum(ab?.activeClients ?? null)}</b> <span style={{ color: MUTED }}>клієнтів ({ab?.ym})</span><InfoHint text={HINT.activeBase} /></span>
-      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>Постійні щотижня: <b>{fmtNum(rep.retention.weeklyRegulars.clients)}</b><InfoHint text={HINT.weeklyRegulars} /></span>
-      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>Нецільові: <b>{rep.retention.nonTarget == null ? "—" : fmtNum(rep.retention.nonTarget)}</b><InfoHint text={HINT.nonTarget} /></span>
-      <span style={{ display: "flex", alignItems: "center", gap: 4, color: MUTED }}>Погашено дебіторки: <b>історія не ведеться</b><InfoHint text={HINT.receivablesPaidOff} /></span>
-    </div>
-  );
-}
-
-// Блок A — повна таблиця: місяць (факт/план/%) + Т1–Т5 (факт/план) для показників з
+// Блок A — повна таблиця (з 17.11.2026 живе у «Плани» → «🎯 Плани КВП», не на Звіті КВП): місяць (факт/план/%) + Т1–Т5 (факт/план) для показників з
 // тижневою природою; ратіо/знімки — місяць-онлі (тижневі «—»). Місячний план ✎ КВП-ручних
 // живо декомпозується на тижні за робочими днями. Нові метрики — окрема група.
-function FullTable({ rep, plans, onSave }: { rep: KvpReport; plans: KvpPlans; onSave: (k: string, v: number | null) => void }) {
+export function KvpPlanTable({ rep, plans, onSave }: { rep: KvpReport; plans: KvpPlans; onSave: (k: string, v: number | null) => void }) {
   const m = rep.money, en = rep.engines, nm = rep.newMetrics, wb = rep.weekBlocks;
   const [draft, setDraft] = useState<Record<string, number | null>>({});
   const planVal = (k: string): number | null => (k in draft ? draft[k] : (plans[k] ?? null));
