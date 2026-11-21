@@ -5,7 +5,7 @@
  * Писати сервісний акаунт може лише в таблиці, якими з ним поділились як із редактором.
  */
 import { googleToken } from "./googleSheets.js";
-import { buildInsertRequests, assertAppendOnly, FORMULA_SPANS, type DataRow } from "../core/dataSheetRows.js";
+import { buildInsertRequests, assertAppendOnly, FORMULA_COLS, type DataRow } from "../core/dataSheetRows.js";
 
 const WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 
@@ -56,7 +56,8 @@ const colLetter = (i: number): string => String.fromCharCode(65 + i);
 
 /**
  * 📤 Дописати рядки у вкладку `tab` (Data): ВСТАВКОЮ після останнього рядка з датою в E — так межі формул CF,
- * обмежені номером рядка, розсуваються самі. Формули B–C, I–L, S беруться з того самого останнього рядка; якщо там
+ * обмежені номером рядка, розсуваються самі. Формули B–C, I–L, S беруться з того самого останнього рядка (зі зсувом
+ * номера рядка, без copyPaste — той не працює під фільтром фінансиста); якщо там
  * формул немає — відмова ДО запису (рядки без формул тихо випали б із CF). Один атомарний batchUpdate.
  */
 export async function insertDataRows(spreadsheetId: string, tab: string, rows: DataRow[]): Promise<{ lastRow: number; inserted: number }> {
@@ -79,14 +80,17 @@ export async function insertDataRows(spreadsheetId: string, tab: string, rows: D
   let lastRow = e.length;
   while (lastRow > 0 && String(e[lastRow - 1] ?? "").trim() === "") lastRow--;
   if (lastRow < 3) throw new DataSheetWriteError(`Google Sheets: у «${tab}» немає рядків із датою — не знаю, куди вставляти`, "no");
-  const tpl = await get(`${base}/values/${encodeURIComponent(`${tab}!A${lastRow}:S${lastRow}`)}?valueRenderOption=FORMULA`);
-  const cells: unknown[] = tpl.values?.[0] ?? [];
-  const missing = FORMULA_SPANS.flatMap((s) => Array.from({ length: s.to - s.from + 1 }, (_, k) => s.from + k))
-    .filter((c) => !String(cells[c] ?? "").startsWith("="));
+  // Шаблон читаємо ТИМ САМИМ каналом, яким пишемо (`userEnteredValue.formulaValue` у batchUpdate), — тоді вигляд формули
+  // (роздільники, десяткова кома локалі) на читанні й на записі збігається за побудовою, а не за припущенням.
+  const tpl = await get(`${base}?ranges=${encodeURIComponent(`${tab}!A${lastRow}:S${lastRow}`)}&fields=sheets.data.rowData.values.userEnteredValue`);
+  const cells: { userEnteredValue?: { formulaValue?: string } }[] = tpl.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values ?? [];
+  const template: Record<number, string> = {};
+  for (const c of FORMULA_COLS) { const f = cells[c]?.userEnteredValue?.formulaValue; if (f) template[c] = f; }
+  const missing = FORMULA_COLS.filter((c) => !template[c]);
   if (missing.length) throw new DataSheetWriteError(`Google Sheets: у рядку ${lastRow} «${tab}» немає формул у ${missing.map(colLetter).join(", ")} — `
     + "нові рядки не мали б звідки їх узяти; вставку не роблю", "no");
-  const requests = buildInsertRequests(sheetId, lastRow, rows);
-  try { assertAppendOnly(requests, lastRow, rows.length); }
+  let requests: object[];
+  try { requests = buildInsertRequests(sheetId, lastRow, rows, template); assertAppendOnly(requests, lastRow, rows.length); }
   catch (err) { throw new DataSheetWriteError((err as Error).message, "no"); }
   let res: Response;
   try {

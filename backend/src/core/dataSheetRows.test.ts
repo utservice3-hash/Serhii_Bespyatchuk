@@ -10,13 +10,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateKeyPairSync } from "node:crypto";
 import {
-  toDataRow, splitForExport, sheetSerial, buildInsertRequests, assertAppendOnly, EXPORT_SELECT_SQL, DATA_SHEET_FROM,
+  toDataRow, splitForExport, sheetSerial, buildInsertRequests, assertAppendOnly, shiftFormula, EXPORT_SELECT_SQL, DATA_SHEET_FROM,
   DATA_SHEET_ACCOUNTS, DATA_SHEET_EXCLUDED, type ExportTx,
 } from "./dataSheetRows.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA = path.resolve(here, "../../src/db/schema.sql");
 const SRC = (p: string) => readFileSync(path.resolve(here, "../../src", p), "utf8");
+
+/** Формули рядка-шаблону 25101 у тому вигляді, як їх віддає Google (українська локаль: «;» і «1,2»). */
+const TPL: Record<number, string> = {
+  1: "=YEAR(E25101)", 2: "=month(E25101)",
+  8: '=IF(H25101="UAH";1;IFERROR(INDEX(GOOGLEFINANCE("CURRENCY:USDUAH";"price";E25101-1);2;2);""))',
+  9: "=IFERROR(IF(H25101=\"UAH\";G25101;G25101*INDEX('FX rate'!L:L;MATCH(INT(E25101);ARRAYFORMULA(INT('FX rate'!K:K));0)));\"\")",
+  10: '=IF(AND(REGEXMATCH(M25101;"(?i)ютс");NOT(REGEXMATCH(Q25101;"(?i)без ПДВ")));"✅";"❌")',
+  11: '=IF(K25101="✅";J25101/1,2;J25101)', 18: '=IF(R25101="";"";IFERROR(VLOOKUP(R25101;CoA!$B:$C;2;0);""))',
+};
 
 const tx = (o: Partial<ExportTx>): ExportTx => ({
   id: 1, account_id: 1, day: "2026-11-17", amount: "-1500.5", currency: "UAH", counterparty_name: "ТОВ «Тест»", purpose: "Оплата", ...o,
@@ -39,7 +48,7 @@ test("#9981 РЯДОК DATA: D — 1-ше число датою, E — день,
   assert.deepEqual([r.m, r.n, r.o, r.h], ['ТОВ "ЮТС"', "ТОВ ЮТС", "ТОВ «Тест»", "UAH"]);
   assert.equal(r.q, "62586299");
   // Q доходить до Google саме stringValue — інакше Google зробить з нього число (#VALUE! у ПДВ).
-  const req = buildInsertRequests(5, 10, [r]) as any[];
+  const req = buildInsertRequests(5, 25101, [r], TPL) as any[];
   const mq = req[2].updateCells.rows[0].values;
   assert.deepEqual(mq[4], { userEnteredValue: { stringValue: "62586299" } }, "🔴 призначення пішло не текстом");
   assert.deepEqual(req[1].updateCells.rows[0].values[0], { userEnteredValue: { numberValue: r.d } }, "🔴 «Період» пішов не числом-датою");
@@ -76,20 +85,22 @@ test("#9982 НЕВІДОМИЙ РАХУНОК: описані — у Data, ви�
  */
 test("#9983 ЗАПИТ ЛИШЕ ДОДАЄ: вставка після останнього рядка, запис і формули лише в нові рядки, один batchUpdate", () => {
   const rows = [toDataRow(tx({ id: 1 }))!, toDataRow(tx({ id: 2 }))!];
-  const ok = buildInsertRequests(795952987, 25101, rows) as any[];
+  const ok = buildInsertRequests(795952987, 25101, rows, TPL) as any[];
   assert.doesNotThrow(() => assertAppendOnly(ok, 25101, 2), "🔴 правильний запит відхилено");
   assert.deepEqual(ok[0].insertDimension.range, { sheetId: 795952987, dimension: "ROWS", startIndex: 25101, endIndex: 25103 });
   assert.equal(ok[0].insertDimension.inheritFromBefore, true, "🔴 нові рядки без формату рядка вище");
-  const pastes = ok.filter((r) => r.copyPaste).map((r) => [r.copyPaste.source.startColumnIndex, r.copyPaste.source.endColumnIndex]);
-  assert.deepEqual(pastes, [[1, 3], [8, 12], [18, 19]], "🔴 формули копіюються не з B–C, I–L, S");
+  assert.equal(ok.filter((r) => r.copyPaste).length, 0, "🔴 повернулось copyPaste — під фільтром фінансиста Google його відхиляє (19–20.11.2026)");
+  const fcells = ok.slice(3).map((r) => [r.updateCells.start.columnIndex, r.updateCells.rows[0].values.length]);
+  assert.deepEqual(fcells, [[1, 2], [8, 4], [18, 1]], "🔴 формули пишуться не в B–C, I–L, S");
+  assert.equal(ok[3].updateCells.rows[1].values[0].userEnteredValue.formulaValue, "=YEAR(E25103)", "🔴 формула другого нового рядка не на свій рядок");
   const bad = (mut: (r: any[]) => void) => { const r = structuredClone(ok); mut(r); return r; };
   const cases: [string, any[]][] = [
     ["видалення рядків", bad((r) => r.push({ deleteDimension: { range: { sheetId: 1, dimension: "ROWS", startIndex: 0, endIndex: 1 } } }))],
     ["очищення", bad((r) => r.push({ updateCells: { range: {}, fields: "*" } }))],
     ["запис у наявний рядок", bad((r) => { r[1].updateCells.start.rowIndex = 25100; })],
     ["вставка не там", bad((r) => { r[0].insertDimension.range.startIndex = 100; r[0].insertDimension.range.endIndex = 102; })],
-    ["звичайне копіювання", bad((r) => { r[3].copyPaste.pasteType = "PASTE_NORMAL"; })],
-    ["формули поверх наявних", bad((r) => { r[3].copyPaste.destination.startRowIndex = 25000; })],
+    ["копіювання (будь-яке)", bad((r) => r.push({ copyPaste: { source: {}, destination: {}, pasteType: "PASTE_FORMULA" } }))],
+    ["формули поверх наявних", bad((r) => { r[3].updateCells.start.rowIndex = 25000; })],
   ];
   for (const [why, req] of cases) assert.throws(() => assertAppendOnly(req, 25101, 2), /Data:/, `🔴 пропущено: ${why}`);
   const writer = SRC("bankSources/googleSheetsWrite.ts");
@@ -97,6 +108,27 @@ test("#9983 ЗАПИТ ЛИШЕ ДОДАЄ: вставка після остан
   assert.equal(fn.match(/:batchUpdate`/g)?.length, 1, "🔴 запис у Data — не одним атомарним batchUpdate");
   assert.ok(fn.indexOf("assertAppendOnly(") > 0 && fn.indexOf("assertAppendOnly(") < fn.indexOf(":batchUpdate`"),
     "🔴 рантайм-захист не стоїть перед відправкою");
+});
+
+/**
+ * #9985 — ЗСУВ ФОРМУЛИ ШАБЛОНУ: посилання на свій рядок отримують новий номер; цілі колонки інших вкладок (`CoA!$B:$C`,
+ * `'FX rate'!L:L`), текст у лапках («CURRENCY:USDUAH»), числа з комою (`1,2`) і назви функцій — без змін; посилання на
+ * чужий або абсолютний рядок — відмова, а не тихий зсув. Живі формули Data (20.11.2026) — як фікстура.
+ * 🧨 Червоніє, якщо зсув зачепить колонку іншої вкладки, лапки чи число, або мовчки «зсуне» посилання на чужий рядок.
+ */
+test("#9985 ЗСУВ ФОРМУЛИ: свій рядок → новий, колонки інших вкладок, лапки й числа — як є; чужий рядок — відмова", () => {
+  assert.equal(shiftFormula(TPL[1], 25101, 25102), "=YEAR(E25102)");
+  assert.equal(shiftFormula(TPL[11], 25101, 30000), '=IF(K30000="✅";J30000/1,2;J30000)', "🔴 зачеплено число 1,2 чи пропущено посилання");
+  assert.equal(shiftFormula(TPL[18], 25101, 25102), '=IF(R25102="";"";IFERROR(VLOOKUP(R25102;CoA!$B:$C;2;0);""))', "🔴 зачеплено CoA!$B:$C");
+  assert.equal(shiftFormula(TPL[9], 25101, 25102), TPL[9].replaceAll("25101", "25102"), "🔴 зачеплено 'FX rate'!L:L");
+  assert.equal(shiftFormula(TPL[8], 25101, 25102), TPL[8].replaceAll("25101", "25102"));
+  assert.match(shiftFormula(TPL[8], 25101, 25102), /"CURRENCY:USDUAH"/, "🔴 зачеплено текст у лапках");
+  assert.equal(shiftFormula('=IF(A1="E25101";1;2)', 1, 7), '=IF(A7="E25101";1;2)', "🔴 зсунуто текст у лапках");
+  assert.equal(shiftFormula("=LOG10(E5)", 5, 6), "=LOG10(E6)", "🔴 назву функції прийнято за клітинку");
+  for (const bad of ["=E25100+E25101", "=E$25101", "=SUM(E1:E25101)"]) {
+    assert.throws(() => shiftFormula(bad, 25101, 25102), /не на свій рядок/, `🔴 «${bad}» зсунуто мовчки`);
+  }
+  assert.throws(() => shiftFormula("2026", 1, 2), /не формула/);
 });
 
 // ── Живий SQL і джоба: один тимчасовий кластер на файл ──────────────────────────────────────────────────────────
@@ -201,7 +233,11 @@ test("#9984 ЖИВИЙ SQL: облік у два кроки — dry без за�
     }
     if (url.includes("fields=sheets.properties")) return j({ sheets: [{ properties: { sheetId: 795952987, title: "Data" } }] });
     if (url.includes(encodeURIComponent("Data!E1:E"))) return j({ values: [["", "Дата платежу", "01.06.2026", "02.06.2026"]] });
-    if (url.includes("valueRenderOption=FORMULA")) return j({ values: [["", "=YEAR(E4)", "=month(E4)", "", "", "", "", "", "=IF(1)", "=IF(2)", "=IF(3)", "=IF(4)", "", "", "", "", "", "", "=IF(5)"]] });
+    if (url.includes("fields=sheets.data.rowData")) {
+      const f = (x: string) => ({ userEnteredValue: { formulaValue: x } });
+      return j({ sheets: [{ data: [{ rowData: [{ values: [{}, f("=YEAR(E4)"), f("=month(E4)"), {}, {}, {}, {}, {}, f("=IF(H4=\"UAH\";1;2)"), f("=G4*I4"),
+        f("=IF(REGEXMATCH(M4;\"ютс\");\"✅\";\"❌\")"), f("=IF(K4=\"✅\";J4/1,2;J4)"), {}, {}, {}, {}, {}, {}, f("=IF(R4=\"\";\"\";R4)")] }] }] }] });
+    }
     return j({ error: { message: `неочікуваний запит ${url}` } }, 400);
   }) as typeof fetch;
   const a = await addTx(c, { kyiv: "2026-11-10 10:00", amount: 500 });
@@ -228,6 +264,8 @@ test("#9984 ЖИВИЙ SQL: облік у два кроки — dry без за�
     assert.equal(ok.firstRow, 5);
     assert.equal(bodies.length, 1, "🔴 не один batchUpdate");
     assert.equal(bodies[0].requests[2].updateCells.rows[1].values[4].userEnteredValue.stringValue, "Готівка", "🔴 Сейф із хвостом угоди");
+    assert.equal(bodies[0].requests[3].updateCells.rows[1].values[0].userEnteredValue.formulaValue, "=YEAR(E6)", "🔴 формула рядка 6 не на свій рядок");
+    assert.ok(!bodies[0].requests.some((r: any) => r.copyPaste), "🔴 у запиті copyPaste — під фільтром Google його відхиляє");
     assert.deepEqual(await ledger(), [`${a}:done:5`, `${b}:done:6`]);
     assert.equal(((await exportDataSheet()) as Record<string, any>).rows, 0, "🔴 записане пішло вдруге");
 
