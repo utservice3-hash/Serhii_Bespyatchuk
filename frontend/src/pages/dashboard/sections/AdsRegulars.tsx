@@ -3,6 +3,7 @@ import { fetchAdsClients, type AdsClient, type AdsClientsAgg, type AdsClientsRep
 import { todayKyiv } from "../periodRules";
 import { MixBar } from "./LeadgenLtvBlock";
 import { TH, TH_L, TD, TD_L, LAB, DIM, CARD, money, dayLabel, campKey, wrapName } from "./adsUi";
+import { AdsClientsList } from "./AdsClientsList";
 
 /**
  * 👥 КЛІЄНТИ З РЕКЛАМИ: LTV, ПОСТІЙНІ, ПОВТОРНІ ЗАМОВЛЕННЯ (задачі #8709, #8704).
@@ -40,33 +41,18 @@ const SEG: Record<AdsClient["segment"], { label: string; color: string }> = {
   episodic: { label: "🌙 Епізодичний", color: "var(--rpt-warn, #a06a08)" },
   unknown: { label: "ще без типу", color: "var(--rpt-muted, #8a8f98)" },
 };
-const STATE: Record<NonNullable<AdsClient["state"]>, { label: string; bg: string; fg: string }> = {
-  active: { label: "працює", bg: "var(--rpt-ok-bg, #e9f5ee)", fg: "var(--rpt-ok, #1a7f4b)" },
-  sleeping: { label: "сплячий", bg: "var(--rpt-warn-bg, #fdf2e0)", fg: "var(--rpt-warn, #a06a08)" },
-  lost: { label: "втрачений", bg: "var(--rpt-soft, #f6f5f3)", fg: "var(--rpt-muted, #8a8f98)" },
-};
-type Chip = "all" | "rep" | "act" | "rs";
-const CHIP: Record<Chip, { label: string; test: (c: AdsClient) => boolean }> = {
-  all: { label: "Усі", test: () => true },
-  rep: { label: "Стали постійними", test: (c) => c.qualified },
-  act: { label: "Працюють зараз", test: (c) => c.state === "active" },
-  rs: { label: "Постійні, не замовляють", test: (c) => c.group === "rs" },
-};
 type SortKey = "margin" | "clients" | "avg" | "regular" | "active" | "repeat" | "deals";
 const SORT: Record<SortKey, (a: AdsClientsAgg) => number> = {
   margin: (a) => a.margin, clients: (a) => a.clients, avg: (a) => (a.clients ? a.margin / a.clients : -1),
   regular: (a) => a.regular, active: (a) => a.active, repeat: (a) => a.repeatMargin, deals: (a) => (a.clients ? a.deals / a.clients : -1),
 };
-const LIST_MAX = 15;
 
 export function AdsRegulars({ from, to }: { from: string; to: string }) {
   const [scope, setScope] = useState<"all" | "period">("all");
   const [rep, setRep] = useState<AdsClientsReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("margin");
-  const [chip, setChip] = useState<Chip>("rep");
   const [group, setGroup] = useState<LtvGroup | null>(null);
-  const [showAll, setShowAll] = useState(false);
   const [allCohorts, setAllCohorts] = useState(false);
 
   const [qFrom, qTo] = scope === "all" ? [ALL_FROM, todayKyiv()] : [from, to];
@@ -107,10 +93,6 @@ export function AdsRegulars({ from, to }: { from: string; to: string }) {
 
   const t = rep.totals;
   const noType = t.regular - t.vip - t.regularSeg - t.episodic;
-  const list = rep.clients
-    .filter((c) => (group ? c.group === group : CHIP[chip].test(c)))
-    .sort((a, b) => b.margin - a.margin);
-  const shown = showAll ? list : list.slice(0, LIST_MAX);
   const cohorts = allCohorts ? rep.cohorts : rep.cohorts.slice(-12);
   const typeMargin = (k: AdsClient["segment"]) => rep.clients.filter((c) => c.qualified && c.segment === k).reduce((s, c) => s + c.margin, 0);
   const typeCount = (k: AdsClient["segment"]) => rep.clients.filter((c) => c.qualified && c.segment === k).length;
@@ -178,10 +160,10 @@ export function AdsRegulars({ from, to }: { from: string; to: string }) {
             <div style={LAB}>Склад {nf(t.clients)} клієнтів</div>
             <span style={{ ...DIM, fontSize: 12.5 }}>клік по групі показує її клієнтів у списку нижче</span>
           </div>
-          <MixBar mix={t.mix} height={14} pick={(g) => { setGroup((x) => (x === g ? null : g)); setShowAll(false); }} selected={group} />
+          <MixBar mix={t.mix} height={14} pick={(g) => setGroup((x) => (x === g ? null : g))} selected={group} />
           <div style={{ marginTop: 10, fontSize: 13, display: "flex", flexWrap: "wrap", gap: "4px 6px" }}>
             {GROUPS.map((g) => (
-              <button key={g} type="button" onClick={() => { setGroup((x) => (x === g ? null : g)); setShowAll(false); }} aria-pressed={group === g}
+              <button key={g} type="button" onClick={() => setGroup((x) => (x === g ? null : g))} aria-pressed={group === g}
                 style={{ border: `1px solid ${group === g ? "var(--rpt-ink, #16181d)" : "transparent"}`, background: group === g ? "var(--rpt-card, #fff)" : "none",
                          borderRadius: 999, padding: "3px 10px", cursor: "pointer", display: "inline-flex", gap: 6, alignItems: "center",
                          fontFamily: "inherit", fontSize: 13, color: "inherit" }}>
@@ -267,59 +249,9 @@ export function AdsRegulars({ from, to }: { from: string; to: string }) {
         )}
       </div>
 
-      {/* Список клієнтів — фільтри як у лідгенів. */}
-      <div style={{ ...CARD, padding: "20px 8px 8px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "0 14px 14px" }}>
-          <div style={LAB}>
-            {group ? <>Група · {GROUP[group].label}</> : "Клієнти з реклами · за LTV"}
-            {group && <button type="button" onClick={() => setGroup(null)}
-              style={{ all: "unset", cursor: "pointer", marginLeft: 8, color: "var(--rpt-link, #2563eb)", textTransform: "none", letterSpacing: 0 }}>× скинути</button>}
-          </div>
-          {!group && (
-            <div style={{ display: "inline-flex", gap: 2, padding: 3, borderRadius: 10, border: "1px solid var(--rpt-line, #e8e6e3)", flexWrap: "wrap" }}>
-              {(Object.keys(CHIP) as Chip[]).map((k) => (
-                <button key={k} type="button" aria-pressed={chip === k} onClick={() => { setChip(k); setShowAll(false); }}
-                  style={{ padding: "5px 11px", borderRadius: 7, fontSize: 12.5, fontWeight: 700, cursor: "pointer", border: "none",
-                           background: chip === k ? "var(--rpt-ink, #16181d)" : "transparent",
-                           color: chip === k ? "var(--rpt-card, #fff)" : "var(--rpt-muted, #8a8f98)" }}>
-                  {CHIP[k].label} · {nf(rep.clients.filter(CHIP[k].test).length)}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontVariantNumeric: "tabular-nums", minWidth: 900 }}>
-            <thead><tr>
-              <th style={TH_L}>Клієнт</th><th style={TH_L}>Кампанія першого ліда</th><th style={TH}>Прийшов</th>
-              <th style={TH}>Тип</th><th style={TH}>Стан</th><th style={TH}>Угод</th><th style={TH}>LTV</th><th style={TH}>З повторних</th>
-            </tr></thead>
-            <tbody>
-              {shown.map((c) => (
-                <tr key={c.clientKey}>
-                  <td style={{ ...TD_L, whiteSpace: "normal", maxWidth: 240 }}><b>{c.name}</b></td>
-                  <td style={{ ...TD_L, whiteSpace: "normal", maxWidth: 260, ...(c.campaign ? {} : DIM) }}>{c.campaign ? wrapName(c.campaign) : "без мітки кампанії"}</td>
-                  <td style={TD}>{dayLabel(c.firstLead)}.{c.firstLead.slice(2, 4)}</td>
-                  <td style={{ ...TD, color: SEG[c.segment].color, fontWeight: 600 }}>{c.qualified ? SEG[c.segment].label : <span style={DIM}>разовий</span>}</td>
-                  <td style={TD}>{c.state ? (
-                    <span style={{ fontSize: 12, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: STATE[c.state].bg, color: STATE[c.state].fg }}>
-                      {STATE[c.state].label}</span>) : "—"}</td>
-                  <td style={TD}>{c.deals}</td>
-                  <td style={TD}><b>{money(c.margin)} ₴</b></td>
-                  <td style={TD}>{c.repeatMargin > 0 ? `${money(c.repeatMargin)} ₴` : <span style={DIM}>—</span>}</td>
-                </tr>
-              ))}
-              {shown.length === 0 && <tr><td style={{ ...TD_L, ...DIM }} colSpan={8}>Клієнтів у цій вибірці немає.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-        {list.length > LIST_MAX && (
-          <button type="button" onClick={() => setShowAll((v) => !v)}
-            style={{ all: "unset", cursor: "pointer", color: "var(--rpt-link, #2563eb)", fontSize: 13, fontWeight: 600, padding: "10px 14px 6px" }}>
-            {showAll ? "Згорнути" : `Показати всіх · ${nf(list.length)}`}
-          </button>
-        )}
-      </div>
+      {/* Список клієнтів — дизайн варіант А з фільтрами й посиланням на Kommo (Роман 19.11.2026), `AdsClientsList.tsx`. */}
+      <AdsClientsList clients={rep.clients} group={group} groupLabel={group ? GROUP[group].label : null} onClearGroup={() => setGroup(null)}
+        campaigns={rep.campaigns.filter((c) => c.campaign !== null).sort((x, y) => y.clients - x.clients).map((c) => c.campaign as string)} />
 
       <div style={{ ...DIM, fontSize: 12, lineHeight: 1.5 }}>
         Клієнт з реклами — той, хто заплатив хоча б раз після першого рекламного ліда; належить кампанії цього ліда. LTV — маржа всіх його

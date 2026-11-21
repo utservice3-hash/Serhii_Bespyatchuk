@@ -18,7 +18,7 @@ export const OFFER_STATE: Record<OfferStateKind, [string, string]> = {
 };
 
 /** Блок у картці кандидата. Лише для HR/керівництва: тімліду сервер відповідає 403 — і блок ховається. */
-export function OfferBox({ candidateId, status, toast, onChanged }: { candidateId: number; status: string; toast: Toast; onChanged?: () => void }) {
+export function OfferBox({ candidateId, status, toast, onChanged, readOnly = false }: { candidateId: number; status: string; toast: Toast; onChanged?: () => void; readOnly?: boolean }) {
   const [info, setInfo] = useState<OfferInfo | null>(null);
   const [hidden, setHidden] = useState(false);
   const [templates, setTemplates] = useState<OfferTemplate[]>([]);
@@ -35,7 +35,8 @@ export function OfferBox({ candidateId, status, toast, onChanged }: { candidateI
   useEffect(() => { load(); fetchOfferTemplates().then((t) => setTemplates(t.filter((x) => x.is_active))).catch(() => setTemplates([])); }, [load]);
   if (hidden || !info) return null;
   const st = OFFER_STATE[info.state.state] ?? OFFER_STATE.none;
-  const allowed = status === "candidate" || status === "training";
+  // 👁 «Перегляд» (#4153): стан оферу й посилання на документ — так; сформувати чи надіслати — ні.
+  const allowed = !readOnly && (status === "candidate" || status === "training");
   const pick = (id: string) => { const n = Number(id) || null; setTpl(n); setMsg(null); if (n) load(n); };
   const make = async () => {
     if (!tpl) return;
@@ -57,7 +58,7 @@ export function OfferBox({ candidateId, status, toast, onChanged }: { candidateI
         <span className={`emp-pill ${st[1]}`}>{st[0]}</span>
         {info.state.docId && <a className="hr-link" href={`/documents?doc=${info.state.docId}`}>{info.state.name} · версія {info.state.version} ↗</a>}
       </div>
-      {!allowed ? <div className="hr-muted">Офер формується на статусі «кандидат + команда» або «на навчанні».</div>
+      {readOnly ? null : !allowed ? <div className="hr-muted">Офер формується на статусі «кандидат + команда» або «на навчанні».</div>
         : templates.length === 0 ? <div className="hr-muted">Шаблонів ще немає — додайте Word-файл у вкладці «Шаблони».</div> : (
           <>
             <select className="hr-inp" value={tpl ?? ""} onChange={(e) => pick(e.target.value)} aria-label="Шаблон оферу">
@@ -86,7 +87,7 @@ export function OfferBox({ candidateId, status, toast, onChanged }: { candidateI
 }
 
 /** Вкладка «Шаблони»: Word-файли оферів і які мітки в них знайдено. */
-export function OfferTemplatesTab({ toast }: { toast: Toast }) {
+export function OfferTemplatesTab({ toast, readOnly = false }: { toast: Toast; readOnly?: boolean }) {
   const [rows, setRows] = useState<OfferTemplate[] | null>(null);
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -107,7 +108,8 @@ export function OfferTemplatesTab({ toast }: { toast: Toast }) {
   if (!rows && !err) return <p className="loading-text">Завантаження…</p>;
   return (
     <>
-      <div className="chart-card" style={{ marginBottom: 16 }}>
+      {/* 👁 «Перегляд» (#4153): шаблони видно, додати чи вимкнути — ні. */}
+      {!readOnly && <div className="chart-card" style={{ marginBottom: 16 }}>
         <div className="chart-title">Новий шаблон оферу</div>
         <div className="hr-muted" style={{ marginBottom: 10, fontSize: 13 }}>
           Відкрийте офер у Word і замість даних кандидата впишіть мітки у фігурних дужках: <b>{"{{ПІБ}}"}</b>, <b>{"{{Посада}}"}</b>, <b>{"{{Команда}}"}</b>,
@@ -123,7 +125,7 @@ export function OfferTemplatesTab({ toast }: { toast: Toast }) {
           <button className="hr-btn p" disabled={busy || !file || !title.trim()} onClick={() => void upload()}>{busy ? "Завантажую…" : "Додати шаблон"}</button>
         </div>
         {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
-      </div>
+      </div>}
       <div className="chart-card">
         <div className="chart-title">Шаблони</div>
         {!rows?.length ? <div className="hr-muted">Шаблонів ще немає.</div> : (
@@ -135,7 +137,7 @@ export function OfferTemplatesTab({ toast }: { toast: Toast }) {
                   <td><b>{t.title}</b>{!t.is_active && <span className="emp-pill mute">вимкнено</span>}</td>
                   <td>{t.fields.map((f) => <span key={f.marker} className={`emp-pill ${f.auto ? "ok" : "warn"}`} title={f.auto ? "заповнюється з картки" : "HR дописує"}>{f.marker}</span>)}</td>
                   <td className="hr-muted">{t.author ?? "—"}</td>
-                  <td><button className="hr-btn xs" onClick={() => void setOfferTemplateActive(t.id, !t.is_active).then(load)}>{t.is_active ? "Вимкнути" : "Увімкнути"}</button></td>
+                  <td>{!readOnly && <button className="hr-btn xs" onClick={() => void setOfferTemplateActive(t.id, !t.is_active).then(load)}>{t.is_active ? "Вимкнути" : "Увімкнути"}</button>}</td>
                 </tr>
               ))}
             </tbody>

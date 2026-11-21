@@ -78,6 +78,7 @@ export function refusalVerdict(p: {
   from: HiringStatus; access: HiringAccess; reasonSide: RefusalSide | null; blacklist: boolean;
 }): RefusalVerdict {
   if (p.access === "none") return { ok: false, reason: "Немає доступу до найму" };
+  if (p.access === "view") return { ok: false, reason: "Лише перегляд — змінювати не можна" };
   if (!p.reasonSide) return { ok: false, reason: "Оберіть причину відмови — без неї відмова не зберігається" };
   const map = p.access === "lead" ? LEAD_TRANSITIONS : TRANSITIONS;
   if (!(map[p.from] ?? []).includes("refused"))
@@ -150,20 +151,28 @@ export function messengerLinks(phone: unknown, telegram: unknown): { telegram: s
 /** Перехід у ці статуси вимагає команди: до кого йде кандидат. */
 export const NEEDS_TEAM: readonly HiringStatus[] = ["lead", "candidate"];
 
-export type HiringAccess = "edit" | "lead" | "none";
+export type HiringAccess = "edit" | "lead" | "view" | "none";
 
 /**
  * Хто що може в розділі. Вкладку `hiring` відкриває tab-гейт; ЦЕ — друга межа, всередині.
  * • edit — рекрутер (роль HR) і адмін-рівень: графік, база, звіт, будь-які переходи.
  * • lead — тімлід: лише кандидати своєї команди від етапу «з тімлідом».
+ * • view — фінансист (20.11.2026, рішення Романа): ЛИШЕ ПЕРЕГЛЯД — кандидати, графік, вакансії, офери, навчання й
+ *   співробітники без паролів; статистик («Щоденний звіт», «Зведення», «Плинність») немає; будь-який запис — 403.
  * • none — усі інші, навіть якщо адмін відкрив їм вкладку тумблером у Налаштуваннях
  *   (fail-closed: тумблер дає пункт меню, а не право бачити телефони кандидатів).
  */
 export function hiringAccess(a: { roleKey: string; adminScope: boolean }): HiringAccess {
+  // 🔴 Фінансист ПЕРШИМ: у його ролі є `admin_scope` (заміряно на проді 20.11.2026), і перевірка нижче дала б йому повне
+  // редагування «Найму» замість перегляду. Тримає #4150.
+  if (a.roleKey === "financier") return "view";
   if (a.adminScope || a.roleKey === "hr") return "edit";
   if (a.roleKey === "team_lead") return "lead";
   return "none";
 }
+
+/** Чи бачить рівень УСІХ кандидатів (без звуження до команди): HR/керівництво й «перегляд». Тримає #4150. */
+export const seesAll = (access: HiringAccess): boolean => access === "edit" || access === "view";
 
 export type TransitionVerdict = { ok: true } | { ok: false; reason: string };
 
@@ -179,6 +188,7 @@ export function canTransition(
   from: HiringStatus, to: HiringStatus, access: HiringAccess, lastFrom: HiringStatus | null,
 ): TransitionVerdict {
   if (access === "none") return { ok: false, reason: "Немає доступу до найму" };
+  if (access === "view") return { ok: false, reason: "Лише перегляд — змінювати не можна" };
   if (from === to) return { ok: false, reason: "Статус не змінився" };
   const map = access === "lead" ? LEAD_TRANSITIONS : TRANSITIONS;
   const leadScope = (s: HiringStatus) => ["lead", "candidate", "training", "manager", "refused"].includes(s);

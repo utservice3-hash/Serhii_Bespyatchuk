@@ -35,7 +35,7 @@ export interface KpiUmbrella {
 export interface KpiDayPlan { assigneeId: number; day: string; metrics: KpiMetricTarget[] | null }
 
 /** Лічильні складаються; ставкові (чек, конверсія) — MAX, бо середнє з сум безглузде. */
-const ADDITIVE = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
+const ADDITIVE = new Set(["ads_count", "leadgen_count", "linkedin_count", "prozorro_count", "dispatch_count", "payment_amount"]);
 
 /** Рівень періоду, з якого дозволено брати ЦІЛЬ. Місячні цілі-показники зняті. */
 export const TARGET_PERIOD_KIND = "week";

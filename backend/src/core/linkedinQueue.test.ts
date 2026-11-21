@@ -566,6 +566,31 @@ test("#3651 тег «LinkedIn» теж робить угоду угодою з L
 });
 
 /**
+ * 🧾 ЗАДАЧА 9363 · «ОПЛАТА ПЕРЕВОЗЧИКАМ» (Роман 19.11.2026, план 9363-redesign): автоугода воронки 7341740 копіює тег
+ * «LinkedIn» з основної угоди — у списку й лічильниках її немає. Фікстура по ОБИДВА боки: та сама угода (тег, «успішна»)
+ * у Повному циклі — так; у 7341740 — ні; воронка невідома (NULL) — так (IS DISTINCT FROM, а не `<>`).
+ * 🧨 САБОТАЖ: у `loadLinkedinDeals` `IS DISTINCT FROM ${String(PAYMENT_REQUEST_PIPELINE)}` → `IS DISTINCT FROM -1` —
+ *    червоніє «автоугода в списку»; `IS DISTINCT FROM` → `<>` — червоніє «угода без воронки загубилась».
+ */
+test("#3654 «Усі угоди з LinkedIn» без «Оплати перевозчикам»: автоугода 7341740 з тегом — ні (ні в списку, ні в успішних); та сама в Повному циклі — так; воронка невідома — так", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { loadLinkedinDeals } = await import("./linkedinDeals.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`DELETE FROM deals WHERE kommo_id BETWEEN 9363000 AND 9363999`);
+  const deal = (id: number, pipe: number | null, s: number) =>
+    q(`INSERT INTO deals (kommo_id, name, pipeline_id, status_id, client_source, tags, created_at_kommo) VALUES ($1, $2, $3, $4, NULL, ARRAY['LinkedIn'], '2026-11-13T09:00:00Z')`,
+      [id, `ОП ${String(id)}`, pipe, s]);
+  await deal(9363201, 8921932, 142);   // основна угода, успішна — так
+  await deal(9363202, 7341740, 142);   // автоугода «Оплата перевозчикам» з тим самим тегом — ні
+  await deal(9363203, null, 69693668); // воронка невідома — так
+  const r = await loadLinkedinDeals(c.db, null);
+  assert.deepEqual(r.deals.map((x) => x.kommoId).sort(), [9363201, 9363203],
+    "🔴 автоугода «Оплата перевозчикам» у списку — або загубилась угода Повного циклу чи угода без воронки");
+  assert.deepEqual([r.total, r.won, r.open], [2, 1, 1], "🔴 автоугода порахована в лічильниках (успішних стало б 2)");
+});
+
+/**
  * 🏷 ЗАДАЧА 9363 · ДОБІР ІСТОРІЇ: з подій «тег додано» беремо рівно угоди, яким додали тег «LinkedIn». Формат Kommo
  * `[{ tag: { name } }]`; кілька тегів в одній події; схожий тег, інша сутність (контакт) і порожня подія — ні.
  * 🧨 САБОТАЖ: у `leadIdsWithTag` `.includes(tag)` → `.some((n) => n.includes("Linked"))` — червоніє «схожий тег».

@@ -26,7 +26,7 @@ const STATUS_LBL: Record<string, string> = {
   ready_for_approval: "На перевірці", done: "Готово",
 };
 const METRIC_LBL: Record<string, string> = {
-  ads_count: "Реклама (шт)", leadgen_count: "Лідоген (шт)", avg_check: "Середній чек", conversion: "Конверсія",
+  ads_count: "Реклама (шт)", leadgen_count: "Лідоген (шт)", linkedin_count: "LinkedIn (шт)", prozorro_count: "Prozorro (шт)", avg_check: "Середній чек", conversion: "Конверсія",
   dispatch_count: "Авто (шт)", payment_amount: "Сума, ₴",
 };
 

@@ -1,7 +1,8 @@
 import type { Db } from "./adCallFacts.js";
 import { clientOwnersFor } from "./clientOwner.js";
+import { FC_PIPELINE_IDS } from "./moneyBuckets.js";
 import {
-  pickOpenDeal, pickOwner, leadBody, taskBody, closeTaskBody, PUSH_MAX_ATTEMPTS, PUSH_PER_RUN, type OwnerCandidate,
+  pickOpenDeal, pickContactSource, pickOwner, leadBody, taskBody, closeTaskBody, PUSH_MAX_ATTEMPTS, PUSH_PER_RUN, type OwnerCandidate,
 } from "./clientKommoTaskRules.js";
 
 /**
@@ -12,7 +13,7 @@ import {
  * Кожен крок запису зберігається одразу (спершу угода, потім задача), щоб повтор після збою не створив другу угоду.
  * Kommo — зовнішня система: помилка не губиться, а лягає в рядок (`kommo_error`, лічильник спроб) і видна на екрані.
  */
-export interface KommoLeadLite { id: number; status_id: number; created_at: number; _embedded?: { contacts?: { id: number }[]; companies?: { id: number }[] } }
+export interface KommoLeadLite { id: number; pipeline_id: number; status_id: number; created_at: number; _embedded?: { contacts?: { id: number }[]; companies?: { id: number }[] } }
 export interface KommoTaskDeps {
   fetchLeads(ids: number[]): Promise<KommoLeadLite[]>;
   createLead(body: unknown): Promise<number>;
@@ -50,14 +51,18 @@ export async function pushStep(db: Db, deps: KommoTaskDeps, stepId: number, now:
     if (leadId == null) {
       const local = (await db.query<{ kommo_id: string; open: boolean }>(
         `SELECT kommo_id::text, (status_id NOT IN (142, 143)) AS open FROM deals
-          WHERE client_key = $1 ORDER BY (status_id NOT IN (142, 143)) DESC, created_at_kommo DESC NULLS LAST LIMIT 12`, [s.client_key])).rows;
+          WHERE client_key = $1
+          ORDER BY (pipeline_id = ANY($2::bigint[])) DESC, (status_id NOT IN (142, 143)) DESC, created_at_kommo DESC NULLS LAST LIMIT 12`,
+        [s.client_key, FC_PIPELINE_IDS])).rows;
       if (!local.length) throw new Error("у клієнта немає жодної угоди в дашборді — нема звідки взяти контакт для Kommo");
       const live = await deps.fetchLeads(local.map((d) => Number(d.kommo_id)));
-      leadId = pickOpenDeal(live.map((l) => ({ id: l.id, statusId: l.status_id, createdAt: l.created_at })));
+      leadId = pickOpenDeal(live.map((l) => ({ id: l.id, pipelineId: l.pipeline_id, statusId: l.status_id, createdAt: l.created_at })));
       if (leadId == null) {
-        const src = [...live].sort((a, b) => b.created_at - a.created_at)[0];
-        const contactIds = src?._embedded?.contacts?.map((c) => c.id) ?? [];
-        const companyId = src?._embedded?.companies?.[0]?.id ?? null;
+        // Контакт — з угоди Повного циклу, а не з найновішої взагалі: заявка перевізнику може нести чужий контакт.
+        const src = pickContactSource(live.map((l) => ({ pipelineId: l.pipeline_id, createdAt: l.created_at,
+          contactIds: l._embedded?.contacts?.map((c) => c.id) ?? [], companyId: l._embedded?.companies?.[0]?.id ?? null })));
+        const contactIds = src?.contactIds ?? [];
+        const companyId = src?.companyId ?? null;
         if (!contactIds.length && companyId == null) throw new Error("в угодах клієнта в Kommo немає ні контакту, ні компанії — нову угоду нема до кого привʼязати");
         leadId = await deps.createLead(leadBody({ clientName: card?.clientName ?? null, clientKey: s.client_key, kommoUserId: owner.kommoUserId, contactIds, companyId }));
         created = true;

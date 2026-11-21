@@ -6,7 +6,8 @@ import {
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
   applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
   isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT,
-  fmtCallback, callbackTone, remakeResetOnce,
+  readColWidths, writeColWidths, clampColWidth, colWidthCss,
+  fmtCallback, callbackTone, remakeResetOnce, restoreColsOnce,
   type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
@@ -78,6 +79,8 @@ export function ReportTableSection({
   const [userId] = useState<number | null>(viewerUserId);
   // Один раз на людину — колонки як на макеті (див. `remakeResetOnce`). Стоїть ДО читання вибору.
   useState(() => remakeResetOnce(colStore(), userId));
+  // Один раз на людину — повернути 8 колонок, зниклих 13.11 (див. `restoreColsOnce`). Після скидання, ДО читання.
+  useState(() => restoreColsOnce(colStore(), userId));
   const [optOn, setOptOn] = useState<Record<string, boolean>>(() => readColPrefs(colStore(), userId));
   const toggleCol = (k: string) => setOptOn((p) => {
     const next = { ...p, [k]: !p[k] };
@@ -115,6 +118,31 @@ export function ReportTableSection({
     el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
   };
   const resetWidth = () => { setMgrW(null); writeMgrWidth(colStore(), userId, null); };
+  // ↔️ Ширина РЕШТИ колонок (правки зустрічі 17.11.2026: «динамічний розмір колонок») — той самий жест, що в
+  // «Менеджер»: тягнеш правий край заголовка, подвійний клік — як було. Особисто, `rptColWidths:<userId>`.
+  const [colW, setColW] = useState<Record<string, number>>(() => readColWidths(colStore(), userId));
+  const thRefs = useRef<Partial<Record<string, HTMLTableCellElement | null>>>({});
+  /** Поки тягнемо край, заголовок не має починати перетягування колонки (th сам `draggable`). */
+  const resizing = useRef(false);
+  const startColResize = (k: ColKey) => (e: React.PointerEvent<HTMLSpanElement>) => {
+    e.preventDefault(); e.stopPropagation();
+    const x0 = e.clientX;
+    const w0 = thRefs.current[k]?.getBoundingClientRect().width ?? colW[k] ?? 90;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    resizing.current = true;
+    let last = w0;
+    const move = (ev: PointerEvent) => { last = clampColWidth(w0 + ev.clientX - x0); setColW((p) => ({ ...p, [k]: last })); };
+    const up = () => {
+      el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
+      document.body.style.cursor = ""; document.body.style.userSelect = "";
+      resizing.current = false;
+      setColW((p) => { const n = { ...p, [k]: last }; writeColWidths(colStore(), userId, n); return n; });
+    };
+    document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+    el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+  };
+  const resetColWidth = (k: ColKey) => setColW((p) => { const n = { ...p }; delete n[k]; writeColWidths(colStore(), userId, n); return n; });
   /**
    * ⤢ НА ВЕСЬ ЕКРАН (зустріч 10.11.2026, правка 4). Не Fullscreen API браузера, а картка поверх сторінки:
    * API на iPhone не працює, а підказки «?» (портал у body) під нативним повноекранним режимом не видно.
@@ -165,6 +193,7 @@ export function ReportTableSection({
   const dnd = (k: ColKey) => (isPinnedCol(k) ? { draggable: false } : {
     draggable: true,
     onDragStart: (e: React.DragEvent) => {
+      if (resizing.current) { e.preventDefault(); return; }
       dragCol.current = k;
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", k);
@@ -275,6 +304,8 @@ export function ReportTableSection({
           * в ОДНОМУ контейнері, а кут «Менеджер» має найвищий z-index.
           */}
         <div ref={scroller} style={{ overflow: "auto", maxHeight: "calc(100vh - 150px)", ...(fs ? { maxHeight: "none", flex: 1 } : null) }}>
+          {/* ↔️ Ширини колонок — CSS за ПОТОЧНИМ порядком (colWidthCss): перестановка несе ширину з собою. */}
+          <style>{colWidthCss("table.rpt-table", colKeys, colW)}</style>
           <table className="data-table rpt-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontVariantNumeric: "tabular-nums" }}>
             <thead>
               {/* Групи над колонками (Гроші · Очікуємо · Дзвінки…) — `<th colSpan>`, щоб назва групи
@@ -291,7 +322,7 @@ export function ReportTableSection({
               <tr>
                 {cols.map((c, i) => (
                   <th key={c.key} onClick={() => onSort(c.key)} {...dnd(c.key)}
-                    ref={c.key === "name" ? mgrTh : undefined}
+                    ref={c.key === "name" ? mgrTh : (el) => { thRefs.current[c.key] = el; }}
                     className={[c.key === "name" ? "sticky-mgr" : "", c.key === sortKey ? "on" : "", bandStart.has(c.key) ? "gl" : ""].join(" ").trim() || undefined}
                     title={isPinnedCol(c.key) ? undefined : "Клік — сортування; перетягніть, щоб змінити порядок"}
                     style={{
@@ -318,6 +349,14 @@ export function ReportTableSection({
                         title="Потягніть, щоб змінити ширину · подвійний клік — як було"
                         onPointerDown={startResize} onClick={(e) => e.stopPropagation()}
                         onDoubleClick={(e) => { e.stopPropagation(); resetWidth(); }}
+                        className="rpt-resize" />
+                    )}
+                    {!isPinnedCol(c.key) && (
+                      <span role="separator" aria-orientation="vertical" aria-label={`Змінити ширину колонки «${c.title}»`}
+                        title="Потягніть, щоб змінити ширину · подвійний клік — як було"
+                        onPointerDown={startColResize(c.key)} onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => { e.stopPropagation(); resetColWidth(c.key); }}
+                        draggable={false} onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
                         className="rpt-resize" />
                     )}
                     {/* Стрілка — лише на активній колонці та при наведенні (макет, п.9). */}

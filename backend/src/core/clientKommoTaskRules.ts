@@ -1,10 +1,15 @@
 import { kyivLocalToUtc, nextWorkingDay } from "./callAiPromise.js";
+import { FC_PIPELINE_IDS } from "./moneyBuckets.js";
 
 /**
- * 📌 ЗАДАЧА КЛІЄНТУ → УГОДА І ЗАДАЧА В KOMMO (задача 8345; рішення Юлі 12.11.2026, слово Романа 12.11.2026).
+ * 📌 ЗАДАЧА КЛІЄНТУ → УГОДА І ЗАДАЧА В KOMMO (задача 8345; рішення Юлі 12.11.2026, слово Романа 12.11.2026;
+ * уточнення Романа 18.11.2026 «згоден з тобою, робимо» — відкритою рахується лише угода Повного циклу).
  *
  * Менеджер ставить «наступний крок» клієнту в «Клієнти та реактивація» — дашборд сам ставить задачу в Kommo:
- *   • у клієнта Є відкрита угода — задача ставиться В НЕЇ, нова угода не створюється;
+ *   • у клієнта Є відкрита угода ПОВНОГО ЦИКЛУ (`FC_PIPELINES`, ті самі воронки, що й для грошей) — задача ставиться
+ *     В НЕЇ, нова угода не створюється. Відкрита угода іншої воронки («Оплата перевозчикам», Кваліфікація, Продзвін)
+ *     відкритою угодою КЛІЄНТА не є: 18.11.2026 заміряно — 2 задачі з 4 «у відкриту угоду» лягли в заявки на оплату
+ *     перевізнику. Повторний крок сам іде в угоду, яку дашборд створив раніше: вона теж у Повному циклі;
  *   • відкритої немає — створюється угода на етапі «Клієнти та реактивація» воронки повного циклу (перед «Взято на
  *     прорахунок»): клієнт дав запит — менеджер рухає її далі звичним шляхом, і гроші йдуть у план;
  *   • відповідальний — менеджер З КАРТКИ КЛІЄНТА в дашборді (не з останньої угоди: та могла лишитись на звільненому);
@@ -23,13 +28,26 @@ export const PUSH_PER_RUN = 3;
 export const DUE_TIME_KYIV = "18:00:00";
 export const DONE_IN_DASHBOARD_TEXT = "Виконано в дашборді («Клієнти та реактивація»)";
 
-export interface OpenDealCandidate { id: number; statusId: number; createdAt: number; deleted?: boolean }
+export interface OpenDealCandidate { id: number; pipelineId: number; statusId: number; createdAt: number; deleted?: boolean }
 
-/** Відкрита угода клієнта: не закрита й не видалена; з кількох — найновіша. `null` — відкритої немає. */
+/** Угода продажів: воронка Повного циклу (ті самі, що для грошей). */
+export const isSalesDeal = (pipelineId: number): boolean => FC_PIPELINE_IDS.includes(pipelineId);
+
+/** Відкрита угода клієнта: Повного циклу, не закрита й не видалена; з кількох — найновіша. `null` — відкритої немає. */
 export function pickOpenDeal(deals: readonly OpenDealCandidate[]): number | null {
-  const open = deals.filter((d) => !d.deleted && !KOMMO_CLOSED_STATUSES.includes(d.statusId));
+  const open = deals.filter((d) => !d.deleted && isSalesDeal(d.pipelineId) && !KOMMO_CLOSED_STATUSES.includes(d.statusId));
   if (!open.length) return null;
   return open.reduce((a, b) => (b.createdAt > a.createdAt || (b.createdAt === a.createdAt && b.id > a.id) ? b : a)).id;
+}
+
+export interface ContactSource { pipelineId: number; createdAt: number; contactIds: readonly number[]; companyId: number | null }
+
+/** Звідки взяти контакт і компанію для нової угоди: найновіша угода Повного циклу, де вони є; такої немає — найновіша
+ *  будь-якої воронки, де вони є (заявка перевізнику може нести контакт перевізника, тому вона — лише запасний шлях). */
+export function pickContactSource<T extends ContactSource>(deals: readonly T[]): T | null {
+  const usable = deals.filter((d) => d.contactIds.length > 0 || d.companyId != null);
+  const newest = (xs: readonly T[]): T | null => (xs.length ? xs.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)) : null);
+  return newest(usable.filter((d) => isSalesDeal(d.pipelineId))) ?? newest(usable);
 }
 
 export interface OwnerCandidate { managerId: number | null; kommoUserId: number | null; active: boolean }

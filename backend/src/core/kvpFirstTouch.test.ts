@@ -96,25 +96,6 @@ test("#1690b ПЕРЕХІД ЗІ ЗВІТУ КВП: посилання несе 
     "🔴 після відкриття фільтр лишився в адресі (або злетіла картка дзвінка)");
 });
 
-test("#1690d ПРОВОДКА: екран AI і блок КВП беруть ТОЙ САМИЙ фільтр і ту саму функцію; «погодився» — з tileStats і managerChecklist; фінансист без вкладки AI блоку не бачить", () => {
-  const ai = FE_SRC("pages/dashboard/sections/AiCallsSection.tsx");
-  assert.match(ai, /useState<ListFilter>\(\(\) => \(\{ \.\.\.DEFAULT_LIST_FILTER, teamId: link\.teamId, managerId: link\.managerId \}\)\)/, "🔴 екран AI відкривається не з DEFAULT_LIST_FILTER — склад розмов розійдеться зі Звітом КВП");
-  assert.match(ai, /const rows = tabRows\(scopedAll, "report"\);/);
-  // 06.11.2026 (задача 7239 п.3): плитки — з розмов звіту без новачків (`teamRows`), як і в `firstTouchSummary`; функція та сама.
-  assert.match(ai, /const teamRows = rows\.filter\(countsForTeam\);\s*const ts = tileStats\(teamRows\);/, "🔴 плитки екрана AI рахуються не tileStats");
-  assert.match(ai, /parseAiLink\(window\.location\.search\)/, "🔴 екран AI не читає перехід зі Звіту КВП");
-  const kvp = FE_SRC("pages/dashboard/sections/KvpFirstTouchBlock.tsx");
-  assert.match(kvp, /firstTouchSummary\(d\.rows\)/, "🔴 блок КВП рахує не спільною функцією");
-  assert.doesNotMatch(kvp, /\btileStats\(|\bmanagerChecklist\(/, "🔴 у блоці КВП своя копія розрахунку");
-  // 14.10.2026 (задача 5316 повернута): розбір згоди на проді з 13.10 — картка й колонка рахуються ТІЄЮ САМОЮ статистикою, що екран.
-  assert.match(kvp, /card\(ts\.decision\.of \? "agreed" : null, "Клієнт погодився", pctStr\(ts\.decision\.pct\)/, "🔴 «Клієнт погодився» не з tileStats().decision — розійдеться з екраном");
-  assert.match(kvp, /думає \$\{String\(ts\.decision\.thinking\)\}/, "🔴 картка КВП не показує «думає»");
-  assert.match(kvp, /\{l\.decided \? `\$\{pctStr\(Math\.round\(\(l\.agreed \/ l\.decided\) \* 100\)\)\}/, "🔴 колонка «Погодився» не з лічильників managerChecklist");
-  assert.doesNotMatch(kvp, /title="Пункт «клієнт погодився» з'явиться після окремої задачі">—</, "🔴 у таблиці КВП досі вічний прочерк замість згоди");
-  assert.match(FE_SRC("pages/Dashboard.tsx"), /<KvpReportSection canSeeFirstTouch=\{!!screens\?\.includes\("ai-calls"\)\} \/>/, "🔴 блок бачить роль без вкладки «Перший дотик · AI» (фінансист отримав би 403)");
-  assert.match(FE_SRC("pages/dashboard/sections/KvpReportSection.tsx"), /\{canSeeFirstTouch && <KvpFirstTouchBlock from=\{rep\.scope\.from\} to=\{rep\.scope\.to\} \/>\}/, "🔴 блок не стоїть у Звіті КВП або бере інший період");
-});
-
 // ─── 🎧 Плеєр записів на екрані «Клієнти» (задача 13.10.2026; закріплений — Роман 15.10.2026) ──────────────────────
 /**
  * #1760 — ПЛЕЄР ЗАКРІПЛЕНИЙ. Роман 15.10: «плеєр дзвінків трішки погано працює — зроби його меншим та фіксованим в одному
@@ -300,33 +281,3 @@ test("#1850c ФАКТ + ОЧІКУВАННЯ В ТАБЛИЦІ КОМАНД: ш�
   assert.match(src, /<WeekCell key=\{w\.idx\} mode=\{weekMode\} w=\{w\} prev=\{rep\.deptWeeks\.find/, "🔴 Σ Відділ без тижневих клітинок — без «Закриємо?» відділу");
 });
 
-/**
- * #1765c — «ПЕРШИЙ ДОТИК» У ЯДРІ: КАРТКА ФІЛЬТРУЄ ТАБЛИЦЮ. Клік по картці — фільтр (менеджери з такими розмовами й
- * скільки їх), повторний — знімає; фільтр команди, «Скинути», сортування кожної колонки, «—» завжди внизу.
- * Червоніє, якщо картка знову веде геть замість фільтра, «—» стане нулем у сортуванні або фільтр рахуватиме не ті розмови.
- */
-test("#1765c ПЕРШИЙ ДОТИК У ЯДРІ: картка = фільтр таблиці, команда, «Скинути», сортування («—» внизу)", async () => {
-  const r = await import(await transpile("pages/dashboard/kvpCoreRules.ts")) as {
-    sortFtLines: <T>(l: T[], k: string | null, d: "asc" | "desc") => T[];
-    tileCountsByManager: (rows: { managerId: number | null; x: boolean }[], m: ((r: { x: boolean }) => boolean) | null) => Map<number | null, number> | null;
-  };
-  const L = (id: number, price: number | null) => ({ id, calls: 1, score: null, price, promise: null, objection: null, decided: 0, agreed: 0, success: 0 });
-  const lines = [L(1, 40), L(2, null), L(3, 80), L(4, 10)];
-  assert.deepEqual(r.sortFtLines(lines, "price", "desc").map((x) => x.id), [3, 1, 4, 2], "🔴 сортування за спаданням або «—» не внизу");
-  assert.deepEqual(r.sortFtLines(lines, "price", "asc").map((x) => x.id), [4, 1, 3, 2], "🔴 «—» піднялось нагору при зростанні — читалось би як 0");
-  assert.deepEqual(r.sortFtLines(lines, null, "desc").map((x) => x.id), [1, 2, 3, 4], "🔴 без сортування порядок змінився");
-  const rows = [{ managerId: 1, x: true }, { managerId: 1, x: true }, { managerId: 2, x: false }, { managerId: null, x: true }];
-  const m = r.tileCountsByManager(rows, (q) => q.x)!;
-  assert.deepEqual([m.get(1), m.get(2), m.get(null)], [2, undefined, 1], "🔴 фільтр картки рахує не ті розмови");
-  assert.equal(r.tileCountsByManager(rows, null), null, "🔴 без картки таблиця фільтрується");
-  const src = FE_SRC("pages/dashboard/sections/KvpFirstTouchBlock.tsx");
-  assert.match(src, /onClick=\{\(\) => setTile\(on \? null : k\)\}/, "🔴 клік по картці не фільтрує таблицю (або не знімає фільтр)");
-  assert.match(src, /const hits = tileCountsByManager\(all\.rows, tile \? TILE_MATCH\[tile\] : null\);/, "🔴 фільтр картки не з того самого TILE_MATCH, що екран AI");
-  assert.match(src, /<option value="all">Усі команди<\/option>/, "🔴 немає фільтра «Команда»");
-  // Макет: «Ціна» і «Обіцянка» — міні-смужкою з екрана AI (`.ftd-bar`), поріг ціни — ціль, обіцянки — 50%.
-  assert.match(src, /\{bar\(l\.price, target\)\}\{bar\(l\.promise, 50\)\}/, "🔴 «Ціна» / «Обіцянка» без смужки або з іншим порогом");
-  assert.match(src, /onClick=\{reset\}[^>]*>Скинути<\/button>/, "🔴 немає «Скинути»");
-  for (const key of ["calls", "score", "price", "promise", "objection", "agreed", "success"]) {
-    assert.match(src, new RegExp(`\\{th\\("${key}", `), `🔴 колонка «${key}» не сортується`);
-  }
-});

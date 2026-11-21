@@ -17,9 +17,11 @@ import { clientOwnersFor } from "./clientOwner.js";
 import { loadClientSegments, factsFor } from "./clientSegments.js";
 import { leadgenTeamMembers } from "./leadgenPlans.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
+import { linkedinDealSql } from "./linkedinDeals.js";
+import { prozorroDealSql } from "./prozorroSource.js";
 import {
-  pickHandoffActor, pickLeadgenClients, firstSuccessOf, unlinkedByMonth, aggLtv, cohortsOf,
-  type HandoffForLtv, type LtvRow, type LtvAgg, type Cohort,
+  pickHandoffActor, pickLeadgenClients, firstSuccessOf, unlinkedByMonth, aggLtv, cohortsOf, ltvSourceLabel, bySourceOf, isKnownSource,
+  type HandoffForLtv, type LtvRow, type LtvAgg, type Cohort, type LtvSourceRow,
 } from "./leadgenLtvRules.js";
 
 /* ───────────────────────────── збирання ───────────────────────────── */
@@ -162,6 +164,8 @@ interface StoredRow {
   first_deal_id: string; first_day: string; deals: number; ltv: string; turnover: string; turnover_missing: number;
   client_name: string | null; owner_manager_id: number | null; owner_name: string | null; segment: string | null; state: string | null;
   merged: boolean; lg_name: string | null; lg_active: boolean | null; built_at: Date;
+  /** Лід лідгена (`pz_id`) у `deals`: чи є, його «Источник клиента» і мітки LinkedIn / Prozorro (задача 8719). */
+  lead_found: boolean; lead_source: string | null; lead_li: boolean; lead_pz: boolean;
 }
 
 async function stored(): Promise<StoredRow[]> {
@@ -169,11 +173,19 @@ async function stored(): Promise<StoredRow[]> {
     `SELECT c.client_key, c.lg_manager_id, c.actor_kommo_user_id AS actor, c.pz_id, to_char(c.handoff_day, 'YYYY-MM-DD') AS handoff_day,
             c.first_deal_id, to_char(c.first_day, 'YYYY-MM-DD') AS first_day, c.deals, c.ltv, c.turnover, c.turnover_missing,
             c.client_name, c.owner_manager_id, om.name AS owner_name, c.segment, c.state, c.merged,
-            lm.name AS lg_name, lm.is_active AS lg_active, c.built_at
+            lm.name AS lg_name, lm.is_active AS lg_active, c.built_at,
+            (pz.kommo_id IS NOT NULL) AS lead_found, pz.client_source AS lead_source,
+            COALESCE(${linkedinDealSql("pz")}, false) AS lead_li, COALESCE(${prozorroDealSql("pz")}, false) AS lead_pz
        FROM leadgen_ltv_clients c
        LEFT JOIN managers lm ON lm.id = c.lg_manager_id
-       LEFT JOIN managers om ON om.id = c.owner_manager_id`)).rows;
+       LEFT JOIN managers om ON om.id = c.owner_manager_id
+       -- 🧭 Джерело — з ліда, який лідген ПЕРЕДАВ (pz_id), а не з першої угоди менеджера (задача 8719). Читаємо під час
+       -- показу: правка поля в Kommo видна після синку, без перезбирання LTV.
+       LEFT JOIN deals pz ON pz.kommo_id = c.pz_id`)).rows;
 }
+
+const sourceOf = (r: StoredRow): string =>
+  ltvSourceLabel({ found: r.lead_found, linkedin: r.lead_li, prozorro: r.lead_pz, source: r.lead_source });
 
 /** Людина, за якою закріплено клієнта: менеджер дашборду або, якщо його немає, акаунт Kommo. */
 function personOf(r: StoredRow): { key: string; managerId: number | null; name: string; dismissed: boolean } {
@@ -192,12 +204,14 @@ export interface LtvClientOut {
   clientKey: string; name: string; firstDay: string; firstDealId: number; firstDealUrl: string; handoffDay: string;
   handedBy: string; deals: number; ltv: number; turnover: number; ownerName: string | null; segment: string | null; state: string | null;
   marks: ("merged" | "pool")[];
+  /** Звідки прийшов: «Источник клиента» ліда лідгена (`ltvSourceLabel`); невідоме — словами, ніколи не порожньо. */
+  source: string; sourceKnown: boolean;
 }
 const clientOut = (r: StoredRow): LtvClientOut => ({
   clientKey: r.client_key, name: r.client_name ?? r.client_key, firstDay: r.first_day, firstDealId: Number(r.first_deal_id),
   firstDealUrl: kommoLeadUrl(Number(r.first_deal_id)), handoffDay: r.handoff_day, handedBy: personOf(r).name, deals: r.deals,
   ltv: Math.round(Number(r.ltv)), turnover: Math.round(Number(r.turnover)), ownerName: r.owner_name, segment: r.segment, state: r.state,
-  marks: r.merged ? ["merged"] : [],
+  marks: r.merged ? ["merged"] : [], source: sourceOf(r), sourceKnown: isKnownSource(sourceOf(r)),
 });
 
 export interface LtvPersonOut { managerId: number | null; name: string; dismissed: boolean; agg: LtvAgg; pool: { clients: number; ltv: number }; top: LtvClientOut[] }
@@ -205,6 +219,8 @@ export interface LtvView {
   builtAt: string | null; from: string; to: string; totals: LtvAgg; pool: { clients: number; ltv: number };
   people: LtvPersonOut[]; others: { agg: LtvAgg; pool: { clients: number; ltv: number }; people: LtvPersonOut[] } | null;
   cohorts: Cohort[]; unknownActors: number; turnoverMissing: number;
+  /** «За джерелом» (задача 8719): ті самі рядки, що й `totals`, розкладені за джерелом ліда; Σ = `totals`. */
+  bySource: LtvSourceRow[];
 }
 
 /** Блок «💎 LTV клієнтів лідогенерації»: «за весь час» — з таблиці, приріст і нові за період — ядром на кожен запит. */
@@ -247,6 +263,7 @@ export async function leadgenLtvView(scope: LtvScope, from: string, to: string, 
     builtAt: all[0]?.built_at ? new Date(all[0].built_at).toISOString() : null, from, to,
     totals: aggLtv(rows.map(toRow), from, to), pool: poolOf(null), people: people.sort((a, b) => b.agg.ltv - a.agg.ltv), others,
     cohorts: cohortsOf(rows.map(toRow), months, from, to),
+    bySource: bySourceOf(rows.map((r) => ({ ...toRow(r), source: sourceOf(r) })), from, to),
     unknownActors: rows.filter((r) => r.lg_manager_id == null).length,
     turnoverMissing: rows.reduce((a, r) => a + r.turnover_missing, 0),
   };

@@ -197,7 +197,7 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
  * власника 18.09.2026, як казав Сергій на зустрічі 15.09). Посилання-запрошення лишається
  * запасним: кандидат сам ставить пароль. Нова видача будь-яким способом гасить попередню.
  */
-function InviteBox({ id, toast, onChanged, disabled }: { id: number; toast: Toast; onChanged: () => void; disabled: string | null }) {
+function InviteBox({ id, toast, onChanged, disabled, hidden = false }: { id: number; toast: Toast; onChanged: () => void; disabled: string | null; hidden?: boolean }) {
   const dlg = useDialogs();
   const [link, setLink] = useState<{ url: string; expiresAt: string; login: string } | null>(null);
   const [cred, setCred] = useState<{ login: string; password: string } | null>(null);
@@ -229,6 +229,8 @@ function InviteBox({ id, toast, onChanged, disabled }: { id: number; toast: Toas
     try { await navigator.clipboard.writeText(link.url); toast("Посилання скопійовано — надішліть кандидату"); }
     catch { toast("Не вдалося скопіювати — виділіть посилання вручну", { error: true }); }
   };
+  // 👁 «Перегляд» (фінансист, #4153): ні логіна з паролем, ні запрошення — блоку немає зовсім.
+  if (hidden) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {cred && (
@@ -325,6 +327,8 @@ export function TrainingAccessBlock({ meta, id, version, toast, onChanged }: { m
   useEffect(load, [load, version]);
   if (d === null || d === "none") return null;
   const r = d.row, h = healthText(r), a = accessText(r);
+  // 👁 «Перегляд» (фінансист, #4153): прогрес і офер видно; логін/пароль, запрошення, привʼязка акаунта — ні.
+  const ro = meta.access === "view";
   const inviteBlock = r.access_closed_at ? "Доступ закрито" : r.status !== "candidate" && r.status !== "training" ? "Запрошення — для «кандидат + команда» і «на навчанні»" : null;
   return (
     <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
@@ -336,12 +340,12 @@ export function TrainingAccessBlock({ meta, id, version, toast, onChanged }: { m
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
         {r.status === "manager"
           ? <ManagerPasswordHint employeeId={d.employeeId} />
-          : <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} disabled={inviteBlock} />}
+          : <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} disabled={inviteBlock} hidden={ro} />}
         <button className="hr-btn" onClick={() => setOpen(true)}>Відкрити прогрес ›</button>
-        {r.health === "no_account" && !inviteBlock && <LinkAccountBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />}
+        {!ro && r.health === "no_account" && !inviteBlock && <LinkAccountBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />}
       </div>
       {open && <TrainingDrawer meta={meta} id={id} toast={toast} onClose={() => setOpen(false)} onChanged={() => { load(); onChanged(); }} />}
-      <OfferBox candidateId={id} status={r.status} toast={toast} onChanged={onChanged} />
+      <OfferBox candidateId={id} status={r.status} toast={toast} onChanged={onChanged} readOnly={ro} />
     </div>
   );
 }
@@ -421,9 +425,9 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
                 {r.status === "manager"
                   ? <ManagerPasswordHint employeeId={d.employeeId} />
-                  : <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }}
+                  : <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} hidden={meta.access === "view"}
                       disabled={r.access_closed_at ? "Доступ закрито — спершу «Відновити доступ»" : r.status !== "candidate" && r.status !== "training" ? "Запрошення — для «кандидат + команда» і «на навчанні»" : null} />}
-                {open && <button className="hr-btn" onClick={() => void run(() => extendHiringAccess(id), "Доступ продовжено на 1 день")}>Продовжити доступ на 1 день</button>}
+                {open && meta.access !== "view" && <button className="hr-btn" onClick={() => void run(() => extendHiringAccess(id), "Доступ продовжено на 1 день")}>Продовжити доступ на 1 день</button>}
                 {d.canRestore && r.access_closed_at && (r.access_closed_reason === "no_login" || r.access_closed_reason === "expired") && (
                   <button className="hr-btn" onClick={() => void run(() => restoreHiringAccess(id), "Доступ відновлено щонайменше на добу")}>Відновити доступ</button>
                 )}

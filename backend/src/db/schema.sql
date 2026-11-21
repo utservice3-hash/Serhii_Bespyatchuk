@@ -1563,7 +1563,9 @@ BEGIN
   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
   WHERE c.conrelid = 'one_on_ones'::regclass AND c.contype = 'p'
   GROUP BY c.conname;
-  IF pkcols IS DISTINCT FROM 'subject_manager_id,type,meeting_date' THEN
+  -- 19.11.2026: ключ переїхав на людину з Найму (блок у кінці файла) — цей блок його назад не повертає.
+  IF pkcols IS DISTINCT FROM 'subject_manager_id,type,meeting_date'
+     AND pkcols IS DISTINCT FROM 'subject_employee_id,type,meeting_date' THEN
     IF pkname IS NOT NULL THEN EXECUTE 'ALTER TABLE one_on_ones DROP CONSTRAINT ' || quote_ident(pkname); END IF;
     ALTER TABLE one_on_ones ADD PRIMARY KEY (subject_manager_id, type, meeting_date);
   END IF;
@@ -2913,7 +2915,9 @@ UPDATE roles SET permissions = permissions - 'view_all_1x1' - 'edit_1x1_forms'
 -- Налаштуваннях тут не лікує: наступна міграція знову скопіює набір адміна. Тому зняття — у схемі,
 -- ПІСЛЯ синку, як і зняття прав вище. «Навчання» фінансисту лишається (рішення 23.09). Тримає #741;
 -- зліпок доступу (#11) уже каже фінансисту 403 на цих роутах.
-UPDATE roles SET screen_access = screen_access - 'hiring' - 'nominations'
+-- 👁 20.11.2026 рішення Романа: «Найм» фінансисту ПОВЕРТАЄТЬСЯ — лише перегляд (`hiringAccess` → «view»), без статистик і
+-- редагувань. Тому тут знімаються лише «Номінації»; «Найм» приходить синком «financier = екрани адміна». Тримає #4153 (#741 знято).
+UPDATE roles SET screen_access = screen_access - 'nominations'
  WHERE key = 'financier';
 
 -- 🙅 «Бізнес-асистент» — НЕ для фінансиста (рішення Романа 24.09.2026: екран — ролі БА і керівництву admin, СЕО, ОД,
@@ -3601,8 +3605,9 @@ CREATE TABLE IF NOT EXISTS hiring_daily_manual (
 -- тімлід (бачить кандидатів своєї команди від етапу «з тімлідом»). Кандидата й менеджера
 -- немає СВІДОМО (#443: у кандидата рівно два екрани). Звіряє #504 зі списком у матриці.
 -- ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+-- 👁 Фінансист — з 20.11.2026, ЛИШЕ ПЕРЕГЛЯД (рішення Романа; рівень «view» у `hiringAccess`). Тримає #4153.
 UPDATE roles SET screen_access = screen_access || '{"hiring":true}'::jsonb
-  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'team_lead')
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'team_lead', 'financier')
     AND NOT (screen_access ? 'hiring');
 
 -- 🔒 ПЕРСОНАЛЬНІ ДАНІ КАНДИДАТІВ (ПІБ, телефон, Telegram, коментарі) — не для моделі.
@@ -8504,3 +8509,46 @@ CREATE TABLE IF NOT EXISTS data_sheet_exports (
 );
 CREATE INDEX IF NOT EXISTS idx_data_sheet_exports_pending ON data_sheet_exports (run_at) WHERE status = 'pending';
 REVOKE ALL ON data_sheet_exports FROM ai_readonly;
+
+-- 🤝 1×1 НА ЛЮДИНІ З НАЙМУ (19.11.2026, Сергій «підв'яжи до найму»; Роман «роби»). Досі запис 1×1 і задача з 1×1
+-- трималися на менеджері Kommo, тож бухгалтерія, CEO, рекрутер (немає Kommo) 1×1 мати не могли. Тепер ключ запису —
+-- картка «Найм → Співробітники» (`subject_employee_id`); менеджер Kommo лишається довідково, де пара є.
+-- Перенос однозначний або ніякий: менеджер із записом, у якого не рівно ОДНА картка (напряму чи через акаунт), зупиняє
+-- міграцію з іменем — вгадувати картку не беремось (заміряно 19.11: 129 записів і 33 задачі, конфліктів 0).
+-- ⚠️ Revert коду цього НЕ відкочує: старий код пише по старому ключу, якого вже немає. Відкат ключа —
+-- `docs/sql/1x1-employee-rollback.sql` (гейт `#9999`).
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS subject_employee_id INTEGER REFERENCES employees(id);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS o2o_employee_id INTEGER REFERENCES employees(id);
+DO $$
+DECLARE bad text; pkcols text; pkname text;
+BEGIN
+  SELECT string_agg(DISTINCT format('%s (карток: %s)', m.name, x.n), ', ') INTO bad
+    FROM (SELECT mid, (SELECT count(*) FROM employees e LEFT JOIN users eu ON eu.id = e.user_id
+                        WHERE e.manager_id = mid OR eu.manager_id = mid) AS n
+            FROM (SELECT subject_manager_id AS mid FROM one_on_ones WHERE subject_employee_id IS NULL
+                  UNION SELECT assignee_id FROM tasks
+                         WHERE task_type = 'oneonone' AND o2o_employee_id IS NULL AND assignee_id IS NOT NULL) ids) x
+    JOIN managers m ON m.id = x.mid
+   WHERE x.n <> 1;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION '1×1 → Найм: у цих менеджерів не рівно одна картка в Найм, перенос зупинено: %', bad;
+  END IF;
+  UPDATE one_on_ones o SET subject_employee_id = (SELECT e.id FROM employees e LEFT JOIN users eu ON eu.id = e.user_id
+                                                   WHERE e.manager_id = o.subject_manager_id OR eu.manager_id = o.subject_manager_id)
+   WHERE o.subject_employee_id IS NULL;
+  UPDATE tasks t SET o2o_employee_id = (SELECT e.id FROM employees e LEFT JOIN users eu ON eu.id = e.user_id
+                                         WHERE e.manager_id = t.assignee_id OR eu.manager_id = t.assignee_id)
+   WHERE t.task_type = 'oneonone' AND t.o2o_employee_id IS NULL AND t.assignee_id IS NOT NULL;
+  ALTER TABLE one_on_ones ALTER COLUMN subject_employee_id SET NOT NULL;
+  SELECT c.conname, string_agg(a.attname, ',' ORDER BY array_position(c.conkey, a.attnum)) INTO pkname, pkcols
+    FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+   WHERE c.conrelid = 'one_on_ones'::regclass AND c.contype = 'p' GROUP BY c.conname;
+  IF pkcols IS DISTINCT FROM 'subject_employee_id,type,meeting_date' THEN
+    IF pkname IS NOT NULL THEN EXECUTE 'ALTER TABLE one_on_ones DROP CONSTRAINT ' || quote_ident(pkname); END IF;
+    ALTER TABLE one_on_ones ADD PRIMARY KEY (subject_employee_id, type, meeting_date);
+  END IF;
+  -- лише ПІСЛЯ зміни ключа: колонку зі старого ключа Postgres NULL-ом не відпускає
+  ALTER TABLE one_on_ones ALTER COLUMN subject_manager_id DROP NOT NULL;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_tasks_o2o_employee ON tasks(o2o_employee_id, o2o_type)
+  WHERE task_type = 'oneonone' AND o2o_resolution IS NULL;

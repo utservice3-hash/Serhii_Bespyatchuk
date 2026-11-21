@@ -10,6 +10,8 @@ import { countsAsContactSql, KOMMO_CHANNEL, SCREEN_MAX_BYTES } from "../core/kom
 import { kommoDriveFile, KommoFileError } from "../kommo/client.js";
 import * as carrierPhones from "../core/carrierPhones.js";
 import { stepState, stepVerdict, phoneState } from "../core/clientNextStep.js";
+import { hideKvpTeamRow, kvpTeamRowName } from "../core/kvpTeamRows.js";
+import { KVP_DEPT_TEAM_ID } from "../core/prozorroAssign.js";
 import { isReturned, RETURN_GAP_DAYS } from "../core/reactivationFilters.js";
 import { mergeNoteComment } from "../core/receivableNoteMerge.js";
 import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
@@ -28,7 +30,8 @@ import { overviewCache } from "../core/lazyCache.js";
 
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, linkedinCount: 0, prozorroCount: 0, otherCount: 0, noChannelCount: 0 } as const;
-import { kommoLeadUrl } from "../core/kommoLinks.js";
+import { kommoLeadUrl, kommoCompanyUrl, kommoContactUrl } from "../core/kommoLinks.js";
+import { adClientLinks, type AdClientKommoTarget } from "../core/adClientLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
 import { canCloseDeal } from "../core/firstTouchClose.js";
 import { checkPriceNote } from "../core/firstTouchPriceReasons.js";
@@ -63,6 +66,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
+import { missedDeals } from "../core/missedDeals.js";
 import { levelByManager } from "../core/employeeLevel.js";
 import { canAssignMissedTask, LEADERSHIP_ROLES, hoursSince, taskState, buttonTaskTitle, buttonTaskDescription, mondayOf, canSetCallbackNorm, callbackNormVerdict, clientNameOf } from "../core/missedNoCallbackRules.js";
 import { missedPeriod, missedScopeFor, ownerlessInScope, dealInWindowLateral, NO_DEAL_STATES, SERIES_GRANULARITIES, type NoDealState, type SeriesGranularity } from "../core/missedCallsRules.js";
@@ -6239,6 +6243,10 @@ dashboardRouter.get("/ads/clients", async (req, res) => {
   const to = dateParam(req.query.to) ?? today;
   const { adSources } = await getSettings();
   const r = await adClients(from, to, adSources);
+  // 🔗 19.11.2026 (Роман): назва клієнта веде в Kommo — компанія / контакт / угода (`core/adClientLinks.ts`, `#3318`).
+  const links = await adClientLinks(r.clients.map((c) => c.clientKey));
+  const linkUrl = (t: AdClientKommoTarget | null | undefined): string | null =>
+    !t ? null : t.kind === "company" ? kommoCompanyUrl(t.id) : t.kind === "contact" ? kommoContactUrl(t.id) : kommoLeadUrl(t.id);
   // 🔁 #8704: клієнти (не лише постійні) — для фільтрів «Стали постійними / Працюють зараз», як у блоці LTV лідгенів.
   res.json({
     from: r.from, to: r.to, campaigns: r.campaigns, cohorts: r.cohorts, totals: r.totals,
@@ -6246,6 +6254,7 @@ dashboardRouter.get("/ads/clients", async (req, res) => {
       clientKey: c.clientKey, name: c.name, campaign: c.campaign, firstLead: c.firstLead,
       segment: c.segment, state: c.state, qualified: c.qualified, group: c.group,
       deals: c.deals, margin: c.margin, repeatMargin: c.repeatMargin,
+      kommoUrl: linkUrl(links.get(c.clientKey)), kommoKind: links.get(c.clientKey)?.kind ?? null,
     })),
   });
 });
@@ -9309,8 +9318,15 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   // client shows under exactly one manager — same identity rule as /loyalty.
   const activeMonths = (await getSettings()).sleepingWindowMonths;
   const clientsRes = await pool.query<{ manager_id: number; client_key: string; name: string; orders: string; revenue: string; last_paid: string }>(
+    // ⏱ ОСНОВНИЙ МЕНЕДЖЕР РАХУЄТЬСЯ В ТОМУ САМОМУ ПРОХОДІ, ЩО Й АГРЕГАТ КЛІЄНТА (18.11.2026, `#9962`).
+    // Було: окремий підзапит `primary_mgr` з ROW_NUMBER, приєднаний до `agg`. Плановик оцінював
+    // його в один рядок і перераховував віконну функцію НА КОЖНОГО клієнта: заміряно на проді
+    // 3,3 млн відкинутих пар і 0,9–1,6 с (з «замовклими» — понад 10 с). Правило те саме:
+    // менеджер із найбільшою кількістю оплачених угод клієнта, при рівності — з найсвіжішою.
     `WITH scoped AS (
-       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price
+       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price,
+              COUNT(*) OVER (PARTITION BY d.client_key, d.manager_id) AS mgr_orders,
+              MAX(d.created_at_kommo) OVER (PARTITION BY d.client_key, d.manager_id) AS mgr_last
        FROM deals d
        JOIN managers m ON m.id = d.manager_id AND m.is_active
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -9320,18 +9336,12 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
        SELECT client_key,
               (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS name,
               COUNT(*) AS orders, COALESCE(SUM(price),0) AS revenue,
-              MAX(created_at_kommo) AS last_paid
+              MAX(created_at_kommo) AS last_paid,
+              (array_agg(manager_id ORDER BY mgr_orders DESC, mgr_last DESC))[1] AS manager_id
        FROM scoped GROUP BY client_key
-     ),
-     primary_mgr AS (
-       SELECT client_key, manager_id FROM (
-         SELECT client_key, manager_id,
-                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(created_at_kommo) DESC) AS rn
-         FROM scoped GROUP BY client_key, manager_id
-       ) z WHERE rn = 1
      )
-     SELECT pm.manager_id, a.client_key, a.name, a.orders, a.revenue, a.last_paid
-     FROM agg a JOIN primary_mgr pm ON pm.client_key = a.client_key
+     SELECT a.manager_id, a.client_key, a.name, a.orders, a.revenue, a.last_paid
+     FROM agg a
      WHERE a.orders >= 2 ${includeInactive ? "" : `AND a.last_paid >= now() - interval '${activeMonths} months'`}
      ORDER BY a.revenue DESC`
   );
@@ -10222,6 +10232,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   //    щоб Звіт КВП рахував прогноз ТИМ САМИМ кодом, а не «за тим самим сенсом» —
   //    рішення 06.08.2026 доїхало сюди й не доїхало туди саме через дві копії.
   const expPlannedM = forecast.expectedSplitByMonth(expDays, kyivToday);
+  // ⏳ Очікування з плановою датою В МЕЖАХ обраного періоду (тиждень Звіту; пункт 2 TOP Weekly 16.11).
+  const expRangeM = forecast.expectedInRange(expDays, from, to);
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
   /** Канальна конверсія в контракт: counts завжди, % лише при taken ≥ 10 — той самий
    *  поріг, що в combined, і рахується ТИМ САМИМ полем `cohortPct` ядра. */
@@ -10447,6 +10459,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // не надійшли. Не входить ні в прогноз, ні в два сусідні числа — саме тому й
       // зникало з екрана (07.09.2026: 67% зони по відділу).
       expectPastMonths: Math.round(expPlannedM.get(m.id)?.pastMonths ?? 0),
+      // ⏳ Планова дата в межах ОБРАНОГО періоду — для «з очікуваннями» в режимі «Тиждень».
+      expectInPeriod: Math.round(expRangeM.get(m.id) ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       // 🔴 ПРОГНОЗ МІСЯЦЯ (рішення власника 06.08.2026) = ФАКТ ② + ОЧІКУВАННЯ З
       // ПЛАНОВОЮ ДАТОЮ ОПЛАТИ В ЦЬОМУ Ж МІСЯЦІ. Контрольне число власника, звірене
@@ -10603,6 +10617,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     expectThisMonth: managers.reduce((s, m) => s + m.expectThisMonth, 0),
     expectNextMonth: managers.reduce((s, m) => s + m.expectNextMonth, 0),
     expectPastMonths: managers.reduce((s, m) => s + m.expectPastMonths, 0),
+    expectInPeriod: managers.reduce((s, m) => s + m.expectInPeriod, 0),
     dispatched: managers.reduce((s, m) => s + m.kpi.dispatch.fact, 0),
     dispatchedRevenue: managers.reduce((s, m) => s + m.kpi.dispatch.revenue, 0),
     created: managers.reduce((s, m) => s + m.created, 0),
@@ -11109,13 +11124,19 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // 4289 (канал), тобто ×4.3. Рядок вище раніше стверджував «чисельник того самого
   // каналу, що знаменник» — це було НЕПРАВДОЮ; тепер стало правдою. Тримає `#143`.
   // per-manager → команда = Σ (Σ-інваріант). Тонкий знаменник (0) → «—», не «0%».
-  const [reachedAuto, adsAllTime, lgAllTime, mgrTeamRows] = await Promise.all([
+  const [reachedAuto, adsAllTime, lgAllTime, mgrTeamRows, teamNameRows] = await Promise.all([
     metrics.reachedAutoByManager(adSources),
     metrics.adsAcceptedByMgr({}, adSources),
     metrics.conversionByManager({}, "leadgen"),
     pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers WHERE is_active`),
+    // 🏷 Назви команд: команду без грошей у періоді заводить рядок плану менеджера, і до 20.11.2026 — з ПОРОЖНІМ
+    // імʼям (три безіменні рядки на екрані Романа). Назва береться з `teams`, а не з того, хто першим згадав команду.
+    pool.query<{ id: number; name: string }>(`SELECT id, name FROM teams`),
   ]);
   const teamOfMgr = new Map(mgrTeamRows.rows.map((r) => [r.id, r.team_id]));
+  const teamNameById = new Map(teamNameRows.rows.map((r) => [r.id, r.name]));
+  /** Команди, де є хоч один активний менеджер, — від цього залежить, чи показувати порожній рядок (`core/kvpTeamRows.ts`). */
+  const teamsWithActive = new Set(mgrTeamRows.rows.map((r) => r.team_id).filter((x): x is number => x != null));
   const adsByMgr = new Map(adsAllTime.map((x) => [x.managerId, x.count]));
   const lgByMgr = new Map(lgAllTime.map((x) => [x.managerId, x.taken]));
   const convLT = new Map<number, { numAd: number; numLg: number; adsDen: number; lgDen: number }>();
@@ -11134,7 +11155,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
 
   for (const [mid, mp] of mgrPlan) {
     if (mp.teamId == null) continue;
-    const e = teamGet(mp.teamId, "");
+    const e = teamGet(mp.teamId, kvpTeamRowName(teamNameById.get(mp.teamId), mp.teamId));
     const rev = recvByMgr.get(mid)?.revenue ?? 0;
     const su = succByMgr.get(mid); const cv = convByMgr.get(mid);
     e.plan += mp.plan;
@@ -11197,7 +11218,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       remainingToPlan: kvpWholeMonth ? t.plan - t.revenue : null,
       managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
     };
-  }).sort((a, b) => b.revenue - a.revenue);
+  })
+    // 🧹 Порожній рядок команди без активних менеджерів (стара команда 11) і порожній рядок відділу КВП (37283,
+    // одна Левентова без CRM) не показуються — рішення Романа 20.11.2026. Рядок із грошима чи планом не ховається ніколи.
+    .filter((t) => !hideKvpTeamRow(t, teamsWithActive.has(t.teamId), KVP_DEPT_TEAM_ID))
+    .sort((a, b) => b.revenue - a.revenue);
 
   // Стратегічний план (🔒 read-only) = Σ планів команд у таблиці — ОДНЕ джерело з
   // рядками дашборда. Раніше strategicRevenuePlac фільтрував m.is_active і мовчки
@@ -11504,6 +11529,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
         cac: newClients > 0 ? Math.round(budgetFact / newClients) : null,
         cacBudget: Math.round(budgetFact), cacNewClients: newClients,
         avgCycleDays: avgCycle,
+        // 🧾 Середній чек ФАКТИЧНИЙ (METRICS_GLOSSARY §5) = отримані кошти ÷ угоди тієї самої множини;
+        // «нових» — та сама формула над сегментом нових клієнтів тієї ж каси (receivedSeg, ядро money).
+        // Правки 17.11.2026: Звіт КВП показує обидва в блоці «Показники місяця». Ділення на нуль → null, не 0.
+        avgCheck: received.deals > 0 ? Math.round(received.revenue / received.deals) : null,
+        avgCheckNew: receivedSeg.newSeg.deals > 0 ? Math.round(receivedSeg.newSeg.revenue / receivedSeg.newSeg.deals) : null,
         lost: { deals: lost.count, sum: lost.sum, nonTargetLeads: nonTarget },
       };
     })(),
@@ -12417,15 +12447,41 @@ dashboardRouter.get("/missed-calls/list", async (req, res) => {
   const day = dateParam(req.query.day) ?? kyivToday();
   const scope = missedScopeFor(req.auth!, req.query);
   const onlyNoCallback = req.query.noCallback === "1";
-  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback);
+  // 20.11.2026: `to` — список за весь обраний період (тиждень, місяць), щоб «Кому передзвонити» збігався з числом у смузі.
+  // Не довше 31 дня і не раніше `day`; інакше — один день, як і було. Стеля рядків і `truncated` — ті самі.
+  const toQ = dateParam(req.query.to);
+  const spanDays = toQ ? (Date.parse(toQ) - Date.parse(day)) / 86_400_000 : -1;
+  const to = toQ && spanDays >= 0 && spanDays <= 31 ? toQ : day;
+  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback, to);
   res.json({
-    day, onlyNoCallback, truncated,
+    day, to, onlyNoCallback, truncated,
     // Явний перелік полів, а не `...r`: нова властивість рядка не поїде назовні сама (#17e2).
     rows: rows.map((r) => ({
       uniqueid: r.uniqueid, at: r.at, phone: r.phone, clientKey: r.clientKey,
       managerId: r.managerId, managerName: r.managerName, bucket: r.bucket,
       next: r.next, nextMin: r.nextMin, dealId: r.dealId,
       dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId),
+      mobile: r.mobile, waiting: r.waiting, waitH: r.waitH,
+    })),
+  });
+});
+
+/**
+ * 📄 ПРОПУЩЕНІ УГОДИ (рішення Романа 20.11.2026, словник §11a) — вкладка поруч із пропущеними дзвінками.
+ * Межа — той самий `pre("/api/dashboard/missed-calls")`, кламп — той самий `missedScopeFor`.
+ * Підсумок, таблиця й список — одним викликом і від однієї миті «зараз».
+ */
+dashboardRouter.get("/missed-calls/deals", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(req.auth!, req.query);
+  const r = await missedDeals(from, to, scope, new Date());
+  res.json({
+    period: { from, to }, summary: r.summary, managers: r.managers, truncated: r.truncated,
+    ownerlessInScope: ownerlessInScope(scope),
+    // Явний перелік полів, а не `...r`: нова властивість рядка не поїде назовні сама (#17e2).
+    rows: r.rows.map((x) => ({
+      dealId: x.dealId, dealUrl: kommoLeadUrl(x.dealId), at: x.at, phone: x.phone,
+      managerId: x.managerId, managerName: x.managerName, teamName: x.teamName, next: x.next, nextMin: x.nextMin,
     })),
   });
 });

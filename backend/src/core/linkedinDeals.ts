@@ -1,5 +1,6 @@
 import type { Db } from "./adCallFacts.js";
 import { stageName } from "./stageNames.js";
+import { PAYMENT_REQUEST_PIPELINE } from "./paymentRequests.js";
 
 /**
  * 🔗 «Усі угоди з LinkedIn» на екрані «Клієнти → LinkedIn» (задача 9363, ТЗ Юлі 16.11.2026; рішення Романа 17.11.2026).
@@ -63,7 +64,10 @@ export interface LinkedinDeals {
 }
 
 /**
- * Усі угоди з LinkedIn за весь час, етап — поточний у CRM. `managerIds`: `null` — усі (керівництво);
+ * Усі угоди з LinkedIn за весь час, етап — поточний у CRM. БЕЗ воронки «Оплата перевозчикам» (7341740): там лежать
+ * автоугоди-запити на оплату перевізнику, вони копіюють теги з основної угоди, тож одне перевезення рахувалось би двічі
+ * (заміряно 19.11.2026: «Автосделка: кожичі – житомир» дублювала успішну угоду Гаркушиної — 57/3 замість 56/2).
+ * Виключення стоїть ТУТ, а не в `linkedinDealSql`: Звіт (9230) і LTV лідгену читають правило окремо й мають свої межі воронок. `managerIds`: `null` — усі (керівництво);
  * масив — лише угоди цих менеджерів (менеджер — свої, тімлід — команда). Порожній масив = порожня відповідь.
  * `leadUrl` — посилання на угоду (`kommoLeadUrl` з роуту): ядро не тягне `config`, щоб гейти бігли без env Kommo.
  */
@@ -75,7 +79,8 @@ export async function loadLinkedinDeals(db: Db, managerIds: readonly number[] | 
             d.status_id::text AS status_id, d.created_at_kommo,
             ${sourceSql("d")} AS by_source, ${tagSql("d")} AS by_tag
        FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
-      WHERE ${linkedinDealSql("d")} AND ($1::int[] IS NULL OR d.manager_id = ANY($1::int[]))
+      WHERE ${linkedinDealSql("d")} AND d.pipeline_id IS DISTINCT FROM ${String(PAYMENT_REQUEST_PIPELINE)}
+        AND ($1::int[] IS NULL OR d.manager_id = ANY($1::int[]))
       ORDER BY d.created_at_kommo DESC NULLS LAST, d.kommo_id DESC`, [managerIds == null ? null : [...managerIds]])).rows;
   const deals: LinkedinDealRow[] = rows.map((r) => ({
     kommoId: Number(r.kommo_id), url: leadUrl ? leadUrl(Number(r.kommo_id)) : null, name: r.name, managerName: r.mname,

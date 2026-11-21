@@ -204,21 +204,21 @@ test("#390g ТИП ЗА РОЛЛЮ + найслабші питання: без �
 test("#390h ЖИВИЙ: ростер і розкол «пропустили/ніколи» сходяться на проді",
   { ...needsBackendEnv() }, async () => {
   const { pool } = await import("../db/pool.js");
-  const { hasPlanSql, stateJoinSql } = await import("./managerState.js");
-  const { activeManagerSql } = await import("./activeManager.js");
+  // 19.11.2026: ростер аналітики — люди з Найму (`oneOnOne/roster.ts`), той самий відбір, що в роуті `/analytics`.
+  const { ROSTER_SQL, rosterOf } = await import("../oneOnOne/roster.js");
   const month = "2026-08-01";
+  const cands = (await pool.query(ROSTER_SQL)).rows;
+  const owed = (["A", "B"] as const).flatMap((t) => rosterOf(cands, t)
+    .filter((x) => x.status === "active" && x.teamId !== null).map((x) => ({ id: x.employeeId, lead: x.category === "teamlead", t })));
   const { rows } = await pool.query<{
     id: number; is_team_lead: boolean; owed: string; met_this: boolean; met_ever: boolean;
   }>(
-    `WITH r AS (
-       SELECT m.id, m.is_team_lead, CASE WHEN m.is_team_lead THEN 'B' ELSE 'A' END AS owed
-         FROM managers m ${stateJoinSql("m")}
-        WHERE ${hasPlanSql("m", activeManagerSql("m"))} AND m.team_id IS NOT NULL)
-     SELECT r.id, r.is_team_lead, r.owed,
-            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_manager_id=r.id AND o.type=r.owed
+    `SELECT r.id, r.lead AS is_team_lead, r.owed,
+            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_employee_id=r.id AND o.type=r.owed
                       AND date_trunc('month', o.meeting_date) = $1::date) AS met_this,
-            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_manager_id=r.id AND o.type=r.owed) AS met_ever
-       FROM r`, [month]);
+            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_employee_id=r.id AND o.type=r.owed) AS met_ever
+       FROM unnest($2::int[], $3::bool[], $4::text[]) AS r(id, lead, owed)`,
+    [month, owed.map((x) => x.id), owed.map((x) => x.lead), owed.map((x) => x.t)]);
 
   assert.ok(rows.length > 0, "ростер порожній — перевірці немає що знаходити");
   const met = rows.filter((r) => r.met_this).length;

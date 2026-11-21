@@ -400,6 +400,24 @@ export async function invoicePdfFrom1c(base: string, uid: string, stamp: boolean
   }
 }
 
+/**
+ * Внутрішній код рахунку 1С за його номером (`GET /invoicePdf?number=…` без `format=file` → JSON з `invoice_uid`).
+ * Для рахунків Genesis (19.11.2026: Genesis упав, менеджерам треба рахунок і акт з угоди): у нашому журналі їх немає,
+ * а акт 1С віддає лише за `invoice_uid`. Номери рахунків у 1С наскрізні між організаціями (перевірено на 13 088).
+ */
+export async function invoiceUidByNumber(base: string, number: string, doFetch: FetchLike = fetch):
+  Promise<{ ok: true; uid: string } | { ok: false; why: string }> {
+  try {
+    const r = await doFetch(`${base}/invoicePdf?${new URLSearchParams({ number })}`, { signal: AbortSignal.timeout(ONEC_TIMEOUT_MS) });
+    if (r.status !== 200) return { ok: false, why: `1С відповіла ${r.status}.` };
+    const j = (await r.json().catch(() => null)) as { state?: boolean; invoice_uid?: string; message?: string } | null;
+    if (!j?.state || !j.invoice_uid) return { ok: false, why: j?.message ? `1С: ${String(j.message).slice(0, 200)}` : `Рахунку №${number} у 1С не знайдено.` };
+    return { ok: true, uid: String(j.invoice_uid) };
+  } catch (e) {
+    return { ok: false, why: (e as Error)?.name === "TimeoutError" ? "1С не відповіла за 30 с." : "1С недоступна." };
+  }
+}
+
 /* ——— контрагент ——— */
 
 /** Код компанії → параметр 1С: 8 цифр — юрособа (`edrpou`), 10 — ФОП (`inn`; лист 1С 04.10: ФОП шукати за `inn`). */

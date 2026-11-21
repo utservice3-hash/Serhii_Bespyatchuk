@@ -204,3 +204,119 @@ test("#9230e LinkedIn і Prozorro видно на екрані: /report-plan, к
   assert.ok(kvp.includes("${c.crLinkedin || 0} / ${c.crProzorro || 0}"), "🔴 Звіт КВП: «Канал ств.» по тижнях без LinkedIn / Prozorro — сума не збіжеться зі «Створено»");
   assert.ok(kvp.includes('chip("LinkedIn", cs.linkedin)') && kvp.includes('chip("Prozorro", cs.prozorro)'), "🔴 Звіт КВП: рядок факту менеджера без LinkedIn / Prozorro");
 });
+
+// ── KPI задачника (Роман 18.11.2026: «окей роби kpi і закривай задачу») ──────────────────────────────────────────
+// Тижневий план у «Задачнику» отримує ще два показники: «LinkedIn» і «Prozorro». Факт — ТЕ САМЕ число, що колонки
+// Звіту «зі створених: LinkedIn / Prozorro», тобто той самий виклик ядра `createdSplitByManager`.
+
+/** Рядок `createdSplitByManager` для менеджера 7: LinkedIn 5, Prozorro 3 — РІЗНІ числа, щоб підміна одного іншим червоніла. */
+const SPLIT_FX = (() => {
+  const z = { undef_ad: "0", undef_lg: "0", undef_el: "0", undef_li: "0", undef_pz: "0", undef_oth: "0", undef_nch: "0" };
+  return { manager_id: 7, name: "Тест", team_id: 1, created: "20", new_count: "12", repeat_count: "8", undef_count: "0",
+    ad_count: "4", leadgen_count: "3", elogist_count: "2", linkedin_count: "5", prozorro_count: "3", other_count: "3", no_channel_count: "0",
+    new_ad: "2", new_lg: "1", new_el: "1", new_li: "4", new_pz: "2", new_oth: "2", new_nch: "0",
+    repeat_ad: "2", repeat_lg: "2", repeat_el: "1", repeat_li: "1", repeat_pz: "1", repeat_oth: "1", repeat_nch: "0", ...z };
+})();
+
+/**
+ * #9230f — ФАКТ ПЛАНУ «LinkedIn» / «Prozorro» = КОЛОНКА ЗВІТУ.
+ *
+ * Прогін `evaluateKpiTasks` на денній задачі з цілями LinkedIn 4 і Prozorro 4: ядро віддає 5 і 3, тож задача мусить
+ * отримати факт 5 (виконано) і 3 (не виконано), а не 0 — `default: return 0` мовчки зробив би показник вічно невиконаним.
+ *
+ * 🧨 САБОТАЖ: `?.linkedinCount` → `?.prozorroCount` у гілці `linkedin_count` → червоніє; прибрати гілку → червоніє.
+ */
+test("#9230f ФАКТ KPI «LinkedIn» / «Prozorro» У ЗАДАЧНИКУ = колонки Звіту «зі створених» (той самий виклик ядра)", async () => {
+  const task = { id: 11, assignee_id: 7, plan_date: "2026-11-18",
+    metrics_json: [{ metric: "linkedin_count", target: 4 }, { metric: "prozorro_count", target: 4 }] };
+  const cap = await capturePool((sql) => {
+    if (/FROM app_settings/.test(sql)) return { rows: [{ data: { adSources: ["test"] } }] };
+    if (/SELECT id, assignee_id, to_char\(plan_date/.test(sql)) return { rows: [task] };
+    if (/AS linkedin_count/.test(sql)) return { rows: [SPLIT_FX] };
+    return { rows: [] };
+  });
+  try {
+    const { evaluateKpiTasks } = await import("../jobs/evaluateKpiTasks.js");
+    await evaluateKpiTasks();
+  } finally { cap.restore(); }
+  const upd = cap.log.find((q) => /UPDATE tasks SET metrics_json = \$1, status = CASE/.test(q.sql));
+  assert.ok(upd, "🔴 задачу не оновлено — гейт втратив предмет");
+  const out = JSON.parse(String(upd!.params[0])) as { metric: string; actual: number; done: boolean }[];
+  const li = out.find((m) => m.metric === "linkedin_count");
+  const pz = out.find((m) => m.metric === "prozorro_count");
+  assert.equal(li?.actual, 5, "🔴 факт «LinkedIn» у задачі ≠ колонці Звіту «зі створених: LinkedIn»");
+  assert.equal(pz?.actual, 3, "🔴 факт «Prozorro» у задачі ≠ колонці Звіту «зі створених: Prozorro»");
+  assert.equal(li?.done, true, "🔴 5 із 4 — це виконано");
+  assert.equal(pz?.done, false, "🔴 3 із 4 — це НЕ виконано");
+  assert.equal(upd!.params[1], false, "🔴 день закрито, хоча Prozorro не виконано");
+});
+
+/**
+ * #9230g — ПЛАН ЗБЕРІГАЄТЬСЯ: `POST /tasks/plan` пише «LinkedIn» / «Prozorro» у парасольку тижня і в кожен день,
+ * а сума днів у Звіті складається (лічильний показник), а не береться максимумом.
+ *
+ * 🧨 САБОТАЖ: прибрати рядок `periodTargets.push({ metric: "linkedin_count"` → червоніє; прибрати `"prozorro_count"`
+ * з `ADDITIVE` у `kpiTargets.ts` → червоніє (2 дні по 1 дали б 1, а не 2).
+ */
+test("#9230g ПЛАН ТИЖНЯ ЗБЕРІГАЄ «LinkedIn» / «Prozorro» у парасольку й дні; дні складаються", async () => {
+  const cap = await capturePool((sql) => {
+    if (/SELECT 1 FROM managers WHERE id/.test(sql)) return { rows: [{ ok: 1 }] };
+    if (/SELECT m\.name, tm\.name AS team_name/.test(sql)) return { rows: [{ name: "Тест", team_name: "РПК" }] };
+    if (/RETURNING id/.test(sql)) return { rows: [{ id: 100 }] };
+    return { rows: [] };
+  });
+  let code = 0; let body: unknown;
+  try {
+    const { tasksRouter } = await import("../routes/tasks.js");
+    type Layer = { route?: { path: string; methods: Record<string, boolean>; stack: { handle: unknown }[] } };
+    const layer = (tasksRouter as unknown as { stack: Layer[] }).stack.find((l) => l.route?.path === "/plan" && l.route.methods.post);
+    assert.ok(layer, "🔴 не знайдено POST /tasks/plan — гейт втратив предмет");
+    const handler = layer!.route!.stack[layer!.route!.stack.length - 1].handle as (req: unknown, res: unknown, next: (e?: unknown) => void) => Promise<void>;
+    const res = { status(x: number) { code = x; return res; }, json(b: unknown) { body = b; return res; }, send(b: unknown) { body = b; return res; } };
+    await handler({ auth: { userId: 1, role: "admin", managerId: null, teamId: null },
+      body: { assigneeId: 7, period: "week", days: ["2026-11-16", "2026-11-17"], linkedinCount: 4, prozorroCount: 2 } }, res, (e) => { if (e) throw e; });
+  } finally { cap.restore(); }
+  assert.equal(code, 201, `🔴 план лише з LinkedIn / Prozorro не збережено: ${JSON.stringify(body)}`);
+  const inserts = cap.log.filter((q) => /^\s*INSERT INTO tasks/.test(q.sql));
+  const umb = inserts.find((q) => /'kpi_period'/.test(q.sql));
+  assert.ok(umb, "🔴 парасольку тижня не створено");
+  const umbM = JSON.parse(String(umb!.params[5])) as { metric: string; target: number }[];
+  assert.equal(umbM.find((m) => m.metric === "linkedin_count")?.target, 4, "🔴 ціль тижня «LinkedIn» не записана в парасольку");
+  assert.equal(umbM.find((m) => m.metric === "prozorro_count")?.target, 2, "🔴 ціль тижня «Prozorro» не записана в парасольку");
+  const days = inserts.filter((q) => /'daily_kpi'/.test(q.sql));
+  assert.equal(days.length, 2, "🔴 днів плану не два");
+  for (const d of days) {
+    const m = JSON.parse(String(d.params[4])) as { metric: string; target: number }[];
+    assert.equal(m.find((x) => x.metric === "linkedin_count")?.target, 2, "🔴 ціль дня «LinkedIn» ≠ 4 ÷ 2");
+    assert.equal(m.find((x) => x.metric === "prozorro_count")?.target, 1, "🔴 ціль дня «Prozorro» ≠ 2 ÷ 2");
+  }
+
+  const { accumulateKpiTargets } = await import("./kpiTargets.js");
+  const dayPlans = ["2026-11-16", "2026-11-17"].map((day) => ({ assigneeId: 7, day,
+    metrics: [{ metric: "linkedin_count", target: 1 }, { metric: "prozorro_count", target: 1 }] }));
+  const acc = accumulateKpiTargets([], dayPlans, "2026-11-16", "2026-11-17").get(7) ?? {};
+  assert.equal(acc.linkedin_count, 2, "🔴 «LinkedIn» по днях береться максимумом, а не сумою");
+  assert.equal(acc.prozorro_count, 2, "🔴 «Prozorro» по днях береться максимумом, а не сумою");
+});
+
+/**
+ * #9230h — ФОРМА ПЛАНУ МАЄ ПОЛЯ «LinkedIn» / «Prozorro», ШЛЕ ЇХ НА СЕРВЕР, А ЗАДАЧА ПІДПИСУЄ ПОКАЗНИКИ.
+ * Без підпису показник у задачі друкувався б сирим ключем `linkedin_count`.
+ *
+ * 🧨 САБОТАЖ: прибрати `linkedinCount:` із виклику `createTaskPlan` у `Dashboard.tsx` → червоніє.
+ */
+test("#9230h ФОРМА ПЛАНУ: поля «LinkedIn» / «Prozorro», відправка на сервер, підписи в задачі", () => {
+  const dash = FE("pages/Dashboard.tsx");
+  const call = /await createTaskPlan\(\{[\s\S]*?\}\);/.exec(dash)?.[0] ?? "";
+  assert.ok(call, "🔴 не знайдено виклик `createTaskPlan` — гейт втратив предмет");
+  for (const k of ["linkedinCount", "prozorroCount"])
+    assert.match(call, new RegExp(`\\b${k}: taskForm\\.${k} \\? Number\\(taskForm\\.${k}\\)`), `🔴 форма не шле \`${k}\` на сервер`);
+  const tasks = FE("pages/dashboard/sections/TasksSection.tsx");
+  for (const k of ["linkedinCount", "prozorroCount"])
+    assert.match(tasks, new RegExp(`value=\\{taskForm\\.${k}\\}`), `🔴 у формі плану немає поля \`${k}\``);
+  for (const [k, l] of [["linkedin_count", "LinkedIn"], ["prozorro_count", "Prozorro"]]) {
+    assert.ok(tasks.includes(`  ${k}: "${l}",`), `🔴 задача не підписує показник \`${k}\``);
+    assert.match(/const ADDITIVE_METRICS = new Set\(\[[^\]]*\]\)/.exec(tasks)?.[0] ?? "", new RegExp(`"${k}"`), `🔴 \`${k}\` у задачі не сумується по днях`);
+  }
+  assert.match(FE("pages/dashboard/taskForm.ts"), /\blinkedinCount: "",\s*\n\s*prozorroCount: "",/, "🔴 порожня форма не скидає поля LinkedIn / Prozorro");
+});
