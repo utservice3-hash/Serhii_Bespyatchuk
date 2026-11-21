@@ -456,6 +456,6 @@ test("#10423 ЖИВИЙ SQL: «клієнт уже був» шукається �
   assert.equal(st.tasks, expected, "🔴 фон пройшов не весь набір");
   assert.equal(st.running, false);
   const cs = route.statsSeriesCacheStatus();
-  assert.equal(cs.fresh, expected, `🔴 у памʼяті ${cs.fresh} свіжих рядів замість ${expected} — фон рахує повз памʼять або ключі зливаються`);
+  assert.equal(cs.cache.fresh, expected, `🔴 у памʼяті ${cs.cache.fresh} свіжих рядів замість ${expected} — фон рахує повз памʼять або ключі зливаються`);
   assert.ok(cs.warm.lastFinishedAt && cs.warm.lastMs != null, "🔴 стан фону не каже, коли й за скільки він пройшов");
 });

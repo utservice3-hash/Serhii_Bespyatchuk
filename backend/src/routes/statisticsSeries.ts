@@ -303,7 +303,7 @@ const COMPANY: ScopeSpec = { scopeType: "company", scopeKey: "company", scopeNam
 interface WarmStatus { running: boolean; lastStartedAt: string | null; lastFinishedAt: string | null; lastMs: number | null; tasks: number; failed: number; firstError: string | null }
 const warmStatus: WarmStatus = { running: false, lastStartedAt: null, lastFinishedAt: null, lastMs: null, tasks: 0, failed: 0, firstError: null };
 export async function warmStatsSeries(): Promise<WarmStatus> {
-  if (warmStatus.running) return { ...warmStatus }; // попередній прохід ще йде — другий поверх нього лише подвоїв би навантаження
+  if (warmStatus.running) return structuredClone(warmStatus); // попередній прохід ще йде — другий поверх нього лише подвоїв би навантаження
   const t0 = Date.now(), tasks = warmTasks(kyivToday());
   Object.assign(warmStatus, { running: true, lastStartedAt: new Date(t0).toISOString() });
   let failed = 0, firstError: string | null = null;
@@ -316,10 +316,10 @@ export async function warmStatsSeries(): Promise<WarmStatus> {
     Object.assign(warmStatus, { running: false, lastFinishedAt: new Date().toISOString(), lastMs: Date.now() - t0, tasks: tasks.length, failed, firstError });
   }
   if (failed) console.warn(`warmStatsSeries: ${failed} із ${tasks.length} рядів не перераховано — ${firstError}`);
-  return { ...warmStatus };
+  return structuredClone(warmStatus);
 }
 /** Стан памʼяті рядів і фонового розрахунку — для `/api/health`. */
-export const statsSeriesCacheStatus = () => ({ freshSec: SERIES_FRESH_MS / 1000, staleSec: SERIES_STALE_MS / 1000, ...seriesCache.stats(), warm: { ...warmStatus } });
+export const statsSeriesCacheStatus = () => ({ freshSec: SERIES_FRESH_MS / 1000, staleSec: SERIES_STALE_MS / 1000, cache: seriesCache.stats(), warm: structuredClone(warmStatus) });
 
 // 🔒 СЕРВЕРНИЙ КЛАМП роль-скоупу. Тімлід бачить свою команду + її менеджерів ПЛЮС компанію
 // ЛИШЕ як агрегат-бенчмарк (одна серія значень; чужих команд/менеджерів у payload НЕМА).
