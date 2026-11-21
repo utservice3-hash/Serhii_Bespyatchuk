@@ -134,38 +134,65 @@ export function splitForExport(txs: ExportTx[]): Split {
 /** Колонки Data (0-based): B=1 … Y=24. */
 export const COL = { B: 1, C: 2, D: 3, H: 7, I: 8, L: 11, M: 12, Q: 16, S: 18 } as const;
 
-/** Колонки, де в кожному рядку Data стоять формули — копіюються з рядка над вставкою. */
+/** Колонки, де в кожному рядку Data стоять формули — беруться з рядка над вставкою зі зсувом номера рядка. */
 export const FORMULA_SPANS: readonly { from: number; to: number }[] = [
   { from: COL.B, to: COL.C }, { from: COL.I, to: COL.L }, { from: COL.S, to: COL.S },
 ];
 
-type CellValue = { userEnteredValue?: { numberValue?: number; stringValue?: string } };
+/** Номери колонок усіх формульних клітинок (B, C, I, J, K, L, S). */
+export const FORMULA_COLS: readonly number[] = FORMULA_SPANS.flatMap((s) => Array.from({ length: s.to - s.from + 1 }, (_, k) => s.from + k));
+
+/**
+ * Формула рядка `from` → та сама формула для рядка `to`: кожне посилання на клітинку свого рядка (`E25101`) отримує
+ * новий номер; цілі колонки (`CoA!$B:$C`, `'FX rate'!L:L`) і текст у лапках не чіпаються.
+ * 🛡 Посилання на будь-який ІНШИЙ рядок або абсолютний рядок (`$E$5`) — відмова: зсунути його правильно без знання
+ * наміру автора не можна, а тихо зіпсована формула у фінансах гірша за помилку прогону.
+ *
+ * Навіщо взагалі: 19–20.11.2026 вставка з `copyPaste` двічі впала — на Data стоїть фільтр фінансиста, нові рядки
+ * (з порожнім «Місяцем») одразу приховані, а Google не копіює в приховані фільтром рядки. Запис формул — дозволений.
+ */
+export function shiftFormula(formula: string, from: number, to: number): string {
+  if (!formula.startsWith("=")) throw new Error(`Data: у шаблоні не формула («${formula.slice(0, 40)}»)`);
+  return formula.split(/("(?:[^"]|"")*")/).map((part, i) => i % 2 === 1 ? part : part.replace(
+    /(^|[^A-Za-z0-9_$.])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(A-Za-z_])/g,
+    (m, pre: string, colAbs: string, col: string, rowAbs: string, row: string) => {
+      if (rowAbs || Number(row) !== from) {
+        throw new Error(`Data: формула шаблону посилається не на свій рядок (${colAbs}${col}${rowAbs}${row}) — зсунути безпечно не можу: ${formula.slice(0, 120)}`);
+      }
+      return `${pre}${colAbs}${col}${to}`;
+    })).join("");
+}
+
+type CellValue = { userEnteredValue?: { numberValue?: number; stringValue?: string; formulaValue?: string } };
 const num = (v: number): CellValue => ({ userEnteredValue: { numberValue: v } });
 const str = (v: string): CellValue => (v === "" ? {} : { userEnteredValue: { stringValue: v } });
 
 /**
  * Один атомарний `batchUpdate`: вставити `rows.length` рядків ПІСЛЯ останнього заповненого (`lastRow`, 1-based),
- * з форматом рядка вище; записати D–H і M–Q; скопіювати формули B–C, I–L, S з рядка `lastRow`.
+ * з форматом рядка вище; записати D–H, M–Q і формули B–C, I–L, S (з рядка `lastRow`, зсунуті на свій рядок).
+ * `template` — формули рядка `lastRow` за номером колонки, у тому вигляді, в якому їх віддав Google (`formulaValue`).
  * Google виконує batchUpdate цілком або ніяк — половини вставки не буває.
  */
-export function buildInsertRequests(sheetId: number, lastRow: number, rows: DataRow[]): object[] {
+export function buildInsertRequests(sheetId: number, lastRow: number, rows: DataRow[], template: Readonly<Record<number, string>>): object[] {
   if (!rows.length) return [];
   const start = lastRow, end = lastRow + rows.length; // 0-based: нові рядки = [lastRow, lastRow+n)
-  const grid = (r0: number, r1: number, c0: number, c1: number) =>
-    ({ sheetId, startRowIndex: r0, endRowIndex: r1, startColumnIndex: c0, endColumnIndex: c1 });
   return [
     { insertDimension: { range: { sheetId, dimension: "ROWS", startIndex: start, endIndex: end }, inheritFromBefore: true } },
     { updateCells: { start: { sheetId, rowIndex: start, columnIndex: COL.D }, fields: "userEnteredValue",
       rows: rows.map((r) => ({ values: [num(r.d), num(r.e), {}, num(r.g), str(r.h)] })) } },
     { updateCells: { start: { sheetId, rowIndex: start, columnIndex: COL.M }, fields: "userEnteredValue",
       rows: rows.map((r) => ({ values: [str(r.m), str(r.n), str(r.o), {}, str(r.q)] })) } },
-    ...FORMULA_SPANS.map((s) => ({ copyPaste: {
-      source: grid(start - 1, start, s.from, s.to + 1), destination: grid(start, end, s.from, s.to + 1), pasteType: "PASTE_FORMULA" } })),
+    ...FORMULA_SPANS.map((s) => ({ updateCells: { start: { sheetId, rowIndex: start, columnIndex: s.from }, fields: "userEnteredValue",
+      rows: rows.map((_, i) => ({ values: Array.from({ length: s.to - s.from + 1 }, (_, k) => {
+        const f = template[s.from + k];
+        if (typeof f !== "string") throw new Error(`Data: у рядку-шаблоні немає формули в колонці ${String.fromCharCode(65 + s.from + k)}`);
+        return { userEnteredValue: { formulaValue: shiftFormula(f, lastRow, lastRow + 1 + i) } };
+      }) })) } })),
   ];
 }
 
 /**
- * 🛡 Запит лише ДОДАЄ: дозволені тільки вставка рядків і запис/копіювання В НОВІ рядки. Видалення, очищення, запис
+ * 🛡 Запит лише ДОДАЄ: дозволені тільки вставка рядків і запис В НОВІ рядки (копіювання — теж заборонене). Видалення, очищення, запис
  * у наявні рядки — помилка ДО відправки. Перевіряється в рантаймі, а не лише тестом: сервісний акаунт має право
  * редагувати весь файл фінансів, і помилка в індексі не повинна мати змоги переписати чуже.
  */
@@ -180,10 +207,6 @@ export function assertAppendOnly(requests: object[], lastRow: number, count: num
     } else if (kind === "updateCells") {
       const row = body.start?.rowIndex;
       if (typeof row !== "number" || row < lastRow || row + (body.rows?.length ?? 0) > end) throw new Error("Data: запис поза новими рядками");
-    } else if (kind === "copyPaste") {
-      const d = body.destination;
-      if (body.pasteType !== "PASTE_FORMULA" || d.startRowIndex !== lastRow || d.endRowIndex !== end || body.source.endRowIndex !== lastRow)
-        throw new Error("Data: копіювання формул поза новими рядками");
     } else {
       throw new Error(`Data: заборонений вид запиту «${kind}» — джоба лише додає рядки`);
     }
