@@ -99,6 +99,7 @@ import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { overviewCache, OVERVIEW_TTL_MS } from "./core/lazyCache.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
+import { warmStatsSeries, statsSeriesCacheStatus } from "./routes/statisticsSeries.js";
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
@@ -357,6 +358,10 @@ app.get("/api/health", async (req, res) => {
       // `alertChannel`. `oldestAgeSec` > TTL не буває: протухле не рахується.
       overviewCache: { ttlSec: Math.round(OVERVIEW_TTL_MS / 1000), ...overviewCache.stats() },
       statistics: getStatisticsStatus(),
+      // ⚡ ПАМʼЯТЬ РЯДІВ «СТАТИСТИК» (21.11.2026). Число на картці може бути до `staleSec` старішим за базу — тож
+      // механізм показує себе тут: скільки рядів свіжих, скільки віддано «з фоновим перерахунком», коли й за скільки
+      // пройшов фоновий розрахунок і скільки рядів у ньому не вдалось (`warm.failed` > 0 = дивитись `firstError`).
+      statsSeriesCache: statsSeriesCacheStatus(),
       ringostat: getRingostatStatus(),
       cashIncome: getCashIncomeStatus(),
     });
@@ -524,6 +529,14 @@ cron.schedule("20,50 * * * *", () => {
   if (isKommoPaused()) return;
   void runJob("syncKommoScreens", () => syncKommoScreens());
 }, { timezone: "Europe/Kyiv" });
+
+/**
+ * ⚡ Фоновий розрахунок стандартного набору «Статистик» (21.11.2026, ціль «будь-який графік швидше 3 с») — кожні 10 хв
+ * о :08, :18 … за Києвом, з 07:00 до 21:59: після тіків `syncKommo` (:00/:30), повз десятихвилинні синки (:04, :05).
+ * Вночі не гріємо: екран тоді рахує на вимогу. НЕ через `runJob` і не під наглядом: зупинка фону цифр не псує (ряд
+ * порахується на вимогу), а стан видно в `/api/health` → `statsSeriesCache.warm`. Сам `warmStatsSeries` не кидає.
+ */
+cron.schedule("8-59/10 7-21 * * *", () => { void warmStatsSeries(); }, { timezone: "Europe/Kyiv" });
 
 // 📌 Задачі клієнтам ↔ Kommo (задача 8345) — кожні 10 хв: повтор невдалих і статус «виконано» в обидва боки.
 cron.schedule("5,15,25,35,45,55 * * * *", () => {
@@ -1191,3 +1204,6 @@ for (const [name, fn] of deferredStartup) {
   }, startupDelayMs);
   startupDelayMs += 45_000; // сходинки по 45с
 }
+// ⚡ Перший фоновий розрахунок «Статистик» — ПІСЛЯ всіх стартових синків (ще одна сходинка): до нього екран рахує на вимогу.
+setTimeout(() => { void warmStatsSeries(); }, startupDelayMs).unref();
+

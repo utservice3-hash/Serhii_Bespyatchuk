@@ -869,6 +869,11 @@ UPDATE ringostat_calls SET
  WHERE utm_source = '' OR utm_medium = '' OR utm_campaign = '' OR utm_term = '' OR utm_content = '';
 CREATE INDEX IF NOT EXISTS idx_rc_utm_campaign ON ringostat_calls(utm_campaign) WHERE utm_campaign IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rc_client_key ON ringostat_calls(client_key, calldate DESC) WHERE client_key IS NOT NULL;
+-- ⏱ Перший ВИХІДНИЙ дзвінок клієнту після створення заявки («Час опрацювання заявки», `core/leadTake.ts loadRows`).
+-- EXPLAIN ANALYZE на проді 21.11.2026: через idx_rc_client_key цей пошук читав усі дзвінки клієнта й відкидав
+-- невихідні в купі (29 709 пошуків, 505 053 відкинуті рядки, 46 404 блоки з диска, 1,16 с із 1,68 с запиту).
+-- Частковий індекс лише вихідних дає перший дзвінок одним кроком по індексу. Числа не змінює: це шлях доступу, не умова.
+CREATE INDEX IF NOT EXISTS idx_rc_client_out ON ringostat_calls(client_key, calldate) WHERE call_type IN ('out', 'transitout');
 CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_manager    ON ringostat_calls(manager_id, calldate DESC) WHERE manager_id IS NOT NULL;

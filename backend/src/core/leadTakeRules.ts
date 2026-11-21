@@ -284,3 +284,29 @@ export function statsByBucket<R extends TakeRowInput & { createdAt: number }>(ro
   }
   return [...by.keys()].sort().map((bucket) => ({ bucket, stats: statsOf(by.get(bucket)!, null) }));
 }
+
+/** Рядок серії: рівно те, що потрібно кошику й розрізу, — без назв, посилань і тексту (десятки тисяч заявок у памʼяті). */
+export interface TakeSeriesRow extends TakeRowInput { createdAt: number; teamId: number | null; managerId: number | null }
+
+/**
+ * ✂️ РОЗРІЗ І ПІДПЕРІОД — З УЖЕ ЗАВАНТАЖЕНИХ ЗАЯВОК (21.11.2026). Заміряно на проді: розгорнутий графік робив СІМ
+ * однакових за вагою вибірок (компанія + 6 команд, 1,7 с кожна окремо, 12 с разом), а картка місяця, картка тижня і
+ * графік — ще три, хоча всі вони є підмножинами однієї: заявки команди — це заявки компанії з `team_id` цієї команди
+ * (`leadSelection` у `core/leadTake.ts` ставить рівно таку умову), заявки менеджера — з його `manager_id`, коротший
+ * період — заявки, чия київська дата створення лежить у ньому. Тут ті самі три умови застосовано до рядків, а не до SQL.
+ * 🔴 Умови мусять лишатись ДЗЕРКАЛОМ `leadSelection`: інша умова команди чи дати там — і тут. Тримає `#10420`
+ * (фікстура по обидва боки кожної межі) і `#2444` (серія команди == вікно Звіту на живому Postgres).
+ */
+export function seriesOfTakeRows(rows: readonly TakeSeriesRow[], sel: { from?: string; to?: string; teamId?: number | null; managerId?: number | null }, g: TakeGran): { bucket: string; stats: TakeStats }[] {
+  const picked = rows.filter((r) => {
+    if (sel.managerId && r.managerId !== sel.managerId) return false;
+    if (sel.teamId && r.teamId !== sel.teamId) return false;
+    if (sel.from || sel.to) {
+      const day = kyivBucket(r.createdAt, "day");
+      if (sel.from && day < sel.from) return false;
+      if (sel.to && day > sel.to) return false;
+    }
+    return true;
+  });
+  return statsByBucket(picked, g);
+}
