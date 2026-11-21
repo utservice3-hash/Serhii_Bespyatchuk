@@ -405,3 +405,57 @@ test("#2444b СЕРІЇ ЧАСУ ОПРАЦЮВАННЯ: лише робочий
   assert.doesNotMatch(fe, /увесь час доби/, "🔴 ⓘ графіка досі обіцяє увесь час доби");
 });
 
+interface PlanNode { "Subplan Name"?: string; Plans?: PlanNode[] }
+const subPlans = (n: PlanNode): number => (/^SubPlan/.test(n["Subplan Name"] ?? "") ? 1 : 0) + (n.Plans ?? []).reduce((s, c) => s + subPlans(c), 0);
+
+/**
+ * #10423 — «КЛІЄНТ УЖЕ БУВ» ШУКАЄТЬСЯ РАЗ НА УГОДУ, І ВЕСЬ ФОНОВИЙ НАБІР «СТАТИСТИК» СПРАВДІ РАХУЄТЬСЯ (живий Postgres,
+ * scratch; стоїть у цьому файлі, бо кластер тут уже піднятий — другий на прогін не заводимо).
+ * EXPLAIN ANALYZE на проді 21.11.2026: `dispatchedByLoadBucket` виконував пошук `priorClientSql` ПʼЯТЬ разів на угоду
+ * (1,9 с із 2,3 с), `createdSplitByBucket` — тричі (2,1 с із 2,5 с): Postgres розгортав `final` у зовнішній запит, і кожен
+ * `FILTER (WHERE klass = …)` рахував клас заново. Тут план СПРАВЖНІХ запитів ядра: вкладених пошуків рівно два (по
+ * одному на гілку правила). 🪞 Дзеркало: той самий запит без `MATERIALIZED` дає більше — детектор бачить, що шукає.
+ * Друга половина — фон: кожен ряд стандартного набору (`seriesWarmSet.warmTasks`) виконує свій SQL без помилки й лягає
+ * в памʼять рядів.
+ * 🧨 Червоніє, якщо `MATERIALIZED` приберуть або клас знову рахуватиметься на кожне звернення; якщо хоч один показник
+ * стіни падає в SQL; якщо фон рахує не весь набір або повз памʼять.
+ */
+test("#10423 ЖИВИЙ SQL: «клієнт уже був» шукається раз на угоду (у плані два вкладені пошуки, а не шість чи десять); фон рахує весь набір без помилок", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const { pool } = await import("../db/pool.js");
+  const metrics = await import("./metrics.js");
+  const seen: { text: string; values: unknown[] }[] = [];
+  const orig = pool.query.bind(pool) as (...a: unknown[]) => unknown;
+  (pool as unknown as { query: unknown }).query = (text: unknown, values?: unknown) => {
+    if (typeof text === "string") seen.push({ text, values: (values as unknown[]) ?? [] });
+    return orig(text, values);
+  };
+  try {
+    const s = { from: "2025-06-01", to: "2026-11-21", teamId: null, managerId: null, activeOnly: true };
+    await metrics.dispatchedByLoadBucket(s, "month");
+    await metrics.createdSplitByBucket(s, "month");
+    await metrics.repeatClientsByBucket(s, "month");
+  } finally { (pool as unknown as { query: unknown }).query = orig; }
+  assert.equal(seen.length, 3, "🔴 три виклики ядра дали не три запити — перехоплення зламалось, звіряти нема що");
+  const counts: number[][] = [];
+  for (const q of seen) {
+    assert.match(q.text, /final AS MATERIALIZED \(/, "🔴 `final` більше не матеріалізований — клас угоди рахуватиметься на кожне звернення");
+    const plan = async (text: string) => subPlans(((await x.c.query(`EXPLAIN (FORMAT JSON) ${text}`, q.values)).rows[0] as { "QUERY PLAN": { Plan: PlanNode }[] })["QUERY PLAN"][0].Plan);
+    counts.push([await plan(q.text), await plan(q.text.replace("final AS MATERIALIZED (", "final AS ("))]);
+  }
+  assert.deepEqual(counts.map((c) => c[0]), [2, 2, 2], `🔴 у планах ${counts.map((c) => c[0]).join(" / ")} вкладених пошуків замість двох (по одному на гілку «клієнт уже був»)`);
+  assert.ok(counts[0][1] > 2 && counts[1][1] > 2, `🪞 без MATERIALIZED пошуків теж ${counts[0][1]} / ${counts[1][1]} — детектор не бачить повторів, перевірка нічого не доводить`);
+
+  // Фон: кожен ряд набору виконує свій SQL і лягає в памʼять.
+  const route = await import("../routes/statisticsSeries.js");
+  const { warmTasks } = await import("../statistics/seriesWarmSet.js");
+  const { kyivToday } = await import("./dates.js");
+  const st = await route.warmStatsSeries();
+  const expected = warmTasks(kyivToday()).length;
+  assert.equal(st.failed, 0, `🔴 фон не порахував ${st.failed} рядів; перша помилка — ${st.firstError}`);
+  assert.equal(st.tasks, expected, "🔴 фон пройшов не весь набір");
+  assert.equal(st.running, false);
+  const cs = route.statsSeriesCacheStatus();
+  assert.equal(cs.fresh, expected, `🔴 у памʼяті ${cs.fresh} свіжих рядів замість ${expected} — фон рахує повз памʼять або ключі зливаються`);
+  assert.ok(cs.warm.lastFinishedAt && cs.warm.lastMs != null, "🔴 стан фону не каже, коли й за скільки він пройшов");
+});

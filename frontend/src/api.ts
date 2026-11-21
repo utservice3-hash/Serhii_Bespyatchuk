@@ -3486,6 +3486,8 @@ export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: s
 /** ⚠️ Відома аномалія точки з доказом CRM (ТЗ 28.09, блок 1, п.3) — реєстр `statistics/anomalies.ts`. */
 export interface StatsAnomaly { metric: string; granularity: string; scopeKey: string; period: string; kind: "real" | "data_error" | "corrected"; note: string; crm: string }
 export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; /** З якого дня ряд рахується з CRM (`STATS_CRM_FROM`); раніше точок немає. */ crmFrom: string; crmAble: boolean; live: boolean; series: StatsSeries[];
+  /** 🕐 Коли пораховано найстаріший із рядів відповіді (памʼять рядів на сервері, до 30 хв). */
+  asOf?: string | null;
   anomalies?: StatsAnomaly[];
   /** 📈 Сходинки плану — лише для «Оплата отримана» (②). */
   plan?: { scopeKey: string; points: { period: string; value: number }[] }[] }
@@ -3552,7 +3554,7 @@ export async function fetchCallsNorm(): Promise<CallsNormResp> {
 export async function saveCallsNorm(body: { norm: number; fromMonth: string }): Promise<void> {
   await api.post("/plans/calls-norm", body);
 }
-export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string; scope?: "main" }): Promise<StatsSeriesResp> {
+export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string; scope?: "main" | "first" }): Promise<StatsSeriesResp> {
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
   return data;
 }

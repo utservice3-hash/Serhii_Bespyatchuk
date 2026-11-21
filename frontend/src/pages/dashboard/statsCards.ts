@@ -98,3 +98,38 @@ export function parseMine(raw: string | null | undefined, known: readonly string
   for (const k of v) if (typeof k === "string" && ok.has(k) && !out.includes(k)) out.push(k);
   return out.slice(0, MINE_MAX);
 }
+
+/** Звідки починати ряд картки: 13 місяців / 13 тижнів — досить для малого графіка й порівняння, і запит легкий.
+ *  🔴 Сервер фоново рахує САМЕ цей період (`seriesWarmSet.cardFrom`): зміниш тут — зміни й там, інакше картки
+ *  відкриватимуться холодними при «повній» памʼяті. Тримає `#10421`. */
+export function cardFrom(today: string, g: CardGran): string {
+  const d = s2d(today);
+  if (g === "month") { d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - 13); } else d.setUTCDate(d.getUTCDate() - 7 * 13);
+  return d2s(d);
+}
+
+/**
+ * 🕐 «Станом на» з відповіді сервера (`asOf`): година й хвилина за Києвом; учорашнє — з датою. `null` — сервер миті
+ * не назвав (стара відповідь у памʼяті вкладки) — тоді підпис мовчить, а не вигадує час.
+ */
+export function asOfLabel(asOf: string | null | undefined, today: string): string | null {
+  if (!asOf) return null;
+  const t = new Date(asOf);
+  if (Number.isNaN(t.getTime())) return null;
+  const day = t.toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const hm = t.toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit", hour12: false });
+  return day === today ? hm : `${day.slice(8, 10)}.${day.slice(5, 7)} ${hm}`;
+}
+
+/**
+ * 🗂 ПАМʼЯТЬ КАРТОК У ВКЛАДЦІ: повернувся до відділу — картки видно одразу з останньої відповіді, а свіжа підміняє їх,
+ * щойно прийде (сервер віддає готовий ряд за частку секунди). Старіше за `maxAgeMs` не показуємо: краще заготовка,
+ * ніж число, якому пів години. Ключ — усі параметри запиту.
+ */
+export function makeCardMemo<V>(maxAgeMs: number, now: () => number = Date.now) {
+  const store = new Map<string, { at: number; v: V }>();
+  return {
+    get(key: string): V | undefined { const e = store.get(key); return e && now() - e.at < maxAgeMs ? e.v : undefined; },
+    set(key: string, v: V): void { store.set(key, { at: now(), v }); if (store.size > 400) store.delete(store.keys().next().value as string); },
+  };
+}

@@ -19,17 +19,19 @@ import { fmRefsFor } from "../core/financeKpiRefs.js";
 import { FM_KOMMO_FROM } from "../core/financeKpi.js";
 import { churnReport } from "../core/churn.js";
 import type { Db } from "../core/secrets.js";
-import { leadTakeSeries as leadTakeSeriesRaw, SERIES_TAKE_FILTER } from "../core/leadTake.js";
+import { leadTakeSeriesRows as leadTakeSeriesRowsRaw, seriesOfTakeRows, SERIES_TAKE_FILTER } from "../core/leadTake.js";
 import type { TakeStats } from "../core/leadTakeRules.js";
 import {
   STATS_SEAM, STATS_CRM_FROM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
 } from "../statistics/seriesCatalog.js";
 import { clipPlanToToday, clipPointsToToday } from "../statistics/statsCompare.js";
 import { anomaliesFor } from "../statistics/anomalies.js";
-import { mainSpec, sumIntoBuckets, periodStarts, blockDenied } from "../statistics/statsBuckets.js";
+import { mainSpec, firstSpec, sumIntoBuckets, periodStarts, blockDenied } from "../statistics/statsBuckets.js";
 import { buildSummary, buildPlanFact, planSeries, dispatchPlanSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
 import type { AuthPayload } from "../auth/auth.js";
 import { memoize } from "../statistics/seriesMemo.js";
+import { SeriesCache, SERIES_FRESH_MS, SERIES_STALE_MS } from "../statistics/seriesCache.js";
+import { SERIES_DEFAULT_FROM, seriesDefaultTo, warmTasks } from "../statistics/seriesWarmSet.js";
 
 /**
  * Вкладка «Статистики» (стіна графіків). Кожна серія — ЛИШЕ з CRM (ядро) або з розділу дашборда («Фінанси», реєстр
@@ -58,7 +60,7 @@ const receivedByBucket = memoize("receivedByBucket", receivedByBucketRaw);
 const dispatchedByLoadBucket = memoize("dispatchedByLoadBucket", dispatchedByLoadBucketRaw);
 const repeatClientsByBucket = memoize("repeatClientsByBucket", repeatClientsByBucketRaw);
 const createdSplitByBucket = memoize("createdSplitByBucket", createdSplitByBucketRaw);
-const leadTakeSeries = memoize("leadTakeSeries", leadTakeSeriesRaw);
+const leadTakeSeriesRows = memoize("leadTakeSeriesRows", leadTakeSeriesRowsRaw);
 const leadgenTrend = memoize("leadgenTrend", leadgenTrendRaw);
 const adReceivedByDay = memoize("adReceivedByDay", money.adReceivedByDay);
 const churnOf = memoize("churnReport", (fromYm: string, toYm: string) => churnReport(pool as unknown as Db, fromYm, toYm));
@@ -70,13 +72,18 @@ const moneyC = (kind: "rev" | "deals" | "avg" | "recv"): Computer => async (g, f
 };
 
 /**
- * ⏱ «ЧАС ОПРАЦЮВАННЯ ЗАЯВКИ» — ТЕ САМЕ ЯДРО, ЩО ВІКНО ЗВІТУ (`core/leadTake.leadTakeSeries`), з тим фільтром, з яким
- * вікно відкривається (`SERIES_TAKE_FILTER`). Скоуп — `teamId`/`managerId` серії (команда на дату заявки, як у вікні).
+ * ⏱ «ЧАС ОПРАЦЮВАННЯ ЗАЯВКИ» — ТЕ САМЕ ЯДРО, ЩО ВІКНО ЗВІТУ (`core/leadTake`), з тим фільтром, з яким вікно
+ * відкривається (`SERIES_TAKE_FILTER`). Скоуп — `teamId`/`managerId` серії (команда на дату заявки, як у вікні).
  * Кошик без заявок (або без жодної взятої — для медіани) точки не дає: «не було» ≠ «нуль».
+ * ⚡ ОДНА ВИБІРКА НА ВСЕ (21.11.2026): заявки компанії від `STATS_CRM_FROM` вантажаться раз, а команда, менеджер,
+ * коротший період картки й усі три кроки беруться з них (`seriesOfTakeRows`) — було сім вибірок на графік і ще дві на картки.
  */
-const leadTakeC = (pick: (s: TakeStats) => number | null): Computer => async (g, from, to, teamId, managerId) =>
-  (await leadTakeSeries({ from, to, ...SERIES_TAKE_FILTER, teamId, managerId }, g))
+const leadTakeC = (pick: (s: TakeStats) => number | null): Computer => async (g, from, to, teamId, managerId) => {
+  const base = from < STATS_CRM_FROM ? from : STATS_CRM_FROM;
+  const rows = await leadTakeSeriesRows({ from: base, to, ...SERIES_TAKE_FILTER });
+  return seriesOfTakeRows(rows, { from, to, teamId, managerId }, g)
     .flatMap((x) => { const v = pick(x.stats); return v == null ? [] : [P(x.bucket, v)]; });
+};
 
 /** 📣 Гроші з реклами по кошиках — лише компанія (ядро не розрізає «Надійшло» по командах). */
 const adC = (pick: (x: { revenue: number; deals: number }) => number): Computer => async (g, from, to, teamId, managerId) => {
@@ -227,7 +234,7 @@ function teamLeadForStats(teamId: number | null): string | null {
   if (teamId === 36283) return "Шевчук Назар";   // «Самостійні» → Шевчук (R2, як у депстаті)
   return SALES_TEAM_LEAD[teamId] ?? null;
 }
-async function depstatsRead(block: string, metric: string, g: Gran, from: string, to: string, scope: ScopeSpec): Promise<Point[]> {
+async function depstatsRead(block: string, metric: string, g: Gran, from: string, to: string, scope: Pick<ScopeSpec, "scopeType" | "teamId">): Promise<Point[]> {
   if (g === "day") return [];                     // statistics_values — лише month|week
   if (scope.scopeType === "manager") return [];   // депстат per-manager нема
   const dept = DEPSTATS_DEPT[block], sv = DEPSTATS_METRIC_MAP[metric];
@@ -256,20 +263,63 @@ async function depstatsRead(block: string, metric: string, g: Gran, from: string
  * таблиця й ручні точки з екрана прибрані. Ряд рахується від `STATS_CRM_FROM` (з якого місяця CRM має повну історію —
  * замір у `seriesCatalog.ts`), а не від шва: CRM_ABLE-показники тепер мають CRM-історію на всю цю глибину.
  * ⚠️ `stats_series` у базі НЕ видаляли: revert коду повертає таблицю на графік.
+ *
+ * Аргументи — РІВНО те, від чого залежать точки: вони ж і ключ памʼяті (`seriesCache.call`). Назва розрізу сюди не
+ * входить: «Мої» менеджера і його прізвище в тімліда — ті самі точки.
  */
-async function stitch(block: string, metric: string, g: Gran, from: string, to: string, sc: ScopeSpec): Promise<Series> {
-  const cf = from > STATS_CRM_FROM ? from : STATS_CRM_FROM;
+async function seriesPoints(block: string, metric: string, g: Gran, cf: string, to: string,
+  scopeType: string, scopeKey: string, teamId: number | null, managerId: number | null): Promise<Point[]> {
   let crm: Point[] = [];
-  const liveScope = sc.scopeType === "company" || sc.teamId != null || sc.managerId != null;
+  const liveScope = scopeType === "company" || teamId != null || managerId != null;
   if (liveScope && to >= cf) {
-    if (metric in COMPUTERS) crm = await COMPUTERS[metric](g, cf, to, sc.teamId, sc.managerId);
-    else if (hasDepstats(block, metric)) crm = await depstatsRead(block, metric, g, cf, to, sc);
+    if (metric in COMPUTERS) crm = await COMPUTERS[metric](g, cf, to, teamId, managerId);
+    else if (hasDepstats(block, metric)) crm = await depstatsRead(block, metric, g, cf, to, { scopeType, teamId });
   }
   // Кошик, що почався ДО `cf` (тиждень через межу), — неповний: не показуємо його як повний період.
-  const points = crm.filter((p) => p.period >= cf && p.period <= to).sort((a, b) => a.period.localeCompare(b.period));
-  return { scopeType: sc.scopeType, scopeKey: sc.scopeKey, scopeName: sc.scopeName, points, ...(sc.benchmark ? { benchmark: true } : {}),
-    ...(sc.teamId != null && ARCHIVED_TEAM_IDS.has(sc.teamId) ? { archived: true } : {}) };
+  return crm.filter((p) => p.period >= cf && p.period <= to).sort((a, b) => a.period.localeCompare(b.period));
 }
+
+/** ⚡ Памʼять готових рядів (`seriesCache.ts`): свіже — одразу, придатне — одразу з фоновим перерахунком, старе — чекаємо. */
+const seriesCache = new SeriesCache<Point[]>();
+
+/** Ряд розрізу + мить, станом на яку він порахований. `force` — фоновий прогрів: рахує заново, старе число при невдачі лишається. */
+async function stitch(block: string, metric: string, g: Gran, from: string, to: string, sc: ScopeSpec, force = false): Promise<{ series: Series; at: number }> {
+  const cf = from > STATS_CRM_FROM ? from : STATS_CRM_FROM;
+  const args = [block, metric, g, cf, to, sc.scopeType, sc.scopeKey, sc.teamId, sc.managerId] as const;
+  const hit = force ? await seriesCache.recompute(seriesPoints, ...args) : await seriesCache.call(seriesPoints, ...args);
+  // Точки з памʼяті СПІЛЬНІ для всіх глядачів — обрізання «до сьогодні» нижче працює з копією масиву, а не з ними.
+  return { at: hit.at, series: { scopeType: sc.scopeType, scopeKey: sc.scopeKey, scopeName: sc.scopeName, points: hit.value, ...(sc.benchmark ? { benchmark: true } : {}),
+    ...(sc.teamId != null && ARCHIVED_TEAM_IDS.has(sc.teamId) ? { archived: true } : {}) } };
+}
+
+/**
+ * 🔥 ФОНОВИЙ РОЗРАХУНОК СТАНДАРТНОГО НАБОРУ (`seriesWarmSet.warmTasks`): кожен показник стіни, місяць і тиждень,
+ * період картки й розгорнутого графіка, розріз «компанія». Іде ПО ОДНОМУ ряду — фон не має права забрати базу в
+ * людей (пул 15 зʼєднань, а 18.11 повна матриця вдень уже клала прод на 3 хв). Спільні виклики ядра (`seriesMemo`)
+ * роблять так, що показники одного джерела питають базу раз.
+ * НЕ КИДАЄ: невдалий ряд рахується, старе число лишається в памʼяті, наступний ряд іде далі. Стан — у `/api/health`.
+ */
+const COMPANY: ScopeSpec = { scopeType: "company", scopeKey: "company", scopeName: "Компанія", teamId: null, managerId: null };
+interface WarmStatus { running: boolean; lastStartedAt: string | null; lastFinishedAt: string | null; lastMs: number | null; tasks: number; failed: number; firstError: string | null }
+const warmStatus: WarmStatus = { running: false, lastStartedAt: null, lastFinishedAt: null, lastMs: null, tasks: 0, failed: 0, firstError: null };
+export async function warmStatsSeries(): Promise<WarmStatus> {
+  if (warmStatus.running) return { ...warmStatus }; // попередній прохід ще йде — другий поверх нього лише подвоїв би навантаження
+  const t0 = Date.now(), tasks = warmTasks(kyivToday());
+  Object.assign(warmStatus, { running: true, lastStartedAt: new Date(t0).toISOString() });
+  let failed = 0, firstError: string | null = null;
+  try {
+    for (const t of tasks) {
+      try { await stitch(t.block, t.metric, t.g, t.from, t.to, COMPANY, true); }
+      catch (e) { failed++; firstError ??= `${t.metric}/${t.g}: ${String(e).slice(0, 160)}`; }
+    }
+  } finally {
+    Object.assign(warmStatus, { running: false, lastFinishedAt: new Date().toISOString(), lastMs: Date.now() - t0, tasks: tasks.length, failed, firstError });
+  }
+  if (failed) console.warn(`warmStatsSeries: ${failed} із ${tasks.length} рядів не перераховано — ${firstError}`);
+  return { ...warmStatus };
+}
+/** Стан памʼяті рядів і фонового розрахунку — для `/api/health`. */
+export const statsSeriesCacheStatus = () => ({ freshSec: SERIES_FRESH_MS / 1000, staleSec: SERIES_STALE_MS / 1000, ...seriesCache.stats(), warm: { ...warmStatus } });
 
 // 🔒 СЕРВЕРНИЙ КЛАМП роль-скоупу. Тімлід бачить свою команду + її менеджерів ПЛЮС компанію
 // ЛИШЕ як агрегат-бенчмарк (одна серія значень; чужих команд/менеджерів у payload НЕМА).
@@ -279,7 +329,7 @@ async function seriesSet(auth: { role: string; roleKey: string; teamId: number |
   if (unit) return isAdminScope(auth)
     ? [{ scopeType: "unit", scopeKey: unit, scopeName: unit, teamId: null, managerId: null }]
     : [];
-  const company: ScopeSpec = { scopeType: "company", scopeKey: "company", scopeName: "Компанія", teamId: null, managerId: null };
+  const company: ScopeSpec = COMPANY;
   const teamOf = (t: { id: number; name: string }): ScopeSpec => ({ scopeType: "team_lead", scopeKey: String(t.id), scopeName: t.name, teamId: t.id, managerId: null });
   if (isAdminScope(auth)) return [company, ...LIVE_TEAMS.map(teamOf)];
   if (auth.role === "team_lead") {
@@ -304,8 +354,9 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const block = String(req.query.block ?? "sales");
   const metric = String(req.query.metric ?? "");
   const g = (["day", "week", "month"].includes(String(req.query.granularity)) ? req.query.granularity : "week") as Gran;
-  const from = String(req.query.from ?? "2024-07-01");
-  const to = String(req.query.to ?? "2026-12-31");
+  const today = kyivToday();
+  const from = String(req.query.from ?? SERIES_DEFAULT_FROM);
+  const to = String(req.query.to ?? seriesDefaultTo(today));
   if (!metric) return res.status(400).json({ error: "metric обовʼязковий" });
   // 🔒 «Фінанси» і HR — числа закритих екранів: та сама межа, що в їхніх джерел (`blockDenied`).
   const denied = blockDenied(block, { tab: (t) => roleHasTab(auth.roleKey, t), perm: (p) => roleHasPerm(auth.roleKey, p) });
@@ -314,11 +365,14 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const full = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
   // 🧱 Картки стіни (20.11.2026): `scope=main` — лише головна серія глядача з УЖЕ обрізаного набору (`mainSpec`),
   //    без команд і без плану. 8 карток відділу × (компанія + 6 команд) вантажились 8,2 с; картці потрібне одне число.
-  const lite = req.query.scope === "main";
-  const set = lite ? mainSpec(full) : full;
-  const today = kyivToday();
-  const series = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
+  //    `scope=first` (21.11.2026) — перша лінія розгорнутого графіка (`firstSpec`): її видно одразу, команди — слідом.
+  const lite = req.query.scope === "main" || req.query.scope === "first";
+  const set = req.query.scope === "main" ? mainSpec(full) : req.query.scope === "first" ? firstSpec(full) : full;
+  const got = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
+  const series = got.map((x) => x.series);
   for (const s of series) s.points = clipPointsToToday(s.points, today); // обчислений обʼєкт stitch, не рядок БД
+  // 🕐 «Станом на»: найстаріша з митей, коли рахувались ряди відповіді, — екран показує її, а не вдає, що число живе.
+  const asOf = got.length ? new Date(Math.min(...got.map((x) => x.at))).toISOString() : null;
   // ⚠️ Аномалії — з реєстру з доказом CRM (ТЗ 28.09, блок 1, п.3); фронт позначає точку, а не мовчки тягне лінію.
   // 📈 План — там, де він є в CRM-дзеркалі, і лише в скоупі глядача (тімлід — своя команда, менеджер — нічого):
   //    ② — план грошей Звіту; «Поставлені» (= плитка «Відправлені авто») — KPI-цілі задачника, від шва.
@@ -330,7 +384,7 @@ statsSeriesRouter.get("/series", async (req, res) => {
   else if (metric === "cars_delivered" && block === "sales") plan = (await dispatchPlanSeries(g, from > STATS_SEAM ? from : STATS_SEAM, to)).filter(inScope);
   plan = clipPlanToToday(plan, today);
   // ✏️ «Виправлено CRM» і «помилка таблиці» стосувались ТОЧОК ТАБЛИЦІ — таблиці на графіку немає, лишаються лише справжні події.
-  res.json({ block, metric, granularity: g, crmFrom: STATS_CRM_FROM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series,
+  res.json({ block, metric, granularity: g, crmFrom: STATS_CRM_FROM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series, asOf,
     anomalies: anomaliesFor(metric, g).filter((a) => a.kind === "real"), plan });
 });
 

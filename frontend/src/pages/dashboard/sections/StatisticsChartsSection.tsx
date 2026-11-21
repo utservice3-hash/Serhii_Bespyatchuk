@@ -4,7 +4,7 @@ import {
 } from "recharts";
 import { effGranOf } from "../statsGran";
 import { MAX_METRICS, canAdd, drawnScopes, multiLines, multiRows } from "../statsMulti";
-import { cardFigures, cardDelta, parseMine, periodStartOf, MINE_KEY, MINE_MAX, type Better, type CardGran } from "../statsCards";
+import { cardFigures, cardDelta, cardFrom, asOfLabel, makeCardMemo, parseMine, periodStartOf, MINE_KEY, MINE_MAX, type Better, type CardGran } from "../statsCards";
 import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
 import { InfoHint } from "../widgets";
 import { ChartSkeleton, SkelBox, TableSkeleton } from "../Skeleton";
@@ -200,6 +200,8 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   /* ⏳ Графік вантажиться — на його місці заготовка ТІЄЇ САМОЇ висоти, легенда лишається (прохання Романа 02.10). */
   const [chartLoading, setChartLoading] = useState(true);
+  /* ⚡ Перша лінія вже на графіку, решта розрізів (команди, менеджери) ще їде — легенда каже це словами. */
+  const [scopesLoading, setScopesLoading] = useState(false);
   const [nonce, setNonce] = useState(0);
   /** Які серії ПОКАЗАНІ. Дефолт — лише компанія; команди додаються вибором (ТЗ, блок 4, п.1). */
   const [shown, setShown] = useState<Set<string> | null>(null);
@@ -222,14 +224,22 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   /** Початок періоду, що йде: на графіку — пунктир і підпис «іде, станом на» у підказці. */
   const curStart = effGran === "day" ? today : periodStartOf(today, effGran);
   useEffect(() => {
-    let alive = true; setChartLoading(true); setLoadErr(null); setWin(null);
+    let alive = true; setChartLoading(true); setLoadErr(null); setWin(null); setScopesLoading(false);
     if (!metric) return; // категорія без метрик серій не тягне
     const m = metric;    // звужений локальний — далі жодного дотику до можливо-порожнього `metric`
-    fetchStatsSeries({ block: m.block, metric: m.key, granularity: effGran, ...(m.unitScope ? { unit: m.unitScope } : {}) })
-      .then((d) => { if (alive) { setResp(d); setChartLoading(false); } })
+    const q = { block: m.block, metric: m.key, granularity: effGran, ...(m.unitScope ? { unit: m.unitScope } : {}) };
+    /* ⚡ ДВА ЗАПИТИ (21.11.2026): перша лінія (`scope=first` — та, що малюється за замовчуванням) приходить одразу з
+       памʼяті сервера, і графік видно; усі розрізи — слідом, і підміняють відповідь. Раніше одна лінія чекала сім
+       розрізів (час опрацювання — 12 с). Повна відповідь прийшла першою — рання вже не потрібна (`full`). */
+    let full = false;
+    fetchStatsSeries({ ...q, scope: "first" })
+      .then((d) => { if (alive && !full) { setResp(d); setChartLoading(false); setScopesLoading(true); } })
+      .catch(() => undefined); // помилку назве повний запит — два повідомлення про одне були б шумом
+    fetchStatsSeries(q)
+      .then((d) => { full = true; if (alive) { setResp(d); setChartLoading(false); setScopesLoading(false); } })
       /* 🔴 ПОМИЛКА — ЯВНО, а не «Немає даних (очікує вводу)» і не вічне «Завантаження…» (ТЗ, блок 1, п.2):
          обидва варіанти брехали про причину. */
-      .catch((e) => alive && (setChartLoading(false), setLoadErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером"))));
+      .catch((e) => { full = true; if (alive) { setChartLoading(false); setScopesLoading(false); setLoadErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером")); } });
     return () => { alive = false; };
   }, [metric?.block, metric?.key, effGran, metric?.unitScope, nonce]);
 
@@ -481,6 +491,8 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
               </label>
             )}
             {!resp && !loadErr && <SkelBox w={420} h={14} />}
+            {scopesLoading && <span style={{ fontSize: 12, color: MUTED }}>інші розрізи довантажуються…</span>}
+            {asOfLabel(resp?.asOf, today) && <span style={{ marginLeft: "auto", fontSize: 12, color: MUTED }} title="коли сервер порахував ці ряди; перерахунок іде у фоні раз на 10 хв">станом на {asOfLabel(resp?.asOf, today)}</span>}
           </div>
 
           {/* 🏷 НАЗВА ПОКАЗНИКА НАД ГРАФІКОМ, як рахується — лише в ⓘ (ТЗ 14.10, п.1). */}
@@ -627,12 +639,8 @@ function ValuesTable({ rows, cols, curStart }: { rows: any[]; cols: { key: strin
 }
 
 type CardState = { resp?: StatsSeriesResp; err?: string };
-/** Звідки починати ряд картки: 13 місяців / 13 тижнів — досить для малого графіка й порівняння, і запит легкий. */
-const cardFrom = (today: string, g: CardGran) => {
-  const d = new Date(`${today}T00:00:00Z`);
-  if (g === "month") { d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - 13); } else d.setUTCDate(d.getUTCDate() - 7 * 13);
-  return d.toISOString().slice(0, 10);
-};
+/** Памʼять карток у вкладці (`makeCardMemo`): 10 хв — стільки ж, скільки сервер тримає ряд без перерахунку. */
+const cardMemo = makeCardMemo<StatsSeriesResp>(10 * 60_000);
 
 /**
  * 🧱 СТІНА ВІДДІЛУ: усі показники картками одразу. Кожна картка — свій легкий запит (`scope=main`), тож одна повільна
@@ -646,12 +654,17 @@ function StatsWall({ cat, gran, setGran, today, onOpen, mine, saveMine, isMine }
   const [editing, setEditing] = useState(false);
   const keyList = cat.metrics.map((m) => m.key).join("|");
   useEffect(() => {
-    let alive = true; setCards({});
-    for (const m of cat.metrics) {
-      const g = effGranOf(m, gran);
-      fetchStatsSeries({ block: m.block, metric: m.key, granularity: g, from: cardFrom(today, g === "week" ? "week" : "month"), scope: "main" })
-        .then((d) => alive && setCards((c) => ({ ...c, [m.key]: { resp: d } })))
-        .catch((e) => alive && setCards((c) => ({ ...c, [m.key]: { err: errText(e) } })));
+    let alive = true;
+    const reqs = cat.metrics.map((m) => {
+      const g = effGranOf(m, gran), from = cardFrom(today, g === "week" ? "week" : "month");
+      return { m, g, from, key: `${m.block}|${m.key}|${g}|${from}` };
+    });
+    /* 🗂 Спершу — що вже є у вкладці (повернення до відділу без заготовок), далі свіжа відповідь підміняє картку. */
+    setCards(Object.fromEntries(reqs.flatMap((r) => { const hit = cardMemo.get(r.key); return hit ? [[r.m.key, { resp: hit }]] : []; })));
+    for (const r of reqs) {
+      fetchStatsSeries({ block: r.m.block, metric: r.m.key, granularity: r.g, from: r.from, scope: "main" })
+        .then((d) => { cardMemo.set(r.key, d); if (alive) setCards((c) => ({ ...c, [r.m.key]: { resp: d } })); })
+        .catch((e) => alive && setCards((c) => ({ ...c, [r.m.key]: { err: errText(e) } })));
     }
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -741,7 +754,7 @@ function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; g
           ) : <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>повних періодів ще немає</div>}
           <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
             {g === "month" ? MONTHS[Number(f.currentStart.slice(5, 7)) - 1] : `тиждень ${dm(f.currentStart)}`} іде:{" "}
-            {f.current ? <b style={{ color: "var(--text)" }}>{fmt(f.current.value, m.unit)}</b> : "точок ще немає"} станом на {dm(today)}
+            {f.current ? <b style={{ color: "var(--text)" }}>{fmt(f.current.value, m.unit)}</b> : "точок ще немає"} станом на {dm(today)}{asOfLabel(st?.resp?.asOf, today) ? `, ${asOfLabel(st?.resp?.asOf, today)}` : ""}
           </div>
           <StatsMiniChart points={points} currentStart={f.currentStart} />
         </>

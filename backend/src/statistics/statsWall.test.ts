@@ -103,9 +103,9 @@ test("#10402 ГОЛОВНА СЕРІЯ: адмін — компанія, тім�
   assert.deepEqual(mainSpec([]), [], "🔴 порожній набір (напрямок без права) дав серію");
   assert.deepEqual(mainSpec([{ ...company, benchmark: true }]), [{ ...company, benchmark: true }], "🔴 некомерційний тімлід лишився без картки");
   const route = codeOnly(read(ROUTE));
-  assert.match(route, /const full = await seriesSet\([\s\S]{0,200}\);\s*[\s\S]{0,400}const lite = req\.query\.scope === "main";\s*const set = lite \? mainSpec\(full\) : full;/,
+  assert.match(route, /const full = await seriesSet\([\s\S]{0,200}\);\s*[\s\S]{0,400}const set = req\.query\.scope === "main" \? mainSpec\(full\) : req\.query\.scope === "first" \? firstSpec\(full\) : full;/,
     "🔴 scope=main бере серію не з набору після клампу ролі");
-  assert.match(route, /const series = await Promise\.all\(set\.map\(\(s\) => stitch\(/, "🔴 серії рахуються не з звуженого набору");
+  assert.match(route, /const got = await Promise\.all\(set\.map\(\(s\) => stitch\(block, metric, g, from, to, s\)\)\);\n\s*const series = got\.map\(\(x\) => x\.series\);/, "🔴 серії рахуються не з звуженого набору");
   assert.match(route, /if \(lite\) plan = \[\];/, "🔴 картка тягне план, якого не малює");
 });
 
@@ -157,7 +157,7 @@ test("#10404 ВІДДІЛИ: порядок рейки; «Час опрацюв�
   const route = read(ROUTE);
   assert.match(route, /\blead_take_median: leadTakeC\(\(s\) => s\.medianMin\),/);
   assert.match(route, /\blead_take_m5_pct: leadTakeC\(\(s\) => s\.m5Pct\),/);
-  assert.match(route, /await leadTakeSeries\(\{ from, to, \.\.\.SERIES_TAKE_FILTER, teamId, managerId \}, g\)/, "🔴 обчислювач іде повз ядро вікна");
+  assert.match(route, /await leadTakeSeriesRows\(\{ from: base, to, \.\.\.SERIES_TAKE_FILTER \}\);\n\s*return seriesOfTakeRows\(rows, \{ from, to, teamId, managerId \}, g\)/, "🔴 обчислювач іде повз ядро вікна");
 });
 
 /**
@@ -206,8 +206,8 @@ test("#10410 ЛИШЕ CRM: серія не читає stats_series; обчисл
   assert.ok(manualAt > 0, "🔴 не знайшов POST /series/manual — зріз став би порожнім");
   assert.equal((route.slice(0, manualAt).match(/\bstats_series\b/g) ?? []).length, 0, "🔴 серія знову читає ручну таблицю");
   assert.ok((route.slice(manualAt).match(/\bstats_series\b/g) ?? []).length >= 1, "🪞 запис ручних показників зник — зріз нічого не довів");
-  assert.match(route, /if \(metric in COMPUTERS\) crm = await COMPUTERS\[metric\]\(g, cf, to, sc\.teamId, sc\.managerId\);/, "🔴 обчислювач не від cf або не зі скоупу серії");
-  assert.match(route, /else if \(hasDepstats\(block, metric\)\) crm = await depstatsRead\(block, metric, g, cf, to, sc\);/);
+  assert.match(route, /if \(metric in COMPUTERS\) crm = await COMPUTERS\[metric\]\(g, cf, to, teamId, managerId\);/, "🔴 обчислювач не від cf або не зі скоупу серії");
+  assert.match(route, /else if \(hasDepstats\(block, metric\)\) crm = await depstatsRead\(block, metric, g, cf, to, \{ scopeType, teamId \}\);/);
   assert.doesNotMatch(route, /storedPoints|companySalesSheet|applyCorrections|sheetWeekToMonday/, "🔴 повернулась зшивка з таблицею");
   const paths = [...route.matchAll(/statsSeriesRouter\.(get|post|put|patch|delete)\("([^"]+)"/g)].map((m) => `${m[1].toUpperCase()} ${m[2]}`);
   assert.deepEqual(paths, ["GET /series", "GET /summary", "GET /plan-fact", "GET /lapsed-clients", "POST /series/manual"], "🔴 склад роутів змінився — потрібен запис у матриці");
@@ -222,7 +222,7 @@ test("#10411 ГЛИБИНА: STATS_CRM_FROM = 2025-06-01; ряд клампит�
   assert.equal(STATS_CRM_FROM, "2025-06-01", "🔴 глибина ряду змінилась без заміру");
   const route = codeOnly(read(ROUTE));
   assert.match(route, /const cf = from > STATS_CRM_FROM \? from : STATS_CRM_FROM;/, "🔴 ряд не клампиться по глибині CRM");
-  assert.match(route, /const points = crm\.filter\(\(p\) => p\.period >= cf && p\.period <= to\)/, "🔴 неповний кошик до межі показується як повний");
+  assert.match(route, /return crm\.filter\(\(p\) => p\.period >= cf && p\.period <= to\)/, "🔴 неповний кошик до межі показується як повний");
   assert.match(route, /crmFrom: STATS_CRM_FROM/, "🔴 фронт не знає глибини ряду");
   assert.match(read("docs/METRICS_GLOSSARY.md"), /## 23\. «СТАТИСТИКИ» — ЛИШЕ CRM І РОЗДІЛИ ДАШБОРДА[\s\S]*2025-06-01/, "🔴 правило глибини не в словнику");
 });
@@ -339,7 +339,7 @@ test("#10417 СПІЛЬНИЙ ВИКЛИК: однакові аргументи 
 
   // Проводка: кожен важкий виклик ядра в роуті йде через спільний виклик, і жоден — повз нього.
   const route = codeOnly(read(ROUTE));
-  const names = ["successByBucket", "receivedByBucket", "dispatchedByLoadBucket", "repeatClientsByBucket", "createdSplitByBucket", "leadTakeSeries", "leadgenTrend"];
+  const names = ["successByBucket", "receivedByBucket", "dispatchedByLoadBucket", "repeatClientsByBucket", "createdSplitByBucket", "leadTakeSeriesRows", "leadgenTrend"];
   for (const n of names) assert.ok(route.includes(`const ${n} = memoize("${n}", ${n}Raw);`), `🔴 ${n}: обчислювачі кличуть ядро напряму — картки відділу знову рахують те саме паралельно`);
   const direct = [...route.matchAll(/\b(\w+Raw)\(/g)].map((x) => x[1]);
   assert.deepEqual(direct, [], `🔴 ядро покликано повз спільний виклик: ${direct.join(", ")}`);
