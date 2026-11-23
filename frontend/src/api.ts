@@ -5678,7 +5678,7 @@ export interface HiringVacancyRef { id: number; title: string; status: HiringVac
 export type HiringAccessLevel = "edit" | "lead" | "view" | "none";
 /** 👥 «Співробітники» для перегляду: реєстр без паролів, сейфу, документів і контактів (#4152). */
 export interface HiringEmployeeViewRow { id: number; full_name: string; status: string; position: string | null; category: string | null; level: string | null;
-  team_name: string | null; hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null }
+  team_name: string | null; hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null; is_office: boolean }
 export const fetchHiringEmployeesView = async () => (await api.get<{ rows: HiringEmployeeViewRow[] }>("/hiring/employees")).data.rows;
 
 export interface HiringMeta {
@@ -6100,6 +6100,8 @@ export interface EmployeeRow {
   team_name: string | null; team_locked: boolean; team_ref: string | null;
   /** 🗂 Категорія (28.10.2026, #2960): ручна (`category_manual`) або за посадою; null — «Без категорії». */
   category: EmpCategory | null; category_manual: boolean;
+  /** 🏢 «Офісний» (10740, 23.11.2026): трекер не чекає від людини даних. Не залежить від категорії. */
+  is_office: boolean;
   /** 🎚 Рівень «Старт / Профі» (03.11.2026, #2970): лише менеджерам з продажу (null — не стосується); статус, не гроші. */
   level: EmpLevel | null; level_from: string | null; level_history: EmpLevelEntry[];
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
@@ -6159,7 +6161,7 @@ export const updateExit = async (id: number, b: Partial<ExitInterview>) => { awa
 export const deleteExit = async (id: number) => { await api.delete(`/secrets/exit/${id}`); };
 export const restoreExit = async (id: number) => { await api.post(`/secrets/exit/${id}/restore`); };
 export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; teams: string[] }>("/secrets/employees")).data;
-export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">> & { category?: EmpCategory | null };
+export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">> & { category?: EmpCategory | null; is_office?: boolean };
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 // 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
 // ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
@@ -7034,10 +7036,12 @@ export interface OrgPerson {
   /** Телефон з «Найму» в одному вигляді; `tel` — лише коли номер розпізнано (рішення Романа 28.10.2026). */
   phone: { text: string; tel: string | null } | null;
   photo: PhotoRef | null; isMe: boolean;
+  /** 🏢 Галочка «Офісний» з Найму (10740). */
+  office: boolean;
 }
 export interface OrgTreeResp {
   units: OrgUnit[]; people: OrgPerson[]; unassigned: number[]; unknownLabels: { label: string; count: number }[];
-  stats: { total: number; noTelegram: number; noPhoto: number; unassigned: number };
+  stats: { total: number; noTelegram: number; noPhoto: number; unassigned: number; office: number };
   depts: Record<OrgDept, string>; canEdit: boolean; meEmployeeId: number | null; teams: { id: number; name: string }[];
 }
 export interface OrgUnitInput { name?: string; parentId?: number | null; dept?: OrgDept; team?: string | null; headEmployeeId?: number | null; side?: boolean; sort?: number }
@@ -7046,6 +7050,8 @@ export const fetchOrgTree = async () => (await api.get<OrgTreeResp>("/org/tree")
 export const setMyOrgTelegram = async (telegram: string) => (await api.put<{ telegram: string | null }>("/org/me/telegram", { telegram })).data.telegram;
 export const uploadMyOrgPhoto = async (dataBase64: string) => (await api.post<{ v: number }>("/org/me/photo", { dataBase64 })).data;
 export const moveOrgPerson = async (employeeId: number, unitId: number | null) => { await api.put(`/org/people/${employeeId}/unit`, { unitId }); };
+/** 🏢 «Офісний» зі схеми (10740): для тих, у кого `edit_org` (бізнес-асистент Найму не має). */
+export const setOrgPersonOffice = async (employeeId: number, office: boolean) => { await api.put(`/org/people/${employeeId}/office`, { office }); };
 export const createOrgUnit = async (body: OrgUnitInput) => (await api.post<{ id: number }>("/org/units", body)).data.id;
 export const updateOrgUnit = async (id: number, body: OrgUnitInput) => { await api.patch(`/org/units/${id}`, body); };
 export const deleteOrgUnit = async (id: number) => { await api.delete(`/org/units/${id}`); };

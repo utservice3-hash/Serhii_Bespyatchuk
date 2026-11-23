@@ -7175,6 +7175,11 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS category TEXT;
 ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_category_check;
 ALTER TABLE employees ADD CONSTRAINT employees_category_check
   CHECK (category IS NULL OR category IN ('manager','teamlead','leadgen','accounting','finance','management','office','it'));
+-- 🏢 ОФІСНИЙ (23.11.2026, задача 10740, рішення Романа): галочка в картці Найму. true = людина працює в офісі, і таймтрекер
+-- не чекає від неї даних (порожній день — «в офісі», не прогул). Їде в реєстр трекера полем `office` (`auth/trackerRoster.ts`).
+-- НЕ залежить від категорії (категорія `office` — це вид роботи, а не формат). Бекфілу немає: false усім, ставить HR руками.
+-- ⚠️ revert коду колонку не прибирає, але без коду її ніхто не читає.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_office BOOLEAN NOT NULL DEFAULT false;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'employees_one_team') THEN
     ALTER TABLE employees ADD CONSTRAINT employees_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);

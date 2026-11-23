@@ -2159,6 +2159,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   { method: "PUT", path: "/api/org/people/:employeeId/unit", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
+  /* 🏢 «Офісний» зі схеми (10740, 23.11.2026): той самий `edit_org` (admin, HR, бізнес-асистент). СЕО, ОД, КВП ставлять
+     галочку в картці Найму (`PATCH /api/secrets/employees/:id`), тут — 403 по праву. Тримає #10740e. */
+  { method: "PUT", path: "/api/org/people/:employeeId/office", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   /* 👥 КОМАНДИ KOMMO + ДАШБОРД (27.10.2026): список — усім, хто бачить орг-структуру; запис — право `manage_teams`
      (керівництво й HR — рішення Романа 27.10). КВП і фінансист адмінського рівня, але права не мають: 403 по ПРАВУ.
      Кандидата в `deny` запису НЕМАЄ (як у навчанні, `CANDIDATE_401`): вкладку він має, тож проба доходить до перевірки

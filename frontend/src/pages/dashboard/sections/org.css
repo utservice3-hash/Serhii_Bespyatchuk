@@ -131,3 +131,7 @@
   .org-form { grid-template-columns: 1fr; }
   .org-tool .org-search { flex-basis: 100%; }
 }
+/* 🏢 «офіс» біля імені (10740): той самий колір, що в Наймі (`.emp-pill.office`). */
+.org-office { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 650; line-height: 16px; vertical-align: 1px; white-space: nowrap; background: rgba(124, 92, 214, .13); color: #6a4fc4; }
+.org-check { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 14px; }
+.org-check input { width: 16px; height: 16px; margin: 0; cursor: pointer; }

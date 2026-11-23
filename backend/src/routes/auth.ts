@@ -394,11 +394,15 @@ authRouter.get("/tracker-users", async (req, res) => {
             u.is_active,
             u.tracker_enabled,
             t.name AS team_name,
-            r.data_scope
+            r.data_scope,
+            COALESCE(e.is_office, false) AS is_office
        FROM users u
        LEFT JOIN managers m ON m.id = u.manager_id
        LEFT JOIN teams t ON t.id = u.team_id
        LEFT JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
+       -- 🏢 «Офісний» з Найму (10740). LEFT, а не JOIN: акаунт без картки в Наймі (службові, тестові) лишається в
+       -- реєстрі з office=false, а не зникає з трекера. employees.user_id UNIQUE — рядки не множаться. Тримає #10740d.
+       LEFT JOIN employees e ON e.user_id = u.id
       ORDER BY u.email`
   );
 

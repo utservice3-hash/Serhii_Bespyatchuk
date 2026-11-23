@@ -1,0 +1,8 @@
+{
+  "people": [
+    { "id": 7, "email": "office@uts.ua", "name": "Приклад Офісний", "active": true,
+      "trackerEnabled": false, "team": null, "scope": "company", "office": true },
+    { "id": 12, "email": "manager@uts.ua", "name": "Приклад Менеджер", "active": true,
+      "trackerEnabled": true, "team": "РПК - Приклад", "scope": "own", "office": false }
+  ]
+}

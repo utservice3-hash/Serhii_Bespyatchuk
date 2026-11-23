@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactElement } from "react";
 import {
-  fetchOrgTree, setMyOrgTelegram, uploadMyOrgPhoto, moveOrgPerson, createOrgUnit, updateOrgUnit, deleteOrgUnit, fetchOrgLog, hiringError,
+  fetchOrgTree, setMyOrgTelegram, uploadMyOrgPhoto, moveOrgPerson, setOrgPersonOffice, createOrgUnit, updateOrgUnit, deleteOrgUnit, fetchOrgLog, hiringError,
   type OrgTreeResp, type OrgUnit, type OrgPerson, type OrgDept, type OrgUnitInput, type OrgLogRow,
 } from "../../../api";
 import { useToast, type Toast } from "../../../components/Toasts";
@@ -136,7 +136,7 @@ export function OrgSection() {
         draggable={edit} onDragStart={(e) => e.dataTransfer.setData("text/org-person", String(id))}>
         <OrgAvatar p={p} size={small ? 26 : 36} />
         <span>
-          <span className="org-pn">{p.name}</span><br />
+          <span className="org-pn">{p.name}</span>{p.office && <OfficeMark />}<br />
           <span className="org-pr">{p.position || "посада не вказана"}</span><br />
           <span className="org-tg">{p.telegram ?? <span className="org-pr">Telegram не вказано</span>}</span>
         </span>
@@ -236,6 +236,7 @@ export function OrgSection() {
         <span>Працюють: <b>{s.total}</b></span>
         <span>без Telegram: <button onClick={() => { setNoTg((x) => !x); setView("list"); }}>{s.noTelegram}</button>{noTg ? " (фільтр увімкнено)" : ""}</span>
         <span>без фото: <b>{s.noPhoto}</b></span>
+        <span title="Галочка «Офісний» у Наймі: таймтрекер не чекає від цих людей даних">в офісі: <b>{s.office}</b></span>
         {s.unassigned > 0 && <span style={{ color: "var(--warn)" }}>без блоку: <b>{s.unassigned}</b></span>}
       </div>
       {edit && (
@@ -258,7 +259,7 @@ export function OrgSection() {
             <tbody>
               {listRows.map((p) => (
                 <tr key={p.id}>
-                  <td><button className="org-person" style={{ width: "auto", margin: 0 }} onClick={() => setCard(p.id)}><OrgAvatar p={p} size={26} /><span className="org-pn">{p.name}</span></button></td>
+                  <td><button className="org-person" style={{ width: "auto", margin: 0 }} onClick={() => setCard(p.id)}><OrgAvatar p={p} size={26} /><span className="org-pn">{p.name}</span>{p.office && <OfficeMark />}</button></td>
                   <td>{p.position || <span className="hr-muted">не вказано</span>}</td>
                   <td>{p.unitId == null ? <span style={{ color: "var(--warn)" }}>Без блоку</span> : unitName(p)}</td>
                   <td className="org-tg" style={{ fontSize: 13 }}>{p.telegram ?? <span className="hr-muted">не вказано</span>}</td>
@@ -313,6 +314,11 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
     try { const v = await setMyOrgTelegram(nick); toast(v ? `Нік збережено: ${v}` : "Нік прибрано"); onChanged(); }
     catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(false); }
   };
+  const setOffice = async (v: boolean) => {
+    setBusy(true);
+    try { await setOrgPersonOffice(p.id, v); toast(v ? `${p.name}: офісний — трекер не чекатиме від нього даних` : `${p.name}: не офісний`); onChanged(); }
+    catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(false); }
+  };
   const move = async (v: string) => {
     setBusy(true);
     try { await moveOrgPerson(p.id, v ? Number(v) : null); toast(`${p.name}: блок і команду змінено`); onChanged(); }
@@ -328,6 +334,7 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
           <div className="org-dname">{p.name}</div>
           <div className="org-pr" style={{ fontSize: 13.5 }}>{p.position || "посада не вказана"}</div>
           <div className="org-pr">{unitName}{p.isHead ? " · керівник" : ""}</div>
+          {p.office && <div><OfficeMark /></div>}
         </div>
         <div className="org-row">
           <span><span className="org-lbl">Telegram</span><br />
@@ -383,12 +390,28 @@ function PersonCard({ p, data, unitName, toast, onClose, onChanged }: {
             )}
           </div>
         )}
+        {/* 🏢 «Офісний» (10740): та сама галочка, що в картці Найму; тут — для тих, у кого «Редагувати» (бізнес-асистент). */}
+        {data.canEdit && (
+          <div className="org-mine">
+            <span className="org-lbl">Формат роботи</span>
+            <label className="org-check">
+              <input type="checkbox" checked={p.office} disabled={busy} onChange={(e) => void setOffice(e.target.checked)} />
+              <b>Офісний</b>
+            </label>
+            <span className="hr-muted">Таймтрекер не чекає від офісного даних: порожній день там позначено «в офісі», а не прогул.</span>
+          </div>
+        )}
       </aside>
       {photoDlg && <PhotoUploadDialog name={p.name} onClose={() => setPhotoDlg(false)} onSave={async (dataUrl) => {
         await uploadMyOrgPhoto(dataUrl); setPhotoDlg(false); toast("Фото збережено"); onChanged();
       }} />}
     </>
   );
+}
+
+/** 🏢 Позначка «офіс» біля імені (10740). */
+function OfficeMark() {
+  return <span className="org-office" title="Працює в офісі: таймтрекер не чекає від нього даних">офіс</span>;
 }
 
 function UnitDialog({ data, unit, toast, onClose, onSaved }: { data: OrgTreeResp; unit: OrgUnit | null; toast: Toast; onClose: () => void; onSaved: () => void }) {

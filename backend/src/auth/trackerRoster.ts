@@ -11,6 +11,8 @@
 export interface RosterRow {
   id: number; email: string; name: string | null; is_active: boolean;
   tracker_enabled: boolean; team_name: string | null; data_scope: string | null;
+  /** 🏢 Галочка «Офісний» з Найму (10740); `false`, якщо картки в Наймі немає. */
+  is_office: boolean;
 }
 
 /**
@@ -31,7 +33,7 @@ export interface RosterRow {
  */
 export function rosterPerson(r: RosterRow): {
   id: number; email: string; name: string; active: boolean;
-  trackerEnabled: boolean; team: string | null; scope: "company" | "team" | "own";
+  trackerEnabled: boolean; team: string | null; scope: "company" | "team" | "own"; office: boolean;
 } {
   return {
     id: r.id,
@@ -43,5 +45,8 @@ export function rosterPerson(r: RosterRow): {
     // Невідома роль означає НАЙМЕНШІ права, ніколи не найбільші: роль, видалену з таблиці,
     // не можна мовчки підвищити.
     scope: r.data_scope === "company" || r.data_scope === "team" ? r.data_scope : "own",
+    // 🏢 Офісний (10740, рішення Романа 23.11): трекер не чекає від людини даних, порожній день — «в офісі».
+    // Лише справжнє true дає true: null/відсутнє (стара база, акаунт без Найму) — false, і поле є ЗАВЖДИ (ТЗ трекера).
+    office: r.is_office === true,
   };
 }
