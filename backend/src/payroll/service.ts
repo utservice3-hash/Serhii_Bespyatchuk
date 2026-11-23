@@ -12,6 +12,7 @@ import { createPayroll, nextStatus, nextMonth, prevMonth, lastDay, CLEARANCE_ITE
 import { createNotifier, OFFER_TITLES } from "./engine/notify.mjs";
 import { loadState, kyivNow, kyivIso, monthStart, NAME_SQL, NAME_JOIN } from "./state.js";
 import { emitAll, closeDone, type EngineNotification } from "./notifyCenter.js";
+import { naimChanges, loadNaim, offerTeams, type Level } from "./naimSync.js";
 import { encryptCard, decryptCard, validateCard, cardHash, cardsAvailable, CardKeyMissing } from "./cards.js";
 
 type Db = Pool | PoolClient;
@@ -176,9 +177,7 @@ export async function cabinet(db: Db, v: Viewer) {
     clearance: clearanceOut(e, id, id),
     cards: await cardsOf(db, v.userId), cardsAvailable: cardsAvailable(), payouts: paidMonths, advances, offers,
     levelChangeInfo: await levelChangeInfoOf(db, v.userId, live),
-    // дні народження місяця — лише імена й дати (суми чужих ЗП тут немає); «без збору» — стаж до року
-    birthdaysMonth: (e.zp.employees as Array<Record<string, unknown>>).map((x) => ({ x, g: e.zp.birthdayGift(x, live) as { date: string; young: boolean } | null }))
-      .filter((r) => r.g).map((r) => ({ id: r.x.id, name: r.x.name, date: r.g!.date, young: r.g!.young, me: r.x.id === id })).sort((a, b) => a.date.localeCompare(b.date)),
+    // блок «Дні народження · місяць» прибрано з кабінету (задача 10723, Тетяна 23.11.2026: «від нього нічого не залежить»)
     advanceRemind: (await db.query(`SELECT 1 FROM payroll_reminders WHERE user_id = $1 AND month = $2::date AND kind = 'advance' AND sent_at IS NULL`, [v.userId, monthStart(live)])).rowCount! > 0,
   };
 }
@@ -920,8 +919,13 @@ export async function employeesView(db: Db) {
        FROM users u ${NAME_JOIN} LEFT JOIN LATERAL (SELECT * FROM employees x WHERE x.user_id = u.id ORDER BY x.id DESC LIMIT 1) e ON true
       WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate' AND NOT EXISTS (SELECT 1 FROM payroll_employees pe WHERE pe.user_id = u.id)
       ORDER BY 2`)).rows;
-  const teams = (await db.query<{ code: string; kommo_team_id: number | null }>(`SELECT code, kommo_team_id FROM payroll_teams`)).rows;
-  return { month: live, people, candidates: candidates.map((c) => ({ userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at, birthday: c.birth,
+  const teams = (await db.query<{ code: string; name: string; offer_code: string; kommo_team_id: number | null }>(`SELECT code, name, offer_code, kommo_team_id FROM payroll_teams`)).rows;
+  // команди для «Оферів»: з людьми — спершу, порожні — у кінці з позначкою (задача 10723)
+  const offerTeamList = offerTeams(teams.map((t) => ({ code: t.code, name: t.name, offer: t.offer_code })), people);
+  // що в «Наймі» розходиться із «Зарплатою» — лише показуємо, дію робить людина (задача 10723)
+  const naim = naimChanges(people.map((p) => ({ userId: String(p.userId), name: String(p.name), role: String(p.role), level: (p.level ?? null) as Level | null,
+    levelChange: (p.levelChange ?? null) as { level: Level } | null, leave: p.leave ?? null })), await loadNaim(db));
+  return { month: live, people, naim, offerTeams: offerTeamList, candidates: candidates.map((c) => ({ userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at, birthday: c.birth,
     title: c.position, team: teams.find((t) => t.kommo_team_id === c.team_id)?.code ?? null, level: c.level === "pro" ? "profi" : c.level === "start" ? "start" : null,
     role: c.role === "team_lead" ? "lead" : c.role === "manager" ? "manager" : "staff" })) };
 }

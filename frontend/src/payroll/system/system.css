@@ -75,3 +75,14 @@
 /* задачі */
 .zps-tasks { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .zps-task { display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; }
+
+/* задача 10723: «Офери» — порожні команди в кінці, сірим; блок «Зміни з «Найму»» */
+.zps-stale { color: var(--text-muted); font-size: 12.5px; margin-top: 6px; }
+.zps-naim { border: 1px solid color-mix(in srgb, var(--zp-warn, #d99a00) 35%, transparent); background: color-mix(in srgb, var(--zp-warn, #d99a00) 6%, transparent); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; }
+.zps-naim__t td { vertical-align: top; }
+.zps-naim__list { margin: 6px 0 0; padding-left: 18px; columns: 2; }
+.zps-tag { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 10px; padding: 2px 8px; background: var(--surface-2, #eee); }
+.zps-tag--warn { background: color-mix(in srgb, #d99a00 18%, transparent); color: #8a5a00; }
+.zps-tag--ok { background: color-mix(in srgb, #1d7a43 14%, transparent); color: #1d7a43; }
+.zps-tag--lvl { background: color-mix(in srgb, #6b2fd6 12%, transparent); color: #6b2fd6; }
+.zps-row--stale td { color: var(--text-muted); }

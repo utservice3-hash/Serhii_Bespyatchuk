@@ -63,6 +63,8 @@ export function OrgSettings({ org, people, canEdit, onChanged }: { org: Obj; peo
   const [team, setTeam] = useState<Obj | null | undefined>(undefined);
   const depts = (org.departments ?? []) as Obj[], teams = (org.teams ?? []) as Obj[];
   const active = people.filter((p) => !p.leave);
+  // люди команди — учасники й тім-лід (як `offerTeams` на сервері); 0 — команда в кінці, сірим (задача 10723)
+  const count = (t: Obj) => active.filter((p) => p.team === t.code || p.leadsTeam === t.code).length;
   return (
     <Card title="Оргструктура" aside="відділ визначає, як платимо, який кабінет бачить працівник і де він в аналітиці">
       <div className="zp-grid" style={{ gap: 12 }}>
@@ -98,13 +100,13 @@ export function OrgSettings({ org, people, canEdit, onChanged }: { org: Obj; peo
             <table className="zp-table">
               <thead><tr><th>Команда</th><th>Відділ</th><th>Офер</th><th>Kommo</th><th className="r">Людей</th></tr></thead>
               <tbody>
-                {teams.map((t) => (
-                  <tr key={t.code} className={canEdit ? "is-click" : ""} onClick={() => canEdit && setTeam(t)}>
-                    <td><b>{t.name}</b><div className="zp-hint">{t.code}</div></td>
+                {[...teams].sort((a, b) => Number(!count(a)) - Number(!count(b))).map((t) => (
+                  <tr key={t.code} className={`${canEdit ? "is-click" : ""} ${count(t) ? "" : "zps-row--stale"}`} onClick={() => canEdit && setTeam(t)}>
+                    <td><b>{t.name}</b><div className="zp-hint">{t.code}{count(t) ? "" : " · 0 людей, неактуальна"}</div></td>
                     <td>{depts.find((d) => d.code === t.dept)?.name ?? t.dept}</td>
                     <td>{OFFER_NAMES[t.offer] ?? t.offer}</td>
                     <td>{t.kommoTeamId ? `#${t.kommoTeamId}` : <span className="zp-hint">не повʼязано</span>}</td>
-                    <td className="r">{active.filter((p) => p.team === t.code).length}</td>
+                    <td className="r">{count(t)}</td>
                   </tr>
                 ))}
               </tbody>
