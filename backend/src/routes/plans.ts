@@ -145,6 +145,23 @@ plansRouter.get("/formation", async (req, res) => {
   const formMap = new Map(formRows.rows.map((f) => [f.manager_id, f]));
   const baseM = baseMonthsFor(month); // 3 повні місяці перед target
 
+  // 🔁 10477: план тих, хто пішов, - окремим пулом «не розподілено» над командою, поки КВП не передасть або не зніме.
+  // До листопада 2026 пулу немає (там діяв автоподіл), тож і запитів немає.
+  const pooled = poolApplies(month);
+  const [gone, transfers] = pooled
+    ? await Promise.all([gonePlans(month, teamId ?? null), transferHistory(month, teamId ?? null)])
+    : [[], []];
+  /** Що менеджер отримав із плану тих, хто пішов: уже сидить у його `currentPlan`, тут - лише підпис «від кого». */
+  const receivedBy = new Map<number, { amount: number; fromName: string; at: string; by: string | null }[]>();
+  for (const e of transfers) {
+    if (e.kind !== "transfer") continue;
+    for (const p of e.parts) {
+      const list = receivedBy.get(p.managerId) ?? [];
+      list.push({ amount: p.amount, fromName: e.fromName, at: e.at, by: e.by });
+      receivedBy.set(p.managerId, list);
+    }
+  }
+
   const mgrOut = roster.map((m) => {
     const mh = histMap.get(m.id) ?? new Map();
     const history = histMonths.map((mo) => ({ month: mo, revenue: mh.get(mo)?.revenue ?? 0, deals: mh.get(mo)?.deals ?? 0 }));
@@ -173,6 +190,7 @@ plansRouter.get("/formation", async (req, res) => {
       },
       carryover: Math.round(carryMap.get(m.id) ?? 0),
       currentPlan: Math.round(planMap.get(m.id) ?? 0),
+      received: receivedBy.get(m.id) ?? [],
       // Довідкова цифра з екрана «Постійні клієнти». `approved` — те, що
       // система вважає планом по постійних; `declared` — ручне поле. Обидва
       // віддаються окремо, щоб фронт МІГ показати розбіжність, а не мусив
@@ -205,12 +223,6 @@ plansRouter.get("/formation", async (req, res) => {
     const e = teamsMap.get(key) ?? { teamId: m.teamId, teamName: m.teamName ?? "Без команди", managers: [] as typeof mgrOut };
     e.managers.push(m); teamsMap.set(key, e);
   }
-  // 🔁 10477: план тих, хто пішов, - окремим пулом «не розподілено» над командою, поки КВП не передасть або не зніме.
-  // До листопада 2026 пулу немає (там діяв автоподіл), тож і запитів немає.
-  const pooled = poolApplies(month);
-  const [gone, transfers] = pooled
-    ? await Promise.all([gonePlans(month, teamId ?? null), transferHistory(month, teamId ?? null)])
-    : [[], []];
   const teams = [...teamsMap.values()].map((t) => {
     const recommended = t.managers.reduce((a, m) => a + m.recommendation.value, 0);
     const carryover = t.managers.reduce((a, m) => a + m.carryover, 0);
@@ -222,10 +234,7 @@ plansRouter.get("/formation", async (req, res) => {
       // «не розподілено» - лише пул; `gone[].plan` включає ще й лишене за людиною як уже виконане
       unassigned: teamGone.reduce((a, g) => a + g.pool, 0),
       gonePlan: teamGone.reduce((a, g) => a + g.plan, 0),
-      gone: teamGone, history,
-      managers: t.managers.map((m) => ({ ...m,
-        received: history.filter((e) => e.kind === "transfer").flatMap((e) => e.parts.filter((p) => p.managerId === m.managerId)
-          .map((p) => ({ amount: p.amount, fromName: e.fromName, at: e.at, by: e.by }))) })) };
+      gone: teamGone, history, managers: t.managers };
   });
 
   // Мʼяка нижня межа з НАЛАШТУВАНЬ (не хардкод): фронт блокує подачу без
