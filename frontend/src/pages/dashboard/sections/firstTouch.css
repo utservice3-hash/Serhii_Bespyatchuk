@@ -12,19 +12,6 @@
 .ftd-title { margin: 2px 0 0; font-size: 26px; font-weight: 800; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
 .ftd-meta { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
 
-.ftd-strip { background: #16181d; color: #fff; border-radius: 10px; padding: 16px 20px; display: flex; flex-wrap: wrap; gap: 18px;
-  align-items: center; transition: box-shadow 700ms ease; box-shadow: 0 0 0 0 rgba(197,20,28,0); }
-.ftd-strip.is-glow { box-shadow: 0 0 0 4px rgba(197,20,28,.35); }
-.ftd-strip-k { font-size: 12px; color: #9ea3ad; letter-spacing: .04em; text-transform: uppercase; }
-.ftd-strip-h { font-size: 20px; font-weight: 800; }
-.ftd-strip-h b { color: #f87171; font-variant-numeric: tabular-nums; }
-.ftd-progress { margin-top: 8px; max-width: 420px; height: 6px; background: #2c2e36; border-radius: 3px; }
-.ftd-progress > i { display: block; height: 100%; background: #fff; border-radius: 3px; transition: width 600ms ease; }
-.ftd-strip-chips { display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px; }
-.ftd-strip-chips span { border-radius: 999px; padding: 4px 11px; }
-.ftd-go { height: 44px; border: 0; background: var(--brand); color: #fff; border-radius: 8px; padding: 0 18px; font: inherit; font-weight: 700; cursor: pointer; }
-.ftd-go:hover { background: var(--brand-dark); }
-
 .ftd-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
 @media (min-width: 1101px) { .ftd-kpis.is-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .ftd-kpi { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
@@ -89,7 +76,6 @@
 .ftd-bar > i { display: block; height: 100%; background: #cbd5e1; border-radius: 4px; }
 .ftd-bar > span { position: absolute; right: 6px; top: 0; font-size: 12px; font-variant-numeric: tabular-nums; line-height: 18px; }
 
-.ftd-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .ftd-seg { display: flex; background: var(--bg); border-radius: 8px; padding: 3px; }
 .ftd-seg button { border: 0; background: transparent; padding: 5px 12px; border-radius: 6px; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
 .ftd-seg button.on { background: var(--card-bg); box-shadow: var(--shadow); font-weight: 600; }
@@ -202,16 +188,6 @@
 /* ── Задача 10734 (Роман 23.11.2026): вкладки екрана, «Точка контролю», «Фільтр ▾», «Технічне», «Правила роботи» ── */
 .ftd-pages button { padding: 7px 16px; font-size: 14px; }
 .ftd-rules-btn { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-align: middle; }
-.ftd-strip-closed { margin-top: 8px; border: 0; background: transparent; color: #cbd5e1; font: inherit; font-size: 13px; padding: 0; cursor: pointer; text-decoration: underline dotted; }
-.ftd-strip-closed:hover { color: #fff; }
-.ftd-fdrop { position: relative; }
-.ftd-fdrop > summary { list-style: none; display: inline-block; }
-.ftd-fdrop > summary::-webkit-details-marker { display: none; }
-.ftd-fdrop-body { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 280px; background: var(--card-bg); border: 1px solid var(--border);
-  border-radius: 10px; box-shadow: var(--shadow); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
-.ftd-fdrop-body label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
-.ftd-fdrop-h { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-top: 6px; }
-.ftd-fdrop-h:first-child { margin-top: 0; }
 .ftd-tech > summary { cursor: pointer; font-size: 14px; }
 .ftd-tech .ftd-meta { margin: 10px 0 0; }
 
@@ -267,10 +243,9 @@
   background: var(--card-bg); box-shadow: var(--shadow); transition: transform 320ms cubic-bezier(.2,.8,.2,1), width 320ms cubic-bezier(.2,.8,.2,1); }
 .ftd-seg.has-ink button { position: relative; z-index: 1; }
 .ftd-seg.has-ink button.on { background: transparent; box-shadow: none; }
-/* Перемикання вкладки: блоки сторінки зʼявляються разом, одним рухом. «Фільтр ▾» і «Технічне» виростають з кнопки. */
+/* Перемикання вкладки: блоки сторінки зʼявляються разом, одним рухом. «Ще фільтри» й «Технічне» виростають з кнопки. */
 .ftd-over > section, .ftd-over > details { animation: ftd-page-in 240ms cubic-bezier(.2,.8,.2,1); }
 @keyframes ftd-page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.ftd-fdrop[open] > .ftd-fdrop-body { transform-origin: 14px 0; animation: ftd-pop 180ms cubic-bezier(.2,.8,.2,1); }
 @keyframes ftd-pop { from { opacity: 0; transform: scale(.94) translateY(-4px); } to { opacity: 1; transform: none; } }
 .ftd-tech[open] > :not(summary) { animation: ftd-page-in 240ms cubic-bezier(.2,.8,.2,1); }
 @media (max-width: 900px) {
@@ -281,4 +256,92 @@
 @media (prefers-reduced-motion: reduce) {
   .ftd-li, .ftd-li::before, .ftd-seg.has-ink::before { transition: none; }
   .ftd-pane-in, .ftd-undo, .ftd-over > section, .ftd-over > details, .ftd-fdrop[open] > .ftd-fdrop-body, .ftd-tech[open] > :not(summary) { animation: none; }
+}
+
+/* ── ФІНАЛЬНИЙ МАКЕТ (Роман 24.11.2026): період як у «Звіті», число на вкладці, фільтри двома підписаними рядками,
+   панель «Ще фільтри», плашки ввімкненого й плавні переходи. Темну смугу «Точка контролю» знято; `.ftd-strip` лишився
+   тільки у спільних селекторах вище, на яких тримаються гейти. ── */
+.ftd-nav.rv { max-width: none; margin: 0; gap: 10px 18px; }
+.ftd-nav .rv-pop { animation: ftd-cal-in 180ms cubic-bezier(.2,.8,.2,1); }
+@keyframes ftd-cal-in { from { opacity: 0; transform: translateX(-50%) translateY(-6px) scale(.97); } to { opacity: 1; transform: translateX(-50%); } }
+.ftd-tab-n { display: inline-grid; place-items: center; min-width: 20px; height: 20px; margin-left: 7px; padding: 0 6px; border-radius: 10px;
+  background: var(--brand); color: #fff; font-size: 12px; font-weight: 700; vertical-align: 1px; transition: background-color 240ms ease; }
+.ftd-tab-n.is-zero { background: var(--ok, #166534); }
+
+.ftd-fbar { display: grid; gap: 10px; padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
+.ftd-frow { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
+.ftd-flabel { flex: none; width: 74px; font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.ftd-seg-n { margin-left: 2px; color: var(--text-muted); }
+.ftd-seg button.on .ftd-seg-n { color: inherit; }
+.ftd-fchip { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); min-height: 32px; padding: 0 12px; border-radius: 999px; font: inherit; font-size: 13px;
+  cursor: pointer; white-space: nowrap; transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 120ms ease; }
+.ftd-fchip b { font-variant-numeric: tabular-nums; }
+.ftd-fchip:hover { border-color: var(--border-strong, var(--text-muted)); }
+.ftd-fchip:active { transform: scale(.97); }
+.ftd-fchip.is-zero { color: var(--text-muted); }
+.ftd-fchip.is-zero b { font-weight: 400; }
+.ftd-fchip.on { background: var(--text); border-color: var(--text); color: var(--card-bg); }
+.ftd-fchip.on::before { content: "✓ "; font-weight: 800; }
+.ftd-fsel { height: 34px; max-width: 230px; border: 1px solid var(--border); border-radius: 8px; padding: 0 8px; background: var(--card-bg); color: var(--text); font: inherit; font-size: 13px;
+  cursor: pointer; transition: border-color 160ms ease, box-shadow 160ms ease; }
+.ftd-fsel.on { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.ftd-reset { border: 0; background: none; color: var(--brand); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; min-height: 32px; padding: 0 4px; white-space: nowrap; }
+.ftd-reset:hover { text-decoration: underline; }
+
+/* «Ще фільтри»: панель стоїть під кнопкою; її зсув по горизонталі рахує `fitShift` (FirstTouchMore.tsx), щоб не виїжджала за край вікна. */
+.ftd-more { position: relative; }
+.ftd-more-btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; border-radius: 8px; padding: 0 12px; }
+.ftd-more-btn.has { border-color: var(--text); }
+.ftd-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--text); color: var(--card-bg); font-size: 11px; font-weight: 700; }
+.ftd-more-caret { color: var(--text-muted); transition: transform 180ms ease; }
+.ftd-more-btn[aria-expanded="true"] .ftd-more-caret { transform: rotate(180deg); }
+.ftd-more-pop { position: absolute; z-index: 40; top: calc(100% + 8px); left: 0; width: min(340px, calc(100vw - 24px)); display: grid; gap: 12px; padding: 14px;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 18px 40px rgba(20,30,50,.16); font-size: 13px; color: var(--text);
+  transform-origin: 28px 0; animation: ftd-pop 180ms cubic-bezier(.2,.8,.2,1); }
+.ftd-more-h { display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+.ftd-more-h button { border: 0; background: none; width: 30px; height: 30px; border-radius: 8px; font: inherit; font-size: 15px; color: var(--text-muted); cursor: pointer; }
+.ftd-more-h button:hover { background: var(--bg); color: var(--text); }
+.ftd-more-f { display: grid; gap: 5px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.ftd-more-f select { height: 36px; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 0 8px; background: var(--card-bg); color: var(--text); font: inherit; font-size: 13px; font-weight: 400; }
+.ftd-more-f .hr-seg2 { font-weight: 400; }
+.ftd-more-chk { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; line-height: 1.35; }
+.ftd-more-chk input { flex: none; width: 16px; height: 16px; margin: 1px 0 0; }
+.ftd-more-pop > .ftd-pill { justify-self: start; }
+.ftd-more-done { height: 38px; font-weight: 600; }
+
+.ftd-under { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 16px; font-size: 12.5px; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.ftd-under b { color: var(--text); font-variant-numeric: tabular-nums; }
+.ftd-fpill { padding: 3px 10px; font-size: 12.5px; animation: ftd-pill-in 180ms cubic-bezier(.2,.8,.2,1); }
+.ftd-pill.on.ftd-fpill { background: var(--text); border-color: var(--text); color: var(--card-bg); }
+@keyframes ftd-pill-in { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: none; } }
+.ftd-legend { display: inline-flex; gap: 10px; }
+.ftd-legend span { display: inline-flex; gap: 5px; align-items: center; }
+.ftd-legend i { width: 11px; height: 11px; border-radius: 3px; }
+.ftd-qbtn { padding: 3px 12px; font-size: 12.5px; font-weight: 600; }
+.ftd-qbtn:disabled { opacity: .6; cursor: default; }
+.ftd-keys { white-space: nowrap; }
+.ftd-kpis-cap { margin: -10px 0 0; font-size: 12px; color: var(--text-muted); }
+
+/* Плавність: список проявляється на новому кошику чи періоді, плитки «Статистики» входять одна за одною, смужки виростають зліва. */
+.ftd-two { animation: ftd-list-in 240ms cubic-bezier(.2,.8,.2,1); }
+@keyframes ftd-list-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.ftd-tile { transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease; }
+.ftd-tile:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(20,30,50,.08); }
+.ftd-kpis > .ftd-kpi { animation: ftd-kpi-in 340ms cubic-bezier(.2,.8,.2,1) backwards; }
+.ftd-kpis > .ftd-kpi:nth-child(2) { animation-delay: 40ms; }
+.ftd-kpis > .ftd-kpi:nth-child(3) { animation-delay: 80ms; }
+.ftd-kpis > .ftd-kpi:nth-child(4) { animation-delay: 120ms; }
+.ftd-kpis > .ftd-kpi:nth-child(5) { animation-delay: 160ms; }
+.ftd-kpis > .ftd-kpi:nth-child(6) { animation-delay: 200ms; }
+@keyframes ftd-kpi-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.ftd-bar > i { transform-origin: left center; animation: ftd-bar-in 520ms cubic-bezier(.2,.8,.2,1) backwards; transition: width 420ms cubic-bezier(.2,.8,.2,1); }
+@keyframes ftd-bar-in { from { transform: scaleX(0); } to { transform: none; } }
+@media (max-width: 900px) {
+  .ftd-flabel { width: 100%; }
+  .ftd-search { width: 100%; }
+  .ftd-keys { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ftd-more-pop, .ftd-fpill, .ftd-two, .ftd-kpis > .ftd-kpi, .ftd-bar > i, .ftd-nav .rv-pop { animation: none; }
+  .ftd-fchip, .ftd-fsel, .ftd-more-caret, .ftd-tab-n, .ftd-tile, .ftd-bar > i { transition: none; }
 }

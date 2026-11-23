@@ -886,3 +886,17 @@ export function pickSelected(prevOrder: readonly string[], shown: readonly strin
   const keep = new Set(shown);
   return [...prevOrder.slice(i + 1), ...prevOrder.slice(0, i).reverse()].find((id) => keep.has(id)) ?? shown[0];
 }
+
+/** Відступ панелі «Ще фільтри» від краю вікна, px. */
+export const MORE_EDGE_PX = 12;
+/**
+ * 🔽 «ЩЕ ФІЛЬТРИ» НЕ ВИЇЖДЖАЄ ЗА КРАЙ (Роман 24.11.2026: «кнопка ще фільтри погано відкриває»). На скільки зсунути панель по
+ * горизонталі, щоб вона вмістилась у вікно: відʼємне — ліворуч, додатне — праворуч, 0 — уже вміщається. `left` / `right` —
+ * краї панелі, якби вона стояла рівно під кнопкою. Панель, ширша за вікно, притискається до ЛІВОГО краю: початок тексту
+ * важливіший за кінець. Чиста функція — гейт ганяє її без браузера; міряє й застосовує `FirstTouchMore.tsx`.
+ */
+export function fitShift(left: number, right: number, viewport: number, edge = MORE_EDGE_PX): number {
+  if (left < edge || right - left > viewport - edge * 2) return edge - left;
+  if (right > viewport - edge) return viewport - edge - right;
+  return 0;
+}
