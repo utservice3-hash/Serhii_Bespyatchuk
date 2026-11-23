@@ -50,5 +50,5 @@ export function typeVerdict(type: ConversationType | null | undefined, confidenc
 }
 
 /** Хто може змінити тип: адмін — будь-яку розмову, тімлід — розмову своєї команди (скоуп перевіряє роут). */
-export const TYPE_EDIT_ROLES: ReadonlySet<string> = new Set(["admin", "team_lead"]);
+export const TYPE_EDIT_ROLES: ReadonlySet<string> = new Set(["admin", "ceo", "team_lead"]); // ceo = адмін на «Першому дотику» (Роман 23.11.2026)
 export const canEditType = (roleKey: string | null | undefined): boolean => roleKey != null && TYPE_EDIT_ROLES.has(roleKey);
