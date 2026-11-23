@@ -50,6 +50,7 @@ export const NAV_GROUPS = [
     items: [
       { key: "ai-calls", label: "Перший дотик · AI", icon: "🎧" },
       // 🚚 Лише керівництво (сид: admin, ceo, opdir, kvp); видимість — зі `screen_access`, як і сусіда.
+      // З 23.11.2026 — вкладка «Першого дотику», у меню не показується (`TAB_NOT_MENU` нижче).
       { key: "carrier-calls", label: "Перевізники за розмовою", icon: "🚚" },
     ],
   },
@@ -151,13 +152,21 @@ export const HIDDEN_NAV: ReadonlySet<string> = new Set<string>([
 /** Nav items visible to a given role. Якщо переданий `screens` (screen_access ефективної
  *  ролі — є в токені для всіх, включно з кастомними) — він АВТОРИТЕТНИЙ (косметика, сервер
  *  гейтить незалежно). Інакше — фолбек на built-in `roles`-гейт (старі токени без screens). */
+/**
+ * 🚚 Пункти, що стали ВКЛАДКОЮ іншого екрана (Роман 23.11.2026, задача 10734 п.2): «Перевізники за розмовою» — вкладка
+ * «Першого дотику». З меню прибрано лише пункт: ключ лишається в NAV_GROUPS (тип NavKey, тумблер у редакторі ролей,
+ * `screen_access` вирішує, кому показати вкладку), а пряма адреса `/carrier-calls` відкриває екран як і раніше
+ * (на неї веде мітка «чекають рішення» у Звіті). Не HIDDEN_NAV: той редіректить на «Звіт».
+ */
+export const TAB_NOT_MENU: ReadonlySet<string> = new Set<string>(["carrier-calls"]);
+
 export function navGroupsForRole(role: string | undefined, screens?: string[]) {
   const allowed = (it: NavItem) =>
     screens ? screens.includes(it.key) : (!it.roles || (role != null && it.roles.includes(role)));
   return NAV_GROUPS
     .map((g) => ({
       label: g.label,
-      items: (g.items as readonly NavItem[]).filter((it) => !HIDDEN_NAV.has(it.key) && allowed(it)),
+      items: (g.items as readonly NavItem[]).filter((it) => !HIDDEN_NAV.has(it.key) && !TAB_NOT_MENU.has(it.key) && allowed(it)),
     }))
     .filter((g) => g.items.length > 0);
 }

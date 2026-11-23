@@ -5,6 +5,8 @@ import { AiCallDrawer, ApproveButton, FeedbackButton } from "./AiCallDrawer";
 import { FirstTouchQueue } from "./FirstTouchQueue";
 import { FirstTouchPriceChart } from "./FirstTouchPriceChart";
 import { ReviewByTeamBlock } from "./ReviewByTeamBlock";
+import { CarrierCallsSection } from "./CarrierCallsSection";
+import { FirstTouchRules } from "./FirstTouchRules";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
@@ -18,7 +20,8 @@ import { approveState, approveWaitText, STATE_UI, TONE_COLOR, FILTERS, matchesFi
   TRANSPORT_LABEL, type ExcludedFilterT,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
   DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams, excludedLabel, REQUEST_KIND_LABEL, requestKindTab, type RequestKindFilterT,
-  priceReasonStats, priceReasonKey, PRICE_REASON_KEY_UA, type PriceReasonKeyT, countsForTeam } from "../aiCallsView";
+  priceReasonStats, priceReasonKey, PRICE_REASON_KEY_UA, type PriceReasonKeyT, countsForTeam,
+  reviewBucket, inListMode, LIST_MODE_UA, REVIEW_REASON_UI, type ListModeT, type ReviewReasonT } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -72,7 +75,11 @@ function FirstTouchSkeleton({ header, drawer }: { header: React.ReactNode; drawe
   );
 }
 
-export function AiCallsSection() {
+/** Вкладки екрана (Роман 23.11.2026, задача 10734 п.2): «Контроль» — перша; «Перевізники за розмовою» — колишній пункт меню. */
+type FtPageT = "ctrl" | "an" | "car";
+const FT_PAGE_UA: Record<FtPageT, string> = { ctrl: "Контроль", an: "Аналітика", car: "Перевізники за розмовою" };
+
+export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { canSeeCarriers?: boolean; roleKey?: string | null } = {}) {
   const today = todayKyiv();
   // 🔗 Перехід зі Звіту КВП (задача 5314): період, плитка, команда чи менеджер — з адреси, один раз при відкритті.
   const link = useMemo(() => parseAiLink(window.location.search), []);
@@ -113,7 +120,17 @@ export function AiCallsSection() {
   useEffect(() => {
     if (d && link.tile && !linkScrolled.current) { linkScrolled.current = true; tableRef.current?.scrollIntoView({ block: "start" }); }
   }, [d, link.tile]);
-  const [view, setView] = useState<"all" | "todo">("all");
+  // 🎯 Режим списку (задача 10734 п.1, п.4): «Потребує дії / Закриті без розбору / Розібрані / Усі заявки». `null` — типовий:
+  // тому, хто розбирає, — «Потребує дії»; решті (і переходу зі Звіту КВП з плиткою) — «Усі заявки».
+  const [mode, setMode] = useState<ListModeT | null>(link.tile ? "all" : null);
+  const [page, setPage] = useState<FtPageT>("ctrl");
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const closeRules = useCallback(() => setRulesOpen(false), []);
+  // «Фільтр ▾» (задача 10734 п.4): причина розбору й стан погодження; менеджер — той самий `lf.managerId`.
+  const [fReasons, setFReasons] = useState<ReviewReasonT[]>([]);
+  const [fApprove, setFApprove] = useState<"all" | "can" | "wait">("all");
+  const [techOpen, setTechOpen] = useState(false);
+  const techRef = useRef<HTMLDetailsElement | null>(null);
   const [q, setQ] = useState("");
   // Згортання блоку «Менеджери за чек-листом» — пам'ятаємо в браузері (лише зручність, не дані).
   const [mgrCollapsed, setMgrCollapsed] = useState<boolean>(() => { try { return localStorage.getItem("ftd.mgrCollapsed") === "1"; } catch { return false; } });
@@ -156,14 +173,29 @@ export function AiCallsSection() {
   // заголовок, рядок конвеєра, під ними завжди окремим рядком період і «Команда». Даних ще немає — команди «усі».
   const headTeams = d ? [...new Map(d.rows.filter((r) => r.teamId != null).map((r) => [r.teamId!, r.teamName ?? `Команда #${String(r.teamId)}`])).entries()]
     .sort((a, b) => a[1].localeCompare(b[1], "uk")) : [];
-  const header = (
-      <div className="ftd-head">
+  // 🧭 Вкладки екрана — у шапці, щоб і «Перевізники» (свій період і свої фільтри) відкривались з того самого місця.
+  const pages: FtPageT[] = canSeeCarriers ? ["ctrl", "an", "car"] : ["ctrl", "an"];
+  const pageTabs = (
+    <div className="ftd-seg ftd-pages" role="tablist" aria-label="Вкладки «Першого дотику»">
+      {pages.map((k) => <button key={k} type="button" role="tab" aria-selected={page === k} className={page === k ? "on" : ""} onClick={() => setPage(k)}>{FT_PAGE_UA[k]}</button>)}
+    </div>
+  );
+  // 📘 Задача 10734 п.3: «Правила роботи» — окрема кнопка поруч із заголовком; панель — фіксована, тож живе тут же.
+  const rulesEl = rulesOpen ? <FirstTouchRules onClose={closeRules} /> : null;
+  const titleBlock = (
         <div>
           <div className="ftd-kicker">Продаж · перші розмови з реклами</div>
           <h1 className="ftd-title">Перший дотик · AI
             {stale && <span className="ftd-updating" role="status">Оновлюю…</span>}
             <InfoHint text="Перша розмова кожної рекламної угоди (будь-який напрямок, від 20 с), розпізнана по двох каналах і розібрана моделлю: ціна, заперечення, обіцянки й наступний крок із дослівними цитатами. Оцінки менеджера тут немає. Період — за датою створення угоди." />
+            <button type="button" className="ftd-pill ftd-rules-btn" onClick={() => setRulesOpen(true)}>📘 Правила роботи</button>
           </h1>
+          {rulesEl}
+        </div>
+  );
+  // ⚙️ Рядок конвеєра й витрат — технічне (Олександр 20.11, 37:57): живе в згорнутому блоці «Технічне» внизу «Контролю».
+  const techMeta = (
+        <>
           {meta && (
             <p className="ftd-meta">
               Конвеєр: {meta.job?.lastSuccessAt ? `останній успішний запуск ${fmtTime(meta.job.lastSuccessAt)}` : "успішних запусків ще не було"}
@@ -174,8 +206,15 @@ export function AiCallsSection() {
             </p>
           )}
           {!meta && <span className="ftd-sk" style={{ width: 420, height: 12, marginTop: 6 }} />}
+        </>
+  );
+  const header = (
+      <div className="ftd-head">
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "flex-end", gap: 12 }}>
+          {titleBlock}
+          {pageTabs}
         </div>
-        <div className="ftd-nav">
+        {page !== "car" && <div className="ftd-nav">
           {navBar}
           <label className="ftd-team">Команда
             <select id="ai-team" disabled={!d} value={lf.teamId ?? ""} onChange={(e) => setLf({ ...lf, teamId: e.target.value ? Number(e.target.value) : null, managerId: null })}>
@@ -183,8 +222,15 @@ export function AiCallsSection() {
               {headTeams.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
             </select>
           </label>
-        </div>
+        </div>}
       </div>
+  );
+  // 🚚 «Перевізники за розмовою» — вкладкою, без змін у самому екрані (свій період, свої фільтри); даних «Першого дотику» не чекає.
+  if (page === "car") return (
+    <>
+      <div className="ftd" style={{ paddingBottom: 0 }}>{header}</div>
+      <CarrierCallsSection roleKey={roleKey} />
+    </>
   );
   if (err) return <div className="ftd">{header}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>{drawer}</div>;
   if (!d) return <FirstTouchSkeleton header={header} drawer={drawer} />;
@@ -237,9 +283,14 @@ export function AiCallsSection() {
   const queue = queueRows(rows);
   const dueTotal = rows.filter((r) => r.reviewReason != null).length;
   const reviewedN = dueTotal - queue.length;
-  const reasonN = (k: "noCall" | "noPrice" | "lost") => queue.filter((r) => r.reviewReason === k).length;
+  // 🎯 Задача 10734 п.1 («нуль у черзі»): у черзі й «Потребує дії» — лише відкриті угоди; закриті без розбору — окремо.
+  const needNow = queue.filter((r) => reviewBucket(r) === "need");
+  const closedNoReview = queue.filter((r) => reviewBucket(r) === "closed");
+  const modeCount = (m: ListModeT) => (m === "all" ? rows.length : rows.filter((r) => reviewBucket(r) === m).length);
+  const listMode: ListModeT = tab === "excluded" ? "all" : (mode ?? (d.canReview ? "need" : "all"));
+  const reasonN = (k: "noCall" | "noPrice" | "lost") => needNow.filter((r) => r.reviewReason === k).length;
   const openQueue = (uniqueid?: string) => {
-    setQueueSel(uniqueid ?? queue[0]?.uniqueid ?? null); setQueueOpen(true); setGlow(false);
+    setQueueSel(uniqueid ?? needNow[0]?.uniqueid ?? null); setQueueOpen(true); setGlow(false);
     topRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
   const closeQueue = () => { setQueueOpen(false); setGlow(true); window.setTimeout(() => setGlow(false), 900); };
@@ -247,10 +298,22 @@ export function AiCallsSection() {
 
   const presetOk = (r: (typeof rows)[number]) => preset === "all" || TILE_MATCH[preset](r);
   const needle = q.trim().toLowerCase();
-  const shownD = shown.filter((r) => (view === "all" || r.needsReview) && presetOk(r)
+  const shownD = shown.filter((r) => inListMode(r, listMode) && presetOk(r)
+    && (fReasons.length === 0 || (r.reviewReason != null && fReasons.includes(r.reviewReason)))
+    && (fApprove === "all" || (r.needsReview && (fApprove === "can" ? r.managerCommented : !r.managerCommented)))
     && (reasonPick == null || (TILE_MATCH.noPrice(r) && priceReasonKey(r) === reasonPick))
     && (!needle || `${r.summary ?? ""} ${r.managerName ?? ""} ${r.priceValue ?? ""}`.toLowerCase().includes(needle)));
-  const pickTile = (k: TileKey) => { setPreset(preset === k ? "all" : k); setTab("report"); setView("all"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); };
+  // Плитки, рядки й чіпи «Аналітики» ведуть у список «Контролю» («натиснув — висвітлилось, які саме»).
+  const goList = () => { setTab("report"); setMode("all"); setPage("ctrl"); window.setTimeout(() => tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }), 0); };
+  const pickTile = (k: TileKey) => { setPreset(preset === k ? "all" : k); goList(); };
+  const CHIPS = ([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["thinking", "Думає"], ["declined", "Відмовив"], ["agreedLost", "Погодився, а в Kommo втрачено"],
+    ["messenger", "Обіцяв у месенджер"], ...(d.canSeeMessengerSignal ? [["messengerSelf", "Сам запропонував месенджер"] as const] : []),
+    ["priceExact", "Ціна: точна"], ["priceRange", "Ціна: вилка"], ["priceFrom", "Ціна: «від…»"]] as const);
+  const TILE_UA: Partial<Record<TileKey, string>> = Object.fromEntries(CHIPS);
+  // Технічні фільтри живуть унизу; коли якийсь діє — у панелі списку про це сказано, і клік відкриває блок.
+  const techActive = [lf.requestKind != null && lf.requestKind !== "all", lf.group !== "all", lf.showNonTarget, silenceOnly, filter !== "all"].filter(Boolean).length;
+  const openTech = () => { setTechOpen(true); window.setTimeout(() => techRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }), 0); };
+  const fActive = fReasons.length + (fApprove === "all" ? 0 : 1) + (lf.managerId == null ? 0 : 1);
   const goodBad = (ok: boolean | null) => (ok == null ? "" : ok ? " is-ok" : " is-bad");
   // ✅ Задача 9229: клітинка «Розбір» розмови, що чекає розбору. Хто може розбирати — бачить «Погоджую», коли менеджер
   // пояснив сам; коли коментар вписав не менеджер — так і написано (раніше тут стояло «менеджер пояснив»).
@@ -285,24 +348,210 @@ export function AiCallsSection() {
         <div className={`ftd-over${queueOpen ? " is-dim" : ""}${stale ? " is-stale" : ""}`} aria-hidden={queueOpen} aria-busy={stale}>
           {header}
 
+          {page === "ctrl" && (<>
+          {/* 🎯 Задача 10734 п.1: «Потребує дії» — лише відкриті угоди, ціль 0; закриті без розбору — окремим числом. */}
           {d.canReview && (
             <section aria-label="Черга розбору" className={`ftd-strip${glow ? " is-glow" : ""}`}>
               <div style={{ flex: "1 1 320px" }}>
-                <div className="ftd-strip-k">Черга розбору</div>
-                <div className="ftd-strip-h">Розібрати: <b>{queue.length}</b> розмов · розібрано {reviewedN} з {dueTotal}</div>
+                <div className="ftd-strip-k">Точка контролю · ціль 0</div>
+                <div className="ftd-strip-h">Потребує дії: <b>{needNow.length}</b> розмов · розібрано {reviewedN} з {dueTotal}</div>
                 <div className="ftd-progress"><i style={{ width: `${String(dueTotal ? Math.round((reviewedN / dueTotal) * 100) : 0)}%` }} /></div>
+                {closedNoReview.length > 0 && (
+                  <button type="button" className="ftd-strip-closed" onClick={() => { setTab("report"); setMode("closed"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); }}
+                    title="Розмова ще не розібрана, а угоду вже закрито в Kommo. З «Потребує дії» вона вийшла; погодити можна в списку «Закриті без розбору».">
+                    Закриті без розбору: <b>{closedNoReview.length}</b> ›</button>
+                )}
               </div>
               <div className="ftd-strip-chips">
                 <span style={{ background: "#3a1616", color: "#fecaca" }}>Немає дзвінка {reasonN("noCall")}</span>
                 <span style={{ background: "#3a2c10", color: "#fde68a" }}>Без ціни {reasonN("noPrice")}</span>
                 <span style={{ background: "#2c2e36", color: "#e5e7eb" }}>Втрачені {reasonN("lost")}</span>
               </div>
-              <button type="button" className="ftd-go" disabled={queue.length === 0} onClick={() => openQueue()}>{reviewedN > 0 ? "Продовжити розбір ›" : "Почати розбір ›"}</button>
+              <button type="button" className="ftd-go" disabled={needNow.length === 0} onClick={() => openQueue()}>{needNow.length === 0 ? "Усе розібрано ✓" : reviewedN > 0 ? "Продовжити розбір ›" : "Почати розбір ›"}</button>
             </section>
           )}
           {/* 📋 Задача 7238: розбір по командах за день і тиждень — тим, хто розбирає (тімлід, КВП, адмін). */}
           {d.canReview && <ReviewByTeamBlock variant="ftd" refresh={reload} />}
 
+          <section aria-label="Розмови" className="ftd-card" ref={tableRef}>
+            <div className="ftd-toolbar">
+              <div className="ftd-seg" role="tablist" aria-label="Режим списку">
+                {(d.canReview ? (["need", "closed", "reviewed", "all"] as const) : (["all"] as const)).map((m) => (
+                  <button key={m} type="button" role="tab" aria-selected={tab === "report" && listMode === m} className={tab === "report" && listMode === m ? "on" : ""}
+                    onClick={() => { setTab("report"); setMode(m); }}>{LIST_MODE_UA[m]} {modeCount(m)}</button>
+                ))}
+              </div>
+              {tab === "excluded" && <button type="button" className="ftd-pill on" onClick={() => setTab("report")} aria-label="Зняти: Виключені">Виключені · {excludedCount} ✕</button>}
+              {preset !== "all" && <button type="button" className="ftd-pill on" onClick={() => setPreset("all")} aria-label="Зняти фільтр плитки">{TILE_UA[preset] ?? preset}: {scoped.filter(TILE_MATCH[preset]).length} ✕</button>}
+              {reasonPick && <button type="button" className="ftd-pill on" onClick={() => setReasonPick(null)} aria-label="Зняти фільтр причини">Без ціни: {PRICE_REASON_KEY_UA[reasonPick]} ✕</button>}
+              {pickedName && (
+                <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
+              )}
+              <details className="ftd-fdrop">
+                <summary className={`ftd-pill${fActive ? " on" : ""}`}>Фільтр ▾{fActive ? ` ${String(fActive)}` : ""}</summary>
+                <div className="ftd-fdrop-body">
+                  <div className="ftd-fdrop-h">Причина розбору</div>
+                  {(Object.keys(REVIEW_REASON_UI) as ReviewReasonT[]).map((k) => (
+                    <label key={k}><input type="checkbox" checked={fReasons.includes(k)}
+                      onChange={(e) => setFReasons(e.target.checked ? [...fReasons, k] : fReasons.filter((x) => x !== k))} /> {REVIEW_REASON_UI[k].label}
+                      <span className="ftd-sub"> · {rows.filter((r) => inListMode(r, listMode) && r.reviewReason === k).length}</span></label>
+                  ))}
+                  {d.canReview && <>
+                    <div className="ftd-fdrop-h">Стан розбору</div>
+                    {([["all", "усі"], ["can", "менеджер уже пояснив — можна погодити"], ["wait", "чекає коментаря менеджера"]] as const).map(([k, label]) => (
+                      <label key={k}><input type="radio" name="ftd-fapprove" checked={fApprove === k} onChange={() => setFApprove(k)} /> {label}</label>
+                    ))}
+                  </>}
+                  <div className="ftd-fdrop-h">Менеджер</div>
+                  <select id="ai-manager" value={lf.managerId ?? ""} onChange={(e) => setLf({ ...lf, managerId: e.target.value ? Number(e.target.value) : null })}>
+                    <option value="">усі</option>
+                    {managers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                  </select>
+                  {fActive > 0 && <button type="button" className="ftd-pill" style={{ marginTop: 8 }} onClick={() => { setFReasons([]); setFApprove("all"); setLf({ ...lf, managerId: null }); }}>Скинути</button>}
+                </div>
+              </details>
+              {techActive > 0 && <button type="button" className="ftd-pill" onClick={openTech} title="Тип запиту, воронка, нецільові, тиша чи фільтр стану — у блоці «Технічне» внизу">⚙️ технічні фільтри: {techActive}</button>}
+              <div style={{ flex: 1 }} />
+              <label htmlFor="ai-search" style={{ position: "absolute", left: -9999 }}>Пошук у розмовах</label>
+              <input id="ai-search" type="search" className="ftd-search" placeholder="Пошук: менеджер, маршрут, сума" value={q} onChange={(e) => setQ(e.target.value)} />
+            </div>
+            {d.truncated && <div className="ftd-filters"><span style={{ color: "var(--warn-fg, #8a5a00)" }}>Показано перші 5 000 — звузьте період.</span></div>}
+            <div style={{ overflowX: "auto" }}>
+              {shownD.length === 0
+                ? <p style={{ margin: 0, padding: 16, color: "var(--text-muted)" }}>{rows.length === 0 ? "У періоді немає перших розмов по рекламних угодах." : listMode === "need" && tab === "report" && preset === "all" ? "Потребує дії: 0 — усе розібрано." : "Під цей фільтр розмов немає."}</p>
+                : (
+                  <table className="ftd-table">
+                    <thead>
+                      <tr>
+                        <th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Про що (AI)</th><th style={cell}>Чек-лист</th>
+                        <th style={cell} title="Чим закінчилась розмова після названої ціни. Окрема інформація — у бал не входить.">Після ціни</th>
+                        <th style={cell}>Обіцянка</th><th style={cell}>Успіх</th><th style={cell}>Реакція</th><th style={cell}>Розбір</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shownD.map((r) => (
+                        <tr key={r.uniqueid} className="ftd-row" tabIndex={0} aria-label={`Відкрити розмову ${fmtTime(r.calledAt)}`}
+                          onClick={() => setOpen(r.uniqueid)} onKeyDown={(e) => { if (e.key === "Enter") setOpen(r.uniqueid); }}>
+                          <td style={{ whiteSpace: "nowrap" }}><b>{fmtTime(r.calledAt)}</b><div className="ftd-sub">{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}</div></td>
+                          <td style={{ whiteSpace: "nowrap" }}>{r.managerName ?? "невідомий"}<div className="ftd-sub">{r.teamName ?? ""}</div></td>
+                          <td style={{ maxWidth: 380 }}>
+                            {(r.typeCheck || !r.inReport || r.typeOverride) && (
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 3 }}>
+                                {r.typeCheck && <span className="ftd-chip" title={r.conversationType ? `Модель не впевнена в типі (${TYPE_LABEL[r.conversationType]}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}` : r.typeReason ?? "Тип не визначено"}
+                                  style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>Перевірити тип</span>}
+                                {r.messengerSignal === true && <span className="ftd-chip" title="Менеджер сам запропонував перейти в месенджер — клієнт не просив (задача 7184)" style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>сам запропонував месенджер</span>}
+                                {!r.inReport && r.transportKind
+                                  ? <span className="ftd-chip" title="Не оцінюємо в першому дотику: на такому перевезенні ціну в першій розмові назвати майже неможливо (задача 7183)" style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>не оцінюємо · {TRANSPORT_LABEL[r.transportKind]}</span>
+                                  : !r.inReport && excludedLabel(r) && <span className="ftd-chip" title={r.typeOverride?.cut ? "Тімлід позначив: розмови по суті не було" : r.typeReason ?? ""} style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>{excludedLabel(r)}</span>}
+                                {r.typeOverride && <span className="ftd-sub">позначено вручну{r.typeOverride.byName ? ` · ${r.typeOverride.byName}` : ""}</span>}
+                              </div>
+                            )}
+                            {r.summary ?? <span className="ftd-sub">—</span>}
+                          </td>
+                          <td>{r.state === "done" && r.checklist
+                            ? <span className="ftd-dots" title={CHECK_ITEMS.map((it) => `${it.label}: ${CHECK_MARK_UI[r.checklist![it.key]].label}`).join(" · ")}>
+                                {CHECK_ITEMS.map((it) => <i key={it.key} style={{ background: CHECK_MARK_UI[r.checklist![it.key]].color }} />)}
+                                <b>{scoreLabel(r.checkScore) ?? "—"}</b>
+                              </span>
+                            : r.state === "done" ? null : <StateChip state={r.state} />}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>{r.clientDecision
+                            ? <span className="ftd-chip" title={`${DECISION_UI[r.clientDecision.value].hint}${r.clientDecision.quote ? ` Клієнт: «${r.clientDecision.quote}»` : ""}`}
+                                style={{ background: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].bg, color: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].fg }}>
+                                <b aria-hidden="true">{DECISION_UI[r.clientDecision.value].mark}</b> {DECISION_UI[r.clientDecision.value].label}</span>
+                            : r.checklist?.price === "y"
+                              ? <span className="ftd-sub" title="Згода після ціни розбирається для розмов від 13.10.2026">не розбиралось</span>
+                              : <span className="ftd-sub" title="Ціну в розмові не назвали — згоди питати нема про що">—</span>}</td>
+                          <td>{r.state !== "done" ? "—" : r.promiseState
+                            ? <span className="ftd-chip" title={PROMISE_UI[r.promiseState].hint} style={{ background: TONE_COLOR[PROMISE_UI[r.promiseState].tone].bg, color: TONE_COLOR[PROMISE_UI[r.promiseState].tone].fg }}>{PROMISE_UI[r.promiseState].label}</span>
+                            : <span className="ftd-sub">немає</span>}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>{!r.dealOutcome ? "—"
+                            : <span className="ftd-chip" title={r.dealOutcome.lossReason ? `Причина відмови в CRM: ${r.dealOutcome.lossReason}` : undefined}
+                                style={{ background: TONE_COLOR[r.dealOutcome.state === "success" ? "ok" : r.dealOutcome.state === "lost" ? "muted" : "wait"].bg,
+                                  color: TONE_COLOR[r.dealOutcome.state === "success" ? "ok" : r.dealOutcome.state === "lost" ? "muted" : "wait"].fg }}>
+                                {r.dealOutcome.state === "success" ? "успіх" : r.dealOutcome.state === "lost" ? "відмова" : "у роботі"}</span>}</td>
+                          <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{r.reactionMin == null ? "—" : fmtMinutes(r.reactionMin)}{r.reactionOffHours ? <div className="ftd-sub">поза роб. часом</div> : null}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>{r.reviewNote
+                            ? <span style={{ color: "var(--ok, #166534)" }}>{r.reviewNote.byName ?? "розібрано"} · {new Date(r.reviewNote.at).toLocaleDateString("uk-UA", { day: "2-digit", month: "2-digit", timeZone: "Europe/Kyiv" })}</span>
+                            : r.missedNote ? <span style={{ color: "var(--ok, #166534)" }}>опрацьовано</span>
+                            : r.reviewClosure === "invoice" ? <span style={{ color: "var(--ok, #166534)" }} title={CLOSURE_UI.invoice.hint}>{CLOSURE_UI.invoice.label}</span>
+                            // ✅ Задача 9229: «Погоджую» прямо в списку — той самий стан, що в черзі й картці (`approveState`).
+                            : r.needsReview ? reviewTodoCell(r)
+                            : <span className="ftd-sub">—</span>}
+                            {/* 💬 Задача 7183: чим закрито — «погоджено коментар» / «закрито тімлідом». */}
+                            {r.reviewClosure && r.reviewClosure !== "invoice" && <div className="ftd-sub" title={CLOSURE_UI[r.reviewClosure].hint}>{CLOSURE_UI[r.reviewClosure].label}</div>}
+                            {d.canFeedback && <div style={{ marginTop: 4 }}><FeedbackButton uniqueid={r.uniqueid} small /></div>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+            </div>
+            <div className="ftd-foot">
+              <div><b>Ціна названа → успіх:</b> {split.named.n} з {split.named.of}{split.enough ? ` (${String(Math.round((split.named.n / Math.max(1, split.named.of)) * 100))}%)` : ""}
+                {" · "}<b>не названа → успіх:</b> {split.notNamed.n} з {split.notNamed.of}{split.enough ? ` (${String(Math.round((split.notNamed.n / Math.max(1, split.notNamed.of)) * 100))}%)` : ""}
+                {!split.enough && <span> — замало угод для висновку: відсотки зʼявляться, коли в кожній групі буде від {SUCCESS_MIN_FOR_PCT} успішних.</span>}</div>
+              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку — картка розмови; розбір черги — кнопкою «Почати розбір» у смузі «Точка контролю».</div>
+            </div>
+          </section>
+          {/* ⚙️ Задача 10734 п.2 (Олександр 20.11, 37:57; Сергій 43:48): технічне — вниз, згорнуто. */}
+          <details ref={techRef} className="ftd-card ftd-card-pad ftd-tech" open={techOpen} onToggle={(e) => setTechOpen(e.currentTarget.open)}>
+            <summary><b>⚙️ Технічне</b> <span className="ftd-sub">· конвеєр AI, тип запиту, воронки, нецільові, виключені{techActive ? ` · діє фільтрів: ${String(techActive)}` : ""}</span></summary>
+            {techMeta}
+            <div className="ftd-filters" style={{ padding: "10px 0 0" }}>
+              {tab === "excluded" && (
+                <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Тип
+                  <select id="ai-extype" value={exType} onChange={(e) => setExType(e.target.value as ExcludedFilterT)}>
+                    <option value="all">усі</option>
+                    <option value="transport">вид перевезення (не оцінюємо)</option>
+                    {(Object.keys(TYPE_LABEL) as ConversationTypeT[]).filter((k) => k !== "cargo_request").map((k) => <option key={k} value={k}>{TYPE_LABEL[k]}</option>)}
+                  </select>
+                </label>
+              )}
+              {/* 🧭 Задача 7239: «Тип запиту» — міжнародку одним кліком; не внутрішні живуть у «Виключених», тож вкладка перемикається сама. */}
+              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Тип запиту
+                <select id="ai-reqkind" value={lf.requestKind ?? "all"} onChange={(e) => {
+                  const k = e.target.value as RequestKindFilterT;
+                  setLf({ ...lf, requestKind: k });
+                  const t = requestKindTab(k);
+                  if (t) { setTab(t); setExType("all"); }
+                }}>
+                  <option value="all">усі · {applyListFilter(d.rows, { ...lf, requestKind: "all" }).length}</option>
+                  {(Object.keys(REQUEST_KIND_LABEL) as (keyof typeof REQUEST_KIND_LABEL)[]).map((k) => (
+                    <option key={k} value={k}>{REQUEST_KIND_LABEL[k]} · {applyListFilter(d.rows, { ...lf, requestKind: k }).length}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="hr-seg2" role="group" aria-label="Воронка">
+                {(["all", "full", "qualification"] as const).map((g) => (
+                  <button key={g} type="button" className={lf.group === g ? "on" : ""} aria-pressed={lf.group === g} onClick={() => setLf({ ...lf, group: g })}>
+                    {g === "all" ? "Усі воронки" : GROUP_LABEL[g]} · {groupCount(g)}
+                  </button>
+                ))}
+              </div>
+              <label style={{ display: "flex", gap: 4, alignItems: "center" }} title="«Дубль» і «Перевізник» — причина відмови в CRM">
+                <input id="ai-nontarget" type="checkbox" checked={lf.showNonTarget} onChange={(e) => setLf({ ...lf, showNonTarget: e.target.checked })} />
+                показати нецільові{lf.showNonTarget ? "" : ` (прибрано: ${String(nonTargetHidden)})`}
+              </label>
+              {normFrom && (
+                <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <input id="ai-silence" type="checkbox" checked={silenceOnly} onChange={(e) => setSilenceOnly(e.target.checked)} />
+                  тиша перед закриттям
+                </label>
+              )}
+              <select id="ai-filter" aria-label="Фільтр" value={filter} onChange={(e) => setFilter(e.target.value as AiFilter)}>
+                {FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+              {done.length < rows.length && (
+                <span>Ще не проаналізовано: {[...byState.entries()].filter(([s]) => s !== "done").map(([s, n]) => `${STATE_UI[s].label.toLowerCase()} — ${String(n)}`).join(", ")}.</span>
+              )}
+              {d.canSeeExcluded && <button type="button" className={`ftd-pill${tab === "excluded" ? " on" : ""}`} aria-pressed={tab === "excluded"}
+                onClick={() => { setTab(tab === "excluded" ? "report" : "excluded"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); }}
+                title="Розмови, які модель упевнено визнала не запитом на перевезення: перевізники, продавці, пошук роботи, помилка номером.">Виключені · {excludedCount}</button>}
+            </div>
+          </details>
+          </>)}
+
+          {page === "an" && (<>
           <section aria-label="Головні числа" className={`ftd-kpis${d.canSeeMessengerSignal ? " is-6" : ""}`}>
             {kpi("noCall", "Обіцяли — дзвінка в телефонії немає", <AnimatedNumber value={ts.noCall.n} />,
               `${ts.noCall.of ? `${String(Math.round((ts.noCall.n / ts.noCall.of) * 100))}% від ` : "з "}${String(ts.noCall.of)} обіцянок`,
@@ -356,7 +605,7 @@ export function AiCallsSection() {
               <div className="ftd-pf">
                 {reasons.map((x) => (
                   <button key={x.key} type="button" className={`ftd-pf-row${reasonPick === x.key ? " on" : ""}`} aria-pressed={reasonPick === x.key}
-                    onClick={() => { setReasonPick(reasonPick === x.key ? null : x.key); setTab("report"); }}>
+                    onClick={() => { setReasonPick(reasonPick === x.key ? null : x.key); goList(); }}>
                     <span className="ftd-pf-l">{PRICE_REASON_KEY_UA[x.key]}</span>
                     <span className="ftd-pf-n"><b>{x.n}</b> розмов</span>
                     <span className="ftd-pf-n">{Math.round((x.n / reasonsTotal) * 100)}%</span>
@@ -457,165 +706,24 @@ export function AiCallsSection() {
             )}
           </section>
 
-          <section aria-label="Розмови" className="ftd-card" ref={tableRef}>
-            <div className="ftd-toolbar">
-              <div className="ftd-seg" role="tablist" aria-label="Режим списку">
-                <button type="button" role="tab" aria-selected={tab === "report" && view === "all"} className={tab === "report" && view === "all" ? "on" : ""}
-                  onClick={() => { setTab("report"); setView("all"); }}>Усі {rows.length}</button>
-                {d.canReview && <button type="button" role="tab" aria-selected={tab === "report" && view === "todo"} className={tab === "report" && view === "todo" ? "on" : ""}
-                  onClick={() => { setTab("report"); setView("todo"); }}>Не розібрані {queue.length}</button>}
-                {d.canSeeExcluded && <button type="button" role="tab" aria-selected={tab === "excluded"} className={tab === "excluded" ? "on" : ""} onClick={() => { setTab("excluded"); setView("all"); }}
-                  title="Розмови, які модель упевнено визнала не запитом на перевезення: перевізники, продавці, пошук роботи, помилка номером.">Виключені · {excludedCount}</button>}
-              </div>
-              {pickedName && (
-                <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
-              )}
-              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["thinking", "Думає"], ["declined", "Відмовив"], ["agreedLost", "Погодився, а в Kommo втрачено"],
-                ["messenger", "Обіцяв у месенджер"], ...(d.canSeeMessengerSignal ? [["messengerSelf", "Сам запропонував месенджер"] as const] : []),
-                ["priceExact", "Ціна: точна"], ["priceRange", "Ціна: вилка"], ["priceFrom", "Ціна: «від…»"]] as const).map(([k, label]) => (
+          {/* 🔎 Задача 10734 п.2: чіпи-фільтри переїхали з «Контролю»; клік — список у «Контролі» з цим фільтром. */}
+          <section aria-label="Фільтри розмов" className="ftd-card ftd-card-pad">
+            <div className="ftd-card-h">
+              <h2>Фільтри розмов</h2>
+              <span>клік — список розмов у «Контролі» з цим фільтром · ще клік — знімає</span>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {CHIPS.map(([k, label]) => (
                 <button key={k} type="button" className={`ftd-pill${preset === k ? " on" : ""}`} aria-pressed={preset === k}
-                  onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{scoped.filter(TILE_MATCH[k]).length}</b></button>
+                  onClick={() => { setPreset(preset === k ? "all" : k); goList(); }}>{label} <b>{scoped.filter(TILE_MATCH[k]).length}</b></button>
               ))}
-              <div style={{ flex: 1 }} />
-              <label htmlFor="ai-search" style={{ position: "absolute", left: -9999 }}>Пошук у розмовах</label>
-              <input id="ai-search" type="search" className="ftd-search" placeholder="Пошук: менеджер, маршрут, сума" value={q} onChange={(e) => setQ(e.target.value)} />
-            </div>
-            <div className="ftd-filters">
-              {tab === "excluded" && (
-                <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Тип
-                  <select id="ai-extype" value={exType} onChange={(e) => setExType(e.target.value as ExcludedFilterT)}>
-                    <option value="all">усі</option>
-                    <option value="transport">вид перевезення (не оцінюємо)</option>
-                    {(Object.keys(TYPE_LABEL) as ConversationTypeT[]).filter((k) => k !== "cargo_request").map((k) => <option key={k} value={k}>{TYPE_LABEL[k]}</option>)}
-                  </select>
-                </label>
-              )}
-              {/* 🧭 Задача 7239: «Тип запиту» — міжнародку одним кліком; не внутрішні живуть у «Виключених», тож вкладка перемикається сама. */}
-              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Тип запиту
-                <select id="ai-reqkind" value={lf.requestKind ?? "all"} onChange={(e) => {
-                  const k = e.target.value as RequestKindFilterT;
-                  setLf({ ...lf, requestKind: k });
-                  const t = requestKindTab(k);
-                  if (t) { setTab(t); setExType("all"); }
-                }}>
-                  <option value="all">усі · {applyListFilter(d.rows, { ...lf, requestKind: "all" }).length}</option>
-                  {(Object.keys(REQUEST_KIND_LABEL) as (keyof typeof REQUEST_KIND_LABEL)[]).map((k) => (
-                    <option key={k} value={k}>{REQUEST_KIND_LABEL[k]} · {applyListFilter(d.rows, { ...lf, requestKind: k }).length}</option>
-                  ))}
-                </select>
-              </label>
-              <div className="hr-seg2" role="group" aria-label="Воронка">
-                {(["all", "full", "qualification"] as const).map((g) => (
-                  <button key={g} type="button" className={lf.group === g ? "on" : ""} aria-pressed={lf.group === g} onClick={() => setLf({ ...lf, group: g })}>
-                    {g === "all" ? "Усі воронки" : GROUP_LABEL[g]} · {groupCount(g)}
-                  </button>
-                ))}
-              </div>
-              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Менеджер
-                <select id="ai-manager" value={lf.managerId ?? ""} onChange={(e) => setLf({ ...lf, managerId: e.target.value ? Number(e.target.value) : null })}>
-                  <option value="">усі</option>
-                  {managers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-                </select>
-              </label>
-              <label style={{ display: "flex", gap: 4, alignItems: "center" }} title="«Дубль» і «Перевізник» — причина відмови в CRM">
-                <input id="ai-nontarget" type="checkbox" checked={lf.showNonTarget} onChange={(e) => setLf({ ...lf, showNonTarget: e.target.checked })} />
-                показати нецільові{lf.showNonTarget ? "" : ` (прибрано: ${String(nonTargetHidden)})`}
-              </label>
-              {normFrom && (
-                <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                  <input id="ai-silence" type="checkbox" checked={silenceOnly} onChange={(e) => setSilenceOnly(e.target.checked)} />
-                  тиша перед закриттям
-                </label>
-              )}
-              <select id="ai-filter" aria-label="Фільтр" value={filter} onChange={(e) => setFilter(e.target.value as AiFilter)}>
-                {FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-              </select>
-              {done.length < rows.length && (
-                <span>Ще не проаналізовано: {[...byState.entries()].filter(([s]) => s !== "done").map(([s, n]) => `${STATE_UI[s].label.toLowerCase()} — ${String(n)}`).join(", ")}.</span>
-              )}
-              {d.truncated && <span style={{ color: "var(--warn-fg, #8a5a00)" }}>Показано перші 5 000 — звузьте період.</span>}
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              {shownD.length === 0
-                ? <p style={{ margin: 0, padding: 16, color: "var(--text-muted)" }}>{rows.length === 0 ? "У періоді немає перших розмов по рекламних угодах." : "Під цей фільтр розмов немає."}</p>
-                : (
-                  <table className="ftd-table">
-                    <thead>
-                      <tr>
-                        <th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Про що (AI)</th><th style={cell}>Чек-лист</th>
-                        <th style={cell} title="Чим закінчилась розмова після названої ціни. Окрема інформація — у бал не входить.">Після ціни</th>
-                        <th style={cell}>Обіцянка</th><th style={cell}>Успіх</th><th style={cell}>Реакція</th><th style={cell}>Розбір</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {shownD.map((r) => (
-                        <tr key={r.uniqueid} className="ftd-row" tabIndex={0} aria-label={`Відкрити розмову ${fmtTime(r.calledAt)}`}
-                          onClick={() => setOpen(r.uniqueid)} onKeyDown={(e) => { if (e.key === "Enter") setOpen(r.uniqueid); }}>
-                          <td style={{ whiteSpace: "nowrap" }}><b>{fmtTime(r.calledAt)}</b><div className="ftd-sub">{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}</div></td>
-                          <td style={{ whiteSpace: "nowrap" }}>{r.managerName ?? "невідомий"}<div className="ftd-sub">{r.teamName ?? ""}</div></td>
-                          <td style={{ maxWidth: 380 }}>
-                            {(r.typeCheck || !r.inReport || r.typeOverride) && (
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 3 }}>
-                                {r.typeCheck && <span className="ftd-chip" title={r.conversationType ? `Модель не впевнена в типі (${TYPE_LABEL[r.conversationType]}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}` : r.typeReason ?? "Тип не визначено"}
-                                  style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>Перевірити тип</span>}
-                                {r.messengerSignal === true && <span className="ftd-chip" title="Менеджер сам запропонував перейти в месенджер — клієнт не просив (задача 7184)" style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>сам запропонував месенджер</span>}
-                                {!r.inReport && r.transportKind
-                                  ? <span className="ftd-chip" title="Не оцінюємо в першому дотику: на такому перевезенні ціну в першій розмові назвати майже неможливо (задача 7183)" style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>не оцінюємо · {TRANSPORT_LABEL[r.transportKind]}</span>
-                                  : !r.inReport && excludedLabel(r) && <span className="ftd-chip" title={r.typeOverride?.cut ? "Тімлід позначив: розмови по суті не було" : r.typeReason ?? ""} style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg }}>{excludedLabel(r)}</span>}
-                                {r.typeOverride && <span className="ftd-sub">позначено вручну{r.typeOverride.byName ? ` · ${r.typeOverride.byName}` : ""}</span>}
-                              </div>
-                            )}
-                            {r.summary ?? <span className="ftd-sub">—</span>}
-                          </td>
-                          <td>{r.state === "done" && r.checklist
-                            ? <span className="ftd-dots" title={CHECK_ITEMS.map((it) => `${it.label}: ${CHECK_MARK_UI[r.checklist![it.key]].label}`).join(" · ")}>
-                                {CHECK_ITEMS.map((it) => <i key={it.key} style={{ background: CHECK_MARK_UI[r.checklist![it.key]].color }} />)}
-                                <b>{scoreLabel(r.checkScore) ?? "—"}</b>
-                              </span>
-                            : r.state === "done" ? null : <StateChip state={r.state} />}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>{r.clientDecision
-                            ? <span className="ftd-chip" title={`${DECISION_UI[r.clientDecision.value].hint}${r.clientDecision.quote ? ` Клієнт: «${r.clientDecision.quote}»` : ""}`}
-                                style={{ background: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].bg, color: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].fg }}>
-                                <b aria-hidden="true">{DECISION_UI[r.clientDecision.value].mark}</b> {DECISION_UI[r.clientDecision.value].label}</span>
-                            : r.checklist?.price === "y"
-                              ? <span className="ftd-sub" title="Згода після ціни розбирається для розмов від 13.10.2026">не розбиралось</span>
-                              : <span className="ftd-sub" title="Ціну в розмові не назвали — згоди питати нема про що">—</span>}</td>
-                          <td>{r.state !== "done" ? "—" : r.promiseState
-                            ? <span className="ftd-chip" title={PROMISE_UI[r.promiseState].hint} style={{ background: TONE_COLOR[PROMISE_UI[r.promiseState].tone].bg, color: TONE_COLOR[PROMISE_UI[r.promiseState].tone].fg }}>{PROMISE_UI[r.promiseState].label}</span>
-                            : <span className="ftd-sub">немає</span>}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>{!r.dealOutcome ? "—"
-                            : <span className="ftd-chip" title={r.dealOutcome.lossReason ? `Причина відмови в CRM: ${r.dealOutcome.lossReason}` : undefined}
-                                style={{ background: TONE_COLOR[r.dealOutcome.state === "success" ? "ok" : r.dealOutcome.state === "lost" ? "muted" : "wait"].bg,
-                                  color: TONE_COLOR[r.dealOutcome.state === "success" ? "ok" : r.dealOutcome.state === "lost" ? "muted" : "wait"].fg }}>
-                                {r.dealOutcome.state === "success" ? "успіх" : r.dealOutcome.state === "lost" ? "відмова" : "у роботі"}</span>}</td>
-                          <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{r.reactionMin == null ? "—" : fmtMinutes(r.reactionMin)}{r.reactionOffHours ? <div className="ftd-sub">поза роб. часом</div> : null}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>{r.reviewNote
-                            ? <span style={{ color: "var(--ok, #166534)" }}>{r.reviewNote.byName ?? "розібрано"} · {new Date(r.reviewNote.at).toLocaleDateString("uk-UA", { day: "2-digit", month: "2-digit", timeZone: "Europe/Kyiv" })}</span>
-                            : r.missedNote ? <span style={{ color: "var(--ok, #166534)" }}>опрацьовано</span>
-                            : r.reviewClosure === "invoice" ? <span style={{ color: "var(--ok, #166534)" }} title={CLOSURE_UI.invoice.hint}>{CLOSURE_UI.invoice.label}</span>
-                            // ✅ Задача 9229: «Погоджую» прямо в списку — той самий стан, що в черзі й картці (`approveState`).
-                            : r.needsReview ? reviewTodoCell(r)
-                            : <span className="ftd-sub">—</span>}
-                            {/* 💬 Задача 7183: чим закрито — «погоджено коментар» / «закрито тімлідом». */}
-                            {r.reviewClosure && r.reviewClosure !== "invoice" && <div className="ftd-sub" title={CLOSURE_UI[r.reviewClosure].hint}>{CLOSURE_UI[r.reviewClosure].label}</div>}
-                            {d.canFeedback && <div style={{ marginTop: 4 }}><FeedbackButton uniqueid={r.uniqueid} small /></div>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-            </div>
-            <div className="ftd-foot">
-              <div><b>Ціна названа → успіх:</b> {split.named.n} з {split.named.of}{split.enough ? ` (${String(Math.round((split.named.n / Math.max(1, split.named.of)) * 100))}%)` : ""}
-                {" · "}<b>не названа → успіх:</b> {split.notNamed.n} з {split.notNamed.of}{split.enough ? ` (${String(Math.round((split.notNamed.n / Math.max(1, split.notNamed.of)) * 100))}%)` : ""}
-                {!split.enough && <span> — замало угод для висновку: відсотки зʼявляться, коли в кожній групі буде від {SUCCESS_MIN_FOR_PCT} успішних.</span>}</div>
-              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку — картка розмови; розбір черги — кнопкою «Почати розбір» у смузі.</div>
             </div>
           </section>
+          </>)}
         </div>
 
         {d.canReview && (
-          <FirstTouchQueue rows={queue} open={queueOpen} selected={queueSel} onSelect={setQueueSel} onClose={closeQueue}
+          <FirstTouchQueue rows={needNow} open={queueOpen} selected={queueSel} onSelect={setQueueSel} onClose={closeQueue}
             onReviewed={() => setReload((x) => x + 1)} onOpenCard={(u) => setOpen(u)} title={teamTitle} />
         )}
       </div>
