@@ -27,17 +27,20 @@
 export const SHARED_PHONE_CAP = 5;
 
 /**
- * Підзапит «дзвінки клієнта» з колонками `ck` (ключ клієнта, ДЛЯ ЯКОГО дзвінок), `shared_n` (скільки клієнтів має
- * номер; 1 = номер не спільний) і потрібними колонками `ringostat_calls`. `match` — умова на ключ без імені колонки:
- * `= a.client_key` (латерал на клієнта) або `= ANY($1)` (пакет ключів).
+ * Підзапит «дзвінки клієнта» з колонками `ck` (ключ клієнта, ДЛЯ ЯКОГО дзвінок), `shared_n` і потрібними колонками
+ * `ringostat_calls`. `match` — умова на ключ без імені колонки: `= a.client_key` (латерал на клієнта) або `= ANY($1)`
+ * (пакет ключів).
+ *
+ * `shared_n` — скільки клієнтів має номер, і лише для розмов, що прийшли ЧЕРЕЗ спільний номер (друга гілка). Для прямо
+ * звʼязаної розмови — 1. Звужено 18.11.2026 після приймання на проді: на живих даних номер компанії майже завжди є ще й у
+ * клієнта-номера, тож позначка на ВСІХ розмовах спільних номерів стояла в 454 з 612 рядків і нічого не означала.
  *
  * Друга гілка бере лише дзвінки, НЕ звʼязані з цим клієнтом напряму, тож один дзвінок не рахується двічі.
  */
 export function clientCallsSql(match: string): string {
   const cols = "rc.uniqueid, rc.calldate, rc.call_type, rc.billsec, rc.recording, rc.manager_id, rc.employee_fio, rc.client_phone";
   return `(
-    SELECT rc.client_key AS ck, ${cols},
-           COALESCE((SELECT MAX(s.n) FROM shared_phone_clients s WHERE s.phone = rc.client_phone), 1) AS shared_n
+    SELECT rc.client_key AS ck, ${cols}, 1 AS shared_n
       FROM ringostat_calls rc
      WHERE rc.client_key ${match}
     UNION ALL
