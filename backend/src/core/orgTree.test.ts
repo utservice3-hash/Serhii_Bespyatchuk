@@ -18,7 +18,7 @@ const unit = (o: Partial<UnitRow> & { id: number; name: string }): UnitRow => ({
 });
 const person = (o: Partial<PersonRow> & { id: number; name: string }): PersonRow => ({
   position: null, teamLabel: null, telegram: null, phone: null, photoV: null, userId: null, teamName: null,
-  kommoTeamId: null, cardTeamId: null, dashTeamId: null, dashLinkedKommoId: null, ...o,
+  kommoTeamId: null, cardTeamId: null, dashTeamId: null, dashLinkedKommoId: null, office: false, ...o,
 });
 
 /**
@@ -114,15 +114,16 @@ const code = (n: number) => (e: { status?: number }) => e.status === n;
 const byUkSort = (a: string[]) => [...a].sort((x, y) => x.localeCompare(y, "uk"));
 
 /**
- * #2712 (було #2851) — ЖИВИЙ SQL МІГРАЦІЇ КОМАНД: офісні блоки сіду (8) стають командами дашборду й привʼязуються; блоки продажів
+ * #10740 (було #2712, до того #2851) — ЖИВИЙ SQL МІГРАЦІЇ КОМАНД: офісні блоки сіду (8) стають командами дашборду й привʼязуються; блоки продажів
  * лишаються на командах Kommo; `teams` не змінюється ні на рядок; людям БЕЗ групи в Kommo команда ставиться з тексту
  * лише за ТОЧНИМ збігом (регістр і пробіли — не різниця), «0»/«1» — ні з чим; з Kommo (і через акаунт) — не чіпаються;
  * повторний викат нічого не дублює, а кому HR команду зняв — не повертає. Дерево віддає людину поіменно: телефон — так
- * (одним виглядом, рішення Романа 28.10.2026), пошти й дат — ні.
+ * (одним виглядом, рішення Романа 28.10.2026), пошти й дат — ні; галочку «Офісний» з Найму — так (`office`, 10740), і
+ * лічильник «в офісі» = працюючі з галочкою (звільнений офісний — ні).
  * 🧨 Червоніє, якщо команди дашборду покласти в `teams`, ставити команду людям із Kommo, зіставляти «приблизно» або
- * повертати зняту команду наступним викатом.
+ * повертати зняту команду наступним викатом; якщо `office` не дійде з бази (завжди false) чи лічильник рахуватиме не тих.
  */
-test("#2712 ЖИВИЙ SQL: офісні блоки → команди дашборду, команда з тексту лише без Kommo й точно, двічі — те саме, телефон без пошти й дат", async (t) => {
+test("#10740 ЖИВИЙ SQL: офісні блоки → команди дашборду, команда з тексту лише без Kommo й точно, двічі — те саме, телефон і «офіс» без пошти й дат", async (t) => {
   const x = await scratch(t); if (!x) return;
   const { c } = x;
   try {
@@ -136,6 +137,9 @@ test("#2712 ЖИВИЙ SQL: офісні блоки → команди дашб�
       (7, 'Завершує Тест', 'k7', 'finishing', 'бухгалтерія', ' бухгалтерія ', NULL, NULL, NULL, NULL, NULL),
       (8, 'Фін Без Kommo', 'k8', 'active', 'фінансист', 'финансовый  отдел', NULL, NULL, NULL, NULL, NULL),
       (9, 'Менеджер Акаунтом', 'k9', 'active', 'менеджер', 'Бухгалтерія', NULL, NULL, NULL, NULL, 91)`);
+    // 🏢 «Офісний» (10740): двоє працюючих (один із них «завершує») і звільнений — він у лічильник не йде.
+    await c.query(`UPDATE employees SET is_office = true WHERE id IN (7, 9)`);
+    await c.query(`INSERT INTO employees (id, full_name, import_key, status, is_office) VALUES (6, 'Звільнений Офісний', 'k6', 'dismissed', true)`);
     const kommoBefore = (await c.query(`SELECT count(*)::int AS n FROM teams`)).rows[0].n as number;
     // Наступний викат: сід блоків знову (тепер із командами Kommo) — як у бойовій базі, де блоки продажів уже на командах.
     await c.query(`DELETE FROM org_units; DELETE FROM org_migrations`);
@@ -169,8 +173,10 @@ test("#2712 ЖИВИЙ SQL: офісні блоки → команди дашб�
     const tree = await loadOrg(c as never, null);
     assert.deepEqual(tree.people.map((p) => p.id).sort((a, b) => a - b), [1, 5, 7, 8, 9], "🔴 у схемі звільнений або немає того, хто «завершує»");
     const keys = [...new Set(tree.people.flatMap((p) => Object.keys(p)))].sort();
-    assert.deepEqual(keys, ["id", "isHead", "isMe", "name", "phone", "photo", "position", "teamLabel", "teamLocked", "teamName", "telegram", "telegramInvalid", "unitId"],
+    assert.deepEqual(keys, ["id", "isHead", "isMe", "name", "office", "phone", "photo", "position", "teamLabel", "teamLocked", "teamName", "telegram", "telegramInvalid", "unitId"],
       `🔴 у відповіді схеми зайві поля людини: ${keys.join(", ")}`);
+    assert.deepEqual(tree.people.filter((p) => p.office).map((p) => p.id).sort((a, b) => a - b), [7, 9], "🔴 галочка «Офісний» з Найму не дійшла до схеми (або дійшла не тим)");
+    assert.equal(tree.stats.office, 2, "🔴 «в офісі: N» ≠ працюючим із галочкою (звільнений офісний не рахується)");
     const raw = JSON.stringify(tree);
     for (const leak of ["a@x.ua", "1980-01-01"]) assert.ok(!raw.includes(leak), `🔴 у відповіді схеми є «${leak}»`);
     assert.deepEqual(tree.people.find((p) => p.id === 1)!.phone, { text: "+380 50 111 22 33", tel: "+380501112233" }, "🔴 телефон з «Найму» не дійшов до картки одним виглядом");
@@ -363,7 +369,8 @@ test("#2705 ДОСТУП: org — усім, edit_org — admin/HR/БА післ�
   const r = SRC("routes/org.ts");
   assert.match(r, /orgRouter\.use\(requireAuth\);\s*\norgRouter\.use\(\(req, res, next\) => \{\s*\n\s*if \(!req\.auth \|\| !roleHasTab\(req\.auth\.roleKey, "org"\)\)/, "🔴 друга лінія (вкладка на роутері) зникла");
   const routes = [...r.matchAll(/orgRouter\.(get|post|put|patch|delete)\("([^"]+)"(, requirePerm\("edit_org"\))?/g)].map((m) => ({ m: m[1], p: m[2], perm: !!m[3] }));
-  assert.equal(routes.length, 8, `🔴 роутів орг-структури ${routes.length}, а не 8 — матриця й гейт розійдуться`);
+  // 9 з 23.11.2026: + `PUT /people/:employeeId/office` (10740).
+  assert.equal(routes.length, 9, `🔴 роутів орг-структури ${routes.length}, а не 9 — матриця й гейт розійдуться`);
   for (const x of routes) {
     const mine = x.p.startsWith("/me/") || x.p === "/tree";
     assert.equal(x.perm, !mine, `🔴 ${x.m.toUpperCase()} ${x.p}: ${mine ? "«моє»/перегляд під правом редагування" : "запис без edit_org"}`);
@@ -652,4 +659,97 @@ test("#2856 ФРОНТ КОМАНД: вибір зі списку двох гр�
   assert.match(emp, /<TeamField row=\{row\} toast=\{toast\} onSaved=\{onSaved\} \/>/, "🔴 поле команди не показане в картці");
   const set = FSRC("pages/dashboard/sections/SettingsSection.tsx");
   assert.match(set, /\{sub === "Команди" && <OrgTeamsBlock \/>\}/, "🔴 «Відділів дашборду» немає в «Налаштуваннях → Команди»");
+});
+
+/**
+ * #10740d — РЕЄСТР ТРЕКЕРА НЕСЕ «ОФІСНИЙ» І НІКОГО НЕ ГУБИТЬ (10740, рішення Романа 23.11.2026). Справжній SQL роуту
+ * `/api/auth/tracker-users` (читається з джерела, а не копія) проти scratch-бази: `office` = галочка з Найму через
+ * `employees.user_id`; акаунт без картки в Наймі (службові, тестові) — `office: false`, і він ЛИШАЄТЬСЯ в реєстрі.
+ * Людей у реєстрі рівно стільки, скільки акаунтів (рядки не множаться).
+ * 🧨 Червоніє, якщо `LEFT JOIN employees` стане `JOIN` (акаунт без Найму зникне з трекера) або галочку не читати.
+ */
+test("#10740d ЖИВИЙ SQL: реєстр трекера — office з Найму через акаунт, акаунт без Найму лишається з false", async (t) => {
+  const route = SRC("routes/auth.ts");
+  const at = route.indexOf('authRouter.get("/tracker-users"');
+  const sql = /pool\.query<RosterRow>\(\s*`([\s\S]*?)`\s*\)/.exec(route.slice(at))?.[1] ?? "";
+  assert.ok(at > 0 && /FROM users u/.test(sql), "🔴 SQL реєстру трекера не знайдено — перевіряти нічого");
+  const x = await scratch(t); if (!x) return;
+  const { c } = x;
+  try {
+    await c.query(x.schema);
+    await c.query(`INSERT INTO users (id, email, password_hash, role) VALUES (81, 'office@x.ua', 'x', 'manager'), (82, 'service@x.ua', 'x', 'admin'), (83, 'remote@x.ua', 'x', 'manager')`);
+    await c.query(`INSERT INTO employees (id, full_name, import_key, status, user_id, is_office) VALUES
+      (31, 'Офісний Тест', 'k31', 'active', 81, true), (33, 'Дистанційний Тест', 'k33', 'active', 83, false)`);
+    const { rosterPerson } = await import("../auth/trackerRoster.js");
+    const people = (await c.query(sql)).rows.map(rosterPerson);
+    const users = (await c.query(`SELECT count(*)::int AS n FROM users`)).rows[0].n as number;
+    assert.equal(people.length, users, `🔴 у реєстрі ${people.length} людей, акаунтів ${users} — хтось зник або задублювався`);
+    const by = new Map(people.map((p) => [p.id, p.office]));
+    assert.equal(by.get(81), true, "🔴 галочка «Офісний» з Найму не дійшла до трекера");
+    assert.equal(by.get(83), false, "дзеркало: без галочки — false");
+    assert.equal(by.get(82), false, "🔴 акаунт без картки в Наймі зник з реєстру або прийшов не з false");
+    assert.ok(people.every((p) => typeof p.office === "boolean"), "🔴 office буває не true/false — трекер чекає поле завжди");
+  } finally { await x.done(); }
+});
+
+/**
+ * #10740e — «ОФІСНИЙ» ЗІ СХЕМИ ДЛЯ БІЗНЕС-АСИСТЕНТА (рішення Романа 23.11.2026: ставлять Іван, усі адміни, БА). Роут
+ * `PUT /api/org/people/:employeeId/office` під `edit_org` і в матриці; ядро пише ТУ САМУ колонку тим самим
+ * `updateEmployee` (аудит реєстру) + рядок журналу схеми; лише працюючим; не true/false — 400 без запису.
+ * 🪞 Дзеркало: у БА `edit_org` є, а `view_employee_secrets` (Найм) — ні, і Найм лишається за цим правом.
+ * 🧨 Червоніє, якщо зняти `requirePerm` з роуту, прибрати рядок матриці, писати в обхід аудиту чи журналу, дати
+ * поставити галочку звільненому або відкрити Найм бізнес-асистенту.
+ */
+test("#10740e «ОФІСНИЙ» ЗІ СХЕМИ: edit_org + матриця, та сама колонка з аудитом і журналом, лише працюючим; Найм БА закритий", async (t) => {
+  const r = SRC("routes/org.ts");
+  assert.match(r, /orgRouter\.put\("\/people\/:employeeId\/office", requirePerm\("edit_org"\), async/, "🔴 роут «Офісний» без edit_org (або зник)");
+  assert.match(SRC("auth/accessMatrix.ts"), /\{ method: "PUT", path: "\/api\/org\/people\/:employeeId\/office", cls: "deny-only",\s*allow: \[\], deny: \[[^\]]*"financier"[^\]]*"manager"[^\]]*\] \}/,
+    "🔴 роуту «Офісний» немає в матриці або фінансист/менеджер не в відмові");
+  assert.match(SRC("routes/secrets.ts"), /secretsRouter\.use\(requireAuth, requirePerm\("view_employee_secrets"\)\)/, "🔴 Найм більше не за правом view_employee_secrets");
+  const x = await scratch(t); if (!x) return;
+  const { c } = x;
+  try {
+    await c.query(x.schema);
+    await c.query(x.schema);
+    const perm = async (k: string, p: string) => (await c.query(`SELECT COALESCE((permissions->>$2)::boolean, false) AS v FROM roles WHERE key = $1`, [k, p])).rows[0]?.v;
+    assert.equal(await perm("business_assistant", "edit_org"), true, "🔴 у БА немає edit_org — поставити галочку йому нічим");
+    assert.equal(await perm("business_assistant", "view_employee_secrets"), false, "🔴 БА відкрито Найм — цього не просили");
+    await c.query(`INSERT INTO users (id, email, password_hash, role) VALUES (75, 'ba@x.ua', 'x', 'manager')`);
+    await c.query(`INSERT INTO employees (id, full_name, import_key, status) VALUES (41, 'Працює Тест', 'k41', 'active'), (42, 'Звільнений Тест', 'k42', 'dismissed')`);
+    const o = await import("./orgTree.js");
+    const db = c as never;
+    const office = async (id: number) => (await c.query(`SELECT is_office FROM employees WHERE id = $1`, [id])).rows[0].is_office;
+    await assert.rejects(o.setEmployeeOffice(db, 75, 41, "так"), code(400), "🔴 «так» прийнято як галочку");
+    assert.equal(await office(41), false, "🔴 відмова все одно записала");
+    await assert.rejects(o.setEmployeeOffice(db, 75, 42, true), code(404), "🔴 галочку поставлено звільненому");
+    assert.equal(await office(42), false);
+    assert.deepEqual(await o.setEmployeeOffice(db, 75, 41, true), { changed: true });
+    assert.equal(await office(41), true, "🔴 галочка не записалась у ту саму колонку, що й у Наймі");
+    const audit = (await c.query(`SELECT details FROM access_audit WHERE target_id = 'e41' AND action = 'employees.update' ORDER BY id DESC LIMIT 1`)).rows[0];
+    assert.deepEqual(audit?.details, { changed: ["is_office"] }, "🔴 зміна зі схеми обійшла аудит реєстру");
+    const lg = (await c.query(`SELECT action, actor_id, before, after FROM org_log WHERE employee_id = 41 ORDER BY id DESC LIMIT 1`)).rows[0];
+    assert.deepEqual([lg?.action, lg?.actor_id, lg?.before, lg?.after], ["office", 75, { is_office: false }, { is_office: true }], "🔴 журнал схеми без рядка «office»");
+    assert.deepEqual(await o.setEmployeeOffice(db, 75, 41, true), { changed: false }, "🔴 зміна без змін записана");
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM org_log WHERE employee_id = 41`)).rows[0].n, 1, "🔴 повтор без змін лишив другий рядок журналу");
+  } finally { await x.done(); }
+});
+
+/**
+ * #10740f — ФРОНТ «ОФІСНИЙ»: у картці Найму галочка поруч із «Категорією» і шле `is_office` булевим; у списку Найму —
+ * позначка «офіс» і фільтр «Офісні»; на схемі — позначка біля імені (дерево й список), «в офісі: N» з сервера, а
+ * галочка в картці людини — лише для `canEdit` і через роут схеми.
+ * 🧨 Червоніє, якщо прибрати поле з картки, позначку, фільтр чи лічильник, або сховати галочку схеми від `canEdit`.
+ */
+test("#10740f ФРОНТ «ОФІСНИЙ»: галочка в картці Найму, позначка й фільтр у списку, позначка й «в офісі: N» на схемі", () => {
+  const emp = FSRC("pages/dashboard/sections/HiringEmployees.tsx");
+  assert.match(emp, /<CategoryField row=\{row\} toast=\{toast\} onSaved=\{onSaved\} \/>\s*\n\s*<OfficeField row=\{row\} toast=\{toast\} onSaved=\{onSaved\} \/>/, "🔴 галочки «Офісний» немає поруч із «Категорією»");
+  assert.match(emp, /updateEmployee\(row\.id, \{ is_office: v \}\)/, "🔴 картка не шле is_office");
+  assert.match(emp, /type="checkbox" checked=\{row\.is_office\}/, "🔴 галочка не показує стан з сервера");
+  assert.match(emp, /\{r\.is_office && <span className="emp-pill office"/, "🔴 у списку Найму немає позначки «офіс»");
+  assert.match(emp, /officeOnly \? byLvl\.filter\(\(r\) => r\.is_office\)/, "🔴 фільтр «Офісні» нічого не відбирає");
+  const org = FSRC("pages/dashboard/sections/OrgSection.tsx");
+  assert.equal((org.match(/\{p\.office && <OfficeMark \/>\}/g) ?? []).length, 2, "🔴 позначки «офіс» немає в дереві або в списку схеми");
+  assert.match(org, /в офісі: <b>\{s\.office\}<\/b>/, "🔴 немає лічильника «в офісі: N»");
+  assert.match(org, /\{data\.canEdit && \(\s*\n\s*<div className="org-mine">\s*\n\s*<span className="org-lbl">Формат роботи<\/span>/, "🔴 галочка схеми не під canEdit");
+  assert.match(org, /await setOrgPersonOffice\(p\.id, v\)/, "🔴 галочка схеми не йде через роут схеми");
 });

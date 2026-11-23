@@ -431,7 +431,7 @@ hiringRouter.get("/employees", async (req, res) => {
     const rows = (await listEmployees(pool as unknown as Db)) as Record<string, unknown>[];
     res.json({ rows: rows.map((r) => ({
       id: r.id, full_name: r.full_name, status: r.status, position: r.position, category: r.category, level: r.level ?? null,
-      team_name: r.team_name, hired_at: r.hired_at, dismissed_at: r.dismissed_at, dismiss_reason: r.dismiss_reason,
+      team_name: r.team_name, hired_at: r.hired_at, dismissed_at: r.dismissed_at, dismiss_reason: r.dismiss_reason, is_office: r.is_office,
     })) });
   } catch (e) { fail(res, e); }
 });

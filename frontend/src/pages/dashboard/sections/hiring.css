@@ -208,6 +208,11 @@ select.hr-c.novac { color: var(--warn); }
 .emp-pill.warn { background: var(--warn-bg); color: var(--warn); }
 .emp-pill.info { background: var(--info-bg); color: var(--info); }
 .emp-pill.mute { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+/* 🏢 «Офісний» (10740): свій колір, щоб не плутати з «новий» (info) і станами (ok/warn). */
+.emp-pill.office { background: rgba(124, 92, 214, .13); color: #6a4fc4; }
+.emp-check-row { display: flex; gap: 8px; align-items: center; min-height: 34px; cursor: pointer; }
+.emp-check-row input { width: 16px; height: 16px; margin: 0; cursor: pointer; }
+.emp-check-row b { color: var(--text); font-size: 14px; }
 .emp-team { display: inline-block; padding: 1px 8px; border-radius: var(--r-pill); font-size: 12px; font-weight: 600; white-space: nowrap;
   color: var(--t); background: color-mix(in srgb, var(--t) 12%, transparent); border: 1px solid color-mix(in srgb, var(--t) 28%, transparent); }
 .emp-miss { color: var(--danger); font-size: 12.5px; }

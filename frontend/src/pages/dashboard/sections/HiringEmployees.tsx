@@ -77,6 +77,8 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const [cat, setCat] = useState<string>("");
   // 🎚 Рівень «Старт / Профі» (03.11.2026, #2970): "" — усі, інакше start / pro.
   const [lvl, setLvl] = useState<string>("");
+  // 🏢 «Офісні» (10740): лише ті, кому HR поставив галочку.
+  const [officeOnly, setOfficeOnly] = useState(false);
   const [importing, setImporting] = useState(false);
   const [adding, setAdding] = useState(false);
   const [bulk, setBulk] = useState(false);
@@ -121,7 +123,9 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
     return m;
   }, [filtered]);
   const byCat = useMemo(() => (cat ? filtered.filter((r) => (r.category ?? "none") === cat) : filtered), [filtered, cat]);
-  const shown = useMemo(() => (lvl ? byCat.filter((r) => r.level === lvl) : byCat), [byCat, lvl]);
+  const byLvl = useMemo(() => (lvl ? byCat.filter((r) => r.level === lvl) : byCat), [byCat, lvl]);
+  const shown = useMemo(() => (officeOnly ? byLvl.filter((r) => r.is_office) : byLvl), [byLvl, officeOnly]);
+  const officeCount = byLvl.filter((r) => r.is_office).length;
   const lvlCount = (k: string) => byCat.filter((r) => r.level === k).length;
   const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_name).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
   if (err) return <div className="chart-card"><b>Реєстр недоступний.</b> <span className="hr-muted">{err}</span></div>;
@@ -177,7 +181,9 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
             if (k === "none" && !n && cat !== "none") return null;
             return <button key={k} className={`emp-cat ${cat === k ? "on" : ""} ${n ? "" : "zero"}`} onClick={() => setCat(cat === k ? "" : k)}>{l} <span>{n}</span></button>;
           })}
-          {(cat || lvl) && <span className="hr-muted" style={{ fontSize: 12.5 }}>показано {shown.length} з {filtered.length}</span>}
+          <button className={`emp-cat ${officeOnly ? "on" : ""} ${officeCount ? "" : "zero"}`} onClick={() => setOfficeOnly(!officeOnly)}
+            title="Галочка «Офісний» у картці: таймтрекер не чекає від людини даних">🏢 Офісні <span>{officeCount}</span></button>
+          {(cat || lvl || officeOnly) && <span className="hr-muted" style={{ fontSize: 12.5 }}>показано {shown.length} з {filtered.length}</span>}
         </div>
         <div className="emp-cats" role="group" aria-label="Рівень умов">
           <span className="emp-cats-label">Рівень умов</span>
@@ -204,6 +210,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                         <div>
                         <b>{r.full_name}</b>
                         {fresh && <span className="emp-pill info">новий</span>}
+                        {r.is_office && <span className="emp-pill office" title="Працює в офісі: таймтрекер не чекає від нього даних">офіс</span>}
                         {r.status === "finishing" && <span className="emp-pill warn" title={`Останній робочий день ${d(r.last_day)}`}>завершує · до {d(r.last_day)}</span>}
                         {bdaySoon(r.birth_date) && <span className="emp-pill warn" title={`День народження ${r.birth_date?.slice(5).split("-").reverse().join(".")}`}>🎂</span>}
                         <div className="hr-muted">{r.position ?? "посада не вказана"}</div>
@@ -319,6 +326,30 @@ function CategoryField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast
         <option value="">{row.category_manual ? "за посадою (скинути ручну)" : `за посадою: ${empCategoryLabel(row.category)}`}</option>
         {EMP_CATEGORIES.map(([k, l]) => <option key={k} value={k}>{l} — вручну</option>)}
       </select>
+    </label>
+  );
+}
+
+/**
+ * 🏢 «Офісний» у картці (10740, рішення Романа 23.11.2026): галочка = людина працює в офісі, і таймтрекер не чекає від
+ * неї даних (порожній день там — «в офісі», а не прогул). Зберігається одразу, як категорія. Від категорії не залежить.
+ */
+function OfficeField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const change = async (v: boolean) => {
+    setBusy(true);
+    try {
+      await updateEmployee(row.id, { is_office: v });
+      toast(v ? `${row.full_name}: офісний — трекер не чекатиме від нього даних` : `${row.full_name}: не офісний`); onSaved();
+    } catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  return (
+    <label className="wide emp-check"><span>Формат роботи</span>
+      <span className="emp-check-row">
+        <input type="checkbox" checked={row.is_office} disabled={busy} onChange={(e) => void change(e.target.checked)} />
+        <b>Офісний</b> <span className="hr-muted">— таймтрекер не чекає від нього даних; порожній день там позначено «в офісі»</span>
+      </span>
     </label>
   );
 }
@@ -458,6 +489,7 @@ function EmployeeDrawer({ row, tab, status, toast, photo, photoErr, onTab, onClo
             <div className="emp-form">
               <TeamField row={row} toast={toast} onSaved={onSaved} />
               <CategoryField row={row} toast={toast} onSaved={onSaved} />
+              <OfficeField row={row} toast={toast} onSaved={onSaved} />
               <LevelField row={row} toast={toast} onSaved={onSaved} />
               {FIELDS.map(([k, label, kind]) => (
                 <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>
