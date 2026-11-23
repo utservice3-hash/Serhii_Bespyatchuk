@@ -7067,12 +7067,8 @@ export const updateOrgTeam = async (id: number, body: { name?: string; kommoTeam
 export const setEmployeeTeam = async (employeeId: number, team: string | null) =>
   (await api.put<{ ok: true; name: string | null }>(`/org/teams/people/${employeeId}`, { team })).data.name;
 
-// 🔗 Черга LinkedIn (задача 7361): «Клієнти → LinkedIn» — статистика за період і редактор кола («Налаштувати чергу»).
-export interface LinkedinQueueScreen {
-  mode: "off" | "dry" | "live"; launchedAt: string | null;
-  members: { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean; botLinked: boolean }[];
-  candidates: { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }[];
-}
+// 🔗 «Клієнти → LinkedIn» (задачі 7361, 9363). Бота черги й вкладки «Черга» немає з задачі 10743: поля `kpi`/`perManager`/`items`/`queue`
+// сервер ще віддає, екран їх не читає.
 export interface LinkedinStats {
   from: string; to: string; scope: "all" | "team" | "own";
   kpi: { created: number; taken: number; dispatcher: number | null; dispatcherDup: number | null; dispatcherNobody: number | null; avgTakeMin: number | null };
@@ -7094,12 +7090,6 @@ export interface LinkedinDeals {
     outcome: LinkedinOutcome; createdAt: string | null }[];
 }
 export const fetchLinkedinStats = async (from: string, to: string) => (await api.get<LinkedinStats>("/linkedin/stats", { params: { from, to } })).data;
-export const fetchLinkedinQueue = async () => (await api.get<LinkedinQueueScreen>("/linkedin-queue")).data;
-export const saveLinkedinQueueMembers = async (managerIds: number[]) => (await api.put<{ ok: boolean }>("/linkedin-queue/members", { managerIds })).data;
-export const setLinkedinQueuePaused = async (paused: boolean) => (await api.put<{ ok: boolean; paused: boolean }>("/linkedin-queue/pause", { paused })).data;
-// 🤖 Бот «UTS Заявки» (черга LinkedIn): підключення власного акаунта.
-export const fetchLeadsBotMe = async () => (await api.get<{ configured: boolean; linked: boolean; inQueue: boolean; eligible: boolean; botUsername: string | null }>("/leads-bot/me")).data;
-export const createLeadsBotLink = async () => (await api.post<{ url: string; code: string; botUsername: string; expiresInSec: number }>("/leads-bot/link")).data;
 
 // ── 🎯 Хантинг (15.11.2026, ТЗ Івана) — `backend/src/core/hunt.ts`. Доступ поіменний: Іван, Сергій, Олександр. ──
 export type HuntStage = "picked" | "call" | "interview" | "approval" | "offer" | "hired" | "rejected";
