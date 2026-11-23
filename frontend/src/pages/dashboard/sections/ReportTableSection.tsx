@@ -5,7 +5,7 @@ import {
   REPORT_COLS, OPTIONAL_COLS, sortRows, footValue, firstTouchLabel,
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
   applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
-  isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT,
+  isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT, MGR_W_WORD,
   readColWidths, writeColWidths, clampColWidth, colWidthCss,
   fmtCallback, callbackTone, remakeResetOnce, restoreColsOnce,
   type ColDef, type ColKey, type ColsStore,
@@ -447,6 +447,13 @@ const tdBase: React.CSSProperties = {
   borderBottom: "1px solid var(--border)", fontSize: 13,
 };
 const none = <span style={{ color: "var(--text-muted)", opacity: 0.6 }}>—</span>;
+/**
+ * ↩️ До двох рядків, далі «…» (10735): для імені й команди у ЗВУЖЕНІЙ колонці «Менеджер». Переносимо за словами;
+ * ПІБ із трьох слів, що не влізло й у два рядки, закінчується «…», а повне — у підказці клітинки.
+ */
+const twoLines: React.CSSProperties = {
+  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "normal",
+};
 
 /**
  * Бейдж «Виконано» — у КОЛЬОРІ СТАНУ, як на макеті (13.11.2026). Колір береться з ТОГО САМОГО
@@ -483,23 +490,24 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
       // 🚦 Стан — смужка й слово в клітинці «Менеджер» (макет, п.5): не крапка лише кольором,
       // і не зникає при скролі вправо, бо клітинка закріплена.
       return (
-        <td className="sticky-mgr rv-mcell" title={mgrW != null ? m.name : undefined}
+        <td className="sticky-mgr rv-mcell" title={mgrW != null ? `${m.name} · ${m.teamName ?? "Поза командами"} · ${STATUS_LBL[m.status].toLowerCase()}` : undefined}
           aria-expanded={isOpen}
           style={{ ...st, position: "sticky", left: 0, zIndex: 1, background: isOpen ? "var(--rv-hover)" : "var(--card-bg)", boxShadow: "1px 0 0 var(--border)",
             ["--sc" as string]: `var(${TOKEN[m.status]})`,
-            ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden", textOverflow: "ellipsis" } : { minWidth: 210 }) }}>
-          {/* Як у макеті: імʼя й команда ліворуч, слово стану праворуч. Імʼя обрізається «…»,
-              слово не стискається — у вузькій колонці воно не налазить на прізвище. */}
+            ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden", whiteSpace: "normal" } : { minWidth: 210 }) }}>
+          {/* Як у макеті: імʼя й команда ліворуч, слово стану праворуч. ↩️ Звужена колонка (10735): імʼя й команда
+              ПЕРЕНОСЯТЬСЯ до двох рядків (`twoLines`), а не ріжуться «…»; повне — у підказці клітинки. Вужче за
+              MGR_W_WORD слово стану ховається — лишається смужка кольору стану й підказка. */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
             <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
               <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                <span style={{ fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</span>
+                <span style={{ fontWeight: 650, ...(mgrW != null ? twoLines : { overflow: "hidden", textOverflow: "ellipsis" }) }}>{m.name}</span>
                 {(mgrW == null || mgrW >= MGR_W_TIGHT) && <LevelChip level={m.level} />}
                 <VacationMark managerId={m.managerId} />
               </span>
-              <span style={{ color: "var(--text-muted)", fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" }}>{m.teamName ?? "Поза командами"}</span>
+              <span style={{ color: "var(--text-muted)", fontSize: 11.5, ...(mgrW != null ? twoLines : { overflow: "hidden", textOverflow: "ellipsis" }) }}>{m.teamName ?? "Поза командами"}</span>
             </div>
-            <span className="rv-word" style={{ flexShrink: 0 }}>{STATUS_LBL[m.status].toLowerCase()}</span>
+            {(mgrW == null || mgrW >= MGR_W_WORD) && <span className="rv-word" style={{ flexShrink: 0 }}>{STATUS_LBL[m.status].toLowerCase()}</span>}
           </div>
         </td>
       );
