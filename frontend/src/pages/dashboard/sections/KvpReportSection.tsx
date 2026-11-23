@@ -5,7 +5,7 @@ import { PeriodStepper } from "../PeriodStepper";
 import { monthStart, todayKyiv, type PeriodState } from "../periodRules";
 import { InfoHint } from "../widgets";
 import { KvpFirstTouchBlock } from "./KvpFirstTouchBlock";
-import { weekCloseStatus, closeNote, withExpected, CLOSE_LABEL, kvpReportParams, kvpPlanMonth, type CloseKind } from "../kvpCoreRules";
+import { weekCloseStatus, closeNote, closeLegendText, withExpected, CLOSE_LABEL, kvpReportParams, kvpPlanMonth, type CloseKind } from "../kvpCoreRules";
 import { VacationMark } from "../VacationMark";
 
 // ── Статус-палітра (зарезервована, НЕ дата-серія): good/warning/serious/critical ──
@@ -163,9 +163,6 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
   const [err, setErr] = useState<string | null>(null);
   const [plans, setPlans] = useState<KvpPlans>({});
   const [openTeam, setOpenTeam] = useState<number | null>(null);
-  /** ▸ «Детальний звіт» — усе, що було на екрані до ядра (ТЗ 12.10: «Звіт КВП перевантажений»), згорнуте, але не видалене. */
-  const [showDetails, setShowDetails] = useState(() => { try { return localStorage.getItem("kvpDetails") === "1"; } catch { return false; } });
-  const toggleDetails = () => setShowDetails((x) => { try { localStorage.setItem("kvpDetails", x ? "0" : "1"); } catch { /* сховище недоступне */ } return !x; });
   const [weekMode, setWeekMode] = useState<WeekMode>("money");
   // #6: тижнево-скоупований дрил — клік по клітинці тижня команди → менеджери ЦЬОГО тижня.
   const [openWeekDrill, setOpenWeekDrill] = useState<{ teamId: number; weekIdx: number } | null>(null);
@@ -239,7 +236,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               клітинка тижня ліворуч від поточного (той самий план і факт), окремих колонок під нього немає. ── */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = календарні тижні Пн–Нд у межах місяця (дати — під номером тижня). «🚚 Відправлені авто» — маржа і кількість авто з «Датою загрузки» в тижні (ті самі, що в «Активність»), смужка — що з ними зараз: оплачено · чекаємо · без оплати; «отримали» — гроші тижня, як у «Гроші». План тижня — ДИНАМІЧНИЙ: минулий тиждень — план, зафіксований на його початок; поточний — (план місяця − факт на початок тижня) ÷ робочі дні до кінця місяця × дні тижня (ручна ціль тімліда перемагає); майбутні — той самий залишок і темп, оновлюються в понеділок. Тому Σ тижнів більша за план місяця, коли минулі тижні недовиконано, — з планом сходиться «залишок» під фактом. Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; поточний тиждень — ще й «з очік.» (факт + оплати з плановою датою в цьому тижні, % плану тижня) і мітка «Закриємо?»; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні)." /></h2>
+              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text={"Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = календарні тижні Пн–Нд у межах місяця (дати — під номером тижня). «🚚 Відправлені авто» — маржа і кількість авто з «Датою загрузки» в тижні (ті самі, що в «Активність»), смужка — що з ними зараз: оплачено · чекаємо · без оплати; «отримали» — гроші тижня, як у «Гроші». План тижня — ДИНАМІЧНИЙ: минулий тиждень — план, зафіксований на його початок; поточний — (план місяця − факт на початок тижня) ÷ робочі дні до кінця місяця × дні тижня (ручна ціль тімліда перемагає); майбутні — той самий залишок і темп, оновлюються в понеділок. Тому Σ тижнів більша за план місяця, коли минулі тижні недовиконано, — з планом сходиться «залишок» під фактом. Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; поточний тиждень — ще й «з очік.» (факт + оплати з плановою датою в цьому тижні, % плану тижня) і мітка «Закриємо?»; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні). " + closeLegendText()} /></h2>
               {rep.weekBlocks.length > 0 && (
                 <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", fontSize: 12 }}>
                   {([["money", "💰 Гроші"], ["activity", "⚙️ Активність"], ["ship", "🚚 Відправлені авто"]] as const).map(([k, lbl]) => (
@@ -309,7 +306,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                 </tbody>
               </table>
             </div>
-            {weekMode === "money" && rep.weekBlocks.some((w) => w.isCurrent) && <CloseLegend />}
+            {/* ✂️ Легенду «Закриємо поточний тиждень?» прибрано (задача 10753, 23.11.2026): значення міток — у підказці (i) заголовка. */}
             {weekMode === "ship" && rep.weekBlocks.length > 0 && <ShipLegend />}
           </div>
 
@@ -322,18 +319,13 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               ставиться він у «Плани» → «🎯 Плани КВП» (туди переїхала колишня «Повна таблиця»). ── */}
           <MonthMetrics rep={rep} plans={plans} />
 
-          {/* ▸ ДЕТАЛЬНИЙ ЗВІТ — згорнутий за замовчуванням. Відкривається ЯВНОЮ кнопкою «Показати ▾ / Згорнути ▴»
-              (Роман 20.11.2026: «не зрозуміло, коли і як відкривається» — раніше це був лише трикутник у заголовку);
-              клік по всьому рядку робить те саме. */}
-          <div className="chart-card" role="button" aria-expanded={showDetails} onClick={toggleDetails}
-            style={{ marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", cursor: "pointer" }}>
+          {/* 📂 ДЕТАЛЬНИЙ ЗВІТ — НЕ ЗГОРТАЄТЬСЯ (задача 10738, ручний список правок Романа 23.11.2026: «не згортати,
+              лишити тільки плашку»). Плашка лишилась заголовком розділу, вміст під нею видно завжди; кнопки
+              «Показати / Згорнути» і памʼяті стану (`kvpDetails`) більше немає. */}
+          <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ margin: 0 }}>📂 Детальний звіт
               <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> — зміна до минулого періоду, темп і життєвий цикл грошей</span></h2>
-            <button type="button" onClick={(e) => { e.stopPropagation(); toggleDetails(); }}
-              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
-              {showDetails ? "Згорнути ▴" : "Показати ▾"}</button>
           </div>
-          {showDetails && (<>
           {/* ── ТЕМП І ЖИТТЄВИЙ ЦИКЛ (були у «де ми зараз»; чотири картки грошей — у ядрі вище, тут не дублюються) ── */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">📍 {rep.scope.label} — темп і життєвий цикл грошей</h2>
@@ -380,8 +372,6 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               ))}
             </div>
           </div>
-
-          </>)}
         </>
       )}
     </>
@@ -790,20 +780,6 @@ function ShipLegend() {
       <span><b style={{ color: "var(--text)" }}>🚚 Відправлені авто:</b> маржа / кількість авто з «Датою загрузки» в тижні (ті самі авто, що в «Активність»)</span>
       <span>{sw(SHIP_PAID)}оплачено</span><span>{sw(SHIP_WAIT)}чекаємо</span><span>{sw(SHIP_LOST)}без оплати (закрито і не реалізовано)</span>
       <span>стан — на зараз · «отримали» — гроші за тиждень, як у «Гроші»</span>
-    </div>
-  );
-}
-function CloseLegend() {
-  return (
-    <div style={{ fontSize: 12, color: MUTED, marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-      <span>Закриємо поточний тиждень?</span>
-      {(["closed", "real", "risk", "no"] as const).map((k) => (
-        <span key={k} style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
-          <span style={{ fontSize: 11, fontWeight: 600, padding: "0 6px", borderRadius: 10, background: CLOSE_TONE[k].bg, color: CLOSE_TONE[k].fg }}>{CLOSE_LABEL[k]}</span>
-          {k === "closed" ? "факт уже не менший за план тижня" : k === "real" ? "вистачить до половини очікуваних оплат" : k === "risk" ? "має прийти 50–85% очікуваного" : "треба понад 85% або навіть усього очікуваного не вистачає"}
-          {k !== "no" && " ·"}
-        </span>
-      ))}
     </div>
   );
 }
