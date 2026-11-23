@@ -36,6 +36,19 @@ export function weekCloseStatus(plan: number, fact: number, expected: number): C
   return { kind: share <= CLOSE_REAL_MAX ? "real" : share <= CLOSE_RISK_MAX ? "risk" : "no", share, short: 0 };
 }
 
+/**
+ * ✂️ Значення міток «Закриємо?» — ОДНИМ реченням для підказки (i) заголовка таблиці команд (задача 10753, 23.11.2026).
+ * Доти це була окрема легенда під таблицею; її прибрали з ручного списку правок Романа, а пояснення переїхало сюди,
+ * щоб не загубитись. Пороги беруться з тих самих констант, що й `weekCloseStatus`, тож підказка не розійдеться з правилом.
+ */
+export function closeLegendText(): string {
+  const real = Math.round(CLOSE_REAL_MAX * 100), risk = Math.round(CLOSE_RISK_MAX * 100);
+  return `Мітка «Закриємо?» поточного тижня: «${CLOSE_LABEL.closed}» — факт уже не менший за план тижня; `
+    + `«${CLOSE_LABEL.real}» — вистачить до ${String(real)}% очікуваних оплат; `
+    + `«${CLOSE_LABEL.risk}» — має прийти ${String(real)}–${String(risk)}% очікуваного; `
+    + `«${CLOSE_LABEL.no}» — треба понад ${String(risk)}% або навіть усього очікуваного не вистачає.`;
+}
+
 /** Другий рядок під статусом — словами, як у макеті. */
 export function closeNote(s: CloseStatus, fmt: (v: number) => string): string | null {
   if (s.kind === "none" || s.kind === "closed") return null;

@@ -36,7 +36,7 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
   const head = (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
       <h2 className="chart-title" style={{ margin: 0 }}>🎧 Перший дотик — якість перших розмов з реклами
-        <InfoHint text="AI слухає першу розмову менеджера з кожною рекламною заявкою. Цифри — рівно ті, що на екрані «Перший дотик · AI» за той самий період (за датою створення угоди). Клік по картці — фільтр таблиці нижче (повторний — знімає); клік по імені — на екран AI з тим самим фільтром." /></h2>
+        <InfoHint text="AI слухає першу розмову менеджера з кожною рекламною заявкою. Цифри — рівно ті, що на екрані «Перший дотик · AI» за той самий період (за датою створення угоди). Клік по картці — фільтр таблиці нижче (повторний — знімає); клік по імені — на екран AI з тим самим фільтром. Новачки в перші 4 тижні від прийому в ці цифри не входять — їх видно на екрані «Перший дотик · AI», блок «На адаптації»." /></h2>
       <button type="button" onClick={() => open({})} style={{ border: "none", background: "none", color: "#2563eb", cursor: "pointer", fontSize: 13 }}>Відкрити «Перший дотик · AI» ›</button>
     </div>
   );
@@ -72,12 +72,7 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
         {card("lost", "Втрачені ліди", String(lost.length), lostReact == null ? "реакція — немає даних" : `реакція (медіана) ${fmtMinutes(lostReact)}`)}
       </div>
       {!all.total && <p style={{ fontSize: 13, color: C.muted, margin: "6px 0 0" }}>Розібраних перших розмов за цей період ще немає.</p>}
-      {/* 🌱 Задача 7239 п.3: новачки в бал команди не входять — тут лише видно, хто й скільки розмов, деталі — на екрані AI. */}
-      {all.adaptation.length > 0 && (
-        <p style={{ fontSize: 13, color: C.muted, margin: "6px 0 0" }}>
-          На адаптації (перші 4 тижні, у бал команд не входять): {all.adaptation.map((l) => `${l.name} — ${String(l.calls)} розм.${l.score == null ? "" : `, бал ${String(l.score)}%`}`).join(" · ")}
-        </p>
-      )}
+      {/* ✂️ Рядок «На адаптації…» прибрано (задача 10753, 23.11.2026): новачків видно на екрані «Перший дотик · AI», тут — лише фраза в підказці (i). */}
     </div>
   );
 }
