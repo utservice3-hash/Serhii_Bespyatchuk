@@ -286,7 +286,7 @@ const DATES = new Set(["birth_date", "hired_at", "dismissed_at"]);
 export async function updateEmployee(db: Db, actorId: number, id: number, body: Record<string, unknown>) {
   const cur = (await db.query<Record<string, unknown>>(
     `SELECT id, full_name, position, team_label, phone, email, telegram, birth_date::text AS birth_date, hired_at::text AS hired_at,
-            dismissed_at::text AS dismissed_at, dismiss_reason, note, status, category FROM employees WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+            dismissed_at::text AS dismissed_at, dismiss_reason, note, status, category, is_office FROM employees WHERE id = $1 FOR UPDATE`, [id])).rows[0];
   if (!cur) throw new ImportError(404, "Співробітника не знайдено");
   // 🚪 Звільнення кнопками (`core/offboarding.ts`) веде статус і дату саме: правка форми обійшла б
   // стан менеджера й акаунт. Тримає #622.
@@ -303,6 +303,11 @@ export async function updateEmployee(db: Db, actorId: number, id: number, body: 
     if (k === "email" && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new ImportError(400, "Пошта не схожа на адресу");
     if (v != null && v.length > 300) throw new ImportError(400, "Задовге значення");
     next[k] = v;
+  }
+  // 🏢 «Офісний» (10740): лише справжнє true/false — рядок «так», 1 чи null не вгадуємо, а відмовляємо. Тримає #10740c.
+  if ("is_office" in body) {
+    if (typeof body.is_office !== "boolean") throw new ImportError(400, "«Офісний»: так або ні");
+    next.is_office = body.is_office;
   }
   if (offboarding && (("status" in next && next.status !== cur.status) || ("dismissed_at" in next && next.dismissed_at !== cur.dismissed_at)))
     throw new ImportError(409, "Людину звільняють кнопками — статус і дату змінюйте через «Завершити звільнення» або «Повернути»");
@@ -327,7 +332,7 @@ export async function listEmployees(db: Db) {
             e.dismiss_reason, e.note, e.extra, e.user_id, ${NAME} AS account_name, u.is_active AS account_active,
             e.manager_id, km.name AS kommo_name, o.stage AS offboarding, o.last_day::text AS last_day, ${DOC_COUNTS_SQL},
             (SELECT count(*)::int FROM employee_secrets s WHERE (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
-            e.updated_at, e.category,
+            e.updated_at, e.category, e.is_office,
             -- 👥 Справжня команда (27.10.2026, \`core/teams.ts\`): з Kommo — заблокована; інакше — вибрана в картці (\`team_ref\`).
             COALESCE((SELECT name FROM teams WHERE id = COALESCE(tm1.team_id, tm2.team_id, e.team_id, tdt.kommo_team_id)), tdt.name) AS team_name,
             (COALESCE(tm1.team_id, tm2.team_id) IS NOT NULL) AS team_locked,

@@ -4,7 +4,7 @@
  * (користувачі дашборда, ще не в зарплаті; дані підставляються з реєстру співробітників). Право — `payroll_edit`.
  * Звільнення — у вкладці «Обхідні листи» (там же створюється лист).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { errText, payrollApi, type Obj } from "../api";
 import { Card, Empty, money, monthTitle, nextMonth, pct } from "../ui";
 import { useToast } from "../../components/Toasts";
@@ -185,7 +185,7 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
   );
 }
 
-function AddModal({ candidates, org, live, onClose, onDone }: { candidates: Obj[]; org: Obj; live: string; onClose: () => void; onDone: () => void }) {
+function AddModal({ candidates, org, live, initial, onClose, onDone }: { candidates: Obj[]; org: Obj; live: string; initial?: string | null; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const [uid, setUid] = useState("");
   const [f, setF] = useState({ role: "manager", title: "", dept: "sales", team: "", leadsTeam: "", startDate: "", birthday: "", level: "start", rate: "", pct: "", offAmt: "", offDed: true, isFinance: false });
@@ -199,6 +199,8 @@ function AddModal({ candidates, org, live, onClose, onDone }: { candidates: Obj[
     if (c) setF((x) => ({ ...x, role: c.role ?? x.role, title: c.title ?? "", team: c.team ?? "", leadsTeam: c.role === "lead" ? c.team ?? "" : "", startDate: c.startDate ?? "",
       birthday: c.birthday ? bday(c.birthday) : "", level: c.level ?? "start", dept: c.role === "staff" ? (x.dept === "sales" ? "" : x.dept) : "sales" }));
   }
+  // «Додати в зарплату» з блоку «Зміни з «Найму»» — людина вже обрана (задача 10723)
+  useEffect(() => { if (initial) pick(initial); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   async function save() {
     setErr(null);
     if (!uid) { setErr("Оберіть людину."); return; }
@@ -257,16 +259,68 @@ function AddModal({ candidates, org, live, onClose, onDone }: { candidates: Obj[
   );
 }
 
-export function PeopleSettings({ emp, org, settings, canEdit, onChanged }: { emp: Obj; org: Obj; settings: Obj; canEdit: boolean; onChanged: () => void }) {
+/**
+ * «Зміни з «Найму», які ще не внесені в «Зарплату»» (задача 10723, Тетяна 23.11.2026: «як відображати всі ці зміни —
+ * звільнення, нові офери»). Сервер лише ПОРІВНЮЄ (`payroll/naimSync.ts`), нічого не пише сам; дія — кнопкою в рядку.
+ * Люди без акаунта — одним рядком-числом з розгортанням: їх може бути багато, і в кожному рядку той самий підпис став би шпалерами.
+ */
+const NAIM_TAG: Record<string, [string, string]> = { dismissed: ["у «Наймі» звільнений", "zps-tag--warn"], new: ["новий у «Наймі»", "zps-tag--ok"], level: ["інший рівень", "zps-tag--lvl"] };
+function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel }: { rows: Obj[]; canEdit: boolean; onLeave: (r: Obj) => void; onAdd: (r: Obj) => void; onLevel: (r: Obj) => void }) {
+  const [openNo, setOpenNo] = useState(false);
+  const main = rows.filter((r) => r.kind !== "noAccount"), noAcc = rows.filter((r) => r.kind === "noAccount");
+  if (!rows.length) return <div className="zp-hint">Змін з «Найму», не внесених у «Зарплату», немає.</div>;
+  const lvl = (l: string) => LEVEL_NAMES[l] ?? l;
+  return (
+    <div className="zps-naim">
+      <div><b>Зміни з «Найму», які ще не внесені в «Зарплату» · {rows.length}</b> <span className="zp-hint">порівнюємо при кожному відкритті; самі нічого не змінюємо</span></div>
+      {main.length > 0 && (
+        <table className="zp-table zps-naim__t"><tbody>
+          {main.map((r) => (
+            <tr key={`${r.kind}-${r.employeeId}`}>
+              <td><b>{r.name}</b><div className="zp-hint">{r.position || "посада не вказана в «Наймі»"}</div></td>
+              <td>
+                <span className={`zps-tag ${NAIM_TAG[r.kind]?.[1] ?? ""}`}>{r.kind === "dismissed" ? `у «Наймі» звільнений${r.date ? ` ${ddy(r.date)}` : ", дату не вказано"}` : r.kind === "level" ? `${lvl(r.naimLevel)} у «Наймі»` : NAIM_TAG[r.kind]?.[0]}</span>
+                <div className="zp-hint">{r.kind === "dismissed" ? "У «Зарплаті» досі працює: рахуємо ставку і збір на дні народження, поки немає обхідного листа."
+                  : r.kind === "new" ? "У «Зарплаті» немає."
+                  : `У «Зарплаті» — ${lvl(r.payrollLevel)}. Рівні ведуться окремо; гроші рахуються за «Зарплатою».`}</div>
+              </td>
+              <td className="r">{canEdit && (r.kind === "dismissed" ? <button className="zp-btn zp-btn--sm" onClick={() => onLeave(r)}>Оформити обхідний лист</button>
+                : r.kind === "new" ? <button className="zp-btn zp-btn--sm" onClick={() => onAdd(r)}>Додати в зарплату</button>
+                : <button className="zp-btn zp-btn--sm" onClick={() => onLevel(r)}>Змінити рівень</button>)}</td>
+            </tr>
+          ))}
+        </tbody></table>
+      )}
+      {noAcc.length > 0 && (
+        <div className="zps-naim__no">
+          <button className="zp-btn zp-btn--sm zp-btn--ghost" onClick={() => setOpenNo(!openNo)}>{openNo ? "▾" : "▸"} Працюють у «Наймі» без акаунта в дашборді · {noAcc.length}</button>
+          <span className="zp-hint"> у зарплату не додати, поки немає акаунта; акаунт створює адмін у «Налаштуваннях»</span>
+          {openNo && <ul className="zps-naim__list">{noAcc.map((r) => <li key={r.employeeId}>{r.name} <span className="zp-hint">· {r.position || "посада не вказана"}{r.reason === "inactive" ? " · акаунт вимкнено" : ""}</span></li>)}</ul>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave }: { emp: Obj; org: Obj; settings: Obj; canEdit: boolean; onChanged: () => void; onLeave: (userId: string, date: string | null) => void }) {
   const [edit, setEdit] = useState<Obj | null>(null);
-  const [add, setAdd] = useState(false);
-  const people = (emp.people ?? []) as Obj[];
+  const [add, setAdd] = useState<false | { uid: string | null }>(false);
+  // за замовчуванням — лише ті, хто працює; звільнені — окремим фільтром (задача 10723)
+  const [show, setShow] = useState<"work" | "left">("work");
+  const all = (emp.people ?? []) as Obj[];
+  const people = all.filter((p) => (show === "left" ? !!p.leave : !p.leave));
+  const nLeft = all.filter((p) => !!p.leave).length;
   const teamName = useMemo(() => Object.fromEntries(((org.teams ?? []) as Obj[]).map((t) => [t.code, t.name])), [org]);
   const S = settings;
   return (
     <Card title="Працівники й умови" aside={canEdit ? "клік — змінити умови: рівень, ставка, %, офіційна ЗП, день народження" : "лише перегляд"}>
       <div className="zp-grid" style={{ gap: 10 }}>
-        {canEdit && <div className="zp-row"><button className="zp-btn" onClick={() => setAdd(true)}>Додати в зарплату</button><span className="zp-hint">Кандидатів: {(emp.candidates ?? []).length}. Звільнення — у вкладці «Обхідні листи».</span></div>}
+        <NaimBlock rows={(emp.naim ?? []) as Obj[]} canEdit={canEdit}
+          onLeave={(r) => onLeave(String(r.userId), r.date ?? null)}
+          onAdd={(r) => setAdd({ uid: String(r.userId) })}
+          onLevel={(r) => { const p = all.find((x) => String(x.userId) === String(r.userId)); if (p) setEdit(p); }} />
+        {canEdit && <div className="zp-row"><button className="zp-btn" onClick={() => setAdd({ uid: null })}>Додати в зарплату</button><span className="zp-hint">Кандидатів: {(emp.candidates ?? []).length}. Звільнення — у вкладці «Обхідні листи».</span></div>}
+        <Seg<"work" | "left"> value={show} onChange={setShow} items={[["work", `Працюють · ${all.length - nLeft}`], ["left", `Звільнені · ${nLeft}`]]} />
         {people.length ? (
           <div className="zp-table-wrap">
             <table className="zp-table">
@@ -290,11 +344,11 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged }: { emp
               </tbody>
             </table>
           </div>
-        ) : <Empty>У зарплаті ще нікого немає. {canEdit ? "Додайте людей кнопкою вище — кабінет «Моя зарплата» зʼявиться в них одразу." : ""}</Empty>}
+        ) : show === "left" ? <Empty>Звільнених у «Зарплаті» немає.</Empty> : <Empty>У зарплаті ще нікого немає. {canEdit ? "Додайте людей кнопкою вище — кабінет «Моя зарплата» зʼявиться в них одразу." : ""}</Empty>}
         <div className="zp-hint">Плани — у вкладці «Плани» дашборда (тім-лід подає, КВП / адмін затверджує); тут не змінюються. Зміна рівня → новий офер у документах працівника й задача рекрутеру.</div>
       </div>
       {edit && <PersonModal p={edit} org={org} live={emp.month} settings={S} onClose={() => setEdit(null)} onDone={() => { setEdit(null); onChanged(); }} />}
-      {add && <AddModal candidates={(emp.candidates ?? []) as Obj[]} org={org} live={emp.month} onClose={() => setAdd(false)} onDone={() => { setAdd(false); onChanged(); }} />}
+      {add && <AddModal candidates={(emp.candidates ?? []) as Obj[]} org={org} live={emp.month} initial={add.uid} onClose={() => setAdd(false)} onDone={() => { setAdd(false); onChanged(); }} />}
     </Card>
   );
 }

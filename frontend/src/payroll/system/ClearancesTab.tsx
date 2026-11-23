@@ -159,12 +159,13 @@ function Sheet({ userId, focus }: { userId: string; focus: boolean }) {
   );
 }
 
-function LeaveModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+/** `initial` — з блоку «Зміни з «Найму»» у «Налаштуваннях»: людина й дата звільнення з «Найму» вже підставлені (задача 10723). */
+function LeaveModal({ initial, onClose, onDone }: { initial?: { userId: string; date: string | null } | null; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const { data } = useLoad(() => payrollApi.employees(), []);
   const people = useMemo(() => ((data?.people ?? []) as Obj[]).filter((p) => !p.leave), [data]);
-  const [userId, setUserId] = useState("");
-  const [date, setDate] = useState(kyivToday());
+  const [userId, setUserId] = useState(initial?.userId ?? "");
+  const [date, setDate] = useState(initial?.date ?? kyivToday());
   const [type, setType] = useState("own");
   const [reason, setReason] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -201,7 +202,8 @@ function LeaveModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
 
 export default function ClearancesTab({ ctx }: { ctx: PayrollCtx }) {
   const { data, err, reload } = useLoad(() => payrollApi.clearances(), []);
-  const [leave, setLeave] = useState(false);
+  const leaveFor = ctx.goExtra?.leaveFor ? { userId: String(ctx.goExtra.leaveFor), date: ctx.goExtra.date ? String(ctx.goExtra.date) : null } : null;
+  const [leave, setLeave] = useState(!!leaveFor && ctx.perms.has("payroll_edit"));
   const focusId = ctx.goExtra?.userId ? String(ctx.goExtra.userId) : null;
   if (!data) return <Loading err={err} onRetry={reload} />;
   const list = data as Obj[];
@@ -219,7 +221,7 @@ export default function ClearancesTab({ ctx }: { ctx: PayrollCtx }) {
       </Card>
       {list.length ? list.map((c) => <Sheet key={c.userId} userId={String(c.userId)} focus={focusId === String(c.userId)} />)
         : <Card><Empty>Обхідних листів немає.</Empty></Card>}
-      {leave && <LeaveModal onClose={() => setLeave(false)} onDone={() => { setLeave(false); void reload(); }} />}
+      {leave && <LeaveModal initial={leaveFor} onClose={() => setLeave(false)} onDone={() => { setLeave(false); void reload(); }} />}
     </div>
   );
 }

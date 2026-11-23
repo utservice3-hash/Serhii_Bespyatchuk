@@ -22,7 +22,7 @@ import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, typ
 import { useCarrierReport, awaitingByManager } from "../carrierReportData";
 import { VacationMark } from "../VacationMark";
 import { ReportManagerPicker } from "./ReportManagerPicker";
-import { readHiddenMgrs, writeHiddenMgrs, pickManagers, isPickNarrowed, type PickStore } from "../mgrPick";
+import { readHiddenMgrs, writeHiddenMgrs, pickManagers, type PickStore } from "../mgrPick";
 import { getAuthPayload } from "../../../auth";
 
 /**
@@ -363,7 +363,6 @@ export function ReportPlanSection({ auth, teams }: {
   const [pickUser] = useState<number | null>(() => { try { return getAuthPayload()?.userId ?? null; } catch { return null; } });
   const [hiddenMgrs, setHiddenMgrs] = useState<number[]>(() => readHiddenMgrs(pickStore(), pickUser));
   const applyHidden = (next: number[]) => { setHiddenMgrs(next); writeHiddenMgrs(pickStore(), pickUser, next); };
-  const pickNarrowed = isPickNarrowed(data?.managers ?? [], hiddenMgrs);
   const shownManagers = pickManagers((data?.managers ?? []).filter((m) => !statusFilter || m.status === statusFilter), hiddenMgrs);
   const listCount = `${shownManagers.length} з ${data?.managers.length ?? 0} менеджерів`;
   const toolbar = data && (
@@ -373,10 +372,9 @@ export function ReportPlanSection({ auth, teams }: {
         <span className="rv-fpill">лише «{SLBL[statusFilter].toLowerCase()}»
           <button type="button" aria-label="Скинути фільтр" onClick={() => setStatusFilter(null)}>×</button></span>
       )}
-      {pickNarrowed && (
-        <span className="rv-fpill">лише обрані менеджери
-          <button type="button" aria-label="Показати всіх менеджерів" onClick={() => applyHidden([])}>×</button></span>
-      )}
+      {/* 👥 Звужений вибір менеджерів НЕ додає на панель свою плашку: вона переносила «На весь екран» на новий рядок,
+          і таблиця з меню стрибали на кожному кліку (Роман 23.11.2026, «дуже скачуть менеджери»). Звуження видно на
+          самій кнопці «Менеджери · N з M» (підсвічена) і в лічильнику; скинути — «Усі» в її меню. */}
       <span className="rv-count">{listCount}</span>
     </>
   );

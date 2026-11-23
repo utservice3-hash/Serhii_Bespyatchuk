@@ -697,10 +697,19 @@ export function footValue(key: ColKey, rows: ReportPlanManager[]): FootValue {
  * як було. Особисто, окремим ключем `rptMgrWidth:<userId>` — як вибір і порядок колонок.
  * `null` = «не задано»: колонка має природну ширину (не 0 — порожнє не виражаємо нулем, правило 7).
  */
-export const MGR_W_MIN = 70;
+/**
+ * 130, а не 70 (задача 10735, зустріч 20.11.2026: «текст робиться в два рядки»): імʼя тепер переноситься, а не
+ * ріжеться «…», і на 70 px прізвище не влазило б у жодну кількість рядків.
+ */
+export const MGR_W_MIN = 130;
 export const MGR_W_MAX = 480;
 /** Нижче цієї ширини позначка «Старт/Профі» ховається: обрізана, вона читалась би як сміття. */
 export const MGR_W_TIGHT = 260;
+/**
+ * Нижче цієї ширини ховається СЛОВО стану («в нормі», «зрив») — лишається кольорова смужка й підказка. Інакше слово
+ * забирає половину вузької колонки, і прізвище не влазить навіть у два рядки (10735).
+ */
+export const MGR_W_WORD = 200;
 export const clampMgrWidth = (w: number): number => Math.max(MGR_W_MIN, Math.min(MGR_W_MAX, Math.round(w)));
 export const MGR_W_LS = "rptMgrWidth";
 export const mgrWidthKey = (userId: number | null | undefined): string =>
@@ -770,14 +779,21 @@ export function writeColWidths(store: ColsStore | null, userId: number | null | 
 /**
  * CSS ширин для ПОТОЧНОГО порядку колонок: колонка → її позиція в рядку (`nth-child`), тож перестановка колонок
  * несе ширину з собою. Рядок груп (`tr.g`) і розгортки на всю ширину (`[colspan]`) не зачіпаються — у них позиції
- * клітинок не збігаються з колонками. Вужча за вміст колонка обрізає текст «…», а не розпирається назад.
+ * клітинок не збігаються з колонками.
+ *
+ * ↩️ ЗВУЖЕНА КОЛОНКА ПЕРЕНОСИТЬ, А НЕ РІЖЕ (задача 10735, зустріч 20.11.2026: «текст робиться в два рядки»). Назва в
+ * шапці переходить на другий рядок; числа не ріжуться ніколи — клітинки рядків лишаються в один рядок (`nowrap` із
+ * `tdBase`), тож колонка не стає вужчою за найдовше число в ній. До 10735 тут стояло `max-width` + «…», і в підсумку
+ * Звіту читалось «2 041 88…» замість 2 041 880 ₴.
  */
 export function colWidthCss(scope: string, keys: readonly string[], w: Record<string, number>): string {
   return keys.map((k, i) => {
     const px = w[k];
     if (px == null || k === "name" || k === "rank") return "";
     const v = String(clampColWidth(px));
-    return `${scope} tr:not(.g) > :nth-child(${String(i + 1)}):not([colspan]) { width: ${v}px; min-width: ${v}px; max-width: ${v}px; overflow: hidden; text-overflow: ellipsis; }`;
+    const cell = `${scope} tr:not(.g) > :nth-child(${String(i + 1)}):not([colspan])`;
+    // `!important` лише на переносі шапки: у `th` стоїть інлайн `nowrap`, і без нього стиль програв би інлайну.
+    return `${cell} { width: ${v}px; min-width: ${v}px; }\n${scope} thead tr:not(.g) > th:nth-child(${String(i + 1)}) { white-space: normal !important; }`;
   }).filter(Boolean).join("\n");
 }
 

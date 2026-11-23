@@ -425,16 +425,18 @@ test("#322 🪞 ДЗЕРКАЛО: правильний ключ приймаєт
  * експортований перелік, автор отримав би зелене. Список звіряється з рішенням власника
  * («лише особа й підказки»), і міняти його можна лише свідомо, разом із цим коментарем.
  */
-const ДОЗВОЛЕНІ_ПОЛЯ = ["active", "email", "id", "name", "scope", "team", "trackerEnabled"];
+// 🏢 + `office` (23.11.2026, задача 10740, рішення Романа: «Офісний» з Найму — трекеру можна знати). Звідси новий номер:
+// змінилось твердження про множину, `#323` у відставці (правило 13).
+const ДОЗВОЛЕНІ_ПОЛЯ = ["active", "email", "id", "name", "office", "scope", "team", "trackerEnabled"];
 
-test("#323 реєстр віддає РІВНО дозволені поля — множина ключів звіряється точно", async () => {
+test("#10740b реєстр віддає РІВНО дозволені поля, включно з office — множина ключів звіряється точно", async () => {
   const { rosterPerson } = await import("../auth/trackerRoster.js");
 
   // Рядок навмисно несе КОЛОНКИ, ЯКИХ ВІДДАВАТИ НЕ МОЖНА: якби мапер був копією рядка,
   // вони приїхали б у відповідь. Саме так виглядав би витік ролі, який гейт мусить ловити.
   const row = {
     id: 7, email: "hto@uts.ua", name: "Хтось", is_active: true, tracker_enabled: false,
-    team_name: "РПК", data_scope: "company",
+    team_name: "РПК", data_scope: "company", is_office: true,
     role_key: "hr", password_hash: "$2b$СЕКРЕТ", role_override: "admin",
   } as unknown as Parameters<typeof rosterPerson>[0];
 
@@ -447,6 +449,16 @@ test("#323 реєстр віддає РІВНО дозволені поля — 
   assert.deepEqual(keys, ДОЗВОЛЕНІ_ПОЛЯ,
     `🔴 набір полів реєстру змінився: ${keys.join(", ")}. Зайве поле їде у ЧУЖУ систему за спільним ключем — `
     + "додавати можна лише свідомо, разом із рішенням власника про те, що трекеру можна знати.");
+  assert.equal(people[0].office, true, "🔴 галочка «Офісний» не дійшла у відповідь");
+  // Обидва боки: лише справжнє true дає true; відсутнє / null / «так» — false, і поле є ЗАВЖДИ (ТЗ трекера: null не буває).
+  for (const v of [false, null, undefined, "так", 1]) {
+    const o = rosterPerson({ ...row, is_office: v } as typeof row).office;
+    assert.equal(o, false, `🔴 is_office=${String(v)} дав office=${String(o)} — трекер вважатиме людину офісною`);
+  }
+  // Приклад для розробника трекера (`docs/tracker-roster.example.json`) — той самий набір полів, інакше опис бреше.
+  const ex = JSON.parse(read("docs/tracker-roster.example.json")).people as Record<string, unknown>[];
+  assert.ok(ex.length > 0 && ex.some((p) => p.office === true) && ex.some((p) => p.office === false), "🔴 у прикладі немає обох значень office");
+  for (const p of ex) assert.deepEqual(Object.keys(p).sort(), ДОЗВОЛЕНІ_ПОЛЯ, "🔴 приклад реєстру для трекера розійшовся з відповіддю");
 });
 
 test("#323b 🪞 ДЗЕРКАЛО: мапер — БІЛИЙ СПИСОК, і роут віддає саме його", async () => {
@@ -454,7 +466,7 @@ test("#323b 🪞 ДЗЕРКАЛО: мапер — БІЛИЙ СПИСОК, і р
 
   // Обидва боки межі: невідомий scope згортається в НАЙМЕНШІ права, відомі проходять.
   const base = { id: 1, email: "a@b", name: null, is_active: false, tracker_enabled: true,
-    team_name: null, data_scope: null };
+    team_name: null, data_scope: null, is_office: false };
   assert.equal(rosterPerson(base).scope, "own", "🔴 невідома роль мусить давати own, не company");
   assert.equal(rosterPerson({ ...base, data_scope: "team" }).scope, "team");
   assert.equal(rosterPerson({ ...base, data_scope: "company" }).scope, "company");

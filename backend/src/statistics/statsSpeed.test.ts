@@ -5,7 +5,7 @@ import path from "node:path";
 import { SeriesCache, SERIES_FRESH_MS, SERIES_STALE_MS } from "./seriesCache.js";
 import { WALL_METRICS, cardFrom, warmTasks, seriesDefaultTo, SERIES_DEFAULT_FROM } from "./seriesWarmSet.js";
 import { firstSpec, mainSpec } from "./statsBuckets.js";
-import { statsByBucket, seriesOfTakeRows, type DealTake } from "../core/leadTakeRules.js";
+import { statsByBucket, seriesOfTakeRows, kyivParts, kyivBucket, type DealTake } from "../core/leadTakeRules.js";
 
 /**
  * ⚡ #10419–#10423 — ШВИДКІСТЬ «СТАТИСТИК» (ціль Романа 21.11.2026: «час завантаження будь-якого графіка — менше 3 секунд»).
@@ -246,4 +246,50 @@ test("#10422 ПЕРША ЛІНІЯ ГРАФІКА: та, що малюється
   assert.equal(cards.asOfLabel("2026-11-20T21:55:00.000Z", "2026-11-21"), "20.11 23:55", "🔴 учорашня мить показана без дати");
   assert.equal(cards.asOfLabel("2026-11-20T22:05:00.000Z", "2026-11-21"), "00:05", "🔴 день миті рахується не за Києвом");
   assert.deepEqual([cards.asOfLabel(null, "2026-11-21"), cards.asOfLabel(undefined, "2026-11-21"), cards.asOfLabel("сміття", "2026-11-21")], [null, null, null]);
+});
+
+/**
+ * #10424 — КИЇВСЬКА ДАТА ЗАЯВКИ НЕ СТВОРЮЄ ФОРМАТЕР НА КОЖЕН ВИКЛИК. Замір прода 23.11.2026 (після викату `#10419`–`#10423`):
+ * холодний «Час опрацювання» 2,3 с, хоча база відповідала за 0,3 с. Решта — процесор Node: `kyivParts` будував
+ * `Intl.DateTimeFormat` на кожну з 30 тис. заявок, двічі на серію (2 с на 30 тис. викликів), і фоновий розрахунок раз на
+ * 10 хв зупиняв відповіді всім користувачам шматками по 2 с. Гейт рахує СТВОРЕННЯ форматера, а не час: час залежить від
+ * машини (правило 14), кількість створень — ні.
+ * 🪞 Дзеркало: числа ті самі. Складові звіряються з незалежним джерелом (`toLocaleString("sv-SE")`) по обидва боки
+ * обох переходів часу 2026 року, опівночі й межі року.
+ * 🧨 Червоніє, якщо форматер знову створюватиметься всередині `kyivParts`; якщо спільний форматер дасть іншу дату чи годину.
+ */
+test("#10424 КИЇВСЬКА ДАТА ЗАЯВКИ: форматер один на модуль, а не на кожну заявку; складові ті самі по обидва боки переходів часу", () => {
+  const Orig = Intl.DateTimeFormat;
+  let built = 0;
+  const Counting = function (this: unknown, ...a: ConstructorParameters<typeof Intl.DateTimeFormat>) { built++; return new Orig(...a); } as unknown as typeof Intl.DateTimeFormat;
+  Counting.supportedLocalesOf = Orig.supportedLocalesOf;
+  const t0 = Date.UTC(2026, 9, 1);
+  try {
+    (Intl as { DateTimeFormat: typeof Intl.DateTimeFormat }).DateTimeFormat = Counting;
+    new Intl.DateTimeFormat("en-GB"); // дзеркало лічильника: він бачить створення
+    assert.equal(built, 1, "лічильник не бачить створення форматера — перевірка нічого не доводить");
+    built = 0;
+    for (let i = 0; i < 2000; i++) { kyivParts(t0 + i * 3_600_000); kyivBucket(t0 + i * 3_600_000, i % 2 ? "day" : "week"); }
+    seriesOfTakeRows([{ createdAt: t0, teamId: 13, managerId: 1, lost: false, take: { takenAt: 1, event: "stage", minutes: 2, bucket: "m5", offHours: false } }], { from: "2026-10-01", to: "2026-10-31" }, "month");
+  } finally { (Intl as { DateTimeFormat: typeof Intl.DateTimeFormat }).DateTimeFormat = Orig; }
+  assert.equal(built, 0, `🔴 на 4000 викликів створено ${built} форматерів — київська дата знову будує форматер на кожну заявку (2 с процесора на 30 тис. заявок)`);
+
+  // Числа ті самі: незалежне джерело складових, по обидва боки кожної межі.
+  const ref = (ms: number) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(new Date(ms).toLocaleString("sv-SE", { timeZone: "Europe/Kyiv" }))!;
+    const [y, mo, d, h, mi] = m.slice(1).map(Number);
+    return { y, mo, d, dow: new Date(Date.UTC(y, mo - 1, d)).getUTCDay(), h, mi };
+  };
+  const edges = [
+    Date.UTC(2026, 2, 29, 0, 59), Date.UTC(2026, 2, 29, 1, 0),    // перехід на літній час: 02:59 → 04:00 за Києвом
+    Date.UTC(2026, 9, 25, 0, 59), Date.UTC(2026, 9, 25, 1, 0),    // перехід на зимовий: 03:59 → 03:00 за Києвом
+    Date.UTC(2026, 9, 31, 21, 59), Date.UTC(2026, 9, 31, 22, 0),  // північ за Києвом узимку (місяць міняється)
+    Date.UTC(2026, 5, 30, 20, 59), Date.UTC(2026, 5, 30, 21, 0),  // північ за Києвом улітку
+    Date.UTC(2026, 11, 31, 21, 59), Date.UTC(2026, 11, 31, 22, 0), // межа року
+    Date.UTC(2026, 10, 22, 21, 59), Date.UTC(2026, 10, 22, 22, 0), // неділя → понеділок (новий тиждень)
+  ];
+  for (const ms of edges) assert.deepEqual(kyivParts(ms), ref(ms), `🔴 київські складові ${new Date(ms).toISOString()} не ті`);
+  assert.deepEqual(edges.slice(0, 4).map((ms) => kyivParts(ms).h), [2, 4, 3, 3], "фікстура: межі справді лежать по обидва боки переходів часу");
+  assert.deepEqual([kyivBucket(edges[4], "month"), kyivBucket(edges[5], "month")], ["2026-10-01", "2026-11-01"]);
+  assert.deepEqual([kyivBucket(edges[10], "week"), kyivBucket(edges[11], "week")], ["2026-11-16", "2026-11-23"], "🔴 тиждень починається не з київського понеділка");
 });

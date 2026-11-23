@@ -78,6 +78,8 @@ export interface PersonRow extends PersonTeamInput {
   /** Назва справжньої команди людини (Kommo або дашборду) — для картки й «Без блоку». */
   teamName: string | null;
   photoV: number | null; userId: number | null;
+  /** 🏢 Галочка «Офісний» з Найму (10740). */
+  office: boolean;
 }
 export interface OrgUnit {
   id: number; parentId: number | null; name: string; dept: OrgDept; teamId: number | null; teamName: string | null;
@@ -94,11 +96,13 @@ export interface OrgPerson {
   teamName: string | null; teamLocked: boolean;
   telegram: string | null; telegramInvalid: boolean; phone: { text: string; tel: string | null } | null;
   photo: { id: number; v: number } | null; isMe: boolean;
+  /** 🏢 Працює в офісі (галочка з Найму, 10740) — трекер не чекає від нього даних. */
+  office: boolean;
 }
 export interface OrgTree {
   units: OrgUnit[]; people: OrgPerson[]; unassigned: number[];
   unknownLabels: { label: string; count: number }[];
-  stats: { total: number; noTelegram: number; noPhoto: number; unassigned: number };
+  stats: { total: number; noTelegram: number; noPhoto: number; unassigned: number; office: number };
 }
 
 const byUk = (a: string, b: string) => a.localeCompare(b, "uk");
@@ -144,7 +148,7 @@ export function buildOrg(unitRows: readonly UnitRow[], personRows: readonly Pers
       id: p.id, name: p.name, position: p.position, teamLabel: p.teamLabel, unitId: where.unitId, isHead: where.isHead,
       teamName: p.teamName, teamLocked: teamOf.get(p.id)!.locked,
       telegram: nick, telegramInvalid: !nick && !!p.telegram?.trim(), phone: phoneView(p.phone), photo: p.photoV != null ? { id: p.id, v: p.photoV } : null,
-      isMe: meUserId != null && p.userId === meUserId,
+      isMe: meUserId != null && p.userId === meUserId, office: p.office,
     };
   }).sort((a, b) => byUk(a.name, b.name));
   const nameOf = new Map(people.map((p) => [p.id, p.name]));
@@ -156,6 +160,8 @@ export function buildOrg(unitRows: readonly UnitRow[], personRows: readonly Pers
     stats: {
       total: people.length, noTelegram: people.filter((p) => !p.telegram).length,
       noPhoto: people.filter((p) => !p.photo).length, unassigned: unassigned.length,
+      // 🏢 «в офісі: N» (10740) — серед тих самих працюючих, що й «усього». Тримає #10740e.
+      office: people.filter((p) => p.office).length,
     },
   };
 }
@@ -181,14 +187,14 @@ async function unitRows(db: Db): Promise<UnitRow[]> {
 async function personRows(db: Db): Promise<PersonRow[]> {
   // 🔒 Поля поіменно: пошти, дат, документів тут немає й бути не може (ТЗ); телефон — рішення Романа 28.10 (#2712).
   const r = await db.query<{ id: number; full_name: string; position: string | null; team_label: string | null; telegram: string | null; phone: string | null;
-    user_id: number | null; has_photo: boolean; photo_updated_at: Date | null; team_name: string | null;
+    user_id: number | null; has_photo: boolean; photo_updated_at: Date | null; team_name: string | null; is_office: boolean;
     kommo_team_id: number | null; card_team_id: number | null; dash_team_id: number | null; dash_linked_kommo_id: number | null }>(
-    `SELECT e.id, e.full_name, e.position, e.team_label, e.telegram, e.phone, e.user_id,
+    `SELECT e.id, e.full_name, e.position, e.team_label, e.telegram, e.phone, e.user_id, e.is_office,
             (e.photo_file IS NOT NULL) AS has_photo, e.photo_updated_at, ${PERSON_TEAM_COLS},
             COALESCE((SELECT name FROM teams WHERE id = COALESCE(tm1.team_id, tm2.team_id, e.team_id, tdt.kommo_team_id)), tdt.name) AS team_name
        FROM employees e ${PERSON_TEAM_JOINS} WHERE ${WORKING_SQL}`);
   return r.rows.map((x) => ({ id: x.id, name: x.full_name, position: x.position, teamLabel: x.team_label, telegram: x.telegram, phone: x.phone,
-    userId: x.user_id, photoV: x.has_photo ? photoVersion(x.photo_updated_at) : null, teamName: x.team_name, ...personTeamInput(x) }));
+    userId: x.user_id, photoV: x.has_photo ? photoVersion(x.photo_updated_at) : null, teamName: x.team_name, office: x.is_office === true, ...personTeamInput(x) }));
 }
 
 export async function loadOrg(db: Db, meUserId: number | null): Promise<OrgTree> {
@@ -262,6 +268,22 @@ export async function moveEmployee(db: Db, actor: number, employeeId: number, un
   catch (x) { if (x instanceof TeamsError) throw new OrgError(x.status, x.message); throw x; }
   if (r.changed.length) await log(db, actor, "move", `${e.full_name} → ${unitName} (команда: ${e.team_label ?? "—"} → ${r.name ?? "—"})`,
     { employeeId, unitId, before: { team_label: e.team_label }, after: { team_label: r.name } });
+}
+
+/**
+ * 🏢 «ОФІСНИЙ» ЗІ СХЕМИ (10740, рішення Романа 23.11.2026). Та сама галочка, що в картці Найму, і пише її той самий
+ * `updateEmployee` (одна перевірка «лише true/false», один аудит). Окремий вхід потрібен бізнес-асистенту: у нього є
+ * `edit_org`, а Найму немає, і Найм йому не відкриваємо. Лише працюючим (як переміщення). Зміна — рядок `office` у журналі.
+ */
+export async function setEmployeeOffice(db: Db, actor: number, employeeId: number, office: unknown): Promise<{ changed: boolean }> {
+  const e = (await db.query<{ full_name: string }>(
+    `SELECT e.full_name FROM employees e WHERE e.id = $1 AND ${WORKING_SQL}`, [employeeId])).rows[0];
+  if (!e) throw new OrgError(404, "Серед працюючих такої людини немає");
+  const r = await updateEmployee(db, actor, employeeId, { is_office: office });
+  if (!r.changed.length) return { changed: false };
+  await log(db, actor, "office", `${e.full_name}: ${office === true ? "офісний" : "не офісний"}`,
+    { employeeId, before: { is_office: office !== true }, after: { is_office: office === true } });
+  return { changed: true };
 }
 
 interface UnitInput { name: string; parentId: number | null; dept: OrgDept; teamId: number | null; dashTeamId: number | null; label: string | null; headEmployeeId: number | null; side: boolean; sort: number }
