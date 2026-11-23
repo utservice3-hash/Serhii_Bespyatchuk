@@ -1393,6 +1393,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
   //    вимагає права в ADMIN_DENIED_BY_PERM, а тут межа — роль, не право. Їх 403 стереже `#1542` (`canSetCallsNorm`).
   { method: "POST", path: "/api/plans/calls-norm", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🔁 10477: передати або зняти план менеджера, який пішов, - лише КВП і адмін (`canTransferPlan`), 403 ДО запису.
+  //    CEO/опдир/фінансист теж отримують 403, але в deny їх не пишемо з тієї ж причини, що в нормі дзвінків вище;
+  //    їх 403 стереже `#4033`.
+  { method: "POST", path: "/api/plans/transfer", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/plans/transfer/drop", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/plans/formation/approve", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/plans/formation/repeat-clients", cls: "GET",

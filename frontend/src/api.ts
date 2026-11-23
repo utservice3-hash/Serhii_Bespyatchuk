@@ -1176,15 +1176,27 @@ export interface PFManager {
   /** Довідково з екрана «Постійні клієнти»: що заявлено вручну і що погоджено по клієнтах. */
   repeatClients?: { approved: number; approvedClients: number; entered: number; declared: number };
   formation: PFState;
+  /** 🔁 10477: що цей менеджер отримав із плану тих, хто пішов (уже сидить у `currentPlan`). */
+  received?: { amount: number; fromName: string; at: string; by: string | null }[];
+}
+/** 🔁 10477: той, хто пішов, і його план за місяць. `pool` - не розподілено; `kept` - лишено за ним як виконане. */
+export interface PFGone { managerId: number; name: string; teamId: number; plan: number; kept: number; pool: number; fact: number }
+export interface PFTransferEvent {
+  batchId: string; at: string; by: string | null; fromManagerId: number; fromName: string; teamId: number | null;
+  kind: "transfer" | "drop"; amount: number; keep: number; parts: { managerId: number; name: string; amount: number }[];
 }
 export interface PFTeam {
   teamId: number | null; teamName: string; total: number;
   recommended: number; carryover: number; approved: number; submitted: number;
   managers: PFManager[];
+  /** 🔁 10477: Σ «не розподілено» і Σ усього плану тих, хто пішов (разом із лишеним за ними). */
+  unassigned?: number; gonePlan?: number; gone?: PFGone[]; history?: PFTransferEvent[];
 }
 export interface PlanFormation {
   month: string; refMonth: string; growthPct: number;
   role: string; canApprove: boolean; canSubmit: boolean; teams: PFTeam[];
+  /** 🔁 10477: чи може цей користувач передавати план (КВП, адмін) і чи відкритий для цього місяць. */
+  canTransfer?: boolean; transferOpen?: boolean;
   /** Мʼяка нижня межа плану на менеджера (₴) з налаштувань; 0 = вимкнено. */
   minPerManager?: number;
 }
@@ -1211,6 +1223,12 @@ export async function submitFormationPlan(managerId: number, month: string, prop
 export async function approveFormationPlan(body: { managerId?: number; teamId?: number; month: string }): Promise<{ approved: number }> {
   const { data } = await api.post<{ ok: boolean; approved: number }>("/plans/formation/approve", body);
   return data;
+}
+export async function transferGonePlan(body: { month: string; fromManagerId: number; mode: "all" | "rest"; parts: { managerId: number; amount: number }[] }): Promise<void> {
+  await api.post("/plans/transfer", body);
+}
+export async function dropGonePlan(body: { month: string; fromManagerId: number }): Promise<void> {
+  await api.post("/plans/transfer/drop", body);
 }
 export async function returnFormationPlan(managerId: number, month: string, returnComment?: string): Promise<void> {
   await api.post("/plans/formation/return", { managerId, month, returnComment });
@@ -1778,7 +1796,7 @@ export interface ReportPlanManager {
 export interface ReportPlan {
   scope: { from: string; to: string; isCurrent: boolean; workingDaysTotal: number; workingDaysElapsed: number };
   role: string; viewerManagerId: number | null; elapsed: number; remainingWorkdays: number;
-  glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number; expectPastMonths: number; expectInPeriod: number;
+  glance: { plan: number; /** 🔁 10477: з цього - план тих, хто пішов (ні на кому з рядків не лежить) */ planGone?: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number; expectPastMonths: number; expectInPeriod: number;
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
     /**
@@ -1803,6 +1821,8 @@ export interface ReportPlan {
    * якому стоїть половина гейтів. Порожній масив — нормальний стан.
    */
   dismissed: ReportPlanDismissed[];
+  /** 🔁 10477: хто пішов із планом за цей місяць; порожньо, якщо період не в межах одного місяця. */
+  gonePlans?: PFGone[];
   /** Про ДЖЕРЕЛО «першого дотику»: розмови без менеджера, останній AI-розбір, чи розбір існував у періоді (задача 7237). */
   firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; covered: boolean };
   /**

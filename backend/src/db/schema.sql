@@ -578,6 +578,23 @@ CREATE TABLE IF NOT EXISTS calls_norm_plan (
   set_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 🔁 ПЕРЕДАЧА ПЛАНУ МЕНЕДЖЕРА, ЯКИЙ ПІШОВ (задача 10477, 23.11.2026; `core/planTransfer.ts`). Журнал: хто, коли, від кого,
+-- кому, скільки. `transfer` - передано отримувачу; `drop` - знято з плану команди; `keep` - лишено за тим, хто пішов,
+-- як уже виконане (режим «тільки залишок»), і в пул «не розподілено» більше не входить. Самі числа плану живуть у `plans`.
+CREATE TABLE IF NOT EXISTS plan_transfers (
+  id              SERIAL PRIMARY KEY,
+  batch_id        TEXT NOT NULL,
+  month           DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  from_manager_id INTEGER NOT NULL REFERENCES managers(id),
+  to_manager_id   INTEGER REFERENCES managers(id),
+  amount          NUMERIC NOT NULL CHECK (amount > 0),
+  kind            TEXT NOT NULL CHECK (kind IN ('transfer', 'drop', 'keep')),
+  created_by      INTEGER REFERENCES users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((kind = 'transfer') = (to_manager_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_plan_transfers_month ON plan_transfers (month, from_manager_id);
+
 -- 🎯 ЦІЛЬ СЕРЕДНЬОГО ЧЕКА КОМАНДИ НА МІСЯЦЬ (4632, Юля 10.10.2026; `core/avgCheckTarget.ts`). Записується першим
 -- зверненням у місяці й до кінця місяця не рухається. `target` NULL — у команди за 3 місяці менше 30 успішних угод.
 CREATE TABLE IF NOT EXISTS avg_check_targets (

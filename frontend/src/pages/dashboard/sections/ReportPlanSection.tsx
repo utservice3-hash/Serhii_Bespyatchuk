@@ -3,7 +3,7 @@ import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, u
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
   fetchResponseTimeByManager,
-  type ReportPlan, type ReportPlanManager, type ReportPlanDismissed, type KvpManagerDetail, type KvpDetailCell, type Team,
+  type ReportPlan, type ReportPlanManager, type ReportPlanDismissed, type PFGone, type KvpManagerDetail, type KvpDetailCell, type Team,
   type DayItemKind, type DayItems, type DealSource, type DealKlass,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
@@ -400,6 +400,8 @@ export function ReportPlanSection({ auth, teams }: {
             monthInProgress={mode === "month" && data.scope.isCurrent}
             weekInProgress={mode === "week" && data.scope.isCurrent}
             statusFilter={statusFilter} onStatus={setStatusFilter} />
+          <GonePlanNote rows={data.gonePlans ?? []} total={data.glance.planGone ?? 0}
+            onOpenPlans={auth.role === "admin" ? () => window.location.assign("/plans") : undefined} />
           {/* Застряглі — один рядок, розкривається на місці. Стан на зараз, не за періодом. */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
           {/* 🗑 «Час опрацювання заявки», «Перший дотик · звіт по менеджерах» і «Дзвінки на мобільні» зі Звіту
@@ -453,6 +455,27 @@ export function ReportPlanSection({ auth, teams }: {
  * ⚠️ Плану, %, світлофора й темпу тут НЕМАЄ навмисно: ставити план тому, кому його не
  * ставлять, безглуздо, а порожня шкала читалась би як «зрив».
  */
+/**
+ * 🔁 ПЛАН ТИХ, ХТО ПІШОВ (задача 10477). З листопада 2026 він не ділиться сам на команду, а лежить окремо, поки КВП не
+ * передасть його в «Плани». Без цього рядка план команди у Звіті був би більший за суму рядків без жодного пояснення.
+ */
+function GonePlanNote({ rows, total, onOpenPlans }: { rows: PFGone[]; total: number; onOpenPlans?: () => void }) {
+  if (!(total > 0)) return null;
+  const open = rows.filter((r) => r.pool > 0);
+  return (
+    <div style={{ margin: "12px 0", border: "1px solid #d9770655", borderLeft: "4px solid #d97706", borderRadius: 10, padding: "10px 14px", background: "#d977060f", fontSize: 13 }}>
+      <b>План тих, хто пішов: {fmt(total)} ₴</b>
+      <span style={{ color: MUTED }}> · входить у план команди, але ні на кому з менеджерів не лежить</span>
+      {open.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          Не розподілено: {open.map((r) => `${r.name} ${fmt(r.pool)} ₴`).join(" · ")}
+          {onOpenPlans && <button onClick={onOpenPlans} style={{ marginLeft: 10, padding: "4px 11px", borderRadius: 8, border: "none", background: "var(--text)", color: "var(--card-bg)", fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>Передати в «Плани»</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DismissedRows({ rows }: { rows: ReportPlanDismissed[] }) {
   if (rows.length === 0) return null;
   const total = rows.reduce((s, r) => s + r.fact, 0);

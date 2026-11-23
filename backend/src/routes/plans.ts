@@ -11,6 +11,8 @@ import * as metrics from "../core/metrics.js";
 import { planRecommendation, baseMonthsFor, formationRoster } from "../core/plans.js";
 import { monthEndOf, kyivToday } from "../core/dates.js";
 import { callsNormHistory, callsNormVerdict, canSetCallsNorm, effectiveNorm, setCallsNorm } from "../core/callsNormPlan.js";
+import { canTransferPlan, monthOpenForTransfer, poolApplies } from "../core/planTransferRules.js";
+import { applyTransfer, dropPool, gonePlans, transferHistory } from "../core/planTransfer.js";
 
 export const plansRouter = Router();
 plansRouter.use(requireAuth);
@@ -203,18 +205,34 @@ plansRouter.get("/formation", async (req, res) => {
     const e = teamsMap.get(key) ?? { teamId: m.teamId, teamName: m.teamName ?? "Без команди", managers: [] as typeof mgrOut };
     e.managers.push(m); teamsMap.set(key, e);
   }
+  // 🔁 10477: план тих, хто пішов, - окремим пулом «не розподілено» над командою, поки КВП не передасть або не зніме.
+  // До листопада 2026 пулу немає (там діяв автоподіл), тож і запитів немає.
+  const pooled = poolApplies(month);
+  const [gone, transfers] = pooled
+    ? await Promise.all([gonePlans(month, teamId ?? null), transferHistory(month, teamId ?? null)])
+    : [[], []];
   const teams = [...teamsMap.values()].map((t) => {
     const recommended = t.managers.reduce((a, m) => a + m.recommendation.value, 0);
     const carryover = t.managers.reduce((a, m) => a + m.carryover, 0);
     const approved = t.managers.filter((m) => m.formation.status === "approved").length;
     const submitted = t.managers.filter((m) => m.formation.status === "submitted").length;
-    return { teamId: t.teamId, teamName: t.teamName, total: t.managers.length, recommended, carryover, approved, submitted, managers: t.managers };
+    const teamGone = gone.filter((g) => g.teamId === t.teamId);
+    const history = transfers.filter((e) => e.teamId === t.teamId);
+    return { teamId: t.teamId, teamName: t.teamName, total: t.managers.length, recommended, carryover, approved, submitted,
+      // «не розподілено» - лише пул; `gone[].plan` включає ще й лишене за людиною як уже виконане
+      unassigned: teamGone.reduce((a, g) => a + g.pool, 0),
+      gonePlan: teamGone.reduce((a, g) => a + g.plan, 0),
+      gone: teamGone, history,
+      managers: t.managers.map((m) => ({ ...m,
+        received: history.filter((e) => e.kind === "transfer").flatMap((e) => e.parts.filter((p) => p.managerId === m.managerId)
+          .map((p) => ({ amount: p.amount, fromName: e.fromName, at: e.at, by: e.by }))) })) };
   });
 
   // Мʼяка нижня межа з НАЛАШТУВАНЬ (не хардкод): фронт блокує подачу без
   // обґрунтування, сервер перевіряє те саме нижче — фронту тут не довіряємо.
   const { planMinPerManager } = await getSettings();
-  res.json({ month, refMonth, growthPct, role: auth.role, canApprove, canSubmit, minPerManager: planMinPerManager, teams });
+  res.json({ month, refMonth, growthPct, role: auth.role, canApprove, canSubmit, minPerManager: planMinPerManager, teams,
+    canTransfer: canTransferPlan(auth), transferOpen: monthOpenForTransfer(month, kyivToday()) });
 });
 
 /** Лазі-дриліл: розклад ПОСТІЙНИХ по клієнтах (розкривається під рядком «Постійні»). */
@@ -377,6 +395,40 @@ plansRouter.post("/formation/return", requireRole("admin"), async (req, res) => 
   );
   if (r.rowCount === 0) return res.status(409).json({ error: "Немає поданого плану для повернення" });
   res.json({ ok: true, status: "returned" });
+});
+
+/**
+ * 🔁 ПЕРЕДАТИ ПЛАН МЕНЕДЖЕРА, ЯКИЙ ПІШОВ (задача 10477). Передає і знімає лише КВП і адмін (`canTransferPlan`) -
+ * перевірка ПЕРШОЮ дією, до розбору тіла: інакше 403 решти ролей тихо стало б 400. Сума частин мусить дорівнювати
+ * плану, який передаємо (`transferVerdict`), тож план команди від передачі не рухається. Закритий місяць не чіпаємо.
+ */
+const transferSchema = z.object({
+  month: z.string(), fromManagerId: z.number().int(), mode: z.enum(["all", "rest"]),
+  parts: z.array(z.object({ managerId: z.number().int(), amount: z.number().int() })).min(1).max(60),
+});
+plansRouter.post("/transfer", async (req, res) => {
+  const auth = req.auth!;
+  if (!canTransferPlan(auth)) return res.status(403).json({ error: "План менеджера, який пішов, передає КВП" });
+  const parsed = transferSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Перевірте дані: місяць, менеджер і суми цілими числами" });
+  const month = monthStartOf(parsed.data.month);
+  if (!monthOpenForTransfer(month, kyivToday())) return res.status(400).json({ error: "План закритого місяця не передається" });
+  const r = await applyTransfer({ month, fromManagerId: parsed.data.fromManagerId, mode: parsed.data.mode, parts: parsed.data.parts, userId: auth.userId ?? null });
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  res.json({ ok: true, amount: r.amount, keep: r.keep });
+});
+
+const dropSchema = z.object({ month: z.string(), fromManagerId: z.number().int() });
+plansRouter.post("/transfer/drop", async (req, res) => {
+  const auth = req.auth!;
+  if (!canTransferPlan(auth)) return res.status(403).json({ error: "План менеджера, який пішов, знімає КВП" });
+  const parsed = dropSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Перевірте дані: місяць і менеджер" });
+  const month = monthStartOf(parsed.data.month);
+  if (!monthOpenForTransfer(month, kyivToday())) return res.status(400).json({ error: "План закритого місяця не знімається" });
+  const r = await dropPool({ month, fromManagerId: parsed.data.fromManagerId, userId: auth.userId ?? null });
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  res.json({ ok: true, amount: r.amount });
 });
 
 /**

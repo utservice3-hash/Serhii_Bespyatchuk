@@ -27,6 +27,8 @@ const ADDITIVE = [
   "expectPastMonths",
   "dispatched", "dispatchedRevenue", "created", "expectNoDate", "jam", "jamDeals",
   "dobir", "byPace", "talks", "attempts", "factNoPlan",
+  // 🔁 10477: план тих, хто пішов. Забути тут = підсумок плану 2+ команд узяв би його лише з першої.
+  "planGone",
 ] as const;
 
 export function mergeReportPlans(parts: ReportPlan[]): ReportPlan {
@@ -82,5 +84,6 @@ export function mergeReportPlans(parts: ReportPlan[]): ReportPlan {
     medianMin: null,
     byTeam: parts.flatMap((p) => p.missedMeta?.byTeam ?? []).filter((t) => !seenTeam.has(t.teamId) && (seenTeam.add(t.teamId), true)),
   };
-  return { ...base, glance, managers, dismissed, missedMeta };
+  const gonePlans = parts.flatMap((p) => p.gonePlans ?? []);
+  return { ...base, glance, managers, dismissed, gonePlans, missedMeta };
 }

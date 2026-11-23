@@ -398,6 +398,7 @@ export function ReportTableSection({
               <tr>
                 {cols.map((c) => (
                   <FootCell key={c.key} col={c} rows={rows} scopeLabel={scopeLabel} count={rows.length}
+                    planGone={statusFilter ? 0 : data.glance.planGone ?? 0}
                     callbackMedian={statusFilter ? null : data.missedMeta?.medianMin ?? null} />
                 ))}
               </tr>
@@ -612,7 +613,9 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
   }
 }
 
-function FootCell({ col, rows, scopeLabel, count, group, callbackMedian }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
+function FootCell({ col, rows, scopeLabel, count, group, callbackMedian, planGone = 0 }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
+  /** 🔁 10477: план тих, хто пішов, - ні на кому з рядків не лежить, але в план підсумку входить. Лише для загального підсумку. */
+  planGone?: number;
   /** Підсумок ГРУПИ (команди) всередині таблиці — тонший, ніж загальний унизу. */
   group?: boolean;
   /** ⏱ Медіана передзвону ЦЬОГО підсумку — з сервера одним запитом (медіани не складаються). */
@@ -640,7 +643,12 @@ function FootCell({ col, rows, scopeLabel, count, group, callbackMedian }: { col
     const n = rows.reduce((s, m) => s + (m.missed?.missed ?? 0), 0), nc = rows.reduce((s, m) => s + (m.missed?.noCallback ?? 0), 0);
     return <td style={st}>{n}{nc > 0 && <span style={{ color: "var(--danger)", fontSize: 11, fontWeight: 500 }}> ({nc})</span>}</td>;
   }
-  const f = footValue(col.key, rows);
+  const f0 = footValue(col.key, rows);
+  // 🔁 10477: без цього підсумок плану «схуд» би рівно на план тих, хто пішов, а відсоток виріс би сам собою.
+  const f = planGone > 0 && col.key === "plan" && f0.value != null ? { ...f0, value: f0.value + planGone }
+    : planGone > 0 && col.key === "pct" && f0.extra ? (() => { const e = f0.extra as { num: number; den: number }; const den = e.den + planGone;
+        return { ...f0, value: den > 0 ? Math.round((e.num / den) * 100) : null }; })()
+    : f0;
   // 🎯 Підсумок групи, де жодної людини не виміряно, — «не вимірюється», а не «—» (рецензія 17.09.2026).
   if (col.key === "firstTouch" && rows.length > 0 && rows.every((m) => m.firstTouch?.state !== "measured")) {
     return <td style={{ ...st, color: "var(--text-muted)", fontWeight: 500 }}>не вимірюється</td>;
