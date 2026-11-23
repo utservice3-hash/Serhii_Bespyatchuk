@@ -1714,9 +1714,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   /* 🎯 «Хантинг» (15.11.2026, ТЗ Івана): межа ПОІМЕННА (`hunt_access`: Іван, Сергій, Олександр), роль не дає нічого —
      навіть адмінська. Проба матриці ходить від userId 0, якого в списку немає, тож КОЖНА роль бачить 403; «людина зі списку
-     може / інша з тією ж роллю ні» тримає живий гейт ядра #3961. Відкритий лише `/access` (тільки «чи показувати пункт»). */
+     може / інша з тією ж роллю ні» тримає живий гейт ядра #3961. Відкритий лише `/access` (тільки «чи показувати пункт»).
+     👁 ФІНАНСИСТ У `allow` З 23.11.2026 (рішення Романа, картка 23.11): 20.11 йому повернули «Найм» на перегляд, а `/api/hunt`
+     стоїть за вкладкою `hiring` — тож `/access` відповідає йому 200 з `allowed:false` (людина не зі списку). Матриця #11 на
+     викаті 47fe375 показала «було 403, стало 200»; рядок відставав від рішення, поведінка коду не мінялась. Решта роутів
+     «Хантингу» нижче лишаються 403 усім ролям, фінансисту теж. */
   { method: "GET", path: "/api/hunt/access", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead", "financier"], deny: ["manager"] },
   { method: "GET", path: "/api/hunt/radar", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/hunt/contacts/activity", cls: "deny-only",
