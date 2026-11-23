@@ -5,7 +5,7 @@ import { PeriodStepper } from "../PeriodStepper";
 import { monthStart, todayKyiv, type PeriodState } from "../periodRules";
 import { InfoHint } from "../widgets";
 import { KvpFirstTouchBlock } from "./KvpFirstTouchBlock";
-import { weekCloseStatus, closeNote, withExpected, CLOSE_LABEL, kvpReportParams, kvpPlanMonth, type CloseKind } from "../kvpCoreRules";
+import { weekCloseStatus, closeNote, closeLegendText, withExpected, CLOSE_LABEL, kvpReportParams, kvpPlanMonth, type CloseKind } from "../kvpCoreRules";
 import { VacationMark } from "../VacationMark";
 
 // ── Статус-палітра (зарезервована, НЕ дата-серія): good/warning/serious/critical ──
@@ -239,7 +239,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               клітинка тижня ліворуч від поточного (той самий план і факт), окремих колонок під нього немає. ── */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = календарні тижні Пн–Нд у межах місяця (дати — під номером тижня). «🚚 Відправлені авто» — маржа і кількість авто з «Датою загрузки» в тижні (ті самі, що в «Активність»), смужка — що з ними зараз: оплачено · чекаємо · без оплати; «отримали» — гроші тижня, як у «Гроші». План тижня — ДИНАМІЧНИЙ: минулий тиждень — план, зафіксований на його початок; поточний — (план місяця − факт на початок тижня) ÷ робочі дні до кінця місяця × дні тижня (ручна ціль тімліда перемагає); майбутні — той самий залишок і темп, оновлюються в понеділок. Тому Σ тижнів більша за план місяця, коли минулі тижні недовиконано, — з планом сходиться «залишок» під фактом. Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; поточний тиждень — ще й «з очік.» (факт + оплати з плановою датою в цьому тижні, % плану тижня) і мітка «Закриємо?»; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні)." /></h2>
+              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text={"Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = календарні тижні Пн–Нд у межах місяця (дати — під номером тижня). «🚚 Відправлені авто» — маржа і кількість авто з «Датою загрузки» в тижні (ті самі, що в «Активність»), смужка — що з ними зараз: оплачено · чекаємо · без оплати; «отримали» — гроші тижня, як у «Гроші». План тижня — ДИНАМІЧНИЙ: минулий тиждень — план, зафіксований на його початок; поточний — (план місяця − факт на початок тижня) ÷ робочі дні до кінця місяця × дні тижня (ручна ціль тімліда перемагає); майбутні — той самий залишок і темп, оновлюються в понеділок. Тому Σ тижнів більша за план місяця, коли минулі тижні недовиконано, — з планом сходиться «залишок» під фактом. Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; поточний тиждень — ще й «з очік.» (факт + оплати з плановою датою в цьому тижні, % плану тижня) і мітка «Закриємо?»; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні). " + closeLegendText()} /></h2>
               {rep.weekBlocks.length > 0 && (
                 <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", fontSize: 12 }}>
                   {([["money", "💰 Гроші"], ["activity", "⚙️ Активність"], ["ship", "🚚 Відправлені авто"]] as const).map(([k, lbl]) => (
@@ -309,7 +309,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                 </tbody>
               </table>
             </div>
-            {weekMode === "money" && rep.weekBlocks.some((w) => w.isCurrent) && <CloseLegend />}
+            {/* ✂️ Легенду «Закриємо поточний тиждень?» прибрано (задача 10753, 23.11.2026): значення міток — у підказці (i) заголовка. */}
             {weekMode === "ship" && rep.weekBlocks.length > 0 && <ShipLegend />}
           </div>
 
@@ -790,20 +790,6 @@ function ShipLegend() {
       <span><b style={{ color: "var(--text)" }}>🚚 Відправлені авто:</b> маржа / кількість авто з «Датою загрузки» в тижні (ті самі авто, що в «Активність»)</span>
       <span>{sw(SHIP_PAID)}оплачено</span><span>{sw(SHIP_WAIT)}чекаємо</span><span>{sw(SHIP_LOST)}без оплати (закрито і не реалізовано)</span>
       <span>стан — на зараз · «отримали» — гроші за тиждень, як у «Гроші»</span>
-    </div>
-  );
-}
-function CloseLegend() {
-  return (
-    <div style={{ fontSize: 12, color: MUTED, marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-      <span>Закриємо поточний тиждень?</span>
-      {(["closed", "real", "risk", "no"] as const).map((k) => (
-        <span key={k} style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
-          <span style={{ fontSize: 11, fontWeight: 600, padding: "0 6px", borderRadius: 10, background: CLOSE_TONE[k].bg, color: CLOSE_TONE[k].fg }}>{CLOSE_LABEL[k]}</span>
-          {k === "closed" ? "факт уже не менший за план тижня" : k === "real" ? "вистачить до половини очікуваних оплат" : k === "risk" ? "має прийти 50–85% очікуваного" : "треба понад 85% або навіть усього очікуваного не вистачає"}
-          {k !== "no" && " ·"}
-        </span>
-      ))}
     </div>
   );
 }
