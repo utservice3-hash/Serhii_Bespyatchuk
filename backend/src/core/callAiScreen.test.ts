@@ -489,8 +489,8 @@ test("#855 ТИП РОЗМОВИ: вантаж — у звіт, непевне (
   const ov = (isCargo: boolean) => ({ isCargo, byName: "Т", at: "2026-09-30T10:00:00Z" });
   assert.equal(typeVerdict("vendor", 0.99, ov(true)).inReport, true, "🔴 «Це вантаж» тімліда не повернуло розмову у звіт");
   assert.equal(typeVerdict("cargo_request", 0.99, ov(false)).inReport, false, "🔴 «Це не вантаж» тімліда не прибрало розмову зі звіту");
-  for (const k of ["admin", "team_lead"]) assert.equal(canEditType(k), true, `дзеркало: ${k} мусить змінювати тип`);
-  for (const k of ["ceo", "opdir", "kvp", "manager", "financier", "hr", null]) assert.equal(canEditType(k), false, `🔴 ${String(k)} може змінювати тип`);
+  for (const k of ["admin", "ceo", "team_lead"]) assert.equal(canEditType(k), true, `дзеркало: ${k} мусить змінювати тип`);
+  for (const k of ["opdir", "kvp", "manager", "financier", "hr", null]) assert.equal(canEditType(k), false, `🔴 ${String(k)} може змінювати тип`);
 });
 
 /**
@@ -595,9 +595,9 @@ test("#862 ЗВІТ ТІМЛІДА · ЯДРО: лише звіт, відсот�
 test("#863 КОМЕНТАРІ Й ЗАПИС: права за видом коментаря, заміна й прибирання, роути — право першим, скоуп до запису", async (t) => {
   const { canWriteNote } = await import("./callAiScreen.js");
   for (const k of ["admin", "team_lead", "manager"]) assert.equal(canWriteNote(k, "price"), true, `дзеркало: ${k} пише «чому не озвучено ціну»`);
-  for (const k of ["ceo", "opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "price"), false, `🔴 ${k} пише коментар до ціни`);
+  for (const k of ["opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "price"), false, `🔴 ${k} пише коментар до ціни`);
   for (const k of ["admin", "team_lead"]) assert.equal(canWriteNote(k, "missed"), true, `дзеркало: ${k} пише «Опрацьовано»`);
-  for (const k of ["manager", "ceo"]) assert.equal(canWriteNote(k, "missed"), false, `🔴 ${k} пише «Опрацьовано» — банер гасив би сам собі`);
+  for (const k of ["manager", "opdir"]) assert.equal(canWriteNote(k, "missed"), false, `🔴 ${k} пише «Опрацьовано» — банер гасив би сам собі`);
   assert.equal(canWriteNote("admin", "other"), false);
   const route = SRC("routes/dashboard.ts");
   const body = (head: string) => { const at = route.indexOf(head); assert.ok(at > 0, `🔴 роуту ${head} немає`); const nx = route.indexOf("dashboardRouter.", at + 10); return route.slice(at, nx > at ? nx : undefined); };
@@ -1165,7 +1165,7 @@ test("#900 ПОЗА ТЕЛЕФОНІЄЮ: позначка = виконано, �
 
   const { canWriteNote } = await import("./callAiScreen.js");
   for (const k of ["admin", "team_lead"]) assert.equal(canWriteNote(k, "offline"), true, `дзеркало: ${k} позначає «поза телефонією»`);
-  for (const k of ["manager", "ceo", "opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "offline"), false, `🔴 ${k} позначає «поза телефонією» (менеджеру вимкнено 08.10.2026)`);
+  for (const k of ["manager", "opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "offline"), false, `🔴 ${k} позначає «поза телефонією» (менеджеру вимкнено 08.10.2026)`);
 
   const V = await loadView() as unknown as { PROMISE_UI: Record<string, { label: string; tone: string }> };
   assert.equal(V.PROMISE_UI.broken.tone === "bad", false, "🔴 «немає дзвінка в телефонії» знову червоне — вирок до звірки людиною");
@@ -1802,7 +1802,7 @@ test("#1780 ЗАКРИТИ УГОДУ · ПРАВИЛА: межа «до Від�
     [{ id: 5, pipeline_id: R.FC_PIPELINE, status_id: 69693668, custom_fields_values: [{ field_id: 2097265, values: null }] }], "🔴 «повернути» не на попередній етап");
   assert.match(R.closeNote("Олена Тімлід", "Відмова ОПР: дорого", "2026-10-16T09:00:00Z"), /Олена Тімлід.*«Відмова ОПР: дорого»/, "🔴 примітка без імені чи причини");
   assert.deepEqual(["team_lead", "admin", "kvp", "manager", "ceo", "opdir", "hr", "financier"].map(R.canCloseDeal),
-    [true, true, true, false, false, false, false, false], "🔴 кнопку отримала не та роль");
+    [true, true, true, false, true, false, false, false], "🔴 кнопку отримала не та роль");
 });
 
 /**
@@ -2965,4 +2965,33 @@ test("#4060 ПІДПИС: імʼя з Kommo перемагає ручне імʼ
   assert.equal(await A.actorDisplayName(c.db, null, "fallback"), "fallback");
   const routes = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
   assert.equal((routes.match(/SELECT full_name AS name FROM users WHERE id = \$1/g) ?? []).length, 0, "🔴 роут знову підписує ручним іменем акаунта");
+});
+
+/**
+ * #10780 — СЕО = АДМІН НА «ПЕРШОМУ ДОТИКУ» (Роман 23.11.2026, «роби і викочуй»; план plans/ceo-first-touch/plan.md).
+ * Олександр Ступаківський заходить роллю СЕО (kriptokoval). Роль СЕО лишається своєю, бо в ній 1×1, якого в адміна немає,
+ * тож розширено шість перевірок екрана, а не роль. Дзеркало: ОД, КВП, менеджер, HR, фінансист — як були
+ * (відкрити «всім адмін-рівня» замість СЕО — червоніє).
+ */
+test("#10780 СЕО = АДМІН НА «ПЕРШОМУ ДОТИКУ»: розбір, коментарі, тип, закриття угоди, зворотний звʼязок, месенджер; решта ролей як були", async () => {
+  const { canWriteNote } = await import("./callAiScreen.js");
+  const { canEditType } = await import("./callAiType.js");
+  const { canCloseDeal } = await import("./firstTouchClose.js");
+  const { canSendCallFeedback } = await import("./firstTouchFeedback.js");
+  const { canSeeMessengerSignal } = await import("./firstTouchMessenger.js");
+  const KINDS = ["price", "offline", "missed", "review", "explain"] as const;
+  const profile = (k: string) => [
+    ...KINDS.map((kind) => canWriteNote(k, kind)), canEditType(k), canCloseDeal(k), canSendCallFeedback(k),
+    canSeeMessengerSignal(k, false), canWriteNote(k, "other"),
+  ];
+  assert.deepEqual(profile("admin"), [true, true, true, true, true, true, true, true, true, false], "дзеркало: профіль адміна змінився — гейт треба перечитати");
+  assert.deepEqual(profile("ceo"), profile("admin"), "🔴 СЕО на «Першому дотику» не дорівнює адміну");
+  const before: Record<string, boolean[]> = {
+    opdir: [false, false, false, false, false, false, false, false, false, false],
+    kvp: [false, false, false, false, false, false, true, true, true, false],
+    manager: [true, false, false, false, true, false, false, false, false, false],
+    hr: [false, false, false, false, false, false, false, false, false, false],
+    financier: [false, false, false, false, false, false, false, false, false, false],
+  };
+  for (const [k, p] of Object.entries(before)) assert.deepEqual(profile(k), p, `🔴 права «${k}» на «Першому дотику» змінились разом із СЕО`);
 });
