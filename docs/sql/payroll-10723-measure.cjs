@@ -72,12 +72,12 @@ const NJOIN = `LEFT JOIN managers m ON m.id = u.manager_id`;
     show("Z2b працюють у Наймі БЕЗ акаунта (у Зарплату їх зараз не додати взагалі): імʼя | посада | команда", (await c.query(`
       SELECT e.full_name, e.position, e.team_label FROM employees e
        WHERE e.status = 'active' AND e.user_id IS NULL ORDER BY e.team_label NULLS LAST, e.full_name`)).rows);
-    show("Z2c пошук «Тищенко» у Наймі й акаунтах: джерело | імʼя | статус/активний | посада | у Зарплаті", (await c.query(`
-      SELECT 'naim' AS src, e.full_name AS name, e.status AS st, e.position, EXISTS (SELECT 1 FROM payroll_employees pe WHERE pe.user_id = e.user_id) AS in_zp
-        FROM employees e WHERE e.full_name ILIKE '%тищенко%'
+    show("Z2c пошук «Тищенко» і «Білоус» у Наймі й акаунтах: джерело | імʼя | статус/активний | посада | у Зарплаті", (await c.query(`
+      SELECT 'naim' AS src, e.full_name AS name, e.status AS st, COALESCE(e.position, '∅') || CASE WHEN e.user_id IS NULL THEN ' · БЕЗ акаунта' ELSE ' · акаунт є' END AS position, EXISTS (SELECT 1 FROM payroll_employees pe WHERE pe.user_id = e.user_id) AS in_zp
+        FROM employees e WHERE e.full_name ILIKE ANY (ARRAY['%тищенко%', '%білоус%', '%белоус%'])
       UNION ALL
       SELECT 'user', COALESCE(u.full_name, u.email), u.is_active::text, COALESCE(u.role_override, u.role), EXISTS (SELECT 1 FROM payroll_employees pe WHERE pe.user_id = u.id)
-        FROM users u WHERE COALESCE(u.full_name, '') ILIKE '%тищенко%'`)).rows);
+        FROM users u WHERE COALESCE(u.full_name, '') ILIKE ANY (ARRAY['%тищенко%', '%білоус%', '%белоус%'])`)).rows);
 
     // ── Z3. Команди «Зарплати»
     show("Z3 команди Зарплати: код | назва (рукою) | офер | команда Kommo | тім-лід у Зарплаті | його звільнення | людей без звільнення", (await c.query(`
