@@ -1,27 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./firstTouch.css";
-import { fetchAiCalls, fetchAiCallsMeta, type AiCallsResp, type AiCallsMetaResp } from "../../../api";
-import { AiCallDrawer, ApproveButton, FeedbackButton } from "./AiCallDrawer";
+import { fetchAiCalls, fetchAiCallsMeta, putAiCallNote, hiringError, type AiCallsResp, type AiCallsMetaResp } from "../../../api";
+import { useToast } from "../../../components/Toasts";
+import { AiCallDrawer, ApproveButton } from "./AiCallDrawer";
 import { FirstTouchQueue } from "./FirstTouchQueue";
 import { FirstTouchPriceChart } from "./FirstTouchPriceChart";
 import { ReviewByTeamBlock } from "./ReviewByTeamBlock";
 import { CarrierCallsSection } from "./CarrierCallsSection";
 import { FirstTouchRules } from "./FirstTouchRules";
+import { FirstTouchPane } from "./FirstTouchPane";
+import { useSegInk } from "./useSegInk";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { approveState, approveWaitText, STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
-  PROMISE_UI, GROUP_LABEL, applyListFilter, type ListFilter, type PipelineGroupT,
+import { approveState, approveWaitText, STATE_UI, TONE_COLOR, FILTERS, matchesFilter, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
+  GROUP_LABEL, applyListFilter, type ListFilter, type PipelineGroupT,
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
-  CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes, DECISION_UI,
+  CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes,
   TILE_MATCH, tileStats, priceFormStats, PRICE_FORM_UI, PRICE_FORM_FROM_UA, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS, CLOSURE_UI,
   TRANSPORT_LABEL, type ExcludedFilterT,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
   DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams, excludedLabel, REQUEST_KIND_LABEL, requestKindTab, type RequestKindFilterT,
   priceReasonStats, priceReasonKey, PRICE_REASON_KEY_UA, type PriceReasonKeyT, countsForTeam,
-  reviewBucket, inListMode, LIST_MODE_UA, REVIEW_REASON_UI, type ListModeT, type ReviewReasonT } from "../aiCallsView";
+  reviewBucket, inListMode, LIST_MODE_UA, REVIEW_REASON_UI, type ListModeT, type ReviewReasonT,
+  groupByDay, pickSelected, reviewNoteText } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -49,7 +53,7 @@ function StateChip({ state }: { state: AiCallState }) {
   return <span title={ui.hint} style={{ background: c.bg, color: c.fg, borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap" }}>{ui.label}</span>;
 }
 
-/** Скелет на час завантаження — та сама розкладка, що й екран (смуга, пʼять плиток, менеджери, таблиця), щоб нічого не стрибало. */
+/** Скелет на час завантаження — та сама розкладка, що й екран (смуга, пʼять плиток, менеджери, список і панель розмови), щоб нічого не стрибало. */
 function FirstTouchSkeleton({ header, drawer }: { header: React.ReactNode; drawer: React.ReactNode }) {
   const sk = (w: string | number, h: number, extra: React.CSSProperties = {}) => <span className="ftd-sk" style={{ width: w, height: h, ...extra }} />;
   return (
@@ -66,8 +70,14 @@ function FirstTouchSkeleton({ header, drawer }: { header: React.ReactNode; drawe
       </div>
       <div className="ftd-card" aria-hidden="true">
         <div className="ftd-toolbar">{sk(260, 30, { borderRadius: 8 })}{sk(120, 28, { borderRadius: 999 })}{sk(120, 28, { borderRadius: 999 })}</div>
-        {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "110px 150px minmax(0, 1fr) 90px 110px 80px 70px 90px", gap: 12, padding: "14px 16px", borderTop: "1px solid var(--border)" }}>
-          {sk("90%", 14)}{sk("80%", 14)}{sk("95%", 14)}{sk(70, 14)}{sk(90, 18, { borderRadius: 999 })}{sk(60, 18, { borderRadius: 999 })}{sk(40, 14)}{sk(70, 14)}</div>)}
+        <div className="ftd-two" style={{ borderTop: "1px solid var(--border)" }}>
+          <div className="ftd-list" style={{ overflow: "hidden" }}>
+            {[0, 1, 2, 3, 4].map((i) => <div key={i} style={{ display: "grid", gap: 8, padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+              {sk("55%", 14)}{sk("100%", 12)}{sk("80%", 12)}{sk(120, 18, { borderRadius: 999 })}</div>)}
+          </div>
+          <div className="ftd-pane">
+            {sk("40%", 20)}{sk("96%", 14, { marginTop: 22 })}{sk("92%", 14, { marginTop: 10 })}{sk("70%", 14, { marginTop: 10 })}{sk("100%", 96, { marginTop: 22, borderRadius: 8 })}{sk(150, 38, { marginTop: 22, borderRadius: 8 })}</div>
+        </div>
       </div>
       <span className="ftd-sr">Завантаження…</span>
       {drawer}
@@ -132,6 +142,18 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
   const [techOpen, setTechOpen] = useState(false);
   const techRef = useRef<HTMLDetailsElement | null>(null);
   const [q, setQ] = useState("");
+  // 🪟 «Розбір у два вікна» (Роман 23.11.2026, макет А): обрана розмова — у правій панелі. `orderRef` памʼятає порядок
+  // списку з минулого рендера: коли обрана зникає (погодили), праворуч стає НАСТУПНА за нею, а не перша (`pickSelected`).
+  const [sel, setSel] = useState<string | null>(null);
+  const orderRef = useRef<string[]>([]);
+  const wantSel = useRef<string | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // Погодження з панелі: рядок виїжджає зі списку (`leaving`), унизу списку кілька секунд висить «Скасувати» (`undo`).
+  const [leaving, setLeaving] = useState<string | null>(null);
+  const [undo, setUndo] = useState<{ uniqueid: string; label: string } | null>(null);
+  const undoTimer = useRef<number | null>(null);
+  const [apBusy, setApBusy] = useState(false);
+  const toast = useToast();
   // Згортання блоку «Менеджери за чек-листом» — пам'ятаємо в браузері (лише зручність, не дані).
   const [mgrCollapsed, setMgrCollapsed] = useState<boolean>(() => { try { return localStorage.getItem("ftd.mgrCollapsed") === "1"; } catch { return false; } });
   const toggleMgr = () => setMgrCollapsed((v) => { try { localStorage.setItem("ftd.mgrCollapsed", v ? "0" : "1"); } catch { /* приватне вікно */ } return !v; });
@@ -159,6 +181,9 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
 
   // ТЗ 30.09.2026: «Звіт» — запити на перевезення (і непевні з позначкою), «Виключені» — решта, з фільтром за типом.
   const [tab, setTab] = useState<ListTab>("report");
+  // 🎚 Повзунки перемикачів (вкладки екрана й кошики списку) — переїжджають під активну кнопку (`useSegInk`).
+  const pagesInk = useSegInk<HTMLDivElement>(page);
+  const modeInk = useSegInk<HTMLDivElement>(`${page}|${String(mode)}|${tab}|${d ? String(d.rows.length) : "-"}|${String(reload)}`);
   const [exType, setExType] = useState<ExcludedFilterT>("all");
   const scopedAll = useMemo(() => (d ? applyListFilter(d.rows, lf) : []), [d, lf]);
   const scoped = useMemo(() => tabRows(scopedAll, tab, exType), [scopedAll, tab, exType]);
@@ -176,7 +201,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
   // 🧭 Вкладки екрана — у шапці, щоб і «Перевізники» (свій період і свої фільтри) відкривались з того самого місця.
   const pages: FtPageT[] = canSeeCarriers ? ["ctrl", "an", "car"] : ["ctrl", "an"];
   const pageTabs = (
-    <div className="ftd-seg ftd-pages" role="tablist" aria-label="Вкладки «Першого дотику»">
+    <div className="ftd-seg ftd-pages" role="tablist" aria-label="Вкладки «Першого дотику»" ref={pagesInk}>
       {pages.map((k) => <button key={k} type="button" role="tab" aria-selected={page === k} className={page === k ? "on" : ""} onClick={() => setPage(k)}>{FT_PAGE_UA[k]}</button>)}
     </div>
   );
@@ -303,6 +328,57 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
     && (fApprove === "all" || (r.needsReview && (fApprove === "can" ? r.managerCommented : !r.managerCommented)))
     && (reasonPick == null || (TILE_MATCH.noPrice(r) && priceReasonKey(r) === reasonPick))
     && (!needle || `${r.summary ?? ""} ${r.managerName ?? ""} ${r.priceValue ?? ""}`.toLowerCase().includes(needle)));
+  // 🪟 Обрана розмова правої панелі. Рахується на рендері, без ефекту: список і вибір мусять зійтись в одному кадрі.
+  const dayGroups = groupByDay(shownD, today);
+  const shownIds = dayGroups.flatMap((g) => g.rows.map((r) => r.uniqueid));
+  let curId = pickSelected(orderRef.current, shownIds, sel);
+  if (wantSel.current && shownIds.includes(wantSel.current)) { curId = wantSel.current; wantSel.current = null; }
+  orderRef.current = shownIds;
+  if (curId !== sel) setSel(curId);
+  const cur = shownD.find((r) => r.uniqueid === curId) ?? null;
+  // На вузькому екрані панель не влазить (CSS її ховає) — розмова відкривається повною карткою, як раніше.
+  const narrow = () => window.matchMedia("(max-width: 900px)").matches;
+  const pickRow = (uniqueid: string) => { if (narrow()) setOpen(uniqueid); else setSel(uniqueid); };
+  const focusRow = (uniqueid: string) => listRef.current?.querySelector<HTMLElement>(`[data-u="${CSS.escape(uniqueid)}"]`)?.focus();
+  // ✅ «Погоджую» з панелі: той самий запис, що в списку, черзі й картці (`review` + `reviewNoteText(true)`, задача 9229).
+  // Рядок виїжджає лише там, де розмова справді покине список («Потребує дії», «Закриті без розбору»).
+  const approvePane = async (uniqueid: string) => {
+    const row = shownD.find((r) => r.uniqueid === uniqueid);
+    if (!row || apBusy) return;
+    setApBusy(true);
+    try {
+      await putAiCallNote(uniqueid, "review", reviewNoteText(true));
+      if (listMode === "need" || listMode === "closed") {
+        setLeaving(uniqueid);
+        setSel(pickSelected(shownIds, shownIds.filter((x) => x !== uniqueid), uniqueid));
+      }
+      setUndo({ uniqueid, label: `${row.managerName ?? "менеджер невідомий"}, ${fmtTime(row.calledAt)}` });
+      if (undoTimer.current != null) window.clearTimeout(undoTimer.current);
+      undoTimer.current = window.setTimeout(() => setUndo(null), 8000);
+      window.setTimeout(() => setReload((x) => x + 1), 300);
+    } catch (e) { toast(hiringError(e)); }
+    setApBusy(false);
+  };
+  // ↩ «Скасувати»: порожній текст знімає позначку «Розібрано» — сервер дозволяє це завжди (routes/dashboard.ts, PUT note).
+  const undoApprove = async () => {
+    if (!undo) return;
+    const u = undo.uniqueid;
+    setUndo(null); setLeaving(null);
+    try { await putAiCallNote(u, "review", ""); wantSel.current = u; setReload((x) => x + 1); } catch (e) { toast(hiringError(e)); }
+  };
+  // ⌨️ Стрілки ходять по розмовах, Enter погоджує обрану (коли це можна). Клавіші всередині кнопок і полів не чіпаємо.
+  const onListKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest("button, a, input, textarea, select")) return;
+    const i = shownIds.indexOf(curId ?? "");
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const nx = shownIds[i + (e.key === "ArrowDown" ? 1 : -1)];
+      if (nx) { e.preventDefault(); setSel(nx); focusRow(nx); }
+    } else if (e.key === "Enter" && cur) {
+      e.preventDefault();
+      if (narrow()) setOpen(cur.uniqueid);
+      else if (approveState(cur, d.canReview)?.kind === "can") void approvePane(cur.uniqueid);
+    }
+  };
   // Плитки, рядки й чіпи «Аналітики» ведуть у список «Контролю» («натиснув — висвітлилось, які саме»).
   const goList = () => { setTab("report"); setMode("all"); setPage("ctrl"); window.setTimeout(() => tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }), 0); };
   const pickTile = (k: TileKey) => { setPreset(preset === k ? "all" : k); goList(); };
@@ -340,7 +416,6 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
       <i style={{ width: `${String(v ?? 0)}%` }} />{goal != null && <b className="ftd-goal" style={{ left: `${String(goal)}%` }} title={`ціль ${String(goal)} %`} />}
       <span>{v == null ? "—" : `${String(v)}%`}</span></div>
   );
-  const cell: React.CSSProperties = {};
 
   return (
     <>
@@ -354,7 +429,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
             <section aria-label="Черга розбору" className={`ftd-strip${glow ? " is-glow" : ""}`}>
               <div style={{ flex: "1 1 320px" }}>
                 <div className="ftd-strip-k">Точка контролю · ціль 0</div>
-                <div className="ftd-strip-h">Потребує дії: <b>{needNow.length}</b> розмов · розібрано {reviewedN} з {dueTotal}</div>
+                <div className="ftd-strip-h">Потребує дії: <b><AnimatedNumber value={needNow.length} /></b> розмов · розібрано {reviewedN} з {dueTotal}</div>
                 <div className="ftd-progress"><i style={{ width: `${String(dueTotal ? Math.round((reviewedN / dueTotal) * 100) : 0)}%` }} /></div>
                 {closedNoReview.length > 0 && (
                   <button type="button" className="ftd-strip-closed" onClick={() => { setTab("report"); setMode("closed"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); }}
@@ -375,7 +450,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
 
           <section aria-label="Розмови" className="ftd-card" ref={tableRef}>
             <div className="ftd-toolbar">
-              <div className="ftd-seg" role="tablist" aria-label="Режим списку">
+              <div className="ftd-seg" role="tablist" aria-label="Режим списку" ref={modeInk}>
                 {(d.canReview ? (["need", "closed", "reviewed", "all"] as const) : (["all"] as const)).map((m) => (
                   <button key={m} type="button" role="tab" aria-selected={tab === "report" && listMode === m} className={tab === "report" && listMode === m ? "on" : ""}
                     onClick={() => { setTab("report"); setMode(m); }}>{LIST_MODE_UA[m]} {modeCount(m)}</button>
@@ -416,27 +491,23 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
               <input id="ai-search" type="search" className="ftd-search" placeholder="Пошук: менеджер, маршрут, сума" value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
             {d.truncated && <div className="ftd-filters"><span style={{ color: "var(--warn-fg, #8a5a00)" }}>Показано перші 5 000 — звузьте період.</span></div>}
-            <div style={{ overflowX: "auto" }}>
-              {shownD.length === 0
-                ? <p style={{ margin: 0, padding: 16, color: "var(--text-muted)" }}>{rows.length === 0 ? "У періоді немає перших розмов по рекламних угодах." : listMode === "need" && tab === "report" && preset === "all" ? "Потребує дії: 0 — усе розібрано." : "Під цей фільтр розмов немає."}</p>
-                : (
-                  <table className="ftd-table">
-                    <thead>
-                      <tr>
-                        <th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Про що (AI)</th><th style={cell}>Чек-лист</th>
-                        <th style={cell} title="Чим закінчилась розмова після названої ціни. Окрема інформація — у бал не входить.">Після ціни</th>
-                        <th style={cell}>Обіцянка</th><th style={cell}>Успіх</th><th style={cell}>Реакція</th><th style={cell}>Розбір</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {shownD.map((r) => (
-                        <tr key={r.uniqueid} className="ftd-row" tabIndex={0} aria-label={`Відкрити розмову ${fmtTime(r.calledAt)}`}
-                          onClick={() => setOpen(r.uniqueid)} onKeyDown={(e) => { if (e.key === "Enter") setOpen(r.uniqueid); }}>
-                          <td style={{ whiteSpace: "nowrap" }}><b>{fmtTime(r.calledAt)}</b><div className="ftd-sub">{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}</div></td>
-                          <td style={{ whiteSpace: "nowrap" }}>{r.managerName ?? "невідомий"}<div className="ftd-sub">{r.teamName ?? ""}</div></td>
-                          <td style={{ maxWidth: 380 }}>
+            {shownD.length === 0
+              ? <p style={{ margin: 0, padding: 16, color: "var(--text-muted)" }}>{rows.length === 0 ? "У періоді немає перших розмов по рекламних угодах." : listMode === "need" && tab === "report" && preset === "all" ? "Потребує дії: 0 — усе розібрано." : "Під цей фільтр розмов немає."}</p>
+              : (
+                <div className="ftd-two">
+                  {/* 🪟 Ліве вікно: розмови групами по київських днях; опис — два рядки, повний текст — праворуч. */}
+                  <div className="ftd-list" ref={listRef} role="listbox" aria-label="Розмови" onKeyDown={onListKey}>
+                    {dayGroups.map((g) => (
+                      <div key={g.day} role="group" aria-label={g.label}>
+                        <div className="ftd-day">{g.label} <span className="ftd-sub">· {g.rows.length}</span></div>
+                        {g.rows.map((r) => (
+                          <div key={r.uniqueid} role="option" aria-selected={r.uniqueid === curId} tabIndex={r.uniqueid === curId ? 0 : -1} data-u={r.uniqueid}
+                            className={`ftd-row ftd-li${r.uniqueid === curId ? " on" : ""}${leaving === r.uniqueid && r.needsReview ? " is-leaving" : ""}`}
+                            aria-label={`Розмова ${fmtTime(r.calledAt)}, ${r.managerName ?? "менеджер невідомий"}`} onClick={() => pickRow(r.uniqueid)}>
+                            <span className="ftd-li-who">{r.managerName ?? "менеджер невідомий"}</span>
+                            <span className="ftd-li-when">{fmtTime(r.calledAt)}</span>
                             {(r.typeCheck || !r.inReport || r.typeOverride) && (
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 3 }}>
+                              <div className="ftd-li-flags">
                                 {r.typeCheck && <span className="ftd-chip" title={r.conversationType ? `Модель не впевнена в типі (${TYPE_LABEL[r.conversationType]}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}` : r.typeReason ?? "Тип не визначено"}
                                   style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>Перевірити тип</span>}
                                 {r.messengerSignal === true && <span className="ftd-chip" title="Менеджер сам запропонував перейти в месенджер — клієнт не просив (задача 7184)" style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg }}>сам запропонував месенджер</span>}
@@ -446,31 +517,16 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
                                 {r.typeOverride && <span className="ftd-sub">позначено вручну{r.typeOverride.byName ? ` · ${r.typeOverride.byName}` : ""}</span>}
                               </div>
                             )}
-                            {r.summary ?? <span className="ftd-sub">—</span>}
-                          </td>
-                          <td>{r.state === "done" && r.checklist
+                            <p className="ftd-li-sum">{r.summary ?? <span className="ftd-sub">опису ще немає</span>}</p>
+                            <div className="ftd-li-meta">
+                              {r.reviewReason && <span className="ftd-chip" style={{ background: TONE_COLOR[REVIEW_REASON_UI[r.reviewReason].tone].bg, color: TONE_COLOR[REVIEW_REASON_UI[r.reviewReason].tone].fg }}>{REVIEW_REASON_UI[r.reviewReason].label}</span>}
+                              {r.state === "done" && r.checklist
                             ? <span className="ftd-dots" title={CHECK_ITEMS.map((it) => `${it.label}: ${CHECK_MARK_UI[r.checklist![it.key]].label}`).join(" · ")}>
                                 {CHECK_ITEMS.map((it) => <i key={it.key} style={{ background: CHECK_MARK_UI[r.checklist![it.key]].color }} />)}
                                 <b>{scoreLabel(r.checkScore) ?? "—"}</b>
                               </span>
-                            : r.state === "done" ? null : <StateChip state={r.state} />}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>{r.clientDecision
-                            ? <span className="ftd-chip" title={`${DECISION_UI[r.clientDecision.value].hint}${r.clientDecision.quote ? ` Клієнт: «${r.clientDecision.quote}»` : ""}`}
-                                style={{ background: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].bg, color: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].fg }}>
-                                <b aria-hidden="true">{DECISION_UI[r.clientDecision.value].mark}</b> {DECISION_UI[r.clientDecision.value].label}</span>
-                            : r.checklist?.price === "y"
-                              ? <span className="ftd-sub" title="Згода після ціни розбирається для розмов від 13.10.2026">не розбиралось</span>
-                              : <span className="ftd-sub" title="Ціну в розмові не назвали — згоди питати нема про що">—</span>}</td>
-                          <td>{r.state !== "done" ? "—" : r.promiseState
-                            ? <span className="ftd-chip" title={PROMISE_UI[r.promiseState].hint} style={{ background: TONE_COLOR[PROMISE_UI[r.promiseState].tone].bg, color: TONE_COLOR[PROMISE_UI[r.promiseState].tone].fg }}>{PROMISE_UI[r.promiseState].label}</span>
-                            : <span className="ftd-sub">немає</span>}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>{!r.dealOutcome ? "—"
-                            : <span className="ftd-chip" title={r.dealOutcome.lossReason ? `Причина відмови в CRM: ${r.dealOutcome.lossReason}` : undefined}
-                                style={{ background: TONE_COLOR[r.dealOutcome.state === "success" ? "ok" : r.dealOutcome.state === "lost" ? "muted" : "wait"].bg,
-                                  color: TONE_COLOR[r.dealOutcome.state === "success" ? "ok" : r.dealOutcome.state === "lost" ? "muted" : "wait"].fg }}>
-                                {r.dealOutcome.state === "success" ? "успіх" : r.dealOutcome.state === "lost" ? "відмова" : "у роботі"}</span>}</td>
-                          <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{r.reactionMin == null ? "—" : fmtMinutes(r.reactionMin)}{r.reactionOffHours ? <div className="ftd-sub">поза роб. часом</div> : null}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>{r.reviewNote
+                            : r.state === "done" ? null : <StateChip state={r.state} />}
+                              <div className="ftd-li-rev">{r.reviewNote
                             ? <span style={{ color: "var(--ok, #166534)" }}>{r.reviewNote.byName ?? "розібрано"} · {new Date(r.reviewNote.at).toLocaleDateString("uk-UA", { day: "2-digit", month: "2-digit", timeZone: "Europe/Kyiv" })}</span>
                             : r.missedNote ? <span style={{ color: "var(--ok, #166534)" }}>опрацьовано</span>
                             : r.reviewClosure === "invoice" ? <span style={{ color: "var(--ok, #166534)" }} title={CLOSURE_UI.invoice.hint}>{CLOSURE_UI.invoice.label}</span>
@@ -478,19 +534,32 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
                             : r.needsReview ? reviewTodoCell(r)
                             : <span className="ftd-sub">—</span>}
                             {/* 💬 Задача 7183: чим закрито — «погоджено коментар» / «закрито тімлідом». */}
-                            {r.reviewClosure && r.reviewClosure !== "invoice" && <div className="ftd-sub" title={CLOSURE_UI[r.reviewClosure].hint}>{CLOSURE_UI[r.reviewClosure].label}</div>}
-                            {d.canFeedback && <div style={{ marginTop: 4 }}><FeedbackButton uniqueid={r.uniqueid} small /></div>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-            </div>
+                            {r.reviewClosure && r.reviewClosure !== "invoice" && <div className="ftd-sub" title={CLOSURE_UI[r.reviewClosure].hint}>{CLOSURE_UI[r.reviewClosure].label}</div>}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                  {/* 🪟 Праве вікно: обрана розмова. `key` — щоб панель «вʼїжджала» на кожну нову розмову. */}
+                  <div className="ftd-pane" aria-label="Обрана розмова">
+                    {cur && <FirstTouchPane key={cur.uniqueid} row={cur} canReview={d.canReview} canFeedback={d.canFeedback} busy={apBusy}
+                      onApprove={() => void approvePane(cur.uniqueid)} onOpenCard={() => setOpen(cur.uniqueid)} />}
+                  </div>
+                </div>
+              )}
+            {/* ↩ «Скасувати» висить унизу екрана кілька секунд після погодження — і тоді, коли список став порожнім. */}
+            {undo && (
+              <div className="ftd-undo" role="status">
+                <span>Погоджено: {undo.label}</span>
+                <button type="button" onClick={() => void undoApprove()}>Скасувати</button>
+              </div>
+            )}
             <div className="ftd-foot">
               <div><b>Ціна названа → успіх:</b> {split.named.n} з {split.named.of}{split.enough ? ` (${String(Math.round((split.named.n / Math.max(1, split.named.of)) * 100))}%)` : ""}
                 {" · "}<b>не названа → успіх:</b> {split.notNamed.n} з {split.notNamed.of}{split.enough ? ` (${String(Math.round((split.notNamed.n / Math.max(1, split.notNamed.of)) * 100))}%)` : ""}
                 {!split.enough && <span> — замало угод для висновку: відсотки зʼявляться, коли в кожній групі буде від {SUCCESS_MIN_FOR_PCT} успішних.</span>}</div>
-              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку — картка розмови; розбір черги — кнопкою «Почати розбір» у смузі «Точка контролю».</div>
+              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не рахується). Клік по розмові показує її праворуч; запис і текст розмови — у «Повній картці»; розбір з плеєром — кнопкою «Почати розбір» у смузі «Точка контролю».</div>
             </div>
           </section>
           {/* ⚙️ Задача 10734 п.2 (Олександр 20.11, 37:57; Сергій 43:48): технічне — вниз, згорнуто. */}

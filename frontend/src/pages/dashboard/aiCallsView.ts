@@ -837,3 +837,52 @@ export function priceFormStats(rows: readonly TileRow[]): { lines: PriceFormLine
   });
   return { lines, analysed: named.length, unknown: named.length - lines.reduce((s, l) => s + l.n, 0) };
 }
+
+/**
+ * 🪟 «РОЗБІР У ДВА ВІКНА» (Роман 23.11.2026, макет А): список розмов ліворуч, обрана розмова праворуч.
+ *
+ * `kyivDay` — день розмови ЗА КИЄВОМ (правило проєкту: дати завжди по-київськи). Розмова о 23:30 UTC — це вже наступний
+ * київський день; групувати за UTC означало б покласти вечірні розмови під учорашній підзаголовок.
+ */
+export function kyivDay(iso: string): string {
+  return new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+}
+const WEEKDAY_UA = ["неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"] as const;
+/** Підзаголовок дня у списку: «Сьогодні, 23.11» · «Вчора, 22.11» · «21.11, субота». `today` — київська дата `YYYY-MM-DD`. */
+export function dayLabelUa(day: string, today: string): string {
+  const [y, m, dd] = day.split("-").map(Number);
+  const short = `${String(dd).padStart(2, "0")}.${String(m).padStart(2, "0")}`;
+  const t = Date.UTC(y, m - 1, dd);
+  const [ty, tm, td] = today.split("-").map(Number);
+  const diff = Math.round((Date.UTC(ty, tm - 1, td) - t) / 86400000);
+  if (diff === 0) return `Сьогодні, ${short}`;
+  if (diff === 1) return `Вчора, ${short}`;
+  return `${short}, ${WEEKDAY_UA[new Date(t).getUTCDay()]}`;
+}
+/**
+ * Розмови одного київського дня — ОДНА група, навіть коли у вхідному списку вони йдуть не підряд (сервер сортує не за
+ * часом розмови). Дні — від найсвіжішого; усередині дня порядок рядків як прийшов. Список на екрані й хід стрілками
+ * беруть порядок саме звідси (`groups.flatMap(g => g.rows)`), інакше стрілка «вниз» стрибала б між днями.
+ */
+export function groupByDay<T extends { calledAt: string }>(rows: readonly T[], today: string): { day: string; label: string; rows: T[] }[] {
+  const by = new Map<string, T[]>();
+  for (const r of rows) {
+    const day = kyivDay(r.calledAt);
+    const g = by.get(day);
+    if (g) g.push(r); else by.set(day, [r]);
+  }
+  return [...by.entries()].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0)).map(([day, rs]) => ({ day, label: dayLabelUa(day, today), rows: rs }));
+}
+/**
+ * Яку розмову показувати праворуч. Обрана ще в списку — вона. Обрана ЗНИКЛА (погодили, змінили фільтр) — найближча
+ * наступна з попереднього порядку, що лишилась; за нею — найближча попередня. Не «завжди перша»: після погодження
+ * третьої тімлід має опинитись на четвертій, а не стрибнути на початок списку.
+ */
+export function pickSelected(prevOrder: readonly string[], shown: readonly string[], selected: string | null): string | null {
+  if (shown.length === 0) return null;
+  if (selected != null && shown.includes(selected)) return selected;
+  const i = selected == null ? -1 : prevOrder.indexOf(selected);
+  if (i < 0) return shown[0];
+  const keep = new Set(shown);
+  return [...prevOrder.slice(i + 1), ...prevOrder.slice(0, i).reverse()].find((id) => keep.has(id)) ?? shown[0];
+}

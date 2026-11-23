@@ -214,3 +214,71 @@
 .ftd-fdrop-h:first-child { margin-top: 0; }
 .ftd-tech > summary { cursor: pointer; font-size: 14px; }
 .ftd-tech .ftd-meta { margin: 10px 0 0; }
+
+/* ═══ 🪟 «РОЗБІР У ДВА ВІКНА» (Роман 23.11.2026, макет А) ═══
+   Список розмов ліворуч, обрана розмова праворуч. У таблиці на 9 колонок опису лишалось ~250 px і чотири речення
+   розтягувались на 18 рядків; тепер у списку опис обрізано до ДВОХ рядків, а повний текст стоїть у панелі. */
+.ftd-two { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); align-items: start; }
+.ftd-list { border-right: 1px solid var(--border); max-height: calc(100vh - 110px); min-height: 360px; overflow-y: auto; position: relative; }
+.ftd-day { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 5px 16px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--border); }
+.ftd-li { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 11px 14px 12px 16px; border-bottom: 1px solid var(--border);
+  cursor: pointer; max-height: 320px; transition: background 150ms ease, max-height 300ms cubic-bezier(.2,.8,.2,1), opacity 220ms ease, transform 300ms cubic-bezier(.2,.8,.2,1), padding 300ms cubic-bezier(.2,.8,.2,1); }
+.ftd-li:hover { background: var(--bg); }
+.ftd-li:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.ftd-li::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--brand); transform: scaleY(0); transition: transform 220ms cubic-bezier(.2,.8,.2,1); }
+.ftd-li.on { background: #fff7f7; }
+.ftd-li.on::before { transform: scaleY(1); }
+:root[data-theme="dark"] .ftd-li.on { background: #2a1416; }
+/* Погоджена розмова виїжджає зі списку: видно, що зник саме цей рядок, а не «щось перемалювалось». */
+.ftd-li.is-leaving { max-height: 0; opacity: 0; transform: translateX(28px); padding-top: 0; padding-bottom: 0; border-bottom-width: 0; overflow: hidden; pointer-events: none; }
+.ftd-li-who { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ftd-li-when { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ftd-li-flags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.ftd-li-sum { grid-column: 1 / -1; margin: 3px 0 6px; font-size: 13px; line-height: 1.45; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.ftd-li-meta { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 12px; }
+.ftd-li-meta .ftd-dots i { width: 11px; height: 11px; }
+.ftd-li-rev { margin-left: auto; text-align: right; }
+.ftd-pane { position: sticky; top: 8px; min-width: 0; max-height: calc(100vh - 110px); overflow-y: auto; padding: 18px 22px 16px; }
+.ftd-pane-in { display: flex; flex-direction: column; gap: 8px; animation: ftd-pane-in 240ms cubic-bezier(.2,.8,.2,1); }
+@keyframes ftd-pane-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+.ftd-pane-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 14px; }
+.ftd-pane h3 { margin: 0; font-size: 19px; font-weight: 800; }
+.ftd-pane h4 { margin: 10px 0 0; font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+/* Повний опис: без обрізки, рядок не довший за ~68 знаків — так його читають, а не сканують. */
+.ftd-pane-text { margin: 0; font-size: 15px; line-height: 1.6; max-width: 68ch; }
+.ftd-pane-facts { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.ftd-pane-note { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+.ftd-pane-note.is-empty { color: var(--text-muted); background: var(--bg); }
+/* Кнопки тримаються внизу панелі, навіть коли чек-лист довший за екран: «прочитав і погодив» без прокрутки до кнопки. */
+.ftd-pane-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; padding: 12px 0 16px; border-top: 1px solid var(--border);
+  position: sticky; bottom: -16px; z-index: 1; background: var(--card-bg); }
+.ftd-pane-keys { margin-left: auto; }
+.ftd-approve { border: 0; background: var(--brand); color: #fff; font-weight: 700; padding: 0 18px; display: inline-flex; align-items: center; gap: 8px; }
+.ftd-approve:hover:not(:disabled) { background: var(--brand-dark); }
+.ftd-kbd { font: 11px/1.5 var(--sans); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; background: var(--card-bg); color: var(--text-muted); }
+.ftd-approve .ftd-kbd { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.4); color: #fff; }
+.ftd-undo { position: fixed; left: 50%; bottom: 22px; z-index: 50; translate: -50% 0; display: flex; align-items: center; gap: 14px; padding: 10px 12px 10px 16px; border-radius: 10px;
+  background: #16181d; color: #fff; font-size: 14px; box-shadow: 0 14px 34px -10px rgba(22,24,29,.5); animation: ftd-undo-in 260ms cubic-bezier(.2,.8,.2,1); }
+.ftd-undo button { border: 0; background: #2f333c; color: #fff; border-radius: 7px; padding: 5px 10px; font: inherit; cursor: pointer; }
+@keyframes ftd-undo-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* 🎚 Повзунок перемикача (`useSegInk`): біла плашка переїжджає під активну кнопку. */
+.ftd-seg.has-ink { position: relative; }
+.ftd-seg.has-ink::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 0; width: var(--ink-w, 0); transform: translateX(var(--ink-x, 0)); border-radius: 6px;
+  background: var(--card-bg); box-shadow: var(--shadow); transition: transform 320ms cubic-bezier(.2,.8,.2,1), width 320ms cubic-bezier(.2,.8,.2,1); }
+.ftd-seg.has-ink button { position: relative; z-index: 1; }
+.ftd-seg.has-ink button.on { background: transparent; box-shadow: none; }
+/* Перемикання вкладки: блоки сторінки зʼявляються разом, одним рухом. «Фільтр ▾» і «Технічне» виростають з кнопки. */
+.ftd-over > section, .ftd-over > details { animation: ftd-page-in 240ms cubic-bezier(.2,.8,.2,1); }
+@keyframes ftd-page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.ftd-fdrop[open] > .ftd-fdrop-body { transform-origin: 14px 0; animation: ftd-pop 180ms cubic-bezier(.2,.8,.2,1); }
+@keyframes ftd-pop { from { opacity: 0; transform: scale(.94) translateY(-4px); } to { opacity: 1; transform: none; } }
+.ftd-tech[open] > :not(summary) { animation: ftd-page-in 240ms cubic-bezier(.2,.8,.2,1); }
+@media (max-width: 900px) {
+  .ftd-two { grid-template-columns: minmax(0, 1fr); }
+  .ftd-list { border-right: 0; max-height: none; }
+  .ftd-pane { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ftd-li, .ftd-li::before, .ftd-seg.has-ink::before { transition: none; }
+  .ftd-pane-in, .ftd-undo, .ftd-over > section, .ftd-over > details, .ftd-fdrop[open] > .ftd-fdrop-body, .ftd-tech[open] > :not(summary) { animation: none; }
+}
