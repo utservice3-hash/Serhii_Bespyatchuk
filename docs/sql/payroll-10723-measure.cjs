@@ -11,6 +11,7 @@
 //   Z4  рівень «Старт/Профі»: «Зарплата» (payroll_terms) проти «Найму» (employee_levels) — розбіжності
 //   Z5  задачі рекрутеру «Перепідписати офер»: скільки, чому, підписано / анульовано / відкрито
 //   Z6  дні народження: чинне правило проти правила з ТЗ, по місяцях листопад 2026 … жовтень 2027
+//   Z8  дата виходу і ДН: Зарплата проти Найму (стаж для ДН рахується від дати виходу в Зарплаті)
 //   Z7  одноразові рядки фінансиста («Премія», «Корекція ±», «Утримання», «Податки») — чи ними вже користуються
 const fs = require("node:fs");
 const { createRequire } = require("node:module");
@@ -138,6 +139,17 @@ const NJOIN = `LEFT JOIN managers m ON m.id = u.manager_id`;
     }
     show("Z6 по місяцях: місяць | працює | іменинників | з них стаж < року | ДН зараз: подарунки всього | зараз: зібрано з колег | ТЗ: подарунки всього | ТЗ: 100 ₴ × усі", rows6);
     show("Z6b іменинники листопада й грудня: місяць | імʼя | роль | стаж, міс | зараз ₴ | за ТЗ ₴", people6);
+
+    // ── Z8. Від чого залежить стаж і дата ДН: «Зарплата» проти «Найму» (дат народження не друкуємо — лише чи збігаються)
+    show("Z8 дата виходу або ДН у Зарплаті не збігається з Наймом: імʼя | вихід у Зарплаті | вихід у Наймі | ДН збігається", (await c.query(`
+      SELECT ${NAME} AS name, to_char(pe.start_date, 'YYYY-MM-DD') AS zp_start, to_char(e.hired_at, 'YYYY-MM-DD') AS naim_start,
+             CASE WHEN pe.birthday_md IS NULL OR e.birth_date IS NULL THEN 'нема з одного боку'
+                  WHEN pe.birthday_md = to_char(e.birth_date, 'MM-DD') THEN 'так' ELSE 'НІ' END AS bd_same
+        FROM payroll_employees pe JOIN users u ON u.id = pe.user_id ${NJOIN}
+        JOIN LATERAL (SELECT * FROM employees x WHERE x.user_id = pe.user_id ORDER BY x.id DESC LIMIT 1) e ON true
+       WHERE NOT EXISTS (SELECT 1 FROM payroll_leaves l WHERE l.user_id = pe.user_id)
+         AND (e.hired_at IS DISTINCT FROM pe.start_date OR pe.birthday_md IS DISTINCT FROM to_char(e.birth_date, 'MM-DD'))
+       ORDER BY 1`)).rows);
 
     // ── Z7. Одноразові рядки фінансиста
     show("Z7 рядки «Премії, утримання» у Перевірці: місяць | вид | скільки | сума", (await c.query(`
