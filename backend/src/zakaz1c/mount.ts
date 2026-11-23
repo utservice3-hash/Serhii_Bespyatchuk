@@ -67,15 +67,17 @@ const testMark = (mode: string) => (mode === "test" ? "[ТЕСТ] " : "");
 
 /** Організації для вікна: правила + що можна виставити зараз + банки ФОП з 1С. Сервер перевіряє те саме ще раз. */
 function orgsForWindow(banks: Map<string, BankAccount[]> | null) {
-  return orgRules(banks).map((o) => {
+  return orgRules().map((o) => {
     const own = o.needsBank && o.code ? (banks?.get(o.code) ?? null) : null;
     const noBanks = o.needsBank && (!own || own.length === 0);
     return {
       key: o.key, short: o.short, name: o.name, match: o.match, available: !!o.code && !noBanks,
-      waits: o.waits ?? (noBanks ? ONEC_WAITS.fopBanks : null),
+      waits: o.waits ?? (noBanks ? (o.noBanksWaits ?? ONEC_WAITS.fopBanks) : null),
       vatTypes: vatTypesFor(o), itemVats: itemVatsFor(o), services: servicesFor(o.key).map((x) => x.name),
       servicesEn: Object.fromEntries(servicesFor(o.key).filter((x) => x.en).map((x) => [x.name, x.en])),
-      banks: own ? own.map((b) => ({ uid: b.uid, label: b.bank || b.name, currency: b.currency, isMain: b.isMain })) : null,
+      // Єдиний рахунок у валюті — обраний одразу (у «Облік сейфу» основний у 1С не вказано: лист 1С 23.11.2026).
+      banks: own ? own.map((b) => ({ uid: b.uid, label: b.bank || b.name, currency: b.currency,
+        isMain: b.isMain || own.filter((x) => x.currency === b.currency).length === 1 })) : null,
     };
   });
 }
@@ -293,8 +295,8 @@ export function buildZakaz1cRouter(): Router {
     const leadId = leadIdOf(req);
     if (!leadId) return res.status(400).json({ error: "Некоректний номер угоди." });
     const today = kyivIso();
+    const orgs = orgRules();
     const banks = await organizationsFrom1c(onecServiceBase());
-    const orgs = orgRules(banks);
     const parsed = parseInvoiceForm(req.body, { today, orgs, banksOf: (c) => banks?.get(c) ?? [] });
     if (!parsed.ok) return res.status(400).json({ error: parsed.why });
     const form = parsed.form;
@@ -367,8 +369,8 @@ export function buildZakaz1cRouter(): Router {
     const row = (await listInvoices(pool, leadId, today)).find((x) => x.invoice_uid === uid);
     if (!row) return res.status(404).json({ error: "Рахунок не з цієї угоди." });
     if (!row.can_edit) return res.status(409).json({ error: ONEC_WAITS.edit });
+    const orgs = orgRules();
     const banks = await organizationsFrom1c(onecServiceBase());
-    const orgs = orgRules(banks);
     const parsed = parseInvoiceForm(req.body, { today, orgs, banksOf: (c) => banks?.get(c) ?? [] });
     if (!parsed.ok) return res.status(400).json({ error: parsed.why });
     const form = parsed.form;

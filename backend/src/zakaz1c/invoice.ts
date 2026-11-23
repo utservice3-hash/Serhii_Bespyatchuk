@@ -41,15 +41,11 @@ export interface OrgRule {
   /** ФОП приймає оплату на кілька рахунків — без явного банку 1С обрала б будь-який (основний не вказано). */
   needsBank?: boolean;
   waits?: string;
+  /** Що сказати, коли `needsBank`, а 1С рахунків не віддала (за замовчуванням — «1С не віддала рахунки ФОП»). */
+  noBanksWaits?: string;
 }
 
-/** Назва «Облік сейфу» в `GET /organizations` — код беремо звідти, а не з коду програми (див. `orgRules`). */
-const SAFE_NAME_RE = /сейф/i;
-/** Код організації 1С за назвою — з рахунків, які віддала `/organizations` (у кожного рахунку є назва організації). */
-export function orgCodeByName(banks: Map<string, BankAccount[]> | null | undefined, re: RegExp): string | null {
-  for (const [code, list] of banks ?? []) if (list.some((b) => re.test(b.org))) return code;
-  return null;
-}
+/** Поки 1С не віддає рахунки «Облік сейфу» в `/organizations` — що бачить менеджер замість кнопки. */
 export const SAFE_WAITS = "«Облік сейфу» ще не відкрита в 1С для віджета — щойно 1С її додасть, зʼявиться тут сама.";
 
 /**
@@ -57,7 +53,7 @@ export const SAFE_WAITS = "«Облік сейфу» ще не відкрита 
  * 28.10.2026), 000000011 ФОП Беспятчук (Сергій, 28.10.2026: «Яцик не працює — тільки Беспятчук»). Банки ФОП — з
  * `GET /organizations`, а не з коду: їх веде бухгалтерія в 1С.
  */
-export function orgRules(banks?: Map<string, BankAccount[]> | null): OrgRule[] {
+export function orgRules(): OrgRule[] {
   return [
     { key: "uts", short: "ЮТС", name: "ТОВ «ЮНАЙТЕД ТРАНСПОРТ СЕРВІС»", code: "000000002", vat: "with", match: "юнайтед" },
     { key: "elogist", short: "Єлогіст", name: "ТОВ «ЄЛОГІСТ»", code: "000000012", vat: "with", match: "логіст" },
@@ -65,9 +61,9 @@ export function orgRules(banks?: Map<string, BankAccount[]> | null): OrgRule[] {
     { key: "fop", short: "ФОП", name: "ФОП Беспятчук С. С.", code: "000000011", vat: "without", match: "беспятчук", needsBank: true },
     // 23.11.2026, Роман: «робимо все як у Genesis». У Genesis — 43 рахунки з липня: без ПДВ, UAH (41) / USD / EUR, клієнт
     // обирає рахунок (Приват UAH чи EUR «Фізична особа» — скрин від 1С), послуги «за маршрутом» і «міжнародного».
-    // Коду 1С не знаємо, а `/organizations` її поки не віддає: код — за назвою з відповіді 1С, тож зʼявиться сама.
-    { key: "safe", short: "Сейф", name: "Облік сейфу", code: orgCodeByName(banks, SAFE_NAME_RE), vat: "without", match: "сейф",
-      needsBank: true, ...(orgCodeByName(banks, SAFE_NAME_RE) ? {} : { waits: SAFE_WAITS }) },
+    // Код 000000009 — відповідь 1С 23.11.2026 («не змінюється»). Доступна, щойно `/organizations` віддасть її рахунки.
+    { key: "safe", short: "Сейф", name: "Облік сейфу", code: "000000009", vat: "without", match: "сейф",
+      needsBank: true, noBanksWaits: SAFE_WAITS },
   ];
 }
 
@@ -81,7 +77,9 @@ export const SERVICES: { name: string; orgs: OrgKey[] | "all"; code: string; en?
   // Англійською — дослівно як у валютних рахунках Genesis (АвтоМув №9130, 02.11.2026).
   { name: "Організація перевезення за маршрутом", orgs: ["avtomuv", "fop", "safe"], code: "000000008", en: "Organization of cargo transportation along the route" },
   // Як найчастіше в рахунках Genesis (11 із 32 валютних PDF з поля «Посилання інвойс €», 06.11.2026).
-  { name: "Організація міжнародного перевезення", orgs: ["avtomuv", "safe"], code: "000000179", en: "Organization of international transportation" },
+  { name: "Організація міжнародного перевезення", orgs: ["avtomuv"], code: "000000179", en: "Organization of international transportation" },
+  // Лише «Облік сейфу»: так у 22 з 43 її рахунків Genesis (лист 1С 23.11.2026); для інших 28.10 вирішили не додавати.
+  { name: "Транспортні послуги", orgs: ["safe"], code: "000000094" },
   { name: "Експедиторські послуги", orgs: "all", code: "000000252" },
   { name: "Штрафні санкції за простій автомобільного транспорту", orgs: "all", code: "000000180" },
 ];
@@ -140,8 +138,7 @@ export const kyivIso = (d = new Date()) => new Intl.DateTimeFormat("en-CA", { ti
 export type FormCheck = { ok: true; form: InvoiceForm } | { ok: false; why: string };
 
 /** Банківський рахунок організації з `GET /organizations`. */
-/** `org` — назва організації 1С, якій належить рахунок (за нею знаходимо код «Облік сейфу»). */
-export interface BankAccount { uid: string; name: string; iban: string; currency: string; bank: string; isMain: boolean; org: string }
+export interface BankAccount { uid: string; name: string; iban: string; currency: string; bank: string; isMain: boolean }
 const REQ_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Розбір і перевірка тіла запиту за правилами організації. Помилки — словами для менеджера: їх показує вікно. */
@@ -671,7 +668,7 @@ export function parseOrganizations(j: any): Map<string, BankAccount[]> | null {
     if (!code) continue;
     out.set(code, (Array.isArray(o.bank_accounts) ? o.bank_accounts : []).map((b: any) => ({
       uid: String(b?.uid ?? ""), name: String(b?.name ?? ""), iban: String(b?.iban ?? ""), currency: String(b?.currency ?? ""),
-      bank: String(b?.bank ?? ""), isMain: b?.is_main === true, org: String(o?.name ?? ""),
+      bank: String(b?.bank ?? ""), isMain: b?.is_main === true,
     })).filter((b: BankAccount) => b.uid));
   }
   return out;
