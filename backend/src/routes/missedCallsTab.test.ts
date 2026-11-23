@@ -114,13 +114,15 @@ test("#463 ПЕРІОД: дефолт «вчора» за Києвом, наві
 
   const sec = stripComments(readFileSync(FE("pages/dashboard/sections/MissedCallsSection.tsx"), "utf8"));
   assert.match(sec, /useState<PeriodState>\(\(\) => missedDefaultPeriod\(today\)\)/, "🔴 вкладка не бере дефолт «вчора»");
-  assert.match(sec, /<PeriodNav\b/, "🔴 на вкладці немає вибору періоду — його знову нема звідки змінити");
+  // 20.11.2026: навігатор той самий, що у Звіті (`PeriodStepper`, прохання Романа «шапку … таку саму як і у звіті»).
+  assert.match(sec, /<PeriodStepper\b/, "🔴 на вкладці немає вибору періоду — його знову нема звідки змінити");
   assert.match(sec, /const \{ from, to \} = periodOf\(nav\)/, "🔴 запити йдуть не з періоду навігатора");
   const dash = stripComments(readFileSync(FE("pages/Dashboard.tsx"), "utf8"));
   // Гонка: пізня відповідь за СТАРИЙ період не перезаписує новий — у всіх чотирьох запитах вкладки.
   // Від предмета, а не від числа: кожен запит вкладки має свій захист від гонки.
   // 5148: + «Відповідь на заявку» (`fetchLeadResponse`) — теж запит вкладки за періодом, теж зі своїм захистом.
-  const fetches = (sec.match(/\bfetch(MissedCalls|MissedList|NoDeal|NoDealList|MissedSeries|LeadResponse)\(/g) ?? []).length;
+  // 20.11.2026: + «Пропущені угоди» (`fetchMissedDeals`) — друга вкладка екрана, той самий період, свій захист.
+  const fetches = (sec.match(/\bfetch(MissedCalls|MissedList|NoDeal|NoDealList|MissedSeries|LeadResponse|MissedDeals)\(/g) ?? []).length;
   assert.ok(fetches >= 5, `🔴 знайдено лише ${String(fetches)} запитів вкладки — розбір зламався`);
   assert.equal((sec.match(/return \(\) => \{ alive = false; \};/g) ?? []).length, fetches,
     "🔴 запит вкладки без захисту від гонки: відповідь за старий період перезапише новий");
@@ -167,7 +169,8 @@ test("#464 КОМАНДИ Й КЛІЄНТ: розкладка без втрат,
 
   const sec = stripComments(readFileSync(FE("pages/dashboard/sections/MissedCallsSection.tsx"), "utf8"));
   assert.match(sec, /groupByTeam\(teams, d\.managers\)/, "🔴 таблиця не розкладає людей по командах");
-  assert.match(sec, /Команда: \{g\.team\.name\}/, "🔴 рядок команди не малюється");
+  // 20.11.2026: рядок команди — розгортний рядок таблиці «По командах» (шеврон + назва), а не підзаголовок «Команда: …».
+  assert.match(sec, /<span className="mc-tchev" aria-hidden="true">▸<\/span>\{g\.team\.name\}/, "🔴 рядок команди не малюється");
   assert.match(sec, /clientCell\(r\.clientKey, canOpenClient\)/, "🔴 колонка «Клієнт» живе повз правило доступу");
   assert.match(sec, /<ClientCardPanel clientKey=\{r\.clientKey\} \/>/, "🔴 картка клієнта не відкривається зі списку");
   assert.match(sec, /d\.ownerlessInScope\s*\?/, "🔴 плитка «Без відповідального» знову малює нуль у зрізі команди");
@@ -178,12 +181,15 @@ test("#464 КОМАНДИ Й КЛІЄНТ: розкладка без втрат,
 });
 
 /**
- * #474 — ДИНАМІКА НА ФРОНТІ Й ПОРЯДОК БЛОКІВ (прохання власника 17.09.2026).
- * Частки точки — з її лічильників; підсумок вікна — зі СУМ, не середнім відсотків; медіана не
- * усереднюється. «Дзвінок був, а угоди немає» — одразу під підсумком, а не під довгим списком.
- * Діапазони й вікно — ті самі функції, що на Статистиках, а не копія.
+ * #10147 — ДИНАМІКА НА ФРОНТІ Й ПОРЯДОК БЛОКІВ ПІСЛЯ РЕДИЗАЙНУ (Роман 20.11.2026: прототип «окей виглядає супер»,
+ * «давай викочувати»). Змінює твердження `#474` (знято через `RETIRED_GATES`): «угоди немає» більше НЕ нагорі — екран
+ * відповідає на питання «кому дзвонити зараз», тож порядок: смуга чисел → «Кому передзвонити» → «По командах» →
+ * «Детальніше» (динаміка, години, «дзвінок без угоди», автозадачі — згорнуто). Частки точки — з її лічильників; підсумок вікна
+ * — зі СУМ, не середнім відсотків; медіана не усереднюється. Діапазони й вікно — ті самі функції, що на Статистиках.
+ * Червоніє, якщо: список опуститься під таблицю команд; «Детальніше» підніметься вище списку; динаміку чи «угоди немає»
+ * винести з «Детальніше» або намалювати двічі; завести власну копію діапазонів.
  */
-test("#474 ДИНАМІКА: частки зі сум, медіана не усереднюється; «угоди немає» нагорі; логіка Статистик без копії", async () => {
+test("#10147 ПОРЯДОК І ДИНАМІКА: числа → кому передзвонити → команди → «Детальніше» (динаміка й «угоди немає» всередині); частки зі сум; логіка Статистик без копії", async () => {
   const periodUrl = await transpile("pages/dashboard/periodRules.ts");
   const V = await load<{ SERIES_METRICS: { key: string; value: (p: object) => number | null; total: (ps: object[]) => number | null }[] }>(
     "pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
@@ -197,15 +203,57 @@ test("#474 ДИНАМІКА: частки зі сум, медіана не ус�
   assert.equal(m("clientSelfPct").total(pts), 9.8);
 
   const sec = stripComments(readFileSync(FE("pages/dashboard/sections/MissedCallsSection.tsx"), "utf8"));
-  const iNoDeal = sec.indexOf("<NoDealBlock "), iDyn = sec.indexOf("<MissedDynamicsBlock"), iMgr = sec.indexOf("По менеджерах"), iList = sec.indexOf("<MissedListBlock ");
-  assert.ok(iNoDeal > 0 && iDyn > 0 && iMgr > 0 && iList > 0, "🔴 на вкладці бракує блоку");
-  assert.ok(iNoDeal < iMgr && iNoDeal < iList, "🔴 «Дзвінок був, а угоди немає» знову під таблицею чи списком — його не видно без прокрутки");
-  assert.ok(iDyn < iMgr, "🔴 динаміка опинилась під довгими таблицями");
+  const main = sec.slice(sec.indexOf("export function MissedCallsSection("), sec.indexOf("\nfunction nextLabel("));
+  const at = (needle: string) => main.indexOf(needle);
+  const iHero = at('className="mc-hero"'), iList = at("<MissedListBlock "), iTeams = at("<TeamsBlock "), iMore = at("<DetailsBlock ");
+  assert.ok(main.length > 0 && iHero > 0 && iList > 0 && iTeams > 0 && iMore > 0, "🔴 на вкладці бракує блоку");
+  assert.ok(iHero < iList && iList < iTeams && iTeams < iMore,
+    "🔴 порядок екрана зламано: мусить бути числа → «Кому передзвонити» → «По командах» → «Детальніше»");
+  const details = sec.slice(sec.indexOf("function DetailsBlock("), sec.indexOf("\nfunction MissedDynamicsBlock("));
+  assert.ok(details.length > 0, "🔴 блоку «Детальніше» немає");
+  assert.match(details, /<MissedDynamicsBlock\b/, "🔴 динаміка винесена з «Детальніше»");
+  assert.match(details, /<NoDealBlock /, "🔴 «Дзвінок був, а угоди немає» винесено з «Детальніше»");
   assert.equal((sec.match(/<NoDealBlock /g) ?? []).length, 1, "🔴 блок «угоди немає» намальовано двічі");
+  assert.equal((sec.match(/<MissedDynamicsBlock\b/g) ?? []).length, 1, "🔴 динаміку намальовано двічі");
   assert.match(sec, /import \{ RANGES, MIN_WIN, rangeWindow, shortDate, COLORS \} from "\.\/StatisticsChartsSection"/,
     "🔴 діапазони й вікно графіка не зі Статистик — друга копія логіки розійдеться з першою");
   assert.doesNotMatch(sec, /const RANGES|function rangeWindow/, "🔴 у вкладці завелась власна копія діапазонів");
   assert.match(sec, /fetchMissedSeries\(\{ granularity: gran(, \.\.\.fp)? \}\)/, "🔴 графік не тягне ряди з роуту динаміки");
+});
+
+interface SplitMod { mobileSplit: (missed: number, missedMobile: number) => { line: number; mobile: number; linePct: number } }
+
+/**
+ * #10145b — 📱 РОЗБИВКА НА ЕКРАНІ: під «Пропущено» — «N на лінію, M на мобільні» з поля ядра `missedMobile`, і поля рядка
+ * списку, які віддає роут, — рівно ті, що в типі `MissedListRow` (позначка «мобільний», «чекає», години очікування).
+ * Червоніє, якщо: розбивку рахувати не з `missedMobile`; лінія + мобільні ≠ пропущено; прибрати підпис; додати / забути
+ * поле рядка з одного боку.
+ */
+test("#10145b 📱 РОЗБИВКА НА ЕКРАНІ: «на лінію + на мобільні» з missedMobile, сума = пропущено; поля рядка списку роуту == тип", async () => {
+  const periodUrl = await transpile("pages/dashboard/periodRules.ts");
+  const V = await load<SplitMod>("pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
+  assert.deepEqual(V.mobileSplit(90, 42), { line: 48, mobile: 42, linePct: 53 }, "🔴 звірка Юлі 90 = 48 на лінію + 42 на мобільні не сходиться");
+  assert.deepEqual(V.mobileSplit(0, 0), { line: 0, mobile: 0, linePct: 0 }, "🔴 без пропущених смуга ділить на нуль");
+  const odd = V.mobileSplit(5, 7);
+  assert.equal(odd.line + odd.mobile, 5, "🔴 лінія + мобільні ≠ пропущено — смуга бреше");
+
+  const sec = stripComments(readFileSync(FE("pages/dashboard/sections/MissedCallsSection.tsx"), "utf8"));
+  assert.match(sec, /const split = mobileSplit\(s\.missed, s\.missedMobile\)/, "🔴 розбивка рахується не з поля ядра");
+  assert.match(sec, /\{num\(split\.line\)\}<\/b> на лінію, <b>\{num\(split\.mobile\)\}<\/b> на мобільні/, "🔴 під «Пропущено» немає підпису розбивки");
+
+  const api = readFileSync(FE("api.ts"), "utf8");
+  assert.match(api, /\bmissedMobile: number;/, "🔴 у типі MissedSummary немає `missedMobile`");
+  const route = readFileSync(fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
+  const body = route.slice(route.indexOf('dashboardRouter.get("/missed-calls/list"'));
+  assert.ok(body.length < route.length, "🔴 роуту /missed-calls/list немає");
+  const rowMap = /rows: rows\.map\(\(r\) => \(\{([\s\S]*?)\}\)\)/.exec(body);
+  assert.ok(rowMap, "🔴 не знайдено явного переліку полів рядка в роуті");
+  const routeKeys = [...rowMap[1].matchAll(/\b([a-zA-Z]+):/g)].map((x) => x[1]).sort();
+  const typeBody = /export interface MissedListRow \{([\s\S]*?)\n\}/.exec(api);
+  assert.ok(typeBody, "🔴 типу MissedListRow немає в api.ts");
+  const typeKeys = [...typeBody[1].replace(/\/\*\*[\s\S]*?\*\//g, " ").matchAll(/\b([a-zA-Z]+):/g)].map((x) => x[1]).sort();
+  for (const k of ["mobile", "waiting", "waitH"]) assert.ok(routeKeys.includes(k), `🔴 роут списку не віддає \`${k}\``);
+  assert.deepEqual(routeKeys, typeKeys, "🔴 поля рядка списку в роуті розійшлись із типом фронта");
 });
 
 interface FilterMod {
@@ -239,4 +287,56 @@ test("#1774 ФІЛЬТР І ЦІЛЬ · ФРОНТ: збережене сміт�
   assert.equal(V.normLabel(80, 80), "ціль 80% · у нормі");
   assert.equal(V.normLabel(79, 80), "ціль 80% · нижче норми");
   assert.equal(V.normLabel(null, 80), "ціль 80%", "🔴 без даних показано вердикт");
+});
+
+interface FixMod {
+  durText: (min: number | null) => string;
+  noTaskReason: (t: { loaded: boolean; truncated: boolean; byId: { has: (u: string) => boolean }; byPhone: { get: (p: string) => { at: string } | undefined }; res: Record<string, unknown> },
+    r: { uniqueid: string; phone: string | null; waiting: boolean; waitH: number }) => string | null;
+}
+
+/**
+ * #10149 — БАГИ ПРОХОДУ ПО ЕКРАНУ НА ПРОДІ (Роман 20.11.2026: «перейдися по всій сторінці і знайди всі баги»).
+ * ① Підказки ⓘ: на проді 38 з 39 закривала липка шапка або обрізав край згортного блоку / таблиці — тепер усі через `Hint`
+ *    (портал у `document.body`, `position: fixed`). Червоніє, якщо на екрані знову з'явиться `InfoHint` або `Hint` перестане
+ *    виносити спливашку з блоку.
+ * ② Тривалість: «1334 хв» → «22 год 14 хв»; червоніє, якщо медіану чи «через N» знову писати сирими хвилинами.
+ * ③ Порожня клітинка «Задача» в рядку, що чекає: кожна причина названа (доба, номер, задача на інший дзвінок, перевізник);
+ *    поки задачі не завантажились чи список обрізано — нічого не вигадуємо.
+ * ④ Список за період: запит несе `to`, задачі — за ті самі дати, роут передає `to` в ядро.
+ */
+test("#10149 ПРОХІД ПО ЕКРАНУ: підказки не обрізаються, тривалість годинами, причина без задачі названа, список за весь період", async () => {
+  const periodUrl = await transpile("pages/dashboard/periodRules.ts");
+  const V = await load<FixMod>("pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
+  const cases: [number | null, string][] = [[null, "—"], [5, "5 хв"], [59, "59 хв"], [60, "1 год"], [241, "4 год 1 хв"], [1334, "22 год 14 хв"], [1440, "1 д"], [3000, "2 д 2 год"]];
+  for (const [m, want] of cases) assert.equal(V.durText(m), want, `🔴 ${String(m)} хв записано як «${V.durText(m)}», а не «${want}»`);
+
+  const t = (o: Partial<Parameters<FixMod["noTaskReason"]>[0]> = {}) => ({
+    loaded: true, truncated: false, byId: new Set<string>(), byPhone: new Map<string, { at: string }>(), res: {}, ...o });
+  const r = (o: Partial<Parameters<FixMod["noTaskReason"]>[1]> = {}) => ({ uniqueid: "u1", phone: "380501112233", waiting: true, waitH: 30, ...o });
+  assert.equal(V.noTaskReason(t(), r({ waiting: false })), null, "🔴 рядок, з яким уже поговорили, отримав пояснення про задачу");
+  assert.equal(V.noTaskReason(t({ loaded: false }), r()), null, "🔴 поки задачі вантажаться, причину вигадано");
+  assert.equal(V.noTaskReason(t({ byId: new Set(["u1"]) }), r()), null, "🔴 рядок із задачею отримав пояснення замість кнопки");
+  assert.equal(V.noTaskReason(t(), r({ waitH: 23 })), "задача — коли мине доба");
+  assert.equal(V.noTaskReason(t(), r({ phone: null })), "номер невідомий");
+  assert.match(V.noTaskReason(t({ byPhone: new Map([["380501112233", { at: "2026-11-19T06:33:00Z" }]]) }), r()) ?? "", /^задача — на дзвінок 19\.11, 08:33$/,
+    "🔴 повторний дзвінок номера не каже, на який дзвінок стоїть задача");
+  assert.equal(V.noTaskReason(t(), r()), "перевізник за історією CRM");
+  assert.equal(V.noTaskReason(t({ truncated: true }), r()), null, "🔴 список під задачі обрізано, а причину «перевізник» вигадано");
+
+  const sec = stripComments(readFileSync(FE("pages/dashboard/sections/MissedCallsSection.tsx"), "utf8"));
+  assert.doesNotMatch(sec, /\bInfoHint\b/, "🔴 на екрані знову InfoHint — його спливашку закриває шапка й обрізає край блоку");
+  assert.ok((sec.match(/<Hint /g) ?? []).length >= 20, "🔴 підказок `Hint` на екрані підозріло мало — розбір зламався");
+  const fold = readFileSync(FE("pages/dashboard/sections/MissedFold.tsx"), "utf8");
+  assert.match(fold, /createPortal\([\s\S]*?className="info-hint-pop mc-hint-pop"[\s\S]*?document\.body\)/, "🔴 спливашка `Hint` не виноситься в document.body");
+  const css = readFileSync(FE("index.css"), "utf8");
+  assert.match(css, /\.info-hint-pop\.mc-hint-pop \{ position: fixed;/, "🔴 спливашка `Hint` не фіксована — її знову обріже край блоку");
+  // «Відповідь на заявку» (ResponseTimeBlock) пише свої медіани хвилинами свідомо — там вони короткі; тут лише екран пропущених.
+  assert.doesNotMatch(sec, /`\$\{String\((?:s|r|g\.team)\.medianMin\)\} хв`|через \$\{String\(min\)\} хв|fmt=\{\(n\) => `\$\{String\(n\)\} хв`\}/, "🔴 тривалість знову сирими хвилинами");
+  assert.ok((sec.match(/durText\(/g) ?? []).length >= 5, "🔴 тривалість на екрані пишеться не через durText");
+
+  assert.match(sec, /const q = qTo !== qFrom \? \{ day: qFrom, to: qTo \} : \{ day: qFrom \};/, "🔴 список не бере кінець періоду");
+  assert.match(sec, /const t = useMissedTasks\(qFrom, qTo, fp\);/, "🔴 задачі списку — не за ті самі дати, що й рядки");
+  const route = readFileSync(fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
+  assert.match(route, /await missedCalls\.missedList\(day, scope, onlyNoCallback, to\)/, "🔴 роут списку не передає `to` в ядро");
 });

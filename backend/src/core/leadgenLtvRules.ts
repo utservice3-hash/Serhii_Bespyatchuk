@@ -172,3 +172,42 @@ export function ltvAccess(auth: LeadgenAuth, pick: number | null): LtvAccess {
   if (auth.role === "team_lead") return { ok: true, scope: { kind: "team", teamId: auth.teamId ?? -1 }, pick };
   return { ok: true, scope: { kind: "all" }, pick };
 }
+
+/**
+ * 🧭 ЗВІДКИ ПРИЙШОВ КЛІЄНТ ЛІДГЕНА (задача 8719 = TOP Weekly 16.11 п. 3; Сергій 09.11: «біля повторних не вистачає джерела
+ * надходження клієнта — холодна база, реактивація»; Роман 19.11.2026 «роби»).
+ *
+ * ДЖЕРЕЛО — «Источник клиента» (поле 2098035) того ліда Продзвону / Реактивації, який лідген ПЕРЕДАВ (`pz_id`), а НЕ першої
+ * угоди менеджера і не першої угоди клієнта: питання саме про те, звідки лідген узяв клієнта. Те саме поле того самого ліда,
+ * що вже показує «Деталі відділу → джерела» лідгенів; нової метрики немає.
+ *  • LinkedIn і Prozorro — спільними правилами ядра (`linkedinDealSql` / `prozorroDealSql`: джерело АБО тег), а не текстом
+ *    поля: інакше лід з тегом і порожнім джерелом читався б як «не проставлене». LinkedIn перед Prozorro, як у Звіті (9230).
+ *  • Значення Kommo НЕ зводимо в групи («Реактивация звонком» / «Реактивація закриті» / «Реактивація наша база» — окремо):
+ *    як групувати, вирішує власник. Показуємо, як записано в CRM.
+ *  • Невідоме — словами, і два невідомі не зливаються: поле порожнє (`SOURCE_UNSET`) ≠ ліда в дашборді немає (`SOURCE_NO_LEAD`).
+ */
+export const SOURCE_UNSET = "джерело не проставлене";
+export const SOURCE_NO_LEAD = "лід лідгена не знайдено";
+export const SOURCE_LINKEDIN = "LinkedIn";
+export const SOURCE_PROZORRO = "Prozorro";
+export function ltvSourceLabel(lead: { found: boolean; linkedin: boolean; prozorro: boolean; source: string | null }): string {
+  if (!lead.found) return SOURCE_NO_LEAD;
+  if (lead.linkedin) return SOURCE_LINKEDIN;
+  if (lead.prozorro) return SOURCE_PROZORRO;
+  const s = (lead.source ?? "").trim();
+  return s || SOURCE_UNSET;
+}
+
+export interface LtvSourceRow extends LtvAgg { source: string; /** `false` — «не проставлене» / «лід не знайдено». */ known: boolean }
+export const isKnownSource = (s: string): boolean => s !== SOURCE_UNSET && s !== SOURCE_NO_LEAD;
+/**
+ * Таблиця «За джерелом»: кожен клієнт рівно в одному рядку, підсумок рядка — тим самим `aggLtv`, що й шапка блока, тож
+ * Σ рядків = шапці (клієнти, LTV, постійні, працюють). Більший LTV — вище; «невідомі» — завжди внизу, щоб не губились у середині.
+ */
+export function bySourceOf(rows: readonly (LtvRow & { source: string })[], from: string, to: string): LtvSourceRow[] {
+  const by = new Map<string, LtvRow[]>();
+  for (const r of rows) by.set(r.source, [...(by.get(r.source) ?? []), r]);
+  const unknown = (s: string) => (isKnownSource(s) ? 0 : 1);
+  return [...by.entries()].map(([source, rs]) => ({ source, known: isKnownSource(source), ...aggLtv(rs, from, to) }))
+    .sort((a, b) => unknown(a.source) - unknown(b.source) || b.ltv - a.ltv || a.source.localeCompare(b.source));
+}

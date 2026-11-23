@@ -28,6 +28,7 @@ import { workuaSummary, setVacancyWorkuaJob, WorkuaError } from "../core/workuaS
 import { syncWorkua, getWorkuaStatus, fetchWorkuaJobs } from "../jobs/syncWorkua.js";
 import { listTemplates, createTemplate, setTemplateActive, offerForm, offerState, generateOffer, offerStates, type Store, type Load } from "../core/offers.js";
 import { notifyOfferOnce } from "../jobs/offerReminders.js";
+import { listEmployees } from "../core/employees.js";
 
 /** Та сама тека, що в `routes/documents.ts` (DOCS_DIR) і в нічному бекапі. */
 const DOCS_DIR = path.join(UPLOAD_DIR, "..", "documents");
@@ -81,9 +82,24 @@ const idOf = (req: Request) => {
 const onlyEdit = (req: Request) => {
   if (accessOf(req) !== "edit") throw new HiringError(403, "Графік і звіт веде рекрутер");
 };
-const anyAccess = (req: Request) => {
+/**
+ * 👁 Рівень «перегляд» (фінансист, 20.11.2026): ЧИТАННЯ — через `readAccess` / `readEdit`; усе інше (`anyAccess`,
+ * `onlyEdit`) його відбиває. Тобто нова дія запису за замовчуванням закрита для «перегляду». Тримає #4150–#4153.
+ */
+const readAccess = (req: Request) => {
   const a = accessOf(req);
   if (a === "none") throw new HiringError(403, "Немає доступу до найму");
+  return a;
+};
+const anyAccess = (req: Request) => {
+  const a = readAccess(req);
+  if (a === "view") throw new HiringError(403, "Лише перегляд — змінювати не можна");
+  return a;
+};
+/** Читання того, що досі бачив лише рекрутер (графік, вакансії, офери), — і для «перегляду». */
+const readEdit = (req: Request) => {
+  const a = accessOf(req);
+  if (a !== "edit" && a !== "view") throw new HiringError(403, "Графік і звіт веде рекрутер");
   return a;
 };
 
@@ -103,7 +119,7 @@ const b64 = (v: unknown): Buffer | null => (typeof v === "string" && v ? Buffer.
 
 hiringRouter.get("/offer-templates", async (req, res) => {
   try {
-    onlyEdit(req);
+    readEdit(req);
     res.json({ rows: await listTemplates(pool as unknown as Db) });
   } catch (e) { fail(res, e); }
 });
@@ -127,7 +143,7 @@ hiringRouter.patch("/offer-templates/:id", async (req, res) => {
 
 hiringRouter.get("/candidates/:id/offer", async (req, res) => {
   try {
-    onlyEdit(req);
+    readEdit(req);
     const db = pool as unknown as Db, id = idOf(req);
     const state = await offerState(db, id);
     const form = req.query.templateId ? await offerForm(db, id, req.query.templateId) : null;
@@ -147,7 +163,7 @@ hiringRouter.post("/candidates/:id/offer", async (req, res) => {
 
 hiringRouter.get("/offers/states", async (req, res) => {
   try {
-    onlyEdit(req);
+    readEdit(req);
     res.json({ states: await offerStates(pool as unknown as Db) });
   } catch (e) { fail(res, e); }
 });
@@ -162,12 +178,12 @@ hiringRouter.get("/summary", async (req, res) => {
 
 hiringRouter.get("/meta", async (req, res) => {
   try {
-    const access = anyAccess(req);
+    const access = readAccess(req);
     const meta = await hiringMeta(pool as unknown as Db);
     res.json({
       access, teamId: req.auth!.teamId, ...meta,
       statuses: HIRING_STATUSES.map((k) => ({ key: k, label: STATUS_LABEL[k] })),
-      transitions: access === "lead" ? LEAD_TRANSITIONS : TRANSITIONS,
+      transitions: access === "lead" ? LEAD_TRANSITIONS : access === "view" ? {} : TRANSITIONS,
       vacancyStatuses: VACANCY_STATUSES.map((k) => ({ key: k, label: VACANCY_STATUS_LABEL[k] })),
       vacancyResults: VACANCY_RESULTS,
     });
@@ -177,7 +193,7 @@ hiringRouter.get("/meta", async (req, res) => {
 // ── Графік ──────────────────────────────────────────────────────────────────
 hiringRouter.get("/schedule", async (req, res) => {
   try {
-    onlyEdit(req);
+    readEdit(req);
     const r = validRange(req.query.from, req.query.to);
     if (!r) throw new HiringError(400, "Потрібен період from..to (не більше 400 днів)");
     res.json({ rows: await scheduleRows(pool as unknown as Db, r.from, r.to) });
@@ -220,7 +236,7 @@ hiringRouter.post("/interviews/:id/restore", async (req, res) => {
 // ── Кандидати ───────────────────────────────────────────────────────────────
 hiringRouter.get("/candidates", async (req, res) => {
   try {
-    const access = anyAccess(req);
+    const access = readAccess(req);
     const q = req.query;
     res.json(await listCandidates(pool as unknown as Db, {
       q: typeof q.q === "string" ? q.q.slice(0, 100) : undefined,
@@ -248,7 +264,7 @@ hiringRouter.post("/candidates", async (req, res) => {
 
 hiringRouter.get("/candidates/:id", async (req, res) => {
   try {
-    const access = anyAccess(req);
+    const access = readAccess(req);
     res.json(await candidateCard(pool as unknown as Db, idOf(req), access, req.auth!.teamId));
   } catch (e) { fail(res, e); }
 });
@@ -405,9 +421,24 @@ hiringRouter.put("/vacancies/:id/workua", async (req, res) => {
 });
 
 // ── Вакансії (прохід 1a) ────────────────────────────────────────────────────
+/**
+ * 👥 «Співробітники» для перегляду (фінансист, 20.11.2026): реєстр БЕЗ паролів, сейфу, документів, телефонів і акаунтів —
+ * поля поіменно (#17e2), не спредом. Повний реєстр із сейфом лишається за правом `view_employee_secrets`. Тримає #4152.
+ */
+hiringRouter.get("/employees", async (req, res) => {
+  try {
+    readEdit(req);
+    const rows = (await listEmployees(pool as unknown as Db)) as Record<string, unknown>[];
+    res.json({ rows: rows.map((r) => ({
+      id: r.id, full_name: r.full_name, status: r.status, position: r.position, category: r.category, level: r.level ?? null,
+      team_name: r.team_name, hired_at: r.hired_at, dismissed_at: r.dismissed_at, dismiss_reason: r.dismiss_reason,
+    })) });
+  } catch (e) { fail(res, e); }
+});
+
 hiringRouter.get("/vacancies", async (req, res) => {
   try {
-    onlyEdit(req);
+    readEdit(req);
     const scope = req.query.scope === "closed" || req.query.scope === "all" ? req.query.scope : "active";
     // 💼 Воронка кожної вакансії — з того самого розрахунку, що й «Зведення» (#626/#627).
     const [rows, funnels] = await Promise.all([listVacancies(pool as unknown as Db, scope), vacancyFunnels(pool as unknown as Db)]);
@@ -499,7 +530,7 @@ hiringRouter.post("/candidates/:id/files", async (req, res) => {
 
 hiringRouter.get("/candidates/:id/files/:fileId", async (req, res) => {
   try {
-    const access = anyAccess(req);
+    const access = readAccess(req);
     const id = idOf(req);
     const fileId = Number(req.params.fileId);
     if (!Number.isInteger(fileId) || fileId <= 0) throw new HiringError(400, "Некоректний id файлу");
@@ -544,7 +575,7 @@ const decides = (req: Request) => canDecideTraining({ roleKey: req.auth!.roleKey
 
 hiringRouter.get("/training", async (req, res) => {
   try {
-    const access = anyAccess(req);
+    const access = readAccess(req);
     const rows = await trainingBoard(pool as unknown as Db, access, req.auth!.teamId);
     res.json({ rows, rules: CANDIDATE_ACCESS, canDecide: decides(req) });
   } catch (e) { fail(res, e); }
@@ -552,7 +583,7 @@ hiringRouter.get("/training", async (req, res) => {
 
 hiringRouter.get("/training/:id", async (req, res) => {
   try {
-    const access = anyAccess(req);
+    const access = readAccess(req);
     const id = idOf(req);
     const { row, steps, questions, events, employeeId } = await trainingDetail(pool as unknown as Db, id, access, req.auth!.teamId);
     res.json({ row, steps, questions, events, employeeId, canDecide: decides(req), canRestore: access === "edit" });

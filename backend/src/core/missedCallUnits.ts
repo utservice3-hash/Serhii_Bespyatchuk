@@ -23,6 +23,15 @@ import { INBOUND_TYPES, MISSED_DISPOSITIONS } from "./missedCallsRules.js";
  * правило на обидва, щоб число на екрані й задачі «Передзвонити» не розійшлися.
  */
 
+/**
+ * 📱 «НА МОБІЛЬНІ» (рішення Романа 20.11.2026, картка «Рахувати з розбивкою»): дзвінок, у якого ЖОДНЕ плече не має типу
+ * «Вхідний» (`in`), тобто всі плечі «Вхідний перехоплений» (`transitin`) — Ringostat переадресував його на мобільний менеджера.
+ * Решта — «на лінію», і саме їх показує фільтр Юлі в Ringostat. Правило за ТИПОМ плеча, а не за номером 073: номер у коді не
+ * зашивається, а тип — те, що Ringostat показує в колонці «Тип дзвінка». Звірка 19.11: 90 = 48 на лінію + 42 на мобільні.
+ * Число «Пропущено» розбивка не змінює: вона лише ділить ту саму множину на дві частини.
+ */
+export const MOBILE_LEG_TYPE = "transitin";
+
 /** Найбільший розрив між сусідніми плечима одного дзвінка. Звірка Юлі: «різниця до 1 хв». */
 export const MISSED_LEG_GAP = "60 seconds";
 
@@ -38,7 +47,8 @@ const KY = "AT TIME ZONE 'Europe/Kyiv'";
  * що обмежує плечі за часом. Вона мусить брати ЦІЛІ київські доби (з хвилиною запасу з обох боків): черга двох
  * чергових рахується від початку доби, а дзвінок на межі доби — один, а не два.
  *
- * `call_units`: `uniqueid` (перше плече), `calldate` (старт), `client_phone`, `client_key`, `answered` (у якомусь плечі
+ * `call_units`: `uniqueid` (перше плече), `calldate` (старт), `client_phone`, `client_key`, `mobile` (усі плечі перехоплені,
+ * див. `MOBILE_LEG_TYPE`), `answered` (у якомусь плечі
  * була розмова — ЄДИНЕ місце, що це вирішує; читачі відкидають `answered`), `disposition` (`NO ANSWER` / `BUSY`, якщо
  * таке плече є, інакше вердикт першого плеча), `legs`, `manager_id` (відповідальний за правилом вище).
  *
@@ -48,7 +58,7 @@ export function callUnitsCte(legsWhere: string): string {
   const kday = `(g.calldate ${KY})::date`;
   return `
     mcu_legs AS (
-      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec, rc.disposition,
+      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec, rc.disposition, rc.call_type,
              COALESCE(rc.client_phone, 'u:' || rc.uniqueid) AS ckey
         FROM ringostat_calls rc
        WHERE rc.call_type IN (${list(INBOUND_TYPES)}) AND ${legsWhere}
@@ -63,6 +73,7 @@ export function callUnitsCte(legsWhere: string): string {
              (array_agg(uniqueid ORDER BY calldate, uniqueid))[1] AS uniqueid,
              MIN(calldate) AS calldate, MAX(client_phone) AS client_phone, MAX(client_key) AS client_key,
              bool_or(billsec > 0) AS answered, COUNT(*)::int AS legs,
+             bool_and(call_type = '${MOBILE_LEG_TYPE}') AS mobile,
              CASE WHEN bool_or(disposition = '${MISSED_DISPOSITIONS[0]}') THEN '${MISSED_DISPOSITIONS[0]}'
                   WHEN bool_or(disposition = '${MISSED_DISPOSITIONS[1]}') THEN '${MISSED_DISPOSITIONS[1]}'
                   ELSE (array_agg(disposition ORDER BY calldate, uniqueid))[1] END AS disposition,
@@ -79,7 +90,7 @@ export function callUnitsCte(legsWhere: string): string {
         FROM mcu_grp g
     ),
     call_units AS (
-      SELECT p.uniqueid, p.calldate, p.client_phone, p.client_key, p.disposition, p.answered, p.legs,
+      SELECT p.uniqueid, p.calldate, p.client_phone, p.client_key, p.disposition, p.answered, p.legs, p.mobile,
              CASE WHEN cardinality(p.pool) = 1 THEN p.pool[1]
                   WHEN cardinality(p.pool) > 1 THEN p.pool[1 + ((ROW_NUMBER() OVER (
                          PARTITION BY (p.calldate ${KY})::date, (NOT p.answered AND cardinality(p.pool) > 1)

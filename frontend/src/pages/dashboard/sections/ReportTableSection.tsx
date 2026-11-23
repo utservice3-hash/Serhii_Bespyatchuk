@@ -6,12 +6,14 @@ import {
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
   applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
   isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT,
-  fmtCallback, callbackTone, remakeResetOnce,
+  readColWidths, writeColWidths, clampColWidth, colWidthCss,
+  fmtCallback, callbackTone, remakeResetOnce, restoreColsOnce,
   type ColDef, type ColKey, type ColsStore,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
 import { VacationMark } from "../VacationMark";
 import { getAuthPayload } from "../../../auth";
+import { pickManagers, isPickNarrowed, rowsScopeLabel } from "../mgrPick";
 
 /**
  * 📊 ТАБЛИЧНИЙ ВИГЛЯД ЗВІТУ — рядок на менеджера за обраний період.
@@ -44,8 +46,11 @@ const viewerUserId = (): number | null => {
 const TOKEN: Record<string, string> = { g: "--ok", a: "--warn", r: "--danger" };
 const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відстає", r: "Зрив" };
 
+/** Типово не приховано нікого — стала посилка, щоб `useMemo` рядків не перераховувався щорендеру. */
+const NO_HIDDEN: readonly number[] = [];
+
 export function ReportTableSection({
-  data, auth, periodLabel, responseByMgr, month, slice, statusFilter, toolbar,
+  data, auth, periodLabel, responseByMgr, month, slice, statusFilter, toolbar, hiddenMgrs = NO_HIDDEN, mgrPicker = null,
 }: {
   data: ReportPlan;
   auth: { role: string; managerId: number | null; teamId: number | null };
@@ -69,6 +74,10 @@ export function ReportTableSection({
    * екран» таблиця додає праворуч у ТОЙ САМИЙ ряд (макет, 13.11.2026).
    */
   toolbar?: React.ReactNode;
+  /** 👥 Приховані менеджери (задача 10752, `mgrPick.ts`) — ще один фільтр рядків поруч із чипом стану. */
+  hiddenMgrs?: readonly number[];
+  /** Кнопка «Менеджери · N з M» від контейнера — стає праворуч, перед «Колонки». */
+  mgrPicker?: React.ReactNode;
 }) {
   const [sortKey, setSortKey] = useState<ColKey>("fact");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -78,6 +87,8 @@ export function ReportTableSection({
   const [userId] = useState<number | null>(viewerUserId);
   // Один раз на людину — колонки як на макеті (див. `remakeResetOnce`). Стоїть ДО читання вибору.
   useState(() => remakeResetOnce(colStore(), userId));
+  // Один раз на людину — повернути 8 колонок, зниклих 13.11 (див. `restoreColsOnce`). Після скидання, ДО читання.
+  useState(() => restoreColsOnce(colStore(), userId));
   const [optOn, setOptOn] = useState<Record<string, boolean>>(() => readColPrefs(colStore(), userId));
   const toggleCol = (k: string) => setOptOn((p) => {
     const next = { ...p, [k]: !p[k] };
@@ -115,6 +126,31 @@ export function ReportTableSection({
     el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
   };
   const resetWidth = () => { setMgrW(null); writeMgrWidth(colStore(), userId, null); };
+  // ↔️ Ширина РЕШТИ колонок (правки зустрічі 17.11.2026: «динамічний розмір колонок») — той самий жест, що в
+  // «Менеджер»: тягнеш правий край заголовка, подвійний клік — як було. Особисто, `rptColWidths:<userId>`.
+  const [colW, setColW] = useState<Record<string, number>>(() => readColWidths(colStore(), userId));
+  const thRefs = useRef<Partial<Record<string, HTMLTableCellElement | null>>>({});
+  /** Поки тягнемо край, заголовок не має починати перетягування колонки (th сам `draggable`). */
+  const resizing = useRef(false);
+  const startColResize = (k: ColKey) => (e: React.PointerEvent<HTMLSpanElement>) => {
+    e.preventDefault(); e.stopPropagation();
+    const x0 = e.clientX;
+    const w0 = thRefs.current[k]?.getBoundingClientRect().width ?? colW[k] ?? 90;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    resizing.current = true;
+    let last = w0;
+    const move = (ev: PointerEvent) => { last = clampColWidth(w0 + ev.clientX - x0); setColW((p) => ({ ...p, [k]: last })); };
+    const up = () => {
+      el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
+      document.body.style.cursor = ""; document.body.style.userSelect = "";
+      resizing.current = false;
+      setColW((p) => { const n = { ...p, [k]: last }; writeColWidths(colStore(), userId, n); return n; });
+    };
+    document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+    el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+  };
+  const resetColWidth = (k: ColKey) => setColW((p) => { const n = { ...p }; delete n[k]; writeColWidths(colStore(), userId, n); return n; });
   /**
    * ⤢ НА ВЕСЬ ЕКРАН (зустріч 10.11.2026, правка 4). Не Fullscreen API браузера, а картка поверх сторінки:
    * API на iPhone не працює, а підказки «?» (портал у body) під нативним повноекранним режимом не видно.
@@ -165,6 +201,7 @@ export function ReportTableSection({
   const dnd = (k: ColKey) => (isPinnedCol(k) ? { draggable: false } : {
     draggable: true,
     onDragStart: (e: React.DragEvent) => {
+      if (resizing.current) { e.preventDefault(); return; }
       dragCol.current = k;
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", k);
@@ -184,7 +221,7 @@ export function ReportTableSection({
     onDragEnd: () => { dragCol.current = null; setDropOn(null); },
   });
   const rows = useMemo(() => {
-    const picked = statusFilter ? data.managers.filter((m) => m.status === statusFilter) : data.managers;
+    const picked = pickManagers(statusFilter ? data.managers.filter((m) => m.status === statusFilter) : data.managers, hiddenMgrs);
     /**
      * 🔀 ЗРІЗ ЗАСТОСОВУЄТЬСЯ ДО РЯДКА ОДИН РАЗ — ТУТ, ПЕРЕД СОРТУВАННЯМ І ПЕРЕД
      * РЕЄСТРОМ КОЛОНОК.
@@ -201,7 +238,7 @@ export function ReportTableSection({
     // лежить у рядку менеджера. Без нього клік по цій колонці нічого не робив би —
     // чип є, сортування мертве.
     return sortRows(base, sortKey, sortDir, { slowByMgr: responseByMgr });
-  }, [data.managers, statusFilter, sortKey, sortDir, responseByMgr, slice]);
+  }, [data.managers, statusFilter, hiddenMgrs, sortKey, sortDir, responseByMgr, slice]);
 
   const onSort = (k: ColKey) => {
     if (k === "rank") return;
@@ -209,7 +246,10 @@ export function ReportTableSection({
     else { setSortKey(k); setSortDir(k === "name" ? 1 : -1); }
   };
 
-  const scopeLabel = statusFilter ? "Обрані рядки" : auth.role === "manager" ? "Команда" : "Весь відділ";
+  /** Рядки звужено — чипом стану чи вибором менеджерів. Від цього залежать підпис і «загальні» числа підсумку. */
+  const pickNarrowed = isPickNarrowed(data.managers, hiddenMgrs);
+  const filtered = statusFilter != null || pickNarrowed;
+  const scopeLabel = rowsScopeLabel({ role: auth.role, statusFiltered: statusFilter != null, pickNarrowed });
   /** Тінь на правому краю — лише коли праворуч справді є сховані колонки (макет, п.4). */
   const scroller = useRef<HTMLDivElement | null>(null);
   const [moreRight, setMoreRight] = useState(false);
@@ -239,6 +279,7 @@ export function ReportTableSection({
       <div className="rv-bar">
         {toolbar}
         <span style={{ flex: 1 }} />
+        {mgrPicker}
         <ColumnPicker
           toggleable={OPTIONAL_COLS.filter((c) => c.key !== "factUndef")}
           locked={REPORT_COLS.filter((c) => isLockedCol(c.key))}
@@ -275,6 +316,8 @@ export function ReportTableSection({
           * в ОДНОМУ контейнері, а кут «Менеджер» має найвищий z-index.
           */}
         <div ref={scroller} style={{ overflow: "auto", maxHeight: "calc(100vh - 150px)", ...(fs ? { maxHeight: "none", flex: 1 } : null) }}>
+          {/* ↔️ Ширини колонок — CSS за ПОТОЧНИМ порядком (colWidthCss): перестановка несе ширину з собою. */}
+          <style>{colWidthCss("table.rpt-table", colKeys, colW)}</style>
           <table className="data-table rpt-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontVariantNumeric: "tabular-nums" }}>
             <thead>
               {/* Групи над колонками (Гроші · Очікуємо · Дзвінки…) — `<th colSpan>`, щоб назва групи
@@ -291,7 +334,7 @@ export function ReportTableSection({
               <tr>
                 {cols.map((c, i) => (
                   <th key={c.key} onClick={() => onSort(c.key)} {...dnd(c.key)}
-                    ref={c.key === "name" ? mgrTh : undefined}
+                    ref={c.key === "name" ? mgrTh : (el) => { thRefs.current[c.key] = el; }}
                     className={[c.key === "name" ? "sticky-mgr" : "", c.key === sortKey ? "on" : "", bandStart.has(c.key) ? "gl" : ""].join(" ").trim() || undefined}
                     title={isPinnedCol(c.key) ? undefined : "Клік — сортування; перетягніть, щоб змінити порядок"}
                     style={{
@@ -318,6 +361,14 @@ export function ReportTableSection({
                         title="Потягніть, щоб змінити ширину · подвійний клік — як було"
                         onPointerDown={startResize} onClick={(e) => e.stopPropagation()}
                         onDoubleClick={(e) => { e.stopPropagation(); resetWidth(); }}
+                        className="rpt-resize" />
+                    )}
+                    {!isPinnedCol(c.key) && (
+                      <span role="separator" aria-orientation="vertical" aria-label={`Змінити ширину колонки «${c.title}»`}
+                        title="Потягніть, щоб змінити ширину · подвійний клік — як було"
+                        onPointerDown={startColResize(c.key)} onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => { e.stopPropagation(); resetColWidth(c.key); }}
+                        draggable={false} onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
                         className="rpt-resize" />
                     )}
                     {/* Стрілка — лише на активній колонці та при наведенні (макет, п.9). */}
@@ -359,7 +410,8 @@ export function ReportTableSection({
               <tr>
                 {cols.map((c) => (
                   <FootCell key={c.key} col={c} rows={rows} scopeLabel={scopeLabel} count={rows.length}
-                    callbackMedian={statusFilter ? null : data.missedMeta?.medianMin ?? null} />
+                    planGone={filtered ? 0 : data.glance.planGone ?? 0}
+                    callbackMedian={filtered ? null : data.missedMeta?.medianMin ?? null} />
                 ))}
               </tr>
             </tfoot>
@@ -368,7 +420,7 @@ export function ReportTableSection({
       </div>
 
       <div className="rv-under">
-        <MissedOutside data={data} rows={rows} filtered={statusFilter != null} />
+        <MissedOutside data={data} rows={rows} filtered={filtered} />
         <details className="rv-how">
           <summary>Як читати таблицю</summary>
           <p>
@@ -573,7 +625,9 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
   }
 }
 
-function FootCell({ col, rows, scopeLabel, count, group, callbackMedian }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
+function FootCell({ col, rows, scopeLabel, count, group, callbackMedian, planGone = 0 }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
+  /** 🔁 10477: план тих, хто пішов, - ні на кому з рядків не лежить, але в план підсумку входить. Лише для загального підсумку. */
+  planGone?: number;
   /** Підсумок ГРУПИ (команди) всередині таблиці — тонший, ніж загальний унизу. */
   group?: boolean;
   /** ⏱ Медіана передзвону ЦЬОГО підсумку — з сервера одним запитом (медіани не складаються). */
@@ -601,7 +655,12 @@ function FootCell({ col, rows, scopeLabel, count, group, callbackMedian }: { col
     const n = rows.reduce((s, m) => s + (m.missed?.missed ?? 0), 0), nc = rows.reduce((s, m) => s + (m.missed?.noCallback ?? 0), 0);
     return <td style={st}>{n}{nc > 0 && <span style={{ color: "var(--danger)", fontSize: 11, fontWeight: 500 }}> ({nc})</span>}</td>;
   }
-  const f = footValue(col.key, rows);
+  const f0 = footValue(col.key, rows);
+  // 🔁 10477: без цього підсумок плану «схуд» би рівно на план тих, хто пішов, а відсоток виріс би сам собою.
+  const f = planGone > 0 && col.key === "plan" && f0.value != null ? { ...f0, value: f0.value + planGone }
+    : planGone > 0 && col.key === "pct" && f0.extra ? (() => { const e = f0.extra as { num: number; den: number }; const den = e.den + planGone;
+        return { ...f0, value: den > 0 ? Math.round((e.num / den) * 100) : null }; })()
+    : f0;
   // 🎯 Підсумок групи, де жодної людини не виміряно, — «не вимірюється», а не «—» (рецензія 17.09.2026).
   if (col.key === "firstTouch" && rows.length > 0 && rows.every((m) => m.firstTouch?.state !== "measured")) {
     return <td style={{ ...st, color: "var(--text-muted)", fontWeight: 500 }}>не вимірюється</td>;

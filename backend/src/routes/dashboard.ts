@@ -10,6 +10,8 @@ import { countsAsContactSql, KOMMO_CHANNEL, SCREEN_MAX_BYTES } from "../core/kom
 import { kommoDriveFile, KommoFileError } from "../kommo/client.js";
 import * as carrierPhones from "../core/carrierPhones.js";
 import { stepState, stepVerdict, phoneState } from "../core/clientNextStep.js";
+import { hideKvpTeamRow, kvpTeamRowName } from "../core/kvpTeamRows.js";
+import { KVP_DEPT_TEAM_ID } from "../core/prozorroAssign.js";
 import { isReturned, RETURN_GAP_DAYS } from "../core/reactivationFilters.js";
 import { mergeNoteComment } from "../core/receivableNoteMerge.js";
 import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
@@ -28,7 +30,8 @@ import { overviewCache } from "../core/lazyCache.js";
 
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, linkedinCount: 0, prozorroCount: 0, otherCount: 0, noChannelCount: 0 } as const;
-import { kommoLeadUrl } from "../core/kommoLinks.js";
+import { kommoLeadUrl, kommoCompanyUrl, kommoContactUrl } from "../core/kommoLinks.js";
+import { adClientLinks, type AdClientKommoTarget } from "../core/adClientLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
 import { canCloseDeal } from "../core/firstTouchClose.js";
 import { checkPriceNote } from "../core/firstTouchPriceReasons.js";
@@ -63,6 +66,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
+import { missedDeals } from "../core/missedDeals.js";
 import { levelByManager } from "../core/employeeLevel.js";
 import { canAssignMissedTask, LEADERSHIP_ROLES, hoursSince, taskState, buttonTaskTitle, buttonTaskDescription, mondayOf, canSetCallbackNorm, callbackNormVerdict, clientNameOf } from "../core/missedNoCallbackRules.js";
 import { missedPeriod, missedScopeFor, ownerlessInScope, dealInWindowLateral, NO_DEAL_STATES, SERIES_GRANULARITIES, type NoDealState, type SeriesGranularity } from "../core/missedCallsRules.js";
@@ -134,6 +138,7 @@ import * as receivableNotePick from "../core/receivableNotePick.js";
 import { agreementActual, defaultAgreementDeal } from "../core/receivableAgreement.js";
 import * as callLink from "../core/receivableCallLink.js";
 import { callsNormFor } from "../core/callsNormPlan.js";
+import { gonePlans } from "../core/planTransfer.js";
 import { RUBRIC_DEBT_V1, type DebtResult } from "../core/receivableCallAi.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { FX_UAH_SQL } from "../core/receivablesFxSql.js";
@@ -170,6 +175,7 @@ import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as orphanRelease from "../core/orphanRelease.js";
 import * as problemClient from "../core/problemClient.js";
+import * as clientTripConfirm from "../core/clientTripConfirm.js";
 import * as clientCommentLog from "../core/clientCommentLog.js";
 import * as clientKindFacts from "../core/clientKindFacts.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
@@ -6238,6 +6244,10 @@ dashboardRouter.get("/ads/clients", async (req, res) => {
   const to = dateParam(req.query.to) ?? today;
   const { adSources } = await getSettings();
   const r = await adClients(from, to, adSources);
+  // 🔗 19.11.2026 (Роман): назва клієнта веде в Kommo — компанія / контакт / угода (`core/adClientLinks.ts`, `#3318`).
+  const links = await adClientLinks(r.clients.map((c) => c.clientKey));
+  const linkUrl = (t: AdClientKommoTarget | null | undefined): string | null =>
+    !t ? null : t.kind === "company" ? kommoCompanyUrl(t.id) : t.kind === "contact" ? kommoContactUrl(t.id) : kommoLeadUrl(t.id);
   // 🔁 #8704: клієнти (не лише постійні) — для фільтрів «Стали постійними / Працюють зараз», як у блоці LTV лідгенів.
   res.json({
     from: r.from, to: r.to, campaigns: r.campaigns, cohorts: r.cohorts, totals: r.totals,
@@ -6245,6 +6255,7 @@ dashboardRouter.get("/ads/clients", async (req, res) => {
       clientKey: c.clientKey, name: c.name, campaign: c.campaign, firstLead: c.firstLead,
       segment: c.segment, state: c.state, qualified: c.qualified, group: c.group,
       deals: c.deals, margin: c.margin, repeatMargin: c.repeatMargin,
+      kommoUrl: linkUrl(links.get(c.clientKey)), kommoKind: links.get(c.clientKey)?.kind ?? null,
     })),
   });
 });
@@ -6693,15 +6704,21 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // 🌙 Сезонний не в сезоні — не в реактивації (задача 8351): ні вкладки, ні циклу.
   // ⚠️ Проблемний клієнт (8350): діюча позначка — до першого замовлення ПІСЛЯ неї (рахунок чи оплата).
   const problemMarks = await problemClient.problemsFor(pool, clientKeys);
+  // 🧾 Поїздка поза CRM, підтверджена тімлідом (9045): для кольору — замовлення, для циклу — рахунок (вимикач
+  // `TRIP_CLEARS_REACT`). У гроші не йде. `reactInv` — єдиний вхід циклу на цьому екрані, щоб вкладка й кнопки не розійшлись.
+  const tripByKey = await clientTripConfirm.tripsFor(pool, clientKeys);
+  const tripDayOf = (key: string) => tripByKey.get(key)?.day ?? null;
+  const reactInv = (key: string) => clientTripConfirm.reactInvoiceDate(lastInvByKey.get(key) ?? null, tripDayOf(key));
   const activeProblem = new Map<string, problemClient.ProblemMark>();
   for (const c of clientsRes.rows) {
     const m = problemMarks.get(c.client_key);
-    if (m && problemClient.problemActive(m.day, clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null))) {
+    if (m && problemClient.problemActive(m.day,
+      clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null, tripDayOf(c.client_key)))) {
       activeProblem.set(c.client_key, m);
     }
   }
   const inReactNow = (key: string) => !factsFor(seg, key).offSeason && !activeProblem.has(key)
-    && reactCycleRules.inReact(lastInvByKey.get(key) ?? null, nowYm);
+    && reactCycleRules.inReact(reactInv(key), nowYm);
   // 🔗 Хто приєднаний до кожного рядка (ТЗ 22.09, п.2.3) — лише назви, у гроші не входить.
   const aliasByKey = await clientAliasNames.aliasNamesFor(clientKeys);
   // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
@@ -6940,7 +6957,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const leadOf = (c: (typeof rosterRows)[number]) => {
     const f = leadFacts.get(c.client_key);
     const segment = factsFor(seg, c.client_key).segment;
-    const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null);
+    const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null, tripDayOf(c.client_key));
     const orderDays = lastOrder ? clientLeadRules.daysBetween(lastOrder, todayKyiv) : null;
     // 🌙 Сезонний не в сезоні (8351) — зелений: дзвонити не треба, і «Немає роботи» на ньому не горить.
     const off = factsFor(seg, c.client_key).offSeason;
@@ -6969,6 +6986,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       offSeason: off,
       // ⚠️ Діюча позначка «Проблемний» (8350): причина, коментар, коли й хто. `null` — звичайний клієнт.
       problem: activeProblem.get(c.client_key) ?? null,
+      // 🧾 Діюче підтвердження поїздки поза CRM (9045): дата, коментар, хто й коли. `null` — немає.
+      trip: tripByKey.get(c.client_key) ?? null,
     };
   };
   const leadByKey = new Map(rosterRows.map((c) => [c.client_key, leadOf(c)]));
@@ -7049,7 +7068,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       // тих, хто у вкладці; решті — null («не стосується»), щоб фронт не малював кнопки живому клієнту.
       lastInvoice: lastInvByKey.get(c.client_key) ?? null,
       reactCycle: inReactNow(c.client_key)
-        ? reactCycle.cycleView(lastInvByKey.get(c.client_key) ?? null, cyclesByKey.get(c.client_key), todayStr)
+        ? reactCycle.cycleView(reactInv(c.client_key), cyclesByKey.get(c.client_key), todayStr)
         : null,
       history: histByKey.get(c.client_key) ?? histMonths.map(() => 0),
       plan,
@@ -7174,6 +7193,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     tabGroupRank: clientTabs.TAB_GROUP_RANK,
     // 🔁 Пул лідгенів (ТЗ 22.09, п.4.2–4.4): хто бачить вкладку пулу і хто може брати.
     leadgenPool: await leadgenPoolAccess(auth),
+    // 🧾 Хто може подати / зняти поїздку поза CRM (9045): тімлід і адмін-рівень — та сама функція, що гейтить роут.
+    // Межа команди тімліда — у роуті.
+    canConfirmTrip: clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)),
     reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, decisionDays: reactCycleRules.DECISION_DAYS,
                   selfGraceDays: reactCycleRules.SELF_GRACE_DAYS, weeklyCap: reactCycleRules.WEEKLY_CAP,
                   launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR,
@@ -8043,7 +8065,10 @@ dashboardRouter.get("/client-card", async (req, res) => {
   // ⚠️ «Проблемний» (8350): позначка діє до першого замовлення ПІСЛЯ неї — та сама дата, що в списку.
   const problemMark = (await problemClient.problemsFor(pool, [clientKey])).get(clientKey) ?? null;
   const cardLastInv = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
-  const problemOn = problemMark != null && problemClient.problemActive(problemMark.day, clientLeadRules.lastOrderDate(h?.last_paid ?? null, cardLastInv));
+  // 🧾 Поїздка поза CRM (9045) — те саме, що в списку: для «Проблемного» замовлення, для циклу рахунок.
+  const cardTripDay = (await clientTripConfirm.tripsFor(pool, [clientKey])).get(clientKey)?.day ?? null;
+  const problemOn = problemMark != null
+    && problemClient.problemActive(problemMark.day, clientLeadRules.lastOrderDate(h?.last_paid ?? null, cardLastInv, cardTripDay));
   const [cardStep, cardPhones, cardLastCall, cardTodayRes] = await Promise.all([
     pool.query<{ id: number; text: string; due_date: string | null; author: string | null; kommo_lead_id: string | null; kommo_task_id: string | null; kommo_error: string | null }>(
       `SELECT s.id, s.text, to_char(s.due_date, 'YYYY-MM-DD') AS due_date, COALESCE(m.name, u.full_name, u.email) AS author,
@@ -8109,14 +8134,15 @@ dashboardRouter.get("/client-card", async (req, res) => {
   const adminLog = await clientAdminLog(clientKey);
   // 🔁 Цикл реактивації (ТЗ 22.09, блок 4) — те саме правило й ті самі кнопки, що в рядку списку.
   const cardLastInvoice = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
+  const cardReactInv = clientTripConfirm.reactInvoiceDate(cardLastInvoice, cardTripDay);
   const cardCycles = await reactCycle.cyclesFor(pool, [clientKey]);
 
   res.json({
     clientKey,
     clientName: h?.client_name ?? clientKey,
     lastInvoice: cardLastInvoice,
-    reactCycle: reactCycleRules.inReact(cardLastInvoice, today.slice(0, 7))
-      ? reactCycle.cycleView(cardLastInvoice, cardCycles.get(clientKey), today) : null,
+    reactCycle: reactCycleRules.inReact(cardReactInv, today.slice(0, 7))
+      ? reactCycle.cycleView(cardReactInv, cardCycles.get(clientKey), today) : null,
     managerName: h?.manager_name ?? null,
     teamName: h?.team_name ?? null,
     pinned: h?.pinned_manager_id != null,
@@ -8506,6 +8532,44 @@ dashboardRouter.post("/client-problem/clear", async (req, res) => {
   if (!(await problemClient.clearProblem(pool, clientKey))) return res.status(409).json({ error: "Позначки «Проблемний» на клієнті немає" });
   await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
     [clientKey, auth.userId, "⚠️ Позначку «Проблемний клієнт» знято"]);
+  res.json({ ok: true, clientKey });
+});
+
+/**
+ * 🧾 «ПОЇЗДКА БУЛА (ПОЗА CRM)» (задача 9045; ТЗ Юлі 16.11.2026; Роман 18.11.2026 «роби»). Подає тімлід (клієнта
+ * своєї команди) і адмін-рівень (будь-якого; Роман 18.11 «подати можна всім (адмінам)»): роль (`canConfirmTrip`) і
+ * межа (`canSeeClient`) — ПЕРШИМ оператором, разом (403 = гейт, не валідація). Дата поїздки + обовʼязковий коментар (№ рахунку, як оплачено). Дата рахується замовленням для
+ * кольору й рахунком для циклу реактивації; у гроші не йде. Коментар дублюється в коментарі клієнта.
+ */
+dashboardRouter.post("/client-trip-confirm", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)) || !clientKey || !(await canSeeClient(auth, clientKey))) {
+    return res.status(403).json({ error: "Підтвердити поїздку може тімлід команди клієнта або керівництво" });
+  }
+  const dayErr = clientTripConfirm.tripDayError(req.body?.day, kyivToday());
+  if (dayErr) return res.status(400).json({ error: dayErr });
+  const day = String(req.body.day);
+  const note = clientTripConfirm.cleanTripNote(req.body?.note);
+  if (!note) return res.status(400).json({ error: `Напишіть № рахунку і як оплачено (від ${clientTripConfirm.TRIP_NOTE_MIN} символів)` });
+  await clientTripConfirm.confirmTrip(pool, { clientKey, userId: auth.userId, day, note });
+  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
+    [clientKey, auth.userId, `🧾 Поїздка поза CRM ${day.split("-").reverse().join(".")}: ${note}`]);
+  res.json({ ok: true, clientKey, day });
+});
+
+/** Зняти підтвердження поїздки — та сама межа. Рядок лишається в історії (`revoked_at`). */
+dashboardRouter.post("/client-trip-confirm/clear", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)) || !clientKey || !(await canSeeClient(auth, clientKey))) {
+    return res.status(403).json({ error: "Зняти підтвердження може тімлід команди клієнта або керівництво" });
+  }
+  if (!(await clientTripConfirm.clearTrips(pool, clientKey, auth.userId))) {
+    return res.status(409).json({ error: "Підтвердженої поїздки на клієнті немає" });
+  }
+  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
+    [clientKey, auth.userId, "🧾 Підтвердження поїздки поза CRM знято"]);
   res.json({ ok: true, clientKey });
 });
 
@@ -9255,8 +9319,15 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   // client shows under exactly one manager — same identity rule as /loyalty.
   const activeMonths = (await getSettings()).sleepingWindowMonths;
   const clientsRes = await pool.query<{ manager_id: number; client_key: string; name: string; orders: string; revenue: string; last_paid: string }>(
+    // ⏱ ОСНОВНИЙ МЕНЕДЖЕР РАХУЄТЬСЯ В ТОМУ САМОМУ ПРОХОДІ, ЩО Й АГРЕГАТ КЛІЄНТА (18.11.2026, `#9962`).
+    // Було: окремий підзапит `primary_mgr` з ROW_NUMBER, приєднаний до `agg`. Плановик оцінював
+    // його в один рядок і перераховував віконну функцію НА КОЖНОГО клієнта: заміряно на проді
+    // 3,3 млн відкинутих пар і 0,9–1,6 с (з «замовклими» — понад 10 с). Правило те саме:
+    // менеджер із найбільшою кількістю оплачених угод клієнта, при рівності — з найсвіжішою.
     `WITH scoped AS (
-       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price
+       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price,
+              COUNT(*) OVER (PARTITION BY d.client_key, d.manager_id) AS mgr_orders,
+              MAX(d.created_at_kommo) OVER (PARTITION BY d.client_key, d.manager_id) AS mgr_last
        FROM deals d
        JOIN managers m ON m.id = d.manager_id AND m.is_active
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -9266,18 +9337,12 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
        SELECT client_key,
               (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS name,
               COUNT(*) AS orders, COALESCE(SUM(price),0) AS revenue,
-              MAX(created_at_kommo) AS last_paid
+              MAX(created_at_kommo) AS last_paid,
+              (array_agg(manager_id ORDER BY mgr_orders DESC, mgr_last DESC))[1] AS manager_id
        FROM scoped GROUP BY client_key
-     ),
-     primary_mgr AS (
-       SELECT client_key, manager_id FROM (
-         SELECT client_key, manager_id,
-                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(created_at_kommo) DESC) AS rn
-         FROM scoped GROUP BY client_key, manager_id
-       ) z WHERE rn = 1
      )
-     SELECT pm.manager_id, a.client_key, a.name, a.orders, a.revenue, a.last_paid
-     FROM agg a JOIN primary_mgr pm ON pm.client_key = a.client_key
+     SELECT a.manager_id, a.client_key, a.name, a.orders, a.revenue, a.last_paid
+     FROM agg a
      WHERE a.orders >= 2 ${includeInactive ? "" : `AND a.last_paid >= now() - interval '${activeMonths} months'`}
      ORDER BY a.revenue DESC`
   );
@@ -10168,6 +10233,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   //    щоб Звіт КВП рахував прогноз ТИМ САМИМ кодом, а не «за тим самим сенсом» —
   //    рішення 06.08.2026 доїхало сюди й не доїхало туди саме через дві копії.
   const expPlannedM = forecast.expectedSplitByMonth(expDays, kyivToday);
+  // ⏳ Очікування з плановою датою В МЕЖАХ обраного періоду (тиждень Звіту; пункт 2 TOP Weekly 16.11).
+  const expRangeM = forecast.expectedInRange(expDays, from, to);
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
   /** Канальна конверсія в контракт: counts завжди, % лише при taken ≥ 10 — той самий
    *  поріг, що в combined, і рахується ТИМ САМИМ полем `cohortPct` ядра. */
@@ -10393,6 +10460,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // не надійшли. Не входить ні в прогноз, ні в два сусідні числа — саме тому й
       // зникало з екрана (07.09.2026: 67% зони по відділу).
       expectPastMonths: Math.round(expPlannedM.get(m.id)?.pastMonths ?? 0),
+      // ⏳ Планова дата в межах ОБРАНОГО періоду — для «з очікуваннями» в режимі «Тиждень».
+      expectInPeriod: Math.round(expRangeM.get(m.id) ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       // 🔴 ПРОГНОЗ МІСЯЦЯ (рішення власника 06.08.2026) = ФАКТ ② + ОЧІКУВАННЯ З
       // ПЛАНОВОЮ ДАТОЮ ОПЛАТИ В ЦЬОМУ Ж МІСЯЦІ. Контрольне число власника, звірене
@@ -10540,8 +10609,15 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const dFact = dismissed.reduce((s, m) => s + m.fact, 0);
   const dSuc = dismissed.reduce((s, m) => s + m.factSuccess, 0);
   const dPaid = dismissed.reduce((s, m) => s + m.factPaid, 0);
+  // 🔁 10477: план тих, хто пішов, з листопада 2026 ні на кому не лежить («не розподілено»), тож у плані команди
+  // він іде окремим доданком - інакше команда «схудла» б на нього. Список людей - лише коли період у межах одного
+  // місяця: пул місячний, і на «з – по» через межу місяців поіменний розклад збрехав би.
+  const gonePlanTotal = Math.round(await plans.proratedGonePlan(from, to, teamId));
+  const goneList = gonePlanTotal > 0 && from.slice(0, 7) === to.slice(0, 7) && !managerId
+    ? await gonePlans(`${from.slice(0, 7)}-01`, teamId) : [];
   const glance = {
-    plan: managers.reduce((s, m) => s + m.plan, 0),
+    plan: managers.reduce((s, m) => s + m.plan, 0) + (managerId ? 0 : gonePlanTotal),
+    planGone: managerId ? 0 : gonePlanTotal,
     fact: managers.reduce((s, m) => s + m.fact, 0) + dFact,
     factSuccess: managers.reduce((s, m) => s + m.factSuccess, 0) + dSuc,
     factPaid: managers.reduce((s, m) => s + m.factPaid, 0) + dPaid,
@@ -10549,6 +10625,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     expectThisMonth: managers.reduce((s, m) => s + m.expectThisMonth, 0),
     expectNextMonth: managers.reduce((s, m) => s + m.expectNextMonth, 0),
     expectPastMonths: managers.reduce((s, m) => s + m.expectPastMonths, 0),
+    expectInPeriod: managers.reduce((s, m) => s + m.expectInPeriod, 0),
     dispatched: managers.reduce((s, m) => s + m.kpi.dispatch.fact, 0),
     dispatchedRevenue: managers.reduce((s, m) => s + m.kpi.dispatch.revenue, 0),
     created: managers.reduce((s, m) => s + m.created, 0),
@@ -10615,6 +10692,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // писати «минуло 4 з 21 (19%)»: сама частка не дає сказати, ЧОГО 19%.
       workingDaysTotal: wdTotal, workingDaysElapsed: wdElapsed },
     role: auth.role, viewerManagerId, elapsed, remainingWorkdays: remWd, glance, managers,
+    // 🔁 10477: хто пішов із планом за цей місяць. `pool` - не розподілено, `kept` - лишено за людиною як виконане.
+    gonePlans: goneList.map((g) => ({ managerId: g.managerId, name: g.name, teamId: g.teamId, plan: g.plan, kept: g.kept, pool: g.pool, fact: g.fact })),
     // Окремим масивом, а не серед `managers`: у них немає плану, %, світлофора й темпу,
     // тож змішувати їх у той самий список означало б рахувати статуси по людях, яких немає.
     dismissed,
@@ -11055,13 +11134,19 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // 4289 (канал), тобто ×4.3. Рядок вище раніше стверджував «чисельник того самого
   // каналу, що знаменник» — це було НЕПРАВДОЮ; тепер стало правдою. Тримає `#143`.
   // per-manager → команда = Σ (Σ-інваріант). Тонкий знаменник (0) → «—», не «0%».
-  const [reachedAuto, adsAllTime, lgAllTime, mgrTeamRows] = await Promise.all([
+  const [reachedAuto, adsAllTime, lgAllTime, mgrTeamRows, teamNameRows] = await Promise.all([
     metrics.reachedAutoByManager(adSources),
     metrics.adsAcceptedByMgr({}, adSources),
     metrics.conversionByManager({}, "leadgen"),
     pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers WHERE is_active`),
+    // 🏷 Назви команд: команду без грошей у періоді заводить рядок плану менеджера, і до 20.11.2026 — з ПОРОЖНІМ
+    // імʼям (три безіменні рядки на екрані Романа). Назва береться з `teams`, а не з того, хто першим згадав команду.
+    pool.query<{ id: number; name: string }>(`SELECT id, name FROM teams`),
   ]);
   const teamOfMgr = new Map(mgrTeamRows.rows.map((r) => [r.id, r.team_id]));
+  const teamNameById = new Map(teamNameRows.rows.map((r) => [r.id, r.name]));
+  /** Команди, де є хоч один активний менеджер, — від цього залежить, чи показувати порожній рядок (`core/kvpTeamRows.ts`). */
+  const teamsWithActive = new Set(mgrTeamRows.rows.map((r) => r.team_id).filter((x): x is number => x != null));
   const adsByMgr = new Map(adsAllTime.map((x) => [x.managerId, x.count]));
   const lgByMgr = new Map(lgAllTime.map((x) => [x.managerId, x.taken]));
   const convLT = new Map<number, { numAd: number; numLg: number; adsDen: number; lgDen: number }>();
@@ -11080,7 +11165,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
 
   for (const [mid, mp] of mgrPlan) {
     if (mp.teamId == null) continue;
-    const e = teamGet(mp.teamId, "");
+    const e = teamGet(mp.teamId, kvpTeamRowName(teamNameById.get(mp.teamId), mp.teamId));
     const rev = recvByMgr.get(mid)?.revenue ?? 0;
     const su = succByMgr.get(mid); const cv = convByMgr.get(mid);
     e.plan += mp.plan;
@@ -11143,7 +11228,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       remainingToPlan: kvpWholeMonth ? t.plan - t.revenue : null,
       managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
     };
-  }).sort((a, b) => b.revenue - a.revenue);
+  })
+    // 🧹 Порожній рядок команди без активних менеджерів (стара команда 11) і порожній рядок відділу КВП (37283,
+    // одна Левентова без CRM) не показуються — рішення Романа 20.11.2026. Рядок із грошима чи планом не ховається ніколи.
+    .filter((t) => !hideKvpTeamRow(t, teamsWithActive.has(t.teamId), KVP_DEPT_TEAM_ID))
+    .sort((a, b) => b.revenue - a.revenue);
 
   // Стратегічний план (🔒 read-only) = Σ планів команд у таблиці — ОДНЕ джерело з
   // рядками дашборда. Раніше strategicRevenuePlac фільтрував m.is_active і мовчки
@@ -11450,6 +11539,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
         cac: newClients > 0 ? Math.round(budgetFact / newClients) : null,
         cacBudget: Math.round(budgetFact), cacNewClients: newClients,
         avgCycleDays: avgCycle,
+        // 🧾 Середній чек ФАКТИЧНИЙ (METRICS_GLOSSARY §5) = отримані кошти ÷ угоди тієї самої множини;
+        // «нових» — та сама формула над сегментом нових клієнтів тієї ж каси (receivedSeg, ядро money).
+        // Правки 17.11.2026: Звіт КВП показує обидва в блоці «Показники місяця». Ділення на нуль → null, не 0.
+        avgCheck: received.deals > 0 ? Math.round(received.revenue / received.deals) : null,
+        avgCheckNew: receivedSeg.newSeg.deals > 0 ? Math.round(receivedSeg.newSeg.revenue / receivedSeg.newSeg.deals) : null,
         lost: { deals: lost.count, sum: lost.sum, nonTargetLeads: nonTarget },
       };
     })(),
@@ -11808,7 +11902,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
       const residualCarry = { amount: teamCo.amount - acc.amount, deals: teamCo.deals - acc.deals };
       if (residualPlan > 0 || residualFact > 0 || residualCarry.deals !== 0) {
         rows.push({
-          managerId: 0, name: `⚠️ ${tf?.name ?? "команда"}: без активного менеджера (звільнені)`, teamId: tid,
+          managerId: 0, name: `⚠️ ${tf?.name ?? "команда"}: ті, хто пішов (їхній факт і нерозподілений план)`, teamId: tid,
           plan: residualPlan, fact: residualFact,
           pctPlan: residualPlan > 0 ? Math.round((residualFact / residualPlan) * 100) : null,
           remaining: Math.max(0, residualPlan - residualFact), expectedThisMonth: 0,
@@ -12363,15 +12457,41 @@ dashboardRouter.get("/missed-calls/list", async (req, res) => {
   const day = dateParam(req.query.day) ?? kyivToday();
   const scope = missedScopeFor(req.auth!, req.query);
   const onlyNoCallback = req.query.noCallback === "1";
-  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback);
+  // 20.11.2026: `to` — список за весь обраний період (тиждень, місяць), щоб «Кому передзвонити» збігався з числом у смузі.
+  // Не довше 31 дня і не раніше `day`; інакше — один день, як і було. Стеля рядків і `truncated` — ті самі.
+  const toQ = dateParam(req.query.to);
+  const spanDays = toQ ? (Date.parse(toQ) - Date.parse(day)) / 86_400_000 : -1;
+  const to = toQ && spanDays >= 0 && spanDays <= 31 ? toQ : day;
+  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback, to);
   res.json({
-    day, onlyNoCallback, truncated,
+    day, to, onlyNoCallback, truncated,
     // Явний перелік полів, а не `...r`: нова властивість рядка не поїде назовні сама (#17e2).
     rows: rows.map((r) => ({
       uniqueid: r.uniqueid, at: r.at, phone: r.phone, clientKey: r.clientKey,
       managerId: r.managerId, managerName: r.managerName, bucket: r.bucket,
       next: r.next, nextMin: r.nextMin, dealId: r.dealId,
       dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId),
+      mobile: r.mobile, waiting: r.waiting, waitH: r.waitH,
+    })),
+  });
+});
+
+/**
+ * 📄 ПРОПУЩЕНІ УГОДИ (рішення Романа 20.11.2026, словник §11a) — вкладка поруч із пропущеними дзвінками.
+ * Межа — той самий `pre("/api/dashboard/missed-calls")`, кламп — той самий `missedScopeFor`.
+ * Підсумок, таблиця й список — одним викликом і від однієї миті «зараз».
+ */
+dashboardRouter.get("/missed-calls/deals", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(req.auth!, req.query);
+  const r = await missedDeals(from, to, scope, new Date());
+  res.json({
+    period: { from, to }, summary: r.summary, managers: r.managers, truncated: r.truncated,
+    ownerlessInScope: ownerlessInScope(scope),
+    // Явний перелік полів, а не `...r`: нова властивість рядка не поїде назовні сама (#17e2).
+    rows: r.rows.map((x) => ({
+      dealId: x.dealId, dealUrl: kommoLeadUrl(x.dealId), at: x.at, phone: x.phone,
+      managerId: x.managerId, managerName: x.managerName, teamName: x.teamName, next: x.next, nextMin: x.nextMin,
     })),
   });
 });

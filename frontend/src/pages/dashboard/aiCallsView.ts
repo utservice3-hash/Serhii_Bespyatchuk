@@ -556,6 +556,41 @@ export function reviewByTeam(rows: readonly ReviewTeamRow[], monday: string): Re
   return { days, teams, total };
 }
 
+// ─── 🎯 «Потребує дії» — нуль у черзі (Роман 23.11.2026, задача 10734 п.1; зустріч 20.11: Юлія 32:33, Сергій 44:38) ─────
+/**
+ * Розмова з причиною розбору лежить рівно в одному кошику:
+ *   • `need` — ще не розібрана, угода ВІДКРИТА: це і є «Потребує дії», ціль — 0;
+ *   • `closed` — ще не розібрана, а угоду вже закрито в Kommo («не реалізовано» чи успіх): з «Потребує дії» вона виходить,
+ *     але не зникає — лежить у «Закриті без розбору» і там її можна погодити як завжди;
+ *   • `reviewed` — розібрана тімлідом або дійшла до «Виставлення рахунку».
+ * Без причини розбору — `null`. Стан угоди — від сервера (`dealOutcome`); невідома угода вважається відкритою, щоб
+ * розмова не вийшла з «Потребує дії» через брак даних.
+ */
+export type ReviewBucketT = "need" | "closed" | "reviewed";
+export function reviewBucket(r: { reviewReason: ReviewReasonT | null; needsReview: boolean; dealOutcome: { state: string } | null }): ReviewBucketT | null {
+  if (r.reviewReason == null) return null;
+  if (!r.needsReview) return "reviewed";
+  return r.dealOutcome != null && r.dealOutcome.state !== "open" ? "closed" : "need";
+}
+/** Режим списку: три кошики і «Усі заявки». Підписи — одні на перемикач і на смугу. */
+export type ListModeT = ReviewBucketT | "all";
+export const LIST_MODE_UA: Record<ListModeT, string> = { need: "Потребує дії", closed: "Закриті без розбору", reviewed: "Розібрані", all: "Усі заявки" };
+export const inListMode = (r: Parameters<typeof reviewBucket>[0], mode: ListModeT): boolean => mode === "all" || reviewBucket(r) === mode;
+/**
+ * Скільки з «лишилось» у «Розборі по командах» — уже закриті угоди («Закриті без розбору»), по командах і разом, за той самий
+ * тиждень і тим самим днем розмови, що `reviewByTeam`. Тож «Потребує дії» команди = лишилось − закриті.
+ */
+export function reviewClosedLeft(rows: readonly (ReviewTeamRow & { needsReview: boolean; dealOutcome: { state: string } | null })[], monday: string): { byTeam: Map<number | null, number>; total: number } {
+  const days = new Set(Array.from({ length: 7 }, (_, i) => addDays(monday, i)));
+  const byTeam = new Map<number | null, number>();
+  let total = 0;
+  for (const r of rows) {
+    if (!r.inReport || r.reviewClosure != null || !days.has(kyivDayOf(r.calledAt)) || reviewBucket(r) !== "closed") continue;
+    byTeam.set(r.teamId, (byTeam.get(r.teamId) ?? 0) + 1); total++;
+  }
+  return { byTeam, total };
+}
+
 /** Медіана хвилин (реакція по втрачених) — `null`, якщо даних немає. */
 export function medianMin(xs: readonly (number | null | undefined)[]): number | null {
   const v = xs.filter((x): x is number => typeof x === "number").sort((a, b) => a - b);

@@ -118,4 +118,4 @@ export const CLOSE_TASK_TEXT = "Угоду закрито з дашборда (�
 
 /** Хто може закривати й повертати (рішення 16.10, п.1). Скоуп тімліда — окремо, через `missedScopeFor`. */
 export const canCloseDeal = (roleKey: string | null | undefined): boolean =>
-  roleKey === "team_lead" || roleKey === "admin" || roleKey === "kvp";
+  roleKey === "team_lead" || roleKey === "admin" || roleKey === "ceo" || roleKey === "kvp"; // ceo — Роман 23.11.2026

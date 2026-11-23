@@ -253,13 +253,18 @@ export interface LtvClient {
   clientKey: string; name: string; firstDay: string; firstDealId: number; firstDealUrl: string; handoffDay: string;
   handedBy: string; deals: number; ltv: number; turnover: number; ownerName: string | null; segment: string | null; state: string | null;
   marks: ("merged" | "pool")[];
+  /** Звідки прийшов: «Источник клиента» ліда, який передав лідген (задача 8719); невідоме — словами з сервера. */
+  source: string; sourceKnown: boolean;
 }
+/** Рядок «За джерелом» (задача 8719): той самий підсумок, що й шапка блока; Σ рядків = `totals`. */
+export interface LtvSourceRow extends LtvAgg { source: string; known: boolean }
 export interface LtvPerson { managerId: number | null; name: string; dismissed: boolean; agg: LtvAgg; pool: { clients: number; ltv: number }; top: LtvClient[] }
 export interface LtvCohort extends LtvAgg { ym: string; warn: boolean; unlinkedPct: number | null }
 export interface LeadgenLtvResp {
   builtAt: string | null; from: string; to: string; totals: LtvAgg; pool: { clients: number; ltv: number };
   people: LtvPerson[]; others: { agg: LtvAgg; pool: { clients: number; ltv: number }; people: LtvPerson[] } | null;
   cohorts: LtvCohort[]; unknownActors: number; turnoverMissing: number;
+  bySource: LtvSourceRow[];
 }
 export async function fetchLeadgenLtv(params: { from: string; to: string; managerId?: number }): Promise<LeadgenLtvResp> {
   const { data } = await api.get<LeadgenLtvResp>("/dashboard/leadgen-ltv", { params });
@@ -403,11 +408,17 @@ export async function fetchLeadgenStats(params: { from: string; to: string; grai
 export type MissedDayBucket = "work" | "evening" | "weekend" | "night";
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
+  /** Пропущені від номерів перевізників — у `missed` НЕ входять (20.11.2026), показуються підписом під плиткою. */
+  carriers: number;
   callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number;
   /** `null` — передзвонів за період не було, тобто медіану нема з чого рахувати. */
   medianMin: number | null;
   buckets: Record<MissedDayBucket, number>;
+  /** 📱 З `missed` — усі плечі «Вхідний перехоплений» (на мобільні менеджерів). «На лінію» = `missed − missedMobile`. */
+  missedMobile: number;
+  /** ⏳ З `missed` — з номером досі немає розмови від 10 с («чекають передзвону», рішення Романа 20.11.2026); з них старші за добу. */
+  waiting: number; waitingOverDay: number;
 }
 export interface MissedManagerRow {
   /** `null` — рядок «Без відповідального»: дзвінок не дійшов до людини. */
@@ -417,6 +428,8 @@ export interface MissedManagerRow {
   teamId: number | null;
   missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
   noCallback: number;
+  /** «Чекають передзвону»: з номером досі немає розмови від 10 с — те саме, що `summary.waiting`. */
+  waiting: number;
   /** У підсумковому рядку ЗАВЖДИ `null`: медіани не додаються й не усереднюються. */
   medianMin: number | null;
 }
@@ -426,6 +439,7 @@ export interface MissedTeamRow {
   name: string;
   missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
   noCallback: number;
+  waiting: number;
   medianMin: number | null;
 }
 export interface MissedCallsResp {
@@ -896,14 +910,19 @@ export interface MissedListRow {
   /** НАЙРАНІША подія після пропущеного — не «чи був передзвін узагалі». */
   next: MissedNextStep; nextMin: number | null;
   dealId: number | null; dealUrl: string | null;
+  /** 📱 Усі плечі «Вхідний перехоплений» — дзвінок ішов на мобільний менеджера. */
+  mobile: boolean;
+  /** ⏳ З номером досі немає розмови від 10 с; `waitH` — скільки годин минуло від дзвінка. */
+  waiting: boolean; waitH: number;
 }
 export interface MissedListResp {
-  day: string; onlyNoCallback: boolean;
+  /** `to` — кінець періоду списку (= `day`, якщо список за один день). */
+  day: string; to: string; onlyNoCallback: boolean;
   /** true — список обрізано стелею; екран мусить це сказати, а не вдавати повноту. */
   truncated: boolean;
   rows: MissedListRow[];
 }
-export async function fetchMissedList(params: { day: string; noCallback?: "1" } & MissedFilterParams): Promise<MissedListResp> {
+export async function fetchMissedList(params: { day: string; to?: string; noCallback?: "1" } & MissedFilterParams): Promise<MissedListResp> {
   const { data } = await api.get<MissedListResp>("/dashboard/missed-calls/list", { params });
   return data;
 }
@@ -1157,15 +1176,27 @@ export interface PFManager {
   /** Довідково з екрана «Постійні клієнти»: що заявлено вручну і що погоджено по клієнтах. */
   repeatClients?: { approved: number; approvedClients: number; entered: number; declared: number };
   formation: PFState;
+  /** 🔁 10477: що цей менеджер отримав із плану тих, хто пішов (уже сидить у `currentPlan`). */
+  received?: { amount: number; fromName: string; at: string; by: string | null }[];
+}
+/** 🔁 10477: той, хто пішов, і його план за місяць. `pool` - не розподілено; `kept` - лишено за ним як виконане. */
+export interface PFGone { managerId: number; name: string; teamId: number; plan: number; kept: number; pool: number; fact: number }
+export interface PFTransferEvent {
+  batchId: string; at: string; by: string | null; fromManagerId: number; fromName: string; teamId: number | null;
+  kind: "transfer" | "drop"; amount: number; keep: number; parts: { managerId: number; name: string; amount: number }[];
 }
 export interface PFTeam {
   teamId: number | null; teamName: string; total: number;
   recommended: number; carryover: number; approved: number; submitted: number;
   managers: PFManager[];
+  /** 🔁 10477: Σ «не розподілено» і Σ усього плану тих, хто пішов (разом із лишеним за ними). */
+  unassigned?: number; gonePlan?: number; gone?: PFGone[]; history?: PFTransferEvent[];
 }
 export interface PlanFormation {
   month: string; refMonth: string; growthPct: number;
   role: string; canApprove: boolean; canSubmit: boolean; teams: PFTeam[];
+  /** 🔁 10477: чи може цей користувач передавати план (КВП, адмін) і чи відкритий для цього місяць. */
+  canTransfer?: boolean; transferOpen?: boolean;
   /** Мʼяка нижня межа плану на менеджера (₴) з налаштувань; 0 = вимкнено. */
   minPerManager?: number;
 }
@@ -1192,6 +1223,12 @@ export async function submitFormationPlan(managerId: number, month: string, prop
 export async function approveFormationPlan(body: { managerId?: number; teamId?: number; month: string }): Promise<{ approved: number }> {
   const { data } = await api.post<{ ok: boolean; approved: number }>("/plans/formation/approve", body);
   return data;
+}
+export async function transferGonePlan(body: { month: string; fromManagerId: number; mode: "all" | "rest"; parts: { managerId: number; amount: number }[] }): Promise<void> {
+  await api.post("/plans/transfer", body);
+}
+export async function dropGonePlan(body: { month: string; fromManagerId: number }): Promise<void> {
+  await api.post("/plans/transfer/drop", body);
 }
 export async function returnFormationPlan(managerId: number, month: string, returnComment?: string): Promise<void> {
   await api.post("/plans/formation/return", { managerId, month, returnComment });
@@ -1419,6 +1456,9 @@ export interface AdsClient {
   deals: number;                  // успішних угод від першого ліда
   margin: number;                 // LTV: маржа від першого ліда до сьогодні — і не з реклами теж
   repeatMargin: number;           // з неї — повторні замовлення (усе після першої оплаченої угоди)
+  /** Картка клієнта в Kommo: компанія → контакт → угода (`core/adClientLinks.ts`); null — у CRM нічого не знайдено. */
+  kommoUrl: string | null;
+  kommoKind: "company" | "contact" | "deal" | null;
 }
 /** Агрегат групи клієнтів (кампанія / когорта / разом) — рахує сервер (`core/adClientsFold.ts`). */
 export interface AdsClientsAgg {
@@ -1604,6 +1644,8 @@ export interface KvpReport {
     overduePayments: { count: number; sum: number };
     cac: number | null; cacBudget: number; cacNewClients: number;
     avgCycleDays: number | null;
+    /** Середній чек фактичний (отримано ÷ угоди) і той самий по нових клієнтах; null — угод немає. */
+    avgCheck: number | null; avgCheckNew: number | null;
     lost: { deals: number; sum: number; nonTargetLeads: number | null };
   };
   verdict: {
@@ -1700,6 +1742,8 @@ export interface ReportPlanManager {
   // 🗓 Планова дата в МИНУЛИХ місяцях. Не входить у прогноз і не є «простроченим»
   //    з плитки КВП (там межа — сьогодні). Заміряно 07.09.2026: 67.1% зони відділу.
   expectPastMonths: number;
+  /** Очікування з плановою датою оплати в межах ОБРАНОГО періоду (для тижня). */
+  expectInPeriod: number;
   // 🟡 Добір нового бізнесу. У `projected` з 06.08.2026 НЕ входить (рішення власника),
   // але лишається видимим числом — щоб зміна формули читалась, а не зникла тихо.
   dobir: number;
@@ -1752,7 +1796,7 @@ export interface ReportPlanManager {
 export interface ReportPlan {
   scope: { from: string; to: string; isCurrent: boolean; workingDaysTotal: number; workingDaysElapsed: number };
   role: string; viewerManagerId: number | null; elapsed: number; remainingWorkdays: number;
-  glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number; expectPastMonths: number;
+  glance: { plan: number; /** 🔁 10477: з цього - план тих, хто пішов (ні на кому з рядків не лежить) */ planGone?: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number; expectPastMonths: number; expectInPeriod: number;
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
     /**
@@ -1777,6 +1821,8 @@ export interface ReportPlan {
    * якому стоїть половина гейтів. Порожній масив — нормальний стан.
    */
   dismissed: ReportPlanDismissed[];
+  /** 🔁 10477: хто пішов із планом за цей місяць; порожньо, якщо період не в межах одного місяця. */
+  gonePlans?: PFGone[];
   /** Про ДЖЕРЕЛО «першого дотику»: розмови без менеджера, останній AI-розбір, чи розбір існував у періоді (задача 7237). */
   firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; covered: boolean };
   /**
@@ -3459,7 +3505,9 @@ export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: s
   archived?: boolean }
 /** ⚠️ Відома аномалія точки з доказом CRM (ТЗ 28.09, блок 1, п.3) — реєстр `statistics/anomalies.ts`. */
 export interface StatsAnomaly { metric: string; granularity: string; scopeKey: string; period: string; kind: "real" | "data_error" | "corrected"; note: string; crm: string }
-export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[];
+export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; /** З якого дня ряд рахується з CRM (`STATS_CRM_FROM`); раніше точок немає. */ crmFrom: string; crmAble: boolean; live: boolean; series: StatsSeries[];
+  /** 🕐 Коли пораховано найстаріший із рядів відповіді (памʼять рядів на сервері, до 30 хв). */
+  asOf?: string | null;
   anomalies?: StatsAnomaly[];
   /** 📈 Сходинки плану — лише для «Оплата отримана» (②). */
   plan?: { scopeKey: string; points: { period: string; value: number }[] }[] }
@@ -3526,7 +3574,7 @@ export async function fetchCallsNorm(): Promise<CallsNormResp> {
 export async function saveCallsNorm(body: { norm: number; fromMonth: string }): Promise<void> {
   await api.post("/plans/calls-norm", body);
 }
-export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string }): Promise<StatsSeriesResp> {
+export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string; scope?: "main" | "first" }): Promise<StatsSeriesResp> {
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
   return data;
 }
@@ -3787,6 +3835,8 @@ export async function createTaskPlan(payload: {
   days: string[];
   adsCount?: number;
   leadgenCount?: number;
+  linkedinCount?: number;
+  prozorroCount?: number;
   dispatchCount?: number;
   avgCheck?: number;
   conversion?: number;
@@ -4414,7 +4464,13 @@ export interface O2OFormBody { sections: O2OSection[]; enps?: boolean; notes?: b
   satisfaction?: boolean }
 export interface O2OForm { type: string; version: number; questions: O2OFormBody; is_active?: boolean }
 export interface OneOnOneSubject {
+  /** Номер КАРТКИ в «Найм → Співробітники» (`employees.id`): на ній тримаються запис 1×1 і задача (19.11.2026). */
   id: number; name: string; team_id: number | null; team_name: string | null;
+  position: string | null;
+  /** Є пара в Kommo. Без неї 1×1 проводиться так само, задача йде на акаунт дашборду. */
+  has_kommo: boolean;
+  /** Чи є кому поставити задачу: менеджер Kommo або активний акаунт дашборду. */
+  can_take_task: boolean;
   is_team_lead: boolean; overall: number | null; done: boolean; updated_at: string | null;
   // зустрічей у вибраному місяці (їх може бути кілька) + дата ОСТАННЬОЇ
   meetings: number; last_meeting_date: string | null;
@@ -4426,12 +4482,20 @@ export interface O2ONotes {
 }
 export interface OneOnOneRecord {
   // meeting_date — АВТОРИТЕТНА дата зустрічі: саме вона визначає запис (не місяць).
-  subject_manager_id: number; type: string; meeting_date: string; form_version: number;
+  subject_id: number; type: string; meeting_date: string; form_version: number;
   answers: OneOnOneAnswers; overall: number | null; enps_score: number | null; enps_reason: string | null;
   // окремий показник, НЕ входить в overall (для типу В дорівнює enps_score)
   satisfaction_score: number | null;
   notes: O2ONotes | null; conducted_by: number | null; conducted_by_name?: string | null; updated_at?: string;
+  /** Рішення по задачах з минулого 1×1, ухвалені НА ЦІЙ зустрічі (кожна позначка — окремий запис, у порядку дій). */
+  task_reviews?: O2OTaskReview[] | null;
+  /** Задачі, поставлені на ЦІЙ зустрічі (сервер уже відібрав за датою й видимістю, `oneOnOne/meetingTasks.ts`). */
+  tasks_set?: O2OMeetingTask[];
 }
+export interface O2OTaskReview {
+  taskId: number; title: string; outcome: O2OTaskOutcome; at: string; byUserId?: number | null; byName?: string | null;
+}
+export interface O2OMeetingTask { id: number; title: string; deadline: string | null; status: string; resolution: string | null }
 export interface O2OMeeting {
   meeting_date: string; overall: number | null; enps_score: number | null; satisfaction_score: number | null;
   form_version: number; conducted_by: number | null; conducted_by_name: string | null; updated_at: string;
@@ -4452,22 +4516,22 @@ export async function saveO2OForm(type: string, questions: O2OFormBody): Promise
   const { data } = await api.put(`/one-on-ones/forms/${type}`, { questions });
   return { version: data?.version };
 }
-export async function fetchOneOnOneSubjects(type: string, month: string): Promise<{ subjects: OneOnOneSubject[] }> {
+export async function fetchOneOnOneSubjects(type: string, month: string): Promise<OneOnOneSubject[]> {
   const { data } = await api.get("/one-on-ones/subjects", { params: { type, month } });
-  return { subjects: data?.subjects ?? [] };
+  return data?.subjects ?? [];
 }
 /** Журнал зустрічей субʼєкта (кожна зустріч — окремий запис). */
-export async function fetchO2OMeetings(type: string, managerId: number, months = 12): Promise<O2OMeeting[]> {
-  const { data } = await api.get(`/one-on-ones/meetings/${type}/${managerId}`, { params: { months } });
+export async function fetchO2OMeetings(type: string, subjectId: number, months = 12): Promise<O2OMeeting[]> {
+  const { data } = await api.get(`/one-on-ones/meetings/${type}/${subjectId}`, { params: { months } });
   return data?.meetings ?? [];
 }
 /** Запис КОНКРЕТНОЇ зустрічі за датою. Без дати — сьогоднішня (нова зустріч). */
-export async function fetchOneOnOne(type: string, managerId: number, date: string): Promise<OneOnOneRecord> {
-  const { data } = await api.get<OneOnOneRecord>(`/one-on-ones/record/${type}/${managerId}`, { params: { date } });
+export async function fetchOneOnOne(type: string, subjectId: number, date: string): Promise<OneOnOneRecord> {
+  const { data } = await api.get<OneOnOneRecord>(`/one-on-ones/record/${type}/${subjectId}`, { params: { date } });
   return data;
 }
 export async function saveOneOnOne(p: {
-  type: string; subjectManagerId: number; meetingDate: string; answers: OneOnOneAnswers;
+  type: string; subjectId: number; meetingDate: string; answers: OneOnOneAnswers;
   enpsScore?: number | null; enpsReason?: string | null; notes?: O2ONotes | null;
   satisfactionScore?: number | null;
 }): Promise<{ overall: number | null }> {
@@ -4488,6 +4552,7 @@ export async function fetchOneOnOneStats(type: string, months = 6, month?: strin
 export type O2OSignalKey = "missed" | "never" | "avgLow" | "drop" | "enpsLow" | "answerLow" | "tasksOpen";
 export interface O2OSignalHit { key: O2OSignalKey; value: number | null; detail: string }
 export interface O2OPersonFinding {
+  /** Номер картки Найму (субʼєкт 1×1), попри назву поля ядра сигналів. */
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   owed: string; hits: O2OSignalHit[];
 }
@@ -4524,14 +4589,14 @@ export interface O2OOpenTask {
 export type O2OTaskOutcome = "done" | "carried" | "cancelled";
 /** Поставити задачу субʼєкту внизу форми зустрічі (закріплена, знімає лише ведучий). */
 export async function createO2OTask(p: {
-  type: string; subjectManagerId: number; meetingDate: string; title: string; deadline?: string | null;
+  type: string; subjectId: number; meetingDate: string; title: string; deadline?: string | null;
 }): Promise<{ id: number }> {
   const { data } = await api.post("/one-on-ones/task", p);
   return { id: data?.id };
 }
 /** Відкриті задачі з МИНУЛИХ зустрічей (для блоку рев'ю вгорі форми). */
-export async function fetchO2OOpenTasks(type: string, managerId: number, before: string): Promise<O2OOpenTask[]> {
-  const { data } = await api.get(`/one-on-ones/open-tasks/${type}/${managerId}`, { params: { before } });
+export async function fetchO2OOpenTasks(type: string, subjectId: number, before: string): Promise<O2OOpenTask[]> {
+  const { data } = await api.get(`/one-on-ones/open-tasks/${type}/${subjectId}`, { params: { before } });
   return data?.tasks ?? [];
 }
 /** Позначити задачу на зустрічі: виконано / переноситься / знято. */
@@ -4869,7 +4934,11 @@ export interface ClientLead {
   offSeason: boolean;
   /** ⚠️ Діюча позначка «Проблемний клієнт» (8350); `null` — звичайний клієнт. */
   problem?: ProblemMark | null;
+  /** 🧾 Поїздка поза CRM, яку підтвердив тімлід (9045); `null` — немає. Рахується замовленням для кольору. */
+  trip?: TripConfirm | null;
 }
+/** 🧾 Підтверджена поїздка поза CRM (9045): день поїздки, коментар, хто подав і коли. */
+export interface TripConfirm { day: string; note: string; byName: string | null; at: string }
 
 export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
@@ -4972,6 +5041,8 @@ export interface ClientPlansResp {
   tabGroupRank: Record<"regular" | "yellow" | "react", number>;
   /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
   leadgenPool?: { canSee: boolean; canTake: boolean };
+  /** 🧾 Чи може поточний користувач подати / зняти поїздку поза CRM (9045) — лише тімлід. */
+  canConfirmTrip?: boolean;
   /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
   reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number;
     /** Чи ввімкнена передача лідгенам (`LEADGEN_POOL_ENABLED`); з 06.11.2026 — ні. */
@@ -5452,6 +5523,13 @@ export async function setClientProblem(clientKey: string, reason: string, note: 
 export async function clearClientProblem(clientKey: string): Promise<void> {
   await api.post("/dashboard/client-problem/clear", { clientKey });
 }
+/** 🧾 «Поїздка була (поза CRM)» (9045): дата `YYYY-MM-DD` і коментар (№ рахунку, як оплачено). Лише тімлід. */
+export async function confirmClientTrip(clientKey: string, day: string, note: string): Promise<void> {
+  await api.post("/dashboard/client-trip-confirm", { clientKey, day, note });
+}
+export async function clearClientTrip(clientKey: string): Promise<void> {
+  await api.post("/dashboard/client-trip-confirm/clear", { clientKey });
+}
 /** 🧭 «В нічийні» (8135): коментар обовʼязковий; 409 — уже в нічийних / у пулі / в архіві. */
 export async function releaseOrphanClient(clientKey: string, note: string): Promise<{ deadline: string; notified: number }> {
   const { data } = await api.post("/dashboard/orphan-clients/release", { clientKey, note });
@@ -5596,7 +5674,12 @@ export type HiringStatus =
 export type HiringVacancyStatus = "open" | "in_work" | "paused" | "closed" | "cancelled";
 export type HiringRefusalSide = "candidate" | "company";
 export interface HiringVacancyRef { id: number; title: string; status: HiringVacancyStatus }
-export type HiringAccessLevel = "edit" | "lead" | "none";
+/** `view` — лише перегляд (фінансист, 20.11.2026, #4153): читає, нічого не змінює. */
+export type HiringAccessLevel = "edit" | "lead" | "view" | "none";
+/** 👥 «Співробітники» для перегляду: реєстр без паролів, сейфу, документів і контактів (#4152). */
+export interface HiringEmployeeViewRow { id: number; full_name: string; status: string; position: string | null; category: string | null; level: string | null;
+  team_name: string | null; hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null }
+export const fetchHiringEmployeesView = async () => (await api.get<{ rows: HiringEmployeeViewRow[] }>("/hiring/employees")).data.rows;
 
 export interface HiringMeta {
   access: HiringAccessLevel;
@@ -6984,12 +7067,8 @@ export const updateOrgTeam = async (id: number, body: { name?: string; kommoTeam
 export const setEmployeeTeam = async (employeeId: number, team: string | null) =>
   (await api.put<{ ok: true; name: string | null }>(`/org/teams/people/${employeeId}`, { team })).data.name;
 
-// 🔗 Черга LinkedIn (задача 7361): «Клієнти → LinkedIn» — статистика за період і редактор кола («Налаштувати чергу»).
-export interface LinkedinQueueScreen {
-  mode: "off" | "dry" | "live"; launchedAt: string | null;
-  members: { managerId: number; name: string; team: string | null; hiredAt: string | null; position: number; absentToday: boolean; botLinked: boolean }[];
-  candidates: { managerId: number; name: string; team: string | null; hiredAt: string | null; suggested: boolean }[];
-}
+// 🔗 «Клієнти → LinkedIn» (задачі 7361, 9363). Бота черги й вкладки «Черга» немає з задачі 10743: поля `kpi`/`perManager`/`items`/`queue`
+// сервер ще віддає, екран їх не читає.
 export interface LinkedinStats {
   from: string; to: string; scope: "all" | "team" | "own";
   kpi: { created: number; taken: number; dispatcher: number | null; dispatcherDup: number | null; dispatcherNobody: number | null; avgTakeMin: number | null };
@@ -7011,12 +7090,6 @@ export interface LinkedinDeals {
     outcome: LinkedinOutcome; createdAt: string | null }[];
 }
 export const fetchLinkedinStats = async (from: string, to: string) => (await api.get<LinkedinStats>("/linkedin/stats", { params: { from, to } })).data;
-export const fetchLinkedinQueue = async () => (await api.get<LinkedinQueueScreen>("/linkedin-queue")).data;
-export const saveLinkedinQueueMembers = async (managerIds: number[]) => (await api.put<{ ok: boolean }>("/linkedin-queue/members", { managerIds })).data;
-export const setLinkedinQueuePaused = async (paused: boolean) => (await api.put<{ ok: boolean; paused: boolean }>("/linkedin-queue/pause", { paused })).data;
-// 🤖 Бот «UTS Заявки» (черга LinkedIn): підключення власного акаунта.
-export const fetchLeadsBotMe = async () => (await api.get<{ configured: boolean; linked: boolean; inQueue: boolean; eligible: boolean; botUsername: string | null }>("/leads-bot/me")).data;
-export const createLeadsBotLink = async () => (await api.post<{ url: string; code: string; botUsername: string; expiresInSec: number }>("/leads-bot/link")).data;
 
 // ── 🎯 Хантинг (15.11.2026, ТЗ Івана) — `backend/src/core/hunt.ts`. Доступ поіменний: Іван, Сергій, Олександр. ──
 export type HuntStage = "picked" | "call" | "interview" | "approval" | "offer" | "hired" | "rejected";
@@ -7060,3 +7133,26 @@ export const fetchHuntCandidate = async (id: number) => (await api.get<HuntCandi
 export const updateHuntCandidate = async (id: number, b: Record<string, string | null>) => (await api.patch(`/hunt/candidates/${id}`, b)).data;
 export const moveHuntCandidate = async (id: number, to: HuntStage, reason?: string) => (await api.post(`/hunt/candidates/${id}/stage`, { to, reason })).data;
 export const commentHuntCandidate = async (id: number, text: string, remindAt: string | null) => (await api.post(`/hunt/candidates/${id}/comments`, { text, remindAt })).data;
+
+/**
+ * 📄 «ПРОПУЩЕНІ УГОДИ» (рішення Романа 20.11.2026, словник §11a). Типи — дзеркало `core/missedDeals.ts` + `dealUrl` з роуту.
+ * Пропущена = угода, яку створив вхідний дзвінок, а за 5 хв від нього не було ні розмови, ні нового дзвінка.
+ */
+export interface MissedDealsSummary { deals: number; missed: number; talkedLater: number; ownerless: number; carriers: number; pending: number }
+export interface MissedDealsManagerRow {
+  managerId: number | null; name: string; teamId: number | null; teamName: string | null;
+  deals: number; missed: number; talkedLater: number;
+}
+export type MissedDealNext = "talked" | "attempt" | "nothing";
+export interface MissedDealsListRow {
+  dealId: number; dealUrl: string; at: string; phone: string; managerId: number | null; managerName: string;
+  teamName: string | null; next: MissedDealNext; nextMin: number | null;
+}
+export interface MissedDealsResp {
+  period: { from: string; to: string }; summary: MissedDealsSummary; managers: MissedDealsManagerRow[];
+  rows: MissedDealsListRow[]; truncated: boolean; ownerlessInScope: boolean;
+}
+export async function fetchMissedDeals(params: { from: string; to: string } & MissedFilterParams): Promise<MissedDealsResp> {
+  const { data } = await api.get<MissedDealsResp>("/dashboard/missed-calls/deals", { params });
+  return data;
+}

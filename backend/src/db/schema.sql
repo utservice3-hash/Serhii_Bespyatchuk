@@ -578,6 +578,23 @@ CREATE TABLE IF NOT EXISTS calls_norm_plan (
   set_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 🔁 ПЕРЕДАЧА ПЛАНУ МЕНЕДЖЕРА, ЯКИЙ ПІШОВ (задача 10477, 23.11.2026; `core/planTransfer.ts`). Журнал: хто, коли, від кого,
+-- кому, скільки. `transfer` - передано отримувачу; `drop` - знято з плану команди; `keep` - лишено за тим, хто пішов,
+-- як уже виконане (режим «тільки залишок»), і в пул «не розподілено» більше не входить. Самі числа плану живуть у `plans`.
+CREATE TABLE IF NOT EXISTS plan_transfers (
+  id              SERIAL PRIMARY KEY,
+  batch_id        TEXT NOT NULL,
+  month           DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  from_manager_id INTEGER NOT NULL REFERENCES managers(id),
+  to_manager_id   INTEGER REFERENCES managers(id),
+  amount          NUMERIC NOT NULL CHECK (amount > 0),
+  kind            TEXT NOT NULL CHECK (kind IN ('transfer', 'drop', 'keep')),
+  created_by      INTEGER REFERENCES users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((kind = 'transfer') = (to_manager_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_plan_transfers_month ON plan_transfers (month, from_manager_id);
+
 -- 🎯 ЦІЛЬ СЕРЕДНЬОГО ЧЕКА КОМАНДИ НА МІСЯЦЬ (4632, Юля 10.10.2026; `core/avgCheckTarget.ts`). Записується першим
 -- зверненням у місяці й до кінця місяця не рухається. `target` NULL — у команди за 3 місяці менше 30 успішних угод.
 CREATE TABLE IF NOT EXISTS avg_check_targets (
@@ -869,6 +886,11 @@ UPDATE ringostat_calls SET
  WHERE utm_source = '' OR utm_medium = '' OR utm_campaign = '' OR utm_term = '' OR utm_content = '';
 CREATE INDEX IF NOT EXISTS idx_rc_utm_campaign ON ringostat_calls(utm_campaign) WHERE utm_campaign IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rc_client_key ON ringostat_calls(client_key, calldate DESC) WHERE client_key IS NOT NULL;
+-- ⏱ Перший ВИХІДНИЙ дзвінок клієнту після створення заявки («Час опрацювання заявки», `core/leadTake.ts loadRows`).
+-- EXPLAIN ANALYZE на проді 21.11.2026: через idx_rc_client_key цей пошук читав усі дзвінки клієнта й відкидав
+-- невихідні в купі (29 709 пошуків, 505 053 відкинуті рядки, 46 404 блоки з диска, 1,16 с із 1,68 с запиту).
+-- Частковий індекс лише вихідних дає перший дзвінок одним кроком по індексу. Числа не змінює: це шлях доступу, не умова.
+CREATE INDEX IF NOT EXISTS idx_rc_client_out ON ringostat_calls(client_key, calldate) WHERE call_type IN ('out', 'transitout');
 CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_manager    ON ringostat_calls(manager_id, calldate DESC) WHERE manager_id IS NOT NULL;
@@ -1563,7 +1585,9 @@ BEGIN
   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
   WHERE c.conrelid = 'one_on_ones'::regclass AND c.contype = 'p'
   GROUP BY c.conname;
-  IF pkcols IS DISTINCT FROM 'subject_manager_id,type,meeting_date' THEN
+  -- 19.11.2026: ключ переїхав на людину з Найму (блок у кінці файла) — цей блок його назад не повертає.
+  IF pkcols IS DISTINCT FROM 'subject_manager_id,type,meeting_date'
+     AND pkcols IS DISTINCT FROM 'subject_employee_id,type,meeting_date' THEN
     IF pkname IS NOT NULL THEN EXECUTE 'ALTER TABLE one_on_ones DROP CONSTRAINT ' || quote_ident(pkname); END IF;
     ALTER TABLE one_on_ones ADD PRIMARY KEY (subject_manager_id, type, meeting_date);
   END IF;
@@ -2913,7 +2937,9 @@ UPDATE roles SET permissions = permissions - 'view_all_1x1' - 'edit_1x1_forms'
 -- Налаштуваннях тут не лікує: наступна міграція знову скопіює набір адміна. Тому зняття — у схемі,
 -- ПІСЛЯ синку, як і зняття прав вище. «Навчання» фінансисту лишається (рішення 23.09). Тримає #741;
 -- зліпок доступу (#11) уже каже фінансисту 403 на цих роутах.
-UPDATE roles SET screen_access = screen_access - 'hiring' - 'nominations'
+-- 👁 20.11.2026 рішення Романа: «Найм» фінансисту ПОВЕРТАЄТЬСЯ — лише перегляд (`hiringAccess` → «view»), без статистик і
+-- редагувань. Тому тут знімаються лише «Номінації»; «Найм» приходить синком «financier = екрани адміна». Тримає #4153 (#741 знято).
+UPDATE roles SET screen_access = screen_access - 'nominations'
  WHERE key = 'financier';
 
 -- 🙅 «Бізнес-асистент» — НЕ для фінансиста (рішення Романа 24.09.2026: екран — ролі БА і керівництву admin, СЕО, ОД,
@@ -3601,8 +3627,9 @@ CREATE TABLE IF NOT EXISTS hiring_daily_manual (
 -- тімлід (бачить кандидатів своєї команди від етапу «з тімлідом»). Кандидата й менеджера
 -- немає СВІДОМО (#443: у кандидата рівно два екрани). Звіряє #504 зі списком у матриці.
 -- ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+-- 👁 Фінансист — з 20.11.2026, ЛИШЕ ПЕРЕГЛЯД (рішення Романа; рівень «view» у `hiringAccess`). Тримає #4153.
 UPDATE roles SET screen_access = screen_access || '{"hiring":true}'::jsonb
-  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'team_lead')
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'team_lead', 'financier')
     AND NOT (screen_access ? 'hiring');
 
 -- 🔒 ПЕРСОНАЛЬНІ ДАНІ КАНДИДАТІВ (ПІБ, телефон, Telegram, коментарі) — не для моделі.
@@ -8468,3 +8495,82 @@ ALTER TABLE hunt_comments ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
 INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
  ('hunt.remind', 'Хантинг', false, 'Настав час нагадування з коментаря до кандидата', 'автор коментаря')
 ON CONFLICT (type) DO NOTHING;
+
+-- 🧾 ПОЇЗДКА ПОЗА CRM, ПІДТВЕРДЖЕНА ТІМЛІДОМ (задача 9045, ТЗ Юлі 16.11.2026; Роман 18.11 «роби»). Клієнт їздив за
+-- готівку чи без рахунку, і в Kommo угоди немає — на «З ким говорити» він жовтий, хоча працює. Тімлід своєї команди
+-- подає дату поїздки й обовʼязковий коментар (№ рахунку, як оплачено): дата рахується замовленням ЛИШЕ для кольору й
+-- циклу реактивації, у гроші не йде. Рядки не видаляються: «зняти» = `revoked_at`, тож видно, хто, коли і що подав.
+-- ⚠️ revert коду таблицю не прибирає, але без коду її ніхто не читає.
+CREATE TABLE IF NOT EXISTS client_trip_confirms (
+  id          SERIAL PRIMARY KEY,
+  client_key  TEXT NOT NULL,
+  trip_day    DATE NOT NULL,
+  note        TEXT NOT NULL,
+  created_by  INTEGER NOT NULL REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_by  INTEGER REFERENCES users(id),
+  revoked_at  TIMESTAMPTZ,
+  CONSTRAINT client_trip_confirms_note_chk CHECK (btrim(note) <> ''),
+  CONSTRAINT client_trip_confirms_revoke_chk CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_client_trip_confirms_live ON client_trip_confirms (client_key) WHERE revoked_at IS NULL;
+
+-- 📤 ОБЛІК «ЩО ВЖЕ У ВКЛАДЦІ Data» фінансів «💰UTS (CF, PL, BS)» (18.11.2026, `jobs/exportDataSheet.ts`). Рядок на
+-- банківську операцію, що лягла (або могла лягти) у Data. `pending` — записано перед запитом до Google; `done` —
+-- Google відповів успіхом. `pending`, що пережив прогін, = запит обірвався без відповіді: джоба падає, доки людина не
+-- звірить Data. `sheet_row` — номер рядка в мить запису (довідка: пізніші вставки його зсувають).
+-- `source = 'manual-2026-11-18'` — разовий перенос 01.07–17.11.2026 (засів `tools/seedDataSheetExports.ts`).
+-- Без FK на bank_transactions свідомо: інструменти дедупу Привату видаляють рядки, і облік не має їм заважати.
+-- ⚠️ revert коду таблицю не прибирає, а рядки, вже записані в Google-таблицю, — тим паче.
+CREATE TABLE IF NOT EXISTS data_sheet_exports (
+  tx_id      INTEGER PRIMARY KEY,
+  status     TEXT NOT NULL CHECK (status IN ('pending', 'done')),
+  run_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sheet_row  INTEGER,
+  source     TEXT NOT NULL DEFAULT 'job'
+);
+CREATE INDEX IF NOT EXISTS idx_data_sheet_exports_pending ON data_sheet_exports (run_at) WHERE status = 'pending';
+REVOKE ALL ON data_sheet_exports FROM ai_readonly;
+
+-- 🤝 1×1 НА ЛЮДИНІ З НАЙМУ (19.11.2026, Сергій «підв'яжи до найму»; Роман «роби»). Досі запис 1×1 і задача з 1×1
+-- трималися на менеджері Kommo, тож бухгалтерія, CEO, рекрутер (немає Kommo) 1×1 мати не могли. Тепер ключ запису —
+-- картка «Найм → Співробітники» (`subject_employee_id`); менеджер Kommo лишається довідково, де пара є.
+-- Перенос однозначний або ніякий: менеджер із записом, у якого не рівно ОДНА картка (напряму чи через акаунт), зупиняє
+-- міграцію з іменем — вгадувати картку не беремось (заміряно 19.11: 129 записів і 33 задачі, конфліктів 0).
+-- ⚠️ Revert коду цього НЕ відкочує: старий код пише по старому ключу, якого вже немає. Відкат ключа —
+-- `docs/sql/1x1-employee-rollback.sql` (гейт `#9999`).
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS subject_employee_id INTEGER REFERENCES employees(id);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS o2o_employee_id INTEGER REFERENCES employees(id);
+DO $$
+DECLARE bad text; pkcols text; pkname text;
+BEGIN
+  SELECT string_agg(DISTINCT format('%s (карток: %s)', m.name, x.n), ', ') INTO bad
+    FROM (SELECT mid, (SELECT count(*) FROM employees e LEFT JOIN users eu ON eu.id = e.user_id
+                        WHERE e.manager_id = mid OR eu.manager_id = mid) AS n
+            FROM (SELECT subject_manager_id AS mid FROM one_on_ones WHERE subject_employee_id IS NULL
+                  UNION SELECT assignee_id FROM tasks
+                         WHERE task_type = 'oneonone' AND o2o_employee_id IS NULL AND assignee_id IS NOT NULL) ids) x
+    JOIN managers m ON m.id = x.mid
+   WHERE x.n <> 1;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION '1×1 → Найм: у цих менеджерів не рівно одна картка в Найм, перенос зупинено: %', bad;
+  END IF;
+  UPDATE one_on_ones o SET subject_employee_id = (SELECT e.id FROM employees e LEFT JOIN users eu ON eu.id = e.user_id
+                                                   WHERE e.manager_id = o.subject_manager_id OR eu.manager_id = o.subject_manager_id)
+   WHERE o.subject_employee_id IS NULL;
+  UPDATE tasks t SET o2o_employee_id = (SELECT e.id FROM employees e LEFT JOIN users eu ON eu.id = e.user_id
+                                         WHERE e.manager_id = t.assignee_id OR eu.manager_id = t.assignee_id)
+   WHERE t.task_type = 'oneonone' AND t.o2o_employee_id IS NULL AND t.assignee_id IS NOT NULL;
+  ALTER TABLE one_on_ones ALTER COLUMN subject_employee_id SET NOT NULL;
+  SELECT c.conname, string_agg(a.attname, ',' ORDER BY array_position(c.conkey, a.attnum)) INTO pkname, pkcols
+    FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+   WHERE c.conrelid = 'one_on_ones'::regclass AND c.contype = 'p' GROUP BY c.conname;
+  IF pkcols IS DISTINCT FROM 'subject_employee_id,type,meeting_date' THEN
+    IF pkname IS NOT NULL THEN EXECUTE 'ALTER TABLE one_on_ones DROP CONSTRAINT ' || quote_ident(pkname); END IF;
+    ALTER TABLE one_on_ones ADD PRIMARY KEY (subject_employee_id, type, meeting_date);
+  END IF;
+  -- лише ПІСЛЯ зміни ключа: колонку зі старого ключа Postgres NULL-ом не відпускає
+  ALTER TABLE one_on_ones ALTER COLUMN subject_manager_id DROP NOT NULL;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_tasks_o2o_employee ON tasks(o2o_employee_id, o2o_type)
+  WHERE task_type = 'oneonone' AND o2o_resolution IS NULL;

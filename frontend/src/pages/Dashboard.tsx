@@ -708,6 +708,8 @@ export function Dashboard() {
         days,
         adsCount: taskForm.adsCount ? Number(taskForm.adsCount) : undefined,
         leadgenCount: taskForm.leadgenCount ? Number(taskForm.leadgenCount) : undefined,
+        linkedinCount: taskForm.linkedinCount ? Number(taskForm.linkedinCount) : undefined,
+        prozorroCount: taskForm.prozorroCount ? Number(taskForm.prozorroCount) : undefined,
         dispatchCount: taskForm.dispatchCount ? Number(taskForm.dispatchCount) : undefined,
         avgCheck: taskForm.avgCheck ? Number(taskForm.avgCheck) : undefined,
         conversion: taskForm.conversion ? Number(taskForm.conversion) : undefined,
@@ -846,6 +848,11 @@ export function Dashboard() {
 
 
   useEffect(() => {
+    // ⏱ ЦІ ШІСТЬ ЗАПИТІВ ЖИВЛЯТЬ ЛИШЕ «ОГЛЯД» (16.11.2026, `#9961`). Екран прихований
+    // (`HIDDEN_NAV`), а запити йшли на КОЖНОМУ відкритті будь-якого екрана і щопʼять хвилин
+    // у кожній вкладці: заміряно на проді — два `/overview` по 5,1 с поруч із `/report-plan`,
+    // чиїх даних ніхто не бачив. Повернуть «Огляд» — запити повернуться самі.
+    if (section !== "overview") return;
     setLoading(true);
     const params: Record<string, any> = {};
     if (teamId) params.teamId = teamId;
@@ -923,7 +930,7 @@ export function Dashboard() {
       })
       .catch(() => { setStages([]); setTimeseries([]); setPaidDynamics([]); })
       .finally(() => setLoading(false));
-  }, [teamId, granularity, dateRange, refreshNonce]);
+  }, [section, teamId, granularity, dateRange, refreshNonce]);
 
   // Order the funnel stages by their real pipeline sequence, not by whatever
   // order the SQL GROUP BY returned them in.
@@ -1056,7 +1063,7 @@ export function Dashboard() {
       {section === "kvp" && auth?.role === "admin" && <KvpReportSection canSeeFirstTouch={!!screens?.includes("ai-calls")} />}
 
       {section === "plans" && (auth?.role === "admin" || auth?.role === "team_lead") && (
-        <PlansTabs auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }} teams={teams} />
+        <PlansTabs auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }} teams={teams} canKvp={!!screens?.includes("kvp")} />
       )}
 
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
@@ -1165,7 +1172,7 @@ export function Dashboard() {
       )}
       {section === "ai-calls" && (
         /* 🎧 «Перший дотик · AI». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */
-        <AiCallsSection />
+        <AiCallsSection canSeeCarriers={!!screens?.includes("carrier-calls")} roleKey={auth?.roleKey ?? null} />
       )}
       {section === "carrier-calls" && (
         /* 🚚 «Перевізники за розмовою». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */

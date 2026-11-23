@@ -35,15 +35,22 @@ export async function missedAutomation(today: string, s: MissedScope = {}): Prom
 
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
+  /** Пропущені від номерів перевізників (довідник `carrier_phones`) — у `missed` НЕ входять, показуються підписом (20.11.2026). */
+  carriers: number;
   callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number; medianMin: number | null;
   buckets: Record<DayBucket, number>;
+  /** 📱 З `missed` — дзвінки, де ВСІ плечі «Вхідний перехоплений» (на мобільні). «На лінію» = `missed − missedMobile`. */
+  missedMobile: number;
+  /** ⏳ З `missed` — з номером досі немає розмови від 10 с (`stillWaitingSql`); `waitingOverDay` — з них старші за 24 год. */
+  waiting: number; waitingOverDay: number;
 }
 
 interface SummaryRaw {
   missed: number; excluded: number; ownerless: number; callback: number;
   callback_attempt: number; callback_self: number; callback_colleague: number;
-  client_self: number; median_min: string | null;
+  client_self: number; median_min: string | null; carriers: number;
+  missed_mobile: number; waiting: number; waiting_over_day: number;
   b_work: number; b_evening: number; b_weekend: number; b_night: number;
 }
 
@@ -59,7 +66,7 @@ export async function missedSummary(from: string, to: string, s: MissedScope = {
   const x = r.rows[0];
   const n = (v: number | undefined): number => Number(v ?? 0);
   return {
-    missed: n(x?.missed), excluded: n(x?.excluded), ownerless: n(x?.ownerless),
+    missed: n(x?.missed), excluded: n(x?.excluded), ownerless: n(x?.ownerless), carriers: n(x?.carriers),
     callback: n(x?.callback), callbackAttempt: n(x?.callback_attempt),
     callbackSelf: n(x?.callback_self), callbackColleague: n(x?.callback_colleague),
     clientSelf: n(x?.client_self),
@@ -68,6 +75,7 @@ export async function missedSummary(from: string, to: string, s: MissedScope = {
       work: n(x?.b_work), evening: n(x?.b_evening),
       weekend: n(x?.b_weekend), night: n(x?.b_night),
     },
+    missedMobile: n(x?.missed_mobile), waiting: n(x?.waiting), waitingOverDay: n(x?.waiting_over_day),
   };
 }
 
@@ -77,12 +85,12 @@ Promise<{ rows: MissedManagerRow[]; total: MissedManagerRow }> {
   const { sql, params } = missedByManagerSql(from, to, s);
   const r = await pool.query<{
     manager_id: number | null; name: string | null; team_id: number | null; missed: number;
-    callback_self: number; callback_colleague: number; client_self: number; median_min: string | null;
+    callback_self: number; callback_colleague: number; client_self: number; median_min: string | null; waiting: number;
   }>(sql, params);
   const raw: MissedManagerRaw[] = r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, teamId: x.team_id, missed: Number(x.missed),
     callbackSelf: Number(x.callback_self), callbackColleague: Number(x.callback_colleague),
-    clientSelf: Number(x.client_self),
+    clientSelf: Number(x.client_self), waiting: Number(x.waiting),
     medianMin: x.median_min == null ? null : Math.round(Number(x.median_min)),
   }));
   return foldManagerRows(raw);
@@ -106,12 +114,12 @@ export async function missedByTeam(from: string, to: string, s: MissedScope = {}
   const { sql, params } = missedByTeamSql(from, to, s);
   const r = await pool.query<{
     team_id: number | null; team_name: string | null; missed: number;
-    callback_self: number; callback_colleague: number; client_self: number; median_min: string | null;
+    callback_self: number; callback_colleague: number; client_self: number; median_min: string | null; waiting: number;
   }>(sql, params);
   return foldTeamRows(r.rows.map((x) => ({
     teamId: x.team_id, name: x.team_name, missed: Number(x.missed),
     callbackSelf: Number(x.callback_self), callbackColleague: Number(x.callback_colleague),
-    clientSelf: Number(x.client_self),
+    clientSelf: Number(x.client_self), waiting: Number(x.waiting),
     medianMin: x.median_min == null ? null : Math.round(Number(x.median_min)),
   })));
 }
@@ -120,19 +128,24 @@ export interface MissedListRow {
   uniqueid: string; at: string; phone: string | null; clientKey: string | null;
   managerId: number | null; managerName: string; bucket: DayBucket;
   next: NextStep; nextMin: number | null; dealId: number | null;
+  /** 📱 Усі плечі «Вхідний перехоплений» — дзвінок ішов на мобільний менеджера. */
+  mobile: boolean;
+  /** ⏳ З номером досі немає розмови від 10 с (`stillWaitingSql`) і скільки годин минуло від дзвінка. */
+  waiting: boolean; waitH: number;
 }
 
 /**
  * Блок C. `truncated` — не прикраса: без нього стеля `MISSED_LIST_LIMIT` мовчки обрізала
  * б список, і екран показав би «ось усі», хоча показав лише частину.
  */
-export async function missedList(day: string, s: MissedScope = {}, onlyNoCallback = false):
+export async function missedList(day: string, s: MissedScope = {}, onlyNoCallback = false, to: string = day):
 Promise<{ rows: MissedListRow[]; truncated: boolean }> {
-  const { sql, params } = missedListSql(day, s, onlyNoCallback);
+  const { sql, params } = missedListSql(day, s, onlyNoCallback, to);
   const r = await pool.query<{
     uniqueid: string; at: string; client_phone: string | null; client_key: string | null;
     manager_id: number | null; manager_name: string | null; bucket: DayBucket;
     cb_min: string | null; cb_talked: boolean | null; cs_min: string | null; deal_id: string | null;
+    mobile: boolean | null; waiting: boolean; wait_h: number;
   }>(sql, params);
   const capped = capRows(r.rows);
   const rows = capped.rows.map((x) => {
@@ -147,6 +160,7 @@ Promise<{ rows: MissedListRow[]; truncated: boolean }> {
       managerName: x.manager_id == null ? OWNERLESS_LABEL : (x.manager_name ?? `#${String(x.manager_id)}`),
       bucket: x.bucket, next: n.kind, nextMin: n.minutes,
       dealId: x.deal_id == null ? null : Number(x.deal_id),
+      mobile: x.mobile === true, waiting: x.waiting === true, waitH: Number(x.wait_h),
     };
   });
   return { rows, truncated: capped.truncated };

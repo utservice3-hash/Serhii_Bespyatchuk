@@ -18,6 +18,9 @@ import { InterviewDialog, avatarTone, initials } from "./HiringInterviewDialog";
  */
 export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta; toast: Toast; onMetaStale: () => void }) {
   const today = todayKyiv();
+  // 👁 «Перегляд» (фінансист, 20.11.2026, #4153): графік видно, змінювати нічого не можна — поля лише для читання,
+  // кнопок дій немає. Сервер усе одно відбиває запис (403); це — щоб людина не натискала того, що не спрацює.
+  const ro = meta.access === "view";
   const [day, setDay] = useState(today);
   const [mode, setMode] = useState<"day" | "week">("day");
   const [rows, setRows] = useState<HiringScheduleRow[] | null>(null);
@@ -145,7 +148,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
   // Некеровані поля: ключ містить значення, тож після перезавантаження клітинка бере свіже.
   const cell = (r: HiringScheduleRow, field: string, value: string | null, props: { type?: string; list?: string; placeholder?: string; className?: string; style?: React.CSSProperties } = {}) => (
     <input key={`${r.id}-${field}-${value ?? ""}`} className={`hr-c ${props.className ?? ""}`} type={props.type ?? "text"} list={props.list}
-      placeholder={props.placeholder} style={props.style} defaultValue={value ?? ""} autoFocus={field === "fullName" && focusId === r.id}
+      placeholder={props.placeholder} style={props.style} defaultValue={value ?? ""} autoFocus={field === "fullName" && focusId === r.id} readOnly={ro}
       onBlur={(e) => { const v = e.target.value; if (v !== (value ?? "")) void save(r, { [field]: v }); }}
       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
   );
@@ -197,7 +200,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
           ))}
         </div>
       ) : view === "agenda" ? (
-        <Agenda meta={meta} day={day} today={today} now={now} rows={dayRows} nextId={nextId} unmarked={unmarked}
+        <Agenda meta={meta} ro={ro} day={day} today={today} now={now} rows={dayRows} nextId={nextId} unmarked={unmarked}
           onMove={(r, d, t) => void move(r, d, t)} onRemove={(r) => void remove(r)}
           onClearMark={(r) => void clearMark(r)} onUndoStatus={(r) => void undoStatus(r)}
           onEdit={(r, patch) => void save(r, patch)}
@@ -243,7 +246,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
                       <td>
                         {r.candidate_id ? (
                           <>
-                            <select className={`hr-c ${r.vacancies?.length ? "" : "novac"}`} value={r.vacancies?.[0]?.id ?? ""}
+                            <select className={`hr-c ${r.vacancies?.length ? "" : "novac"}`} value={r.vacancies?.[0]?.id ?? ""} disabled={ro}
                               onChange={(e) => { if (e.target.value) void save(r, { vacancyId: Number(e.target.value) }); }}>
                               <option value="">— вакансія —</option>
                               {meta.vacancies.filter((v) => !isClosedVacancy(v.status) || r.vacancies?.some((x) => x.id === v.id)).map((v) => <option key={v.id} value={v.id}>{v.title}</option>)}
@@ -253,14 +256,14 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
                         ) : <span className="hr-muted">спершу ПІБ або телефон</span>}
                       </td>
                       <td>
-                        <select className="hr-c" value={r.attended === true ? "y" : r.attended === false ? "n" : ""}
+                        <select className="hr-c" value={r.attended === true ? "y" : r.attended === false ? "n" : ""} disabled={ro}
                           onChange={(e) => void save(r, { attended: e.target.value === "y" ? true : e.target.value === "n" ? false : null })}>
                           <option value="">не відмічено</option><option value="y">✓ прийшов</option><option value="n">✕ не прийшов</option>
                         </select>
                       </td>
                       <td>
                         {r.candidate_id && r.status ? (
-                          <select className="hr-c" value={r.status} onChange={(e) => {
+                          <select className="hr-c" value={r.status} disabled={ro} onChange={(e) => {
                             const to = e.target.value as HiringStatus;
                             if (to === "refused") setRefuseFor(r); else setStatusFor({ row: r, to });
                           }}>
@@ -271,7 +274,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
                         {r.refusal_reason && (r.status === "refused" || r.status === "black") && <div className="hr-muted">{r.refusal_reason}</div>}
                       </td>
                       <td>
-                        <textarea key={`${r.id}-c-${r.comment ?? ""}`} className="hr-c" rows={1} defaultValue={r.comment ?? ""}
+                        <textarea key={`${r.id}-c-${r.comment ?? ""}`} className="hr-c" rows={1} defaultValue={r.comment ?? ""} readOnly={ro}
                           onBlur={(e) => { if (e.target.value !== (r.comment ?? "")) void save(r, { comment: e.target.value }); }} />
                       </td>
                       <td>
@@ -280,7 +283,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
                           {r.record_url && <a className="hr-link" href={r.record_url} target="_blank" rel="noopener noreferrer" title="Відкрити запис">▶</a>}
                         </div>
                       </td>
-                      <td><button className="hr-link" style={{ color: "var(--text-muted)" }} title="Видалити рядок (можна відновити)" onClick={() => void remove(r)}>✕</button></td>
+                      <td>{!ro && <button className="hr-link" style={{ color: "var(--text-muted)" }} title="Видалити рядок (можна відновити)" onClick={() => void remove(r)}>✕</button>}</td>
                     </tr>
                   );
                 })}
@@ -291,8 +294,8 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
             </table>
           </div>
           <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--border)", flexWrap: "wrap", alignItems: "center" }}>
-            <button className="hr-btn p" onClick={() => setIvAt(nextTime())}>+ Співбесіда з кандидатом</button>
-            <button className="hr-btn" onClick={() => void add()}>+ Порожній рядок</button>
+            {!ro && <button className="hr-btn p" onClick={() => setIvAt(nextTime())}>+ Співбесіда з кандидатом</button>}
+            {!ro && <button className="hr-btn" onClick={() => void add()}>+ Порожній рядок</button>}
             <span className="hr-muted">Новий рядок стає через 30 хв після останнього; час змінюється в клітинці. Зміна дати переносить рядок на інший день.</span>
           </div>
         </div>
@@ -339,8 +342,8 @@ const fromMin = (x: number) => `${String(Math.floor(x / 60)).padStart(2, "0")}:$
  * «✓ Прийшов / ✕ Не прийшов» однією кнопкою, лінія «зараз», вільні вікна з кнопкою призначення.
  * Дані й дії — ті самі, що в таблиці (той самий `save` рядка графіка), тож звіт рахує однаково.
  */
-function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend, onStatus, onOpen, onAdd, onMove, onRemove, onClearMark, onUndoStatus, onEdit }: {
-  meta: HiringMeta; day: string; today: string; now: string; rows: HiringScheduleRow[]; nextId?: number;
+function Agenda({ meta, ro, day, today, now, rows, nextId, unmarked, tiles, onAttend, onStatus, onOpen, onAdd, onMove, onRemove, onClearMark, onUndoStatus, onEdit }: {
+  meta: HiringMeta; ro: boolean; day: string; today: string; now: string; rows: HiringScheduleRow[]; nextId?: number;
   unmarked: (r: HiringScheduleRow) => boolean; tiles: { total: number; came: number; missed: number; open: number };
   onAttend: (r: HiringScheduleRow, v: boolean) => void; onStatus: (r: HiringScheduleRow, to: HiringStatus) => void;
   onOpen: (id: number) => void; onAdd: (time?: string) => void;
@@ -364,7 +367,7 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
     const prev = rows[i - 1];
     if (prev?.interview_time && r.interview_time && toMin(r.interview_time) - toMin(prev.interview_time) >= 60) {
       const ft = fromMin(toMin(prev.interview_time) + 30);
-      out.push(<div key={`gap${r.id}`} />, <button key={`free${r.id}`} className="ag-free" onClick={() => onAdd(ft)}>+ вільне вікно з {ft} — призначити співбесіду</button>);
+      if (!ro) out.push(<div key={`gap${r.id}`} />, <button key={`free${r.id}`} className="ag-free" onClick={() => onAdd(ft)}>+ вільне вікно з {ft} — призначити співбесіду</button>);
     }
     const unm = unmarked(r), vac = r.vacancies?.[0];
     const next = r.status ? meta.transitions[r.status] ?? [] : [];
@@ -382,7 +385,7 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
           {r.attended === true ? <span className="emp-pill ok">✓ прийшов</span> : r.attended === false ? <span className="emp-pill" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>✕ не прийшов</span>
             : unm ? <span className="emp-pill warn">не відмічено</span> : r.status ? <StatusPill meta={meta} status={r.status} /> : null}
           <div className="ag-acts">
-            {r.candidate_id && (<>
+            {r.candidate_id && !ro && (<>
               {r.attended == null && <>
                 <button className="hr-btn xs came" onClick={() => onAttend(r, true)}>✓ Прийшов</button>
                 <button className="hr-btn xs miss" onClick={() => onAttend(r, false)}>✕ Не прийшов</button>
@@ -392,8 +395,8 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
                 <button key={s} className="hr-btn xs p" onClick={() => onStatus(r, s)}>→ {meta.statuses.find((x) => x.key === s)?.label ?? s}</button>)}
               {r.status && next.includes("refused") && <button className="hr-btn xs" onClick={() => onStatus(r, "refused")}>Відмова…</button>}
             </>)}
-            <button className="hr-btn xs" aria-label="Ще дії" title="Перенести, видалити, картка кандидата"
-              onClick={(e) => { e.stopPropagation(); const b = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMenu({ r, x: b.right, y: b.bottom }); }}>⋯</button>
+            {!ro && <button className="hr-btn xs" aria-label="Ще дії" title="Перенести, видалити, картка кандидата"
+              onClick={(e) => { e.stopPropagation(); const b = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMenu({ r, x: b.right, y: b.bottom }); }}>⋯</button>}
           </div>
         </div>
         <div className="ag-sub">

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fetchLeadgenLtv, fetchLeadgenLtvClients, type LeadgenLtvResp, type LtvAgg, type LtvClient, type LtvGroup, type LtvPerson } from "../../../api";
+import { fetchLeadgenLtv, fetchLeadgenLtvClients, type LeadgenLtvResp, type LtvAgg, type LtvClient, type LtvGroup, type LtvPerson, type LtvSourceRow } from "../../../api";
 import { formatAmountFull } from "../format";
 import { InfoHint } from "../widgets";
 
@@ -11,6 +11,9 @@ import { InfoHint } from "../widgets";
  *
  * 🧭 Задача 8729 (13.11.2026): «стали постійними» (2+ успішні угоди) і «працюють зараз» (стан «активний») — числом, і склад
  * клієнтів на чотири групи. Групи рахує сервер (`ltvGroupOf`), тут — лише та сама межа для фільтрів списку клієнтів.
+ *
+ * 🧭 Задача 8719 (Роман 19.11.2026 «роби»): «Звідки прийшов» — «Источник клиента» ліда, який передав лідген. Підпис
+ * джерела (і підпис невідомого словами) дає сервер (`ltvSourceLabel`); тут лише колонка, фільтр і таблиця «За джерелом».
  */
 const MUTED = "var(--text-muted)";
 const nf = (v: number) => v.toLocaleString("uk-UA");
@@ -30,7 +33,25 @@ const STATE: Record<string, { label: string; bg: string; fg: string }> = {
 const RULES = "Клієнт лідгена — клієнт, чия ПЕРША успішна угода за всю історію виросла з ліда, який лідген передав. Закріплюється назавжди за тим, хто перевів угоду Продзвону в «Кваліфіковано», — зміна відповідального в Kommo цього не змінює. "
   + "Постійні до передачі (була успішна угода раніше або КВП позначив постійним) і перевізники з архіву не рахуються. LTV — маржа всіх успішних угод клієнта від першої до сьогодні; мінусові віднімаються. "
   + "Оборот — сума рахунків тих самих угод, довідково. Повернуті з «Пулу лідгенів» — окремо: лише маржа після повернення, в основний LTV не входять. "
-  + "Стали постійними — 2+ успішні угоди (те саме правило, що в «Клієнтах»). Працюють зараз — стан клієнта «активний»: замовляє у ритмі свого сегмента.";
+  + "Стали постійними — 2+ успішні угоди (те саме правило, що в «Клієнтах»). Працюють зараз — стан клієнта «активний»: замовляє у ритмі свого сегмента. "
+  + "Звідки прийшов — «Источник клиента» в Kommo на ліді, який лідген передав (не на угоді менеджера). LinkedIn і Prozorro — за джерелом або тегом, як у Звіті.";
+
+/** Фільтр «Джерело» над списком клієнтів: значення — з самих рядків, з кількістю; «усі» — без фільтра. */
+export function SourcePick({ rows, value, onChange }: { rows: readonly LtvClient[]; value: string | null; onChange: (v: string | null) => void }) {
+  const counts = new Map<string, number>();
+  for (const c of rows) counts.set(c.source, (counts.get(c.source) ?? 0) + 1);
+  const opts = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return (
+    <label style={{ fontSize: 12.5, display: "inline-flex", gap: 6, alignItems: "center" }}>
+      <span style={{ color: MUTED }}>Джерело:</span>
+      <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}
+        style={{ font: "inherit", fontSize: 12.5, padding: "3px 6px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+        <option value="">усі · {nf(rows.length)}</option>
+        {opts.map(([src, n]) => <option key={src} value={src}>{src} · {nf(n)}</option>)}
+      </select>
+    </label>
+  );
+}
 
 /** Група клієнта — та сама межа, що в ядрі (`ltvGroupOf`): постійний — 2+ угоди, працює — лише стан «активний». */
 const groupOf = (c: { deals: number; state: string | null }): LtvGroup =>
@@ -82,6 +103,8 @@ export function LeadgenLtvBlock({ from, to, periodLabel, who, own, onShowClients
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [allCohorts, setAllCohorts] = useState(false);
   const [group, setGroup] = useState<LtvGroup | null>(null);
+  /** Рядок таблиці «За джерелом», чиїх клієнтів показати (задача 8719). */
+  const [srcPick, setSrcPick] = useState<string | null>(null);
   /** Усі клієнти в межах того, що бачить користувач, — для панелі групи й фільтрів людини; вантажимо за першим кліком. */
   const [clients, setClients] = useState<LtvClient[] | null>(null);
   const [clientsErr, setClientsErr] = useState<string | null>(null);
@@ -95,7 +118,7 @@ export function LeadgenLtvBlock({ from, to, periodLabel, who, own, onShowClients
       .catch((e) => { if (alive) { setD(null); setErr(e?.response?.data?.error ?? "Не вдалося завантажити LTV."); } });
     return () => { alive = false; };
   }, [from, to, pickId]);
-  useEffect(() => { setClients(null); setGroup(null); }, [pickId]);
+  useEffect(() => { setClients(null); setGroup(null); setSrcPick(null); }, [pickId]);
 
   const needClients = () => {
     if (clients || clientsErr) return;
@@ -143,6 +166,8 @@ export function LeadgenLtvBlock({ from, to, periodLabel, who, own, onShowClients
   );
   const cohorts = allCohorts ? d.cohorts : d.cohorts.slice(0, 12);
   const groupRows = group && clients ? clients.filter((c) => groupOf(c) === group) : null;
+  const srcRows = srcPick && clients ? clients.filter((c) => c.source === srcPick).sort((a, b) => b.ltv - a.ltv) : null;
+  const pickSource = (src: string) => { setSrcPick((x) => (x === src ? null : src)); needClients(); };
 
   return (
     <details className="chart-card" style={{ margin: "4px 0 14px" }} open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
@@ -220,6 +245,9 @@ export function LeadgenLtvBlock({ from, to, periodLabel, who, own, onShowClients
           </div>
         )}
 
+        {d.bySource.length > 0 && <SourceTable rows={d.bySource} total={t} pick={srcPick} onPick={pickSource}
+          clients={srcRows} clientsErr={clientsErr} onShowAll={() => onShowClients(pickId ?? null)} />}
+
         {(people.length > 0 || d.others) && <>
           <div style={{ fontWeight: 650, margin: "16px 0 6px" }}>По лідгенах</div>
           <div style={{ overflowX: "auto" }}>
@@ -283,9 +311,10 @@ export function LeadgenLtvBlock({ from, to, periodLabel, who, own, onShowClients
  */
 function PersonClients({ person, all, err, onShowAll }: { person: LtvPerson; all: LtvClient[] | null; err: string | null; onShowAll: () => void }) {
   const [chip, setChip] = useState<ChipKey>("all");
+  const [src, setSrc] = useState<string | null>(null);
   const mine = all ? all.filter((c) => c.handedBy === person.name) : null;
   const base = mine && mine.length ? mine : person.top;
-  const rows = base.filter(CHIP[chip].test);
+  const rows = base.filter(CHIP[chip].test).filter((c) => src == null || c.source === src);
   const count: Record<ChipKey, number> = { all: person.agg.clients, rep: person.agg.repeat, act: person.agg.activeNow, rs: person.agg.mix.rs };
   const full = base === mine;
   return <>
@@ -302,9 +331,11 @@ function PersonClients({ person, all, err, onShowAll }: { person: LtvPerson; all
           {CHIP[k].label} · {nf(count[k])}
         </button>
       ))}
+      {base.length > 0 && <SourcePick rows={base} value={src} onChange={setSrc} />}
     </div>
     {rows.length ? <ClientTable rows={rows.slice(0, LIST_MAX)} />
       : <div style={{ fontSize: 12.5, color: MUTED }}>{base.length ? `У ${full ? "списку" : "топ-10"} таких клієнтів немає.` : "Клієнтів, приведених цією людиною, ще немає."}</div>}
+    {src != null && !full && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Фільтр за джерелом поки діє лише на топ-10 — повний список у «усі клієнти →».</div>}
     {rows.length > LIST_MAX && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Показано {LIST_MAX} з {nf(rows.length)} — решта в «усі клієнти →».</div>}
   </>;
 }
@@ -317,9 +348,9 @@ export function ClientTable({ rows, wide = false, handedBy = false }: { rows: Lt
   const showHanded = wide || handedBy;
   return (
     <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: wide ? 1000 : showHanded ? 900 : 780 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: wide ? 1140 : showHanded ? 1040 : 920 }}>
         <thead><tr>
-          <th style={th}>Клієнт</th><th style={th}>Перша успішна угода</th>{showHanded && <th style={th}>Хто передав</th>}
+          <th style={th}>Клієнт</th><th style={th}>Звідки прийшов</th><th style={th}>Перша успішна угода</th>{showHanded && <th style={th}>Хто передав</th>}
           <th style={{ ...th, textAlign: "right" }}>Угод</th><th style={{ ...th, textAlign: "right" }}>LTV ₴</th>
           {wide && <th style={{ ...th, textAlign: "right" }}>Оборот ₴</th>}<th style={th}>Менеджер зараз</th>
           <th style={th}>Постійний</th><th style={th}>Зараз</th><th style={th}>Ритм</th>{wide && <th style={th}>Позначка</th>}
@@ -330,6 +361,7 @@ export function ClientTable({ rows, wide = false, handedBy = false }: { rows: Lt
             return (
               <tr key={c.clientKey}>
                 <td style={td}>{c.name}</td>
+                <td style={{ ...td, fontSize: 12.5, color: c.sourceKnown ? undefined : MUTED }}>{c.source}</td>
                 <td style={{ ...td, whiteSpace: "nowrap" }}><a href={c.firstDealUrl} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>#{c.firstDealId} ↗</a> · {dmy(c.firstDay)}</td>
                 {showHanded && <td style={td}>{c.handedBy}</td>}
                 <td style={num}>{nf(c.deals)}</td><td style={num}>{nf(c.ltv)}</td>
@@ -350,4 +382,54 @@ export function ClientTable({ rows, wide = false, handedBy = false }: { rows: Lt
       </table>
     </div>
   );
+}
+
+/**
+ * 🧭 «За джерелом» (задача 8719; Сергій 09.11: «біля повторних не вистачає джерела»): клієнти, LTV, стали постійними (з %),
+ * працюють зараз і склад — ті самі показники, що в шапці, і рядок «Разом» = шапка. Клік по рядку — клієнти цього джерела.
+ */
+function SourceTable({ rows, total, pick, onPick, clients, clientsErr, onShowAll }: {
+  rows: LtvSourceRow[]; total: LtvAgg; pick: string | null; onPick: (src: string) => void;
+  clients: LtvClient[] | null; clientsErr: string | null; onShowAll: () => void;
+}) {
+  const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
+  const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: MUTED };
+  const numPct = (v: number, n: number) => <>{nf(v)} <span style={{ color: MUTED, fontWeight: 400 }}>{pct(share(v, n))}</span></>;
+  const line = (key: string, label: React.ReactNode, a: LtvAgg, opts: { bold?: boolean; muted?: boolean; click?: () => void } = {}) => (
+    <tr key={key} onClick={opts.click} style={{ cursor: opts.click ? "pointer" : undefined, borderTop: "1px solid var(--border)", fontWeight: opts.bold ? 700 : undefined }}>
+      <td style={{ ...cell, textAlign: "left", color: opts.muted ? MUTED : undefined }}>{label}</td>
+      <td style={cell}>{nf(a.clients)}</td><td style={cell}>{nf(a.ltv)}</td><td style={cell}>{a.avg == null ? "—" : nf(a.avg)}</td>
+      <td style={cell}>{a.clients ? numPct(a.repeat, a.clients) : "—"}</td>
+      <td style={cell}>{a.clients ? numPct(a.activeNow, a.clients) : "—"}</td>
+      <td style={{ ...cell, textAlign: "left" }}><MixBar mix={a.mix} width={130} /></td>
+    </tr>
+  );
+  return <>
+    <div style={{ fontWeight: 650, margin: "16px 0 2px" }}>За джерелом</div>
+    <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 6 }}>Звідки лідген узяв клієнта: «Источник клиента» на ліді, який він передав. Значення — як записано в Kommo. Клік по рядку показує клієнтів.</div>
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
+        <thead><tr>
+          <th style={{ ...head, textAlign: "left" }}>Звідки прийшов</th><th style={head}>Клієнтів</th><th style={head}>LTV разом ₴</th><th style={head}>Сер. LTV ₴</th>
+          <th style={head}>Стали постійними</th><th style={head}>Працюють зараз</th><th style={{ ...head, textAlign: "left" }}>Склад</th>
+        </tr></thead>
+        <tbody>
+          {rows.map((r) => <Fragment key={r.source}>
+            {line(r.source, <>{pick === r.source ? "▾ " : "▸ "}{r.source}</>, r, { muted: !r.known, click: () => onPick(r.source) })}
+            {pick === r.source && <tr><td colSpan={7} style={{ background: "var(--bg)", padding: "8px 12px" }}>
+              {clientsErr ? <div style={{ fontSize: 12.5, color: MUTED }}>{clientsErr}</div>
+                : !clients ? <div style={{ fontSize: 12.5, color: MUTED }}>Завантаження клієнтів…</div>
+                : <>
+                  <ClientTable rows={clients.slice(0, LIST_MAX)} handedBy />
+                  {clients.length > LIST_MAX && <button type="button" onClick={onShowAll}
+                    style={{ border: 0, background: "none", padding: "6px 4px", color: "var(--accent)", cursor: "pointer", fontSize: 12.5 }}>
+                    показано {LIST_MAX} з {nf(clients.length)} з найбільшим LTV · усі клієнти →</button>}
+                </>}
+            </td></tr>}
+          </Fragment>)}
+          {line("total", "Разом", total, { bold: true })}
+        </tbody>
+      </table>
+    </div>
+  </>;
 }

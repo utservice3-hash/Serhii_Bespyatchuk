@@ -4,6 +4,7 @@ import {
   fetchPlanFormation, fetchFormationRepeatClients, submitFormationPlan, approveFormationPlan, returnFormationPlan,
   type PlanFormation, type PFManager, type PFTeam, type PFStatus, type PFRepeatBreakdown, type Team,
 } from "../../../api";
+import { GonePool, GoneCards } from "./PlanTransferBlock";
 
 // Палітра (тема-безпечна, статуси з іконкою+підписом — не колір-наодинці).
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BAR = "#2f6fdb", PURPLE = "#7a52c7", MUTED = "var(--text-muted)";
@@ -27,10 +28,14 @@ const curMonth = () => { const n = new Date(); return `${n.getFullYear()}-${Stri
  * рахуються цією ж функцією над тим самим набором.
  */
 function issuedOf(m: PFManager, drafts: Record<number, number>): number {
+  // 🔁 10477: передане з плану того, хто пішов, додається ПОВЕРХ власного - поле вводу його не знає.
+  const got = receivedOf(m);
   const d = drafts[m.managerId];
-  if (typeof d === "number" && Number.isFinite(d)) return d;
-  return m.formation.proposedValue ?? m.recommendation.value;
+  if (typeof d === "number" && Number.isFinite(d)) return d + got;
+  return (m.formation.proposedValue ?? m.recommendation.value) + got;
 }
+/** Скільки менеджер отримав із плану тих, хто пішов (уже сидить у його `currentPlan`). */
+const receivedOf = (m: PFManager) => (m.received ?? []).reduce((a, r) => a + r.amount, 0);
 
 // Стани картки: колір + іконка + підпис.
 export const ST: Record<PFStatus, { c: string; icon: string; label: string }> = {
@@ -206,10 +211,17 @@ function TeamBlock({ team, month, data, open, onToggle, onChanged, drafts, setDr
         {/* ЖИВА сума виставленого — оновлюється під час набору, ще до подачі. */}
         <div style={{ minWidth: 96 }}>
           <div style={{ fontWeight: 800, fontSize: 20, lineHeight: 1.1, color: BAR }}>
-            {fmt(team.managers.reduce((a, m) => a + issuedOf(m, drafts), 0))} ₴
+            {fmt(team.managers.reduce((a, m) => a + issuedOf(m, drafts), 0) + (team.gonePlan ?? 0))} ₴
           </div>
-          <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>ВИСТАВЛЕНО</div>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{(team.gonePlan ?? 0) > 0 ? "ПЛАН КОМАНДИ" : "ВИСТАВЛЕНО"}</div>
         </div>
+        {/* 🔁 10477: план тих, хто пішов, входить у план команди окремим числом, поки його не передали. */}
+        {(team.unassigned ?? 0) > 0 && (
+          <div style={{ textAlign: "center", minWidth: 62 }}>
+            <div style={{ fontWeight: 750, fontSize: 15, lineHeight: 1.1, color: AMBER }}>{fmt(team.unassigned ?? 0)}</div>
+            <div style={{ fontSize: 10.5, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>не розподілено</div>
+          </div>
+        )}
         {stat(k(team.recommended), "рекомендовано")}
         {stat(k(team.carryover), "перенесено")}
         {stat(`${team.approved} / ${team.total}`, "затверджено")}
@@ -224,7 +236,9 @@ function TeamBlock({ team, month, data, open, onToggle, onChanged, drafts, setDr
       </div>
       {open && (
         <div style={{ borderTop: "1px solid var(--border)", padding: "6px 18px 18px" }}>
+          <GonePool team={team} month={month} canTransfer={data.canTransfer === true} open={data.transferOpen === true} onChanged={onChanged} />
           {team.managers.map((m) => <ManagerCard key={m.managerId} m={m} month={month} data={data} onChanged={onChanged} onValue={setDraft} />)}
+          <GoneCards team={team} />
           {team.managers.length === 0 && <p style={{ color: MUTED, fontSize: 13, padding: "10px 0" }}>Немає активних менеджерів.</p>}
         </div>
       )}
@@ -497,8 +511,13 @@ function PlanSeg({ m, month, data, onChanged, onValue }: { m: PFManager; month: 
       {/* Головне число: рекомендація (draft/submitted/returned) АБО затверджене (approved) */}
       {f.status === "approved" ? (
         <div style={{ background: GREEN + "12", border: `1px solid ${GREEN}55`, borderRadius: 12, padding: "12px 14px" }}>
-          <div style={{ fontSize: 26, fontWeight: 800, color: "var(--text)" }}>{fmt(f.proposedValue ?? 0)} <span style={{ fontSize: 14, fontWeight: 600 }}>₴</span></div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: "var(--text)" }}>{fmt((f.proposedValue ?? 0) + receivedOf(m))} <span style={{ fontSize: 14, fontWeight: 600 }}>₴</span></div>
           <div style={{ fontSize: 12, color: GREEN, fontWeight: 600, marginTop: 2 }}>затверджено КВП · діє скрізь (Звіт/КВП/плани)</div>
+          {(m.received ?? []).map((r, i) => (
+            <div key={i} style={{ fontSize: 12, color: BAR, fontWeight: 600, marginTop: 4 }}>
+              +{fmt(r.amount)} від {r.fromName} · передано {r.at.slice(8, 10)}.{r.at.slice(5, 7)}{r.by ? ` · ${r.by}` : ""}
+            </div>
+          ))}
         </div>
       ) : (
         <div style={{ background: BAR + "0d", border: "1px solid var(--border)", borderRadius: 12, padding: "12px 14px" }}>

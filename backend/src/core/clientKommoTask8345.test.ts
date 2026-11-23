@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 import {
-  pickOpenDeal, pickOwner, dueUnix, leadBody, taskBody, closeTaskBody, REACT_PIPELINE_ID, REACT_STATUS_ID, PUSH_PER_RUN,
+  pickOpenDeal, pickContactSource, pickOwner, dueUnix, leadBody, taskBody, closeTaskBody, REACT_PIPELINE_ID, REACT_STATUS_ID, PUSH_PER_RUN,
 } from "./clientKommoTaskRules.js";
 import { OPERATIONAL_STATUSES } from "./moneyBuckets.js";
 import { stageName } from "./stageNames.js";
@@ -21,17 +21,41 @@ import type { KommoTaskDeps, KommoLeadLite } from "./clientKommoTask.js";
 const ROOT = path.join(import.meta.dirname, "..", "..", "..");
 const src = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
 
-test("#3906 🪞 ВІДКРИТА УГОДА: є — задача в неї (найновішу); усі закриті або видалені — нова; відповідальний — з картки, звільнений — ні", () => {
-  assert.equal(pickOpenDeal([{ id: 1, statusId: 142, createdAt: 50 }, { id: 2, statusId: 69693668, createdAt: 10 }, { id: 3, statusId: 69693672, createdAt: 20 }]), 3,
-    "🔴 з кількох відкритих узято не найновішу");
-  assert.equal(pickOpenDeal([{ id: 1, statusId: 142, createdAt: 50 }, { id: 2, statusId: 143, createdAt: 60 }]), null, "🔴 закрита угода прийнята за відкриту");
-  assert.equal(pickOpenDeal([{ id: 4, statusId: 69693668, createdAt: 5, deleted: true }]), null, "🔴 видалена угода прийнята за відкриту");
+test("#8345 🪞 ВІДКРИТА УГОДА — ЛИШЕ ПОВНОГО ЦИКЛУ: відкрита заявка перевізнику чи Кваліфікація — не відкрита угода клієнта; відкрита в Повному циклі — задача в неї (найновішу)", () => {
+  const FC = 8921932, FC_OLD = 155304, CARRIER = 7341740, QUAL = 8921928;
+  // Заміряно 18.11.2026: 2 задачі з 4 «у відкриту угоду» лягли в «Оплата перевозчикам».
+  assert.equal(pickOpenDeal([{ id: 1, pipelineId: FC, statusId: 142, createdAt: 10 }, { id: 2, pipelineId: CARRIER, statusId: 60434924, createdAt: 50 }]), null,
+    "🔴 відкрита заявка на оплату перевізнику прийнята за відкриту угоду клієнта");
+  assert.equal(pickOpenDeal([{ id: 3, pipelineId: QUAL, statusId: 113486296, createdAt: 50 }]), null, "🔴 угода Кваліфікації прийнята за відкриту угоду клієнта");
+  // Дзеркало: відкрита в Повному циклі (обидві воронки) — береться, навіть коли поруч новіша заявка перевізнику.
+  assert.equal(pickOpenDeal([{ id: 4, pipelineId: FC, statusId: 69716252, createdAt: 10 }, { id: 5, pipelineId: CARRIER, statusId: 60434924, createdAt: 90 }]), 4,
+    "🔴 відкриту угоду Повного циклу не взято");
+  assert.equal(pickOpenDeal([{ id: 6, pipelineId: FC_OLD, statusId: 11804491, createdAt: 10 }]), 6, "🔴 стара воронка Повного циклу не рахується продажною");
+  assert.equal(pickOpenDeal([{ id: 7, pipelineId: FC, statusId: 69693668, createdAt: 10 }, { id: 8, pipelineId: FC, statusId: REACT_STATUS_ID, createdAt: 20 }]), 8,
+    "🔴 з кількох відкритих узято не найновішу (повторний крок мусить лягти в угоду, яку дашборд створив раніше)");
+  assert.equal(pickOpenDeal([{ id: 9, pipelineId: FC, statusId: 143, createdAt: 50 }]), null, "🔴 закрита угода прийнята за відкриту");
+  assert.equal(pickOpenDeal([{ id: 10, pipelineId: FC, statusId: 69693668, createdAt: 5, deleted: true }]), null, "🔴 видалена угода прийнята за відкриту");
   assert.equal(pickOpenDeal([]), null);
   const card = { managerId: 1, kommoUserId: 111, active: true }, author = { managerId: 2, kommoUserId: 222, active: true };
   assert.deepEqual(pickOwner(card, author), { ok: true, kommoUserId: 111, from: "card" }, "🔴 відповідальний — не менеджер картки клієнта");
   assert.deepEqual(pickOwner({ ...card, active: false }, author), { ok: true, kommoUserId: 222, from: "author" }, "🔴 задача впала на звільненого менеджера клієнта");
   assert.deepEqual(pickOwner(null, author), { ok: true, kommoUserId: 222, from: "author" });
   assert.equal(pickOwner({ ...card, kommoUserId: null }, { ...author, active: false }).ok, false, "🔴 відповідального вигадано, коли не годиться ні картка, ні автор");
+});
+
+test("#8345b 🪞 КОНТАКТ ДЛЯ НОВОЇ УГОДИ — З ПОВНОГО ЦИКЛУ: новіша заявка перевізнику з іншим контактом не перебиває; угоди Повного циклу без контакту — запасний шлях", () => {
+  const FC = 8921932, CARRIER = 7341740;
+  const fcOld = { pipelineId: FC, createdAt: 10, contactIds: [7], companyId: 9 };
+  const carrierNew = { pipelineId: CARRIER, createdAt: 90, contactIds: [666], companyId: null };
+  assert.equal(pickContactSource([fcOld, carrierNew]), fcOld, "🔴 контакт узято з новішої заявки перевізнику, а не з угоди Повного циклу");
+  // Найновіша угода Повного циклу без контакту — береться та, де контакт є.
+  const fcEmpty = { pipelineId: FC, createdAt: 50, contactIds: [], companyId: null };
+  assert.equal(pickContactSource([fcOld, fcEmpty]), fcOld, "🔴 узято угоду без контакту");
+  const fcNew = { pipelineId: FC, createdAt: 60, contactIds: [8], companyId: null };
+  assert.equal(pickContactSource([fcOld, fcNew, carrierNew]), fcNew, "🔴 з угод Повного циклу взято не найновішу");
+  // Дзеркало: Повного циклу з контактом немає — запасний шлях з будь-якої воронки, а не відмова.
+  assert.equal(pickContactSource([fcEmpty, carrierNew]), carrierNew, "🔴 без угоди Повного циклу з контактом нову угоду не створено, хоча контакт є");
+  assert.equal(pickContactSource([fcEmpty]), null);
 });
 
 test("#3907 🪞 ТІЛА ЗАПИТІВ: угода — на етапі «Клієнти та реактивація» з контактом; строк — дата о 18:00 Києва, без дати — наступний робочий день", () => {
@@ -94,12 +118,18 @@ test("#3909 🪞 ЖИВИЙ ЛАНЦЮГ 8345: відкрита угода — �
   await deal(20, "B", 1, 142); await deal(30, "C", 2, 142); await deal(40, "D", 1, 142); await deal(50, "E", 1, 142);
   const step = async (ck: string, due: string | null) => (await c.query<{ id: number }>(
     `INSERT INTO client_next_steps (client_key, text, due_date, created_by) VALUES ($1, 'набрати', $2, 900) RETURNING id`, [ck, due])).rows[0].id;
+  // G: закрита угода Повного циклу + НОВІША відкрита заявка «Оплата перевозчикам» з іншим контактом (8345, 18.11.2026).
+  await c.query(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, created_at_kommo, client_key, client_name)
+                 VALUES (61, 'заявка', 1, 7341740, 60434924, 0, now() - interval '1 day', 'G', 'G')`);
+  await deal(60, "G", 1, 142);
   const kommo: Record<number, KommoLeadLite> = {
-    10: { id: 10, status_id: 142, created_at: 1 }, 11: { id: 11, status_id: 69693668, created_at: 2 },
-    20: { id: 20, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 7 }], companies: [{ id: 9 }] } },
-    30: { id: 30, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 8 }] } },
-    40: { id: 40, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 6 }] } },
-    50: { id: 50, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 5 }] } },
+    10: { id: 10, pipeline_id: 8921932, status_id: 142, created_at: 1 }, 11: { id: 11, pipeline_id: 8921932, status_id: 69693668, created_at: 2 },
+    20: { id: 20, pipeline_id: 8921932, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 7 }], companies: [{ id: 9 }] } },
+    30: { id: 30, pipeline_id: 8921932, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 8 }] } },
+    40: { id: 40, pipeline_id: 8921932, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 6 }] } },
+    50: { id: 50, pipeline_id: 8921932, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 5 }] } },
+    60: { id: 60, pipeline_id: 8921932, status_id: 142, created_at: 1, _embedded: { contacts: [{ id: 4 }] } },
+    61: { id: 61, pipeline_id: 7341740, status_id: 60434924, created_at: 9, _embedded: { contacts: [{ id: 666 }] } },
   };
   const calls = { leads: [] as { responsible_user_id: number; _embedded: unknown }[], tasks: [] as { entity_id: number; responsible_user_id: number }[], closed: [] as number[] };
   let failTask = false; const completed = new Set<number>();
@@ -141,6 +171,13 @@ test("#3909 🪞 ЖИВИЙ ЛАНЦЮГ 8345: відкрита угода — �
   const cc = await step("C", "2026-11-14");
   await pushStep(pool, deps, cc, now);
   assert.equal(calls.leads[1].responsible_user_id, 333, "🔴 угода впала на звільненого менеджера");
+
+  // G — відкрита лише заявка перевізнику: це НЕ відкрита угода клієнта → нова угода, контакт з угоди Повного циклу.
+  const g = await step("G", "2026-11-14");
+  await pushStep(pool, deps, g, now);
+  assert.deepEqual([calls.leads.length, (await row(g)).kommo_lead_created, calls.tasks.at(-1)?.entity_id], [3, true, 1003],
+    "🔴 задача лягла в заявку на оплату перевізнику замість нової угоди");
+  assert.deepEqual(calls.leads[2]._embedded, { contacts: [{ id: 4 }] }, "🔴 нова угода взяла контакт із заявки перевізнику");
 
   // Порція: у черзі 2 (D, E) + ще один F без угод → за прохід не більше PUSH_PER_RUN, помилка названа.
   const d = await step("D", null), e = await step("E", null), f = await step("F", null);

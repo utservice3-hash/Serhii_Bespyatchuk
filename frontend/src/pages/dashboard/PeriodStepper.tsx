@@ -15,6 +15,11 @@ import {
  * 🔴 МАЙБУТНЄ НЕ ОБИРАЄТЬСЯ: «›» вимкнено, коли наступний період починається після
  * сьогодні, а дні/місяці після сьогодні в календарі неактивні. Дивитись «завтра» нема
  * на що, а порожній екран читався б як провал.
+ *
+ * 🧩 ДВА НЕОБОВʼЯЗКОВІ ПАРАМЕТРИ (20.11.2026 — той самий контрол на Звіті КВП і в «Плани КВП»):
+ *   `modes` — які довжини періоду показати; одна довжина → перемикача немає, лишається «‹ назва ›»;
+ *   `allowFuture` — дозволити майбутні МІСЯЦІ: план ставлять наперед, тож «Плани КВП» мусять дійти до грудня.
+ * Без них контрол поводиться рівно як у Звіті — типові значення і є поведінка Звіту.
  */
 
 const MON = ["січень", "лютий", "березень", "квітень", "травень", "червень", "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"];
@@ -39,10 +44,14 @@ export function stepperLabel(s: PeriodState, today: string): string {
   return `${dNum(p.from)} ${MON_S[mIdx(p.from)]} – ${dNum(p.to)} ${MON_S[mIdx(p.to)]}`;
 }
 
-export function PeriodStepper({ state, onPatch, today }: {
+const ALL_MODES: PeriodMode[] = ["day", "week", "month", "range"];
+
+export function PeriodStepper({ state, onPatch, today, modes = ALL_MODES, allowFuture = false }: {
   state: PeriodState;
   onPatch: (p: Partial<PeriodState>) => void;
   today: string;
+  modes?: PeriodMode[];
+  allowFuture?: boolean;
 }) {
   const [pop, setPop] = useState(false);
   const host = useRef<HTMLDivElement | null>(null);
@@ -57,7 +66,7 @@ export function PeriodStepper({ state, onPatch, today }: {
   const p = periodOf(state);
   const next = navBy(state, 1);
   const nextFrom = next ? periodOf({ ...state, ...next }).from : null;
-  const canNext = nextFrom != null && nextFrom <= today;
+  const canNext = nextFrom != null && (allowFuture || nextFrom <= today);
   const isCurrent = state.mode !== "range" && p.from <= today && today <= p.to;
 
   const setMode = (mo: PeriodMode) => {
@@ -72,7 +81,8 @@ export function PeriodStepper({ state, onPatch, today }: {
     // Місяць: у поточному місяці якір — сьогодні, у минулому — останній день.
     if (state.mode === "month" && patch.anchor) {
       const end = monthEnd(patch.anchor);
-      const day = end > today ? today : end;
+      // Майбутній місяць (лише з `allowFuture`) якориться своїм першим днем: «сьогодні» лежить поза ним.
+      const day = monthStart(patch.anchor) > today ? monthStart(patch.anchor) : end > today ? today : end;
       onPatch({ anchor: day, focusDay: day });
       return;
     }
@@ -81,31 +91,34 @@ export function PeriodStepper({ state, onPatch, today }: {
 
   return (
     <div className="rv-pgrp" ref={host}>
-      <div className="rv-seg" role="group" aria-label="Довжина періоду">
-        {(["day", "week", "month", "range"] as PeriodMode[]).map((mo) => (
-          <button key={mo} type="button" aria-pressed={state.mode === mo} onClick={() => setMode(mo)}>{MODE_LABEL[mo]}</button>
-        ))}
-      </div>
+      {modes.length > 1 && (
+        <div className="rv-seg" role="group" aria-label="Довжина періоду">
+          {modes.map((mo) => (
+            <button key={mo} type="button" aria-pressed={state.mode === mo} onClick={() => setMode(mo)}>{MODE_LABEL[mo]}</button>
+          ))}
+        </div>
+      )}
       <div className="rv-stepper">
         <button type="button" className="arr" aria-label="Попередній період" onClick={() => step(-1)}>‹</button>
         <button type="button" className="rv-plabel" aria-haspopup="dialog" aria-expanded={pop} onClick={() => setPop((o) => !o)}>
           {stepperLabel(state, today)}<small>▾</small>
         </button>
         <button type="button" className="arr" aria-label="Наступний період" disabled={!canNext} onClick={() => step(1)}>›</button>
+        {/* Поповер живе всередині смуги «‹ назва ›», щоб відкриватись під кнопкою, а не під вкладками. */}
+        {pop && (
+          <Calendar state={state} today={today} allowFuture={allowFuture}
+            onPick={(patch) => { setPop(false); onPatch(patch); }} />
+        )}
       </div>
       {!isCurrent && state.mode !== "range" && (
         <button type="button" className="rv-tonow" onClick={() => onPatch({ anchor: today, focusDay: today })}>↺ До поточного</button>
-      )}
-      {pop && (
-        <Calendar state={state} today={today}
-          onPick={(patch) => { setPop(false); onPatch(patch); }} />
       )}
     </div>
   );
 }
 
-function Calendar({ state, today, onPick }: {
-  state: PeriodState; today: string; onPick: (p: Partial<PeriodState>) => void;
+function Calendar({ state, today, allowFuture, onPick }: {
+  state: PeriodState; today: string; allowFuture: boolean; onPick: (p: Partial<PeriodState>) => void;
 }) {
   const sel = periodOf(state);
   const [view, setView] = useState(monthStart(sel.from)); // перший день місяця, що показано
@@ -117,16 +130,16 @@ function Calendar({ state, today, onPick }: {
       <div className="rv-pop" role="dialog" aria-label="Оберіть місяць">
         <div className="rv-pop-h">
           <button type="button" aria-label="Попередній рік" onClick={() => setView(`${y - 1}-01-01`)}>‹</button>{y}
-          <button type="button" aria-label="Наступний рік" disabled={y >= Number(today.slice(0, 4))} onClick={() => setView(`${y + 1}-01-01`)}>›</button>
+          <button type="button" aria-label="Наступний рік" disabled={!allowFuture && y >= Number(today.slice(0, 4))} onClick={() => setView(`${y + 1}-01-01`)}>›</button>
         </div>
         <div className="rv-months">
           {MON_S.map((m, i) => {
             const first = `${y}-${String(i + 1).padStart(2, "0")}-01`;
             const end = monthEnd(first);
             return (
-              <button key={m} type="button" disabled={first > today}
+              <button key={m} type="button" disabled={!allowFuture && first > today}
                 className={sel.from === first ? "s" : ""}
-                onClick={() => { const day = end > today ? today : end; onPick({ anchor: day, focusDay: day }); }}>{cap(m)}</button>
+                onClick={() => { const day = first > today ? first : end > today ? today : end; onPick({ anchor: day, focusDay: day }); }}>{cap(m)}</button>
             );
           })}
         </div>

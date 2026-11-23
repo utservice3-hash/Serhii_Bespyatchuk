@@ -141,33 +141,6 @@ test("#3403 тік: нова угода → першому в колі; 15 хв 
   assert.equal((await q(`SELECT state FROM linkedin_queue_items WHERE kommo_id = 7004`)).rows[0].state, "gone");
 });
 
-test("#3404 джоба: крон кожні 2 хв (непарні хвилини), під наглядом із тією ж частотою; режим за замовчуванням — пробний", async () => {
-  const idx = read("backend/src/index.ts");
-  const at = idx.indexOf('runJob("linkedinQueueJob"');
-  assert.ok(at > 0, "🔴 linkedinQueueJob не запускається з index.ts");
-  const spec = /cron\.schedule\("([^"]+)"[^]*?$/.exec(idx.slice(Math.max(0, idx.lastIndexOf("cron.schedule(", at)), at))?.[1];
-  assert.equal(spec, Array.from({ length: 30 }, (_, i) => 2 * i + 1).join(",") + " * * * *", "🔴 частота черги не 2 хв або збігається з :00/:30 синку");
-  const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
-  assert.equal(MONITORED_JOBS.find((x) => x.name === "linkedinQueueJob")?.everyMin, 2, "🔴 джоба не під наглядом із частотою крону");
-  const { closeModeOf } = await import("./carrierClose.js");
-  assert.equal(closeModeOf(""), "dry", "🔴 порожній LINKEDIN_QUEUE має бути пробним режимом");
-  assert.match(read("backend/src/config.ts"), /linkedinQueue: \{ mode: process\.env\.LINKEDIN_QUEUE \?\? ""/);
-});
-
-test("#3405 межа: кожен роут черги — право manage_linkedin_queue першим; у матриці; право мають лише адмін і КВП", () => {
-  const r = read("backend/src/routes/linkedinQueue.ts");
-  const routes = [...r.matchAll(/linkedinQueueRouter\.(get|put|post|delete|patch)\("([^"]+)",\s*([a-zA-Z]+\("[a-z_]+"\))/g)];
-  assert.equal(routes.length, 3, "🔴 роутів черги не три (екран, список, пауза) — новий роут без межі або межа не першим middleware");
-  for (const m of routes) assert.equal(m[3], 'requirePerm("manage_linkedin_queue")', `🔴 ${m[1]} ${m[2]} без права першим`);
-  const matrix = read("backend/src/auth/accessMatrix.ts");
-  for (const p of ['method: "GET", path: "/api/linkedin-queue"', 'method: "PUT", path: "/api/linkedin-queue/members"', 'method: "PUT", path: "/api/linkedin-queue/pause"']) {
-    assert.ok(matrix.includes(p), `🔴 у матриці немає ${p}`);
-  }
-  const schema = read("backend/src/db/schema.sql");
-  assert.match(schema, /SET permissions = permissions \|\| '\{"manage_linkedin_queue": true\}'::jsonb\s+WHERE key IN \('admin', 'kvp'\);/);
-  assert.match(schema, /SET permissions = permissions - 'manage_linkedin_queue'\s+WHERE key NOT IN \('admin', 'kvp'\);/);
-});
-
 test("#3406 статистика за період — з журналу: отримав / проігнорував по менеджерах, дублі окремо від «ніхто не взяв», межі дат включно", async (t) => {
   const c = await ctx(t);
   if (!c) return;
@@ -192,23 +165,6 @@ test("#3406 статистика за період — з журналу: отр
   // Рядок черги: коло стоїть на В (остання пропозиція 08:41), далі по колу А; Б ще у відпустці.
   assert.equal(s.queue.nextName, "LQ Аа");
   await assert.rejects(loadLinkedinStats(c.db, "2026-11-05", "2026-11-04", ""), /Початок періоду пізніше/);
-});
-
-test("#3407 вкладка «LinkedIn» у «Клієнтах»: межа — вкладка linkedin (керівництво, КВП, тімліди, менеджери; без фінансиста); редактор черги — там, а не в Налаштуваннях", () => {
-  const rt = read("backend/src/auth/routeTab.ts");
-  assert.match(rt, /\{ test: pre\("\/api\/linkedin"\), tabs: \["linkedin"\] \}/, "🔴 /api/linkedin не привʼязано до вкладки");
-  const schema = read("backend/src/db/schema.sql");
-  assert.match(schema, /'\{"linkedin":true\}'::jsonb\s+WHERE key IN \('admin', 'ceo', 'opdir', 'kvp', 'team_lead', 'manager'\)/);
-  const grant = schema.indexOf(`'{"linkedin":true}'`), drop = schema.indexOf("screen_access - 'linkedin'");
-  const sync = schema.lastIndexOf("financier");
-  assert.ok(drop > grant && drop > 0, "🔴 фінансисту не знято вкладку LinkedIn після сиду");
-  assert.ok(schema.slice(drop - 40, drop + 60).includes("financier") && sync > 0);
-  assert.ok(read("backend/src/auth/accessMatrix.ts").includes('{ method: "GET", path: "/api/linkedin/stats", cls: "GET",\n    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["financier", "hr"] }'));
-  assert.match(read("frontend/src/components/Layout.tsx"), /\{ key: "linkedin", label: "LinkedIn", icon: "🔗" \}/);
-  assert.match(read("frontend/src/pages/Dashboard.tsx"), /section === "linkedin" && <LinkedinSection \/>/);
-  // Парне твердження «а де воно тепер»: редактор живе у вкладці, з Налаштувань прибрано.
-  assert.match(read("frontend/src/pages/dashboard/sections/LinkedinSection.tsx"), /tab === "queue" && canEdit \? <LinkedinQueueTab /);
-  assert.doesNotMatch(read("frontend/src/pages/dashboard/sections/SettingsSection.tsx"), /LinkedinQueueTab|Черга LinkedIn/);
 });
 
 test("#3408 «Зупинити бота»: на паузі тік нічого не робить (навіть у Kommo не ходить); після запуску поточні пропозиції — свіжі 15 хв, а не «проігнорував»", async (t) => {
@@ -363,22 +319,6 @@ test("#3412 підключення бота: код із дашборда при
   assert.match(await linkLeadsChat(c.db, "привіт", 777, t0), /код із 6 цифр/);
 });
 
-test("#3413 бот «UTS Заявки»: вебхук — секрет Telegram першим рядком; кнопка = TAKE_PREFIX; callback у allowed_updates; межі в реєстрі й матриці; старт реєструє вебхук", () => {
-  const route = read("backend/src/routes/leadsBot.ts");
-  const wh = route.slice(route.indexOf('leadsBotRouter.post("/webhook"'));
-  assert.match(wh, /^leadsBotRouter\.post\("\/webhook", async \(req, res\) => \{\s*const secret = leadsWebhookSecret\(\);\s*if \(!secret \|\| req\.header\("X-Telegram-Bot-Api-Secret-Token"\) !== secret\) return res\.status\(401\)/,
-    "🔴 вебхук бота діє раніше, ніж перевірив секрет Telegram");
-  assert.match(route, /cq\.data\?\.startsWith\(TAKE_PREFIX\)/, "🔴 кнопку читають не тим префіксом, яким її шле черга");
-  for (const p of ['leadsBotRouter.get("/me", requireAuth', 'leadsBotRouter.post("/link", requireAuth', 'leadsBotRouter.post("/unlink", requireAuth']) assert.ok(route.includes(p), `🔴 ${p} без requireAuth`);
-  assert.match(read("backend/src/bot/leadsBot.ts"), /allowed_updates: \["message", "callback_query"\]/, "🔴 Telegram не надсилатиме натиск «Взяти»");
-  const gates = read("backend/src/auth/gates.ts"), matrix = read("backend/src/auth/accessMatrix.ts");
-  for (const [m, p] of [["POST", "/api/leads-bot/webhook"], ["GET", "/api/leads-bot/me"], ["POST", "/api/leads-bot/link"], ["POST", "/api/leads-bot/unlink"]]) {
-    assert.ok(gates.includes(`{ method: "${m}", path: "${p}", permanent: true,`), `🔴 ${m} ${p} не в реєстрі виключень меж`);
-    assert.ok(matrix.includes(`{ method: "${m}", path: "${p}", cls: "deny-only",`), `🔴 ${m} ${p} не в матриці`);
-  }
-  assert.match(read("backend/src/index.ts"), /\["leadsBotEnsureWebhook", \(\) => leadsBotEnsureWebhook\(\)\]/, "🔴 вебхук бота заявок не реєструється на старті");
-});
-
 test("#3414 статистика за роллю: менеджер — лише свої рядки й заявки, тімлід — своя команда, керівництво — усі; «Даші» й черга — лише керівництву", async (t) => {
   const c = await ctx(t);
   if (!c) return;
@@ -474,15 +414,70 @@ test("#3416 «створено з початку етапу»: тік пише �
   assert.equal(all.kpi.created, 0, "🔴 старі угоди потрапили в журнал бота — «взяли через бота» рахувався б від них");
 });
 
-test("#3417 екран: «Пішли на Операційного директора» — без «Даші»; «Створено» керівництву — з угод етапу; джоба черги щодня добирає історію етапу", () => {
+/**
+ * 🚫 ЗАДАЧА 10743 (TOP Weekly 19.11.2026, Роман: «прибираю бота, він і не працював... забираю вкладку»; 23.11.2026:
+ * плитку «Нових на етапі LinkedIn» лишити, рахувати без бота). Бот «UTS Заявки», вкладка «Черга», плашка «Підключіть
+ * бот заявок» і 2-хвилинний тік прибрані; етап «LinkedIn» пише окрема джоба раз на 30 хв. Кожне «немає» — у парі з
+ * «а де воно тепер», інакше гейт задовольнило б і зникнення всього екрана.
+ * 🧨 САБОТАЖ: повернути `<BotStatus` у `LinkedinSection.tsx` → `#10743`; повернути монтування `/api/leads-bot` → `#10743b`;
+ *    повернути `<LeadsBotBanner />` у `Layout.tsx` → `#10743c`; крон етапу «11,41» → «11 * * * *» → `#10743d`.
+ */
+test("#10743 екран LinkedIn без бота: немає «Черги», смуги й плиток бота, таблиць бота; є угоди з LinkedIn і плитка етапу; межа — вкладка linkedin", () => {
   const ui = read("frontend/src/pages/dashboard/sections/LinkedinSection.tsx");
-  assert.match(ui, /<span className="kpi-label">Пішли на Операційного директора<\/span>/, "🔴 плитку не перейменовано");
-  assert.doesNotMatch(ui, /Даш/, "🔴 на екрані лишилась «Даша» (Роман 06.11.2026: «Пішли на Операційного директора»)");
-  assert.match(ui, /\{s\.stage \? s\.stage\.created : k\.created\}/, "🔴 «Заявок створено» керівництву не з угод етапу");
-  const job = read("backend/src/jobs/linkedinQueueJob.ts");
-  const body = job.slice(job.indexOf("export async function linkedinQueueJob"), job.indexOf("async function stageEventIds"));
-  assert.match(body, /\bawait sweepLinkedinStageHistory\(\)/, "🔴 джоба черги не добирає угоди, що пішли з етапу");
+  for (const [re, why] of [[/LinkedinQueueTab/, "вкладка «Черга»"], [/<BotStatus|function BotStatus/, "смуга бота"], [/<BotTables|function BotTables/, "таблиці бота"],
+    [/Взяли через бота/, "плитка «Взяли через бота»"], [/Пішли на Операційного директора/, "плитка «Пішли на Операційного директора»"],
+    [/Сер\. час взяття/, "плитка «Сер. час взяття»"], [/setLinkedinQueuePaused|Зупинити бота/, "кнопка «Зупинити бота»"]] as const) {
+    assert.doesNotMatch(ui, re, `🔴 на екрані LinkedIn знову ${why} (задача 10743)`);
+  }
+  // Дзеркало: екран живий, і рахує те саме, що до зняття бота.
+  assert.match(ui, /<AllDeals d=\{d\} scope=\{s\.scope\} \/>/, "🔴 зник блок «Усі угоди з LinkedIn»");
+  assert.match(ui, /Угоди з LinkedIn · за весь час<\/span><span className="kpi-value">\{d\.total\}/, "🔴 зникла головна плитка угод");
+  assert.match(ui, /\{s\.stage && <div className="kpi-card"><span className="kpi-label">Нових на етапі «LinkedIn»<\/span><span className="kpi-value">\{s\.stage\.created\}/,
+    "🔴 плитка «Нових на етапі LinkedIn» не з угод етапу (рішення Романа 23.11.2026 — лишити)");
+  assert.match(read("frontend/src/components/Layout.tsx"), /\{ key: "linkedin", label: "LinkedIn", icon: "🔗" \}/);
+  assert.match(read("frontend/src/pages/Dashboard.tsx"), /section === "linkedin" && <LinkedinSection \/>/);
+  assert.match(read("backend/src/auth/routeTab.ts"), /\{ test: pre\("\/api\/linkedin"\), tabs: \["linkedin"\] \}/, "🔴 /api/linkedin не привʼязано до вкладки");
+  assert.ok(read("backend/src/auth/accessMatrix.ts").includes('{ method: "GET", path: "/api/linkedin/stats", cls: "GET",\n    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["financier", "hr"] }'));
+});
+
+test("#10743b бот черги не підключений: роути /api/linkedin-queue і /api/leads-bot не змонтовані й ніде не обіцяні, вебхук не реєструється; /api/linkedin — змонтований", () => {
+  const idx = read("backend/src/index.ts");
+  for (const [re, why] of [[/app\.use\("\/api\/linkedin-queue"/, "змонтовано /api/linkedin-queue"], [/app\.use\("\/api\/leads-bot"/, "змонтовано /api/leads-bot"],
+    [/leadsBotEnsureWebhook/, "на старті реєструється вебхук бота заявок"], [/runJob\("linkedinQueueJob"/, "запускається тік черги"]] as const) {
+    assert.doesNotMatch(idx, re, `🔴 ${why} (задача 10743)`);
+  }
+  for (const f of ["backend/src/auth/accessMatrix.ts", "backend/src/auth/gates.ts", "backend/src/auth/routeInventory.ts", "frontend/src/api.ts"]) {
+    assert.doesNotMatch(read(f), /\/api\/linkedin-queue|\/api\/leads-bot|"\/linkedin-queue|"\/leads-bot/, `🔴 ${f} досі обіцяє роут бота черги`);
+  }
+  // Дзеркало: сам екран LinkedIn змонтований і в реєстрі роутів.
+  assert.match(idx, /app\.use\("\/api\/linkedin", linkedinRouter\)/, "🔴 зник роут екрана LinkedIn");
+  assert.match(read("backend/src/auth/routeInventory.ts"), /\{ mount: "\/api\/linkedin", module: "\.\.\/routes\/linkedin\.js", export: "linkedinRouter" \}/);
+});
+
+test("#10743c плашки «Підключіть бот заявок» немає на жодному екрані; оболонка лишилась", () => {
+  const layout = read("frontend/src/components/Layout.tsx");
+  assert.doesNotMatch(layout, /LeadsBotBanner/, "🔴 плашка бота заявок знову в оболонці (задача 10743)");
+  assert.doesNotMatch(read("frontend/src/api.ts"), /fetchLeadsBotMe|createLeadsBotLink/, "🔴 фронт знову питає стан бота заявок");
+  // Дзеркало: решта оболонки на місці — гейт не мав би задовольнитись зниклим Layout.
+  assert.match(layout, /<VersionBanner \/>\s*\{role === "admin" && <HealthBanner \/>\}\s*\{children\}/, "🔴 оболонка змінилась не так, як планувалось");
+});
+
+test("#10743d етап «LinkedIn» без бота: джоба раз на 30 хв (:11/:41), під наглядом із тією ж частотою; пише угоди етапу й добирає історію; без черги й Telegram", async () => {
+  const idx = read("backend/src/index.ts");
+  const at = idx.indexOf('runJob("linkedinStageJob"');
+  assert.ok(at > 0, "🔴 linkedinStageJob не запускається з index.ts — плитка «Нових на етапі LinkedIn» застигне");
+  const spec = /cron\.schedule\("([^"]+)"[^]*?$/.exec(idx.slice(Math.max(0, idx.lastIndexOf("cron.schedule(", at)), at))?.[1];
+  assert.equal(spec, "11,41 * * * *", "🔴 частота етапу не 30 хв або збігається з :00/:30 syncKommo чи :15/:45 syncStageEvents");
+  const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
+  assert.equal(MONITORED_JOBS.find((x) => x.name === "linkedinStageJob")?.everyMin, 30, "🔴 джоба етапу не під наглядом із частотою крону");
+  assert.equal(MONITORED_JOBS.find((x) => x.name === "linkedinQueueJob"), undefined, "🔴 нагляд досі чекає вимкнений тік черги — тривога щодві хвилини");
+  const job = read("backend/src/jobs/linkedinStageJob.ts");
+  const body = job.slice(job.indexOf("export async function linkedinStageJob"), job.indexOf("async function stageEventIds"));
+  assert.match(body, /fetchLeadsOnStage\(LINKEDIN_STAGE\.pipelineId, LINKEDIN_STAGE\.statusId\)/, "🔴 джоба читає не етап «LinkedIn»");
+  assert.match(body, /await recordStageDeals\(pool, leads, now\)/, "🔴 джоба не пише угоди, що зараз на етапі");
+  assert.match(body, /await sweepLinkedinStageHistory\(now\)/, "🔴 джоба не добирає угоди, що пішли з етапу");
   assert.match(job, /filter\[\$\{side\}\]\[leads_statuses\]\[0\]\[status_id\]=\$\{String\(statusId\)\}/, "🔴 події Kommo не відфільтровано по етапу LinkedIn");
+  assert.doesNotMatch(job, /runLinkedinQueueTick|leadsBot|linkedin_queue_log|linkedin_queue_items/, "🔴 у джобу етапу повернулась черга або Telegram");
 });
 
 /**
@@ -563,6 +558,31 @@ test("#3651 тег «LinkedIn» теж робить угоду угодою з L
   assert.equal(r.total, 3, "🔴 угода з джерелом і тегом порахована двічі");
   const by = Object.fromEntries(r.deals.map((x) => [x.kommoId, [x.bySource, x.byTag]]));
   assert.deepEqual(by, { 9363101: [false, true], 9363102: [true, true], 9363103: [true, false] }, "🔴 «звідки LinkedIn» не той");
+});
+
+/**
+ * 🧾 ЗАДАЧА 9363 · «ОПЛАТА ПЕРЕВОЗЧИКАМ» (Роман 19.11.2026, план 9363-redesign): автоугода воронки 7341740 копіює тег
+ * «LinkedIn» з основної угоди — у списку й лічильниках її немає. Фікстура по ОБИДВА боки: та сама угода (тег, «успішна»)
+ * у Повному циклі — так; у 7341740 — ні; воронка невідома (NULL) — так (IS DISTINCT FROM, а не `<>`).
+ * 🧨 САБОТАЖ: у `loadLinkedinDeals` `IS DISTINCT FROM ${String(PAYMENT_REQUEST_PIPELINE)}` → `IS DISTINCT FROM -1` —
+ *    червоніє «автоугода в списку»; `IS DISTINCT FROM` → `<>` — червоніє «угода без воронки загубилась».
+ */
+test("#3654 «Усі угоди з LinkedIn» без «Оплати перевозчикам»: автоугода 7341740 з тегом — ні (ні в списку, ні в успішних); та сама в Повному циклі — так; воронка невідома — так", async (t) => {
+  const c = await ctx(t);
+  if (!c) return;
+  const { loadLinkedinDeals } = await import("./linkedinDeals.js");
+  const q = (sql: string, p: unknown[] = []) => c.raw.query(sql, p);
+  await q(`DELETE FROM deals WHERE kommo_id BETWEEN 9363000 AND 9363999`);
+  const deal = (id: number, pipe: number | null, s: number) =>
+    q(`INSERT INTO deals (kommo_id, name, pipeline_id, status_id, client_source, tags, created_at_kommo) VALUES ($1, $2, $3, $4, NULL, ARRAY['LinkedIn'], '2026-11-13T09:00:00Z')`,
+      [id, `ОП ${String(id)}`, pipe, s]);
+  await deal(9363201, 8921932, 142);   // основна угода, успішна — так
+  await deal(9363202, 7341740, 142);   // автоугода «Оплата перевозчикам» з тим самим тегом — ні
+  await deal(9363203, null, 69693668); // воронка невідома — так
+  const r = await loadLinkedinDeals(c.db, null);
+  assert.deepEqual(r.deals.map((x) => x.kommoId).sort(), [9363201, 9363203],
+    "🔴 автоугода «Оплата перевозчикам» у списку — або загубилась угода Повного циклу чи угода без воронки");
+  assert.deepEqual([r.total, r.won, r.open], [2, 1, 1], "🔴 автоугода порахована в лічильниках (успішних стало б 2)");
 });
 
 /**

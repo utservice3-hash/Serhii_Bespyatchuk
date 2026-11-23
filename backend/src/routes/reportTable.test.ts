@@ -803,6 +803,13 @@ const DEFAULT_SHOWN_1311 = [
 ];
 
 /**
+ * ↩️ ТИПОВИЙ НАБІР З 18.11.2026 — 12 МАКЕТА + 8, ЩО БУЛИ ТИПОВИМИ ДО 13.11 (пункт 1 TOP Weekly 16.11:
+ * «зафіксувати всі показники, які були, і повернути»; «роби» Романа 18.11). Теж перелічено ТУТ, не імпортом.
+ */
+const RESTORED_1611_EXPECTED = ["created", "ads", "leadgen", "conv", "dispatch", "awaitNoDate", "jamDeals", "responseTime"];
+const DEFAULT_SHOWN_1811 = [...DEFAULT_SHOWN_1311, ...RESTORED_1611_EXPECTED];
+
+/**
  * #2465 — БУДЬ-ЯКУ КОЛОНКУ, КРІМ «МЕНЕДЖЕР», МОЖНА ВИМКНУТИ (задача 7087).
  *
  * Роман, 26.10.2026: «хочеться щоб можна було ставити порядок колонок і вибирати
@@ -1003,10 +1010,12 @@ test("#7721 ЧИП СТАНУ ЗВУЖУЄ СПИСОК, А НЕ ПІДСУМО�
   const t = codeOnly(readFileSync(TABLE_TSX, "utf8"));
   assert.match(t, /statusFilter \? data\.managers\.filter\(\(m\) => m\.status === statusFilter\) : data\.managers/,
     "🔴 таблиця звужує рядки не чипом стану");
-  assert.match(t, /scopeLabel = statusFilter \? "Обрані рядки"/, "🔴 підсумок звуженого списку підписаний як «Весь відділ»");
+  // 10752 (23.11.2026): підпис рахує чиста `rowsScopeLabel` (mgrPick.ts) — і від чипа стану, і від вибору менеджерів;
+  // що чип стану дає «Обрані рядки», виконанням стереже `#10752c`. Твердження цього гейта не змінилось — лише форма виразу.
+  assert.match(t, /scopeLabel = rowsScopeLabel\(\{ role: auth\.role, statusFiltered: statusFilter != null,/, "🔴 підсумок звуженого списку підписаний як «Весь відділ»");
   assert.equal(/glance\s*[:=]/.test(t), false, "🔴 у таблиці зʼявився власний розрахунок glance");
   const r = codeOnly(readFileSync(REPORT_TSX, "utf8"));
-  assert.match(r, /shownManagers = \(data\?\.managers \?\? \[\]\)\.filter\(\(m\) => !statusFilter \|\| m\.status === statusFilter\)/,
+  assert.match(r, /shownManagers = pickManagers\(\(data\?\.managers \?\? \[\]\)\.filter\(\(m\) => !statusFilter \|\| m\.status === statusFilter\)/,
     "🔴 картки звужуються не тим самим фільтром, що таблиця");
   assert.match(r, /className="rv-fpill">лише «/, "🔴 немає плашки «лише «…»» — звужений список читається як повний");
   assert.match(r, /statusFilter=\{statusFilter\}/, "🔴 таблиця не отримує фільтр стану");
@@ -1083,17 +1092,17 @@ test("#7724 ОДИН cols: шапка, рядки, tfoot і ряд груп іт
 });
 
 /**
- * #7725 — ТИПОВИЙ НАБІР = 12 КОЛОНОК МАКЕТА; СТАРИЙ ВИБІР НЕ ГУБИТЬ CORE. Наступник `#7712`.
- * Хто нічого не обирав — бачить 12 колонок; хто обирав колись (коли core були завжди на
+ * #7890 — ТИПОВИЙ НАБІР = 12 КОЛОНОК МАКЕТА + 8 ПОВЕРНУТИХ; СТАРИЙ ВИБІР НЕ ГУБИТЬ CORE. Наступник `#7725`.
+ * Хто нічого не обирав — бачить 20 колонок; хто обирав колись (коли core були завжди на
  * екрані) — не втрачає «Створено», «Авто» й решту core, яких не вимикав.
  * 🧨 Червоніє, якщо змінити типовий набір або накладати збережений вибір на новий (вужчий) набір.
  */
-test("#7725 ТИПОВИЙ НАБІР — 12 КОЛОНОК МАКЕТА; старий збережений вибір не ховає core, яких людина не вимикала", async () => {
+test("#7890 ТИПОВИЙ НАБІР — 12 КОЛОНОК МАКЕТА + 8, ЩО БУЛИ ДО 13.11; старий збережений вибір не ховає core, яких людина не вимикала", async () => {
   const { REPORT_COLS, readColPrefs, DEFAULT_OPT_ON, colVisible } = await loadCols();
   const shownBy = (prefs: Record<string, boolean>) =>
     REPORT_COLS.filter((c: any) => c.key !== "factUndef" && c.key !== "name" && colVisible(c.key, prefs)).map((c: any) => c.key);
-  assert.deepEqual(shownBy(DEFAULT_OPT_ON).sort(), [...DEFAULT_SHOWN_1311].sort(), "🔴 типовий набір колонок не той, що в погодженому макеті");
-  assert.deepEqual(shownBy(readColPrefs(memStore({}), 42)).sort(), [...DEFAULT_SHOWN_1311].sort(), "🔴 людина без збереженого вибору бачить не типовий набір");
+  assert.deepEqual(shownBy(DEFAULT_OPT_ON).sort(), [...DEFAULT_SHOWN_1811].sort(), "🔴 типовий набір колонок не той, що в погодженому макеті");
+  assert.deepEqual(shownBy(readColPrefs(memStore({}), 42)).sort(), [...DEFAULT_SHOWN_1811].sort(), "🔴 людина без збереженого вибору бачить не типовий набір");
   const coreKeys = REPORT_COLS.filter((c: any) => c.core && c.key !== "name").map((c: any) => c.key);
   assert.ok(coreKeys.length >= 10, `🔴 core-колонок ${coreKeys.length} — розбір реєстру зламався`);
   for (const [label, st] of [
@@ -1111,29 +1120,67 @@ test("#7725 ТИПОВИЙ НАБІР — 12 КОЛОНОК МАКЕТА; ста
 });
 
 /**
- * #7726 — «УСІ» ВМИКАЄ ВСЕ, «СКИНУТИ» — 12 КОЛОНОК МАКЕТА І ТИПОВИЙ ПОРЯДОК. Наступник `#7713`.
+ * #7891 — «УСІ» ВМИКАЄ ВСЕ, «СКИНУТИ» — 20 КОЛОНОК (12 МАКЕТА + 8 ПОВЕРНУТИХ) І ТИПОВИЙ ПОРЯДОК. Наступник `#7726`.
  * 🧨 Червоніє, якщо `resetColPrefs` віддає не новий типовий набір або «Скинути» не скидає порядок.
  */
-test("#7726 «УСІ» ВМИКАЄ КОЖНУ КОЛОНКУ, «СКИНУТИ» ПОВЕРТАЄ 12 КОЛОНОК МАКЕТА І ТИПОВИЙ ПОРЯДОК", async () => {
+test("#7891 «УСІ» ВМИКАЄ КОЖНУ КОЛОНКУ, «СКИНУТИ» ПОВЕРТАЄ 12 КОЛОНОК МАКЕТА + 8 ПОВЕРНУТИХ І ТИПОВИЙ ПОРЯДОК", async () => {
   const { REPORT_COLS, allColPrefs, resetColPrefs, resetColOrder, defaultColOrder, colVisible } = await loadCols();
   const all = allColPrefs();
   assert.deepEqual(REPORT_COLS.filter((c: any) => !colVisible(c.key, all)).map((c: any) => c.key), [], "🔴 «Усі» лишає вимкнені колонки");
   const r = resetColPrefs();
   const shown = REPORT_COLS.filter((c: any) => c.key !== "factUndef" && c.key !== "name" && colVisible(c.key, r)).map((c: any) => c.key);
-  assert.deepEqual(shown.sort(), [...DEFAULT_SHOWN_1311].sort(), "🔴 «Скинути до типових» дає не типовий набір");
+  assert.deepEqual(shown.sort(), [...DEFAULT_SHOWN_1811].sort(), "🔴 «Скинути до типових» дає не типовий набір");
   assert.deepEqual(resetColOrder(), defaultColOrder(), "🔴 «Скинути до типових» дає не типовий порядок");
-  assert.equal(colVisible("created", r), false, "🔴 «Скинути» лишає колонку поза типовим набором (це «Усі» під іншою назвою)");
+  assert.equal(colVisible("convAd", r), false, "🔴 «Скинути» лишає колонку поза типовим набором (це «Усі» під іншою назвою)");
   const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
   const pick = s.split("function ColumnPicker(")[1]?.split("\nfunction ")[0] ?? "";
   assert.match(pick, /const onReset = \(\) => \{ resetCols\(\); onResetOrder\(\); \};/, "🔴 «Скинути» скидає не обидва — вибір і порядок");
 });
 
 /**
- * #7730 — ВИБІР ПЕРІОДУ «А»: НАЗВА СЛОВАМИ, МАЙБУТНЄ НЕ ОБИРАЄТЬСЯ. Підпис рахується виконанням
- * (`stepperLabel`), а «›» вимикається, коли наступний період починається після сьогодні.
- * 🧨 Червоніє, якщо підпис брехатиме про день/місяць або «›» пустить у майбутнє.
+ * #7892 — ОДИН РАЗ НА ЛЮДИНУ ДОДАТИ 8 КОЛОНОК, ЗНИКЛИХ 13.11; НІЧОГО НЕ СХОВАТИ; ВДРУГЕ НЕ ВМИКАТИ.
+ * 13.11 `remakeResetOnce` переписав кожному вибір на 12 колонок макета, і тімліди 16.11 не знайшли
+ * «Створено», «Реклама», «Лідоген», «Авто» (TOP Weekly 16.11). `restoreColsOnce` їх ДОДАЄ поверх
+ * поточного вибору. Дзеркало: колонку, яку людина вимкнула ПІСЛЯ повернення, вдруге не вмикаємо.
+ * 🧨 Червоніє, якщо функція перезапише вибір типовим (сховає ввімкнене людиною), не додасть одну з 8,
+ * повториться на другому відкритті, зачепить чужий ключ або стоятиме в таблиці після читання вибору.
  */
-test("#7730 ВИБІР ПЕРІОДУ «А»: назва словами за режимом; «›» не веде в майбутнє; «Період» — з початку місяця", async () => {
+test("#7892 ОДИН РАЗ НА ЛЮДИНУ — +8 КОЛОНОК, ЗНИКЛИХ 13.11; НІЧОГО НЕ ХОВАЄ; ВИМКНЕНЕ ПІСЛЯ — НЕ ВМИКАЄ ВДРУГЕ; ЧУЖІ НЕ ЗАЧЕПЛЕНІ", async () => {
+  const { restoreColsOnce, readColPrefs, colVisible, RESTORED_1611 } = await loadCols();
+  assert.deepEqual([...RESTORED_1611].sort(), [...RESTORED_1611_EXPECTED].sort(), "🔴 перелік повернутих колонок не той, що зник 13.11");
+  // Людина після 13.11 щось налаштувала: увімкнула convAd, вимкнула projected.
+  const mine = { fact: true, plan: true, pct: true, projected: false, convAd: true, created: false, ads: false };
+  const st = memStore({ "rptTableCols:42": mine, "rptTableCols:7": { convAd: true } });
+  assert.equal(restoreColsOnce(st, 42), true, "🔴 перше відкриття не повернуло колонки");
+  const p = readColPrefs(st, 42);
+  const missing = RESTORED_1611_EXPECTED.filter((k) => !colVisible(k, p));
+  assert.deepEqual(missing, [], "🔴 не повернулось: " + missing.join(", "));
+  assert.equal(p.convAd, true, "🔴 повернення сховало колонку, яку людина ввімкнула сама");
+  assert.equal(p.projected, false, "🔴 повернення ввімкнуло колонку, яку людина вимкнула сама (це скидання, а не додавання)");
+  assert.equal(st.data.get("rptTableCols:7"), JSON.stringify({ convAd: true }), "🔴 повернення зачепило чужий вибір");
+  // Далі людина вимикає повернуту колонку — і вона лишається вимкненою.
+  st.data.set("rptTableCols:42", JSON.stringify({ ...p, ads: false }));
+  assert.equal(restoreColsOnce(st, 42), false, "🔴 повернення повторилось — вимкнене людиною вмикатиметься щоразу");
+  assert.equal(readColPrefs(st, 42).ads, false, "🔴 вимкнена після повернення колонка знову на екрані");
+  assert.equal(restoreColsOnce(null, 42), false, "🔴 без сховища повернення «сталось»");
+  // Порядок у таблиці: скидання макета → повернення → читання вибору.
+  const s = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  const iReset = s.indexOf("remakeResetOnce(colStore(), userId)"), iRestore = s.indexOf("restoreColsOnce(colStore(), userId)"),
+    iRead = s.indexOf("readColPrefs(colStore(), userId)");
+  assert.ok(iRestore > 0, "🔴 таблиця не кличе повернення колонок");
+  assert.ok(iReset > 0 && iRestore > iReset, "🔴 повернення стоїть ДО скидання макета — скидання його зітре для тих, хто ще не відкривав");
+  assert.ok(iRead > iRestore, "🔴 повернення стоїть ПІСЛЯ читання вибору — таблиця відмалюється без повернутих колонок");
+});
+
+/**
+ * #9514 — ВИБІР ПЕРІОДУ «А»: НАЗВА СЛОВАМИ, МАЙБУТНЄ НЕ ОБИРАЄТЬСЯ — крім МІСЯЦІВ там, де екран прямо просить
+ * (`allowFuture`: «Плани КВП», план ставлять наперед). Підпис рахується виконанням (`stepperLabel`). Типові значення
+ * параметрів — поведінка Звіту: усі чотири довжини, майбутнє закрите. Наступник `#7730` (20.11.2026): твердження
+ * розширилось двома параметрами, тому номер новий.
+ * 🧨 Червоніє, якщо підпис брехатиме про день/місяць, «›» пустить у майбутнє без `allowFuture`, майбутній ДЕНЬ стане
+ * обираним узагалі, типове значення `allowFuture` стане true, або одна довжина малюватиме перемикач.
+ */
+test("#9514 ВИБІР ПЕРІОДУ «А»: назва словами; «›» і календар не ведуть у майбутнє, крім місяців з allowFuture; одна довжина — без перемикача", async () => {
   const ts = (await import("typescript")).default;
   const rulesJs = ts.transpileModule(readFileSync(path.join(FE, "periodRules.ts"), "utf8"),
     { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -1152,7 +1199,12 @@ test("#7730 ВИБІР ПЕРІОДУ «А»: назва словами за р�
   assert.equal(stepperLabel(st("month", T), T), "Листопад 2026");
   assert.equal(stepperLabel(st("week", T), T), "9–15 листопада", "🔴 тиждень — не Пн–Нд дня");
   assert.equal(stepperLabel(st("range", T, "2026-10-28", "2026-11-03"), T), "28 жовт – 3 лист");
-  assert.match(src, /const canNext = nextFrom != null && nextFrom <= today;/, "🔴 «›» не вимикається перед майбутнім періодом");
+  assert.match(src, /const canNext = nextFrom != null && \(allowFuture \|\| nextFrom <= today\);/, "🔴 «›» не вимикається перед майбутнім періодом (або вимикається й там, де майбутнє дозволене)");
+  assert.match(src, /modes = ALL_MODES, allowFuture = false \}/, "🔴 типові значення змінились — Звіт поводитиметься інакше");
+  assert.match(src, /const ALL_MODES: PeriodMode\[\] = \["day", "week", "month", "range"\];/, "🔴 типовий набір довжин — не чотири");
+  assert.match(src, /disabled=\{!allowFuture && first > today\}/, "🔴 майбутній місяць обирається без дозволу (або не обирається з ним)");
+  assert.match(src, /\{modes\.length > 1 && \(\s*<div className="rv-seg"/, "🔴 одна довжина періоду малює перемикач");
+  assert.match(src, /const day = monthStart\(patch\.anchor\) > today \? monthStart\(patch\.anchor\) : end > today \? today : end;/, "🔴 крок у майбутній місяць лишає якір на сьогодні — місяць не зміниться");
   assert.match(src, /disabled=\{!canNext\}/, "🔴 умова «›» не підключена до кнопки");
   assert.match(src, /disabled=\{d > today\}/, "🔴 у календарі можна обрати майбутній день");
   assert.match(src, /if \(mo === "range"\) onPatch\(\{ mode: mo, rangeFrom: monthStart\(today\), rangeTo: today \}\)/, "🔴 «Період» стартує не з початку місяця");
@@ -1170,4 +1222,48 @@ test("#7731 ПЛИТКА ДНЯ = ОСТАННІЙ ДЕНЬ ПЕРІОДУ (≤ 
   assert.match(r, /if \(mode !== "day" && focusDay !== dayShown\) setFocusDay\(dayShown\);/, "🔴 тиждень картки й плитка дня дивляться на різні дні");
   assert.match(r, /<Glance data=\{data\} focus=\{focus\} focusDay=\{dayShown\}/, "🔴 плитка дня отримує не той день");
   assert.match(r, /fetchScoped\(\{ from: focusDay, to: focusDay \}\)/, "🔴 числа плитки дня тягнуться не за тим днем");
+});
+
+/**
+ * #9510 — ↔️ ШИРИНА БУДЬ-ЯКОЇ КОЛОНКИ (правки зустрічі 17.11.2026: «динамічний розмір колонок»): межі 44…360,
+ * особистий ключ `rptColWidths:<userId>`, «як було» = відсутність запису; CSS іде за ПОТОЧНОЮ позицією колонки
+ * й не чіпає рядок груп і розгортки на всю ширину; «Менеджер» і «#» сюди не входять (у «Менеджер» своя ширина).
+ * 🧨 Червоніє, якщо ширину не обмежити, писати спільним ключем, читати сміття як число, привʼязати ширину до
+ * позиції замість ключа (перестановка колонок віддала б ширину сусідові) або зачепити `[colspan]`-рядки.
+ */
+test("#9510 ШИРИНА КОЛОНОК ЗВІТУ: межі 44…360, ключ rptColWidths:<userId>, CSS за поточним порядком, без рядка груп і розгорток", async () => {
+  const { readColWidths, writeColWidths, clampColWidth, colWidthCss, COL_W_MIN, COL_W_MAX } = await loadCols();
+  assert.deepEqual([clampColWidth(5), clampColWidth(120.4), clampColWidth(5000)], [COL_W_MIN, 120, COL_W_MAX]);
+  const st: any = { ...memStore(), removeItem(k: string) { st.data.delete(k); } };
+  assert.deepEqual(readColWidths(st, 42), {}, "🔴 без запису ширини не «природні»");
+  writeColWidths(st, 42, { fact: 10, plan: 900, name: 300 });
+  assert.deepEqual(JSON.parse(st.getItem("rptColWidths:42")), { fact: COL_W_MIN, plan: COL_W_MAX }, "🔴 ширини пишуться не особистим ключем, без меж або з «Менеджер»");
+  assert.deepEqual(readColWidths(st, 7), {}, "🔴 ширини одного користувача дістались іншому");
+  writeColWidths(st, 42, {});
+  assert.equal(st.getItem("rptColWidths:42"), null, "🔴 «як було» лишило запис");
+  assert.deepEqual(readColWidths({ getItem: () => "[1,2]", setItem() {} }, 1), {}, "🔴 сміття у сховищі прочитано як ширини");
+  assert.deepEqual(readColWidths({ getItem: () => "{\"fact\":\"abc\",\"rank\":50}", setItem() {} }, 1), {}, "🔴 нечислову ширину або «#» прочитано");
+  assert.deepEqual(readColWidths({ getItem: () => "{\"name\":200,\"fact\":90}", setItem() {} }, 1), { fact: 90 }, "🔴 ширину «Менеджер» прочитано з чужого ключа — у неї свій механізм");
+  assert.deepEqual(readColWidths({ getItem: () => { throw new Error("private"); }, setItem() {} }, 1), {}, "🔴 недоступне сховище ламає таблицю");
+  // CSS: позиція = індекс ключа в ПОТОЧНОМУ порядку (+1), лише для колонок із записом.
+  const a = colWidthCss(".t", ["rank", "name", "fact", "plan"], { plan: 100 });
+  assert.match(a, /^\.t tr:not\(\.g\) > :nth-child\(4\):not\(\[colspan\]\) \{ width: 100px; min-width: 100px; max-width: 100px;/, "🔴 ширина не на позиції колонки або без обрізання");
+  const b = colWidthCss(".t", ["rank", "name", "plan", "fact"], { plan: 100 });
+  assert.match(b, /:nth-child\(3\)/, "🔴 після перестановки ширина лишилась на старій позиції — дісталась сусідові");
+  assert.equal(colWidthCss(".t", ["rank", "name", "fact"], { name: 200, rank: 50 }), "", "🔴 «Менеджер» або «#» отримали ширину з цього механізму");
+});
+
+/**
+ * #9511 — ПРОВОДКА ШИРИНИ: кожна НЕзакріплена колонка має ручку зміни ширини, подвійний клік скидає саме її,
+ * поки тягнеш — колонка не перетягується, і CSS ширин будується за тим самим `colKeys`, що шапка й рядки.
+ * 🧨 Червоніє, якщо ручку прибрати, CSS брати з іншого порядку, ніж `cols`, або перетягування колонки
+ * спрацьовуватиме під час зміни ширини.
+ */
+test("#9511 ПРОВОДКА ШИРИНИ: ручка на кожній незакріпленій колонці, скидання по одній, CSS за colKeys, без перетягування під час зміни", () => {
+  const t = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(t, /\{!isPinnedCol\(c\.key\) && \(\s*<span role="separator"[^>]*?onPointerDown=\{startColResize\(c\.key\)\}/s, "🔴 у незакріпленої колонки немає ручки ширини");
+  assert.match(t, /onDoubleClick=\{\(e\) => \{ e\.stopPropagation\(\); resetColWidth\(c\.key\); \}\}/, "🔴 подвійний клік не скидає ширину саме цієї колонки");
+  assert.match(t, /<style>\{colWidthCss\("table\.rpt-table", colKeys, colW\)\}<\/style>/, "🔴 CSS ширин не за поточним порядком колонок");
+  assert.match(t, /onDragStart: \(e: React\.DragEvent\) => \{\s*if \(resizing\.current\) \{ e\.preventDefault\(\); return; \}/, "🔴 під час зміни ширини колонка ще й перетягується");
+  assert.match(t, /const \[colW, setColW\] = useState<Record<string, number>>\(\(\) => readColWidths\(colStore\(\), userId\)\);/, "🔴 ширини не читаються з особистого сховища");
 });

@@ -2,6 +2,7 @@ import { mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 import { dayBucketCase, dayBucketParts } from "./dayBuckets.js";
 import { teamAtSql, teamOnDateSql } from "./teamAt.js";
 import { callUnitsCte, legsForDays } from "./missedCallUnits.js";
+import { carrierCallSql } from "./carrierPhones.js";
 
 /**
  * 📵 ПРОПУЩЕНІ ВХІДНІ — ОЗНАЧЕННЯ Й ФОРМА ЗАПИТУ. ТЗ-1 від 14.09.2026.
@@ -179,6 +180,15 @@ export function missedScopeFor(
  *
  * ⚠️ `scope.teamId` СВІДОМО ховає «без відповідального»: дзвінок, що не дійшов до людини, не належить жодній команді.
  * Це не втрата рядка, це чесна відповідь — на екрані команди підсумок менший за загальний, і так і має бути.
+ *
+ * 🚚 ПЕРЕВІЗНИКІВ У ПРОПУЩЕНИХ НЕМАЄ (рішення Романа 20.11.2026, «правильні пропущені», п.3). Перевізник — номер у
+ * довіднику `carrier_phones` (угода «Перевізник» або машини на Lardi, мінус номери з угодою замовника) — те саме
+ * визначення, що на екрані Клієнтів (7359). `base_all` тримає їх із прапорцем, `base` — уже без них, тож КОЖЕН читач
+ * основи (плитки, таблиці, графік, список, звіт тижня, «Не передзвонили», колонка Звіту) бачить одне й те саме.
+ * Скільки відсіяно — `carriers` у підсумку, з ТОГО САМОГО оператора, що й ціле (правило 18). Заміряно 13-19.11.2026:
+ * 229 із 660 (35%). Довідник без історії: номер, що став перевізником сьогодні, зникає і зі старих днів — це
+ * властивість номера, а не дня. Чому довідник, а не живий `carrierHistorySql`: графік «Усе» (~50 тис. дзвінків) з
+ * живим виразом рахувався б секундами, з довідником це звичайний пошук за ключем.
  */
 export function missedBaseCte(from: string, to: string, s: MissedScope): { cte: string; params: unknown[] } { return baseCte(from, to, s); }
 function baseCte(from: string, to: string, s: MissedScope): { cte: string; params: unknown[] } {
@@ -190,14 +200,16 @@ function baseCte(from: string, to: string, s: MissedScope): { cte: string; param
   conds.push(...missedScopeConds(s, p));
   const cte = `
     WITH ${callUnitsCte(legsForDays("$1::date", "$2::date"))},
-    base AS (
-      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, 0 AS billsec, rc.disposition,
+    base_all AS (
+      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, 0 AS billsec, rc.disposition, rc.mobile,
              ${teamAtSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date")} AS team_at,
-             ${dayBucketParts("rc.calldate")}
+             ${dayBucketParts("rc.calldate")},
+             (${carrierCallSql("rc")}) AS is_carrier
         FROM call_units rc
         LEFT JOIN managers m ON m.id = rc.manager_id
        WHERE ${conds.join(" AND ")}
     ),
+    base AS (SELECT * FROM base_all WHERE NOT is_carrier),
     legs AS (SELECT *, ${dayBucketCase()} AS bucket FROM base),
     withNext AS (
       SELECT f.*, cb.calldate AS cb_at, cb.billsec AS cb_billsec, cb.manager_id AS cb_manager,
@@ -245,6 +257,18 @@ const MEDIAN_MIN_SQL =
   "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (cb_at - calldate))/60.0)"
   + " FILTER (WHERE cb_at IS NOT NULL)";
 
+/**
+ * ⏳ «ЧЕКАЮТЬ ПЕРЕДЗВОНУ» — З НОМЕРОМ ДОСІ НЕ БУЛО РОЗМОВИ ВІД 10 С (ні нашої, ні коли клієнт передзвонив сам), без межі 24 год.
+ * Рішення Романа 20.11.2026 (картка «Досі без розмови (38)»): «чекають» на екрані означає саме це СКРІЗЬ — у смузі чисел,
+ * у колонці таблиці команд і в списку «Кому передзвонити». До того таблиця й звіт тижня показували «не передзвонили за 24 год»
+ * (52 за 19.11), а список — «досі без розмови» (38): два різні числа під майже однією назвою. Вікно 24 год лишається
+ * для «% передзвону» і «часу до передзвону» — вони про швидкість, а не про те, кому дзвонити зараз.
+ * 🔴 ОДИН ВИРАЗ на число, колонку й список: розкриття пояснює число, а не сперечається з ним (гейт `#10146`).
+ */
+export const stillWaitingSql = (a: string): string => `NOT EXISTS (
+      SELECT 1 FROM ringostat_calls x WHERE x.client_phone = ${a}.client_phone
+         AND x.billsec >= ${String(CALLBACK_MIN_TALK_SEC)} AND x.calldate > ${a}.calldate)`;
+
 /** Підсумок за період — блок A екрана. Обидва числа ОДНИМ запитом по одній основі. */
 export function missedSummarySql(from: string, to: string, s: MissedScope): { sql: string; params: unknown[] } {
   const { cte, params } = baseCte(from, to, s);
@@ -262,7 +286,11 @@ export function missedSummarySql(from: string, to: string, s: MissedScope): { sq
            COUNT(*) FILTER (WHERE ${m} AND bucket = 'evening')::int AS b_evening,
            COUNT(*) FILTER (WHERE ${m} AND bucket = 'weekend')::int AS b_weekend,
            COUNT(*) FILTER (WHERE ${m} AND bucket = 'night')::int   AS b_night,
-           ${MEDIAN_MIN_SQL} AS median_min
+           ${MEDIAN_MIN_SQL} AS median_min,
+           (SELECT COUNT(*) FROM base_all WHERE is_carrier AND ${m})::int AS carriers,
+           COUNT(*) FILTER (WHERE ${m} AND mobile)::int AS missed_mobile,
+           COUNT(*) FILTER (WHERE ${m} AND ${stillWaitingSql("withNext")})::int AS waiting,
+           COUNT(*) FILTER (WHERE ${m} AND ${stillWaitingSql("withNext")} AND calldate <= now() - interval '${CALLBACK_WINDOW}')::int AS waiting_over_day
       FROM withNext`;
   return { sql, params };
 }
@@ -277,6 +305,7 @@ export function missedByManagerSql(from: string, to: string, s: MissedScope): { 
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
            COUNT(*) FILTER (WHERE cs_at IS NOT NULL)::int AS client_self,
+           COUNT(*) FILTER (WHERE ${stillWaitingSql("w")})::int AS waiting,
            ${MEDIAN_MIN_SQL} AS median_min
       FROM withNext w
       LEFT JOIN managers mg ON mg.id = w.manager_id
@@ -310,6 +339,7 @@ export function missedByTeamSql(from: string, to: string, s: MissedScope): { sql
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
            COUNT(*) FILTER (WHERE cs_at IS NOT NULL)::int AS client_self,
+           COUNT(*) FILTER (WHERE ${stillWaitingSql("w")})::int AS waiting,
            ${MEDIAN_MIN_SQL} AS median_min
       FROM withNext w
       JOIN managers mg ON mg.id = w.manager_id
@@ -401,8 +431,10 @@ export const NO_TEAM_LABEL = "Поза командами";
 export interface MissedTeamRaw {
   teamId: number | null; name: string | null; missed: number;
   callbackSelf: number; callbackColleague: number; clientSelf: number; medianMin: number | null;
+  /** «Чекають передзвону» — `stillWaitingSql`. Необовʼязкове лише для фікстур старих гейтів; ядро віддає завжди. */
+  waiting?: number;
 }
-export interface MissedTeamRow extends MissedTeamRaw { name: string; noCallback: number }
+export interface MissedTeamRow extends MissedTeamRaw { name: string; noCallback: number; waiting: number }
 
 /** Команди за спаданням пропущених; «Поза командами» — останньою, як «без відповідального». */
 export function foldTeamRows(raw: MissedTeamRaw[]): MissedTeamRow[] {
@@ -411,6 +443,7 @@ export function foldTeamRows(raw: MissedTeamRaw[]): MissedTeamRow[] {
       ...r,
       name: r.teamId === null ? NO_TEAM_LABEL : (r.name ?? `Команда #${String(r.teamId)}`),
       noCallback: r.missed - r.callbackSelf - r.callbackColleague,
+      waiting: r.waiting ?? 0,
     }))
     .sort((a, b) =>
       (a.teamId === null ? 1 : 0) - (b.teamId === null ? 1 : 0)
@@ -433,8 +466,10 @@ export const OWNERLESS_LABEL = "Без відповідального";
 export interface MissedManagerRaw {
   managerId: number | null; name: string | null; teamId: number | null; missed: number;
   callbackSelf: number; callbackColleague: number; clientSelf: number; medianMin: number | null;
+  /** «Чекають передзвону» — `stillWaitingSql`. Необовʼязкове лише для фікстур старих гейтів; ядро віддає завжди. */
+  waiting?: number;
 }
-export interface MissedManagerRow extends MissedManagerRaw { name: string; noCallback: number }
+export interface MissedManagerRow extends MissedManagerRaw { name: string; noCallback: number; waiting: number }
 
 /**
  * 🔴 «БЕЗ ВІДПОВІДАЛЬНОГО» — ОКРЕМИЙ РЯДОК, А НЕ ФІЛЬТР І НЕ РОЗМАЗУВАННЯ.
@@ -457,6 +492,7 @@ export function foldManagerRows(raw: MissedManagerRaw[]): { rows: MissedManagerR
     ...r,
     name: r.managerId === null ? OWNERLESS_LABEL : (r.name ?? `#${String(r.managerId)}`),
     noCallback: r.missed - r.callbackSelf - r.callbackColleague,
+    waiting: r.waiting ?? 0,
   }));
   rows.sort((a, b) =>
     (a.managerId === null ? 1 : 0) - (b.managerId === null ? 1 : 0)
@@ -468,7 +504,7 @@ export function foldManagerRows(raw: MissedManagerRaw[]): { rows: MissedManagerR
     total: {
       managerId: null, name: "Всього", teamId: null, missed: sum((r) => r.missed),
       callbackSelf: sum((r) => r.callbackSelf), callbackColleague: sum((r) => r.callbackColleague),
-      clientSelf: sum((r) => r.clientSelf), noCallback: sum((r) => r.noCallback), medianMin: null,
+      clientSelf: sum((r) => r.clientSelf), noCallback: sum((r) => r.noCallback), waiting: sum((r) => r.waiting), medianMin: null,
     },
   };
 }
@@ -552,21 +588,30 @@ export function capRows<T>(rows: T[], limit = MISSED_LIST_LIMIT): { rows: T[]; t
  * те, чим `missedSummarySql` рахує «пропущено». Для одного дня кількість рядків
  * списку дорівнює `summary.missed` за той самий день — це й стереже `#450`.
  */
-export function missedListSql(day: string, s: MissedScope, onlyNoCallback = false): { sql: string; params: unknown[] } {
-  const { cte, params } = baseCte(day, day, s);
-  // «Лише непередзвонені» (5824): без НАШОЇ розмови від 10 с і без розмови від 10 с, коли клієнт передзвонив сам, — за
-  // ті самі 24 год. Інакше рядок, після якого з клієнтом поговорили, висів би як «не передзвонили».
-  const extra = onlyNoCallback ? ` AND w.cb_at IS NULL AND NOT EXISTS (
-      SELECT 1 FROM ringostat_calls i WHERE i.client_phone = w.client_phone AND i.call_type IN (${list(INBOUND_TYPES)})
-         AND i.billsec >= ${String(CALLBACK_MIN_TALK_SEC)} AND i.calldate > w.calldate AND i.calldate <= w.calldate + interval '${CALLBACK_WINDOW}')` : "";
+/**
+ * 📅 ПЕРІОД (баг 20.11.2026, прохід по екрану на проді): за тиждень смуга казала «Чекають 131», а список «Кому передзвонити»
+ * показував лише один день (38). Тепер список можна взяти за весь період тим самим виразом (`to`); без `to` — один день,
+ * як і було. У кількох днях «Дзвінок» несе дату (`DD.MM HH:MM`), інакше два дзвінки о 09:10 різних днів не розрізнити.
+ */
+export function missedListSql(day: string, s: MissedScope, onlyNoCallback = false, to: string = day): { sql: string; params: unknown[] } {
+  const { cte, params } = baseCte(day, to, s);
+  const atFmt = to === day ? "HH24:MI" : "DD.MM HH24:MI";
+  // «Лише непередзвонені» (5824): з цим номером ДОСІ не було розмови від 10 с — ні нашої, ні коли клієнт передзвонив сам.
+  // 🔴 БЕЗ МЕЖІ 24 ГОД (рішення Романа 20.11.2026, «правильні пропущені», п.4: «якщо менеджер передзвонив, пропущений має
+  // зникати зі списку»). До 20.11 вікно було 24 год, і дзвінок, якому передзвонили наступного ранку, висів «нічого за 24 год»
+  // (13-19.11: 36 таких). Та сама умова, що в блоці «Не передзвонили» (`noCallbackSql`). Спроба без розмови рядок НЕ прибирає:
+  // передзвін — це розмова від 10 с (словник §11). Вікно 24 год лишається для % передзвону і медіани — вони про швидкість.
+  const extra = onlyNoCallback ? ` AND ${stillWaitingSql("w")}` : "";
   const sql = `${cte}
     SELECT w.uniqueid,
-           to_char(w.calldate AT TIME ZONE 'Europe/Kyiv', 'HH24:MI') AS at,
+           to_char(w.calldate AT TIME ZONE 'Europe/Kyiv', '${atFmt}') AS at,
            w.client_phone, w.client_key, w.manager_id, mg.name AS manager_name, w.bucket,
            EXTRACT(EPOCH FROM (COALESCE(w.cb_at, w.ca_at) - w.calldate))/60.0 AS cb_min,
            (w.cb_at IS NOT NULL) AS cb_talked,
            EXTRACT(EPOCH FROM (w.cs_at - w.calldate))/60.0 AS cs_min,
-           dl.kommo_id AS deal_id
+           dl.kommo_id AS deal_id, w.mobile,
+           ${stillWaitingSql("w")} AS waiting,
+           floor(EXTRACT(EPOCH FROM (now() - w.calldate))/3600)::int AS wait_h
       FROM withNext w
       LEFT JOIN managers mg ON mg.id = w.manager_id
       ${dealInWindowLateral("w")}

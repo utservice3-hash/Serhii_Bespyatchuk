@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import { parseTaskIdParam, deepLinkState } from "../taskDeepLink";
@@ -115,10 +115,13 @@ import { TaskCreateDialog } from "./TaskCreateDialog";
 import { CloseTaskDialog } from "./ReactivationBits";
 import { needsCloseReason } from "../reactCloseRule";
 import { browserStorage, isSetByMe, kyivDate, readDesign, readOwnerGroupBy, writeDesign, writeOwnerGroupBy, type OwnerGroupBy, type TasksDesign } from "../tasksFocus";
+import { createFitBatch, fitHeights, type FitBatch } from "../fitBatch";
 
 const METRIC_LBL: Record<string, string> = {
   ads_count: "Реклама",
   leadgen_count: "Лідоген",
+  linkedin_count: "LinkedIn",
+  prozorro_count: "Prozorro",
   dispatch_count: "Авто",
   avg_check: "Сер. чек",
   conversion: "Конверсія",
@@ -126,7 +129,7 @@ const METRIC_LBL: Record<string, string> = {
 };
 const METRIC_UNIT: Record<string, string> = { avg_check: "₴", payment_amount: "₴", conversion: "%" };
 // Адитивні метрики (сумуються по днях у шапку парасольки); чек/конверсія — ставкові (по днях).
-const ADDITIVE_METRICS = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
+const ADDITIVE_METRICS = new Set(["ads_count", "leadgen_count", "linkedin_count", "prozorro_count", "dispatch_count", "payment_amount"]);
 
 // ── дати (Пн–Нд, UTC) для синтетичних парасольок сиріт-daily_kpi ──
 const tMondayOf = (s: string) => { const d = new Date(s + "T00:00:00Z"); const w = d.getUTCDay() === 0 ? 7 : d.getUTCDay(); d.setUTCDate(d.getUTCDate() - (w - 1)); return d.toISOString().slice(0, 10); };
@@ -241,6 +244,19 @@ const priorityPillStyle = (p: TaskPriority): CSSProperties => ({
   appearance: "none", WebkitAppearance: "none", cursor: "pointer",
 });
 
+/**
+ * 📏 ТІЛО ТАБЛИЦІ ЗАДАЧ, ЯКЕ САМЕ ПІДГАНЯЄ ВИСОТУ СВОЇХ ПОЛІВ (задача 9227). Поля лише
+ * позначаються (`mark`), а підгонка йде ОДНА на всю таблицю - після того, як усі рядки
+ * намальовані: ефекти дітей React виконує раніше за ефект батька. Без цього 600 рядків
+ * давали 1 200 перерахунків розмітки, і «Командні задачі» тімліда зависали на хвилину.
+ */
+const FitBatchCtx = createContext<FitBatch | null>(null);
+function FitBatchBody({ children }: { children: ReactNode }) {
+  const [batch] = useState(() => createFitBatch((cb) => { requestAnimationFrame(cb); }));
+  useLayoutEffect(() => { batch.flush(); });
+  return <FitBatchCtx.Provider value={batch}><tbody>{children}</tbody></FitBatchCtx.Provider>;
+}
+
 /** Textarea that grows to fit its full content — never clips, no matter how
  *  narrow the column. onLocal updates the row live; onCommit persists on blur. */
 function AutoTextarea({ value, onLocal, onCommit, style, placeholder }: {
@@ -251,12 +267,14 @@ function AutoTextarea({ value, onLocal, onCommit, style, placeholder }: {
   placeholder?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  // 📏 У таблиці висоту підганяє таблиця, одним проходом на всі поля (9227); поза таблицею - саме поле.
+  const batch = useContext(FitBatchCtx);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [value]);
+    if (batch) batch.mark(el);
+    else fitHeights([el]);
+  }, [value, batch]);
   return (
     <textarea
       ref={ref}
@@ -1355,7 +1373,7 @@ export function TasksSection({
                 <th></th>
               </tr>
             </thead>
-            <tbody>
+            <FitBatchBody>
               {(() => {
                 const q = taskSearch.trim().toLowerCase();
                 // Діти KPI-періоду (parentId) НЕ показуємо окремими рядками — вони в
@@ -1749,7 +1767,7 @@ export function TasksSection({
                   </tr>
                 ); });
               })()}
-            </tbody>
+            </FitBatchBody>
           </table>
         </div>
       );
@@ -2361,6 +2379,27 @@ export function TasksSection({
                         onChange={(e) => setTaskForm((f) => ({ ...f, leadgenCount: e.target.value }))}
                         placeholder="напр. 40"
                         title="Прийнято заявок від лідогенераторів (переданих і взятих у роботу менеджером — з Реєстру лідоген-бота). Доступно для всіх команд."
+                      />
+                    </label>
+                    {/* Задача 9230: факт — те саме число, що колонки Звіту «зі створених: LinkedIn / Prozorro». */}
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                      К-сть угод з LinkedIn
+                      <input
+                        type="number"
+                        value={taskForm.linkedinCount}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, linkedinCount: e.target.value }))}
+                        placeholder="напр. 3"
+                        title="Створені менеджером угоди з LinkedIn (джерело клієнта «LinkedIn» або тег «LinkedIn»). Те саме число, що колонка Звіту «зі створених: LinkedIn»."
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                      К-сть угод з Prozorro
+                      <input
+                        type="number"
+                        value={taskForm.prozorroCount}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, prozorroCount: e.target.value }))}
+                        placeholder="напр. 2"
+                        title="Створені менеджером угоди з Prozorro (джерело «AI тендер» або тег «AI тендер» / «Prozorro»). Те саме число, що колонка Звіту «зі створених: Prozorro»."
                       />
                     </label>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>

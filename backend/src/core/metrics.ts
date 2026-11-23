@@ -840,7 +840,13 @@ const SOURCE_KLASS_CASE = `
  *   • `bucketExpr` — необов'язковий бакет (день/тиждень/місяць за `windowCol`); без нього
  *     final несе лише manager_id.
  *   • `carryPrice` — тягнути `d.price` у final (для суми ₴ по відправлених авто; signed).
- * Повертає ТІЛО WITH (без «WITH»). */
+ * Повертає ТІЛО WITH (без «WITH»).
+ *
+ * ⚙️ `final AS MATERIALIZED` (21.11.2026) — ЩОБ `klass` РАХУВАВСЯ РАЗ НА УГОДУ. Без нього Postgres розгортає CTE у
+ * зовнішній запит, і кожне звернення до `klass` (а це кожен `FILTER (WHERE klass = …)`) заново виконує пошук «клієнт
+ * уже був» (`priorClientSql`). Заміряно на проді 21.11 (EXPLAIN ANALYZE, компанія, з 06.2025): `dispatchedByLoadBucket`
+ * — той самий пошук ПʼЯТЬ разів на угоду (5 × 11 561, 1,9 с із 2,3 с), `createdSplitByBucket` — ТРИЧІ (3 × 40 582,
+ * 2,1 с із 2,5 с). Множина рядків і значення ті самі: вирази чисті, змінюється лише скільки разів їх рахують. */
 function classifyCte(
   s: MetricScope,
   params: unknown[],
@@ -875,7 +881,7 @@ function classifyCte(
               ${priorClientSql({ vkey: "b.vkey", createdAt: "b.created_at_kommo", selfId: "b.kommo_id" })} AS has_prior
          FROM base b
      ),
-     final AS (
+     final AS MATERIALIZED (
        SELECT manager_id${bcarry}${pcarry}${vcarry}, ${opts.klassCase} AS klass,
               ${CREATED_SOURCE_CASE} AS source
          FROM classed

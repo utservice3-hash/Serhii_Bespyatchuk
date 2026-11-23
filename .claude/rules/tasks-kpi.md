@@ -52,7 +52,10 @@ paths:
 
 ## Задачник KPI
 
-Тімлід ставить план менеджеру (`POST /tasks/plan`): `ads_count`, `leadgen_count`, `dispatch_count`, `avg_check`, `conversion`. **План = ОДНА задача-парасолька** (`task_type='kpi_period'`) + приховані діти-дні (`daily_kpi`, `parent_id`). Парасолька→done, коли всі дні done. **Тижневий план — довільний період з календаря.**
+Тімлід ставить план менеджеру (`POST /tasks/plan`): `ads_count`, `leadgen_count`, `linkedin_count`, `prozorro_count`, `dispatch_count`, `avg_check`, `conversion`.
+- **`linkedin_count` / `prozorro_count`** (задача 9230, 18.11.2026): факт = `createdSplitByManager(...).linkedinCount / prozorroCount` — ТЕ САМЕ число, що колонки Звіту «зі створених: LinkedIn / Prozorro» (глосарій §20/§21; кошики вирізані лише з «без джерела»). Тримають `#9230f`-`#9230h`. На картці менеджера у Звіті (блок «Тиждень · задача з Задачника») їх свідомо НЕ показуємо — окреме рішення.
+
+**План = ОДНА задача-парасолька** (`task_type='kpi_period'`) + приховані діти-дні (`daily_kpi`, `parent_id`). Парасолька→done, коли всі дні done. **Тижневий план — довільний період з календаря.**
 ⚠️ Дати в `/tasks` GET віддавати через `to_char(...,'YYYY-MM-DD')` (інакше `<input type=date>` не показує).
 - **Тип «🔄 Реактивація клієнтів»**: `GET /dashboard/reactivation-candidates` — **лише компанії**, НЕ боржники: `lapsed` (3+ перевезень, замовкли) і `oneshot_bg` (1 перевезення б/г). Вибрані → **ОДНА задача на менеджера** з чеклістом (`checklist_json`).
 - **Департамент** призначається АВТОМАТИЧНО з команди виконавця.

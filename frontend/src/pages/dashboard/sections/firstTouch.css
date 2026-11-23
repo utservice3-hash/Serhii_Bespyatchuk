@@ -198,3 +198,19 @@
   border: 1px dashed; border-radius: 10px; }
 /* Квадрат, а не коло: пункти балу — кружки, згода — окремо. */
 .ftd-decision-mark { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 15px; }
+
+/* ── Задача 10734 (Роман 23.11.2026): вкладки екрана, «Точка контролю», «Фільтр ▾», «Технічне», «Правила роботи» ── */
+.ftd-pages button { padding: 7px 16px; font-size: 14px; }
+.ftd-rules-btn { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-align: middle; }
+.ftd-strip-closed { margin-top: 8px; border: 0; background: transparent; color: #cbd5e1; font: inherit; font-size: 13px; padding: 0; cursor: pointer; text-decoration: underline dotted; }
+.ftd-strip-closed:hover { color: #fff; }
+.ftd-fdrop { position: relative; }
+.ftd-fdrop > summary { list-style: none; display: inline-block; }
+.ftd-fdrop > summary::-webkit-details-marker { display: none; }
+.ftd-fdrop-body { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 280px; background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.ftd-fdrop-body label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.ftd-fdrop-h { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-top: 6px; }
+.ftd-fdrop-h:first-child { margin-top: 0; }
+.ftd-tech > summary { cursor: pointer; font-size: 14px; }
+.ftd-tech .ftd-meta { margin: 10px 0 0; }

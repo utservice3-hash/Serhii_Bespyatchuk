@@ -76,15 +76,6 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
   { method: "POST", path: "/api/vault-bot/webhook", permanent: true,
     why: "Стукає сервер Telegram (бот «UTS Сейф»), не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
        + "(виводиться з токена бота, bot/vaultBot.ts). Не збігся → 401 без жодної дії. Робить лише привʼязку чату за одноразовим кодом." },
-  { method: "POST", path: "/api/leads-bot/webhook", permanent: true,
-    why: "Стукає сервер Telegram (бот «UTS Заявки», черга LinkedIn), не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
-       + "(виводиться з токена бота, bot/leadsBot.ts). Не збігся → 401 без жодної дії. «Взяти» діє лише на заявку, запропоновану САМЕ цьому чату (takeOffer)." },
-  { method: "GET", path: "/api/leads-bot/me", permanent: true,
-    why: "Стан підключення бота заявок ВЛАСНОГО токена (для плашки «Підключіть бот заявок»). Скоуп — сам токен; потрібен будь-якій ролі." },
-  { method: "POST", path: "/api/leads-bot/link", permanent: true,
-    why: "Одноразовий код підключення бота заявок для ВЛАСНОГО акаунта (10 хв, як #442b). Скоуп — сам токен." },
-  { method: "POST", path: "/api/leads-bot/unlink", permanent: true,
-    why: "Відʼєднати бот заявок від ВЛАСНОГО акаунта. Скоуп — сам токен." },
   { method: "POST", path: "/api/telegram/sign-webhook", permanent: true,
     why: "Стукає сервер Telegram, не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
        + "(виводиться з токена бота, bot/signBot.ts). Не збігся → 401 без жодної дії. Вкладки бути не може." },
@@ -475,6 +466,9 @@ export interface SpreadExemption { file: string; frag: string; why: string }
  * акумулятори.
  */
 export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
+  // 🤝 1×1 (19.11.2026, Сергій «нічого не зникає» + «підв'яжи до найму»): рядок — ЯВНИЙ SELECT у тому ж обробнику.
+  { file: "routes/oneOnOnes.ts", frag: "return res.json({ ...rec, tasks_set",
+    why: "`rec` — рядок `GET /record` з явним переліком колонок `one_on_ones`; `tasks_set` — відбір `tasksSetAtMeeting` (гейт `#9991`)." },
   // 📈 Калькулятор, ринкова ціна (прохід A, 30.10.2026): `v` — варіант маршруту `RouteVariantOut` з чистого ядра
   // `core/roadRoute.ts → toVariants` (поля перелічені в типі), не рядок БД; дописуються ринок і показана ставка.
   { file: "routes/rates.ts", frag: "return { ...v, market_price: market, price: priceView",

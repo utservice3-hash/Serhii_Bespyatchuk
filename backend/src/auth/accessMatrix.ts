@@ -447,6 +447,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/missed-calls/norm", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  // 📄 «Пропущені угоди» (рішення Романа 20.11.2026) — ТІ САМІ межі, що в екрана: той самий tab-гейт. Звіряє #449.
+  { method: "GET", path: "/api/dashboard/missed-calls/deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   /* Кнопка задачі: керівництво й тімлід (своя команда) — першим оператором; менеджер вкладку має, але кнопки ні. */
   { method: "POST", path: "/api/dashboard/missed-calls/no-callback/task", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
@@ -468,20 +471,20 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/ai-calls/:uniqueid/recording", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
-  /* Ручний тип розмови (ТЗ 30.09.2026): лише адмін і тімлід (своя команда). Менеджер має вкладку, тож 403 йому дає
+  /* Ручний тип розмови (ТЗ 30.09.2026): лише адмін (і СЕО — Роман 23.11.2026) і тімлід (своя команда). Менеджер має вкладку, тож 403 йому дає
      обробник першим оператором; HR — tab-гейт. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/type", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   /* Коментарі (ТЗ 30.09.2026 п.5, п.6.3): право — першим оператором обробника за видом коментаря. */
   { method: "PUT", path: "/api/dashboard/ai-calls/:uniqueid/note", cls: "deny-only",
     allow: [], deny: ["hr"] },
-  /* ❌ Закрити / повернути угоду в Kommo з картки (рішення Романа 16.10.2026): тімлід (своя команда), адмін, КВП.
+  /* ❌ Закрити / повернути угоду в Kommo з картки (рішення Романа 16.10.2026): тімлід (своя команда), адмін, СЕО (23.11.2026), КВП.
      Запис у Kommo — тож проба лише на відмову. Менеджер — 403 першим оператором; HR — без вкладки. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/close-deal", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/close-deal/revert", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
-  /* 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін; запис у `feedback` — проба лише на відмову.
+  /* 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін, СЕО (23.11.2026); запис у `feedback` — проба лише на відмову.
      Менеджер — 403 першим оператором (`canSendCallFeedback`); HR — без вкладки. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/feedback", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
@@ -579,13 +582,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/nominations/manual-slides/:id/restore", cls: "deny-only",
     allow: [], deny: ["team_lead", "hr", "manager"] },
   { method: "GET", path: "/api/hiring/meta", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead", "financier"], deny: ["manager"] },
   { method: "GET", path: "/api/hiring/candidates", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead", "financier"], deny: ["manager"] },
   { method: "GET", path: "/api/hiring/candidates/:id", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead", "financier"], deny: ["manager"] },
   { method: "GET", path: "/api/hiring/schedule?from=2026-09-01&to=2026-09-07", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "financier"], deny: ["team_lead", "manager"] },
   { method: "GET", path: "/api/hiring/daily?from=2026-09-01&to=2026-09-07", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
   { method: "POST", path: "/api/hiring/interviews", cls: "deny-only",
@@ -631,7 +634,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/hiring/workua/sync", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "PUT", path: "/api/hiring/vacancies/:id/workua", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "GET", path: "/api/hiring/vacancies?scope=active", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "financier"], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/vacancies", cls: "deny-only",
     allow: [], deny: ["team_lead", "manager"] },
   { method: "PATCH", path: "/api/hiring/vacancies/:id", cls: "deny-only",
@@ -647,7 +650,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/hiring/candidates/:id/files", cls: "deny-only",
     allow: [], deny: ["team_lead", "manager"] },
   { method: "GET", path: "/api/hiring/candidates/:id/files/:fileId", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead", "financier"], deny: ["manager"] },
   { method: "DELETE", path: "/api/hiring/candidates/:id/files/:fileId", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/files/:fileId/restore", cls: "deny-only",
@@ -656,23 +659,26 @@ export const ACCESS_MATRIX: AccessRow[] = [
      Читання — як картка кандидата (тімлід бачить своїх). Запис тімліда: запрошення, продовження,
      «менеджер», відповідь; «Відновити доступ» — лише рекрутер і адмін-рівень. */
   { method: "GET", path: "/api/hiring/training", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead", "financier"], deny: ["manager"] },
   { method: "GET", path: "/api/hiring/training/:id", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead", "financier"], deny: ["manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/invite", cls: "deny-only",
     allow: [], deny: ["manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/password", cls: "deny-only",
     allow: [], deny: ["manager"] },
   // 📄 Офер із шаблону (18.09.2026) — лише «редагування» Найму (HR, керівництво).
   { method: "GET", path: "/api/hiring/offer-templates", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "financier"], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/offer-templates", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "PATCH", path: "/api/hiring/offer-templates/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "GET", path: "/api/hiring/candidates/:id/offer", cls: "GET",
-    allow: [], deny: ["team_lead", "manager", "financier"] },
+    allow: [], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/offer", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "GET", path: "/api/hiring/offers/states", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "financier"], deny: ["team_lead", "manager"] },
+  // 👁 «Співробітники» для перегляду (фінансист, 20.11.2026, #4152): реєстр без паролів; сейф — окремо (`/api/secrets`).
+  { method: "GET", path: "/api/hiring/employees", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "financier"], deny: ["team_lead", "manager"] },
   // 📊 Зведення найму (18.09.2026) — лише «редагування» Найму.
   { method: "GET", path: "/api/hiring/summary?from=2026-09-01&to=2026-09-30", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
@@ -914,6 +920,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-problem/clear", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🧾 «Поїздка була (поза CRM)» (9045): тімлід свого клієнта і адмін-рівень будь-якого (`canConfirmTrip` +
+  // `canSeeClient`, ПЕРШИМ оператором, до тіла). Менеджер і HR — 403 по ролі, тож проба безпечна. Тімліду проба з
+  // неіснуючим ключем дає 403 по клієнту, не по ролі, а адмін-рівень гейт проходить — тому їх у deny немає (проба
+  // дозволеної ролі записала б).
+  { method: "POST", path: "/api/dashboard/client-trip-confirm", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/client-trip-confirm/clear", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   // 🚫 «Закрити» в «Нічийних» (задача 7187) — той самий допуск, що «Взяти в роботу»: менеджер без прапорця — 403.
   { method: "POST", path: "/api/dashboard/orphan-clients/close", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
@@ -1349,13 +1363,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["admin", "financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/one-on-ones/forms/:type/versions", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
-  { method: "GET", path: "/api/one-on-ones/meetings/:type/:managerId", cls: "GET",
+  { method: "GET", path: "/api/one-on-ones/meetings/:type/:subjectId", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
-  { method: "GET", path: "/api/one-on-ones/open-tasks/:type/:managerId", cls: "GET",
+  { method: "GET", path: "/api/one-on-ones/open-tasks/:type/:subjectId", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "POST", path: "/api/one-on-ones/record", cls: "deny-only",
     allow: [], deny: ["manager"] },
-  { method: "GET", path: "/api/one-on-ones/record/:type/:managerId", cls: "GET",
+  { method: "GET", path: "/api/one-on-ones/record/:type/:subjectId", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "GET", path: "/api/one-on-ones/stats/scores", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["manager", "financier"] },
@@ -1378,6 +1392,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
   //    ⚠️ CEO/опдир/фінансист теж отримують 403 (норму ставить КВП), але в deny їх не пишемо: проба рядків адмін-рівня
   //    вимагає права в ADMIN_DENIED_BY_PERM, а тут межа — роль, не право. Їх 403 стереже `#1542` (`canSetCallsNorm`).
   { method: "POST", path: "/api/plans/calls-norm", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🔁 10477: передати або зняти план менеджера, який пішов, - лише КВП і адмін (`canTransferPlan`), 403 ДО запису.
+  //    CEO/опдир/фінансист теж отримують 403, але в deny їх не пишемо з тієї ж причини, що в нормі дзвінків вище;
+  //    їх 403 стереже `#4033`.
+  { method: "POST", path: "/api/plans/transfer", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/plans/transfer/drop", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/plans/formation/approve", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
@@ -1561,15 +1582,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/auth/telegram-unlink", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/telegram/sign-webhook", cls: "deny-only",
-    allow: [], deny: [] },
-  // 🤖 Бот «UTS Заявки» (черга LinkedIn, задача 7361): вебхук — секрет Telegram; решта — власний акаунт (як telegram-link).
-  { method: "POST", path: "/api/leads-bot/webhook", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "GET", path: "/api/leads-bot/me", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "POST", path: "/api/leads-bot/link", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "POST", path: "/api/leads-bot/unlink", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
@@ -1981,13 +1993,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🔗 «Клієнти → LinkedIn» (задача 7361): вкладка `linkedin`; менеджер — лише себе, тімлід — команду, керівництво — усіх (Роман 04.11.2026).
   { method: "GET", path: "/api/linkedin/stats", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["financier", "hr"] },
-  // 🔗 Черга LinkedIn (задача 7361): список кола веде Юля (КВП) і адмін — право `manage_linkedin_queue`, перший middleware.
-  { method: "GET", path: "/api/linkedin-queue", cls: "GET",
-    allow: ["admin", "kvp"], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
-  { method: "PUT", path: "/api/linkedin-queue/members", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
-  { method: "PUT", path: "/api/linkedin-queue/pause", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/minus-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/minus-deals/counter", cls: "GET",

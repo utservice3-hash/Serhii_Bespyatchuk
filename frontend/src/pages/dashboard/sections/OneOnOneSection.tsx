@@ -6,6 +6,7 @@ import {
   fetchO2OMeetings, fetchO2OOpenTasks, createO2OTask, reviewO2OTask,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type OneOnOneRecord,
   type O2OMeeting, type O2OOpenTask, type O2OTaskOutcome, type O2OEnpsResponse, type O2OEnpsSummary,
+  type O2OTaskReview, type O2OMeetingTask, fetchSecretsStatus,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { useToast } from "../../../components/Toasts";
@@ -15,7 +16,7 @@ import { enpsColor, CLASS_UI, BAND_COLOR, SCALE_CAPTION } from "./enpsScale";
 import { legacySections, unmappedKeys, averageOfScores, sameScore, isFullyUnmapped } from "./oneOnOneLegacy";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
 import { saveErrorText, draftKey, hasUnsavedEdits, UNSAVED_PROMPT, UNSAVED_BEFOREUNLOAD, type O2ODraft,
-  draftStoreKey, parseStoredDraft, draftToRestore, draftExpired, DRAFT_PREFIX } from "./oneOnOneSave";
+  draftStoreKey, parseStoredDraft, draftToRestore, draftExpired, DRAFT_PREFIX, selStillFresh, reviewsOfMeeting } from "./oneOnOneSave";
 import { getAuthPayload } from "../../../auth";
 
 type O2OType = "A" | "B" | "V";
@@ -130,12 +131,24 @@ const ls = {
   set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* сховище недоступне — чернетки не буде */ } },
   del: (k: string) => { try { localStorage.removeItem(k); } catch { /* те саме */ } },
 };
+/** Підписи рішень по задачі на зустрічі — ті самі слова, що на кнопках рев'ю. */
+const REVIEW_LABEL: Record<O2OTaskOutcome, string> = { done: "✓ Виконано", carried: "✗ Ні, переноситься", cancelled: "✗ Знято" };
+const REVIEW_CHIP: Record<O2OTaskOutcome, CSSProperties> = {
+  done: { background: "#dcfce7", color: "#15803d" },
+  carried: { background: "#fee2e2", color: "#b91c1c" },
+  cancelled: { background: "#e2e8f0", color: "#475569" },
+};
 /** Вибір екрана (тип, людина, дата) — щоб після перезавантаження повернутись туди, де був (задача 5760). */
-const SEL_KEY = "o2oSel";
-type SavedSel = { type: O2OType; selId: number; date: string };
+// `Emp` — у `selId` номер КАРТКИ Найму (19.11.2026); старий `o2oSel` тримав менеджера Kommo, і те саме число
+// відкрило б іншу людину. Старий ключ просто більше не читається.
+const SEL_KEY = "o2oSelEmp";
+type SavedSel = { type: O2OType; selId: number; date: string; at?: string };
+/** Місце повертається лише СВІЖИМ (`selStillFresh`, 19.11.2026): старше — екран відкривається на сьогодні, а не на
+ *  місяці, який колись переглядали (там сьогоднішня зустріч виглядала зниклою). */
 const readSel = (): SavedSel | null => {
   try { const v = JSON.parse(ls.get(SEL_KEY) ?? "null") as SavedSel | null;
-    return v && ["A", "B", "V"].includes(v.type) && Number.isInteger(v.selId) && /^\d{4}-\d{2}-\d{2}$/.test(v.date) ? v : null; }
+    return v && ["A", "B", "V"].includes(v.type) && Number.isInteger(v.selId) && /^\d{4}-\d{2}-\d{2}$/.test(v.date)
+      && selStillFresh(v.at, new Date()) ? v : null; }
   catch { return null; }
 };
 
@@ -153,9 +166,13 @@ export function OneOnOneSection() {
   const restoreSel = useRef<SavedSel | null>(readSel());
   const [type, setType] = useState<O2OType>(() => restoreSel.current?.type ?? "A");
   const [tab, setTab] = useState<"conduct" | "stats" | "analytics" | "enps" | "edit">("conduct");
-  const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("o2oMonth") || curMonthStr());
+  // Місяць — місяць свіжого місця, куди повертаємось; інакше поточний. Окремо місяць більше не памʼятається (19.11.2026).
+  const [monthSel, setMonthSel] = useState<string>(() => restoreSel.current?.date.slice(0, 7) ?? curMonthStr());
   const [form, setForm] = useState<O2OForm | null>(null);
   const [subjects, setSubjects] = useState<OneOnOneSubject[]>([]);
+  // «Картка в Найм ↗» — лише тим, кому сервер відкриває «Найм → Співробітники» (право сейфу), як у самому Наймі.
+  const [canHiringCard, setCanHiringCard] = useState(false);
+  useEffect(() => { fetchSecretsStatus().then(() => setCanHiringCard(true)).catch(() => setCanHiringCard(false)); }, []);
   const [selId, setSelId] = useState<number | null>(null);
   const [answers, setAnswers] = useState<OneOnOneAnswers>({});
   const [enpsScore, setEnpsScore] = useState<number | null>(null);
@@ -188,6 +205,10 @@ export function OneOnOneSection() {
   const [person, setPerson] = useState<{ managerId: number; name: string } | null>(null);
   // Задачі з 1×1: відкриті з МИНУЛИХ зустрічей (рев'ю) + форма постановки нової
   const [openTasks, setOpenTasks] = useState<O2OOpenTask[]>([]);
+  // Що вже записано НА ЦІЙ зустрічі: рішення по минулих задачах і нові задачі (19.11.2026, «нічого не зникає»).
+  const [reviews, setReviews] = useState<O2OTaskReview[]>([]);
+  const [tasksSet, setTasksSet] = useState<O2OMeetingTask[]>([]);
+  const extrasFor = useRef<string | null>(null);
   const [newTask, setNewTask] = useState("");
   const [newTaskDue, setNewTaskDue] = useState("");
   const [taskBusy, setTaskBusy] = useState(false);
@@ -204,7 +225,9 @@ export function OneOnOneSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel).then((d) => setSubjects(d.subjects)).catch(() => setSubjects([]));
+  const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel)
+    .then(setSubjects)
+    .catch(() => setSubjects([]));
   const loadMeetings = (mgrId: number) => fetchO2OMeetings(type, mgrId, 24).then(setMeetings).catch(() => setMeetings([]));
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
   useEffect(() => { setSelId(null); setMeetings([]); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
@@ -256,6 +279,13 @@ export function OneOnOneSection() {
   // в блок рев'ю не потрапляють — їх переглядатимуть на НАСТУПНІЙ зустрічі).
   const loadOpenTasks = (mgrId: number, date: string) =>
     fetchO2OOpenTasks(type, mgrId, date).then(setOpenTasks).catch(() => setOpenTasks([]));
+  /** Підтягнути з сервера ЛИШЕ рішення й задачі цієї зустрічі — відповіді анкети не чіпаються (там може бути набране). */
+  const loadMeetingExtras = (mgrId: number, date: string) =>
+    fetchOneOnOne(type, mgrId, date).then((r) => {
+      // Поки відповідь їхала, людина могла перейти на іншу зустріч — тоді чужі блоки не підставляємо.
+      if (extrasFor.current !== `${type}:${mgrId}:${date}`) return;
+      setReviews(reviewsOfMeeting(r.task_reviews)); setTasksSet(r.tasks_set ?? []);
+    }).catch(() => { /* блоки лишаються як були; помилку дії вже показав її власний catch */ });
   useEffect(() => {
     if (selId == null || type === "V") { setOpenTasks([]); return; }
     let live = true;
@@ -267,7 +297,7 @@ export function OneOnOneSection() {
     if (selId == null) return;
     setTaskBusy(true);
     setErr(null);
-    try { await reviewO2OTask(id, outcome, dateSel); await loadOpenTasks(selId, dateSel); }
+    try { await reviewO2OTask(id, outcome, dateSel); await Promise.all([loadOpenTasks(selId, dateSel), loadMeetingExtras(selId, dateSel)]); }
     catch (e) { setErr(saveErrorText(e, "Не вдалося позначити задачу")); }
     finally { setTaskBusy(false); }
   };
@@ -275,11 +305,12 @@ export function OneOnOneSection() {
     if (selId == null || !newTask.trim()) return;
     setTaskBusy(true); setErr(null);
     try {
-      await createO2OTask({ type, subjectManagerId: selId, meetingDate: dateSel, title: newTask.trim(), deadline: newTaskDue || null });
+      await createO2OTask({ type, subjectId: selId, meetingDate: dateSel, title: newTask.trim(), deadline: newTaskDue || null });
       // Раніше лише очищалось поле — і не було видно, чи задача десь зʼявилась (30.09.2026).
       const who = subjects.find((s) => s.id === selId)?.name;
       toast(`«${newTask.trim()}» — у Задачнику${who ? ` у ${who}` : ""}.`, { head: "Задачу поставлено" });
       setNewTask(""); setNewTaskDue("");
+      await loadMeetingExtras(selId, dateSel);
     } catch (e) { setErr(saveErrorText(e, "Задачу не поставлено")); }
     finally { setTaskBusy(false); }
   };
@@ -292,6 +323,7 @@ export function OneOnOneSection() {
     // захист незбереженого мовчки вимкнеться саме там, де людина почне набирати заново.
     const snap = (d: O2ODraft) => { setSavedSnap(draftKey(d)); };
     const key = userId != null ? draftStoreKey(userId, type, selId, dateSel) : null;
+    extrasFor.current = `${type}:${selId}:${dateSel}`;
     fetchOneOnOne(type, selId, dateSel).then((r) => {
       if (!live) return;
       const loaded: O2ODraft = {
@@ -311,13 +343,14 @@ export function OneOnOneSection() {
       // немає, ховати попереднє «не збереглося» нема підстав (а синхронний setState в
       // тілі ефекту — ще й зайвий каскад рендерів).
       setNotes(shown.notes); setSavedAt(r.updated_at ?? null); snap(loaded); setErr(null);
+      setReviews(reviewsOfMeeting(r.task_reviews)); setTasksSet(r.tasks_set ?? []);
     }).catch((e) => {
       if (!live) return;
       const empty: O2ODraft = { answers: {}, enpsScore: null, enpsReason: "", satisfaction: null, notes: {} };
       setAnswers(empty.answers); setEnpsScore(null); setEnpsReason(""); setSatisfaction(null);
       // Сервер не відповів — чернетку НЕ підставляємо й не чіпаємо: порівняти її нема з чим, а стерти — не можна.
       draftFor.current = null; setRestoredAt(null);
-      setNotes(empty.notes); setSavedAt(null); snap(empty);
+      setNotes(empty.notes); setSavedAt(null); snap(empty); setReviews([]); setTasksSet([]);
       setErr(saveErrorText(e, "Не вдалося завантажити анкету"));
     });
     return () => { live = false; };
@@ -364,7 +397,9 @@ export function OneOnOneSection() {
     const key = userId != null && selId != null ? draftStoreKey(userId, type, selId, dateSel) : null;
     if (!key || draftFor.current !== key) return;
     if (!dirty) { ls.del(key); return; }
-    const t = setTimeout(() => ls.set(key, JSON.stringify({ at: new Date().toISOString(), draft })), 800);
+    // `base` — від яких серверних відповідей почалась чернетка: рев'ю задачі посуває час запису, але не відповіді (19.11.2026).
+    const base = serverDraft.current ? draftKey(serverDraft.current) : undefined;
+    const t = setTimeout(() => ls.set(key, JSON.stringify({ at: new Date().toISOString(), draft, base })), 800);
     return () => clearTimeout(t);
   }, [draft, dirty, userId, type, selId, dateSel]);
   // Прострочені чернетки (усіх людей і дат) прибираються на відкритті екрана: нотатки HR не лежать у браузері вічно.
@@ -376,7 +411,7 @@ export function OneOnOneSection() {
     } catch { /* сховище недоступне */ }
   }, []);
   // Запамʼятати, де працюєш, — щоб перезавантаження повертало сюди ж.
-  useEffect(() => { if (selId != null) ls.set(SEL_KEY, JSON.stringify({ type, selId, date: dateSel })); }, [type, selId, dateSel]);
+  useEffect(() => { if (selId != null) ls.set(SEL_KEY, JSON.stringify({ type, selId, date: dateSel, at: new Date().toISOString() })); }, [type, selId, dateSel]);
   /** «Відкинути» відновлену чернетку — повернути збережене на сервері. */
   const discardDraft = () => {
     const d = serverDraft.current; if (!d) return;
@@ -400,7 +435,7 @@ export function OneOnOneSection() {
     if (selId == null) return;
     setSaving(true); setErr(null);
     try {
-      await saveOneOnOne({ type, subjectManagerId: selId, meetingDate: dateSel, answers,
+      await saveOneOnOne({ type, subjectId: selId, meetingDate: dateSel, answers,
         enpsScore: type === "V" ? enpsScore : null, enpsReason: type === "V" ? enpsReason : null, notes: type === "V" ? notes : null,
         satisfactionScore: type === "V" ? null : satisfaction });
       setSavedAt(new Date().toISOString());
@@ -414,7 +449,7 @@ export function OneOnOneSection() {
     finally { setSaving(false); }
   };
 
-  const pickMonth = async (v: string) => { if (!v || v > curMonthStr()) return; if (!(await leaveGuard())) return; setMonthSel(v); localStorage.setItem("o2oMonth", v); setSelId(null); };
+  const pickMonth = async (v: string) => { if (!v || v > curMonthStr()) return; if (!(await leaveGuard())) return; setMonthSel(v); setSelId(null); };
   const selected = subjects.find((s) => s.id === selId);
   const isV = type === "V";
   // «нова зустріч» = на цю дату запису ще немає (журнал не містить її)
@@ -498,8 +533,13 @@ export function OneOnOneSection() {
                     <div>
                       <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>{selected.is_team_lead ? "👑 " : ""}{selected.name}</h2>
                       <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
-                        <Chip>{selected.is_team_lead ? "тімлід" : "менеджер"}</Chip>
+                        <Chip>{selected.position ?? (selected.is_team_lead ? "тімлід" : "посада не вказана в Найм")}</Chip>
+                        {!selected.has_kommo && <Chip>без Kommo</Chip>}
                         {selected.team_name && <Chip>команда {selected.team_name}</Chip>}
+                        {canHiringCard && (
+                          <a data-testid="o2o-hiring-card" href={`/hiring?tab=emp&employee=${selected.id}`} target="_blank" rel="noreferrer"
+                            title="Відкрити картку в «Найм → Співробітники»" style={{ fontSize: 12, color: "#2563eb", alignSelf: "center" }}>Картка в Найм ↗</a>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -587,6 +627,43 @@ export function OneOnOneSection() {
                   </div>
                 )}
 
+                {/* ✅ ЩО ВЖЕ ЗАПИСАНО НА ЦІЙ ЗУСТРІЧІ (19.11.2026). Позначки по задачах і нові задачі йдуть у базу одразу,
+                    але досі на формі не лишалось їхнього сліду — після перезавантаження це виглядало як «зникло». */}
+                {reviews.length > 0 && (
+                  <div data-testid="o2o-meeting-reviews" style={{ marginBottom: 16, padding: "14px 16px", borderRadius: 16, background: "rgba(22,163,74,.07)" }}>
+                    <h3 style={{ fontSize: 13, margin: "0 0 10px", fontWeight: 800, color: "#15803d" }}>✅ На цій зустрічі вирішили по задачах</h3>
+                    {reviews.map((r) => (
+                      <div key={r.taskId} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 0", borderTop: "1px dashed rgba(22,163,74,.25)" }}>
+                        <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+                          <div style={{ fontSize: 14.5, overflowWrap: "anywhere" }}>{r.title}</div>
+                          <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 2 }}>
+                            {r.byName ? `позначив(-ла) ${r.byName}` : "позначено"} · {new Date(r.at).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                          </div>
+                        </div>
+                        <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 20, padding: "3px 10px", ...REVIEW_CHIP[r.outcome] }}>{REVIEW_LABEL[r.outcome]}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {tasksSet.length > 0 && (
+                  <div data-testid="o2o-meeting-tasks" style={{ marginBottom: 16, padding: "14px 16px", borderRadius: 16, background: "rgba(29,78,216,.06)" }}>
+                    <h3 style={{ fontSize: 13, margin: "0 0 10px", fontWeight: 800, color: "#1d4ed8" }}>➕ Поставлено на цій зустрічі</h3>
+                    {tasksSet.map((t) => (
+                      <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 0", borderTop: "1px dashed rgba(29,78,216,.2)" }}>
+                        <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+                          <div style={{ fontSize: 14.5, overflowWrap: "anywhere" }}>{t.title}</div>
+                          <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 2 }}>
+                            {t.deadline ? `дедлайн ${dmy(t.deadline)}` : "без дедлайну"} · у Задачнику з позначкою «Задача з 1×1»
+                          </div>
+                        </div>
+                        <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 20, padding: "3px 10px", background: "rgba(128,128,128,.12)" }}>
+                          {t.resolution === "done" ? "виконано" : t.resolution === "cancelled" ? "знято" : t.status === "done" ? "закрита" : "відкрита"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* Прогрес */}
                 <div style={{ marginBottom: 18 }}>
                   <div style={{ height: 6, borderRadius: 4, background: "rgba(128,128,128,.12)", overflow: "hidden" }}>
@@ -646,6 +723,12 @@ export function OneOnOneSection() {
                     <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, margin: "0 0 10px", fontWeight: 800 }}>
                       ➕ Поставити задачу {selected.is_team_lead ? "тімліду" : "менеджеру"}
                     </h3>
+                    {!selected.can_take_task ? (
+                      <div data-testid="o2o-no-task-target" style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+                        У {selected.name} немає ні Kommo, ні акаунта в дашборді — задачу поставити нікому. Заведіть акаунт у
+                        Налаштуваннях → Користувачі, і задача піде на нього.
+                      </div>
+                    ) : (<>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                       <input value={newTask} onChange={(e) => setNewTask(e.target.value)}
                         placeholder="Напр.: підготувати шаблони КП до кінця місяця…"
@@ -658,6 +741,7 @@ export function OneOnOneSection() {
                     <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 8 }}>
                       Задача одразу зʼявиться в Задачнику з позначкою «Задача з 1×1», <b>закріпленою вгорі й без можливості видалення</b>. Її статус ти переглянеш і закриєш на <b>наступному 1×1</b>.
                     </div>
+                    </>)}
                   </div>
                 )}
 

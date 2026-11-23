@@ -13,6 +13,11 @@
  *
  * Якщо в угоді віджета зʼявився рахунок Genesis (віджет не впорався, менеджер пішов у Genesis) — угода переходить
  * до Genesis: та сама функція вже скаже «genesis».
+ *
+ * 19.11.2026 — Genesis упав, Роман: «давай дозволяти виставляти угоду де працював генезис». Виставляти рахунок
+ * «genesis» БІЛЬШЕ НЕ ЗАВАЖАЄ (і «Номер заказа» Genesis не перетираємо — `claimPatch` пише лише в порожнє поле).
+ * `dealOwner` лишився для автозапису оплати й акта в поля угоди: оплат за рахунками Genesis ми не бачимо, тож
+ * в угоді з рахунком Genesis «Оплачено» й етап «оплачено» за самими нашими рахунками не пишемо — збрехали б.
  */
 import { KOMMO_FIELDS, type LeadPatch } from "./kommoApi.js";
 
@@ -28,14 +33,12 @@ export function dealOwner(a: { orderNo: string; ourNumbers: string[]; onecNumber
   return ours.size ? "widget" : "free";
 }
 
-export const GENESIS_DEAL_WHY = "Ця угода ведеться через Genesis — працюйте у вкладці «Заказ 1С». Одна угода — одна система.";
-
 /** Тег угоди, яку веде віджет (видно в списку угод і в картці). */
 export const WIDGET_TAG = "Заказ 1С: новий віджет";
 
 /**
  * Угода стала «нашою» (перший рахунок віджета): «Номер заказа» (лише якщо порожній — як пише Genesis; номер не
- * перетираємо) і тег. Лише в угоді віджета — в угоду Genesis сервер сюди не доходить (`ownerOf` у `mount.ts`).
+ * перетираємо — у колишній угоді Genesis там лишається номер Genesis) і тег.
  */
 export function claimPatch(leadId: number, lead: { orderNo: string; tags: string[] }, number: string): LeadPatch | null {
   const patch: LeadPatch = { id: leadId };

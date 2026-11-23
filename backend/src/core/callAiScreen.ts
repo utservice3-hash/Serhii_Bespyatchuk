@@ -81,6 +81,9 @@ export const FIRST_TOUCH_TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin
  * «Опрацьовано» до невиконаної домовленості — лише тімлід і адмін. Скоуп — у роуті через картку.
  */
 export function canWriteNote(roleKey: string | null | undefined, kind: string): boolean {
+  // СЕО (Олександр Ступаківський, kriptokoval) = адмін на «Першому дотику» (Роман 23.11.2026, «роби і викочуй»):
+  // роль СЕО лишається своєю (у ній 1×1, якого в адміна немає), тож розширюємо перевірки, а не міняємо роль.
+  if (roleKey === "ceo") roleKey = "admin";
   if (kind === "price") return roleKey === "admin" || roleKey === "team_lead" || roleKey === "manager";
   // «Передзвонив поза телефонією» — менеджеру вимкнено (рішення 08.10.2026, ТЗ «фінальні доробки»: без редагування,
   // спершу фідбек тімлідів); тімлід і адмін ставлять.

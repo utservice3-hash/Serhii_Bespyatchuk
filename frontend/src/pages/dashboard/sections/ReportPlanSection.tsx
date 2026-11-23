@@ -3,7 +3,7 @@ import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, u
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
   fetchResponseTimeByManager,
-  type ReportPlan, type ReportPlanManager, type ReportPlanDismissed, type KvpManagerDetail, type KvpDetailCell, type Team,
+  type ReportPlan, type ReportPlanManager, type ReportPlanDismissed, type PFGone, type KvpManagerDetail, type KvpDetailCell, type Team,
   type DayItemKind, type DayItems, type DealSource, type DealKlass,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
@@ -21,6 +21,9 @@ import { NON_COMMERCIAL_TEAM_IDS } from "../teamSets";
 import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
 import { useCarrierReport, awaitingByManager } from "../carrierReportData";
 import { VacationMark } from "../VacationMark";
+import { ReportManagerPicker } from "./ReportManagerPicker";
+import { readHiddenMgrs, writeHiddenMgrs, pickManagers, isPickNarrowed, type PickStore } from "../mgrPick";
+import { getAuthPayload } from "../../../auth";
 
 /**
  * 🔀 ПОЛОЖЕННЯ ПЕРЕМИКАЧА ЇДЕ КОНТЕКСТОМ, А НЕ ПРОПСОМ.
@@ -141,6 +144,11 @@ const autoSplit = (repeat: number, leadgen: number, ad: number, elogist: number,
 
 /** Режими живуть у `../periodNav` — щоб «Реклама» й Звіт не мали двох переліків. */
 type Mode = PeriodMode;
+
+/** Сховище вибору менеджерів. Сам доступ до `localStorage` може кинути (приватне вікно) — тоді `null`. */
+const pickStore = (): PickStore | null => {
+  try { return window.localStorage; } catch { return null; }
+};
 
 export function ReportPlanSection({ auth, teams }: {
   auth: { role: string; managerId: number | null; teamId: number | null };
@@ -348,7 +356,15 @@ export function ReportPlanSection({ auth, teams }: {
 
   /** Чип стану = фільтр списку в ОБОХ виглядах; підсумок угорі він не звужує. */
   const [statusFilter, setStatusFilter] = useState<"g" | "a" | "r" | null>(null);
-  const shownManagers = (data?.managers ?? []).filter((m) => !statusFilter || m.status === statusFilter);
+  /**
+   * 👥 Вибір менеджерів (задача 10752): особистий список ПРИХОВАНИХ, переживає перезавантаження, як «Колонки».
+   * Діє на обидва вигляди разом із чипом стану; підсумок угорі не звужує. Правила — у `mgrPick.ts`.
+   */
+  const [pickUser] = useState<number | null>(() => { try { return getAuthPayload()?.userId ?? null; } catch { return null; } });
+  const [hiddenMgrs, setHiddenMgrs] = useState<number[]>(() => readHiddenMgrs(pickStore(), pickUser));
+  const applyHidden = (next: number[]) => { setHiddenMgrs(next); writeHiddenMgrs(pickStore(), pickUser, next); };
+  const pickNarrowed = isPickNarrowed(data?.managers ?? [], hiddenMgrs);
+  const shownManagers = pickManagers((data?.managers ?? []).filter((m) => !statusFilter || m.status === statusFilter), hiddenMgrs);
   const listCount = `${shownManagers.length} з ${data?.managers.length ?? 0} менеджерів`;
   const toolbar = data && (
     <>
@@ -357,8 +373,16 @@ export function ReportPlanSection({ auth, teams }: {
         <span className="rv-fpill">лише «{SLBL[statusFilter].toLowerCase()}»
           <button type="button" aria-label="Скинути фільтр" onClick={() => setStatusFilter(null)}>×</button></span>
       )}
+      {pickNarrowed && (
+        <span className="rv-fpill">лише обрані менеджери
+          <button type="button" aria-label="Показати всіх менеджерів" onClick={() => applyHidden([])}>×</button></span>
+      )}
       <span className="rv-count">{listCount}</span>
     </>
+  );
+  /** Кнопка «Менеджери · N з M» — лише коли в Звіті більше одного рядка. */
+  const mgrPicker = data && data.managers.length > 1 && (
+    <ReportManagerPicker managers={data.managers} hidden={hiddenMgrs} onChange={applyHidden} />
   );
 
   return (
@@ -398,7 +422,10 @@ export function ReportPlanSection({ auth, teams }: {
         <SliceCtx.Provider value={slice}><AwaitCtx.Provider value={awaitMap}>
           <Glance data={data} focus={focus} focusDay={dayShown} today={today} periodLabel={periodLabel}
             monthInProgress={mode === "month" && data.scope.isCurrent}
+            weekInProgress={mode === "week" && data.scope.isCurrent}
             statusFilter={statusFilter} onStatus={setStatusFilter} />
+          <GonePlanNote rows={data.gonePlans ?? []} total={data.glance.planGone ?? 0}
+            onOpenPlans={auth.role === "admin" ? () => window.location.assign("/plans") : undefined} />
           {/* Застряглі — один рядок, розкривається на місці. Стан на зараз, не за періодом. */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
           {/* 🗑 «Час опрацювання заявки», «Перший дотик · звіт по менеджерах» і «Дзвінки на мобільні» зі Звіту
@@ -411,9 +438,10 @@ export function ReportPlanSection({ auth, teams }: {
               periodLabel={periodLabel}
               responseByMgr={respByMgr} month={selectedPeriod.from.slice(0, 7)} slice={slice}
               statusFilter={statusFilter} toolbar={toolbar}
+              hiddenMgrs={hiddenMgrs} mgrPicker={mgrPicker || null}
             />
           ) : (<>
-            <div className="rv-bar">{toolbar}</div>
+            <div className="rv-bar">{toolbar}<span style={{ flex: 1 }} />{mgrPicker}</div>
             {/* 🔴 ЗРІЗ ДІЄ Й НА КАРТКУ, А НЕ ЛИШЕ НА ТАБЛИЦЮ (знайдено скріншотом
                 приймання 25.08.2026): картка показувала повне «створено» під звуженим
                 підписом. Тому кожна картка отримує `narrowToSlice(m, slice)`. */}
@@ -452,6 +480,27 @@ export function ReportPlanSection({ auth, teams }: {
  * ⚠️ Плану, %, світлофора й темпу тут НЕМАЄ навмисно: ставити план тому, кому його не
  * ставлять, безглуздо, а порожня шкала читалась би як «зрив».
  */
+/**
+ * 🔁 ПЛАН ТИХ, ХТО ПІШОВ (задача 10477). З листопада 2026 він не ділиться сам на команду, а лежить окремо, поки КВП не
+ * передасть його в «Плани». Без цього рядка план команди у Звіті був би більший за суму рядків без жодного пояснення.
+ */
+function GonePlanNote({ rows, total, onOpenPlans }: { rows: PFGone[]; total: number; onOpenPlans?: () => void }) {
+  if (!(total > 0)) return null;
+  const open = rows.filter((r) => r.pool > 0);
+  return (
+    <div style={{ margin: "12px 0", border: "1px solid #d9770655", borderLeft: "4px solid #d97706", borderRadius: 10, padding: "10px 14px", background: "#d977060f", fontSize: 13 }}>
+      <b>План тих, хто пішов: {fmt(total)} ₴</b>
+      <span style={{ color: MUTED }}> · входить у план команди, але ні на кому з менеджерів не лежить</span>
+      {open.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          Не розподілено: {open.map((r) => `${r.name} ${fmt(r.pool)} ₴`).join(" · ")}
+          {onOpenPlans && <button onClick={onOpenPlans} style={{ marginLeft: 10, padding: "4px 11px", borderRadius: 8, border: "none", background: "var(--text)", color: "var(--card-bg)", fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>Передати в «Плани»</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DismissedRows({ rows }: { rows: ReportPlanDismissed[] }) {
   if (rows.length === 0) return null;
   const total = rows.reduce((s, r) => s + r.fact, 0);
@@ -565,10 +614,12 @@ const WD_FULL = ["понеділок", "вівторок", "середа", "че
  * чек» переїхав у підказку кільця, «поза ростером» і кількість нерозібраних розмов —
  * у підказку «ціну названо».
  */
-function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onStatus, monthInProgress }: {
+function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onStatus, monthInProgress, weekInProgress }: {
   data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string; periodLabel: string;
   /** Обрано повний ПОТОЧНИЙ місяць — лише тоді очікування цього місяця лягає на смугу. */
   monthInProgress: boolean;
+  /** Обрано ПОТОЧНИЙ тиждень — очікування з плановою датою цього тижня лягає на смугу й у рядок «з очікуваннями». */
+  weekInProgress: boolean;
   statusFilter: "g" | "a" | "r" | null; onStatus: (s: "g" | "a" | "r" | null) => void;
 }) {
   const g = data.glance;
@@ -581,6 +632,15 @@ function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onSta
   const col = pctColor(pct);
   const pace = Math.round(Math.min(1, Math.max(0, data.elapsed)) * 100);
   const dayHead = focusDay === today ? "Сьогодні" : WD_FULL[dow(focusDay) - 1].replace(/^./, (c) => c.toUpperCase());
+  /**
+   * ⏳ «З ОЧІКУВАННЯМИ» (TOP Weekly 16.11.2026, пункт 2, Сергій: «з очікуваннями скільки ми виконали»).
+   * Місяць — та сама формула, що «прогноз» картки менеджера: факт + очікуємо з план. датою в цьому місяці.
+   * Тиждень — факт + очікуємо з план. датою в межах тижня. Лише для ПОТОЧНОГО періоду: у минулому
+   * нічого не очікується, і рядок домалював би гроші, яких не буде. Без дати — не входить ніде.
+   */
+  const expNow = monthInProgress ? g.expectThisMonth : weekInProgress ? g.expectInPeriod : null;
+  const withExp = expNow == null ? null : g.fact + expNow;
+  const pctWithExp = withExp != null && g.plan > 0 ? Math.round((withExp / g.plan) * 100) : null;
   const ringTitle = `Круг оплати — факт (отримані кошти): ${fmt(g.fact)} ₴\n= успішно реалізовано (виграно 142): ${fmt(g.factSuccess)} ₴\n+ оплачено: ${fmt(g.factPaid)} ₴\nчек: ${g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"}`;
   return (
     <section className="rv-kpis">
@@ -598,8 +658,20 @@ function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onSta
               <i style={{ width: `${Math.min(100, pct)}%`, background: col }} />
               {monthInProgress && <ExpectSeg fact={g.fact} expect={g.expectThisMonth} plan={g.plan}
                 title={`очікуємо цього місяця (є планова дата оплати) — ${fmt(g.expectThisMonth)} ₴`} />}
+              {weekInProgress && <ExpectSeg fact={g.fact} expect={g.expectInPeriod} plan={g.plan}
+                title={`очікуємо цього тижня (планова дата оплати в межах тижня) — ${fmt(g.expectInPeriod)} ₴`} />}
               {data.scope.isCurrent && <em style={{ left: `${pace}%` }} title={`темп: ${pace}% робочих днів минуло`} />}
             </div>
+            {withExp != null && (
+              <div style={{ fontSize: 12, marginTop: 5 }}>з очікуваннями <b>{fmt(withExp)} ₴</b>
+                {pctWithExp != null && <> · <b style={{ color: pctColor(pctWithExp) }}>{pctWithExp}%</b> плану {monthInProgress ? "місяця" : "тижня"}</>}
+                {" "}<InfoHint text={monthInProgress
+                  ? "Отримано + угоди, які чекають оплату з плановою датою в цьому місяці. Те саме, що «прогноз» у картках менеджерів, лише для всієї команди. Угоди без планової дати й з минулих місяців не входять."
+                  : "Отримано за тиждень + угоди, які чекають оплату з плановою датою на цьому тижні (Пн-Нд), включно з днями, що вже минули. Угоди без планової дати не входять."} />
+              </div>
+            )}
+            {/* ↩️ Розклад факту й чек команди — рядком, як було до 13.11 (TOP Weekly 16.11, пункт 1; «роби» Романа 18.11). */}
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>= успішно {k(g.factSuccess)} + оплачено {k(g.factPaid)} · чек {g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"} <InfoHint text="Ср. чек Звіту = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період»; Σ суми ÷ Σ угод (не середнє середніх)." /></div>
           </div>
         </div>
         {/* 🔵 Три стани покривають УСІХ: Σ чипів = кількість менеджерів (рішення власника 07.08.2026). */}
@@ -616,6 +688,7 @@ function Glance({ data, focus, focusDay, today, periodLabel, statusFilter, onSta
         <div className="lab">Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. «Цей міс» входить у прогноз; без дати — ні. Календарні місяці — від обраного періоду НЕ залежить." /></div>
         <div className="val" style={{ color: g.expectThisMonth > 0 ? "var(--rv-ok)" : MUTED }}>{fmt(g.expectThisMonth)} <small>₴ цей міс</small></div>
         <div className="rv-mini">
+          {weekInProgress && <><span>на цей тиждень</span><b style={{ color: g.expectInPeriod > 0 ? "var(--rv-warn)" : undefined }}>{fmt(g.expectInPeriod)} ₴</b></>}
           <span>наступний місяць</span><b>{fmt(g.expectNextMonth)} ₴</b>
           {/* 🔴 «З минулих місяців» — НЕ «прострочено» з плитки КВП: там межа «сьогодні», тут — початок місяця. */}
           <span>з минулих місяців</span><b style={{ color: g.expectPastMonths !== 0 ? "var(--rv-warn)" : undefined }}>{fmt(g.expectPastMonths)} ₴</b>

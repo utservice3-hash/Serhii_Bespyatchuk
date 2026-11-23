@@ -336,6 +336,10 @@ const planSchema = z.object({
   days: z.array(z.string()).min(1),
   adsCount: z.number().nonnegative().optional(),
   leadgenCount: z.number().nonnegative().optional(),
+  // 🔗 Задача 9230 (18.11.2026): угоди з LinkedIn і Prozorro — факт тим самим правилом, що колонки
+  // Звіту «зі створених: LinkedIn / Prozorro» (`createdSplitByManager`), див. `evaluateKpiTasks`.
+  linkedinCount: z.number().nonnegative().optional(),
+  prozorroCount: z.number().nonnegative().optional(),
   dispatchCount: z.number().nonnegative().optional(),
   avgCheck: z.number().nonnegative().optional(),
   conversion: z.number().min(0).max(100).optional(),
@@ -347,6 +351,8 @@ const planSchema = z.object({
 const METRIC_LABELS: Record<string, string> = {
   ads_count: "Кількість прийнятої реклами",
   leadgen_count: "Кількість прийнятих лідогенів",
+  linkedin_count: "Угоди з LinkedIn",
+  prozorro_count: "Угоди з Prozorro",
   dispatch_count: "Поставлені авто (за подіями)",
   avg_check: "Середній чек",
   conversion: "Конверсія",
@@ -357,7 +363,7 @@ tasksRouter.post("/plan", async (req, res) => {
   const auth = req.auth!;
   const parsed = planSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { period, days, adsCount, leadgenCount, dispatchCount, avgCheck, conversion, paymentAmount } = parsed.data;
+  const { period, days, adsCount, leadgenCount, linkedinCount, prozorroCount, dispatchCount, avgCheck, conversion, paymentAmount } = parsed.data;
   // Хто кому може ставити план на день:
   //  • менеджер — ЛИШЕ собі (assignee форсується на себе);
   //  • тімлід — лише своїй команді;
@@ -405,13 +411,15 @@ tasksRouter.post("/plan", async (req, res) => {
   const dailyMetrics: { metric: string; target: number }[] = [];
   if (adsCount && adsCount > 0) dailyMetrics.push({ metric: "ads_count", target: Math.max(1, Math.round(adsCount / sorted.length)) });
   if (leadgenCount && leadgenCount > 0) dailyMetrics.push({ metric: "leadgen_count", target: Math.max(1, Math.round(leadgenCount / sorted.length)) });
+  if (linkedinCount && linkedinCount > 0) dailyMetrics.push({ metric: "linkedin_count", target: Math.max(1, Math.round(linkedinCount / sorted.length)) });
+  if (prozorroCount && prozorroCount > 0) dailyMetrics.push({ metric: "prozorro_count", target: Math.max(1, Math.round(prozorroCount / sorted.length)) });
   if (dispatchCount && dispatchCount > 0) dailyMetrics.push({ metric: "dispatch_count", target: Math.max(1, Math.round(dispatchCount / sorted.length)) });
   if (avgCheck && avgCheck > 0) dailyMetrics.push({ metric: "avg_check", target: avgCheck });
   if (conversion && conversion > 0) dailyMetrics.push({ metric: "conversion", target: conversion });
   if (dailyPayment > 0) dailyMetrics.push({ metric: "payment_amount", target: dailyPayment });
 
   if (dailyMetrics.length === 0) {
-    return res.status(400).json({ error: "Вкажіть хоча б одну ціль (реклама, лідоген, авто, чек або конверсія), або задайте місячний план виручки для «суми»" });
+    return res.status(400).json({ error: "Вкажіть хоча б одну ціль (реклама, лідоген, LinkedIn, Prozorro, авто, чек або конверсія), або задайте місячний план виручки для «суми»" });
   }
 
   // ОДНА задача на період (тиждень/місяць) — «парасолька». Дні НЕ стають окремими
@@ -423,6 +431,8 @@ tasksRouter.post("/plan", async (req, res) => {
   const periodTargets: { metric: string; target: number; actual: number | null; done: boolean }[] = [];
   if (adsCount && adsCount > 0) periodTargets.push({ metric: "ads_count", target: adsCount, actual: null, done: false });
   if (leadgenCount && leadgenCount > 0) periodTargets.push({ metric: "leadgen_count", target: leadgenCount, actual: null, done: false });
+  if (linkedinCount && linkedinCount > 0) periodTargets.push({ metric: "linkedin_count", target: linkedinCount, actual: null, done: false });
+  if (prozorroCount && prozorroCount > 0) periodTargets.push({ metric: "prozorro_count", target: prozorroCount, actual: null, done: false });
   if (dispatchCount && dispatchCount > 0) periodTargets.push({ metric: "dispatch_count", target: dispatchCount, actual: null, done: false });
   if (avgCheck && avgCheck > 0) periodTargets.push({ metric: "avg_check", target: avgCheck, actual: null, done: false });
   if (conversion && conversion > 0) periodTargets.push({ metric: "conversion", target: conversion, actual: null, done: false });
