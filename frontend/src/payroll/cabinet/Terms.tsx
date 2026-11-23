@@ -1,7 +1,7 @@
 /**
  * Вкладка «Умови» (макет `c05-terms.js`): мій офер і формула з моїми цифрами; для команди Лілії — порівняння зі
- * стандартним офером; рівень («Профі» за вибором — `chooseProfi`, або автоматично в офері Лілії); правила; дні народження
- * місяця в моєму розрахунку; мої документи (офери).
+ * стандартним офером; рівень («Профі» за вибором — `chooseProfi`, або автоматично в офері Лілії); правила; мої документи (офери).
+ * Блок «Дні народження · місяць» прибрано в усіх (задача 10723, Тетяна 23.11.2026: «від нього нічого не залежить»); правило ДН — у «Правилах».
  */
 import { useState } from "react";
 import { errText, payrollApi, type Obj } from "../api";
@@ -179,39 +179,6 @@ function RulesBlock({ me }: { me: Obj }) {
   );
 }
 
-function BdaysBlock({ me }: { me: Obj }) {
-  const c = me.live?.calc as Obj | undefined;
-  const bl = ((c?.birthdays ?? []) as Obj[]).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  // усі іменинники місяця (імена й дати — без чужих сум); «без збору» — стаж до року
-  const all = (me.birthdaysMonth ?? []) as Obj[];
-  if (!bl.length && !all.length) return null;
-  const mine = new Set(bl.filter((b) => b.kind === "give").map((b) => String(b.who?.id ?? b.who)));
-  return (
-    <Block title={`Дні народження · ${monthLow(me.live?.month ?? me.liveMonth)}`} sub="у розрахунку автоматично">
-      {all.length > 0 && (
-        <ul className="zc-hist">
-          {all.map((b) => (
-            <li key={b.id} className={b.me ? "zc-bday-me" : ""}>
-              <span>{b.me ? <b>Ваш день народження</b> : b.name} · {dd(b.date)}</span>
-              {b.young ? <Pill>без збору · стаж до року</Pill> : b.me ? <Pill tone="ok">збір колег</Pill> : mine.has(String(b.id)) ? <Pill tone="muted">−{nf(me.settings?.birthday?.each ?? 0)} ₴ з вас</Pill> : <span className="zp-hint">—</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-      {bl.length > 0 && (
-        <>
-          <div className="zp-k" style={{ marginTop: all.length ? 10 : 0 }}>У вашому розрахунку</div>
-          <ul className="zc-hist">
-            {bl.map((b, i) => b.kind === "gift"
-              ? <li key={i}><span>Ваш день народження · {dd(b.date)}</span><b className="zp-num zp-tone--ok">{money(b.amount, { sign: true })}</b></li>
-              : <li key={i}><span>{b.who?.name ?? "Колега"} · {dd(b.date)}</span><b className="zp-num">{money(b.amount)}</b></li>)}
-          </ul>
-        </>
-      )}
-    </Block>
-  );
-}
-
 function DocsBlock({ me }: { me: Obj }) {
   const ds = ((me.offers ?? []) as Obj[]).filter((d) => !d.voidAt).sort((a, b) => String(b.from).localeCompare(String(a.from)));
   if (!ds.length) return null;
@@ -241,7 +208,6 @@ export default function Terms({ me, onChanged }: { me: Obj; onChanged: () => Pro
       </div>
       <div className="zc-col">
         <RulesBlock me={me} />
-        <BdaysBlock me={me} />
         <DocsBlock me={me} />
       </div>
     </div>

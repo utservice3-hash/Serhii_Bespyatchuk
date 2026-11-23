@@ -116,8 +116,22 @@ function Rules({ S }: { S: Obj }) {
   );
 }
 
+/**
+ * Команди — з `employeesView.offerTeams` (сервер рахує людей без звільнення): з людьми — спершу, з кількістю; порожні — у кінці,
+ * сірим, «0 людей, неактуальна» (задача 10723, Тетяна 23.11.2026: не ховати, а підсовувати вниз і помічати).
+ */
 function Offers({ S, teams }: { S: Obj; teams: Obj[] }) {
-  const ofTeams = (code: string) => teams.filter((t) => (t.offer ?? "std") === code).map((t) => t.name).join(", ") || "—";
+  const ofTeams = (code: string) => {
+    const ts = teams.filter((t) => (t.offer ?? "std") === code);
+    if (!ts.length) return "—";
+    const live = ts.filter((t) => !t.stale), stale = ts.filter((t) => t.stale);
+    return (
+      <>
+        {live.map((t) => `${t.name} · ${t.people}`).join(", ") || "—"}
+        {stale.length > 0 && <div className="zps-stale">{stale.map((t) => <div key={t.code}>{t.name} · 0 людей, неактуальна</div>)}</div>}
+      </>
+    );
+  };
   const ladder = (S.kpi?.ladder ?? []).map((x: number[]) => `${x[0]} % → ${num(x[1])}`).join(", ");
   return (
     <Card title="Офери менеджерів" aside="офер — за командою; умови однакові для всіх у команді">
@@ -226,8 +240,9 @@ export default function SettingsTab({ ctx }: { ctx: PayrollCtx }) {
           )}
         </div>
       </Card>
-      <Offers S={S} teams={data.cur.teams as Obj[]} />
-      <PeopleSettings emp={data.emp} org={data.cur} settings={S} canEdit={canEdit} onChanged={() => { void reload(); }} />
+      <Offers S={S} teams={(data.emp.offerTeams ?? []) as Obj[]} />
+      <PeopleSettings emp={data.emp} org={data.cur} settings={S} canEdit={canEdit} onChanged={() => { void reload(); }}
+        onLeave={(userId, date) => ctx.go("clearances", { leaveFor: userId, date })} />
       <OrgSettings org={data.cur} people={(data.emp.people ?? []) as Obj[]} canEdit={canSet} onChanged={() => { void reload(); }} />
       {canNotify && <NotifyRules />}
       <Card title="Історія змін" aside="умови, шкали, офіційна ЗП, перевірки, аванси, згоди, виплати">
