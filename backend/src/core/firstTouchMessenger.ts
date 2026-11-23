@@ -100,4 +100,4 @@ export const messengerPromisesOf = (promises: readonly { who: string; channel?: 
 
 /** Хто бачить сигнал: адмін і КВП завжди; тімлід — лише коли адмін увімкнув після звірки. Менеджер — ні. */
 export const canSeeMessengerSignal = (roleKey: string | null | undefined, forTeamLeads: boolean): boolean =>
-  roleKey === "admin" || roleKey === "kvp" || (roleKey === "team_lead" && forTeamLeads);
+  roleKey === "admin" || roleKey === "ceo" || roleKey === "kvp" || (roleKey === "team_lead" && forTeamLeads);
