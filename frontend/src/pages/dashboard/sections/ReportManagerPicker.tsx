@@ -41,7 +41,7 @@ export function ReportManagerPicker({ managers, hidden, onChange }: {
     <div ref={box} style={{ position: "relative" }}>
       <button type="button" className="rv-btn" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true"
         title="Обрати, чиї рядки показати в таблиці й картках"
-        style={narrowed ? { borderColor: "var(--brand)", color: "var(--brand)" } : undefined}>
+        style={{ fontVariantNumeric: "tabular-nums", ...(narrowed ? { borderColor: "var(--brand)", color: "var(--brand)" } : {}) }}>
         Менеджери · {shown} з {managers.length} <span style={{ opacity: 0.6, marginLeft: 2 }}>{open ? "▴" : "▾"}</span>
       </button>
       {open && (
