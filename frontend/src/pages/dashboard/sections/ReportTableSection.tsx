@@ -13,6 +13,7 @@ import {
 import { narrowToSlice, type Slice } from "../klassSlice";
 import { VacationMark } from "../VacationMark";
 import { getAuthPayload } from "../../../auth";
+import { pickManagers, isPickNarrowed, rowsScopeLabel } from "../mgrPick";
 
 /**
  * 📊 ТАБЛИЧНИЙ ВИГЛЯД ЗВІТУ — рядок на менеджера за обраний період.
@@ -45,8 +46,11 @@ const viewerUserId = (): number | null => {
 const TOKEN: Record<string, string> = { g: "--ok", a: "--warn", r: "--danger" };
 const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відстає", r: "Зрив" };
 
+/** Типово не приховано нікого — стала посилка, щоб `useMemo` рядків не перераховувався щорендеру. */
+const NO_HIDDEN: readonly number[] = [];
+
 export function ReportTableSection({
-  data, auth, periodLabel, responseByMgr, month, slice, statusFilter, toolbar,
+  data, auth, periodLabel, responseByMgr, month, slice, statusFilter, toolbar, hiddenMgrs = NO_HIDDEN, mgrPicker = null,
 }: {
   data: ReportPlan;
   auth: { role: string; managerId: number | null; teamId: number | null };
@@ -70,6 +74,10 @@ export function ReportTableSection({
    * екран» таблиця додає праворуч у ТОЙ САМИЙ ряд (макет, 13.11.2026).
    */
   toolbar?: React.ReactNode;
+  /** 👥 Приховані менеджери (задача 10752, `mgrPick.ts`) — ще один фільтр рядків поруч із чипом стану. */
+  hiddenMgrs?: readonly number[];
+  /** Кнопка «Менеджери · N з M» від контейнера — стає праворуч, перед «Колонки». */
+  mgrPicker?: React.ReactNode;
 }) {
   const [sortKey, setSortKey] = useState<ColKey>("fact");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -213,7 +221,7 @@ export function ReportTableSection({
     onDragEnd: () => { dragCol.current = null; setDropOn(null); },
   });
   const rows = useMemo(() => {
-    const picked = statusFilter ? data.managers.filter((m) => m.status === statusFilter) : data.managers;
+    const picked = pickManagers(statusFilter ? data.managers.filter((m) => m.status === statusFilter) : data.managers, hiddenMgrs);
     /**
      * 🔀 ЗРІЗ ЗАСТОСОВУЄТЬСЯ ДО РЯДКА ОДИН РАЗ — ТУТ, ПЕРЕД СОРТУВАННЯМ І ПЕРЕД
      * РЕЄСТРОМ КОЛОНОК.
@@ -230,7 +238,7 @@ export function ReportTableSection({
     // лежить у рядку менеджера. Без нього клік по цій колонці нічого не робив би —
     // чип є, сортування мертве.
     return sortRows(base, sortKey, sortDir, { slowByMgr: responseByMgr });
-  }, [data.managers, statusFilter, sortKey, sortDir, responseByMgr, slice]);
+  }, [data.managers, statusFilter, hiddenMgrs, sortKey, sortDir, responseByMgr, slice]);
 
   const onSort = (k: ColKey) => {
     if (k === "rank") return;
@@ -238,7 +246,10 @@ export function ReportTableSection({
     else { setSortKey(k); setSortDir(k === "name" ? 1 : -1); }
   };
 
-  const scopeLabel = statusFilter ? "Обрані рядки" : auth.role === "manager" ? "Команда" : "Весь відділ";
+  /** Рядки звужено — чипом стану чи вибором менеджерів. Від цього залежать підпис і «загальні» числа підсумку. */
+  const pickNarrowed = isPickNarrowed(data.managers, hiddenMgrs);
+  const filtered = statusFilter != null || pickNarrowed;
+  const scopeLabel = rowsScopeLabel({ role: auth.role, statusFiltered: statusFilter != null, pickNarrowed });
   /** Тінь на правому краю — лише коли праворуч справді є сховані колонки (макет, п.4). */
   const scroller = useRef<HTMLDivElement | null>(null);
   const [moreRight, setMoreRight] = useState(false);
@@ -268,6 +279,7 @@ export function ReportTableSection({
       <div className="rv-bar">
         {toolbar}
         <span style={{ flex: 1 }} />
+        {mgrPicker}
         <ColumnPicker
           toggleable={OPTIONAL_COLS.filter((c) => c.key !== "factUndef")}
           locked={REPORT_COLS.filter((c) => isLockedCol(c.key))}
@@ -398,8 +410,8 @@ export function ReportTableSection({
               <tr>
                 {cols.map((c) => (
                   <FootCell key={c.key} col={c} rows={rows} scopeLabel={scopeLabel} count={rows.length}
-                    planGone={statusFilter ? 0 : data.glance.planGone ?? 0}
-                    callbackMedian={statusFilter ? null : data.missedMeta?.medianMin ?? null} />
+                    planGone={filtered ? 0 : data.glance.planGone ?? 0}
+                    callbackMedian={filtered ? null : data.missedMeta?.medianMin ?? null} />
                 ))}
               </tr>
             </tfoot>
@@ -408,7 +420,7 @@ export function ReportTableSection({
       </div>
 
       <div className="rv-under">
-        <MissedOutside data={data} rows={rows} filtered={statusFilter != null} />
+        <MissedOutside data={data} rows={rows} filtered={filtered} />
         <details className="rv-how">
           <summary>Як читати таблицю</summary>
           <p>

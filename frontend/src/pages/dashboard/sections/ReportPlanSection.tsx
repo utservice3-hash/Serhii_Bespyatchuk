@@ -21,6 +21,9 @@ import { NON_COMMERCIAL_TEAM_IDS } from "../teamSets";
 import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
 import { useCarrierReport, awaitingByManager } from "../carrierReportData";
 import { VacationMark } from "../VacationMark";
+import { ReportManagerPicker } from "./ReportManagerPicker";
+import { readHiddenMgrs, writeHiddenMgrs, pickManagers, isPickNarrowed, type PickStore } from "../mgrPick";
+import { getAuthPayload } from "../../../auth";
 
 /**
  * 🔀 ПОЛОЖЕННЯ ПЕРЕМИКАЧА ЇДЕ КОНТЕКСТОМ, А НЕ ПРОПСОМ.
@@ -141,6 +144,11 @@ const autoSplit = (repeat: number, leadgen: number, ad: number, elogist: number,
 
 /** Режими живуть у `../periodNav` — щоб «Реклама» й Звіт не мали двох переліків. */
 type Mode = PeriodMode;
+
+/** Сховище вибору менеджерів. Сам доступ до `localStorage` може кинути (приватне вікно) — тоді `null`. */
+const pickStore = (): PickStore | null => {
+  try { return window.localStorage; } catch { return null; }
+};
 
 export function ReportPlanSection({ auth, teams }: {
   auth: { role: string; managerId: number | null; teamId: number | null };
@@ -348,7 +356,15 @@ export function ReportPlanSection({ auth, teams }: {
 
   /** Чип стану = фільтр списку в ОБОХ виглядах; підсумок угорі він не звужує. */
   const [statusFilter, setStatusFilter] = useState<"g" | "a" | "r" | null>(null);
-  const shownManagers = (data?.managers ?? []).filter((m) => !statusFilter || m.status === statusFilter);
+  /**
+   * 👥 Вибір менеджерів (задача 10752): особистий список ПРИХОВАНИХ, переживає перезавантаження, як «Колонки».
+   * Діє на обидва вигляди разом із чипом стану; підсумок угорі не звужує. Правила — у `mgrPick.ts`.
+   */
+  const [pickUser] = useState<number | null>(() => { try { return getAuthPayload()?.userId ?? null; } catch { return null; } });
+  const [hiddenMgrs, setHiddenMgrs] = useState<number[]>(() => readHiddenMgrs(pickStore(), pickUser));
+  const applyHidden = (next: number[]) => { setHiddenMgrs(next); writeHiddenMgrs(pickStore(), pickUser, next); };
+  const pickNarrowed = isPickNarrowed(data?.managers ?? [], hiddenMgrs);
+  const shownManagers = pickManagers((data?.managers ?? []).filter((m) => !statusFilter || m.status === statusFilter), hiddenMgrs);
   const listCount = `${shownManagers.length} з ${data?.managers.length ?? 0} менеджерів`;
   const toolbar = data && (
     <>
@@ -357,8 +373,16 @@ export function ReportPlanSection({ auth, teams }: {
         <span className="rv-fpill">лише «{SLBL[statusFilter].toLowerCase()}»
           <button type="button" aria-label="Скинути фільтр" onClick={() => setStatusFilter(null)}>×</button></span>
       )}
+      {pickNarrowed && (
+        <span className="rv-fpill">лише обрані менеджери
+          <button type="button" aria-label="Показати всіх менеджерів" onClick={() => applyHidden([])}>×</button></span>
+      )}
       <span className="rv-count">{listCount}</span>
     </>
+  );
+  /** Кнопка «Менеджери · N з M» — лише коли в Звіті більше одного рядка. */
+  const mgrPicker = data && data.managers.length > 1 && (
+    <ReportManagerPicker managers={data.managers} hidden={hiddenMgrs} onChange={applyHidden} />
   );
 
   return (
@@ -414,9 +438,10 @@ export function ReportPlanSection({ auth, teams }: {
               periodLabel={periodLabel}
               responseByMgr={respByMgr} month={selectedPeriod.from.slice(0, 7)} slice={slice}
               statusFilter={statusFilter} toolbar={toolbar}
+              hiddenMgrs={hiddenMgrs} mgrPicker={mgrPicker || null}
             />
           ) : (<>
-            <div className="rv-bar">{toolbar}</div>
+            <div className="rv-bar">{toolbar}<span style={{ flex: 1 }} />{mgrPicker}</div>
             {/* 🔴 ЗРІЗ ДІЄ Й НА КАРТКУ, А НЕ ЛИШЕ НА ТАБЛИЦЮ (знайдено скріншотом
                 приймання 25.08.2026): картка показувала повне «створено» під звуженим
                 підписом. Тому кожна картка отримує `narrowToSlice(m, slice)`. */}

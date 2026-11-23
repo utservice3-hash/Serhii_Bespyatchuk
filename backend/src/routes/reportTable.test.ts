@@ -1010,10 +1010,12 @@ test("#7721 ЧИП СТАНУ ЗВУЖУЄ СПИСОК, А НЕ ПІДСУМО�
   const t = codeOnly(readFileSync(TABLE_TSX, "utf8"));
   assert.match(t, /statusFilter \? data\.managers\.filter\(\(m\) => m\.status === statusFilter\) : data\.managers/,
     "🔴 таблиця звужує рядки не чипом стану");
-  assert.match(t, /scopeLabel = statusFilter \? "Обрані рядки"/, "🔴 підсумок звуженого списку підписаний як «Весь відділ»");
+  // 10752 (23.11.2026): підпис рахує чиста `rowsScopeLabel` (mgrPick.ts) — і від чипа стану, і від вибору менеджерів;
+  // що чип стану дає «Обрані рядки», виконанням стереже `#10752c`. Твердження цього гейта не змінилось — лише форма виразу.
+  assert.match(t, /scopeLabel = rowsScopeLabel\(\{ role: auth\.role, statusFiltered: statusFilter != null,/, "🔴 підсумок звуженого списку підписаний як «Весь відділ»");
   assert.equal(/glance\s*[:=]/.test(t), false, "🔴 у таблиці зʼявився власний розрахунок glance");
   const r = codeOnly(readFileSync(REPORT_TSX, "utf8"));
-  assert.match(r, /shownManagers = \(data\?\.managers \?\? \[\]\)\.filter\(\(m\) => !statusFilter \|\| m\.status === statusFilter\)/,
+  assert.match(r, /shownManagers = pickManagers\(\(data\?\.managers \?\? \[\]\)\.filter\(\(m\) => !statusFilter \|\| m\.status === statusFilter\)/,
     "🔴 картки звужуються не тим самим фільтром, що таблиця");
   assert.match(r, /className="rv-fpill">лише «/, "🔴 немає плашки «лише «…»» — звужений список читається як повний");
   assert.match(r, /statusFilter=\{statusFilter\}/, "🔴 таблиця не отримує фільтр стану");
