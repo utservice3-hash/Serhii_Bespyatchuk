@@ -228,7 +228,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
   // 🚚 «Перевізники за розмовою» — вкладкою, без змін у самому екрані (свій період, свої фільтри); даних «Першого дотику» не чекає.
   if (page === "car") return (
     <>
-      <div className="ftd" style={{ paddingBottom: 0 }}>{header}</div>
+      <div className="ftd" style={{ paddingBottom: 0, marginBottom: 14 }}>{header}</div>
       <CarrierCallsSection roleKey={roleKey} />
     </>
   );
