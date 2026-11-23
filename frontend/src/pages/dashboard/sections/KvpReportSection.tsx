@@ -163,9 +163,6 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
   const [err, setErr] = useState<string | null>(null);
   const [plans, setPlans] = useState<KvpPlans>({});
   const [openTeam, setOpenTeam] = useState<number | null>(null);
-  /** ▸ «Детальний звіт» — усе, що було на екрані до ядра (ТЗ 12.10: «Звіт КВП перевантажений»), згорнуте, але не видалене. */
-  const [showDetails, setShowDetails] = useState(() => { try { return localStorage.getItem("kvpDetails") === "1"; } catch { return false; } });
-  const toggleDetails = () => setShowDetails((x) => { try { localStorage.setItem("kvpDetails", x ? "0" : "1"); } catch { /* сховище недоступне */ } return !x; });
   const [weekMode, setWeekMode] = useState<WeekMode>("money");
   // #6: тижнево-скоупований дрил — клік по клітинці тижня команди → менеджери ЦЬОГО тижня.
   const [openWeekDrill, setOpenWeekDrill] = useState<{ teamId: number; weekIdx: number } | null>(null);
@@ -322,18 +319,13 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               ставиться він у «Плани» → «🎯 Плани КВП» (туди переїхала колишня «Повна таблиця»). ── */}
           <MonthMetrics rep={rep} plans={plans} />
 
-          {/* ▸ ДЕТАЛЬНИЙ ЗВІТ — згорнутий за замовчуванням. Відкривається ЯВНОЮ кнопкою «Показати ▾ / Згорнути ▴»
-              (Роман 20.11.2026: «не зрозуміло, коли і як відкривається» — раніше це був лише трикутник у заголовку);
-              клік по всьому рядку робить те саме. */}
-          <div className="chart-card" role="button" aria-expanded={showDetails} onClick={toggleDetails}
-            style={{ marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", cursor: "pointer" }}>
+          {/* 📂 ДЕТАЛЬНИЙ ЗВІТ — НЕ ЗГОРТАЄТЬСЯ (задача 10738, ручний список правок Романа 23.11.2026: «не згортати,
+              лишити тільки плашку»). Плашка лишилась заголовком розділу, вміст під нею видно завжди; кнопки
+              «Показати / Згорнути» і памʼяті стану (`kvpDetails`) більше немає. */}
+          <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ margin: 0 }}>📂 Детальний звіт
               <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> — зміна до минулого періоду, темп і життєвий цикл грошей</span></h2>
-            <button type="button" onClick={(e) => { e.stopPropagation(); toggleDetails(); }}
-              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
-              {showDetails ? "Згорнути ▴" : "Показати ▾"}</button>
           </div>
-          {showDetails && (<>
           {/* ── ТЕМП І ЖИТТЄВИЙ ЦИКЛ (були у «де ми зараз»; чотири картки грошей — у ядрі вище, тут не дублюються) ── */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">📍 {rep.scope.label} — темп і життєвий цикл грошей</h2>
@@ -380,8 +372,6 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               ))}
             </div>
           </div>
-
-          </>)}
         </>
       )}
     </>
