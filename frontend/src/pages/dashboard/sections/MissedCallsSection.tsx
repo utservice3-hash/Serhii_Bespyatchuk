@@ -12,7 +12,7 @@ import { PeriodStepper } from "../PeriodStepper";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { missedDefaultPeriod, groupByTeam, clientCell, clampListDay, SERIES_METRICS, type SeriesMetric,
   MISSED_FILTER_KEY, EMPTY_MISSED_FILTER, parseMissedFilter, missedFilterParams, normLabel, type MissedFilter,
-  mobileSplit, durText, noTaskReason, callbackPct, prevPeriodOf, prevPeriodWord, changePp, teamsCopyText, type CopyRow } from "../missedCallsView";
+  mobileSplit, durText, noTaskReason, callbackPct, prevPeriodOf, prevPeriodWord, changePp, teamsCopyText, CARRIER_DIRECTORY_HINT, type CopyRow } from "../missedCallsView";
 import { fetchMissedNorm, type MissedFilterParams } from "../../../api";
 import { MissedFilterMenu, useMissedTasks, taskAssignable, TaskCell, ManagerName } from "./MissedCallsTzBlocks";
 import { Fold, CountUp, Hint } from "./MissedFold";
@@ -183,7 +183,7 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
           </div>
           {/* Не входять у «Пропущено» — числом, щоб їх не шукали як зниклі (правило проєкту). */}
           <div className="mc-foot">
-            Не входять у {num(s.missed)}: {`перевізники: ${num(s.carriers)}`} <Hint text="Перевізники — номери, які в CRM закривали як «Перевізник» або які виставляють машини на Ларді (крім номерів з угодою замовника): їх немає ніде на цій вкладці і в колонці Звіту." />,
+            Не входять у {num(s.missed)}: {`перевізники: ${num(s.carriers)}`} <Hint text={`${CARRIER_DIRECTORY_HINT} Їх немає ніде на цій вкладці і в колонці Звіту.`} />,
             {" "}голосова пошта та інше: {num(s.excluded)} <Hint text="Голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою." />.
             {" "}Клієнт передзвонив сам: {num(s.clientSelf)} (у передзвін не входить).
             {" "}{d.ownerlessInScope
@@ -1014,7 +1014,7 @@ function MissedDealsBlock({ from, to, fp }: { from: string; to: string; fp: Miss
           </div>
         </div>
         <div className="mc-foot">
-          Не входять: угоди перевізників {num(s.carriers)}. Ще рахуються (менше 5 хв від дзвінка): {num(s.pending)}.
+          Не входять: угоди перевізників {num(s.carriers)} <Hint text={CARRIER_DIRECTORY_HINT} />. Ще рахуються (менше 5 хв від дзвінка): {num(s.pending)}.
           {" "}{d.ownerlessInScope ? <>Без відповідального: {num(s.ownerless)}.</> : <>Без відповідального — не входять у зріз команди.</>}
         </div>
       </div>
