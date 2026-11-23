@@ -19,7 +19,7 @@ import { isNetError, withNetRetry } from "./kommoApi.js";
 import { zakaz1cFieldsMode, zakaz1cMode, zakaz1cTesters } from "./env.js";
 import { BEFORE_PAID, PAID_STAGE, patchOf, planPayment, runPayments } from "./payments.js";
 import { invoiceCaption, noteInvoice } from "./notes.js";
-import { SERVICES, actDatePlan, buildPersonCustomerBody, customerInfoByUid, kyivDateOfUnix, kyivMidnightUnix, normalizePhone, normalizePib,
+import { SAFE_WAITS, SERVICES, orgCodeByName, actDatePlan, buildPersonCustomerBody, customerInfoByUid, kyivDateOfUnix, kyivMidnightUnix, normalizePhone, normalizePib,
   setActDateIn1c } from "./invoice.js";
 import { actDatePatch } from "./kommoApi.js";
 
@@ -108,8 +108,8 @@ const TODAY = "2026-10-28";
 const ORGS = orgRules();
 const ctx = { today: TODAY, orgs: ORGS };
 const FOP_BANKS: BankAccount[] = [
-  { uid: "B-MONO", name: "Текущий в Монобанк", iban: "UA84…", currency: "UAH", bank: "Монобанк", isMain: false },
-  { uid: "B-PRIV", name: "Текущий в АТ КБ «ПРИВАТБАНК»", iban: "UA70…", currency: "UAH", bank: "АТ КБ «ПРИВАТБАНК»", isMain: false },
+  { uid: "B-MONO", name: "Текущий в Монобанк", iban: "UA84…", currency: "UAH", bank: "Монобанк", isMain: false, org: "ФОП Беспятчук Сергій Степанович" },
+  { uid: "B-PRIV", name: "Текущий в АТ КБ «ПРИВАТБАНК»", iban: "UA70…", currency: "UAH", bank: "АТ КБ «ПРИВАТБАНК»", isMain: false, org: "ФОП Беспятчук Сергій Степанович" },
 ];
 const ctxBanks = { ...ctx, banksOf: (code: string) => (code === "000000011" ? FOP_BANKS : []) };
 const FORM = {
@@ -274,7 +274,7 @@ test("#7124 ПРАВИЛА ОРГАНІЗАЦІЙ: ЮТС і Єлогіст ли
   const fopForm = { ...FORM, org: "fop", currency: "UAH", bankUid: "B-MONO", items: [{ ...FORM.items[0], service: "Організація перевезення за маршрутом" }] };
   assert.equal(parseInvoiceForm(fopForm, ctxBanks).ok, true, "ФОП без ПДВ з банком не пройшов");
   assert.equal(parseInvoiceForm({ ...fopForm, vatType: "ПДВ в тому числі" }, ctxBanks).ok, false, "ФОП з ПДВ пройшов");
-  assert.deepEqual(ORGS.map((o) => [o.key, o.code]), [["uts", "000000002"], ["elogist", "000000012"], ["avtomuv", "000000004"], ["fop", "000000011"]],
+  assert.deepEqual(ORGS.map((o) => [o.key, o.code]), [["uts", "000000002"], ["elogist", "000000012"], ["avtomuv", "000000004"], ["fop", "000000011"], ["safe", null]],
     "коди організацій 1С не ті, що дала 1С / Сергій");
 });
 
@@ -894,4 +894,45 @@ test("#7147 РАХУНКИ GENESIS У ВІКНІ: рахунок і акт з 1�
   assert.match(js, /"\/genesis\/" \+ encodeURIComponent\(String\(b\.data\("num"\)\)\)/);
   assert.doesNotMatch(js, /у вкладці «Заказ 1С»/, "вікно досі шле у вкладку Genesis, якої вже немає");
   assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.6");
+});
+
+test("#7148 «ОБЛІК СЕЙФУ» ЯК У GENESIS: код 1С — за назвою з /organizations (немає — видно, але виставити не можна); без ПДВ; рахунок клієнта за валютою; послуги «за маршрутом» і «міжнародного»", () => {
+  // Без «Сейфу» у відповіді 1С: організація в списку, але недоступна й пояснює чому; виставити не дасть сервер.
+  const none = orgRules(null).find((o) => o.key === "safe")!;
+  assert.equal(none.code, null, "код «Сейфу» вигадано, хоча 1С його не віддала");
+  assert.equal(none.waits, SAFE_WAITS);
+  const form = { ...FORM, org: "safe", currency: "UAH", vatType: "Без ПДВ", bankUid: "S-UAH",
+    items: [{ service: "Організація перевезення за маршрутом", route: "Київ – Біла Церква", qty: 1, price: 5000, vat: 0 }] };
+  const blocked = parseInvoiceForm(form, { today: TODAY, orgs: orgRules(null) });
+  assert.equal(blocked.ok, false, "рахунок на «Сейф» пройшов без коду 1С");
+  // 1С віддала «Облік сейфу» з двома рахунками (як на скрині 1С: Приват UAH і EUR «Фізична особа»).
+  const j = { state: true, organizations: [
+    { code: "000000011", name: "ФОП Беспятчук Сергій Степанович", bank_accounts: [{ uid: "B-PRIV", name: "Текущий", currency: "UAH", bank: "Приват" }] },
+    { code: "000000099", name: "Облік сейфу", bank_accounts: [
+      { uid: "S-UAH", name: "Текущий в Банк ПАТ КБ \"ПРИВАТБАНК\"", currency: "UAH", bank: "ПАТ КБ \"ПРИВАТБАНК\"", is_main: true },
+      { uid: "S-EUR", name: "Текущий (EUR) в Фізична особа", currency: "EUR", bank: "Фізична особа", is_main: false }] }] };
+  const banks = parseOrganizations(j)!;
+  assert.equal(orgCodeByName(banks, /сейф/i), "000000099");
+  const orgs = orgRules(banks);
+  const safe = orgs.find((o) => o.key === "safe")!;
+  assert.equal(safe.code, "000000099"); assert.equal(safe.waits, undefined); assert.equal(safe.vat, "without"); assert.equal(safe.needsBank, true);
+  assert.equal(orgs.find((o) => o.key === "fop")!.code, "000000011", "ФОП зачепило");
+  const c = { today: TODAY, orgs, banksOf: (code: string) => banks.get(code) ?? [] };
+  const ok = parseInvoiceForm(form, c);
+  assert.ok(ok.ok, ok.ok ? "" : ok.why);
+  if (ok.ok) {
+    const body = buildCreateInvoiceBody(1, ok.form, { customerUid: "u", manager: "М", today: TODAY, orgCode: safe.code! }) as any;
+    assert.equal(body.organization, "000000099"); assert.equal(body.bank_account, "S-UAH"); assert.equal(body.vat_type, "Без ПДВ");
+    assert.equal(body.items[0].code, "000000008");
+  }
+  assert.equal(parseInvoiceForm({ ...form, currency: "EUR", bankUid: "S-UAH" }, c).ok, false, "гривневий рахунок у рахунку в EUR");
+  assert.ok(parseInvoiceForm({ ...form, currency: "EUR", bankUid: "S-EUR" }, c).ok, "EUR на «Фізична особа» не пройшов");
+  assert.equal(parseInvoiceForm({ ...form, currency: "USD", bankUid: "S-UAH" }, c).ok, false, "USD без рахунку в USD");
+  assert.equal(parseInvoiceForm({ ...form, vatType: "ПДВ в тому числі" }, c).ok, false, "«Сейф» з ПДВ");
+  assert.ok(parseInvoiceForm({ ...form, items: [{ ...form.items[0], service: "Організація міжнародного перевезення" }] }, c).ok, "«міжнародного» недоступна");
+  assert.equal(parseInvoiceForm({ ...form, items: [{ ...form.items[0], service: "Організація перевезення в межах території України за маршрутом" }] }, c).ok, false,
+    "послуга ЮТС пройшла для «Сейфу»");
+  // Вікно й сервер беруть організації з тих самих банків 1С (інакше вікно показало б «Сейф», а сервер відмовив).
+  assert.match(MOUNT(), /orgRules\(banks\)\.map/);
+  assert.equal((MOUNT().match(/const orgs = orgRules\(banks\);/g) ?? []).length, 2, "виставлення/зміна беруть правила без банків 1С");
 });
