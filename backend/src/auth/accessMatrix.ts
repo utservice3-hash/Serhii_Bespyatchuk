@@ -471,20 +471,20 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/ai-calls/:uniqueid/recording", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
-  /* Ручний тип розмови (ТЗ 30.09.2026): лише адмін і тімлід (своя команда). Менеджер має вкладку, тож 403 йому дає
+  /* Ручний тип розмови (ТЗ 30.09.2026): лише адмін (і СЕО — Роман 23.11.2026) і тімлід (своя команда). Менеджер має вкладку, тож 403 йому дає
      обробник першим оператором; HR — tab-гейт. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/type", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   /* Коментарі (ТЗ 30.09.2026 п.5, п.6.3): право — першим оператором обробника за видом коментаря. */
   { method: "PUT", path: "/api/dashboard/ai-calls/:uniqueid/note", cls: "deny-only",
     allow: [], deny: ["hr"] },
-  /* ❌ Закрити / повернути угоду в Kommo з картки (рішення Романа 16.10.2026): тімлід (своя команда), адмін, КВП.
+  /* ❌ Закрити / повернути угоду в Kommo з картки (рішення Романа 16.10.2026): тімлід (своя команда), адмін, СЕО (23.11.2026), КВП.
      Запис у Kommo — тож проба лише на відмову. Менеджер — 403 першим оператором; HR — без вкладки. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/close-deal", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/close-deal/revert", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
-  /* 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін; запис у `feedback` — проба лише на відмову.
+  /* 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін, СЕО (23.11.2026); запис у `feedback` — проба лише на відмову.
      Менеджер — 403 першим оператором (`canSendCallFeedback`); HR — без вкладки. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/feedback", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
@@ -1583,15 +1583,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "POST", path: "/api/telegram/sign-webhook", cls: "deny-only",
     allow: [], deny: [] },
-  // 🤖 Бот «UTS Заявки» (черга LinkedIn, задача 7361): вебхук — секрет Telegram; решта — власний акаунт (як telegram-link).
-  { method: "POST", path: "/api/leads-bot/webhook", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "GET", path: "/api/leads-bot/me", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "POST", path: "/api/leads-bot/link", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "POST", path: "/api/leads-bot/unlink", cls: "deny-only",
-    allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/integrations/google-ads/conversions.csv", cls: "deny-only",
@@ -2002,13 +1993,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🔗 «Клієнти → LinkedIn» (задача 7361): вкладка `linkedin`; менеджер — лише себе, тімлід — команду, керівництво — усіх (Роман 04.11.2026).
   { method: "GET", path: "/api/linkedin/stats", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["financier", "hr"] },
-  // 🔗 Черга LinkedIn (задача 7361): список кола веде Юля (КВП) і адмін — право `manage_linkedin_queue`, перший middleware.
-  { method: "GET", path: "/api/linkedin-queue", cls: "GET",
-    allow: ["admin", "kvp"], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
-  { method: "PUT", path: "/api/linkedin-queue/members", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
-  { method: "PUT", path: "/api/linkedin-queue/pause", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/minus-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/minus-deals/counter", cls: "GET",
