@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { HealthBanner } from "./HealthBanner";
 import { VersionBanner } from "./VersionBanner";
-import { LeadsBotBanner } from "./LeadsBotBanner";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
@@ -493,7 +492,6 @@ export function Layout({
             саме порядок у потоці — вона пережила свою причину за один прохід. */}
         <VersionBanner />
         {role === "admin" && <HealthBanner />}
-        <LeadsBotBanner />
         {children}
       </main>
     </div>
