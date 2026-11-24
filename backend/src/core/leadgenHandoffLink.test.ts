@@ -1124,6 +1124,23 @@ test("#3790b ЖИВИЙ SQL: рахунки-машини — бюджет раз
 });
 
 /**
+ * #4120 — РУЧНІ ВИНЯТКИ 24.11.2026 (Віка Демчук і Роман): прорахунок 62862579 закріплено за Скляр (Kommo 16054448) — угоду
+ * Продзвону після «Кваліфіковано» передали Сербенюк; угода менеджера 62745793 (успіх з 0 ₴) + рахунок 62861725 (2 280 ₴) —
+ * одна машина передачі 62669501 Демчук. Записи стоять у списках і доходять до SQL закріплення.
+ * 🧨 САБОТАЖ: прибрати рядок 62862579 з `LEADGEN_OWNER_MANUAL` → червоніє.
+ */
+test("#4120 РУЧНІ ВИНЯТКИ 24.11: 62862579 закріплено за Скляр, 62745793 + 62861725 — одна машина", async () => {
+  const { HANDOFF_SPLIT_INVOICES, splitIsEachCar, splitInvoicesOf } = await import("./leadgenHandoffRules.js");
+  const { lgOwnerSql } = await import("./leadgenSql.js");
+  const pin = LEADGEN_OWNER_MANUAL.find((m) => m.dealId === 62862579);
+  assert.equal(pin?.kommoUserId, 16054448, "🔴 62862579 не закріплено за Скляр");
+  assert.match(lgOwnerSql("d"), /WHEN 62862579 THEN \(SELECT mo\.id FROM managers mo WHERE mo\.kommo_user_id = 16054448\)/, "🔴 закріплення не дійшло до SQL");
+  assert.ok(HANDOFF_SPLIT_INVOICES.some((x) => x.mainDealId === 62745793), "🔴 пару 62745793 + 62861725 прибрали зі списку");
+  assert.deepEqual([...splitInvoicesOf(62745793)], [62861725], "🔴 до 62745793 додано не той рахунок");
+  assert.equal(splitIsEachCar(62745793), false, "🔴 62861725 став окремою машиною — рейс один");
+});
+
+/**
  * #3730d — ЖИВИЙ SQL: стан угоди передачі несе «Дату загрузки» КИЇВСЬКИМ днем (задача 7363). Загрузка 22:30 UTC
  * 01.03 — це вже 02.03 за Києвом; угода без дати — `null`, а не порожній рядок.
  * 🧨 САБОТАЖ: у `handoffDealStates` прибрати `AT TIME ZONE 'Europe/Kyiv'` з `load_day` → червоніє (01.03 замість 02.03).

@@ -95,6 +95,8 @@ export const QUOTE_KEPT_MANUAL: readonly { dealId: number; decided: string; reas
 export const LEADGEN_OWNER_MANUAL: readonly { dealId: number; kommoUserId: number; decided: string; reason: string }[] = [
   { dealId: 62663169, kommoUserId: 12812476, decided: "Роман, 16.10.2026",
     reason: "Сердюк 24.09 поставив ОПР і «Кваліфіковано» (угода менеджера 62713339, Петров, успіх); 15.10 Яцик переставив відповідального на Петрова" },
+  { dealId: 62862579, kommoUserId: 16054448, decided: "Віка Демчук і Роман, 24.11.2026",
+    reason: "Скляр 20.11 13:09 перевела в «Кваліфіковано» (угода менеджера 62865993); о 13:14 саму угоду Продзвону передали Сербенюк, вона пішла в повний цикл і закрилась" },
 ];
 
 /** Чий лід угода Продзвону `d`: лідген зі списку `LEADGEN_OWNER_MANUAL`, інакше поточний відповідальний. */
