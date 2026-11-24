@@ -761,49 +761,70 @@ function StatsWall({ cat, gran, setGran, today, onOpen, mine, saveMine, isMine }
   );
 }
 
-function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; gran: CardGran; today: string; onOpen: () => void }) {
+/**
+ * 🔢 ЦИФРИ ПОКАЗНИКА СТІНИ — ОДИН РАЗ НА ОБИДВА ВИГЛЯДИ. Картка й рядок «Один під одним» беруть число, зміну й період,
+ * що йде, з цієї функції та малюють їх одним блоком (`CardNumbers`): двох способів порахувати «жовтень» на екрані немає.
+ */
+function cardOf(m: Metric, st: CardState | undefined, gran: CardGran, today: string) {
   const g: CardGran = effGranOf(m, gran) === "week" ? "week" : "month";
   const series = st?.resp?.series[0];
   const points = series?.points ?? [];
   const f = cardFigures(points, g, today);
-  const box = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", cursor: "pointer", textAlign: "left" as const, color: "var(--text)", font: "inherit" };
   const dl = cardDelta(f.last, f.prev, m.unit, m.better);
+  /** Є що малювати графіком: відповідь прийшла, серія у розрізі глядача є, точки є. */
+  const ok = !st?.err && !!series && points.length > 0;
+  return { g, series, points, f, dl, ok };
+}
+type CardOf = ReturnType<typeof cardOf>;
+
+function CardHead({ m }: { m: Metric }) {
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+      <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25 }}>{m.label}</span>
+      {/* Джерело — лише коли воно НЕ CRM: однакова плашка «CRM» на кожній картці була шумом (ⓘ біля «Місяць / Тиждень» каже, що без позначки — CRM). */}
+      {srcOf(m) !== "CRM" && <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "var(--border)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{srcOf(m)}</span>}
+    </div>
+  );
+}
+
+function CardNumbers({ m, st, c, today }: { m: Metric; st?: CardState; c: CardOf; today: string }) {
+  const { g, series, points, f, dl } = c;
+  if (st?.err) return <div role="alert" style={{ color: "#b91c1c", fontSize: 12.5, marginTop: 8 }}>⚠️ {st.err}</div>;
+  if (!st) return <SkelBox w="70%" h={26} style={{ marginTop: 10 }} />;
+  if (!series) return <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>у вашому розрізі цього показника немає</div>;
+  if (!points.length) return (
+    <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>
+      {m.companyOnly && series.scopeType !== "company" ? "лише по компанії — по команді не розрізається" : "за останні періоди точок немає"}
+    </div>
+  );
+  return (
+    <>
+      {f.last ? (
+        <>
+          <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(f.last.value, m.unit)}</div>
+          <div style={{ fontSize: 12, color: MUTED }}>{periodLabel(f.last.period, g)}{series.scopeType !== "company" ? ` · ${series.scopeName}` : ""}</div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, color: dl?.tone === "good" ? "#16a34a" : dl?.tone === "bad" ? "#dc2626" : MUTED }}>
+            {dl == null ? "немає з чим порівняти" : `${dl.text} ${prevLabel(f.prev!.period, g)}`}
+          </div>
+          {f.missingSince && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3 }}>після {periodLabel(f.missingSince, g)} даних немає</div>}
+        </>
+      ) : <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>повних періодів ще немає</div>}
+      <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
+        {g === "month" ? MONTHS[Number(f.currentStart.slice(5, 7)) - 1] : `тиждень ${dm(f.currentStart)}`} іде:{" "}
+        {f.current ? <b style={{ color: "var(--text)" }}>{fmt(f.current.value, m.unit)}</b> : "точок ще немає"} станом на {dm(today)}{asOfLabel(st?.resp?.asOf, today) ? `, ${asOfLabel(st?.resp?.asOf, today)}` : ""}
+      </div>
+    </>
+  );
+}
+
+function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; gran: CardGran; today: string; onOpen: () => void }) {
+  const c = cardOf(m, st, gran, today);
+  const box = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", cursor: "pointer", textAlign: "left" as const, color: "var(--text)", font: "inherit" };
   return (
     <button type="button" onClick={onOpen} style={box} title="клік — розгорнути: графік, команди, таблиця значень">
-      <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25 }}>{m.label}</span>
-        {/* Джерело — лише коли воно НЕ CRM: однакова плашка «CRM» на кожній картці була шумом (ⓘ біля «Місяць / Тиждень» каже, що без позначки — CRM). */}
-        {srcOf(m) !== "CRM" && <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "var(--border)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{srcOf(m)}</span>}
-      </div>
-      {st?.err ? (
-        <div role="alert" style={{ color: "#b91c1c", fontSize: 12.5, marginTop: 8 }}>⚠️ {st.err}</div>
-      ) : !st ? (
-        <SkelBox w="70%" h={26} style={{ marginTop: 10 }} />
-      ) : !series ? (
-        <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>у вашому розрізі цього показника немає</div>
-      ) : !points.length ? (
-        <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>
-          {m.companyOnly && series.scopeType !== "company" ? "лише по компанії — по команді не розрізається" : "за останні періоди точок немає"}
-        </div>
-      ) : (
-        <>
-          {f.last ? (
-            <>
-              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(f.last.value, m.unit)}</div>
-              <div style={{ fontSize: 12, color: MUTED }}>{periodLabel(f.last.period, g)}{series.scopeType !== "company" ? ` · ${series.scopeName}` : ""}</div>
-              <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, color: dl?.tone === "good" ? "#16a34a" : dl?.tone === "bad" ? "#dc2626" : MUTED }}>
-                {dl == null ? "немає з чим порівняти" : `${dl.text} ${prevLabel(f.prev!.period, g)}`}
-              </div>
-              {f.missingSince && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3 }}>після {periodLabel(f.missingSince, g)} даних немає</div>}
-            </>
-          ) : <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>повних періодів ще немає</div>}
-          <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
-            {g === "month" ? MONTHS[Number(f.currentStart.slice(5, 7)) - 1] : `тиждень ${dm(f.currentStart)}`} іде:{" "}
-            {f.current ? <b style={{ color: "var(--text)" }}>{fmt(f.current.value, m.unit)}</b> : "точок ще немає"} станом на {dm(today)}{asOfLabel(st?.resp?.asOf, today) ? `, ${asOfLabel(st?.resp?.asOf, today)}` : ""}
-          </div>
-          <StatsMiniChart points={points} currentStart={f.currentStart} />
-        </>
-      )}
+      <CardHead m={m} />
+      <CardNumbers m={m} st={st} c={c} today={today} />
+      {c.ok && <StatsMiniChart points={c.points} currentStart={c.f.currentStart} />}
     </button>
   );
 }
