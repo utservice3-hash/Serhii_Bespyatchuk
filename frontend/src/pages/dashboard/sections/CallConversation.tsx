@@ -114,7 +114,7 @@ function Player({ load, marks, onTime, seekRef, lanes = [], durHint = null, prel
  * Плеєр і репліки разом. `turns` — null, коли тексту цій ролі не віддали (тоді лише плеєр); `quoted` — індекси
  * реплік, на які спирається розбір (`quoteTurnIndex`).
  */
-export function CallConversation({ load, turns, managerChannel, quoted, seekRef, mixed = false, durationSec = null, showTurns = true, active = true }: {
+export function CallConversation({ load, turns, managerChannel, quoted, seekRef, mixed = false, durationSec = null, showTurns = true, active = true, preload = true, playerClass, between }: {
   load: () => Promise<Blob>; turns: AiTurn[] | null; managerChannel: number | null; quoted: ReadonlySet<number>;
   seekRef: React.MutableRefObject<SeekFn | null>;
   /** Моно без розділення голосів: підпис «Обидва голоси», а не «Менеджер» — інакше підпис бреше. */
@@ -125,6 +125,12 @@ export function CallConversation({ load, turns, managerChannel, quoted, seekRef,
   showTurns?: boolean;
   /** `false` — сховано (згорнута черга): пауза. */
   active?: boolean;
+  /** `false` — запис тягнеться лише після ▶ або кліку по цитаті (права панель «Розбору»: по списку ходять стрілками). */
+  preload?: boolean;
+  /** Клас обгортки плеєра: права панель тримає плеєр на місці під час прокрутки. */
+  playerClass?: string;
+  /** Вміст між плеєром і репліками (права панель: чек-лист і погодження стоять вище за текст розмови). */
+  between?: React.ReactNode;
 }) {
   const [now, setNow] = useState(0);
   const list = turns ?? [];
@@ -136,7 +142,8 @@ export function CallConversation({ load, turns, managerChannel, quoted, seekRef,
   ] : [];
   return (
     <>
-      <Player load={load} marks={marks} onTime={setNow} seekRef={seekRef} lanes={lanes} durHint={durationSec} active={active} />
+      <div className={playerClass}><Player load={load} marks={marks} onTime={setNow} seekRef={seekRef} lanes={lanes} durHint={durationSec} preload={preload} active={active} /></div>
+      {between}
       {showTurns && list.length > 0 && (
         <div style={{ marginTop: 10, maxHeight: 280, overflowY: "auto" }}>
           {list.map((t, i) => {

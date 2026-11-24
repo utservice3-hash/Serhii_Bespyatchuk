@@ -1,32 +1,22 @@
 import { LineChart, Line, ResponsiveContainer, YAxis } from "recharts";
 
 /**
- * 📈 МАЛИЙ ГРАФІК КАРТКИ СТІНИ. Повні періоди — суцільна лінія; період, що йде, — пунктиром і порожньою точкою
- * (він ще не закінчився, і рівень у ньому читати як «обвал» не можна). Осей і підписів немає: картка — для погляду,
- * числа — у розгорнутому показнику.
+ * 📈 МАЛИЙ ГРАФІК КАРТКИ СТІНИ — ЛИШЕ ПОВНІ ПЕРІОДИ. Період, що йде, сюди не потрапляє зовсім: число «станом на» вже
+ * стоїть рядком над графіком, а точка неповного місяця на графіку без осей пірнала вниз і читалась як обвал навіть
+ * пунктиром (огляд 23.11.2026). Осей і підписів немає: картка — для погляду, числа — у розгорнутому показнику.
+ * Тримає `#10902`.
  */
 export function StatsMiniChart({ points, currentStart, color = "#2f6fdb" }: {
   points: { period: string; value: number }[]; currentStart: string; color?: string;
 }) {
-  const closed = points.filter((p) => p.period < currentStart);
-  const cur = points.find((p) => p.period === currentStart);
-  const lastClosed = closed[closed.length - 1];
-  const rows = points.filter((p) => p.period <= currentStart).map((p) => ({
-    period: p.period,
-    v: p.period < currentStart ? p.value : undefined,
-    c: p.period === currentStart || (cur && p === lastClosed) ? p.value : undefined,
-  }));
+  const rows = points.filter((p) => p.period < currentStart).map((p) => ({ period: p.period, v: p.value }));
   if (rows.length < 2) return <div style={{ height: 46 }} />;
   return (
     <div style={{ height: 46, marginTop: 6 }}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={rows} margin={{ top: 4, right: 6, bottom: 2, left: 6 }}>
           <YAxis hide domain={["auto", "auto"]} />
-          <Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} />
-          <Line type="monotone" dataKey="c" stroke={color} strokeWidth={1.6} strokeDasharray="4 3" isAnimationActive={false}
-            dot={(p: any) => (p?.payload?.period === currentStart && typeof p.cx === "number"
-              ? <circle key="cur" cx={p.cx} cy={p.cy} r={3} fill="var(--card-bg)" stroke={color} strokeWidth={1.6} />
-              : <g key={`n${p?.index ?? 0}`} />)} />
+          <Line type="linear" dataKey="v" stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />
         </LineChart>
       </ResponsiveContainer>
     </div>

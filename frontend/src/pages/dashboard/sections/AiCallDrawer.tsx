@@ -155,7 +155,7 @@ export function Analysis({ c }: { c: AiCallCardResp }) {
  * «Розмова обірвалась» (05.11.2026)
  * для тімліда своєї команди й адміна (право вирішує сервер — `canEditType`). Помилку запису видно, а не «нічого».
  */
-function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void }) {
+export function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const r = c.row;
@@ -236,7 +236,7 @@ function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind:
   );
 }
 
-function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) {
+export function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) {
   const needPrice = c.result != null && c.result.price.discussed === false;
   const needMissed = c.row.promiseState === "broken";
   // 📞 01.10.2026: Ringostat не бачить мобільного й месенджера — передзвін поза телефонією позначає людина.
@@ -261,7 +261,7 @@ function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) 
  * ❌ «Закрити угоду в Kommo» (рішення Романа 16.10.2026): тімлід (своя команда), адмін, КВП. Причина — з довідника Kommo,
  * AI підставляє, людина підтверджує; запис — лише після діалогу. Що можна закрити й хто вже закрив — вирішує сервер.
  */
-function CloseDealBlock({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
+export function CloseDealBlock({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
   const o = c.closeDeal;
   const dlg = useDialogs();
   const toast = useToast();

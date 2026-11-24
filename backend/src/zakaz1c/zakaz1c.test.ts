@@ -19,7 +19,7 @@ import { isNetError, withNetRetry } from "./kommoApi.js";
 import { zakaz1cFieldsMode, zakaz1cMode, zakaz1cTesters } from "./env.js";
 import { BEFORE_PAID, PAID_STAGE, patchOf, planPayment, runPayments } from "./payments.js";
 import { invoiceCaption, noteInvoice } from "./notes.js";
-import { SERVICES, actDatePlan, buildPersonCustomerBody, customerInfoByUid, kyivDateOfUnix, kyivMidnightUnix, normalizePhone, normalizePib,
+import { SAFE_WAITS, SERVICES, servicesFor, actDatePlan, buildPersonCustomerBody, customerInfoByUid, kyivDateOfUnix, kyivMidnightUnix, normalizePhone, normalizePib,
   setActDateIn1c } from "./invoice.js";
 import { actDatePatch } from "./kommoApi.js";
 
@@ -142,7 +142,7 @@ test("#7103 ФОРМА → 1С: валюта, організація, ПДВ, з
     ["Організація міжнародного перевезення", "Organization of international transportation: м. Praha (CZ) – м. Київ (Київська обл.)", 1800, "000000179"]);
   assert.equal(body.pdf, true);
   // Кожна послуга — своїм кодом 1С (відповідь 1С 28.10.2026): за назвою «Експедиторські послуги» 1С не знаходить.
-  assert.deepEqual(SERVICES.map((x) => x.code), ["000000092", "000000008", "000000179", "000000252", "000000180"], "коди послуг не ті, що дала 1С");
+  assert.deepEqual(SERVICES.map((x) => x.code), ["000000092", "000000008", "000000179", "000000094", "000000252", "000000180"], "коди послуг не ті, що дала 1С");
   const allSvc = parseInvoiceForm({ ...FORM, items: ["Організація перевезення за маршрутом", "Експедиторські послуги",
     "Штрафні санкції за простій автомобільного транспорту"].map((service) => ({ service, route: "", qty: 1, price: 10, vat: 0 })) }, ctx);
   assert.ok(allSvc.ok);
@@ -274,7 +274,7 @@ test("#7124 ПРАВИЛА ОРГАНІЗАЦІЙ: ЮТС і Єлогіст ли
   const fopForm = { ...FORM, org: "fop", currency: "UAH", bankUid: "B-MONO", items: [{ ...FORM.items[0], service: "Організація перевезення за маршрутом" }] };
   assert.equal(parseInvoiceForm(fopForm, ctxBanks).ok, true, "ФОП без ПДВ з банком не пройшов");
   assert.equal(parseInvoiceForm({ ...fopForm, vatType: "ПДВ в тому числі" }, ctxBanks).ok, false, "ФОП з ПДВ пройшов");
-  assert.deepEqual(ORGS.map((o) => [o.key, o.code]), [["uts", "000000002"], ["elogist", "000000012"], ["avtomuv", "000000004"], ["fop", "000000011"]],
+  assert.deepEqual(ORGS.map((o) => [o.key, o.code]), [["uts", "000000002"], ["elogist", "000000012"], ["avtomuv", "000000004"], ["fop", "000000011"], ["safe", "000000009"]],
     "коди організацій 1С не ті, що дала 1С / Сергій");
 });
 
@@ -894,4 +894,38 @@ test("#7147 РАХУНКИ GENESIS У ВІКНІ: рахунок і акт з 1�
   assert.match(js, /"\/genesis\/" \+ encodeURIComponent\(String\(b\.data\("num"\)\)\)/);
   assert.doesNotMatch(js, /у вкладці «Заказ 1С»/, "вікно досі шле у вкладку Genesis, якої вже немає");
   assert.equal(JSON.parse(WIDGET("manifest.json")).widget.version, "0.6.6");
+});
+
+test("#7148 «ОБЛІК СЕЙФУ» ЯК У GENESIS: код 1С 000000009; без рахунків з /organizations — видно, але виставити не можна; без ПДВ; рахунок клієнта за валютою (єдиний — обраний сам); послуги «за маршрутом» і «Транспортні послуги»", () => {
+  const safe = ORGS.find((o) => o.key === "safe")!;
+  assert.equal(safe.code, "000000009", "код «Облік сейфу» — з листа 1С 23.11.2026");
+  assert.equal(safe.vat, "without"); assert.equal(safe.needsBank, true); assert.equal(safe.noBanksWaits, SAFE_WAITS);
+  assert.deepEqual(servicesFor("safe").map((x) => x.code), ["000000008", "000000094", "000000252", "000000180"], "послуги «Сейфу» не як у Genesis");
+  assert.ok(!servicesFor("uts").some((x) => x.code === "000000094"), "«Транспортні послуги» протекли в інші організації");
+  const form = { ...FORM, org: "safe", currency: "UAH", vatType: "Без ПДВ", bankUid: "S-UAH",
+    items: [{ service: "Транспортні послуги", route: "Київ – Біла Церква", qty: 1, price: 5000, vat: 0 }] };
+  // Поки 1С не віддає рахунків «Сейфу» — не виставляється.
+  assert.equal(parseInvoiceForm(form, ctx).ok, false, "рахунок на «Сейф» пройшов без рахунків з 1С");
+  // Відповідь 1С 23.11.2026: iban null, is_main false в обох.
+  const banks = parseOrganizations({ state: true, organizations: [{ code: "000000009", name: "Облік сейфу", bank_accounts: [
+    { uid: "S-UAH", name: "Текущий в Банк ПАТ КБ \"ПРИВАТБАНК\"", iban: null, currency: "UAH", bank: "Банк ПАТ КБ \"ПРИВАТБАНК\"", is_main: false },
+    { uid: "S-EUR", name: "Текущий (EUR) в Фізична особа", iban: null, currency: "EUR", bank: "Фізична особа", is_main: false }] }] })!;
+  assert.deepEqual(banks.get("000000009")!.map((b) => [b.uid, b.iban]), [["S-UAH", ""], ["S-EUR", ""]], "iban: null зламав розбір");
+  const c = { today: TODAY, orgs: ORGS, banksOf: (code: string) => banks.get(code) ?? [] };
+  const ok = parseInvoiceForm(form, c);
+  assert.ok(ok.ok, ok.ok ? "" : ok.why);
+  if (ok.ok) {
+    const body = buildCreateInvoiceBody(1, ok.form, { customerUid: "u", manager: "М", today: TODAY, orgCode: safe.code! }) as any;
+    assert.equal(body.organization, "000000009"); assert.equal(body.bank_account, "S-UAH"); assert.equal(body.vat_type, "Без ПДВ");
+    assert.equal(body.items[0].code, "000000094");
+  }
+  assert.equal(parseInvoiceForm({ ...form, currency: "EUR", bankUid: "S-UAH" }, c).ok, false, "гривневий рахунок у рахунку в EUR");
+  assert.ok(parseInvoiceForm({ ...form, currency: "EUR", bankUid: "S-EUR" }, c).ok, "EUR на «Фізична особа» не пройшов");
+  assert.equal(parseInvoiceForm({ ...form, currency: "USD", bankUid: "S-UAH" }, c).ok, false, "USD без рахунку в USD");
+  assert.equal(parseInvoiceForm({ ...form, vatType: "ПДВ в тому числі" }, c).ok, false, "«Сейф» з ПДВ");
+  assert.equal(parseInvoiceForm({ ...form, items: [{ ...form.items[0], service: "Організація міжнародного перевезення" }] }, c).ok, false,
+    "«міжнародного» для «Сейфу» — у Genesis її не було жодного разу");
+  // Вікно: пояснення «Сейфу» замість «рахунки ФОП»; єдиний рахунок у валюті — обраний сам.
+  assert.match(MOUNT(), /o\.noBanksWaits \?\? ONEC_WAITS\.fopBanks/);
+  assert.match(MOUNT(), /isMain: b\.isMain \|\| own\.filter\(\(x\) => x\.currency === b\.currency\)\.length === 1/);
 });

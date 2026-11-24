@@ -12,9 +12,10 @@ import { FirstTouchPane } from "./FirstTouchPane";
 import { useSegInk } from "./useSegInk";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { InfoHint } from "../widgets";
-import { PeriodNav } from "../PeriodNav";
+import { PeriodStepper, stepperLabel } from "../PeriodStepper";
+import { MoreFilters } from "./FirstTouchMore";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { approveState, approveWaitText, STATE_UI, TONE_COLOR, FILTERS, matchesFilter, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
+import { approveState, approveWaitText, type ApproveState, STATE_UI, TONE_COLOR, FILTERS, matchesFilter, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
   GROUP_LABEL, applyListFilter, type ListFilter, type PipelineGroupT,
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
@@ -35,6 +36,11 @@ import { approveState, approveWaitText, STATE_UI, TONE_COLOR, FILTERS, matchesFi
  * Черга (розкладка B) відкривається поверх і згортається назад у смугу. Стани пунктів і «потребує розбору» — від
  * сервера (`core/firstTouchTeamReport.ts`); тут їх лише складають.
  *
+ * 🆕 ФІНАЛЬНИЙ МАКЕТ (Роман 24.11.2026, «давай тепер реально таке робити, додавай плавні анімації»): вкладки «Розбір» і
+ * «Статистика», період — той самий перемикач, що у «Звіті» (`PeriodStepper`), темної смуги «Точка контролю» немає («плашка про
+ * 23 розмови зайва») — число «Потребує дії» стоїть на вкладці «Розбір»; фільтри списку — двома підписаними рядками
+ * («Показати», «Причина»), рідкісні — у панелі «Ще фільтри» (`FirstTouchMore`), усе ввімкнене видно плашками під ними.
+ *
  * Що є: перші розмови рекламних угод (правило — METRICS_GLOSSARY §15), витяг моделі з дослівними
  * цитатами, позначка «звірено з розшифровкою», факт Ringostat про наш наступний вихідний, стан
  * конвеєра й витрати. Чого немає свідомо: розбору тімліда, повернення угоди (П21), балу (після
@@ -53,23 +59,17 @@ function StateChip({ state }: { state: AiCallState }) {
   return <span title={ui.hint} style={{ background: c.bg, color: c.fg, borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap" }}>{ui.label}</span>;
 }
 
-/** Скелет на час завантаження — та сама розкладка, що й екран (смуга, пʼять плиток, менеджери, список і панель розмови), щоб нічого не стрибало. */
+/** Скелет на час завантаження — та сама розкладка, що й перша вкладка «Розбір» (два рядки фільтрів, список і панель розмови), щоб нічого не стрибало. */
 function FirstTouchSkeleton({ header, drawer }: { header: React.ReactNode; drawer: React.ReactNode }) {
   const sk = (w: string | number, h: number, extra: React.CSSProperties = {}) => <span className="ftd-sk" style={{ width: w, height: h, ...extra }} />;
   return (
     <div className="ftd" aria-busy="true" aria-label="Завантаження «Першого дотику»">
       {header}
-      <div className="ftd-strip" aria-hidden="true">{sk("40%", 22, { background: "#2c2e36" })}<span style={{ flex: 1 }} />{sk(160, 44, { background: "#2c2e36", borderRadius: 8 })}</div>
-      <div className="ftd-kpis" aria-hidden="true">
-        {[0, 1, 2, 3, 4].map((i) => <div key={i} className="ftd-kpi">{sk("70%", 12)}{sk("45%", 28, { margin: "6px 0" })}{sk("60%", 12)}</div>)}
-      </div>
-      <div className="ftd-card ftd-card-pad" aria-hidden="true">
-        {sk(320, 16)}
-        {[0, 1, 2, 3].map((i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "210px 64px repeat(4, minmax(80px, 1fr)) 80px", gap: 14 }}>
-          {sk("80%", 14)}{sk(36, 14)}{sk("100%", 18)}{sk("100%", 18)}{sk("100%", 18)}{sk("100%", 18)}{sk(40, 14)}</div>)}
-      </div>
       <div className="ftd-card" aria-hidden="true">
-        <div className="ftd-toolbar">{sk(260, 30, { borderRadius: 8 })}{sk(120, 28, { borderRadius: 999 })}{sk(120, 28, { borderRadius: 999 })}</div>
+        <div className="ftd-fbar">
+          <div className="ftd-frow">{sk(64, 14)}{sk(420, 34, { borderRadius: 8 })}<span style={{ flex: 1 }} />{sk(240, 34, { borderRadius: 8 })}</div>
+          <div className="ftd-frow">{sk(64, 14)}{sk(120, 30, { borderRadius: 999 })}{sk(110, 30, { borderRadius: 999 })}{sk(96, 30, { borderRadius: 999 })}{sk(130, 30, { borderRadius: 999 })}</div>
+        </div>
         <div className="ftd-two" style={{ borderTop: "1px solid var(--border)" }}>
           <div className="ftd-list" style={{ overflow: "hidden" }}>
             {[0, 1, 2, 3, 4].map((i) => <div key={i} style={{ display: "grid", gap: 8, padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
@@ -85,9 +85,14 @@ function FirstTouchSkeleton({ header, drawer }: { header: React.ReactNode; drawe
   );
 }
 
-/** Вкладки екрана (Роман 23.11.2026, задача 10734 п.2): «Контроль» — перша; «Перевізники за розмовою» — колишній пункт меню. */
+/**
+ * Вкладки екрана (Роман 23.11.2026, задача 10734 п.2): перша — список розмов; «Перевізники за розмовою» — колишній пункт меню.
+ * Назви «Розбір» і «Статистика» — з фінального макета (Роман 24.11.2026); ключі `ctrl` / `an` лишились, на них тримаються гейти.
+ */
 type FtPageT = "ctrl" | "an" | "car";
-const FT_PAGE_UA: Record<FtPageT, string> = { ctrl: "Контроль", an: "Аналітика", car: "Перевізники за розмовою" };
+/** Підписи фільтра «Стан» — ті самі три стани, що й у кнопки «Погоджую» (`approveState`): фільтр і кнопка не розійдуться. */
+const APPROVE_FILTER_UA: Record<ApproveState["kind"], string> = { can: "Можна погодити", wait: "Чекає коментаря менеджера", notManager: "Коментар не від менеджера" };
+const FT_PAGE_UA: Record<FtPageT, string> = { ctrl: "Розбір", an: "Статистика", car: "Перевізники за розмовою" };
 
 export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { canSeeCarriers?: boolean; roleKey?: string | null } = {}) {
   const today = todayKyiv();
@@ -111,7 +116,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
     window.history.replaceState(window.history.state, "", withCallParam(window.location.href, uniqueid));
   }, []);
   const closeCard = useCallback(() => setOpen(null), [setOpen]);
-  // Черга розбору (розкладка B) — поверх огляду; закриття згортає її в смугу (`.ftd-queue.is-closed`).
+  // Черга розбору (розкладка B, з плеєром) — поверх екрана; відкривається кнопкою під фільтрами списку.
   const [queueOpen, setQueueOpen] = useState(false);
   const periodKey = useRef("");
   // Новий період: старі цифри лишаються (напівпрозорі, «Оновлюю…»), а щойно прийдуть нові — плитки перетікають до них.
@@ -119,7 +124,6 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
   const [stale, setStale] = useState(false);
   const topRef = useRef<HTMLDivElement | null>(null);
   const [queueSel, setQueueSel] = useState<string | null>(null);
-  const [glow, setGlow] = useState(false);
   const [preset, setPreset] = useState<"all" | TileKey>(link.tile ?? "all");
   // 💬 Задача 7239: клік по причині в блоці «Чому не назвали ціну» — список лише розмов без ціни з цією причиною.
   const [reasonPick, setReasonPick] = useState<PriceReasonKeyT | null>(null);
@@ -136,11 +140,9 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
   const [page, setPage] = useState<FtPageT>("ctrl");
   const [rulesOpen, setRulesOpen] = useState(false);
   const closeRules = useCallback(() => setRulesOpen(false), []);
-  // «Фільтр ▾» (задача 10734 п.4): причина розбору й стан погодження; менеджер — той самий `lf.managerId`.
+  // Рядок «Причина» (задача 10734 п.4, макет 24.11.2026): причина розбору й стан погодження; менеджер — той самий `lf.managerId`.
   const [fReasons, setFReasons] = useState<ReviewReasonT[]>([]);
-  const [fApprove, setFApprove] = useState<"all" | "can" | "wait">("all");
-  const [techOpen, setTechOpen] = useState(false);
-  const techRef = useRef<HTMLDetailsElement | null>(null);
+  const [fApprove, setFApprove] = useState<"all" | ApproveState["kind"]>("all");
   const [q, setQ] = useState("");
   // 🪟 «Розбір у два вікна» (Роман 23.11.2026, макет А): обрана розмова — у правій панелі. `orderRef` памʼятає порядок
   // списку з минулого рендера: коли обрана зникає (погодили), праворуч стає НАСТУПНА за нею, а не перша (`pickSelected`).
@@ -192,17 +194,30 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
   const shown = useMemo(() => scoped.filter((r) => matchesFilter(r, filter)
     && (!silenceOnly || (normFrom != null && r.silentBeforeClose === true && r.dealCreatedAt.slice(0, 10) >= normFrom))), [scoped, filter, silenceOnly, normFrom]);
 
-  const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
+  // 🗓 Період — той самий перемикач, що у «Звіті» (Роман 23.11.2026: «додай фільтри по датах як у "звіт"»): День · Тиждень ·
+  // Місяць · Період, стрілки, календар по кліку на назві. Правила періоду ті самі (`periodRules`), змінився лише вигляд.
+  const navBar = <PeriodStepper state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
   const drawer = open ? <AiCallDrawer uniqueid={open} onClose={closeCard} onChanged={() => setReload((x) => x + 1)} /> : null;
   // 🧭 ШАПКА — ОДНА для скелета й екрана (Роман 08.10.2026: «вибір періоду не потребує рендера після отримання даних»):
   // заголовок, рядок конвеєра, під ними завжди окремим рядком період і «Команда». Даних ще немає — команди «усі».
   const headTeams = d ? [...new Map(d.rows.filter((r) => r.teamId != null).map((r) => [r.teamId!, r.teamName ?? `Команда #${String(r.teamId)}`])).entries()]
     .sort((a, b) => a[1].localeCompare(b[1], "uk")) : [];
+  // Плитки й підсумки рахуються лише по ЗВІТУ: виключене сміття не розмиває відсотки (ТЗ 30.09.2026).
+  const rows = tabRows(scopedAll, "report");
+  // Черга розбору: прапорець сервера; лічильник «розібрано N з M» — серед тих, що потребували розбору.
+  const queue = queueRows(rows);
+  // 🎯 Задача 10734 п.1 («нуль у черзі»): у черзі й «Потребує дії» — лише відкриті угоди; закриті без розбору — окремо.
+  // Рахується ДО шапки: те саме число стоїть на вкладці «Розбір» (замість темної смуги, Роман 24.11.2026) — одне правило, не два.
+  const needNow = queue.filter((r) => reviewBucket(r) === "need");
   // 🧭 Вкладки екрана — у шапці, щоб і «Перевізники» (свій період і свої фільтри) відкривались з того самого місця.
   const pages: FtPageT[] = canSeeCarriers ? ["ctrl", "an", "car"] : ["ctrl", "an"];
   const pageTabs = (
     <div className="ftd-seg ftd-pages" role="tablist" aria-label="Вкладки «Першого дотику»" ref={pagesInk}>
-      {pages.map((k) => <button key={k} type="button" role="tab" aria-selected={page === k} className={page === k ? "on" : ""} onClick={() => setPage(k)}>{FT_PAGE_UA[k]}</button>)}
+      {pages.map((k) => (
+        <button key={k} type="button" role="tab" aria-selected={page === k} className={page === k ? "on" : ""} onClick={() => setPage(k)}>{FT_PAGE_UA[k]}
+          {k === "ctrl" && d?.canReview && <b className={`ftd-tab-n${needNow.length === 0 ? " is-zero" : ""}`} title="Потребує дії: розмови відкритих угод, які ще не розібрано. Ціль — 0."><AnimatedNumber value={needNow.length} /></b>}
+        </button>
+      ))}
     </div>
   );
   // 📘 Задача 10734 п.3: «Правила роботи» — окрема кнопка поруч із заголовком; панель — фіксована, тож живе тут же.
@@ -218,7 +233,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
           {rulesEl}
         </div>
   );
-  // ⚙️ Рядок конвеєра й витрат — технічне (Олександр 20.11, 37:57): живе в згорнутому блоці «Технічне» внизу «Контролю».
+  // ⚙️ Рядок конвеєра й витрат — технічне (Олександр 20.11, 37:57): живе в згорнутому блоці «Технічне» внизу «Розбору».
   const techMeta = (
         <>
           {meta && (
@@ -239,7 +254,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
           {titleBlock}
           {pageTabs}
         </div>
-        {page !== "car" && <div className="ftd-nav">
+        {page !== "car" && <div className="ftd-nav rv">
           {navBar}
           <label className="ftd-team">Команда
             <select id="ai-team" disabled={!d} value={lf.teamId ?? ""} onChange={(e) => setLf({ ...lf, teamId: e.target.value ? Number(e.target.value) : null, managerId: null })}>
@@ -260,8 +275,6 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
   if (err) return <div className="ftd">{header}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>{drawer}</div>;
   if (!d) return <FirstTouchSkeleton header={header} drawer={drawer} />;
 
-  // Плитки й підсумки рахуються лише по ЗВІТУ: виключене сміття не розмиває відсотки (ТЗ 30.09.2026).
-  const rows = tabRows(scopedAll, "report");
   const excludedCount = tabRows(scopedAll, "excluded").length;
   const done = rows.filter((r) => r.state === "done");
   const nonTargetHidden = applyListFilter(d.rows, { ...lf, showNonTarget: true }).length - applyListFilter(d.rows, { ...lf, showNonTarget: false }).length;
@@ -304,28 +317,25 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
       </button>
     </div>);
 
-  // Черга розбору: прапорець сервера; лічильник «розібрано N з M» — серед тих, що потребували розбору.
-  const queue = queueRows(rows);
   const dueTotal = rows.filter((r) => r.reviewReason != null).length;
   const reviewedN = dueTotal - queue.length;
-  // 🎯 Задача 10734 п.1 («нуль у черзі»): у черзі й «Потребує дії» — лише відкриті угоди; закриті без розбору — окремо.
-  const needNow = queue.filter((r) => reviewBucket(r) === "need");
-  const closedNoReview = queue.filter((r) => reviewBucket(r) === "closed");
   const modeCount = (m: ListModeT) => (m === "all" ? rows.length : rows.filter((r) => reviewBucket(r) === m).length);
   const listMode: ListModeT = tab === "excluded" ? "all" : (mode ?? (d.canReview ? "need" : "all"));
-  const reasonN = (k: "noCall" | "noPrice" | "lost") => needNow.filter((r) => r.reviewReason === k).length;
   const openQueue = (uniqueid?: string) => {
-    setQueueSel(uniqueid ?? needNow[0]?.uniqueid ?? null); setQueueOpen(true); setGlow(false);
+    setQueueSel(uniqueid ?? needNow[0]?.uniqueid ?? null); setQueueOpen(true);
     topRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
-  const closeQueue = () => { setQueueOpen(false); setGlow(true); window.setTimeout(() => setGlow(false), 900); };
+  const closeQueue = () => setQueueOpen(false);
   const teamTitle = lf.teamId != null ? (teams.find(([id]) => id === lf.teamId)?.[1] ?? "команда") : "усі команди";
 
   const presetOk = (r: (typeof rows)[number]) => preset === "all" || TILE_MATCH[preset](r);
   const needle = q.trim().toLowerCase();
+  // «Стан» діє лише там, де його видно: у «Потребує дії» для тих, хто розбирає. В інших режимах вибір не фільтрує потай.
+  const stateOn = d.canReview && tab === "report" && listMode === "need";
+  const fAp = stateOn ? fApprove : "all";
   const shownD = shown.filter((r) => inListMode(r, listMode) && presetOk(r)
     && (fReasons.length === 0 || (r.reviewReason != null && fReasons.includes(r.reviewReason)))
-    && (fApprove === "all" || (r.needsReview && (fApprove === "can" ? r.managerCommented : !r.managerCommented)))
+    && (fAp === "all" || approveState(r, d.canReview)?.kind === fAp)
     && (reasonPick == null || (TILE_MATCH.noPrice(r) && priceReasonKey(r) === reasonPick))
     && (!needle || `${r.summary ?? ""} ${r.managerName ?? ""} ${r.priceValue ?? ""}`.toLowerCase().includes(needle)));
   // 🪟 Обрана розмова правої панелі. Рахується на рендері, без ефекту: список і вибір мусять зійтись в одному кадрі.
@@ -379,17 +389,36 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
       else if (approveState(cur, d.canReview)?.kind === "can") void approvePane(cur.uniqueid);
     }
   };
-  // Плитки, рядки й чіпи «Аналітики» ведуть у список «Контролю» («натиснув — висвітлилось, які саме»).
+  // Плитки, рядки й чіпи «Статистики» ведуть у список «Розбору» («натиснув — висвітлилось, які саме»).
   const goList = () => { setTab("report"); setMode("all"); setPage("ctrl"); window.setTimeout(() => tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }), 0); };
   const pickTile = (k: TileKey) => { setPreset(preset === k ? "all" : k); goList(); };
   const CHIPS = ([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["thinking", "Думає"], ["declined", "Відмовив"], ["agreedLost", "Погодився, а в Kommo втрачено"],
     ["messenger", "Обіцяв у месенджер"], ...(d.canSeeMessengerSignal ? [["messengerSelf", "Сам запропонував месенджер"] as const] : []),
     ["priceExact", "Ціна: точна"], ["priceRange", "Ціна: вилка"], ["priceFrom", "Ціна: «від…»"]] as const);
   const TILE_UA: Partial<Record<TileKey, string>> = Object.fromEntries(CHIPS);
-  // Технічні фільтри живуть унизу; коли якийсь діє — у панелі списку про це сказано, і клік відкриває блок.
-  const techActive = [lf.requestKind != null && lf.requestKind !== "all", lf.group !== "all", lf.showNonTarget, silenceOnly, filter !== "all"].filter(Boolean).length;
-  const openTech = () => { setTechOpen(true); window.setTimeout(() => techRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }), 0); };
-  const fActive = fReasons.length + (fApprove === "all" ? 0 : 1) + (lf.managerId == null ? 0 : 1);
+  // 🧹 УСЕ ВВІМКНЕНЕ — ОДНИМ ПЕРЕЛІКОМ (макет 24.11.2026): з нього і плашки під фільтрами, і число на «Ще фільтри», і
+  // «Скинути все». Фільтр, якого тут немає, діяв би невидимо — тому новий фільтр списку додається САМЕ сюди.
+  const reqKind = lf.requestKind ?? "all";
+  const active: { key: string; label: string; more?: boolean; off: () => void }[] = [
+    ...(tab === "excluded" ? [{ key: "ex", label: `Виключені · ${String(excludedCount)}`, more: true, off: () => { setTab("report"); setExType("all"); } }] : []),
+    ...(preset !== "all" ? [{ key: "tile", label: `${TILE_UA[preset] ?? preset}: ${String(scoped.filter(TILE_MATCH[preset]).length)}`, off: () => setPreset("all") }] : []),
+    ...(reasonPick ? [{ key: "why", label: `Без ціни: ${PRICE_REASON_KEY_UA[reasonPick]}`, off: () => setReasonPick(null) }] : []),
+    ...fReasons.map((k) => ({ key: `r-${k}`, label: `Причина: ${REVIEW_REASON_UI[k].label}`, off: () => setFReasons(fReasons.filter((x) => x !== k)) })),
+    ...(fAp !== "all" ? [{ key: "state", label: `Стан: ${APPROVE_FILTER_UA[fAp].toLowerCase()}`, off: () => setFApprove("all") }] : []),
+    ...(pickedName ? [{ key: "mgr", label: `Менеджер: ${pickedName}`, off: () => setLf({ ...lf, managerId: null }) }] : []),
+    ...(reqKind !== "all" ? [{ key: "kind", label: `Тип запиту: ${REQUEST_KIND_LABEL[reqKind]}`, more: true, off: () => setLf({ ...lf, requestKind: "all" }) }] : []),
+    ...(lf.group !== "all" ? [{ key: "group", label: `Воронка: ${GROUP_LABEL[lf.group]}`, more: true, off: () => setLf({ ...lf, group: "all" }) }] : []),
+    ...(lf.showNonTarget ? [{ key: "nt", label: "З нецільовими", more: true, off: () => setLf({ ...lf, showNonTarget: false }) }] : []),
+    ...(silenceOnly ? [{ key: "silence", label: "Тиша перед закриттям", more: true, off: () => setSilenceOnly(false) }] : []),
+    ...(filter !== "all" ? [{ key: "ai", label: `Стан аналізу: ${FILTERS.find((f) => f.key === filter)?.label ?? filter}`, more: true, off: () => setFilter("all") }] : []),
+    ...(needle ? [{ key: "q", label: `Пошук: «${q.trim()}»`, off: () => setQ("") }] : []),
+  ];
+  const moreActive = active.filter((a) => a.more).length;
+  // «Команда» з шапки — не фільтр списку, а зріз усього екрана: «Скинути все» її не чіпає.
+  const resetAll = () => {
+    setFReasons([]); setFApprove("all"); setPreset("all"); setReasonPick(null); setQ(""); setSilenceOnly(false); setFilter("all");
+    setTab("report"); setExType("all"); setLf({ ...DEFAULT_LIST_FILTER, teamId: lf.teamId });
+  };
   const goodBad = (ok: boolean | null) => (ok == null ? "" : ok ? " is-ok" : " is-bad");
   // ✅ Задача 9229: клітинка «Розбір» розмови, що чекає розбору. Хто може розбирати — бачить «Погоджую», коли менеджер
   // пояснив сам; коли коментар вписав не менеджер — так і написано (раніше тут стояло «менеджер пояснив»).
@@ -424,77 +453,125 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
           {header}
 
           {page === "ctrl" && (<>
-          {/* 🎯 Задача 10734 п.1: «Потребує дії» — лише відкриті угоди, ціль 0; закриті без розбору — окремим числом. */}
-          {d.canReview && (
-            <section aria-label="Черга розбору" className={`ftd-strip${glow ? " is-glow" : ""}`}>
-              <div style={{ flex: "1 1 320px" }}>
-                <div className="ftd-strip-k">Точка контролю · ціль 0</div>
-                <div className="ftd-strip-h">Потребує дії: <b><AnimatedNumber value={needNow.length} /></b> розмов · розібрано {reviewedN} з {dueTotal}</div>
-                <div className="ftd-progress"><i style={{ width: `${String(dueTotal ? Math.round((reviewedN / dueTotal) * 100) : 0)}%` }} /></div>
-                {closedNoReview.length > 0 && (
-                  <button type="button" className="ftd-strip-closed" onClick={() => { setTab("report"); setMode("closed"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); }}
-                    title="Розмова ще не розібрана, а угоду вже закрито в Kommo. З «Потребує дії» вона вийшла; погодити можна в списку «Закриті без розбору».">
-                    Закриті без розбору: <b>{closedNoReview.length}</b> ›</button>
-                )}
-              </div>
-              <div className="ftd-strip-chips">
-                <span style={{ background: "#3a1616", color: "#fecaca" }}>Немає дзвінка {reasonN("noCall")}</span>
-                <span style={{ background: "#3a2c10", color: "#fde68a" }}>Без ціни {reasonN("noPrice")}</span>
-                <span style={{ background: "#2c2e36", color: "#e5e7eb" }}>Втрачені {reasonN("lost")}</span>
-              </div>
-              <button type="button" className="ftd-go" disabled={needNow.length === 0} onClick={() => openQueue()}>{needNow.length === 0 ? "Усе розібрано ✓" : reviewedN > 0 ? "Продовжити розбір ›" : "Почати розбір ›"}</button>
-            </section>
-          )}
-          {/* 📋 Задача 7238: розбір по командах за день і тиждень — тим, хто розбирає (тімлід, КВП, адмін). */}
-          {d.canReview && <ReviewByTeamBlock variant="ftd" refresh={reload} />}
-
           <section aria-label="Розмови" className="ftd-card" ref={tableRef}>
-            <div className="ftd-toolbar">
-              <div className="ftd-seg" role="tablist" aria-label="Режим списку" ref={modeInk}>
-                {(d.canReview ? (["need", "closed", "reviewed", "all"] as const) : (["all"] as const)).map((m) => (
-                  <button key={m} type="button" role="tab" aria-selected={tab === "report" && listMode === m} className={tab === "report" && listMode === m ? "on" : ""}
-                    onClick={() => { setTab("report"); setMode(m); }}>{LIST_MODE_UA[m]} {modeCount(m)}</button>
-                ))}
-              </div>
-              {tab === "excluded" && <button type="button" className="ftd-pill on" onClick={() => setTab("report")} aria-label="Зняти: Виключені">Виключені · {excludedCount} ✕</button>}
-              {preset !== "all" && <button type="button" className="ftd-pill on" onClick={() => setPreset("all")} aria-label="Зняти фільтр плитки">{TILE_UA[preset] ?? preset}: {scoped.filter(TILE_MATCH[preset]).length} ✕</button>}
-              {reasonPick && <button type="button" className="ftd-pill on" onClick={() => setReasonPick(null)} aria-label="Зняти фільтр причини">Без ціни: {PRICE_REASON_KEY_UA[reasonPick]} ✕</button>}
-              {pickedName && (
-                <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
-              )}
-              <details className="ftd-fdrop">
-                <summary className={`ftd-pill${fActive ? " on" : ""}`}>Фільтр ▾{fActive ? ` ${String(fActive)}` : ""}</summary>
-                <div className="ftd-fdrop-body">
-                  <div className="ftd-fdrop-h">Причина розбору</div>
-                  {(Object.keys(REVIEW_REASON_UI) as ReviewReasonT[]).map((k) => (
-                    <label key={k}><input type="checkbox" checked={fReasons.includes(k)}
-                      onChange={(e) => setFReasons(e.target.checked ? [...fReasons, k] : fReasons.filter((x) => x !== k))} /> {REVIEW_REASON_UI[k].label}
-                      <span className="ftd-sub"> · {rows.filter((r) => inListMode(r, listMode) && r.reviewReason === k).length}</span></label>
+            {/* 🎛 ФІЛЬТРИ ДВОМА ПІДПИСАНИМИ РЯДКАМИ (Роман 24.11.2026: «фільтра трішки покращ що було більше інтуєтивно»):
+                «Показати» — який кошик; «Причина» — чому розмова в розборі, стан погодження, менеджер; рідкісне — «Ще фільтри». */}
+            <div className="ftd-fbar">
+              <div className="ftd-frow">
+                <span className="ftd-flabel" id="ftd-fl-show">Показати</span>
+                <div className="ftd-seg" role="tablist" aria-labelledby="ftd-fl-show" ref={modeInk}>
+                  {(d.canReview ? (["need", "closed", "reviewed", "all"] as const) : (["all"] as const)).map((m) => (
+                    <button key={m} type="button" role="tab" aria-selected={tab === "report" && listMode === m} className={tab === "report" && listMode === m ? "on" : ""}
+                      onClick={() => { setTab("report"); setMode(m); }}>{LIST_MODE_UA[m]} <span className="ftd-seg-n"><AnimatedNumber value={modeCount(m)} /></span></button>
                   ))}
-                  {d.canReview && <>
-                    <div className="ftd-fdrop-h">Стан розбору</div>
-                    {([["all", "усі"], ["can", "менеджер уже пояснив — можна погодити"], ["wait", "чекає коментаря менеджера"]] as const).map(([k, label]) => (
-                      <label key={k}><input type="radio" name="ftd-fapprove" checked={fApprove === k} onChange={() => setFApprove(k)} /> {label}</label>
-                    ))}
-                  </>}
-                  <div className="ftd-fdrop-h">Менеджер</div>
-                  <select id="ai-manager" value={lf.managerId ?? ""} onChange={(e) => setLf({ ...lf, managerId: e.target.value ? Number(e.target.value) : null })}>
-                    <option value="">усі</option>
-                    {managers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-                  </select>
-                  {fActive > 0 && <button type="button" className="ftd-pill" style={{ marginTop: 8 }} onClick={() => { setFReasons([]); setFApprove("all"); setLf({ ...lf, managerId: null }); }}>Скинути</button>}
                 </div>
-              </details>
-              {techActive > 0 && <button type="button" className="ftd-pill" onClick={openTech} title="Тип запиту, воронка, нецільові, тиша чи фільтр стану — у блоці «Технічне» внизу">⚙️ технічні фільтри: {techActive}</button>}
-              <div style={{ flex: 1 }} />
-              <label htmlFor="ai-search" style={{ position: "absolute", left: -9999 }}>Пошук у розмовах</label>
-              <input id="ai-search" type="search" className="ftd-search" placeholder="Пошук: менеджер, маршрут, сума" value={q} onChange={(e) => setQ(e.target.value)} />
+                <div style={{ flex: 1 }} />
+                <label htmlFor="ai-search" style={{ position: "absolute", left: -9999 }}>Пошук у розмовах</label>
+                <input id="ai-search" type="search" className="ftd-search" placeholder="Пошук: менеджер, маршрут, сума" value={q} onChange={(e) => setQ(e.target.value)} />
+              </div>
+              <div className="ftd-frow">
+                <span className="ftd-flabel" id="ftd-fl-why">Причина</span>
+                <span role="group" aria-labelledby="ftd-fl-why" style={{ display: "contents" }}>
+                  {(Object.keys(REVIEW_REASON_UI) as ReviewReasonT[]).map((k) => {
+                    const n = shown.filter((r) => inListMode(r, listMode) && r.reviewReason === k).length;
+                    const on = fReasons.includes(k);
+                    return (
+                      <button key={k} type="button" className={`ftd-fchip${on ? " on" : ""}${n === 0 && !on ? " is-zero" : ""}`} aria-pressed={on}
+                        onClick={() => setFReasons(on ? fReasons.filter((x) => x !== k) : [...fReasons, k])}>{REVIEW_REASON_UI[k].label} <b>{n}</b></button>
+                    );
+                  })}
+                </span>
+                {stateOn && (
+                  <select id="ai-approve" aria-label="Стан розбору" className={`ftd-fsel${fApprove === "all" ? "" : " on"}`} value={fApprove} onChange={(e) => setFApprove(e.target.value as typeof fApprove)}>
+                    <option value="all">Стан: усі</option>
+                    {(Object.keys(APPROVE_FILTER_UA) as ApproveState["kind"][]).map((k) => <option key={k} value={k}>{APPROVE_FILTER_UA[k]}</option>)}
+                  </select>
+                )}
+                <select id="ai-manager" aria-label="Менеджер" className={`ftd-fsel${lf.managerId == null ? "" : " on"}`} value={lf.managerId ?? ""} onChange={(e) => setLf({ ...lf, managerId: e.target.value ? Number(e.target.value) : null })}>
+                  <option value="">Менеджер: усі</option>
+                  {managers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
+                {/* 🔽 Рідкісні фільтри — колишній вміст блоку «Технічне»: тип запиту, воронка, нецільові, тиша, стан аналізу, виключені. */}
+                <MoreFilters count={moreActive}>
+                  <label className="ftd-more-f">Тип запиту
+                    <select id="ai-reqkind" value={reqKind} onChange={(e) => {
+                      const k = e.target.value as RequestKindFilterT;
+                      setLf({ ...lf, requestKind: k });
+                      const t = requestKindTab(k);
+                      if (t) { setTab(t); setExType("all"); }
+                    }}>
+                      <option value="all">усі · {applyListFilter(d.rows, { ...lf, requestKind: "all" }).length}</option>
+                      {(Object.keys(REQUEST_KIND_LABEL) as (keyof typeof REQUEST_KIND_LABEL)[]).map((k) => (
+                        <option key={k} value={k}>{REQUEST_KIND_LABEL[k]} · {applyListFilter(d.rows, { ...lf, requestKind: k }).length}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="ftd-more-f">Воронка
+                    <div className="hr-seg2" role="group" aria-label="Воронка">
+                      {(["all", "full", "qualification"] as const).map((g) => (
+                        <button key={g} type="button" className={lf.group === g ? "on" : ""} aria-pressed={lf.group === g} onClick={() => setLf({ ...lf, group: g })}>
+                          {g === "all" ? "Усі" : GROUP_LABEL[g]} · {groupCount(g)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <label className="ftd-more-f">Стан аналізу
+                    <select id="ai-filter" aria-label="Фільтр" value={filter} onChange={(e) => setFilter(e.target.value as AiFilter)}>
+                      {FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="ftd-more-chk" title="«Дубль» і «Перевізник» — причина відмови в CRM">
+                    <input id="ai-nontarget" type="checkbox" checked={lf.showNonTarget} onChange={(e) => setLf({ ...lf, showNonTarget: e.target.checked })} />
+                    <span>Показати нецільові{lf.showNonTarget ? "" : ` (прибрано: ${String(nonTargetHidden)})`}</span>
+                  </label>
+                  {normFrom && (
+                    <label className="ftd-more-chk">
+                      <input id="ai-silence" type="checkbox" checked={silenceOnly} onChange={(e) => setSilenceOnly(e.target.checked)} />
+                      <span>Лише з тишею перед закриттям</span>
+                    </label>
+                  )}
+                  {/* «Виключені» — не запити на перевезення (перевізники, продавці, помилка номером); менеджеру сервер їх не віддає. */}
+                  {d.canSeeExcluded && <button type="button" className={`ftd-pill${tab === "excluded" ? " on" : ""}`} aria-pressed={tab === "excluded"}
+                    onClick={() => { setTab(tab === "excluded" ? "report" : "excluded"); setExType("all"); }}
+                    title="Розмови, які модель упевнено визнала не запитом на перевезення: перевізники, продавці, пошук роботи, помилка номером.">Виключені · {excludedCount}</button>}
+                  {tab === "excluded" && (
+                    <label className="ftd-more-f">Тип виключених
+                      <select id="ai-extype" value={exType} onChange={(e) => setExType(e.target.value as ExcludedFilterT)}>
+                        <option value="all">усі</option>
+                        <option value="transport">вид перевезення (не оцінюємо)</option>
+                        {(Object.keys(TYPE_LABEL) as ConversationTypeT[]).filter((k) => k !== "cargo_request").map((k) => <option key={k} value={k}>{TYPE_LABEL[k]}</option>)}
+                      </select>
+                    </label>
+                  )}
+                </MoreFilters>
+                {active.length > 0 && <button type="button" className="ftd-reset" onClick={resetAll}>Скинути все</button>}
+              </div>
+            </div>
+            {/* Під фільтрами: скільки розмов у кошику за період і скільки з них показано; кожен увімкнений фільтр — плашка, що знімається кліком. */}
+            <div className="ftd-under">
+              <span>{tab === "excluded" ? "Виключені розмови" : `«${LIST_MODE_UA[listMode]}»`} · {stepperLabel(nav, today)}: <b>{tab === "excluded" ? scoped.length : modeCount(listMode)}</b>
+                {shownD.length !== (tab === "excluded" ? scoped.length : modeCount(listMode)) && <> · показано <b>{shownD.length}</b></>}</span>
+              {active.filter((a) => a.key !== "mgr").map((a) => <button key={a.key} type="button" className="ftd-pill on ftd-fpill" onClick={a.off} aria-label={`Зняти фільтр: ${a.label}`}>{a.label} <span aria-hidden="true">✕</span></button>)}
+              {pickedName && (
+                <button type="button" className="ftd-pill on ftd-fpill" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} <span aria-hidden="true">✕</span></button>
+              )}
+              <span style={{ flex: 1 }} />
+              <span className="ftd-legend" aria-label="Квадрати чек-листа">
+                {(["y", "n", "o"] as const).map((k) => <span key={k}><i style={{ background: CHECK_MARK_UI[k].color }} />{k === "y" ? "так" : k === "n" ? "ні" : "не оцінюємо"}</span>)}
+              </span>
+              {d.canReview && <button type="button" className="ftd-pill ftd-qbtn" disabled={needNow.length === 0} title="Розбір по черзі з плеєром: розмови «Потребує дії» одна за одною, із записом і текстом"
+                onClick={() => openQueue()}>{needNow.length === 0 ? "Усе розібрано ✓" : reviewedN > 0 ? "Продовжити розбір ›" : "Почати розбір ›"}</button>}
+              <span className="ftd-keys">{d.canReview ? "↑ ↓ між розмовами · Enter погодити" : "↑ ↓ між розмовами"}</span>
             </div>
             {d.truncated && <div className="ftd-filters"><span style={{ color: "var(--warn-fg, #8a5a00)" }}>Показано перші 5 000 — звузьте період.</span></div>}
             {shownD.length === 0
-              ? <p style={{ margin: 0, padding: 16, color: "var(--text-muted)" }}>{rows.length === 0 ? "У періоді немає перших розмов по рекламних угодах." : listMode === "need" && tab === "report" && preset === "all" ? "Потребує дії: 0 — усе розібрано." : "Під цей фільтр розмов немає."}</p>
+              // Порожньо буває з трьох причин, і кожна названа: у періоді нічого немає; усе розібрано; або розмови сховав фільтр — тоді поруч «Скинути все».
+              ? <p style={{ margin: 0, padding: 16, color: "var(--text-muted)" }}>{rows.length === 0 ? "У періоді немає перших розмов по рекламних угодах." : listMode === "need" && tab === "report" && active.length === 0 ? "Потребує дії: 0 — усе розібрано." : "Під ці фільтри розмов немає."}
+                {rows.length > 0 && active.length > 0 && <> <button type="button" className="ftd-reset" onClick={resetAll}>Скинути все</button></>}</p>
               : (
-                <div className="ftd-two">
+                // `key` — щоб список плавно проявлявся на новому кошику й на новому періоді. Період береться з ВІДПОВІДІ сервера
+                // (`d.period`), а не з перемикача: проявляються вже нові розмови, а не старі в мить кліку по стрілці.
+                <div className="ftd-two" key={`${listMode}|${tab}|${d.period.from}|${d.period.to}`}>
                   {/* 🪟 Ліве вікно: розмови групами по київських днях; опис — два рядки, повний текст — праворуч. */}
                   <div className="ftd-list" ref={listRef} role="listbox" aria-label="Розмови" onKeyDown={onListKey}>
                     {dayGroups.map((g) => (
@@ -544,6 +621,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
                   {/* 🪟 Праве вікно: обрана розмова. `key` — щоб панель «вʼїжджала» на кожну нову розмову. */}
                   <div className="ftd-pane" aria-label="Обрана розмова">
                     {cur && <FirstTouchPane key={cur.uniqueid} row={cur} canReview={d.canReview} canFeedback={d.canFeedback} busy={apBusy}
+                      active={!queueOpen && open == null} onChanged={() => setReload((x) => x + 1)}
                       onApprove={() => void approvePane(cur.uniqueid)} onOpenCard={() => setOpen(cur.uniqueid)} />}
                   </div>
                 </div>
@@ -559,64 +637,17 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
               <div><b>Ціна названа → успіх:</b> {split.named.n} з {split.named.of}{split.enough ? ` (${String(Math.round((split.named.n / Math.max(1, split.named.of)) * 100))}%)` : ""}
                 {" · "}<b>не названа → успіх:</b> {split.notNamed.n} з {split.notNamed.of}{split.enough ? ` (${String(Math.round((split.notNamed.n / Math.max(1, split.notNamed.of)) * 100))}%)` : ""}
                 {!split.enough && <span> — замало угод для висновку: відсотки зʼявляться, коли в кожній групі буде від {SUCCESS_MIN_FOR_PCT} успішних.</span>}</div>
-              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не рахується). Клік по розмові показує її праворуч; запис і текст розмови — у «Повній картці»; розбір з плеєром — кнопкою «Почати розбір» у смузі «Точка контролю».</div>
+              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не оцінюємо). Клік по розмові показує її праворуч разом із записом, текстом і розбором AI; розбір по черзі — кнопкою «Почати розбір» під фільтрами.</div>
             </div>
           </section>
-          {/* ⚙️ Задача 10734 п.2 (Олександр 20.11, 37:57; Сергій 43:48): технічне — вниз, згорнуто. */}
-          <details ref={techRef} className="ftd-card ftd-card-pad ftd-tech" open={techOpen} onToggle={(e) => setTechOpen(e.currentTarget.open)}>
-            <summary><b>⚙️ Технічне</b> <span className="ftd-sub">· конвеєр AI, тип запиту, воронки, нецільові, виключені{techActive ? ` · діє фільтрів: ${String(techActive)}` : ""}</span></summary>
+          {/* ⚙️ Задача 10734 п.2 (Олександр 20.11, 37:57; Сергій 43:48): технічне — вниз, згорнуто. Фільтри звідси переїхали
+              в «Ще фільтри» (24.11.2026); тут лишились конвеєр AI, витрати й те, що ще не проаналізовано. */}
+          <details className="ftd-card ftd-card-pad ftd-tech">
+            <summary><b>⚙️ Технічне</b> <span className="ftd-sub">· конвеєр AI і витрати</span></summary>
             {techMeta}
-            <div className="ftd-filters" style={{ padding: "10px 0 0" }}>
-              {tab === "excluded" && (
-                <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Тип
-                  <select id="ai-extype" value={exType} onChange={(e) => setExType(e.target.value as ExcludedFilterT)}>
-                    <option value="all">усі</option>
-                    <option value="transport">вид перевезення (не оцінюємо)</option>
-                    {(Object.keys(TYPE_LABEL) as ConversationTypeT[]).filter((k) => k !== "cargo_request").map((k) => <option key={k} value={k}>{TYPE_LABEL[k]}</option>)}
-                  </select>
-                </label>
-              )}
-              {/* 🧭 Задача 7239: «Тип запиту» — міжнародку одним кліком; не внутрішні живуть у «Виключених», тож вкладка перемикається сама. */}
-              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>Тип запиту
-                <select id="ai-reqkind" value={lf.requestKind ?? "all"} onChange={(e) => {
-                  const k = e.target.value as RequestKindFilterT;
-                  setLf({ ...lf, requestKind: k });
-                  const t = requestKindTab(k);
-                  if (t) { setTab(t); setExType("all"); }
-                }}>
-                  <option value="all">усі · {applyListFilter(d.rows, { ...lf, requestKind: "all" }).length}</option>
-                  {(Object.keys(REQUEST_KIND_LABEL) as (keyof typeof REQUEST_KIND_LABEL)[]).map((k) => (
-                    <option key={k} value={k}>{REQUEST_KIND_LABEL[k]} · {applyListFilter(d.rows, { ...lf, requestKind: k }).length}</option>
-                  ))}
-                </select>
-              </label>
-              <div className="hr-seg2" role="group" aria-label="Воронка">
-                {(["all", "full", "qualification"] as const).map((g) => (
-                  <button key={g} type="button" className={lf.group === g ? "on" : ""} aria-pressed={lf.group === g} onClick={() => setLf({ ...lf, group: g })}>
-                    {g === "all" ? "Усі воронки" : GROUP_LABEL[g]} · {groupCount(g)}
-                  </button>
-                ))}
-              </div>
-              <label style={{ display: "flex", gap: 4, alignItems: "center" }} title="«Дубль» і «Перевізник» — причина відмови в CRM">
-                <input id="ai-nontarget" type="checkbox" checked={lf.showNonTarget} onChange={(e) => setLf({ ...lf, showNonTarget: e.target.checked })} />
-                показати нецільові{lf.showNonTarget ? "" : ` (прибрано: ${String(nonTargetHidden)})`}
-              </label>
-              {normFrom && (
-                <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                  <input id="ai-silence" type="checkbox" checked={silenceOnly} onChange={(e) => setSilenceOnly(e.target.checked)} />
-                  тиша перед закриттям
-                </label>
-              )}
-              <select id="ai-filter" aria-label="Фільтр" value={filter} onChange={(e) => setFilter(e.target.value as AiFilter)}>
-                {FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-              </select>
-              {done.length < rows.length && (
-                <span>Ще не проаналізовано: {[...byState.entries()].filter(([s]) => s !== "done").map(([s, n]) => `${STATE_UI[s].label.toLowerCase()} — ${String(n)}`).join(", ")}.</span>
-              )}
-              {d.canSeeExcluded && <button type="button" className={`ftd-pill${tab === "excluded" ? " on" : ""}`} aria-pressed={tab === "excluded"}
-                onClick={() => { setTab(tab === "excluded" ? "report" : "excluded"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); }}
-                title="Розмови, які модель упевнено визнала не запитом на перевезення: перевізники, продавці, пошук роботи, помилка номером.">Виключені · {excludedCount}</button>}
-            </div>
+            {done.length < rows.length && (
+              <p className="ftd-meta">Ще не проаналізовано: {[...byState.entries()].filter(([s]) => s !== "done").map(([s, n]) => `${STATE_UI[s].label.toLowerCase()} — ${String(n)}`).join(", ")}.</p>
+            )}
           </details>
           </>)}
 
@@ -639,6 +670,11 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
               ts.messengerSelf.of ? `з ${String(ts.messengerSelf.of)} розібраних · ${String(Math.round((ts.messengerSelf.n / ts.messengerSelf.of) * 100))}%` : "розбирається для розмов від 30.10",
               "Менеджер сам запропонував перейти у Viber / Telegram / WhatsApp, клієнт про це не просив. Лише з дослівною цитатою, знайденою в розмові. Розбираються розмови від 30.10, де звучить месенджер. Клік — ці розмови; у картці — цитата.")}
           </section>
+          <p className="ftd-kpis-cap">Клік по плитці відкриває ці розмови в «Розборі».</p>
+
+          {/* 📋 Задача 7238: розбір по командах за день і тиждень — тим, хто розбирає (тімлід, КВП, адмін). З «Розбору» переїхав
+              сюди 24.11.2026: на першій вкладці лишився тільки список розмов. */}
+          {d.canReview && <ReviewByTeamBlock variant="ftd" refresh={reload} />}
 
           {/* 💵 Задача 7351: як названо ціну і чи погодився клієнт — кожен рядок фільтрує список тим самим правилом (TILE_MATCH). */}
           <section aria-label="Як назвали ціну" className="ftd-card ftd-card-pad">
@@ -687,10 +723,9 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
           <section aria-label="Менеджери за чек-листом" className="ftd-card ftd-card-pad">
             <div className="ftd-card-h">
               <h2>Менеджери за чек-листом першого дотику</h2>
-              <span style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <span className={`ftd-fade${mgrCollapsed ? " is-hidden" : ""}`}>{mgrView === "table"
-                  ? "частка розмов, де пункт виконано · клік по назві колонки — сортування · клік по менеджеру фільтрує таблицю, ще клік — знімає"
-                  : "чи допомагає названа ціна успіху · клік по менеджеру фільтрує таблицю, ще клік — знімає"}</span>
+              {/* Підказка НЕ стоїть у цьому рядку (24.11.2026): її текст для «Таблиці» й «Графіка» різної довжини, і поки вона
+                  була поруч, перемикач їхав з-під курсора на кожному кліку. Тепер вона окремим рядком під заголовком. */}
+              <span className="ftd-mgr-ctl">
                 <label className="ftd-sub" style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
                   <input id="ftd-mgr-mature" type="checkbox" checked={mgrMature} onChange={(e) => pickMature(e.target.checked)} />
                   лише угоди, старші {MATURE_DAYS} днів
@@ -705,6 +740,9 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
                 </button>
               </span>
             </div>
+            <div className={`ftd-sub ftd-mgr-hint${mgrCollapsed ? " is-gone" : ""}`}>{mgrView === "table"
+              ? "частка розмов, де пункт виконано · клік по назві колонки — сортування · клік по менеджеру фільтрує таблицю, ще клік — знімає"
+              : "чи допомагає названа ціна успіху · клік по менеджеру фільтрує таблицю, ще клік — знімає"}</div>
             <div className={`ftd-sub ftd-fade${mgrCollapsed ? "" : " is-hidden is-gone"}`}>{lines.length} менеджерів{weakest ? ` · найслабший бал — ${weakest.name} (${String(weakest.score)}%)` : ""}{pickedName ? ` · вибрано: ${pickedName}` : ""}</div>
             <div id="ftd-mgr-body" className={`ftd-collapsible${mgrCollapsed ? " is-collapsed" : ""}`} aria-hidden={mgrCollapsed}>
             <div className="ftd-collapsible-in">
@@ -775,11 +813,11 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
             )}
           </section>
 
-          {/* 🔎 Задача 10734 п.2: чіпи-фільтри переїхали з «Контролю»; клік — список у «Контролі» з цим фільтром. */}
+          {/* 🔎 Задача 10734 п.2: чіпи-фільтри переїхали з першої вкладки; клік — список у «Розборі» з цим фільтром. */}
           <section aria-label="Фільтри розмов" className="ftd-card ftd-card-pad">
             <div className="ftd-card-h">
               <h2>Фільтри розмов</h2>
-              <span>клік — список розмов у «Контролі» з цим фільтром · ще клік — знімає</span>
+              <span>клік — список розмов у «Розборі» з цим фільтром · ще клік — знімає</span>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {CHIPS.map(([k, label]) => (

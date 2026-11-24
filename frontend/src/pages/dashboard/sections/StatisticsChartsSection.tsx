@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, ReferenceDot, Brush,
 } from "recharts";
@@ -9,9 +9,14 @@ import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeries
 import { InfoHint } from "../widgets";
 import { ChartSkeleton, SkelBox, TableSkeleton } from "../Skeleton";
 import { StatsMiniChart } from "./StatsMiniChart";
+import { splitCurrent, teamKeys, periodTick, periodTitle, fmt, FULL_SUFFIX, CUR_SUFFIX } from "../statsChart";
 
-// dataviz категорійна палітра (фіксований порядок; компанія завжди [0]). CVD-safe рампи.
-export const COLORS = ["#2f6fdb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#db2777", "#65a30d"];
+/* 🎨 Категорійна палітра (фіксований порядок; компанія завжди [0]). Перевірена валідатором dataviz 23.11.2026 на білій
+   картці (#ffffff) і темній (#1a1d27): сусіди розрізнювані і зі звичайним зором (ΔE ≥ 15), і для дальтоніків
+   (ΔE ≥ 8), контраст до фону ≥ 3:1 в обох темах. Зеленого й червоного в ній немає навмисно: ними картки кажуть
+   «краще / гірше», і команда не мусить виглядати «поганою» через свій колір. Було: салатовий і зелений злипались
+   (ΔE 5,7), фіолетовий у темній темі мав 2,95:1. Тримає `#10903`. */
+export const COLORS = ["#2f6fdb", "#ea580c", "#0891b2", "#db2777", "#c026d3", "#a16207", "#8b5cf6", "#059669"];
 const MUTED = "var(--text-muted)";
 
 /** `companyOnly` — показник рахується лише по компанії (по командах його не розрізає джерело): картка тімліда й менеджера
@@ -104,13 +109,6 @@ const MULTI_POOL: { cat: Cat; m: Metric }[] = CATS.filter((c) => !c.manualForm)
 const WALL_POOL: Metric[] = MULTI_POOL.map((x) => x.m);
 const MULTI_NOTE = "Збіг ліній не доводить, що один показник впливає на інший.";
 
-const fmt = (n: number, unit?: string) => {
-  // 0,2% плинності — не «0%»: до 10% показуємо один знак після коми.
-  if (unit === "%") return n.toLocaleString("uk-UA", { maximumFractionDigits: Math.abs(n) < 10 ? 1 : 0 }) + "%";
-  if (unit === "хв") return `${Math.round(n * 10) / 10} хв`;
-  const r = Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + " млн" : Math.abs(n) >= 1e3 ? Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ") : String(Math.round(n));
-  return unit === "₴" ? r + " ₴" : r;
-};
 // 📤 Експортуються для графіка «Пропущених дзвінків» (17.09.2026): той самий вигляд діапазонів і вікна,
 // а не друга копія логіки, що розійдеться з цією на першій правці.
 export const shortDate = (p: string) => { const [y, m, d] = p.split("-"); return `${d}.${m}.${y.slice(2)}`; };
@@ -151,7 +149,7 @@ const axisFmt = (v: number, unit?: string) => {
    0–10% (це відомий розрив мінусових угод), раніше CRM має лише 12–48% угод. Межа — `STATS_CRM_FROM` на сервері. */
 const SEAM_NOTE = "Ряд — лише з CRM і розділів дашборда, від 06.2025: раніше CRM має лише частину угод (12–48% від ручного підрахунку), тож довший ряд показав би «зростання», якого не було. Команди до 14.07.2026 — за поточним складом (Kommo не зберігає історії переходів).";
 /** ⓘ біля перемикача карток: як читати картку. */
-const WALL_NOTE = "Картка — останній ПОВНИЙ місяць (тиждень) і зміна до попереднього повного. Період, що йде, — окремим рядком «станом на» і в порівняння не потрапляє: половина місяця проти цілого читалась би як обвал. На графіку він — пунктиром із порожньою точкою. " + SEAM_NOTE;
+const WALL_NOTE = "Картка — останній ПОВНИЙ місяць (тиждень) і зміна до попереднього повного. Період, що йде, — окремим рядком «станом на» і в порівняння не потрапляє: половина місяця проти цілого читалась би як обвал. Малий графік картки — лише повні періоди; на розгорнутому період, що йде, — пунктиром із порожньою точкою в сірій смузі «іде». Без позначки джерела — число з CRM. " + SEAM_NOTE;
 
 /** Сьогодні за Києвом — межа «повний період / період, що йде» на картках і на графіку. */
 const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
@@ -280,7 +278,21 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const mRows = useMemo(() => (multi ? multiRows(chosen.map((m, j) => (j === 0 ? resp : extraResp[m.key])), multiScope) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [multi, resp, extraResp, multiScope, extraKeys.join("|")]);
-  const rows: any[] = multi ? mRows : singleRows;
+  const baseRows: any[] = multi ? mRows : singleRows;
+  /* ⏳ Період, що йде, — окремою пунктирною лінією від останнього повного (`splitCurrent`, тримає `#10902`): суцільна
+     лінія, що падала в неповний місяць, читалась як обвал. Вихідні ключі (`s{i}` / `m{j}`) лишаються — їх читають
+     таблиця, поділки осі й аномалії. */
+  const drawKeys = multi ? lines.map((l) => l.dataKey) : seriesList.map((_, i) => `s${i}`);
+  const drawKeysSig = drawKeys.join("|");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const rows: any[] = useMemo(() => splitCurrent(baseRows, drawKeys, curStart), [baseRows, drawKeysSig, curStart]);
+  /* 🔑 НОВІ ДАНІ — НОВИЙ ГРАФІК (огляд 23.11.2026, видно на проді: «12 міс» натиснуто, а графік від 06.2025).
+     recharts 3 на зміні `data` скидає вікно брашу на весь ряд, а `startIndex`/`endIndex` повторно не застосовує, бо
+     ці пропси не змінились. Тож щойно після першої лінії довантажувались команди, вікно розʼїжджалось із кнопкою.
+     Перемонтування на кожні нові рядки повторює перший показ, де вікно стає рівно `eff`. Тримає `#10900`. */
+  const chartVerRef = useRef(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const chartVer = useMemo(() => ++chartVerRef.current, [rows]);
 
   const winKey = `${range}:${rows.length}`;
   const eff = useMemo(() => {
@@ -299,10 +311,13 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const toggle = (k: string) => setShown(() => { const n = new Set(visibleKeys); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const isolate = (k: string) => setShown(new Set([k]));
   const isDrawn = (k: string) => (multi ? k === multiScope : visibleKeys.has(k));
-  /** 👥 «Усі команди» одним кліком (Роман 16.10.2026: «щоб не клікати по одній») — рівно ті серії, що видно в легенді
-   *  (розформовані — лише з «показати архівні»); коли ввімкнено все, той самий клік повертає дефолт — лише компанію. */
-  const allShown = legendKeys.length > 1 && legendKeys.every((k) => visibleKeys.has(k));
-  const toggleAll = () => setShown(allShown ? null : new Set(legendKeys));
+  /** 👥 «Усі команди» одним кліком (Роман 16.10.2026: «щоб не клікати по одній») — усі КОМАНДИ легенди, без лінії
+   *  компанії (огляд 23.11.2026: компанія ~3 млн на одній осі з командами 0,1–1 млн притискала їх до нуля); розформовані —
+   *  лише з «показати архівні». Компанію можна повернути кліком у легенді. Коли ввімкнено всі команди, той самий клік
+   *  повертає дефолт — лише компанію. Правило — `teamKeys`, тримає `#10901`. */
+  const teams = teamKeys(seriesList, showArchived);
+  const allShown = teams.length > 1 && teams.every((k) => visibleKeys.has(k));
+  const toggleAll = () => setShown(allShown ? null : new Set(teams));
   const archivedCount = seriesList.filter((s) => s.archived).length;
 
   // Межа осі Y — по видимому вікну, щоб поділки були круглими саме в тому, що бачимо.
@@ -326,8 +341,6 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
     return { left: maxOf("left"), right: lines.some((l) => l.yAxisId === "right") ? maxOf("right") : null };
   }, [rows, eff.lo, eff.hi, lines]);
   const axisUnit = (axis: "left" | "right") => lines.find((l) => l.yAxisId === axis)?.unit;
-  /** Одиниця значення в підказці: у кількох показників — одиниця ЛІНІЇ, а не основного показника. */
-  const unitOfKey = (dataKey: string) => (multi ? lines.find((l) => l.dataKey === dataKey)?.unit : metric?.unit);
   const refAxis = multi ? "left" : 0;
   /** Чи є у вікні хоч одна точка видимих серій — інакше графік порожній, і це кажемо словами. */
   const hasPoints = useMemo(() => rows.slice(eff.lo, eff.hi + 1).some((r) => (multi
@@ -336,6 +349,10 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   [rows, eff.lo, eff.hi, visibleSeries, multi, lines]);
 
   const anomalyAt = (period: string) => (resp?.anomalies ?? []).filter((a) => a.period === period && visibleKeys.has(a.scopeKey));
+  /** Порожня точка — лише на періоді, що йде (кінець пунктиру), з кільцем кольору фону. */
+  const curDot = (c: string) => (p: any) => (p?.payload?.period >= curStart && typeof p.cx === "number" && typeof p.cy === "number"
+    ? <circle key={`cur${p.index}`} cx={p.cx} cy={p.cy} r={4} fill="var(--card-bg)" stroke={c} strokeWidth={2} />
+    : <g key={`n${p?.index ?? 0}`} />);
 
   const onDragEnd = () => {
     if (drag.a && drag.b && drag.a !== drag.b) {
@@ -467,12 +484,12 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
 
           {/* Серії: дефолт — компанія; команди додаються кліком. Розформовані — лише з «показати архівні». */}
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-            {!multi && legendKeys.length > 1 && (
+            {!multi && legendKeys.length > 1 && (teams.length > 1 ? (
               <button type="button" onClick={toggleAll}
                 style={{ fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
                 {allShown ? "Лише компанія" : "Усі команди"}
               </button>
-            )}
+            ) : null)}
             {seriesList.map((s, i) => (s.archived && !showArchived) ? null : (
               <span key={s.scopeKey} onClick={() => (multi ? isolate(s.scopeKey) : toggle(s.scopeKey))} onDoubleClick={() => isolate(s.scopeKey)}
                 title={multi ? "кілька показників — один розріз: клік обирає цей" : s.benchmark ? "бенчмарк — агрегат компанії (для порівняння)" : "клік — показати / сховати · подвійний — лише ця"}
@@ -481,7 +498,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                   ? <span style={{ width: 11, height: 11, borderRadius: "50%", border: "2px solid var(--text)", background: isDrawn(s.scopeKey) ? "var(--text)" : "transparent" }} />
                   : s.benchmark
                   ? <span style={{ width: 14, height: 0, borderTop: "2px dashed #94a3b8" }} />
-                  : <span style={{ width: 11, height: 11, borderRadius: "50%", background: color(i) }} />}
+                  : <span style={{ width: 14, height: 3, borderRadius: 2, background: color(i) }} />}
                 {isDrawn(s.scopeKey) || multi ? "" : "+ "}{s.scopeName}{s.benchmark && " (бенчмарк)"}
               </span>
             ))}
@@ -526,26 +543,40 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
             <>
               <div style={{ userSelect: "none" }}>
                 <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={rows} margin={{ top: 12, right: 64, bottom: 4, left: 8 }}
+                  <LineChart data={rows} key={chartVer} margin={{ top: 12, right: 64, bottom: 4, left: 8 }}
                     onMouseDown={(e: any) => e && setDrag({ a: e.activeLabel, b: e.activeLabel })}
                     onMouseMove={(e: any) => e && drag.a && setDrag((d) => ({ ...d, b: e.activeLabel }))}
                     onMouseUp={onDragEnd}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                    <XAxis dataKey="period" tickFormatter={shortDate} tick={{ fontSize: 11, fill: MUTED }} minTickGap={40} axisLine={{ stroke: "var(--border)" }} tickLine={false} />
+                    {/* Сітка — суцільна волосинка: пунктир читається як «прогноз» або «поріг», а це лише сітка. */}
+                    <CartesianGrid stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="period" tickFormatter={(p) => periodTick(String(p), effGran)} tick={{ fontSize: 11, fill: MUTED }} minTickGap={40} axisLine={{ stroke: "var(--border)" }} tickLine={false} />
                     {multi ? (
                       [<YAxis key="yl" yAxisId="left" ticks={axisTicks.left} domain={[0, axisTicks.left[axisTicks.left.length - 1]]} tick={{ fontSize: 11, fill: MUTED }} tickFormatter={(v) => axisFmt(Number(v), axisUnit("left"))} axisLine={false} tickLine={false} width={58} />,
                        axisTicks.right && <YAxis key="yr" yAxisId="right" orientation="right" ticks={axisTicks.right} domain={[0, axisTicks.right[axisTicks.right.length - 1]]} tick={{ fontSize: 11, fill: MUTED }} tickFormatter={(v) => axisFmt(Number(v), axisUnit("right"))} axisLine={false} tickLine={false} width={58} />]
                     ) : (
                       <YAxis ticks={yTicks} domain={[0, yTicks[yTicks.length - 1]]} tick={{ fontSize: 11, fill: MUTED }} tickFormatter={(v) => axisFmt(Number(v), metric.unit)} axisLine={false} tickLine={false} width={58} />
                     )}
+                    {/* 💬 Одна підказка на всі лінії: значення — головне, назва — другорядна; ключ лінії — короткий штрих її
+                        кольору, а текст — кольором тексту (світлі кольори ліній як текст на білому не читаються). Значення
+                        береться з рядка, а не з лінії, тож суцільна й пунктирна половини однієї серії не двоять рядок. */}
                     <Tooltip
                       content={({ active, payload, label }: any) => {
                         if (!active || !payload?.length) return null;
+                        const row = payload[0]?.payload ?? {};
                         const an = anomalyAt(String(label));
+                        const items = multi
+                          ? lines.map((l, j) => ({ key: l.dataKey, name: l.label, unit: l.unit, color: color(j), dashed: false }))
+                          : visibleSeries.map(({ s, i }) => ({ key: `s${i}`, name: s.scopeName, unit: metric.unit, color: s.benchmark ? "#94a3b8" : color(i), dashed: !!s.benchmark }));
                         return (
-                          <div style={{ fontSize: 12, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", padding: "8px 10px", maxWidth: 320 }}>
-                            <b>{shortDate(String(label))}</b>{String(label) >= curStart && <span style={{ color: MUTED }}> · іде, станом на {shortDate(today)}</span>}
-                            {payload.map((p: any) => <div key={p.dataKey} style={{ color: p.stroke }}>{p.name}: {fmt(Number(p.value), unitOfKey(String(p.dataKey)))}</div>)}
+                          <div style={{ fontSize: 12, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", padding: "8px 10px", maxWidth: 340 }}>
+                            <div style={{ color: MUTED, marginBottom: 3 }}>{periodTitle(String(label), effGran)}{String(label) >= curStart && <> · іде, станом на {shortDate(today)}</>}</div>
+                            {items.filter((it) => typeof row[it.key] === "number").map((it) => (
+                              <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span style={{ width: 12, height: 0, borderTop: `2px ${it.dashed ? "dashed" : "solid"} ${it.color}`, flex: "none" }} />
+                                <b>{fmt(Number(row[it.key]), it.unit)}</b>
+                                <span style={{ color: MUTED }}>{it.name}</span>
+                              </div>
+                            ))}
                             {an.map((a, k) => (
                               <div key={k} style={{ marginTop: 4, color: a.kind === "real" ? "#b45309" : a.kind === "corrected" ? "#1d4ed8" : "#b91c1c" }}>{a.kind === "corrected" ? "✏️" : "⚠️"} {a.note}<br /><span style={{ color: MUTED }}>{a.crm}</span></div>
                             ))}
@@ -554,14 +585,26 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                       }} />
                     {/* 🪡 Підпису шва 01.07 більше немає: таблиці на графіку немає, тож і зміни джерела всередині ряду немає. */}
                     {/* Кілька показників: лінія на показник, вісь — за ОДИНИЦЕЮ показника (`multiLines`). */}
+                    {/* Лінії — прямими відрізками між точками (`linear`): точки — суми за період, а згладжена крива
+                        вигадувала проміжні значення й горби між ними. Кожна серія — дві лінії: суцільна по повних
+                        періодах і пунктир від останнього повного до того, що йде (порожня точка на кінці). */}
                     {multi && lines.map((l, j) => (
-                      <Line key={l.dataKey} yAxisId={l.yAxisId} type="monotone" dataKey={l.dataKey} name={l.label}
-                        stroke={color(j)} strokeWidth={j === 0 ? 2.4 : 1.9} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+                      <Line key={l.dataKey} yAxisId={l.yAxisId} type="linear" dataKey={l.dataKey + FULL_SUFFIX} name={l.label}
+                        stroke={color(j)} strokeWidth={j === 0 ? 2.4 : 2} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+                    ))}
+                    {multi && lines.map((l, j) => (
+                      <Line key={l.dataKey + CUR_SUFFIX} yAxisId={l.yAxisId} type="linear" dataKey={l.dataKey + CUR_SUFFIX} name={l.label} legendType="none"
+                        stroke={color(j)} strokeWidth={2} strokeDasharray="5 4" dot={curDot(color(j))} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
                     ))}
                     {!multi && visibleSeries.map(({ s, i }) => (
-                      <Line key={s.scopeKey} type="monotone" dataKey={`s${i}`} name={s.scopeName}
-                        stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : i === 0 ? 2.4 : 1.8}
+                      <Line key={s.scopeKey} type="linear" dataKey={`s${i}${FULL_SUFFIX}`} name={s.scopeName}
+                        stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : i === 0 ? 2.4 : 2}
                         strokeDasharray={s.benchmark ? "6 4" : undefined} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+                    ))}
+                    {!multi && visibleSeries.map(({ s, i }) => (
+                      <Line key={s.scopeKey + CUR_SUFFIX} type="linear" dataKey={`s${i}${CUR_SUFFIX}`} name={s.scopeName} legendType="none"
+                        stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : 2}
+                        strokeDasharray={s.benchmark ? "2 3" : "5 4"} dot={curDot(s.benchmark ? "#94a3b8" : color(i))} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
                     ))}
                     {/* ⚠️ Аномалії з доказом CRM (ТЗ, блок 1, п.3) — точка помічена, а не лінія тягнеться мовчки. */}
                     {(resp.anomalies ?? []).flatMap((a, k) => {
@@ -581,7 +624,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                         : null;
                     })()}
                     {drag.a && drag.b && <ReferenceArea yAxisId={refAxis} x1={drag.a} x2={drag.b} fill="#2f6fdb" fillOpacity={0.08} />}
-                    <Brush dataKey="period" height={24} travellerWidth={9} stroke="#94a3b8" tickFormatter={shortDate}
+                    <Brush dataKey="period" height={24} travellerWidth={9} stroke="#94a3b8" tickFormatter={(p) => periodTick(String(p), effGran)}
                       startIndex={eff.lo} endIndex={eff.hi} gap={1}
                       onChange={(e: any) => {
                         if (!e || e.startIndex == null || e.endIndex == null) return;
@@ -598,7 +641,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
               {!hasPoints && <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>У вибраному вікні немає точок для цього показника.</div>}
               {multi && <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>{MULTI_NOTE}</div>}
               {/* 🔢 Таблиця значень (макет, п.3): ті самі точки, що в видимому вікні графіка, нові — зверху. */}
-              <ValuesTable rows={rows.slice(eff.lo, eff.hi + 1)} curStart={curStart}
+              <ValuesTable rows={rows.slice(eff.lo, eff.hi + 1)} curStart={curStart} gran={effGran}
                 cols={multi
                   ? lines.map((l, j) => ({ key: l.dataKey, label: l.label, unit: l.unit, color: color(j) }))
                   : visibleSeries.map(({ s, i }) => ({ key: `s${i}`, label: s.scopeName, unit: metric.unit, color: s.benchmark ? "#94a3b8" : color(i) }))} />
@@ -617,19 +660,20 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   );
 }
 
-/** 🔢 Значення по періодах — під розгорнутим графіком. Період, що йде, підписаний: його число ще росте. */
-function ValuesTable({ rows, cols, curStart }: { rows: any[]; cols: { key: string; label: string; unit?: string; color: string }[]; curStart: string }) {
+/** 🔢 Значення по періодах — під розгорнутим графіком, рівно ті самі періоди, що у вікні (нові — зверху; довге вікно
+ *  гортається всередині таблиці — раніше вона мовчки обрізалась до 24 рядків). Період, що йде, підписаний: його число ще росте. */
+function ValuesTable({ rows, cols, curStart, gran }: { rows: any[]; cols: { key: string; label: string; unit?: string; color: string }[]; curStart: string; gran: "day" | "week" | "month" }) {
   if (!rows.length || !cols.length) return null;
-  const list = [...rows].reverse().slice(0, 24);
+  const list = [...rows].reverse();
   return (
     <div style={{ marginTop: 12, maxHeight: 320, overflow: "auto", border: "1px solid var(--border)", borderRadius: 10 }}>
       <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
         <thead><tr><th style={{ textAlign: "left" }}>Період</th>{cols.map((c) => (
-          <th key={c.key} style={{ textAlign: "right" }}><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: c.color, marginRight: 5 }} />{c.label}</th>
+          <th key={c.key} style={{ textAlign: "right" }}><span style={{ display: "inline-block", width: 12, height: 3, borderRadius: 2, background: c.color, marginRight: 5, verticalAlign: "middle" }} />{c.label}</th>
         ))}</tr></thead>
         <tbody>{list.map((r) => (
           <tr key={r.period}>
-            <td>{shortDate(r.period)}{r.period >= curStart && <span style={{ color: MUTED }}> · іде</span>}</td>
+            <td>{periodTitle(r.period, gran)}{r.period >= curStart && <span style={{ color: MUTED }}> · іде</span>}</td>
             {cols.map((c) => <td key={c.key} style={{ textAlign: "right" }}>{typeof r[c.key] === "number" ? fmt(r[c.key], c.unit) : <span style={{ color: MUTED }}>—</span>}</td>)}
           </tr>
         ))}</tbody>
@@ -728,7 +772,8 @@ function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; g
     <button type="button" onClick={onOpen} style={box} title="клік — розгорнути: графік, команди, таблиця значень">
       <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
         <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25 }}>{m.label}</span>
-        <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "rgba(47,111,219,0.1)", color: "#2f6fdb", whiteSpace: "nowrap" }}>{srcOf(m)}</span>
+        {/* Джерело — лише коли воно НЕ CRM: однакова плашка «CRM» на кожній картці була шумом (ⓘ біля «Місяць / Тиждень» каже, що без позначки — CRM). */}
+        {srcOf(m) !== "CRM" && <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "var(--border)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{srcOf(m)}</span>}
       </div>
       {st?.err ? (
         <div role="alert" style={{ color: "#b91c1c", fontSize: 12.5, marginTop: 8 }}>⚠️ {st.err}</div>
