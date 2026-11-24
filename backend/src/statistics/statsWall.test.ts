@@ -7,14 +7,15 @@ import { STATS_CRM_FROM, hasDepstats } from "./seriesCatalog.js";
 import { clipPointsToToday } from "./statsCompare.js";
 import { needsApi, API_BASE } from "../testMode.js";
 import { memoize, SERIES_MEMO_TTL_MS } from "./seriesMemo.js";
+import { WALL_METRICS, cardFrom as warmCardFrom, warmTasks, SERIES_DEFAULT_FROM } from "./seriesWarmSet.js";
 
 /**
- * 🧱 #10400–#10418 — ЕКРАН «СТАТИСТИКИ» = СТІНА КАРТОК + ЛИШЕ CRM І ДАШБОРД (зустріч 20.11.2026).
+ * 🧱 #10400–#10418, #10425–#10428 — ЕКРАН «СТАТИСТИКИ» = СТІНА КАРТОК + ЛИШЕ CRM І ДАШБОРД (зустріч 20.11.2026).
  * Рішення Романа 20.11: «картки з цифрами — так» (ТЗ 14.10 «лише графіки» скасовано); «всі дані з CRM — дашборду, немає
  * ніяких інших даних»; «Мій набір» — у браузері; машини нових = повністю нові клієнти, джерело не важливе.
  *
  * Прохід А — стіна (`#10400`–`#10406`), прохід Б — ряди (`#10410`–`#10416`), після викату — швидкість і зміна на картці
- * (`#10417`, `#10418`). Правила фронту ВИКОНУЮТЬСЯ (транспіляція
+ * (`#10417`, `#10418`); вигляд «Один під одним» (Роман 24.11.2026) — `#10425`–`#10428`. Правила фронту ВИКОНУЮТЬСЯ (транспіляція
  * `statsCards.ts`), а не читаються очима; джерело звіряється лише там, де твердження — про проводку.
  */
 
@@ -376,6 +377,175 @@ test("#10418 ЗМІНА: показник у % — різницею в п.п.; �
   assert.match(fe, /color: dl\?\.tone === "good" \? "#16a34a" : dl\?\.tone === "bad" \? "#dc2626" : MUTED/, "🔴 колір береться не з тону");
   for (const k of ["lead_take_median", "hr_fired", "hr_turnover_total"]) assert.match(fe, new RegExp(`\\{ key: "${k}",[^\\n]*better: "down"`), `🔴 ${k}: падіння знову читається як погіршення`);
   for (const k of ["fin_bank_out", "fin_receivables"]) assert.match(fe, new RegExp(`\\{ key: "${k}",[^\\n]*better: "neutral"`), `🔴 ${k}: зміна знову фарбується як добре / погано`);
+});
+
+// ─────────────────────── ВИГЛЯД «ОДИН ПІД ОДНИМ» (Роман 24.11.2026) ───────────────────────
+
+const count = (s: string, re: RegExp) => (s.match(re) ?? []).length;
+const between = (s: string, a: string, b: string) => s.slice(s.indexOf(a), s.indexOf(b));
+
+/**
+ * #10425 — СТОВПЧИК ПИТАЄ ТІ САМІ РЯДИ, ЩО КАРТКИ. Вигляд «Один під одним» на 6 / 12 періодів бере ряд картки
+ * (`cardFrom`: він уже порахований фоном, тож перемикання вигляду запиту не робить); «Усе» — без `from`, тобто ряд на
+ * всю глибину, який фон теж тримає готовим. Вікно стовпчика цілком лежить у ряді картки.
+ * 🧨 Червоніє, якщо: стовпчику дати власний період запиту (він відкривався б холодним при «повній» памʼяті); вікно
+ * вилізе за початок ряду картки (перший період лишився б порожнім); «Усе» перестане збігатись із тим, що гріє фон;
+ * графік чи рядок почне ходити на сервер сам.
+ */
+test("#10425 СТОВПЧИК ПИТАЄ ТІ САМІ РЯДИ, ЩО КАРТКИ: 6 / 12 періодів — ряд картки, «Усе» — уся глибина; свого запиту в графіка немає", async () => {
+  const { wallFrom, stackPeriods, stackWindow, effStackPeriod } = await loadCards();
+  const diff: string[] = [];
+  let checked = 0;
+  for (let t = Date.UTC(2026, 0, 1); t <= Date.UTC(2027, 2, 31); t += 86_400_000) {
+    const day = new Date(t).toISOString().slice(0, 10);
+    for (const g of ["month", "week"] as const) {
+      const card = warmCardFrom(day, g);
+      for (const period of ["6", "12", "all"] as const) {
+        if (wallFrom(day, g, "cards", period) !== card) diff.push(`${day} ${g} cards/${period}: картки питають не свій ряд`);
+        const eff = effStackPeriod(period, g);
+        const want = eff === "all" ? undefined : card;
+        if (wallFrom(day, g, "stack", eff) !== want) diff.push(`${day} ${g} stack/${eff}: ${wallFrom(day, g, "stack", eff)} ≠ ${want}`);
+      }
+      for (const o of stackPeriods(g) as { key: string }[]) {
+        if (o.key === "all") continue;
+        const first = stackWindow([], o.key, g, day)[0].period;
+        if (first < card) diff.push(`${day} ${g} ${o.key}: вікно з ${first}, а ряд картки з ${card}`);
+        checked++;
+      }
+    }
+  }
+  assert.ok(checked > 1000, "🔴 перевірка вікон не виконалась");
+  assert.deepEqual(diff.slice(0, 5), [], "🔴 стовпчик питає не той ряд, що картка, або його вікно ширше за ряд картки");
+
+  // «Усе» = рівно той ряд, який фон гріє для розгорнутого графіка, і сервер без `from` бере саме його.
+  const tasks = warmTasks("2026-11-24");
+  for (const m of WALL_METRICS) for (const g of (m.monthOnly ? ["month"] : ["month", "week"]) as ("month" | "week")[]) {
+    const mine = tasks.filter((x) => x.block === m.block && x.metric === m.metric && x.g === g).map((x) => x.from).sort();
+    assert.deepEqual(mine, [SERIES_DEFAULT_FROM, warmCardFrom("2026-11-24", g)].sort(), `🔴 ${m.metric}/${g}: фон не гріє ряд картки або ряд на всю глибину`);
+  }
+  assert.match(codeOnly(read(ROUTE)), /const from = String\(req\.query\.from \?\? SERIES_DEFAULT_FROM\);/, "🔴 запит без `from` більше не означає «уся глибина»");
+
+  const fe = codeOnly(read(`${SEC}/StatisticsChartsSection.tsx`));
+  const wall = between(fe, "function StatsWall(", "function cardOf(");
+  assert.ok(wall.length > 200, "🔴 стіни StatsWall немає — перевіряти нема що");
+  assert.equal(count(wall, /fetchStatsSeries\(/g), 1, "🔴 у стіни зʼявився другий запит — стовпчик питає своє");
+  assert.match(wall, /from = wallFrom\(today, g === "week" \? "week" : "month", view, per\);/, "🔴 період запиту стіни береться не з `wallFrom`");
+  assert.match(wall, /fetchStatsSeries\(\{ block: r\.m\.block, metric: r\.m\.key, granularity: r\.g, from: r\.from, scope: "main" \}\)/, "🔴 запит стіни йде не з тим `from`");
+  const row = between(fe, "function StackRow(", "function ManualForm(");
+  assert.ok(row.length > 200, "🔴 рядка StackRow немає — перевіряти нема що");
+  const chart = codeOnly(read(`${SEC}/StatsStackChart.tsx`));
+  assert.doesNotMatch(row + chart, /fetchStatsSeries|useEffect|from "\.\.\/\.\.\/\.\.\/api"/, "🔴 рядок або графік стовпчика ходить на сервер сам");
+});
+
+/**
+ * #10426 — ВІКНО СТОВПЧИКА — ЗА КАЛЕНДАРЕМ. «6» і «12» — стільки ПОВНИХ періодів плюс той, що йде; кожен період вікна
+ * присутній (діра — `null`, а не зсув), тож у всіх графіків однакова вісь часу. Період, що йде, — завжди останній.
+ * 🧨 Червоніє, якщо: межа вікна зʼїде на період у будь-який бік; вікно різатиметься з кінця або за кількістю точок
+ * (діра розтягнула б його в минуле); період, що йде, зникне без точки; 31-ше число перескочить місяць; «Усе» обріже ряд.
+ */
+test("#10426 ВІКНО СТОВПЧИКА: 6 і 12 повних періодів + той, що йде; діра лишається дірою; «Усе» — від найранішого", async () => {
+  const { stackWindow, stackPeriods, effStackPeriod } = await loadCards();
+  const months: { period: string; value: number }[] = [];
+  for (let y = 2025, m = 6, i = 1; y < 2026 || m <= 11; m === 12 ? (y++, m = 1) : m++, i++) months.push(P(`${y}-${String(m).padStart(2, "0")}-01`, i));
+  assert.equal(months.length, 18, "фікстура: 06.2025–11.2026");
+  const T = "2026-11-24";
+  const per = (r: { period: string }[]) => r.map((x) => x.period);
+
+  const w6 = stackWindow(months, "6", "month", T);
+  assert.deepEqual(per(w6), ["2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01", "2026-09-01", "2026-10-01", "2026-11-01"], "🔴 «6 міс» — не шість повних місяців плюс листопад, що йде");
+  assert.deepEqual(w6.map((x: { value: number }) => x.value), [12, 13, 14, 15, 16, 17, 18], "🔴 значення зʼїхали відносно періодів");
+  const w12 = stackWindow(months, "12", "month", T);
+  assert.equal(w12.length, 13);
+  assert.equal(w12[0].period, "2025-11-01", "🔴 «12 міс» починається не з листопада 2025 (жовтень 2025 — уже поза вікном)");
+  assert.equal(w12[12].period, "2026-11-01", "🔴 період, що йде, не останній");
+
+  // Період, що йде, без точки — усе одно останній, порожній.
+  assert.deepEqual(stackWindow(months.slice(0, -1), "6", "month", T).at(-1), { period: "2026-11-01", value: null }, "🔴 місяць, що йде, зник з осі, бо в ньому ще немає точки");
+  // Діра в серпні: довжина та сама, сусіди на місці.
+  const hole = stackWindow(months.filter((p) => p.period !== "2026-08-01"), "6", "month", T);
+  assert.deepEqual(hole.map((x: { value: number | null }) => x.value), [12, 13, 14, null, 16, 17, 18], "🔴 діра в ряді зсунула вікно замість лишитись дірою");
+  // Порожній ряд — та сама вісь.
+  assert.deepEqual(stackWindow([], "12", "month", T).map((x: { value: null }) => x.value), Array(13).fill(null));
+  // Точка з майбутнього (після періоду, що йде) на вісь не потрапляє.
+  assert.equal(stackWindow([...months, P("2026-12-01", 99)], "6", "month", T).at(-1).period, "2026-11-01");
+
+  // «Усе»: від першої точки; спільний початок стовпчика раніший — вісь від нього; пізніший — ряд не обрізається.
+  assert.equal(stackWindow(months, "all", "month", T).length, 18);
+  const wide = stackWindow(months, "all", "month", T, "2025-03-01");
+  assert.deepEqual([wide.length, wide[0].period, wide[0].value, wide[3].value], [21, "2025-03-01", null, 1], "🔴 «Усе» не тягнеться до спільного початку стовпчика");
+  assert.equal(stackWindow(months, "all", "month", T, "2026-01-01")[0].period, "2025-06-01", "🔴 «Усе» обрізало власний ряд показника");
+
+  // Межа року й 31-ше число: жодного пропущеного чи подвоєного місяця.
+  assert.deepEqual(per(stackWindow([], "6", "month", "2027-01-15")), ["2026-07-01", "2026-08-01", "2026-09-01", "2026-10-01", "2026-11-01", "2026-12-01", "2027-01-01"]);
+  assert.deepEqual(per(stackWindow([], "6", "month", "2026-03-31")), ["2025-09-01", "2025-10-01", "2025-11-01", "2025-12-01", "2026-01-01", "2026-02-01", "2026-03-01"], "🔴 31-ше число перескочило місяць");
+
+  // Тижні: 12 повних + той, що йде; понеділок, середина тижня й неділя.
+  for (const [day, cur, first] of [["2026-11-23", "2026-11-23", "2026-08-31"], ["2026-11-24", "2026-11-23", "2026-08-31"], ["2026-11-22", "2026-11-16", "2026-08-24"]]) {
+    const w = stackWindow([P(cur, 5)], "12", "week", day);
+    assert.deepEqual([w.length, w[0].period, w[12].period, w[12].value], [13, first, cur, 5], `🔴 ${day}: «12 тиж» — не дванадцять повних тижнів плюс той, що йде`);
+  }
+  assert.deepEqual((stackPeriods("month") as { key: string }[]).map((o) => o.key), ["6", "12", "all"]);
+  assert.deepEqual((stackPeriods("week") as { key: string }[]).map((o) => o.key), ["12", "all"]);
+  assert.deepEqual([effStackPeriod("6", "week"), effStackPeriod("6", "month"), effStackPeriod("all", "week")], ["12", "6", "all"], "🔴 у тижнів зʼявився період, якого немає серед кнопок");
+});
+
+/**
+ * #10427 — ВИБІР ВИГЛЯДУ — З БРАУЗЕРА, І СМІТТЯ ЕКРАН НЕ КЛАДЕ. Типовий вигляд — «Картки» (рішення Романа 24.11.2026:
+ * «Роби з перемикачем», типовими лишаються картки); «Один під одним» — лише за точним значенням, яке екран сам записав.
+ * 🧨 Червоніє, якщо: типовим стане стовпчик; сміття в ключі дасть щось, крім карток; вибір перестане читатись через
+ * `parseWallView` або перестане зберігатись.
+ */
+test("#10427 ВИГЛЯД СТІНИ: типовий — «Картки»; сміття в браузері — теж «Картки»; вибір читається і зберігається", async () => {
+  const { parseWallView, WALL_VIEW_KEY } = await loadCards();
+  for (const junk of [null, undefined, "", "cards", "STACK", " stack", "\"stack\"", "{}", "[\"stack\"]", "1", "true"]) {
+    assert.equal(parseWallView(junk), "cards", `🔴 ${JSON.stringify(junk)} у браузері дало не «Картки»`);
+  }
+  assert.equal(parseWallView("stack"), "stack", "🔴 збережений вибір «Один під одним» не читається");
+  assert.equal(typeof WALL_VIEW_KEY, "string");
+  const fe = codeOnly(read(`${SEC}/StatisticsChartsSection.tsx`));
+  assert.match(fe, /try \{ return parseWallView\(localStorage\.getItem\(WALL_VIEW_KEY\)\); \} catch \{ return parseWallView\(null\); \}/, "🔴 вигляд читається не через parseWallView (або збій сховища кладе екран)");
+  assert.match(fe, /try \{ localStorage\.setItem\(WALL_VIEW_KEY, v\); \} catch \{/, "🔴 вибір вигляду не зберігається в браузері");
+  assert.match(fe, /view=\{wallView\} setView=\{saveWallView\}/, "🔴 перемикач міняє вигляд повз збереження");
+  const wall = between(fe, "function StatsWall(", "function cardOf(");
+  assert.match(wall, /onClick=\{\(\) => setView\("cards"\)\}[^\n]*Картки<\/button>\s*<button[^\n]*onClick=\{\(\) => setView\("stack"\)\}[^\n]*Один під одним<\/button>/, "🔴 перемикача «Картки / Один під одним» немає");
+  assert.match(wall, /\{view === "stack" \? \(\s*<div[^\n]*\n\s*\{cat\.metrics\.map\(\(m\) => \(\s*<StackRow key=\{m\.key\}/, "🔴 вигляд «Один під одним» не малює рядки показників");
+  assert.match(wall, /\{cat\.metrics\.map\(\(m\) => <WallCard key=\{m\.key\}/, "🔴 вигляд «Картки» зник");
+});
+
+/**
+ * #10428 — СПІЛЬНЕ НАВЕДЕННЯ Й ТІ САМІ ЦИФРИ. Усі графіки стовпчика мають ОДИН `syncId` (наводиш на місяць — число
+ * зʼявляється на всіх), а цифри ліворуч — той самий код, що на картці (`cardOf` + `CardNumbers`): двох способів
+ * порахувати «жовтень» на екрані немає. Період, що йде, — пунктиром через `splitCurrent`, як на розгорнутому графіку.
+ * 🧨 Червоніє, якщо: графіку дати свій `syncId` (наведення перестане бути спільним); рядок почне рахувати чи
+ * форматувати число сам; на екрані зʼявиться другий виклик `cardFigures`; неповний період піде суцільною лінією.
+ */
+test("#10428 СТОВПЧИК: один syncId на всі графіки; цифри ліворуч — ті самі, що на картці; період, що йде, — пунктиром", () => {
+  const chart = codeOnly(read(`${SEC}/StatsStackChart.tsx`));
+  assert.match(chart, /export const STACK_SYNC_ID = "[\w-]+";/, "🔴 спільний syncId — не одна константа");
+  assert.equal(count(chart, /<LineChart\b/g), 1);
+  assert.match(chart, /<LineChart data=\{data\} syncId=\{STACK_SYNC_ID\} syncMethod="value"/, "🔴 графіки стовпчика не звʼязані спільним наведенням за періодом");
+  assert.equal(count(chart, /syncId=/g), 1, "🔴 у графіка стовпчика зʼявився другий syncId");
+  assert.match(chart, /splitCurrent\(rows\.map\(/, "🔴 графік стовпчика малює рядки не через `splitCurrent`");
+  assert.match(chart, /dataKey=\{fk\}[^>]*dot=\{loneDot\}/, "🔴 суцільна лінія — не з повних періодів");
+  assert.match(chart, /dataKey=\{ck\}[^>]*strokeDasharray="5 4" dot=\{curDot\}/, "🔴 період, що йде, не пунктиром із порожньою точкою");
+  assert.match(chart, /const fk = `v\$\{FULL_SUFFIX\}`, ck = `v\$\{CUR_SUFFIX\}`;/);
+  assert.equal(count(chart, /<Line\b/g), 2, "🔴 у графіку стовпчика зʼявились зайві лінії (команди — лише в розгорнутому)");
+  assert.doesNotMatch(chart, /cardFigures|cardDelta|deltaPct/, "🔴 графік рахує цифри сам");
+
+  const fe = codeOnly(read(`${SEC}/StatisticsChartsSection.tsx`));
+  assert.equal(count(fe, /cardFigures\(/g), 1, "🔴 на екрані зʼявився другий спосіб порахувати число показника");
+  assert.equal(count(fe, /cardDelta\(/g), 1, "🔴 на екрані зʼявився другий спосіб порахувати зміну");
+  const card = between(fe, "function WallCard(", "function StackRow(");
+  const row = between(fe, "function StackRow(", "function ManualForm(");
+  for (const [name, src] of [["картка", card], ["рядок стовпчика", row]] as const) {
+    assert.ok(src.length > 200, `🔴 ${name}: коду немає — перевіряти нема що`);
+    assert.match(src, /const c = cardOf\(m, st, gran, today\);/, `🔴 ${name}: цифри не з cardOf`);
+    assert.match(src, /<CardNumbers m=\{m\} st=\{st\} c=\{c\} today=\{today\} \/>/, `🔴 ${name}: цифри малює не спільний блок CardNumbers`);
+  }
+  assert.doesNotMatch(row, /\bfmt\(|periodLabel\(|prevLabel\(/, "🔴 рядок стовпчика форматує числа чи періоди сам — вони розійдуться з карткою");
+  assert.match(row, /<StatsStackChart rows=\{rows\} g=\{c\.g\}[^>]*currentStart=\{c\.f\.currentStart\}/, "🔴 графік рядка бере межу «іде» не з тих самих цифр");
+  assert.match(row, /const rows = c\.ok \? stackWindow\(c\.points, period, c\.g, today, earliest\[c\.g\]\) : \[\];/, "🔴 вікно графіка рядка — не `stackWindow`");
+  assert.match(row, /<button type="button" onClick=\{onOpen\}[^>]*>\s*Розгорнути →/, "🔴 з рядка не можна розгорнути показник");
 });
 
 // ─────────────────────────────── ЖИВІ (test:prod) ───────────────────────────────
