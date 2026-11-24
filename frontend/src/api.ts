@@ -275,7 +275,7 @@ export interface LardiCheckOffer { side: "cargo" | "lorry"; offerId: string; com
   cargo: string | null; mass: number | null; total: number | null; currency: string | null; negotiable: boolean; seenAt: string }
 /** 🏛 ЄДР (YouControl) за кодом фірми з Ларді — вид діяльності (24.11.2026). Вердикт від нього не залежить. */
 export interface RegistryActivity { code: string; name: string; main: boolean; transport: string | null }
-export interface RegistryInfo { code: string; name: string | null; fop: boolean; registered: string | null; status: string | null; closing: boolean; activities: RegistryActivity[] }
+export interface RegistryInfo { code: string; name: string | null; fop: boolean; registered: string | null; status: string | null; closing: boolean; activities: RegistryActivity[]; archived?: boolean }
 export type RegistryLookup =
   | { state: "ok"; info: RegistryInfo; cached: boolean } | { state: "updating" } | { state: "notFound" } | { state: "unconfigured" } | { state: "failed"; why: string };
 export interface LardiCheckUser {

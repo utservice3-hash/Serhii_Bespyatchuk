@@ -7,7 +7,7 @@
 //       чи є в пошуку поле firmCode
 //   L2  для знайдених — GET /v2/users/user/{refId} (профіль «Пользователь»): статус (403 = платний пакет!), firmCode,
 //       shipper / carrier (за документацією вони там є — тип компанії, якого 13.11 не бачили)
-//   Y1  РІВНО ОДИН запит GET /v1/usr/{код} до YouControl за першим знайденим кодом — ⚠ 1 ТРАНЗАКЦІЯ:
+//   Y1  GET /v1/usr/{код} до YouControl за першим знайденим кодом — ⚠ 1 ТРАНЗАКЦІЯ, на 202 ще одна (архів):
 //       статус, mainEconomicActivity, economicActivities (лише коди й назви КВЕД), contractorType
 const fs = require("node:fs");
 const { createRequire } = require("node:module");
@@ -73,9 +73,11 @@ const lardi = async (path) => {
   const key = process.env.YOUCONTROL_API_KEY || process.env.YOUSCORE_API_KEY;
   if (!firstCode) { console.log("── Y1 пропущено: жодного коду з Ларді — YouControl не питаю (транзакцію не витрачено)"); return; }
   if (!key) { console.log("── Y1 пропущено: немає ключа YouControl"); return; }
-  const r = await fetch(`https://api.youscore.com.ua/v1/usr/${firstCode}`, { headers: { Authorization: `bearer ${key}`, Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
-  let u = null; try { u = await r.json(); } catch { /* */ }
+  const yc = (q) => fetch(`https://api.youscore.com.ua/v1/usr/${firstCode}${q}`, { headers: { Authorization: `bearer ${key}`, Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+  let r = await yc("");
   console.log(`\n── Y1 YouControl /v1/usr (${firstCode.length === 10 ? "ФОП" : "юрособа"}) · статус ${r.status} (⚠ 1 транзакція)`);
+  if (r.status === 202) { r = await yc("?showCurrentData=true"); console.log(`   202 → архів showCurrentData=true · статус ${r.status} (⚠ ще 1 транзакція) — так робить і код PR`); }
+  let u = null; try { u = await r.json(); } catch { /* */ }
   if (u && typeof u === "object") {
     console.log("   contractorType:", u.contractorType ?? "∅", "· status:", u.status ?? "∅");
     console.log("   mainEconomicActivity:", JSON.stringify(u.mainEconomicActivity ?? null));

@@ -180,7 +180,7 @@ function RegistryBlock({ u }: { u: LardiCheckUser }) {
           </div>
         )}
       <div style={{ fontSize: 11.5, color: MUTED }}>
-        Джерело — ЄДР через YouControl{r.cached ? " (збережено за останні 30 днів)" : ""}. 🚚 — транспортний розділ КВЕД.
+        Джерело — ЄДР через YouControl{info.archived ? ", остання збережена копія реєстру" : ""}{r.cached ? " (перевірено за останні 30 днів)" : ""}. 🚚 — транспортний розділ КВЕД.
       </div>
     </div>
   );

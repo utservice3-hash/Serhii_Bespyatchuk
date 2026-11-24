@@ -10,6 +10,13 @@ import { parseRegistry, type RegistryInfo } from "./lardiCheckRules.js";
  *
  * Гроші: `/v1/usr` — 1 транзакція на код (заміряно для конструктора 30.09.2026). Повтор того самого коду в межах
  * `REGISTRY_CACHE_DAYS` у мережу не йде. Кешується лише успіх: 202 («оновлюється»), 404 і збої питаються знову.
+ *
+ * 🔴 202 НА ПЕРШОМУ ЗАПИТІ — НОРМА, А НЕ ВИНЯТОК. Заміряно 24.11.2026 на проді: юрособа з Ларді (код з профілю) →
+ * `202 {status: "Update in progress", currentDataUrl}`. Без обходу лідген на кожну нову компанію бачив би «оновлюється,
+ * спробуйте за хвилину». Тому на 202 одразу другий запит з `showCurrentData=true` — архівні дані YouControl без
+ * оновлення реєстру (так само робить «Перевірка контрагента», `counterparty/server/youscore/client.ts`). КВЕД змінюються
+ * рідко, тож архів для лідгена годиться; картка підписує, що дані з архіву. Ціна: до 2 транзакцій на новий код
+ * (202 теж списується — так записано в клієнті «Перевірки контрагента»).
  * Ключ — той самий, що в конструктора (`YOUCONTROL_API_KEY`), запасний — ключ «Перевірки контрагента».
  */
 export const REGISTRY_CACHE_DAYS = 30;
@@ -44,12 +51,20 @@ export async function registryByCode(db: Db, code: string, opts: { key?: string;
   const doFetch = opts.doFetch ?? (fetch as unknown as FetchLike);
   try {
     // Ключ — лише в заголовку (не в адресі, тож не в логах проксі); у тексті помилки — тільки статус.
-    const r = await doFetch(`${BASE}/v1/usr/${code}`, { headers: { Authorization: `bearer ${key}`, Accept: "application/json" }, signal: AbortSignal.timeout(TIMEOUT_MS) });
-    if (r.status === 202) return { state: "updating" };
+    const get = (q: string) => doFetch(`${BASE}/v1/usr/${code}${q}`, { headers: { Authorization: `bearer ${key}`, Accept: "application/json" }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    let r = await get("");
+    let archived = false;
+    if (r.status === 202) {
+      r = await get("?showCurrentData=true");
+      archived = true;
+      // Архіву немає (YouControl цю компанію ще не бачив) або він теж оновлюється — чесне «оновлюється», не «немає в ЄДР».
+      if (r.status !== 200) return { state: "updating" };
+    }
     if (r.status === 404 || r.status === 204) return { state: "notFound" };
     if (r.status !== 200) return { state: "failed", why: `ЄДР відповів ${r.status}` };
-    const info = parseRegistry(code, await r.json().catch(() => null));
-    if (!info) return { state: "failed", why: "ЄДР віддав не картку компанії" };
+    const parsed = parseRegistry(code, await r.json().catch(() => null));
+    if (!parsed) return { state: "failed", why: "ЄДР віддав не картку компанії" };
+    const info = { ...parsed, archived };
     await db.query(
       `INSERT INTO lardi_registry_cache (code, info, fetched_at) VALUES ($1, $2, $3)
        ON CONFLICT (code) DO UPDATE SET info = EXCLUDED.info, fetched_at = EXCLUDED.fetched_at`,

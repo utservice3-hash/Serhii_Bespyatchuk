@@ -121,3 +121,23 @@ test("#11013 ПРОВОДКА: код — з профілю Ларді; ЄДР �
   assert.match(ui, /вердикт угорі від нього не змінюється/, "🔴 пояснення не каже, що КВЕД — не вердикт");
   assert.match(ui, /Ларді для цієї компанії не віддав/, "🔴 немає підпису, коли коду фірми немає (порожнеча читалась би як «перевірено»)");
 });
+
+test("#11014 🪞 202 «ОНОВЛЮЮ» → АРХІВ ОДРАЗУ: другий запит showCurrentData=true, картка позначена архівною й кешується; без 202 — архів не питаємо", async () => {
+  const t0 = new Date("2026-11-24T15:00:00Z");
+  const seq = (answers: Array<[number, unknown]>, calls: string[]) =>
+    async (url: string) => { calls.push(url); const [status, body] = answers[Math.min(calls.length - 1, answers.length - 1)]; return { status, json: async () => body }; };
+  const db = memDb(), calls: string[] = [];
+  const a = await registryByCode(db, "39261965", { key: "k", doFetch: seq([[202, { status: "Update in progress" }], [200, LEGAL]], calls), now: t0 });
+  assert.equal(a.state, "ok", "🔴 202 на першому запиті (заміряно на проді 24.11) лишив лідгена без виду діяльності");
+  assert.deepEqual(calls, ["https://api.youscore.com.ua/v1/usr/39261965", "https://api.youscore.com.ua/v1/usr/39261965?showCurrentData=true"]);
+  assert.equal(a.state === "ok" && a.info.archived, true, "🔴 архівні дані не позначені архівними");
+  assert.equal(db.rows.size, 1, "🔴 картку з архіву не закешовано — наступна перевірка заплатить знову");
+  // Дзеркало: свіжа відповідь — один запит, не архівна.
+  const fresh: string[] = [];
+  const b = await registryByCode(memDb(), "12345678", { key: "k", doFetch: seq([[200, LEGAL]], fresh), now: t0 });
+  assert.equal(fresh.length, 1, "🔴 архів питали без 202 — зайва транзакція");
+  assert.equal(b.state === "ok" && b.info.archived, false);
+  // Архіву теж немає — «оновлюється», а не «немає в ЄДР».
+  const none: string[] = [];
+  assert.equal((await registryByCode(memDb(), "12345678", { key: "k", doFetch: seq([[202, null], [404, null]], none), now: t0 })).state, "updating");
+});

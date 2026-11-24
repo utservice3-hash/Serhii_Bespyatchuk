@@ -155,6 +155,8 @@ export interface RegistryInfo {
   closing: boolean;
   /** Основний — першим; далі решта в порядку ЄДР, без повторів. Порожньо — реєстр видів діяльності не віддав. */
   activities: RegistryActivity[];
+  /** Дані з архіву YouControl (`showCurrentData=true`), бо ЄДР саме оновлювався. Екран це підписує. */
+  archived: boolean;
 }
 
 /** Розділи секції H «Транспорт, складське господарство…» КВЕД-2010 — офіційні назви. */
@@ -212,7 +214,7 @@ export function parseRegistry(code: string, usr: unknown): RegistryInfo | null {
   const closing = !!(s(u.registrationOfTermination?.status) || s(u.terminationStatus?.status) || u.bankruptcyStatus
     || (status && /припинен/i.test(status) && !/не перебуває/i.test(status)));
   return {
-    code, name: name || null, fop, status, closing, activities,
+    code, name: name || null, fop, status, closing, activities, archived: false,
     registered: ymd(u.registrationAfterLaw?.entryDate) ?? ymd(u.registrationBeforeLaw?.date) ?? ymd(u.registrationDate),
   };
 }
