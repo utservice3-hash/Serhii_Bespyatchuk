@@ -621,6 +621,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
                   {/* 🪟 Праве вікно: обрана розмова. `key` — щоб панель «вʼїжджала» на кожну нову розмову. */}
                   <div className="ftd-pane" aria-label="Обрана розмова">
                     {cur && <FirstTouchPane key={cur.uniqueid} row={cur} canReview={d.canReview} canFeedback={d.canFeedback} busy={apBusy}
+                      active={!queueOpen && open == null} onChanged={() => setReload((x) => x + 1)}
                       onApprove={() => void approvePane(cur.uniqueid)} onOpenCard={() => setOpen(cur.uniqueid)} />}
                   </div>
                 </div>
@@ -636,7 +637,7 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
               <div><b>Ціна названа → успіх:</b> {split.named.n} з {split.named.of}{split.enough ? ` (${String(Math.round((split.named.n / Math.max(1, split.named.of)) * 100))}%)` : ""}
                 {" · "}<b>не названа → успіх:</b> {split.notNamed.n} з {split.notNamed.of}{split.enough ? ` (${String(Math.round((split.notNamed.n / Math.max(1, split.notNamed.of)) * 100))}%)` : ""}
                 {!split.enough && <span> — замало угод для висновку: відсотки зʼявляться, коли в кожній групі буде від {SUCCESS_MIN_FOR_PCT} успішних.</span>}</div>
-              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не оцінюємо). Клік по розмові показує її праворуч; запис і текст розмови — у «Повній картці»; розбір по черзі з плеєром — кнопкою «Почати розбір» під фільтрами.</div>
+              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не оцінюємо). Клік по розмові показує її праворуч разом із записом, текстом і розбором AI; розбір по черзі — кнопкою «Почати розбір» під фільтрами.</div>
             </div>
           </section>
           {/* ⚙️ Задача 10734 п.2 (Олександр 20.11, 37:57; Сергій 43:48): технічне — вниз, згорнуто. Фільтри звідси переїхали
@@ -722,10 +723,9 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
           <section aria-label="Менеджери за чек-листом" className="ftd-card ftd-card-pad">
             <div className="ftd-card-h">
               <h2>Менеджери за чек-листом першого дотику</h2>
-              <span style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <span className={`ftd-fade${mgrCollapsed ? " is-hidden" : ""}`}>{mgrView === "table"
-                  ? "частка розмов, де пункт виконано · клік по назві колонки — сортування · клік по менеджеру фільтрує таблицю, ще клік — знімає"
-                  : "чи допомагає названа ціна успіху · клік по менеджеру фільтрує таблицю, ще клік — знімає"}</span>
+              {/* Підказка НЕ стоїть у цьому рядку (24.11.2026): її текст для «Таблиці» й «Графіка» різної довжини, і поки вона
+                  була поруч, перемикач їхав з-під курсора на кожному кліку. Тепер вона окремим рядком під заголовком. */}
+              <span className="ftd-mgr-ctl">
                 <label className="ftd-sub" style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
                   <input id="ftd-mgr-mature" type="checkbox" checked={mgrMature} onChange={(e) => pickMature(e.target.checked)} />
                   лише угоди, старші {MATURE_DAYS} днів
@@ -740,6 +740,9 @@ export function AiCallsSection({ canSeeCarriers = false, roleKey = null }: { can
                 </button>
               </span>
             </div>
+            <div className={`ftd-sub ftd-mgr-hint${mgrCollapsed ? " is-gone" : ""}`}>{mgrView === "table"
+              ? "частка розмов, де пункт виконано · клік по назві колонки — сортування · клік по менеджеру фільтрує таблицю, ще клік — знімає"
+              : "чи допомагає названа ціна успіху · клік по менеджеру фільтрує таблицю, ще клік — знімає"}</div>
             <div className={`ftd-sub ftd-fade${mgrCollapsed ? "" : " is-hidden is-gone"}`}>{lines.length} менеджерів{weakest ? ` · найслабший бал — ${weakest.name} (${String(weakest.score)}%)` : ""}{pickedName ? ` · вибрано: ${pickedName}` : ""}</div>
             <div id="ftd-mgr-body" className={`ftd-collapsible${mgrCollapsed ? " is-collapsed" : ""}`} aria-hidden={mgrCollapsed}>
             <div className="ftd-collapsible-in">

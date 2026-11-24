@@ -3327,3 +3327,106 @@ test("#10804 ФІЛЬТРИ «РОЗБОРУ»: усе ввімкнене — о
   assert.match(sec, /fetchAiCalls\(\{ from, to \}\)/, "🔴 запит іде не з періоду перемикача");
   assert.match(sec, /\{stepperLabel\(nav, today\)\}/, "🔴 під фільтрами не сказано, за який період список");
 });
+
+/**
+ * #10810 — ПРАВА ПАНЕЛЬ: ЗАПИС РОЗМОВИ (Роман 24.11.2026: «чому тут не відкривається розмова… давай сюди і дзвінок
+ * перенесемо»). До цього в панелі стояла кнопка «▶ 0:22 і цитата», яка нічого не робила: плеєра не було, а перемотка була
+ * порожньою функцією. Тепер у панелі той самий плеєр, що в картці й черзі, і цитата справді перемотує. Запис НЕ тягнеться,
+ * поки не натиснули ▶ чи цитату: по списку ходять стрілками. Дзеркало: картка й черга тягнуть запис одразу, як і раніше.
+ * 🧨 Червоніє, якщо повернути порожню перемотку, прибрати `preload={false}` з панелі, перестати передавати `preload` у
+ * плеєр, дати запису грати під відкритою чергою чи карткою, або зняти плеєр із «липкого» місця.
+ */
+test("#10810 ПАНЕЛЬ · ЗАПИС: цитата з чек-листа перемотує, плеєр спільний і тримається вгорі, запис лише після ▶, під чергою й карткою — пауза", () => {
+  const pane = readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8");
+  const conv = readFileSync(FE("pages/dashboard/sections/CallConversation.tsx"), "utf8");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  // Перемотка справжня — і порожньої не лишилось ніде в панелі.
+  assert.match(pane, /<ChecklistBlock c=\{c\}[^\n]*onSeek=\{\(t\) => seekRef\.current\?\.\(t\)\} \/>/, "🔴 цитата з чек-листа в панелі нічого не перемотує");
+  assert.ok(!/onSeek=\{\(\) => undefined\}/.test(pane), "🔴 у панелі знову порожня перемотка: кнопка «▶ час» нічого не робить");
+  // Плеєр — спільний компонент, запис через наш роут, без попереднього завантаження, з паузою, коли панель закрита.
+  const call = /<CallConversation load=\{\(\) => fetchAiCallRecording\(c\.row\.uniqueid\)\}([\s\S]*?)\/>/.exec(pane)?.[1] ?? null;
+  assert.ok(call, "🔴 у панелі немає плеєра (або запис іде не через наш роут)");
+  for (const prop of ["seekRef={seekRef}", "preload={false}", "active={active}", 'playerClass="ftd-pane-player"', "between={mid}", "turns={turns}", "quoted={quoted}"]) {
+    assert.ok(call!.includes(prop), `🔴 плеєр панелі без ${prop}`);
+  }
+  assert.match(pane, /const listen = c != null && c\.canListen && c\.durationSec != null;/, "🔴 плеєр у панелі не за дозволом сервера");
+  assert.match(pane, /\{listen && c\s*\? <CallConversation /, "🔴 плеєр показано без дозволу listen");
+  assert.match(pane, /const turns = c && !c\.transcriptHidden \? c\.turns : null;/, "🔴 текст розмови в панелі не за прапорцем сервера");
+  assert.match(sec, /active=\{!queueOpen && open == null\}/, "🔴 запис у панелі грає під відкритою чергою чи карткою");
+  // `preload` доходить до плеєра, і за замовчуванням лишається «тягнути одразу» (картка й черга).
+  assert.match(conv, /showTurns = true, active = true, preload = true, playerClass, between \}/, "🔴 без `preload` картка й черга перестануть тягнути запис одразу");
+  assert.match(conv, /<Player load=\{load\}[^\n]*preload=\{preload\} active=\{active\} \/>/, "🔴 `preload` не доходить до плеєра: панель качатиме запис кожної проминутої розмови");
+  const iPlayer = conv.indexOf("<div className={playerClass}><Player "), iBetween = conv.indexOf("{between}"), iTurns = conv.indexOf("{showTurns && list.length > 0 && (");
+  assert.ok(iPlayer >= 0 && iPlayer < iBetween && iBetween < iTurns, "🔴 порядок у плеєрі: плеєр → вміст панелі → репліки");
+  // Дзеркало: картка й черга НЕ вимикають попереднє завантаження.
+  assert.ok(!/preload=\{false\}/.test(drw), "🔴 картка перестала тягнути запис одразу");
+  assert.ok(!/preload=\{false\}/.test(readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8")), "🔴 черга перестала тягнути запис одразу");
+  // Плеєр тримається вгорі панелі й займає місце від першого кадру.
+  const rule = /\n\.ftd-pane-player \{([^}]*)\}/.exec(css)?.[1] ?? null;
+  assert.ok(rule, "🔴 правила .ftd-pane-player немає");
+  assert.match(rule!, /position: sticky; top: -18px;/, "🔴 плеєр не тримається вгорі панелі під час прокрутки");
+  assert.match(rule!, /min-height: 72px;/, "🔴 місце під плеєр не зайняте: чек-лист стрибне, коли картка довантажиться");
+  assert.match(rule!, /background: var\(--card-bg\);/, "🔴 під липким плеєром просвічує текст");
+  assert.match(pane, /<div className="ftd-pane-player is-wait ftd-sub"/, "🔴 поки картка вантажиться, місця під плеєр немає");
+});
+
+/**
+ * #10811 — ПРАВА ПАНЕЛЬ: УСЯ ІНФОРМАЦІЯ (Роман 24.11.2026: «не має всієї інфи, давай сюди»). «Розбір AI», тип розмови,
+ * коментарі й «Угода в Kommo» — ТІ САМІ блоки, що в «Повній картці», а не копії: інакше правило (хто що пише, що можна
+ * закрити) розійдеться між двома місцями. Зміна в панелі перечитує і картку, і список ліворуч.
+ * 🧨 Червоніє, якщо блок зникне з панелі чи з картки, панель збере власну копію, або зміна перестане оновлювати список.
+ */
+test("#10811 ПАНЕЛЬ · УСЯ ІНФОРМАЦІЯ: розбір AI, тип, коментарі й угода — ті самі блоки, що в картці; зміна перечитує картку і список", () => {
+  const pane = readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8");
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const imp = /import \{ ([^}]*) \} from "\.\/AiCallDrawer";/.exec(pane)?.[1].split(", ") ?? [];
+  const BLOCKS = ["Analysis", "TypeBlock", "NotesBlock", "CloseDealBlock"];
+  assert.deepEqual(BLOCKS.filter((b) => !imp.includes(b)), [], "🔴 панель не бере блоки з картки");
+  assert.ok(imp.includes("QuoteSeek"), "🔴 цитати «Розбору AI» в панелі без перемотки");
+  // Жодного власного блоку з тією самою назвою в панелі.
+  assert.deepEqual(BLOCKS.filter((b) => new RegExp(`function ${b}\\(`).test(pane)), [], "🔴 панель зібрала власну копію блоку картки");
+  // Картка їх і далі оголошує та показує (дзеркало: «перенесли» не означає «забрали з картки»).
+  for (const b of BLOCKS) assert.ok(drw.includes(`export function ${b}(`), `🔴 картка більше не віддає ${b}`);
+  for (const use of ["<TypeBlock c={c} onChanged=", "<NotesBlock c={c} onSaved=", "<CloseDealBlock c={c} onDone=", "<Analysis c={c} />"]) assert.ok(drw.split("export function AiCallDrawer(")[1].includes(use), `🔴 з картки зник ${use}`);
+  // У панелі — всі чотири, і кожна зміна йде через `changed`.
+  assert.match(pane, /<QuoteSeek\.Provider value=\{listen && turns && !mixed \? seekQuote : null\}>\s*<Analysis c=\{c\} \/>/, "🔴 «Розбору AI» в панелі немає (або перемотка цитат без дозволу)");
+  assert.match(pane, /<TypeBlock c=\{c\} onChanged=\{changed\} \/>/, "🔴 типу розмови в панелі немає");
+  assert.match(pane, /<NotesBlock c=\{c\} onSaved=\{changed\} \/>/, "🔴 коментарів у панелі немає");
+  assert.match(pane, /<CloseDealBlock c=\{c\} onDone=\{changed\} \/>/, "🔴 «Угоди в Kommo» в панелі немає");
+  assert.match(pane, /const changed = \(\) => \{ setRev\(\(x\) => x \+ 1\); onChanged\(\); \};/, "🔴 зміна в панелі не перечитує картку або список");
+  assert.match(pane, /\}, \[r\.uniqueid, rev\]\);/, "🔴 картка в панелі не перечитується після зміни");
+  assert.match(sec, /<FirstTouchPane key=\{cur\.uniqueid\}[^\n]*\n\s*active=\{[^\n]*\} onChanged=\{\(\) => setReload\(\(x\) => x \+ 1\)\}/, "🔴 список не перечитується після зміни в панелі");
+  // Те, що картка показувала плашками, а панель ні: коли наступний дзвінок і месенджер.
+  assert.match(pane, /\{c && <span className="ftd-sub">\{afterLabel\(r\.calledAt, c\.nextOutboundAt\)\}<\/span>\}/, "🔴 у панелі немає «коли наступний дзвінок»");
+  assert.match(pane, /\{r\.messengerSignal === true && <Chip tone="warn">сам запропонував месенджер<\/Chip>\}/, "🔴 у панелі немає сигналу месенджера");
+});
+
+/**
+ * #10812 — «МЕНЕДЖЕРИ ЗА ЧЕК-ЛИСТОМ»: ПЕРЕМИКАЧ СТОЇТЬ НА МІСЦІ (Роман 24.11.2026: «коли нажимаєш таблиця… воно тут дуже
+ * дивно скаче»). Підказка стояла в одному рядку з перемикачем «Таблиця / Графік», її текст для двох виглядів різної
+ * довжини, а в згорнутому блоці вона була лише прозора й далі займала місце. Тому перемикач їхав з-під курсора на кожному
+ * кліку. Тепер у рядку керування підказки немає: вона окремим рядком під заголовком, а в згорнутому блоці її немає зовсім.
+ * 🧨 Червоніє, якщо повернути в рядок керування щось, що залежить від вигляду, або лишити підказку прозорою замість прибраної.
+ */
+test("#10812 МЕНЕДЖЕРИ · ПЕРЕМИКАЧ НА МІСЦІ: у рядку керування нічого не залежить від вигляду; підказка окремим рядком, у згорнутому блоці її немає", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  // Рядок керування — від відкриття до закриття шапки картки (межі змістові, не за довжиною).
+  const head = /<h2>Менеджери за чек-листом першого дотику<\/h2>([\s\S]*?)<div id="ftd-mgr-body"/.exec(sec)?.[1] ?? null;
+  assert.ok(head, "🔴 шапки блоку менеджерів немає");
+  const ctl = /<span className="ftd-mgr-ctl">([\s\S]*?)<\/span>\s*<\/div>/.exec(head!)?.[1] ?? null;
+  assert.ok(ctl, "🔴 рядка керування блоку менеджерів немає");
+  for (const part of ['id="ftd-mgr-mature"', 'aria-label="Вигляд блоку менеджерів"', "className={`ftd-collapse$"]) assert.ok(ctl!.includes(part), `🔴 у рядку керування немає ${part}`);
+  // Єдине, що в рядку керування може залежати від вигляду, — підсвітка самої кнопки (ширини не міняє).
+  const viewDeps = [...ctl!.matchAll(/mgrView === "(?:table|chart)"[^\n]{0,40}/g)].map((m) => m[0]).filter((x) => !/^mgrView === "(?:table|chart)"\} className=|^mgrView === "(?:table|chart)" \? "on" : ""/.test(x));
+  assert.deepEqual(viewDeps, [], "🔴 у рядку керування знову є вміст, що залежить від вигляду: перемикач поїде");
+  assert.ok(!/ftd-fade/.test(ctl!), "🔴 у рядку керування знову прозорий текст, що займає місце");
+  // Підказка — окремим рядком після шапки, обидва тексти там; у згорнутому блоці її немає (display: none, не opacity).
+  assert.match(head!, /<div className=\{`ftd-sub ftd-mgr-hint\$\{mgrCollapsed \? " is-gone" : ""\}`\}>\{mgrView === "table"\s*\? "частка розмов, де пункт виконано[^"]*"\s*: "чи допомагає названа ціна успіху[^"]*"\}<\/div>/, "🔴 підказки під заголовком немає");
+  assert.ok(head!.indexOf("ftd-mgr-hint") > head!.indexOf("ftd-mgr-ctl"), "🔴 підказка знову перед перемикачем");
+  assert.match(css, /\n\.ftd-mgr-hint\.is-gone \{ display: none; \}/, "🔴 у згорнутому блоці підказка лише прозора й далі займає місце");
+  assert.match(css, /\n\.ftd-mgr-ctl \{[^}]*margin-left: auto;[^}]*\}/, "🔴 рядок керування не притиснутий праворуч");
+});
