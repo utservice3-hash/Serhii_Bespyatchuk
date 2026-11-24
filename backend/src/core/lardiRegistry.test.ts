@@ -48,6 +48,10 @@ test("#11011 🪞 ЄДР → ВИДИ ДІЯЛЬНОСТІ: основний р�
   assert.deepEqual([r.name, r.fop, r.registered, r.closing], ["ТОВ «ПРИКЛАД ТРАНС»", false, "2017-03-14", false]);
   assert.deepEqual(r.activities.map((a) => a.transport !== null), [true, true, false], "🔴 транспортний розділ позначено не тим кодам");
 
+  // Основний позначений лише `isMain` і стоїть у масиві НЕ першим — однаково першим у відповіді.
+  const noMain = { ...LEGAL, mainEconomicActivity: undefined };
+  assert.deepEqual(parseRegistry("12345678", noMain)!.activities.map((a) => [a.code, a.main]), [["52.29", true], ["49.41", false], ["46.90", false]],
+    "🔴 основний вид діяльності не першим, коли реєстр поставив його в середину списку");
   // Дзеркало: основного немає в масиві, лише в mainEconomicActivity — він усе одно є й першим.
   const only = parseRegistry("12345678", { ...LEGAL, economicActivities: [{ isMain: false, code: "46.90", description: "Опт" }] })!;
   assert.deepEqual(only.activities.map((a) => [a.code, a.main]), [["52.29", true], ["46.90", false]]);
