@@ -4,11 +4,15 @@ import {
 } from "recharts";
 import { effGranOf } from "../statsGran";
 import { MAX_METRICS, canAdd, drawnScopes, multiLines, multiRows } from "../statsMulti";
-import { cardFigures, cardDelta, cardFrom, asOfLabel, makeCardMemo, parseMine, periodStartOf, MINE_KEY, MINE_MAX, type Better, type CardGran } from "../statsCards";
+import {
+  cardFigures, cardDelta, asOfLabel, makeCardMemo, parseMine, periodStartOf, MINE_KEY, MINE_MAX, type Better, type CardGran,
+  parseWallView, stackPeriods, effStackPeriod, wallFrom, stackWindow, WALL_VIEW_KEY, type WallView, type StackPeriod,
+} from "../statsCards";
 import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
 import { InfoHint } from "../widgets";
 import { ChartSkeleton, SkelBox, TableSkeleton } from "../Skeleton";
 import { StatsMiniChart } from "./StatsMiniChart";
+import { StatsStackChart, STACK_CHART_HEIGHT } from "./StatsStackChart";
 import { splitCurrent, teamKeys, periodTick, periodTitle, fmt, FULL_SUFFIX, CUR_SUFFIX } from "../statsChart";
 
 /* 🎨 Категорійна палітра (фіксований порядок; компанія завжди [0]). Перевірена валідатором dataviz 23.11.2026 на білій
@@ -151,6 +155,9 @@ const SEAM_NOTE = "Ряд — лише з CRM і розділів дашборд
 /** ⓘ біля перемикача карток: як читати картку. */
 const WALL_NOTE = "Картка — останній ПОВНИЙ місяць (тиждень) і зміна до попереднього повного. Період, що йде, — окремим рядком «станом на» і в порівняння не потрапляє: половина місяця проти цілого читалась би як обвал. Малий графік картки — лише повні періоди; на розгорнутому період, що йде, — пунктиром із порожньою точкою в сірій смузі «іде». Без позначки джерела — число з CRM. " + SEAM_NOTE;
 
+/** ⓘ у вигляді «Один під одним»: як читати стовпчик. */
+const STACK_NOTE = "Один показник — один графік зі своєю шкалою; вісь часу в усіх спільна, тож місяці стоять один під одним. Наведення показує той самий період на всіх графіках. Ліворуч — ті самі цифри, що на картці: останній ПОВНИЙ місяць (тиждень) і зміна до попереднього повного. Період, що йде, — пунктиром із порожньою точкою в сірій смузі «іде». Лінії команд — у «Розгорнути». Без позначки джерела — число з CRM. " + SEAM_NOTE;
+
 /** Сьогодні за Києвом — межа «повний період / період, що йде» на картках і на графіку. */
 const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
 const MONTHS = ["січень", "лютий", "березень", "квітень", "травень", "червень", "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"];
@@ -191,6 +198,13 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const metric: Metric | undefined = metricKey == null ? undefined : (cat.metrics.find((m) => m.key === metricKey) ?? WALL_POOL.find((m) => m.key === metricKey));
   const today = kyivToday();
   const [cardGran, setCardGran] = useState<CardGran>("month");
+  /* ☰ Вигляд стіни: «Картки» або «Один під одним» (Роман 24.11.2026). Вибір — у браузері, типовий — «Картки»; сміття в
+     ключі екран не кладе (`parseWallView`). Період стовпчика живе тут, щоб «Розгорнути» і повернення його не скидали. */
+  const [wallView, setWallView] = useState<WallView>(() => {
+    try { return parseWallView(localStorage.getItem(WALL_VIEW_KEY)); } catch { return parseWallView(null); }
+  });
+  const saveWallView = (v: WallView) => { setWallView(v); try { localStorage.setItem(WALL_VIEW_KEY, v); } catch { /* приватний режим — вибір живе до перезавантаження */ } };
+  const [stackPeriod, setStackPeriod] = useState<StackPeriod>("12");
   const [gran, setGran] = useState<"day" | "week" | "month">("week");
   /* 🗓 Дефолт — 3 місяці (ТЗ, блок 4, п.1); було 12 місяців і 7 ліній. */
   const [range, setRange] = useState("3м");
@@ -399,7 +413,8 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
       <div style={{ flex: "1 1 620px", minWidth: 0 }}>
       {!cat.manualForm && !metric && (
         <StatsWall cat={cat} gran={cardGran} setGran={setCardGran} today={today} onOpen={openMetric}
-          mine={mine} saveMine={saveMine} isMine={catKey === "mine"} />
+          mine={mine} saveMine={saveMine} isMine={catKey === "mine"}
+          view={wallView} setView={saveWallView} period={stackPeriod} setPeriod={setStackPeriod} />
       )}
 
       {!cat.manualForm && metric && (
@@ -690,18 +705,23 @@ const cardMemo = makeCardMemo<StatsSeriesResp>(10 * 60_000);
  * 🧱 СТІНА ВІДДІЛУ: усі показники картками одразу. Кожна картка — свій легкий запит (`scope=main`), тож одна повільна
  * чи заборонена не тримає інших. Цифри — `cardFigures` (останній повний період, попередній повний, той, що йде).
  */
-function StatsWall({ cat, gran, setGran, today, onOpen, mine, saveMine, isMine }: {
+function StatsWall({ cat, gran, setGran, today, onOpen, mine, saveMine, isMine, view, setView, period, setPeriod }: {
   cat: Cat; gran: CardGran; setGran: (g: CardGran) => void; today: string; onOpen: (k: string) => void;
   mine: string[]; saveMine: (ks: string[]) => void; isMine: boolean;
+  view: WallView; setView: (v: WallView) => void; period: StackPeriod; setPeriod: (p: StackPeriod) => void;
 }) {
   const [cards, setCards] = useState<Record<string, CardState>>({});
   const [editing, setEditing] = useState(false);
   const keyList = cat.metrics.map((m) => m.key).join("|");
+  /* ☰ Стовпчик питає ТІ САМІ ряди, що картки (`wallFrom`): перемикання вигляду запиту не робить. Лише «Усе» бере ряд
+     на всю глибину — його фон теж тримає готовим. Тож ефект залежить не від вигляду, а від того, чи потрібна глибина. */
+  const per = effStackPeriod(period, gran);
+  const deep = wallFrom(today, gran, view, per) === undefined;
   useEffect(() => {
     let alive = true;
     const reqs = cat.metrics.map((m) => {
-      const g = effGranOf(m, gran), from = cardFrom(today, g === "week" ? "week" : "month");
-      return { m, g, from, key: `${m.block}|${m.key}|${g}|${from}` };
+      const g = effGranOf(m, gran), from = wallFrom(today, g === "week" ? "week" : "month", view, per);
+      return { m, g, from, key: `${m.block}|${m.key}|${g}|${from ?? "all"}` };
     });
     /* 🗂 Спершу — що вже є у вкладці (повернення до відділу без заготовок), далі свіжа відповідь підміняє картку. */
     setCards(Object.fromEntries(reqs.flatMap((r) => { const hit = cardMemo.get(r.key); return hit ? [[r.m.key, { resp: hit }]] : []; })));
@@ -712,7 +732,17 @@ function StatsWall({ cat, gran, setGran, today, onOpen, mine, saveMine, isMine }
     }
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyList, gran, today]);
+  }, [keyList, gran, today, deep]);
+  /* «Усе»: спільний початок осі — найраніший період серед графіків того самого кроку, щоб місяці стояли один під одним. */
+  const earliest = useMemo(() => {
+    const out: Partial<Record<CardGran, string>> = {};
+    for (const m of cat.metrics) {
+      const g: CardGran = effGranOf(m, gran) === "week" ? "week" : "month";
+      for (const p of cards[m.key]?.resp?.series[0]?.points ?? []) if (!out[g] || p.period < out[g]!) out[g] = p.period;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cards, keyList, gran]);
   const seg = (on: boolean) => ({ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", border: "none",
     background: on ? "#1f2330" : "var(--card-bg)", color: on ? "#fff" : "var(--text)" } as const);
   const toggleMine = (k: string) => saveMine(mine.includes(k) ? mine.filter((x) => x !== k) : [...mine, k].slice(0, MINE_MAX));
@@ -725,10 +755,29 @@ function StatsWall({ cat, gran, setGran, today, onOpen, mine, saveMine, isMine }
           <button type="button" onClick={() => setGran("month")} style={seg(gran === "month")}>Місяць</button>
           <button type="button" onClick={() => setGran("week")} style={seg(gran === "week")}>Тиждень</button>
         </span>
-        <InfoHint text={WALL_NOTE} />
+        <InfoHint text={view === "stack" ? STACK_NOTE : WALL_NOTE} />
+        <span style={{ marginLeft: "auto", display: "inline-flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          {view === "stack" && (
+            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 12.5, color: MUTED }}>Період</span>
+              <span style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
+                {stackPeriods(gran).map((o) => (
+                  <button key={o.key} type="button" aria-pressed={per === o.key} onClick={() => setPeriod(o.key)} style={seg(per === o.key)}>{o.label}</button>
+                ))}
+              </span>
+            </span>
+          )}
+          <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 12.5, color: MUTED }}>Вигляд</span>
+            <span style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
+              <button type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")} style={seg(view === "cards")}>▦ Картки</button>
+              <button type="button" aria-pressed={view === "stack"} onClick={() => setView("stack")} style={seg(view === "stack")}>☰ Один під одним</button>
+            </span>
+          </span>
+        </span>
         {isMine && (
           <button type="button" onClick={() => setEditing((e) => !e)}
-            style={{ marginLeft: "auto", fontSize: 13, fontWeight: 650, padding: "6px 12px", borderRadius: 9, cursor: "pointer", border: "1px dashed var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+            style={{ fontSize: 13, fontWeight: 650, padding: "6px 12px", borderRadius: 9, cursor: "pointer", border: "1px dashed var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
             {editing ? "Готово" : "Обрати показники"}
           </button>
         )}
@@ -754,57 +803,119 @@ function StatsWall({ cat, gran, setGran, today, onOpen, mine, saveMine, isMine }
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 }}>
-        {cat.metrics.map((m) => <WallCard key={m.key} m={m} st={cards[m.key]} gran={gran} today={today} onOpen={() => onOpen(m.key)} />)}
-      </div>
+      {view === "stack" ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {cat.metrics.map((m) => (
+            <StackRow key={m.key} m={m} st={cards[m.key]} gran={gran} today={today} period={per} earliest={earliest} onOpen={() => onOpen(m.key)} />
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 }}>
+          {cat.metrics.map((m) => <WallCard key={m.key} m={m} st={cards[m.key]} gran={gran} today={today} onOpen={() => onOpen(m.key)} />)}
+        </div>
+      )}
     </div>
   );
 }
 
-function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; gran: CardGran; today: string; onOpen: () => void }) {
+/**
+ * 🔢 ЦИФРИ ПОКАЗНИКА СТІНИ — ОДИН РАЗ НА ОБИДВА ВИГЛЯДИ. Картка й рядок «Один під одним» беруть число, зміну й період,
+ * що йде, з цієї функції та малюють їх одним блоком (`CardNumbers`): двох способів порахувати «жовтень» на екрані немає.
+ */
+function cardOf(m: Metric, st: CardState | undefined, gran: CardGran, today: string) {
   const g: CardGran = effGranOf(m, gran) === "week" ? "week" : "month";
   const series = st?.resp?.series[0];
   const points = series?.points ?? [];
   const f = cardFigures(points, g, today);
-  const box = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", cursor: "pointer", textAlign: "left" as const, color: "var(--text)", font: "inherit" };
   const dl = cardDelta(f.last, f.prev, m.unit, m.better);
+  /** Є що малювати графіком: відповідь прийшла, серія у розрізі глядача є, точки є. */
+  const ok = !st?.err && !!series && points.length > 0;
+  return { g, series, points, f, dl, ok };
+}
+type CardOf = ReturnType<typeof cardOf>;
+
+function CardHead({ m }: { m: Metric }) {
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+      <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25 }}>{m.label}</span>
+      {/* Джерело — лише коли воно НЕ CRM: однакова плашка «CRM» на кожній картці була шумом (ⓘ біля «Місяць / Тиждень» каже, що без позначки — CRM). */}
+      {srcOf(m) !== "CRM" && <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "var(--border)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{srcOf(m)}</span>}
+    </div>
+  );
+}
+
+function CardNumbers({ m, st, c, today }: { m: Metric; st?: CardState; c: CardOf; today: string }) {
+  const { g, series, points, f, dl } = c;
+  if (st?.err) return <div role="alert" style={{ color: "#b91c1c", fontSize: 12.5, marginTop: 8 }}>⚠️ {st.err}</div>;
+  if (!st) return <SkelBox w="70%" h={26} style={{ marginTop: 10 }} />;
+  if (!series) return <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>у вашому розрізі цього показника немає</div>;
+  if (!points.length) return (
+    <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>
+      {m.companyOnly && series.scopeType !== "company" ? "лише по компанії — по команді не розрізається" : "за останні періоди точок немає"}
+    </div>
+  );
+  return (
+    <>
+      {f.last ? (
+        <>
+          <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(f.last.value, m.unit)}</div>
+          <div style={{ fontSize: 12, color: MUTED }}>{periodLabel(f.last.period, g)}{series.scopeType !== "company" ? ` · ${series.scopeName}` : ""}</div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, color: dl?.tone === "good" ? "#16a34a" : dl?.tone === "bad" ? "#dc2626" : MUTED }}>
+            {dl == null ? "немає з чим порівняти" : `${dl.text} ${prevLabel(f.prev!.period, g)}`}
+          </div>
+          {f.missingSince && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3 }}>після {periodLabel(f.missingSince, g)} даних немає</div>}
+        </>
+      ) : <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>повних періодів ще немає</div>}
+      <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
+        {g === "month" ? MONTHS[Number(f.currentStart.slice(5, 7)) - 1] : `тиждень ${dm(f.currentStart)}`} іде:{" "}
+        {f.current ? <b style={{ color: "var(--text)" }}>{fmt(f.current.value, m.unit)}</b> : "точок ще немає"} станом на {dm(today)}{asOfLabel(st?.resp?.asOf, today) ? `, ${asOfLabel(st?.resp?.asOf, today)}` : ""}
+      </div>
+    </>
+  );
+}
+
+function WallCard({ m, st, gran, today, onOpen }: { m: Metric; st?: CardState; gran: CardGran; today: string; onOpen: () => void }) {
+  const c = cardOf(m, st, gran, today);
+  const box = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", cursor: "pointer", textAlign: "left" as const, color: "var(--text)", font: "inherit" };
   return (
     <button type="button" onClick={onOpen} style={box} title="клік — розгорнути: графік, команди, таблиця значень">
-      <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25 }}>{m.label}</span>
-        {/* Джерело — лише коли воно НЕ CRM: однакова плашка «CRM» на кожній картці була шумом (ⓘ біля «Місяць / Тиждень» каже, що без позначки — CRM). */}
-        {srcOf(m) !== "CRM" && <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "var(--border)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{srcOf(m)}</span>}
-      </div>
-      {st?.err ? (
-        <div role="alert" style={{ color: "#b91c1c", fontSize: 12.5, marginTop: 8 }}>⚠️ {st.err}</div>
-      ) : !st ? (
-        <SkelBox w="70%" h={26} style={{ marginTop: 10 }} />
-      ) : !series ? (
-        <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>у вашому розрізі цього показника немає</div>
-      ) : !points.length ? (
-        <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>
-          {m.companyOnly && series.scopeType !== "company" ? "лише по компанії — по команді не розрізається" : "за останні періоди точок немає"}
-        </div>
-      ) : (
-        <>
-          {f.last ? (
-            <>
-              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(f.last.value, m.unit)}</div>
-              <div style={{ fontSize: 12, color: MUTED }}>{periodLabel(f.last.period, g)}{series.scopeType !== "company" ? ` · ${series.scopeName}` : ""}</div>
-              <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, color: dl?.tone === "good" ? "#16a34a" : dl?.tone === "bad" ? "#dc2626" : MUTED }}>
-                {dl == null ? "немає з чим порівняти" : `${dl.text} ${prevLabel(f.prev!.period, g)}`}
-              </div>
-              {f.missingSince && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3 }}>після {periodLabel(f.missingSince, g)} даних немає</div>}
-            </>
-          ) : <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>повних періодів ще немає</div>}
-          <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
-            {g === "month" ? MONTHS[Number(f.currentStart.slice(5, 7)) - 1] : `тиждень ${dm(f.currentStart)}`} іде:{" "}
-            {f.current ? <b style={{ color: "var(--text)" }}>{fmt(f.current.value, m.unit)}</b> : "точок ще немає"} станом на {dm(today)}{asOfLabel(st?.resp?.asOf, today) ? `, ${asOfLabel(st?.resp?.asOf, today)}` : ""}
-          </div>
-          <StatsMiniChart points={points} currentStart={f.currentStart} />
-        </>
-      )}
+      <CardHead m={m} />
+      <CardNumbers m={m} st={st} c={c} today={today} />
+      {c.ok && <StatsMiniChart points={c.points} currentStart={c.f.currentStart} />}
     </button>
+  );
+}
+
+/**
+ * ☰ РЯДОК ВИГЛЯДУ «ОДИН ПІД ОДНИМ»: ліворуч — ті самі цифри, що на картці (`cardOf` + `CardNumbers`, інших чисел тут
+ * немає), праворуч — графік показника на спільній осі часу (`stackWindow`). «Розгорнути» веде у великий графік з
+ * командами, як клік по картці.
+ */
+function StackRow({ m, st, gran, today, period, earliest, onOpen }: {
+  m: Metric; st?: CardState; gran: CardGran; today: string; period: StackPeriod; earliest: Partial<Record<CardGran, string>>; onOpen: () => void;
+}) {
+  const c = cardOf(m, st, gran, today);
+  const rows = c.ok ? stackWindow(c.points, period, c.g, today, earliest[c.g]) : [];
+  const vals = rows.flatMap((r) => (r.value == null ? [] : [r.value]));
+  const ticks = vals.length && Math.min(...vals) >= 0 && Math.max(...vals) > 0 ? niceTicks(Math.max(...vals)) : undefined;
+  return (
+    <div style={{ display: "flex", gap: 14, alignItems: "stretch", flexWrap: "wrap", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px" }}>
+      <div style={{ flex: "0 0 220px", minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <CardHead m={m} />
+        <CardNumbers m={m} st={st} c={c} today={today} />
+        {/* Показник без тижневого ряду у вигляді «Тиждень» лишається помісячним — кажемо це, бо вісь у нього інша. */}
+        {c.g !== gran && <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>лише помісячно</div>}
+        <button type="button" onClick={onOpen} title="графік, команди, таблиця значень"
+          style={{ marginTop: "auto", padding: "8px 0 0", alignSelf: "flex-start", font: "inherit", fontSize: 12.5, fontWeight: 700, cursor: "pointer", border: "none", background: "none", color: "#2563eb" }}>
+          Розгорнути →
+        </button>
+      </div>
+      <div style={{ flex: "1 1 380px", minWidth: 0 }}>
+        {c.ok
+          ? <StatsStackChart rows={rows} g={c.g} unit={m.unit} currentStart={c.f.currentStart} today={today} ticks={ticks} tickFmt={(v) => axisFmt(v, m.unit)} />
+          : !st ? <SkelBox w="100%" h={STACK_CHART_HEIGHT} /> : null}
+      </div>
+    </div>
   );
 }
 

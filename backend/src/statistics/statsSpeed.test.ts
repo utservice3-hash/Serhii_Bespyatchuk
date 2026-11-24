@@ -175,11 +175,15 @@ test("#10421 ФОНОВИЙ НАБІР = МЕНЮ ЕКРАНА: ті самі п
   const diff: string[] = [];
   for (let t = Date.UTC(2026, 0, 1); t <= Date.UTC(2027, 2, 31); t += 86_400_000) {
     const day = new Date(t).toISOString().slice(0, 10);
-    for (const g of ["month", "week"] as const) if (cards.cardFrom(day, g) !== cardFrom(day, g)) diff.push(`${day}/${g}`);
+    for (const g of ["month", "week"] as const) {
+      if (cards.cardFrom(day, g) !== cardFrom(day, g)) diff.push(`${day}/${g}`);
+      // З 24.11.2026 період запиту стіни віддає `wallFrom` (вигляд «Один під одним»): для карток це той самий `cardFrom`.
+      if (cards.wallFrom(day, g, "cards", "12") !== cardFrom(day, g)) diff.push(`${day}/${g}: wallFrom`);
+    }
   }
   assert.deepEqual(diff, [], "🔴 період картки на екрані й у фоні різний");
   assert.deepEqual([cardFrom("2026-11-21", "month"), cardFrom("2026-11-21", "week"), cardFrom("2026-03-31", "month")], ["2025-10-01", "2026-08-22", "2025-02-01"]);
-  assert.match(codeOnly(fe), /const g = effGranOf\(m, gran\), from = cardFrom\(today, g === "week" \? "week" : "month"\);/, "🔴 картка питає не той період, що рахує фон");
+  assert.match(codeOnly(fe), /const g = effGranOf\(m, gran\), from = wallFrom\(today, g === "week" \? "week" : "month", view, per\);/, "🔴 картка питає не той період, що рахує фон");
   assert.match(codeOnly(fe), /fetchStatsSeries\(\{ block: r\.m\.block, metric: r\.m\.key, granularity: r\.g, from: r\.from, scope: "main" \}\)/, "🔴 картка шле ще щось, окрім `from` і `scope=main` — ключ фону не збігатиметься");
 
   const tasks = warmTasks("2026-11-21");
@@ -240,7 +244,7 @@ test("#10422 ПЕРША ЛІНІЯ ГРАФІКА: та, що малюється
   assert.equal(memo.get("b"), undefined, "🔴 картка отримала чужу відповідь — ключ не працює");
   clock = 600_000; assert.equal(memo.get("a"), undefined, "🔴 картка старша за межу показана як готова");
   assert.match(fe, /const cardMemo = makeCardMemo<StatsSeriesResp>\(10 \* 60_000\);/);
-  assert.match(fe, /key: `\$\{m\.block\}\|\$\{m\.key\}\|\$\{g\}\|\$\{from\}`/, "🔴 ключ памʼяті картки не містить показника, кроку чи періоду");
+  assert.match(fe, /key: `\$\{m\.block\}\|\$\{m\.key\}\|\$\{g\}\|\$\{from \?\? "all"\}`/, "🔴 ключ памʼяті картки не містить показника, кроку чи періоду");
   // «Станом на»: година за Києвом; не сьогодні — з датою; немає миті — підпис мовчить.
   assert.equal(cards.asOfLabel("2026-11-21T10:40:00.000Z", "2026-11-21"), "12:40");
   assert.equal(cards.asOfLabel("2026-11-20T21:55:00.000Z", "2026-11-21"), "20.11 23:55", "🔴 учорашня мить показана без дати");

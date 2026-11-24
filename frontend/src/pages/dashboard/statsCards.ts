@@ -109,6 +109,67 @@ export function cardFrom(today: string, g: CardGran): string {
 }
 
 /**
+ * ☰ ВИГЛЯД СТІНИ: «Картки» або «Один під одним» (Роман 24.11.2026: «опція, що декілька графіків видно один під одним»).
+ * Вибір — у `localStorage`; вміст сховища — чужий текст, тож усе, крім точного «stack», — це «Картки». Типовий вигляд —
+ * «Картки» (рішення Романа 24.11: «Роби з перемикачем», типовими лишаються картки).
+ */
+export type WallView = "cards" | "stack";
+export const WALL_VIEW_KEY = "stats.wallView";
+export function parseWallView(raw: string | null | undefined): WallView {
+  return raw === "stack" ? "stack" : "cards";
+}
+
+/**
+ * 🗓 ПЕРІОД СТОВПЧИКА — один на всі графіки. Місяці: 6 / 12 / усе; тижні: 12 / усе («6 тижнів» немає — замало точок).
+ * Чому 12 тижнів, а не 13: ряд картки починається за 13 тижнів від СЬОГОДНІ, і перший тиждень у ньому зазвичай
+ * неповний, тож повних тижнів у ряді гарантовано 12.
+ */
+export type StackPeriod = "6" | "12" | "all";
+export function stackPeriods(g: CardGran): { key: StackPeriod; label: string }[] {
+  return g === "month"
+    ? [{ key: "6", label: "6 міс" }, { key: "12", label: "12 міс" }, { key: "all", label: "Усе" }]
+    : [{ key: "12", label: "12 тиж" }, { key: "all", label: "Усе" }];
+}
+/** Період, який справді діє: у тижнів «6» немає — це «12». */
+export function effStackPeriod(period: StackPeriod, g: CardGran): StackPeriod {
+  return g === "week" && period === "6" ? "12" : period;
+}
+
+/**
+ * 📥 ЗВІДКИ СТІНА ПИТАЄ РЯД. Стовпчик на 6 / 12 періодів бере РІВНО той самий ряд, що картка (`cardFrom`), — він уже
+ * порахований фоном, і перемикання вигляду нового запиту не робить. «Усе» — без `from`: сервер віддає ряд на всю
+ * глибину CRM, який фон теж тримає готовим (`seriesWarmSet.warmTasks`). Власного періоду запиту стовпчик не має:
+ * інакше він відкривався б холодним при «повній» памʼяті. Тримає `#10425`.
+ */
+export function wallFrom(today: string, g: CardGran, view: WallView, period: StackPeriod): string | undefined {
+  return view === "stack" && period === "all" ? undefined : cardFrom(today, g);
+}
+
+/**
+ * 📐 ВІКНО ГРАФІКА СТОВПЧИКА — ЗА КАЛЕНДАРЕМ, А НЕ ЗА КІЛЬКІСТЮ ТОЧОК. Повертає КОЖЕН період від початку вікна до
+ * періоду, що йде, включно; де точки немає — `null`. Тому в усіх графіків стовпчика однакова вісь часу (місяці стоять
+ * рівно один під одним), діра в ряді лишається дірою, а період, що йде, — завжди останній, навіть без точки.
+ *   • «6» / «12» — стільки ПОВНИХ періодів перед тим, що йде, плюс він сам;
+ *   • «Усе» — від `earliest` (найраніший період серед графіків стовпчика) або від першої точки ряду.
+ */
+export interface StackPt { period: string; value: number | null }
+export function stackWindow(points: readonly Pt[], period: StackPeriod, g: CardGran, today: string, earliest?: string | null): StackPt[] {
+  const cur = periodStartOf(today, g);
+  const at = new Map(points.map((p) => [p.period, p.value]));
+  let start = cur;
+  if (period === "all") {
+    for (const p of points) if (p.period < start) start = p.period;
+    if (earliest && earliest < start) start = earliest;
+    start = periodStartOf(start, g);
+  } else {
+    for (let i = 0; i < Number(period); i++) start = prevPeriod(start, g);
+  }
+  const out: StackPt[] = [];
+  for (let p = cur, n = 0; p >= start && n < 1200; p = prevPeriod(p, g), n++) out.push({ period: p, value: at.get(p) ?? null });
+  return out.reverse();
+}
+
+/**
  * 🕐 «Станом на» з відповіді сервера (`asOf`): година й хвилина за Києвом; учорашнє — з датою. `null` — сервер миті
  * не назвав (стара відповідь у памʼяті вкладки) — тоді підпис мовчить, а не вигадує час.
  */
