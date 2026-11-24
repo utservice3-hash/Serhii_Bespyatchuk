@@ -20,6 +20,8 @@ import { parseRegistry, type RegistryInfo } from "./lardiCheckRules.js";
  * Ключ — той самий, що в конструктора (`YOUCONTROL_API_KEY`), запасний — ключ «Перевірки контрагента».
  */
 export const REGISTRY_CACHE_DAYS = 30;
+/** Скільки живе картка з АРХІВУ YouControl (відповідь на 202). Див. `registryByCode`. */
+export const ARCHIVED_CACHE_DAYS = 1;
 /** Скільки різних кодів за одну перевірку номера — стеля витрат (Ларді за номером знаходить до 5 користувачів). */
 export const REGISTRY_MAX_CODES = 3;
 const BASE = "https://api.youscore.com.ua";
@@ -44,7 +46,10 @@ export async function registryByCode(db: Db, code: string, opts: { key?: string;
   const hit = await db.query<{ info: RegistryInfo; fetched_at: string }>(
     `SELECT info, fetched_at FROM lardi_registry_cache WHERE code = $1`, [code]);
   const row = hit.rows[0];
-  if (row && now.getTime() - new Date(row.fetched_at).getTime() < REGISTRY_CACHE_DAYS * 86_400_000) return { state: "ok", info: row.info, cached: true };
+  // Архівна картка (взята, поки ЄДР оновлювався) живе добу, а не 30: наступного дня YouControl уже має свіжу — з
+  // актуальними КВЕД-2010 замість старих 2005 (так було в першому ж живому замірі 24.11.2026).
+  const ttlDays = row?.info?.archived ? ARCHIVED_CACHE_DAYS : REGISTRY_CACHE_DAYS;
+  if (row && now.getTime() - new Date(row.fetched_at).getTime() < ttlDays * 86_400_000) return { state: "ok", info: row.info, cached: true };
 
   const key = "key" in opts ? opts.key : registryKey();
   if (!key) return { state: "unconfigured" };

@@ -144,6 +144,8 @@ export interface RegistryActivity {
   code: string; name: string; main: boolean;
   /** Назва транспортного розділу КВЕД (`transportDivision`), якщо код у ньому, інакше `null`. Рахує сервер — фронт не тримає копії. */
   transport: string | null;
+  /** Код за старим КВЕД-2005 («NN.NN.N») — екран підписує, бо номери розділів там інші. */
+  old: boolean;
 }
 export interface RegistryInfo {
   code: string; name: string | null; fop: boolean;
@@ -166,21 +168,45 @@ export const TRANSPORT_DIVISIONS: Readonly<Record<string, string>> = {
   "51": "Авіаційний транспорт",
   "52": "Складське господарство та допоміжна діяльність у сфері транспорту",
 };
-/** Код КВЕД «NN.NN» → назва транспортного розділу або `null`, якщо розділ не транспортний (чи код не КВЕД). */
+/**
+ * 🔴 СТАРИЙ КЛАСИФІКАТОР КВЕД-2005 — ІНШІ НОМЕРИ РОЗДІЛІВ. Заміряно на проді 24.11.2026: архівна картка YouControl
+ * (`showCurrentData=true`) юрособи віддала коди «51.47.9», «60.24.0», «52.48.9» — три рівні, КВЕД-2005. У ньому 51/52 —
+ * ТОРГІВЛЯ, а транспорт — секція I, розділи 60-63. Звіряти «51.47.9» з таблицею 2010 означало б назвати оптову торгівлю
+ * авіаційним транспортом. Формат розрізняє їх однозначно: «NN.NN» — 2010, «NN.NN.N» — 2005.
+ */
+export const TRANSPORT_DIVISIONS_2005: Readonly<Record<string, string>> = {
+  "60": "Діяльність сухопутного транспорту",
+  "61": "Діяльність водного транспорту",
+  "62": "Діяльність авіаційного транспорту",
+  "63": "Допоміжна та додаткова транспортна діяльність",
+};
+const KVED_2010 = /^(\d{2})\.\d{1,2}$/;
+const KVED_2005 = /^(\d{2})\.\d{2}\.\d$/;
+/** Код КВЕД («NN.NN» — 2010 або «NN.NN.N» — 2005) → назва транспортного розділу свого класифікатора, інакше `null`. */
 export function transportDivision(code: string): string | null {
-  const m = /^(\d{2})\.\d{1,2}$/.exec(code.trim());
-  return m ? TRANSPORT_DIVISIONS[m[1]] ?? null : null;
+  const t = code.trim();
+  const m10 = KVED_2010.exec(t);
+  if (m10) return TRANSPORT_DIVISIONS[m10[1]] ?? null;
+  const m05 = KVED_2005.exec(t);
+  return m05 ? TRANSPORT_DIVISIONS_2005[m05[1]] ?? null : null;
+}
+/** «ОПТОВА ТОРГІВЛЯ …» (так ЄДР віддає старі записи) → «Оптова торгівля …». Звичайний регістр не чіпаємо. */
+export function readableName(name: string): string {
+  const t = name.trim().replace(/\s+/g, " ");
+  if (!/\p{L}/u.test(t) || t !== t.toUpperCase()) return t;
+  const low = t.toLowerCase();
+  return low.charAt(0).toUpperCase() + low.slice(1);
 }
 
 const s = (v: unknown) => (typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "");
-const KVED = /^\d{2}\.\d{1,2}$/;
 function activity(raw: unknown, main: boolean): RegistryActivity | null {
   if (!raw || typeof raw !== "object") return null;
   const a = raw as Record<string, unknown>;
   const code = s(a.code ?? a.kved ?? a.kvedCode);
-  if (!KVED.test(code)) return null;
-  const name = s(a.description ?? a.name ?? a.title);
-  return { code, name, main: main || a.isMain === true || a.isPrimary === true || a.main === true, transport: transportDivision(code) };
+  const old = KVED_2005.test(code);
+  if (!old && !KVED_2010.test(code)) return null;
+  const name = readableName(s(a.description ?? a.name ?? a.title));
+  return { code, name, main: main || a.isMain === true || a.isPrimary === true || a.main === true, transport: transportDivision(code), old };
 }
 function ymd(v: unknown): string | null {
   const t = s(v);

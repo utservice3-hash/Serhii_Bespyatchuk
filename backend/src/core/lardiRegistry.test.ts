@@ -141,3 +141,51 @@ test("#11014 🪞 202 «ОНОВЛЮЮ» → АРХІВ ОДРАЗУ: други
   const none: string[] = [];
   assert.equal((await registryByCode(memDb(), "12345678", { key: "k", doFetch: seq([[202, null], [404, null]], none), now: t0 })).state, "updating");
 });
+
+/** Жива відповідь архіву YouControl 24.11.2026 (коди й назви — як прийшли; компанію не називаємо). */
+const OLD_2005 = {
+  contractorType: "Юридична особа (ЮО)", status: "Не перебуває в процесі припинення",
+  mainEconomicActivity: { code: "51.47.9", description: "ОПТОВА ТОРГІВЛЯ ІНШИМИ НЕПРОДОВОЛЬЧИМИ ТОВАРАМИ СПОЖИВЧОГО ПРИЗНАЧЕННЯ, Н. В. І. Г." },
+  economicActivities: [
+    { isMain: false, code: "33.10.1", description: "ВИРОБНИЦТВО МЕДИЧНОЇ ТЕХНІКИ, ВКЛЮЧАЮЧИ ХІРУРГІЧНЕ УСТАТКОВАННЯ, ТА ОРТОПЕДИЧНИХ ПРИСТОСОВАНЬ" },
+    { isMain: false, code: "74.40.0", description: "РЕКЛАМНА ДІЯЛЬНІСТЬ" },
+    { isMain: false, code: "60.24.0", description: "ДІЯЛЬНІСТЬ АВТОМОБІЛЬНОГО ВАНТАЖНОГО ТРАНСПОРТУ" },
+    { isMain: false, code: "45.45.0", description: "ІНШІ РОБОТИ З ЗАВЕРШЕННЯ БУДІВНИЦТВА" },
+    { isMain: false, code: "52.48.9", description: "РОЗДРІБНА ТОРГІВЛЯ ІНШИМИ НЕПРОДОВОЛЬЧИМИ ТОВАРАМИ, Н. В. І. Г." },
+    { isMain: false, code: "51.90.0", description: "ІНШІ ВИДИ ОПТОВОЇ ТОРГІВЛІ" },
+    { isMain: false, code: "51.18.0", description: "ПОСЕРЕДНИЦТВО В СПЕЦІАЛІЗОВАНІЙ ТОРГІВЛІ ІНШИМИ ТОВАРАМИ" },
+    { isMain: true, code: "51.47.9", description: "ОПТОВА ТОРГІВЛЯ ІНШИМИ НЕПРОДОВОЛЬЧИМИ ТОВАРАМИ СПОЖИВЧОГО ПРИЗНАЧЕННЯ, Н. В. І. Г." },
+  ],
+};
+
+test("#11015 🪞 КВЕД-2005 (живий архів YouControl): коди «NN.NN.N» не губляться; транспорт — за розділами 60-63, а 51/52 там торгівля; назви не КАПСОМ", () => {
+  const r = parseRegistry("31362680", OLD_2005)!;
+  assert.equal(r.activities.length, 8, `🔴 зі старого класифікатора лишилось ${r.activities.length} з 8 — лідген побачив би «видів діяльності немає»`);
+  assert.deepEqual([r.activities[0].code, r.activities[0].main, r.activities[0].old], ["51.47.9", true, true]);
+  const byCode = new Map(r.activities.map((a) => [a.code, a]));
+  assert.equal(byCode.get("60.24.0")!.transport, "Діяльність сухопутного транспорту", "🔴 вантажний автотранспорт за КВЕД-2005 не позначено транспортом");
+  for (const c of ["51.47.9", "52.48.9", "51.90.0", "51.18.0"]) {
+    assert.equal(byCode.get(c)!.transport, null, `🔴 «${c}» (торгівля за КВЕД-2005) названо транспортом за таблицею 2010`);
+  }
+  assert.equal(byCode.get("74.40.0")!.name, "Рекламна діяльність", "🔴 назва лишилась КАПСОМ");
+  // Дзеркало: ті самі розділи за КВЕД-2010 — транспорт, і код не «старий».
+  assert.equal(transportDivision("51.10"), "Авіаційний транспорт");
+  assert.equal(transportDivision("52.29"), "Складське господарство та допоміжна діяльність у сфері транспорту");
+  assert.equal(parseRegistry("12345678", LEGAL)!.activities.every((a) => a.old === false), true, "🔴 КВЕД-2010 позначено старим");
+});
+
+test("#11016 🪞 АРХІВНА КАРТКА ЖИВЕ ДОБУ, СВІЖА — 30 ДНІВ: завтра YouControl уже має актуальні КВЕД, і ми їх беремо", async () => {
+  const t0 = new Date("2026-11-24T15:00:00Z"), later = new Date(t0.getTime() + 2 * 86_400_000);
+  const seq = (answers: Array<[number, unknown]>, calls: string[]) =>
+    async (url: string) => { calls.push(url); const [status, body] = answers[Math.min(calls.length - 1, answers.length - 1)]; return { status, json: async () => body }; };
+  const db = memDb(), c1: string[] = [];
+  await registryByCode(db, "31362680", { key: "k", doFetch: seq([[202, null], [200, OLD_2005]], c1), now: t0 });
+  const c2: string[] = [];
+  const again = await registryByCode(db, "31362680", { key: "k", doFetch: seq([[200, LEGAL]], c2), now: later });
+  assert.equal(c2.length, 1, "🔴 архівна картка трималась у кеші понад добу — лідген 30 днів бачив би старі КВЕД-2005");
+  assert.equal(again.state === "ok" && again.info.archived, false);
+  // Дзеркало: свіжу картку через 2 дні з кешу (інакше платимо щоразу).
+  const c3: string[] = [];
+  assert.equal((await registryByCode(db, "31362680", { key: "k", doFetch: seq([[200, LEGAL]], c3), now: new Date(later.getTime() + 2 * 86_400_000) })).state, "ok");
+  assert.equal(c3.length, 0, "🔴 свіжу картку не взято з кешу");
+});

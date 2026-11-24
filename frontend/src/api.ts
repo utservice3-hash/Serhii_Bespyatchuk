@@ -274,7 +274,7 @@ export async function fetchLeadgenLtv(params: { from: string; to: string; manage
 export interface LardiCheckOffer { side: "cargo" | "lorry"; offerId: string; company: string | null; face: string | null; from: string | null; to: string | null;
   cargo: string | null; mass: number | null; total: number | null; currency: string | null; negotiable: boolean; seenAt: string }
 /** 🏛 ЄДР (YouControl) за кодом фірми з Ларді — вид діяльності (24.11.2026). Вердикт від нього не залежить. */
-export interface RegistryActivity { code: string; name: string; main: boolean; transport: string | null }
+export interface RegistryActivity { code: string; name: string; main: boolean; transport: string | null; old?: boolean }
 export interface RegistryInfo { code: string; name: string | null; fop: boolean; registered: string | null; status: string | null; closing: boolean; activities: RegistryActivity[]; archived?: boolean }
 export type RegistryLookup =
   | { state: "ok"; info: RegistryInfo; cached: boolean } | { state: "updating" } | { state: "notFound" } | { state: "unconfigured" } | { state: "failed"; why: string };

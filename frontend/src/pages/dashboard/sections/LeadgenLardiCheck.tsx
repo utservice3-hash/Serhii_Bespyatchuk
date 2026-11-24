@@ -127,6 +127,7 @@ function KvedLine({ a, big }: { a: RegistryActivity; big?: boolean }) {
           borderRadius: 6, whiteSpace: "nowrap", background: transport ? "#dbeafe" : "var(--border)", color: transport ? "#1e3a8a" : "var(--text)" }}>
         {transport ? "🚚 " : ""}{a.code}
       </span>
+      {a.old && <span title="Код за старим класифікатором КВЕД-2005: так записано в цій копії реєстру" style={{ fontSize: 11, color: MUTED, whiteSpace: "nowrap" }}>КВЕД-2005</span>}
       <span style={{ fontSize: big ? 14 : 13, fontWeight: big ? 600 : 400, color: big ? "var(--text)" : MUTED }}>
         {a.name || "назву виду діяльності реєстр не віддав"}
       </span>
@@ -180,7 +181,7 @@ function RegistryBlock({ u }: { u: LardiCheckUser }) {
           </div>
         )}
       <div style={{ fontSize: 11.5, color: MUTED }}>
-        Джерело — ЄДР через YouControl{info.archived ? ", остання збережена копія реєстру" : ""}{r.cached ? " (перевірено за останні 30 днів)" : ""}. 🚚 — транспортний розділ КВЕД.
+        Джерело — ЄДР через YouControl{info.archived ? ", збережена копія реєстру (реєстр саме оновлювався — завтра підтягнеться свіжа)" : r.cached ? " (перевірено за останні 30 днів)" : ""}. 🚚 — транспортний розділ КВЕД.
       </div>
     </div>
   );
