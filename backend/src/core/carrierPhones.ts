@@ -1,6 +1,5 @@
 import type { Db } from "./adCallFacts.js";
-import { CARRIER_REJECT_REASON, LOST_STATUS_ID, NOT_CLIENT_PIPELINES, NAME_DIGITS } from "./carrierHistory.js";
-import { CARRIER_STAGE } from "./carrierCallRules.js";
+import { CARRIER_REJECT_REASON, LOST_STATUS_ID, NAME_DIGITS } from "./carrierHistory.js";
 import { LARDI_SIDE, PHONE9 } from "./carrierLardi.js";
 
 /**
@@ -11,12 +10,15 @@ import { LARDI_SIDE, PHONE9 } from "./carrierLardi.js";
  * номер перевізника не рахується розмовою з клієнтом; (3) нічийного клієнта, у якого ВСІ номери перевізницькі,
  * не можна «Взяти в роботу».
  *
- * 🔴 ВИНЯТОК «НОМЕР З УГОДОЮ ЗАМОВНИКА («Успіх» або в роботі) ПЕРЕВІЗНИКОМ НЕ Є» (рішення Романа 03.11.2026, «1 так»)
- * З 24.11.2026 ДІЄ ЛИШЕ НА НОМЕРИ З ЛАРДІ (задача 10991, Роман: «якщо номер на якому є угода перевізник - то ми його
- * закриваємо не зважаючи ні на що»). Номер, угоду якого закривали «Перевізник», у довіднику ЗАВЖДИ — так само, як у
- * `carrierHistorySql`. Ларді — не «угода, закрита як перевізник»: там є й вантажовласники, тож для неї виняток лишився
- * з тими самими межами: воронки перевізника (`NOT_CLIENT_PIPELINES`) і етап фільтра «Дзвінки на мобільні» винятком не
- * є. Номер → угоди — двома шляхами: назва угоди з цифр номера і телефони контактів угоди.
+ * 🔴 ВИНЯТКУ «НОМЕР З УГОДОЮ ЗАМОВНИКА ПЕРЕВІЗНИКОМ НЕ Є» (рішення Романа 03.11.2026) БІЛЬШЕ НЕМАЄ — НІ ДЛЯ ІСТОРІЇ,
+ * НІ ДЛЯ LARDI (задача 10991, Роман 24.11.2026: «якщо номер на якому є угода перевізник - то ми його закриваємо не
+ * зважаючи ні на що»; «перевізник це той хто бється по ларді (якщо є номер на ларді він 100 відсотків перевізник). Також
+ * перевізник це ті хто по історії crm перевізник»). Причина — 380976560785: контакти перевізника прикріплюють до угод
+ * замовників як перевізника рейсу, і виняток робив його «клієнтом». «Номер на Ларді» — це номер у пропозиціях МАШИН
+ * (`lardi_offers.side='lorry'`); вантажі й сама реєстрація на Ларді перевізником не роблять (Роман 20.11.2026).
+ * Номер → угоди — двома шляхами: назва угоди з цифр номера і телефони контактів угоди.
+ * 📐 Замір перед рішенням 24.11.2026 (лише для історії): +1 680 номерів до 10 730; 64 з них мали відкриту угоду «Повного
+ * циклу», 30 — основним контактом; «Чекають» за 17–23.11 −26 номерів.
  * 📐 ЦІНА ВИНЯТКУ, заміряна 03.11.2026 на проді: у клієнтів із 2+ оплатами 1 940 пар «клієнт · номер» з Lardi чи
  * історії, і 1 779 з них — номери, приписані до ВЛАСНИХ угод клієнта в роботі чи в «Успіх». Лишається 30 пар /
  * 18 клієнтів (без винятку було б 476). Розмов за 90 днів на кандидатів 11 713 із 49 961, після винятку — 7 688.
@@ -44,25 +46,17 @@ const DEAL_PHONES_SQL = `
   SELECT d.kommo_id, d.status_id, d.pipeline_id, d.reject_reason, right(${NAME_DIGITS("d")}, 9)
     FROM deals d WHERE ${NAME_DIGITS("d")} ~ '^380[0-9]{9}$'`;
 
-/** Угода замовника — та сама умова, що виняток у `carrierHistorySql`. `a` — аліас рядка угоди. */
-const CLIENT_DEAL_SQL = (a: string): string =>
-  `${a}.status_id <> ${String(LOST_STATUS_ID)}
-     AND ${a}.pipeline_id <> ALL (ARRAY[${NOT_CLIENT_PIPELINES.join(",")}]::bigint[])
-     AND NOT (${a}.pipeline_id = ${String(CARRIER_STAGE.pipelineId)} AND ${a}.status_id = ${String(CARRIER_STAGE.statusId)})`;
-
-/** Рядки довідника: номер (9 цифр) з «Перевізник» в історії — завжди; з Lardi-машин — якщо в номера немає угоди замовника. */
+/** Рядки довідника: номер (9 цифр) з Lardi-машин або з «Перевізник» в історії — завжди, без винятку для угод замовника. */
 export const CARRIER_PHONES_SELECT_SQL = `
   WITH dp AS (${DEAL_PHONES_SQL}),
   lardi AS (SELECT ${PHONE9("p->>'n'")} AS p9, max(NULLIF(o.company, '')) AS company
               FROM lardi_offers o, jsonb_array_elements(o.phones) p WHERE o.side = '${LARDI_SIDE}' GROUP BY 1),
   hist AS (SELECT p9, max(kommo_id) AS deal FROM dp
-            WHERE status_id = ${String(LOST_STATUS_ID)} AND reject_reason = '${CARRIER_REJECT_REASON}' GROUP BY p9),
-  client AS (SELECT DISTINCT p9 FROM dp WHERE ${CLIENT_DEAL_SQL("dp")})
+            WHERE status_id = ${String(LOST_STATUS_ID)} AND reject_reason = '${CARRIER_REJECT_REASON}' GROUP BY p9)
   SELECT COALESCE(l.p9, h.p9) AS p9, (l.p9 IS NOT NULL) AS via_lardi, (h.p9 IS NOT NULL) AS via_history,
          h.deal AS history_deal, l.company AS lardi_company
     FROM lardi l FULL JOIN hist h ON h.p9 = l.p9
-   WHERE length(COALESCE(l.p9, h.p9)) = 9
-     AND (h.p9 IS NOT NULL OR NOT EXISTS (SELECT 1 FROM client c WHERE c.p9 = l.p9))`;
+   WHERE length(COALESCE(l.p9, h.p9)) = 9`;
 
 /**
  * Перебудувати довідник повністю. Повертає кількість номерів. `db` — ОДНЕ зʼєднання (не пул): перебудова — одна
