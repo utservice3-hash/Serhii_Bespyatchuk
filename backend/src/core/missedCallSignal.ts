@@ -69,7 +69,7 @@ export interface SignalGroup {
   last_bucket: DayBucket;
   team_name: string | null;
   today: string;
-  /** Угода номера, закрита як «Перевізник» (блок 1 ТЗ 4373); NULL — не перевізник або є угода замовника. */
+  /** Угода номера, закрита як «Перевізник» (блок 1 ТЗ 4373); NULL — не перевізник (угода замовника з 24.11.2026 не рятує). */
   carrier_deal: string | null;
 }
 

@@ -150,7 +150,7 @@ export interface CloseReport { mode: CloseMode; otherMode: CloseMode; historyMod
   failed: number; tasksClosed: number; error: string | null;
   /** Угоди «історії CRM», що чекають: синк угод застарів (`readHistoryGate`) — у Kommo не пишемо. */
   historyPaused: number;
-  /** Угоди «історії CRM», у яких повторна перевірка знайшла угоду замовника, — не закрито, повернуто в чергу. */
+  /** Угоди «історії CRM», у яких повторна перевірка вже не знайшла угоди-джерела «Перевізник», — не закрито, повернуто в чергу. */
   historyRevoked: number }
 
 /** Чи пише цей кандидат у CRM у ЦЬОМУ проході: основний режим «live» і його власний перемикач «live». */
@@ -165,8 +165,9 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
   let cands = (await closeCandidates(db, onStage, now))
     .filter((c) => !(c.aiOther && otherMode === "off") && !(c.history && historyMode === "off"));
   // 🛡 Історія CRM (`carrierHistory.ts`, рішення 05.10.2026). Вердикт ставився раніше й з тих пір НЕ перевірявся, а між
-  // ним і закриттям по номеру могла зʼявитись угода замовника. Тому: синк угод застарів — чекаємо (у CRM не пишемо);
-  // свіжий — перевіряємо виняток ЩЕ РАЗ, і угода, що стала клієнтською, повертається в чергу «Відсіву», а не закривається.
+  // ним і закриттям угоду-джерело «Перевізник» могли повернути в роботу. Тому: синк угод застарів — чекаємо (у CRM не
+  // пишемо); свіжий — перевіряємо історію ЩЕ РАЗ, і угода без джерела повертається в чергу «Відсіву», а не закривається.
+  // Угода замовника на номері з 24.11.2026 НЕ рятує (рішення Романа, задача 10991).
   let historyOpen = true;
   const hist = cands.filter((c) => c.history);
   if (hist.length) {
