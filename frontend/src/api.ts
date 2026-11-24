@@ -284,7 +284,7 @@ export interface LardiCheckUser {
 }
 export interface LardiCheckResp {
   phone: string; days: number;
-  verdict: { kind: "cargo" | "carrier" | "known" | "none"; title: string; advice: string; pass: boolean | null };
+  verdict: { kind: "cargo" | "carrier" | "known" | "none" | "registry"; title: string; advice: string; pass: boolean | null };
   lardi: { ok: boolean; status: number; users: LardiCheckUser[] };
   archive: { cargo: number; lorry: number; routes: number; withPrice: number; companies: string[]; last: LardiCheckOffer[]; lastLorry: LardiCheckOffer[] };
 }

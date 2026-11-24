@@ -2,13 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { firmCode, parseLardiProfile, parseLardiUsers, parseRegistry, transportDivision } from "./lardiCheckRules.js";
+import { companyType, firmCode, lardiVerdict, parseLardiProfile, parseLardiUsers, parseRegistry, transportDivision, type RegistryActivity } from "./lardiCheckRules.js";
 import { REGISTRY_CACHE_DAYS, registryByCode, type Db } from "./lardiRegistry.js";
 
 /**
  * 🏛 ВИД ДІЯЛЬНОСТІ З ЄДР ДЛЯ ЗНАЙДЕНОГО НА ЛАРДІ (24.11.2026). Гейти стережуть: код фірми — лише справжній код;
  * основний КВЕД — рівно один і першим; кожен запит до YouControl — гроші, тож повтор того самого коду йде з кешу,
- * а «оновлюється» не кешується; вердикт 8136 від реєстру не залежить. Фікстури — ВИГАДАНІ компанії.
+ * а «оновлюється» не кешується; транспортний основний КВЕД дає ⛔ вердикт 8136, нетранспортний — не дає «можна». Фікстури — ВИГАДАНІ компанії.
  */
 const ROOT = path.join(import.meta.dirname, "..", "..", "..");
 const src = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
@@ -108,18 +108,42 @@ test("#11012 🪞 YOUCONTROL — ГРОШІ: перший раз — один з
   assert.equal(none.length, 0, "🔴 без ключа пішли в YouControl");
 });
 
-test("#11013 ПРОВОДКА: код — з профілю Ларді; ЄДР — для знайдених, не більше трьох кодів; вердикт рахується без реєстру; екран каже, що це факт, а не вердикт", () => {
+test("#11017 ПРОВОДКА: код — з профілю Ларді; ЄДР — для знайдених, не більше трьох кодів; вердикт отримує основний КВЕД кожного знайденого; екран пояснює правило", () => {
   const core = src("backend/src/core/lardiCheck.ts");
   assert.match(core, /lardiGet\(`\/v2\/users\/user\/\$\{refId\}`/, "🔴 код фірми питаємо не з профілю «Пользователь»");
   assert.match(core, /\.slice\(0, REGISTRY_MAX_CODES\)/, "🔴 немає стелі кодів за одну перевірку");
-  assert.match(core, /lardiVerdict\(\{ users: live\.users\.length, cargo: archive\.cargo, lorry: archive\.lorry, liveOk: live\.ok \}\)/,
-    "🔴 вердикт почав залежати від чогось, крім Ларді й архіву");
+  assert.match(core, /lardiVerdict\(\{ users: live\.users\.length, cargo: archive\.cargo, lorry: archive\.lorry, liveOk: live\.ok, registry: users\.map\(registryMain\) \}\)/,
+    "🔴 вердикт не отримує вид діяльності з реєстру (або отримує щось інше)");
   assert.match(core, /users = await withRegistry\(live\.users\)/, "🔴 реєстр не підключений до перевірки");
   assert.match(src("backend/src/db/schema.sql"), /CREATE TABLE IF NOT EXISTS lardi_registry_cache\b(?!_)/, "🔴 немає таблиці кешу");
   const ui = src("frontend/src/pages/dashboard/sections/LeadgenLardiCheck.tsx");
   assert.match(ui, /<LardiUserCard key=\{u\.refId\} u=\{u\} \/>/, "🔴 картка компанії не рендериться");
-  assert.match(ui, /вердикт угорі від нього не змінюється/, "🔴 пояснення не каже, що КВЕД — не вердикт");
+  assert.match(ui, /Нетранспортний вид діяльності рішення не приймає/, "🔴 пояснення не каже, що нетранспортний КВЕД — не «можна передавати»");
   assert.match(ui, /Ларді для цієї компанії не віддав/, "🔴 немає підпису, коли коду фірми немає (порожнеча читалась би як «перевірено»)");
+});
+
+const act = (code: string, name = "x"): RegistryActivity => ({ code, name, main: true, transport: transportDivision(code), old: /\.\d$/.test(code) && code.length > 5 });
+test("#11018 🪞 ВЕРДИКТ ЗА РЕЄСТРОМ (8136, Роман 24.11 «без зеленого»): транспортний основний КВЕД — ⛔ з типом; нетранспортний і невідомий — рішення лідгена; заявки сильніші за реєстр", () => {
+  // Тип — за точним кодом обох класифікаторів; інший транспорт — «транспортна компанія»; решта — немає типу.
+  assert.equal(companyType(act("52.29")), "forwarder"); assert.equal(companyType(act("63.40.0")), "forwarder");
+  assert.equal(companyType(act("49.41")), "carrier"); assert.equal(companyType(act("60.24.0")), "carrier");
+  assert.equal(companyType(act("52.10")), "transport");
+  assert.equal(companyType(act("46.90")), null, "🔴 торгівлю названо транспортом");
+  assert.equal(companyType(act("51.47.9")), null, "🔴 оптову торгівлю за КВЕД-2005 названо транспортом");
+  const base = { users: 2, cargo: 0, lorry: 0, liveOk: true };
+  const fwd = lardiVerdict({ ...base, registry: [{ company: "Агро", activity: act("46.90") }, { company: "Транс", activity: act("52.29", "Інша допоміжна діяльність у сфері транспорту") }] });
+  assert.deepEqual([fwd.kind, fwd.pass], ["registry", false], "🔴 експедицію за реєстром дозволено передавати");
+  assert.match(fwd.title, /^Експедиція/); assert.match(fwd.advice, /^Транс: .*52\.29/, "🔴 вердикт не називає, за якою компанією й кодом");
+  const car = lardiVerdict({ ...base, registry: [{ company: "Віз", activity: act("60.24.0") }, { company: "Транс", activity: act("52.10") }] });
+  assert.deepEqual([car.kind, car.pass], ["registry", false]); assert.match(car.title, /^Перевізник/, "🔴 перевізник програв «транспортній компанії»");
+  // Дзеркало: нетранспортний КВЕД НЕ дає «можна передавати» — рішення лідгена (вибір Романа «без зеленого»).
+  const trade = lardiVerdict({ ...base, registry: [{ company: "Агро", activity: act("46.90") }, { company: "Будо", activity: act("51.47.9") }] });
+  assert.deepEqual([trade.kind, trade.pass], ["known", null], "🔴 нетранспортний КВЕД дав готовий висновок");
+  assert.match(trade.advice, /не транспортний/);
+  const unknown = lardiVerdict({ ...base, registry: [{ company: "Агро", activity: null }] });
+  assert.deepEqual([unknown.kind, unknown.pass], ["known", null]); assert.match(unknown.advice, /невідомий/);
+  // Заявки вантажу — сильніший доказ: вердикт «вантажі на Ларді», а не тип із реєстру.
+  assert.equal(lardiVerdict({ ...base, cargo: 2, registry: [{ company: "Транс", activity: act("52.29") }] }).kind, "cargo");
 });
 
 test("#11014 🪞 202 «ОНОВЛЮЮ» → АРХІВ ОДРАЗУ: другий запит showCurrentData=true, картка позначена архівною й кешується; без 202 — архів не питаємо", async () => {

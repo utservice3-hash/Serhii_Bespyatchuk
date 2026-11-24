@@ -1,7 +1,7 @@
 import { pool } from "../db/pool.js";
 import { hasLardiToken, lardiGet, LANG } from "../lardi/client.js";
 import { PHONE9 } from "./carrierLardi.js";
-import { LARDI_CHECK_DAYS, archiveSummary, lardiVerdict, parseLardiProfile, parseLardiUsers, type ArchiveOffer, type LardiUser } from "./lardiCheckRules.js";
+import { LARDI_CHECK_DAYS, archiveSummary, lardiVerdict, parseLardiProfile, parseLardiUsers, type ArchiveOffer, type LardiUser, type RegistryMain } from "./lardiCheckRules.js";
 import { REGISTRY_MAX_CODES, registryByCode, type RegistryLookup } from "./lardiRegistry.js";
 
 /**
@@ -9,7 +9,8 @@ import { REGISTRY_MAX_CODES, registryByCode, type RegistryLookup } from "./lardi
  * `lardiCheckRules.ts`. У Ларді нічого не пишемо; у базу — лише кеш ЄДР (`lardi_registry_cache`, див. нижче).
  *
  * 🏛 З 24.11.2026 для кожного знайденого користувача — ще й вид діяльності з ЄДР (YouControl) за `firmCode` з його
- * профілю Ларді. Автоматично, без кнопки (рішення Романа 24.11). Вердикт від цього НЕ змінюється.
+ * профілю Ларді. Автоматично, без кнопки (рішення Романа 24.11). Транспортний основний КВЕД
+ * дає вердикт «експедиція / перевізник — не передавати», коли заявок в архіві немає (8136; правило — `lardiVerdict`).
  */
 
 /** Заявки з архіву за номером (останні 9 цифр) у вікні. Одна заявка, знайдена на кількох маршрутах, — один рядок. */
@@ -66,13 +67,20 @@ export async function withRegistry(users: LardiUser[]): Promise<Array<LardiUser 
   return coded.map((u) => ({ ...u, registry: (u.firmCode && found.get(u.firmCode)) || null }));
 }
 
+/** Основний вид діяльності для вердикту — лише з успішної картки ЄДР; інакше `null` («невідомо», а не «не транспорт»). */
+export function registryMain(u: { name: string; registry: RegistryLookup | null }): RegistryMain {
+  if (u.registry?.state !== "ok") return { company: u.name, activity: null };
+  const acts = u.registry.info.activities;
+  return { company: u.name, activity: acts.find((a) => a.main) ?? acts[0] ?? null };
+}
+
 export async function lardiCheck(p9: string) {
   const [live, offers] = await Promise.all([lardiUsersByPhone(p9), archiveOffersByPhone(p9)]);
   const archive = archiveSummary(offers);
   const users = await withRegistry(live.users);
   return {
     phone: `+380${p9}`,
-    verdict: lardiVerdict({ users: live.users.length, cargo: archive.cargo, lorry: archive.lorry, liveOk: live.ok }),
+    verdict: lardiVerdict({ users: live.users.length, cargo: archive.cargo, lorry: archive.lorry, liveOk: live.ok, registry: users.map(registryMain) }),
     lardi: { ok: live.ok, status: live.status, users },
     archive, days: LARDI_CHECK_DAYS,
   };
