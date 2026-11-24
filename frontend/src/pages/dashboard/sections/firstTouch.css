@@ -345,3 +345,12 @@
   .ftd-more-pop, .ftd-fpill, .ftd-two, .ftd-kpis > .ftd-kpi, .ftd-bar > i, .ftd-nav .rv-pop { animation: none; }
   .ftd-fchip, .ftd-fsel, .ftd-more-caret, .ftd-tab-n, .ftd-tile, .ftd-bar > i { transition: none; }
 }
+
+/* 🎧 24.11.2026 — уся розмова в правій панелі. Плеєр тримається вгорі панелі під час прокрутки: цитата з чек-листа чи
+   репліка перемотують запис, і плеєр при цьому видно. Місце під плеєр зайняте від першого кадру (`is-wait`). */
+.ftd-pane-player { position: sticky; top: -18px; z-index: 2; margin: 2px -22px 0; padding: 10px 22px; min-height: 72px; box-sizing: border-box;
+  display: flex; flex-direction: column; justify-content: center;
+  background: var(--card-bg); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+/* Блок менеджерів: перемикач «Таблиця / Графік» стоїть на місці, підказка — окремим рядком під заголовком. */
+.ftd-mgr-ctl { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.ftd-mgr-hint.is-gone { display: none; }
