@@ -1,11 +1,15 @@
 import { pool } from "../db/pool.js";
 import { hasLardiToken, lardiGet, LANG } from "../lardi/client.js";
 import { PHONE9 } from "./carrierLardi.js";
-import { LARDI_CHECK_DAYS, archiveSummary, lardiVerdict, parseLardiUsers, type ArchiveOffer, type LardiUser } from "./lardiCheckRules.js";
+import { LARDI_CHECK_DAYS, archiveSummary, lardiVerdict, parseLardiProfile, parseLardiUsers, type ArchiveOffer, type LardiUser } from "./lardiCheckRules.js";
+import { REGISTRY_MAX_CODES, registryByCode, type RegistryLookup } from "./lardiRegistry.js";
 
 /**
  * 🔎 Перевірка номера на Ларді (задача 8136): живий пошук користувача + заявки з власного архіву. Правила й межі —
- * `lardiCheckRules.ts`. Тут лише два читання; нічого не пишемо (ні в базу, ні в Ларді).
+ * `lardiCheckRules.ts`. У Ларді нічого не пишемо; у базу — лише кеш ЄДР (`lardi_registry_cache`, див. нижче).
+ *
+ * 🏛 З 24.11.2026 для кожного знайденого користувача — ще й вид діяльності з ЄДР (YouControl) за `firmCode` з його
+ * профілю Ларді. Автоматично, без кнопки (рішення Романа 24.11). Вердикт від цього НЕ змінюється.
  */
 
 /** Заявки з архіву за номером (останні 9 цифр) у вікні. Одна заявка, знайдена на кількох маршрутах, — один рядок. */
@@ -39,13 +43,37 @@ export async function lardiUsersByPhone(p9: string): Promise<{ ok: boolean; stat
   }
 }
 
+/**
+ * Код фірми з профілю Ларді (`GET /v2/users/user/{refId}`). Пошук за документацією теж повертає структуру «Пользователь»,
+ * але в прикладі відповіді `firmCode` немає — тому профіль питаємо лише тим, кому пошук коду не дав. Збій — `null`:
+ * без коду лишається рядок «код фірми Ларді не віддав», а не помилка всієї перевірки.
+ */
+export async function lardiFirmCode(refId: number): Promise<string | null> {
+  try {
+    const res = await lardiGet(`/v2/users/user/${refId}`, { language: LANG });
+    if (res.status !== 200) return null;
+    return parseLardiProfile(await res.json())?.firmCode ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Кожному користувачу — його код (з пошуку або профілю) і ЄДР за ним. Різних кодів — не більше `REGISTRY_MAX_CODES`. */
+export async function withRegistry(users: LardiUser[]): Promise<Array<LardiUser & { registry: RegistryLookup | null }>> {
+  const coded = await Promise.all(users.map(async (u) => (u.firmCode ? u : { ...u, firmCode: await lardiFirmCode(u.refId) })));
+  const codes = [...new Set(coded.map((u) => u.firmCode).filter((c): c is string => !!c))].slice(0, REGISTRY_MAX_CODES);
+  const found = new Map(await Promise.all(codes.map(async (c) => [c, await registryByCode(pool, c)] as const)));
+  return coded.map((u) => ({ ...u, registry: (u.firmCode && found.get(u.firmCode)) || null }));
+}
+
 export async function lardiCheck(p9: string) {
   const [live, offers] = await Promise.all([lardiUsersByPhone(p9), archiveOffersByPhone(p9)]);
   const archive = archiveSummary(offers);
+  const users = await withRegistry(live.users);
   return {
     phone: `+380${p9}`,
     verdict: lardiVerdict({ users: live.users.length, cargo: archive.cargo, lorry: archive.lorry, liveOk: live.ok }),
-    lardi: { ok: live.ok, status: live.status, users: live.users },
+    lardi: { ok: live.ok, status: live.status, users },
     archive, days: LARDI_CHECK_DAYS,
   };
 }

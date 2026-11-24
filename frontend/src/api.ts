@@ -273,10 +273,19 @@ export async function fetchLeadgenLtv(params: { from: string; to: string; manage
 /** 🔎 «Перевірити номер на Ларді» (задача 8136): усе рахує сервер (`core/lardiCheckRules.ts`). */
 export interface LardiCheckOffer { side: "cargo" | "lorry"; offerId: string; company: string | null; face: string | null; from: string | null; to: string | null;
   cargo: string | null; mass: number | null; total: number | null; currency: string | null; negotiable: boolean; seenAt: string }
+/** 🏛 ЄДР (YouControl) за кодом фірми з Ларді — вид діяльності (24.11.2026). Вердикт від нього не залежить. */
+export interface RegistryActivity { code: string; name: string; main: boolean; transport: string | null }
+export interface RegistryInfo { code: string; name: string | null; fop: boolean; registered: string | null; status: string | null; closing: boolean; activities: RegistryActivity[] }
+export type RegistryLookup =
+  | { state: "ok"; info: RegistryInfo; cached: boolean } | { state: "updating" } | { state: "notFound" } | { state: "unconfigured" } | { state: "failed"; why: string };
+export interface LardiCheckUser {
+  refId: number; name: string; town: string | null; positive: number; negative: number; since: string | null;
+  firmCode: string | null; registry: RegistryLookup | null;
+}
 export interface LardiCheckResp {
   phone: string; days: number;
   verdict: { kind: "cargo" | "carrier" | "known" | "none"; title: string; advice: string; pass: boolean | null };
-  lardi: { ok: boolean; status: number; users: { refId: number; name: string; town: string | null; positive: number; negative: number; since: string | null }[] };
+  lardi: { ok: boolean; status: number; users: LardiCheckUser[] };
   archive: { cargo: number; lorry: number; routes: number; withPrice: number; companies: string[]; last: LardiCheckOffer[]; lastLorry: LardiCheckOffer[] };
 }
 export async function fetchLardiCheck(phone: string): Promise<LardiCheckResp> {

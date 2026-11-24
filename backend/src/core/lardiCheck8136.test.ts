@@ -64,7 +64,7 @@ test("#3952 🪞 АРХІВ І ВІДПОВІДЬ ЛАРДІ: числа — п�
     { refId: 13343989534, name: " Яцків Орест, ФОП ", address: { town: { id: 179, name: "Львів" } }, rating: { positiveCommentCount: 8, negativeCommentCount: 0 }, createDate: 1404829569000 },
     { refId: 0, name: "без id" }, { refId: 5, name: "" }, null,
   ]);
-  assert.deepEqual(users, [{ refId: 13343989534, name: "Яцків Орест, ФОП", town: "Львів", positive: 8, negative: 0, since: "2014-07-08" }]);
+  assert.deepEqual(users, [{ refId: 13343989534, name: "Яцків Орест, ФОП", town: "Львів", positive: 8, negative: 0, since: "2014-07-08", firmCode: null }]);
   assert.deepEqual(parseLardiUsers({ statusCode: 403, message: "пакет" }), [], "🔴 відмова Ларді розібрана як список користувачів");
 });
 

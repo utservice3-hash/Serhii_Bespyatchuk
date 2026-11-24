@@ -29,7 +29,29 @@ export function phone9(input: unknown): string | null {
   return digits.length >= 9 && digits.length <= 13 ? digits.slice(-9) : null;
 }
 
-export interface LardiUser { refId: number; name: string; town: string | null; positive: number; negative: number; since: string | null }
+export interface LardiUser {
+  refId: number; name: string; town: string | null; positive: number; negative: number; since: string | null;
+  /** Код фірми з профілю Ларді (ЄДРПОУ — 8 цифр, ІПН ФОП — 10). `null` — Ларді не віддав або віддав не код. */
+  firmCode: string | null;
+}
+
+/**
+ * `firmCode` Ларді → код для реєстру. Лише 8 (ЄДРПОУ) або 10 (ІПН ФОП) цифр; решта — `null` ТУТ, один раз (правило 5:
+ * сентинел перетворюється на «немає» в парсері, а не в кожного читача). Пробіли й дефіси прибираємо, літери — ні:
+ * «АА123456» (паспорт ФОП, що відмовився від ІПН) — не код, за ним реєстр не шукаємо.
+ */
+export function firmCode(v: unknown): string | null {
+  if (typeof v !== "string" && typeof v !== "number") return null;
+  const t = String(v).replace(/[\s-]/g, "");
+  if (!/^\d+$/.test(t) || !(t.length === 8 || t.length === 10) || /^0+$/.test(t)) return null;
+  return t;
+}
+
+/** Профіль Ларді (`GET /v2/users/user/{refId}`, структура «Пользователь») → лише код фірми. Не обʼєкт — `null`. */
+export function parseLardiProfile(json: unknown): { firmCode: string | null } | null {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  return { firmCode: firmCode((json as { firmCode?: unknown }).firmCode) };
+}
 
 /** Відповідь `/v2/users/search` → наш вигляд. Чуже поле, якого не чекали, відкидається; не масив — порожньо. */
 export function parseLardiUsers(json: unknown): LardiUser[] {
@@ -48,6 +70,7 @@ export function parseLardiUsers(json: unknown): LardiUser[] {
       positive: Math.max(0, Number(u.rating?.positiveCommentCount) || 0),
       negative: Math.max(0, Number(u.rating?.negativeCommentCount) || 0),
       since: Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString().slice(0, 10) : null,
+      firmCode: firmCode((raw as { firmCode?: unknown }).firmCode),
     });
   }
   return out;
@@ -100,5 +123,96 @@ export function archiveSummary(offers: readonly ArchiveOffer[]) {
     companies: names.slice(0, 5),
     last: [...cargo].sort(byDate).slice(0, LARDI_CHECK_LIST),
     lastLorry: [...lorry].sort(byDate).slice(0, 5),
+  };
+}
+
+/*
+ * 🏛 ВИД ДІЯЛЬНОСТІ З ЄДР (YouControl) ДЛЯ ЗНАЙДЕНОГО НА ЛАРДІ (24.11.2026, Роман: «автоматично … перевіряти тип його
+ * діяльності просто і все»). Ларді типу компанії не віддає, зате віддає `firmCode` у профілі (структура «Пользователь»,
+ * `GET /v2/users/user/{refId}`, базовий доступ — за документацією api.lardi-trans.com/v2/docs). За цим кодом ЄДР через
+ * YouControl (`GET /v1/usr/{код}`, 1 транзакція) дає КВЕДи.
+ *
+ * 🔴 ВЕРДИКТ НЕ ЧІПАЄМО. Екран показує КВЕД як ФАКТ ЄДР; висновку «це експедиція — не передавати» тут немає: такого
+ * правила в словнику немає, і рішення 24.11 — «лише показати вид діяльності». Підсвітка «транспорт» — назва РОЗДІЛУ
+ * КВЕД-2010 (секція H), а не наш висновок про компанію.
+ *
+ * Поля відповіді YouControl — з прикладу у swagger (`economicActivities[] {code, description, isMain}`,
+ * `mainEconomicActivity {code, description}`). Схема ФОП у специфікації не описана (посилання на зовнішній документ),
+ * тому розбір терпимий до інших назв масиву, а невпізнане — порожній список, НЕ вигадана діяльність.
+ */
+export interface RegistryActivity {
+  code: string; name: string; main: boolean;
+  /** Назва транспортного розділу КВЕД (`transportDivision`), якщо код у ньому, інакше `null`. Рахує сервер — фронт не тримає копії. */
+  transport: string | null;
+}
+export interface RegistryInfo {
+  code: string; name: string | null; fop: boolean;
+  /** Дата реєстрації в ЄДР (YYYY-MM-DD) або `null`, якщо реєстр її не віддав. */
+  registered: string | null;
+  /** Стан словами ЄДР, як є («Не перебуває в процесі припинення», «припинено»…). */
+  status: string | null;
+  /** Припиняється / припинена / банкрут — екран показує червоним. */
+  closing: boolean;
+  /** Основний — першим; далі решта в порядку ЄДР, без повторів. Порожньо — реєстр видів діяльності не віддав. */
+  activities: RegistryActivity[];
+}
+
+/** Розділи секції H «Транспорт, складське господарство…» КВЕД-2010 — офіційні назви. */
+export const TRANSPORT_DIVISIONS: Readonly<Record<string, string>> = {
+  "49": "Наземний і трубопровідний транспорт",
+  "50": "Водний транспорт",
+  "51": "Авіаційний транспорт",
+  "52": "Складське господарство та допоміжна діяльність у сфері транспорту",
+};
+/** Код КВЕД «NN.NN» → назва транспортного розділу або `null`, якщо розділ не транспортний (чи код не КВЕД). */
+export function transportDivision(code: string): string | null {
+  const m = /^(\d{2})\.\d{1,2}$/.exec(code.trim());
+  return m ? TRANSPORT_DIVISIONS[m[1]] ?? null : null;
+}
+
+const s = (v: unknown) => (typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "");
+const KVED = /^\d{2}\.\d{1,2}$/;
+function activity(raw: unknown, main: boolean): RegistryActivity | null {
+  if (!raw || typeof raw !== "object") return null;
+  const a = raw as Record<string, unknown>;
+  const code = s(a.code ?? a.kved ?? a.kvedCode);
+  if (!KVED.test(code)) return null;
+  const name = s(a.description ?? a.name ?? a.title);
+  return { code, name, main: main || a.isMain === true || a.isPrimary === true || a.main === true, transport: transportDivision(code) };
+}
+function ymd(v: unknown): string | null {
+  const t = s(v);
+  if (!t) return null;
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? null : (/^\d{4}-\d{2}-\d{2}/.test(t) ? t.slice(0, 10) : d.toISOString().slice(0, 10));
+}
+
+/** Відповідь `/v1/usr/{код}` → що показує лідгену. Не обʼєкт — `null` (це не «компанія без діяльності»). */
+export function parseRegistry(code: string, usr: unknown): RegistryInfo | null {
+  if (!usr || typeof usr !== "object" || Array.isArray(usr)) return null;
+  const u = usr as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const fop = code.length === 10 || /ФОП|фізична особа-підприєм/i.test(s(u.contractorType)) || typeof u.name === "string";
+  const name = typeof u.name === "string" ? s(u.name) : s(u.name?.shortName) || s(u.name?.fullName) || s(u.legalPersonName);
+  const list: RegistryActivity[] = [];
+  const push = (a: RegistryActivity | null) => {
+    if (!a) return;
+    const at = list.findIndex((x) => x.code === a.code);
+    if (at < 0) list.push(a);
+    else if (a.main) list[at] = { ...list[at], main: true, name: list[at].name || a.name };
+  };
+  push(activity(u.mainEconomicActivity, true));
+  for (const key of ["economicActivities", "activities", "activityKinds", "kveds"]) {
+    if (Array.isArray(u[key])) for (const a of u[key]) push(activity(a, false));
+  }
+  // Основний — рівно один і першим: якщо реєстр позначив кілька, перший позначений лишається основним.
+  const mainAt = list.findIndex((a) => a.main);
+  const activities = list.map((a, i) => ({ ...a, main: i === mainAt }));
+  if (mainAt > 0) activities.unshift(...activities.splice(mainAt, 1));
+  const status = s(u.status) || null;
+  const closing = !!(s(u.registrationOfTermination?.status) || s(u.terminationStatus?.status) || u.bankruptcyStatus
+    || (status && /припинен/i.test(status) && !/не перебуває/i.test(status)));
+  return {
+    code, name: name || null, fop, status, closing, activities,
+    registered: ymd(u.registrationAfterLaw?.entryDate) ?? ymd(u.registrationBeforeLaw?.date) ?? ymd(u.registrationDate),
   };
 }
