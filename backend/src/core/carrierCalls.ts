@@ -100,7 +100,7 @@ export async function resolveCarrierDeals(db: Db, now: Date, noTalkAfterMin: num
   const rep: ResolveReport = { history: 0, lardi: 0, reused: 0, own: 0, noTalk: 0, secondTalk: 0,
     noTalkGate: guard.gate, noTalkNoCreatingCall: guard.noCreatingCall, historyGate };
 
-  // ⓪ Номер уже закривали як «Перевізник» у CRM, угоди замовника в «Успіх» чи в роботі немає (ТЗ 17.09, блок 1;
+  // ⓪ Номер уже закривали як «Перевізник» у CRM — угода замовника на ньому не рятує з 24.11.2026 (ТЗ 17.09, блок 1;
   //    `core/carrierHistory.ts`) — вердикт без розмови: не слухаємо й не платимо. ПЕРШИМ — раніше за повтор номера.
   //    Лише при свіжих угодах (`readHistoryGate`): на паузі угода лишається «чекає» й іде звичайним шляхом.
   if (historyGate.open) rep.history = (await db.query(
