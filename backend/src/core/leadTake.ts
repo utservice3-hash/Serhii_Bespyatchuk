@@ -9,8 +9,8 @@ import { kommoLeadUrl } from "./kommoLinks.js";
 import { elogistMarkSql } from "./elogist.js";
 import { INBOUND_TYPES } from "./missedCallsRules.js";
 import {
-  takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost, statsByBucket, TAKE_IN_MIN_TALK_SEC,
-  type DealTake, type TakeRowInput, type TakeStats, type TakeColumn, type TakeTarget, type TakeGran,
+  takeOf, statsOf, targetOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost, seriesOfTakeRows, TAKE_IN_MIN_TALK_SEC,
+  type DealTake, type TakeRowInput, type TakeStats, type TakeColumn, type TakeTarget, type TakeGran, type TakeSeriesRow,
 } from "./leadTakeRules.js";
 
 /**
@@ -216,9 +216,14 @@ export async function leadTakeDeals(q: TakeQuery, rowKey: string, col: TakeColum
  * дорівнює рядку «ВІДДІЛ» вікна за той самий Пн–Нд і той самий фільтр. Копії SQL тут немає.
  */
 export async function leadTakeSeries(q: TakeQuery, g: TakeGran): Promise<{ bucket: string; stats: TakeStats }[]> {
-  const rows = await loadRows(q);
-  return statsByBucket(rows.map((r) => ({ ...r, createdAt: Date.parse(r.d.createdAt) })), g);
+  return seriesOfTakeRows(await leadTakeSeriesRows(q), {}, g);
 }
+
+/** Заявки періоду для серій — той самий `loadRows`, що вікно; далі їх розкладає `seriesOfTakeRows` (`leadTakeRules.ts`). */
+export async function leadTakeSeriesRows(q: TakeQuery): Promise<TakeSeriesRow[]> {
+  return (await loadRows(q)).map((r) => ({ take: r.take, lost: r.lost, createdAt: Date.parse(r.d.createdAt), teamId: r.d.teamId, managerId: r.d.managerId }));
+}
+export { seriesOfTakeRows, type TakeSeriesRow };
 
 /**
  * Фільтр серій «Статистик»: усі джерела, ЛИШЕ РОБОЧИЙ ЧАС (Роман 26.10.2026: «робочий час»). Число на графіку збігається

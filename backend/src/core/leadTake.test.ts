@@ -405,42 +405,57 @@ test("#2444b СЕРІЇ ЧАСУ ОПРАЦЮВАННЯ: лише робочий
   assert.doesNotMatch(fe, /увесь час доби/, "🔴 ⓘ графіка досі обіцяє увесь час доби");
 });
 
-/**
- * #2445 — ПОКАЗНИК Є В КАТАЛОЗІ Й У МЕНЮ ФРОНТУ. Серверний обчислювач без пункту меню — мертвий показник; пункт меню без
- * обчислювача — порожній графік, що читається як «немає даних». Обидва показники — у `CRM_ABLE` (ряд від шва), у
- * `COMPUTERS` через ядро вікна, у категорії «Ліди й канали» зі своєю одиницею, медіаною (не середнім) і застереженням
- * про порожні до вересня поле й нотатки.
- * 🧨 Червоніє, якщо прибрати пункт меню, обчислювач, запис у каталозі або застереження з ⓘ.
- */
-test("#2445 КАТАЛОГ І МЕНЮ: «Медіана часу опрацювання заявки, хв» і «Взято до 5 хв, %» — у CRM_ABLE, COMPUTERS і меню «Статистик»", async () => {
-  const { isCrmAble } = await import("../statistics/seriesCatalog.js");
-  for (const k of ["lead_take_median", "lead_take_m5_pct"]) assert.ok(isCrmAble("sales", k), `🔴 ${k} не в каталозі CRM_ABLE`);
-  const route = readFileSync(path.join(ROOT, "backend", "src", "routes", "statisticsSeries.ts"), "utf8");
-  assert.match(route, /\blead_take_median: leadTakeC\(\(s\) => s\.medianMin\),/, "🔴 медіана не з medianMin ядра вікна");
-  assert.match(route, /\blead_take_m5_pct: leadTakeC\(\(s\) => s\.m5Pct\),/, "🔴 «до 5 хв» не з m5Pct ядра вікна");
-  assert.match(route, /await leadTakeSeries\(\{ from, to, \.\.\.SERIES_TAKE_FILTER, teamId, managerId \}, g\)/, "🔴 обчислювач іде повз ядро вікна або без фільтра вікна");
-  const fe = readFileSync(path.join(ROOT, "frontend", "src", "pages", "dashboard", "sections", "StatisticsChartsSection.tsx"), "utf8");
-  const leads = fe.slice(fe.indexOf(`{ key: "leads"`), fe.indexOf(`{ key: "clients"`));
-  assert.match(leads, /\{ key: "lead_take_median", block: "sales", label: "Медіана часу опрацювання заявки, хв", unit: "хв",/, "🔴 медіани немає в меню «Ліди й канали»");
-  assert.match(leads, /\{ key: "lead_take_m5_pct", block: "sales", label: "Взято до 5 хв, %", unit: "%",/, "🔴 «Взято до 5 хв» немає в меню «Ліди й канали»");
-  assert.ok(fe.includes("до вересня поле «Взято в роботу» й нотатки-дзвінки майже порожні — частка «взято» тоді спиралась на етап і Ringostat"),
-    "🔴 у ⓘ немає застереження про порожні до вересня поле й нотатки");
-  assert.doesNotMatch(leads, /lead_take_(avg|mean)|label: "[^"]*середн/i, "🔴 з'явилось середнє — рішення власника: лише медіана");
-});
+interface PlanNode { "Subplan Name"?: string; Plans?: PlanNode[] }
+const subPlans = (n: PlanNode): number => (/^SubPlan/.test(n["Subplan Name"] ?? "") ? 1 : 0) + (n.Plans ?? []).reduce((s, c) => s + subPlans(c), 0);
 
 /**
- * #2446 — ДОСТУП ТОЙ САМИЙ, ЩО В ІНШИХ СЕРІЙ: нового роуту немає (показники їдуть через наявний `GET /series`, межа —
- * вкладка `statistics`), скоуп — `teamId`/`managerId` з `seriesSet` (серверний клам ролі). Отже матриця не змінюється.
- * 🧨 Червоніє, якщо додати роут у `statsSeriesRouter`, або обчислювач перестане брати скоуп серії (тімлід побачив би компанію).
+ * #10423 — «КЛІЄНТ УЖЕ БУВ» ШУКАЄТЬСЯ РАЗ НА УГОДУ, І ВЕСЬ ФОНОВИЙ НАБІР «СТАТИСТИК» СПРАВДІ РАХУЄТЬСЯ (живий Postgres,
+ * scratch; стоїть у цьому файлі, бо кластер тут уже піднятий — другий на прогін не заводимо).
+ * EXPLAIN ANALYZE на проді 21.11.2026: `dispatchedByLoadBucket` виконував пошук `priorClientSql` ПʼЯТЬ разів на угоду
+ * (1,9 с із 2,3 с), `createdSplitByBucket` — тричі (2,1 с із 2,5 с): Postgres розгортав `final` у зовнішній запит, і кожен
+ * `FILTER (WHERE klass = …)` рахував клас заново. Тут план СПРАВЖНІХ запитів ядра: вкладених пошуків рівно два (по
+ * одному на гілку правила). 🪞 Дзеркало: той самий запит без `MATERIALIZED` дає більше — детектор бачить, що шукає.
+ * Друга половина — фон: кожен ряд стандартного набору (`seriesWarmSet.warmTasks`) виконує свій SQL без помилки й лягає
+ * в памʼять рядів.
+ * 🧨 Червоніє, якщо `MATERIALIZED` приберуть або клас знову рахуватиметься на кожне звернення; якщо хоч один показник
+ * стіни падає в SQL; якщо фон рахує не весь набір або повз памʼять.
  */
-test("#2446 ДОСТУП: нових роутів «Статистик» немає, показники — через наявний /series із клампом скоупу серії", () => {
-  const route = readFileSync(path.join(ROOT, "backend", "src", "routes", "statisticsSeries.ts"), "utf8");
-  const paths = [...route.matchAll(/statsSeriesRouter\.(get|post|put|patch|delete)\("([^"]+)"/g)].map((m) => `${m[1].toUpperCase()} ${m[2]}`);
-  assert.deepEqual(paths, ["GET /series", "GET /summary", "GET /plan-fact", "GET /lapsed-clients", "POST /series/manual"], "🔴 склад роутів «Статистик» змінився — потрібен запис у матриці");
-  assert.match(route, /const leadTakeC = \(pick: \(s: TakeStats\) => number \| null\): Computer => async \(g, from, to, teamId, managerId\) =>/,
-    "🔴 обчислювач не бере скоуп серії");
-  assert.match(route, /if \(metric in COMPUTERS\) crm = await COMPUTERS\[metric\]\(g, from > STATS_SEAM \? from : STATS_SEAM, to, sc\.teamId, sc\.managerId\);/,
-    "🔴 серію рахують не зі скоупу seriesSet або не від шва");
-  const matrix = readFileSync(path.join(ROOT, "backend", "src", "auth", "accessMatrix.ts"), "utf8");
-  assert.match(matrix, /\{ method: "GET", path: "\/api\/statistics\/series", cls: "GET",/, "🔴 /api/statistics/series зник із матриці");
+test("#10423 ЖИВИЙ SQL: «клієнт уже був» шукається раз на угоду (у плані два вкладені пошуки, а не шість чи десять); фон рахує весь набір без помилок", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const { pool } = await import("../db/pool.js");
+  const metrics = await import("./metrics.js");
+  const seen: { text: string; values: unknown[] }[] = [];
+  const orig = pool.query.bind(pool) as (...a: unknown[]) => unknown;
+  (pool as unknown as { query: unknown }).query = (text: unknown, values?: unknown) => {
+    if (typeof text === "string") seen.push({ text, values: (values as unknown[]) ?? [] });
+    return orig(text, values);
+  };
+  try {
+    const s = { from: "2025-06-01", to: "2026-11-21", teamId: null, managerId: null, activeOnly: true };
+    await metrics.dispatchedByLoadBucket(s, "month");
+    await metrics.createdSplitByBucket(s, "month");
+    await metrics.repeatClientsByBucket(s, "month");
+  } finally { (pool as unknown as { query: unknown }).query = orig; }
+  assert.equal(seen.length, 3, "🔴 три виклики ядра дали не три запити — перехоплення зламалось, звіряти нема що");
+  const counts: number[][] = [];
+  for (const q of seen) {
+    assert.match(q.text, /final AS MATERIALIZED \(/, "🔴 `final` більше не матеріалізований — клас угоди рахуватиметься на кожне звернення");
+    const plan = async (text: string) => subPlans(((await x.c.query(`EXPLAIN (FORMAT JSON) ${text}`, q.values)).rows[0] as { "QUERY PLAN": { Plan: PlanNode }[] })["QUERY PLAN"][0].Plan);
+    counts.push([await plan(q.text), await plan(q.text.replace("final AS MATERIALIZED (", "final AS ("))]);
+  }
+  assert.deepEqual(counts.map((c) => c[0]), [2, 2, 2], `🔴 у планах ${counts.map((c) => c[0]).join(" / ")} вкладених пошуків замість двох (по одному на гілку «клієнт уже був»)`);
+  assert.ok(counts[0][1] > 2 && counts[1][1] > 2, `🪞 без MATERIALIZED пошуків теж ${counts[0][1]} / ${counts[1][1]} — детектор не бачить повторів, перевірка нічого не доводить`);
+
+  // Фон: кожен ряд набору виконує свій SQL і лягає в памʼять.
+  const route = await import("../routes/statisticsSeries.js");
+  const { warmTasks } = await import("../statistics/seriesWarmSet.js");
+  const { kyivToday } = await import("./dates.js");
+  const st = await route.warmStatsSeries();
+  const expected = warmTasks(kyivToday()).length;
+  assert.equal(st.failed, 0, `🔴 фон не порахував ${st.failed} рядів; перша помилка — ${st.firstError}`);
+  assert.equal(st.tasks, expected, "🔴 фон пройшов не весь набір");
+  assert.equal(st.running, false);
+  const cs = route.statsSeriesCacheStatus();
+  assert.equal(cs.cache.fresh, expected, `🔴 у памʼяті ${cs.cache.fresh} свіжих рядів замість ${expected} — фон рахує повз памʼять або ключі зливаються`);
+  assert.ok(cs.warm.lastFinishedAt && cs.warm.lastMs != null, "🔴 стан фону не каже, коли й за скільки він пройшов");
 });

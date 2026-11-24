@@ -36,7 +36,7 @@ export function HiringEmployeesView() {
           <tbody>
             {shown.map((r) => (
               <tr key={r.id} className={r.status === "dismissed" ? "off" : ""}>
-                <td><b>{r.full_name}</b><div className="hr-muted">{r.position ?? "посада не вказана"}</div></td>
+                <td><b>{r.full_name}</b>{r.is_office && <span className="emp-pill office" title="Працює в офісі: таймтрекер не чекає від нього даних">офіс</span>}<div className="hr-muted">{r.position ?? "посада не вказана"}</div></td>
                 <td>{r.category ? empCategoryLabel(r.category) : <span className="hr-muted">без категорії</span>}</td>
                 <td>{r.level ? <span className={`emp-lvl ${r.level}`}>{EMP_LEVEL_LABEL[r.level as EmpLevel]}</span> : <span className="hr-muted">—</span>}</td>
                 <td>{r.team_name ?? <span className="hr-muted">—</span>}</td>

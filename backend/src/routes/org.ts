@@ -6,7 +6,7 @@ import type { Db } from "../core/secrets.js";
 import { ImportError } from "../core/employeeImport.js";
 import { uploadPhoto, PeopleError } from "../core/people.js";
 import {
-  OrgError, ORG_DEPTS, loadOrg, myEmployeeId, orgLog, setMyTelegram, moveEmployee, createUnit, updateUnit, deleteUnit, logMyPhoto,
+  OrgError, ORG_DEPTS, loadOrg, myEmployeeId, orgLog, setMyTelegram, moveEmployee, setEmployeeOffice, createUnit, updateUnit, deleteUnit, logMyPhoto,
 } from "../core/orgTree.js";
 
 /**
@@ -97,5 +97,13 @@ orgRouter.put("/people/:employeeId/unit", requirePerm("edit_org"), async (req, r
     const unitId = req.body?.unitId == null ? null : num(req.body.unitId, "id блоку");
     await tx((db) => moveEmployee(db, me(req), num(req.params.employeeId, "id співробітника"), unitId));
     res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+/* 🏢 Галочка «Офісний» зі схеми (10740): бізнес-асистент ставить її тут, бо Найм йому закритий. Межа — `edit_org`. */
+orgRouter.put("/people/:employeeId/office", requirePerm("edit_org"), async (req, res) => {
+  try {
+    const r = await tx((db) => setEmployeeOffice(db, me(req), num(req.params.employeeId, "id співробітника"), req.body?.office));
+    res.json({ ok: true, changed: r.changed });
   } catch (e) { fail(res, e); }
 });

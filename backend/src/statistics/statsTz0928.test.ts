@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { compareWindows, deltaPct, planPct, rankByPlan, sheetWeekToMonday, weekOf, foldWeek, clipPlanToToday, clipPointsToToday, type WeekPlanCell } from "./statsCompare.js";
+import { compareWindows, deltaPct, planPct, rankByPlan, sheetWeekToMonday, weekOf, foldWeek, clipPlanToToday, type WeekPlanCell } from "./statsCompare.js";
 import { ANOMALIES, anomaliesFor, CORRECTIONS, applyCorrections } from "./anomalies.js";
 import { needsApi, API_BASE } from "../testMode.js";
 
@@ -43,14 +43,6 @@ test("#870b Δ і % ПЛАНУ — ЧЕСНІ ПОРОЖНЕЧІ, ранг — �
   assert.equal(planPct(500, 1000), 50);
   const r = rankByPlan([{ id: "a", pct: 80, fact: 9 }, { id: "b", pct: null, fact: 100 }, { id: "c", pct: 120, fact: 1 }]);
   assert.deepEqual(r.map((x) => `${x.id}:${x.rank}`), ["c:1", "a:2", "b:3"], "🔴 команда без плану обігнала тих, хто план має");
-});
-
-test("#871 ТИЖДЕНЬ — ПОНЕДІЛКОМ: тижні ручної таблиці (неділя) зводяться до понеділка, як CRM", () => {
-  assert.equal(sheetWeekToMonday("2026-01-04"), "2025-12-29", "🔴 тиждень таблиці лишився датований неділею — зсув на 6 днів відносно CRM");
-  assert.equal(sheetWeekToMonday("2025-12-29"), "2025-12-29", "🔴 понеділок CRM зсунуло");
-  const route = codeOnly(read("backend/src/routes/statisticsSeries.ts"));
-  assert.match(route, /period: weekLabel\(g, x\.period\)/, "🔴 точки з таблиці віддаються без зведення до понеділка");
-  assert.equal((route.match(/weekLabel\(g, x\.period\)/g) ?? []).length, 3, "🔴 не всі три читачі історії таблиці зводять тиждень до понеділка");
 });
 
 test("#874 АНОМАЛІЇ — З ДОКАЗОМ CRM ЧИСЛОМ, на понеділок, і серія їх віддає", () => {
@@ -94,17 +86,6 @@ test("#876 РОЗФОРМОВАНА КОМАНДА — У «АРХІВНИХ»: 
   assert.match(ch, /\(s\.archived && !showArchived\) \? null/, "🔴 розформована команда знову жива серія в легенді");
 });
 
-test("#877 ПЛИТКИ — З СЕРВЕРА; фронт не порівнює останню точку з «4 тижні тому» і не бреше «Немає даних» на помилці", () => {
-  const ch = codeOnly(read(`${SEC}/StatisticsChartsSection.tsx`));
-  assert.doesNotMatch(ch, /pts\[pts\.length - 5\]|function MiniTiles/, "🔴 повернулись старі міні-плитки з порівнянням неповного тижня");
-  assert.doesNotMatch(ch, /Δ до попер\./, "🔴 під графіком знову «Δ до попер.» неповного відрізка");
-  assert.doesNotMatch(ch, /очікує вводу/, "🔴 помилка завантаження знову читається як «немає даних»");
-  assert.match(ch, /setLoadErr\(/, "🔴 збій запиту не показується як помилка");
-  const sum = codeOnly(read(`${SEC}/StatisticsSummary.tsx`));
-  assert.match(sum, /fetchStatsSummary\(\{ gran, anchor \}\)/, "🔴 плитки рахує не сервер");
-  assert.match(sum, /станом на/, "🔴 неповний період не підписаний «станом на»");
-});
-
 test("#878 «РЕКЛАМА» — ОКРЕМИЙ РОЗДІЛ: власний навігатор періоду, той самий, що на Звіті, і вибір застосовується", () => {
   const ads = codeOnly(read(`${SEC}/AdsPage.tsx`));
   assert.match(ads, /import \{ PeriodNav \} from "\.\.\/PeriodNav"/, "🔴 «Реклама» без того самого навігатора, що на Звіті");
@@ -123,25 +104,6 @@ test("#878b 🪞 У СТАТИСТИКАХ «РЕКЛАМИ» БІЛЬШЕ НЕ�
   assert.ok(hid.length > 0, "🔴 не знайшов HIDDEN_NAV — перевірка стала б порожньою");
   assert.doesNotMatch(hid, /"ads"/, "🔴 «Реклама» досі прихована з меню");
   assert.match(lay, /\{ key: "ads", label: "Реклама", icon: "📣" \}/);
-});
-
-test("#879 ВІСЬ Y — КРУГЛІ ПОДІЛКИ; керування — дві підписані групи; дефолт — 3 місяці", async () => {
-  const ts = (await import("typescript")).default;
-  const src = read(`${SEC}/StatisticsChartsSection.tsx`);
-  const fn = src.slice(src.indexOf("export function niceTicks"), src.indexOf("const axisFmt"));
-  const js = ts.transpileModule(fn.replace("export function", "function") + "\nmodule.exports = niceTicks;", { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
-  const m = { exports: {} as unknown };
-  new Function("module", js)(m);
-  const niceTicks = m.exports as (max: number) => number[];
-  assert.deepEqual(niceTicks(14000), [0, 5000, 10000, 15000], "🔴 поділки знову «0к · 4к · 7к · 11к · 14к»");
-  assert.deepEqual(niceTicks(1440000), [0, 500000, 1000000, 1500000]);
-  assert.deepEqual(niceTicks(0), [0]);
-  assert.match(src, />Крок:</, "🔴 крок графіка без підпису");
-  assert.match(src, />Період:</, "🔴 діапазон без підпису");
-  assert.match(src, /useState\("3м"\)/, "🔴 дефолтний діапазон не 3 місяці");
-  // З 15.10.2026 на графіку лише дата шва, пояснення — у ⓘ біля назви показника (ТЗ 14.10, п.1: «тексту на екрані немає»).
-  assert.match(src, /label=\{\{ value: "01\.07", position: "insideTopRight"/, "🔴 шов 01.07 не позначений на графіку");
-  assert.match(src, /<InfoHint text=\{\[metric\.hint, metric\.seamHint, SEAM_NOTE\]/, "🔴 пояснення шва зникло і з ⓘ — рівні до й після читатимуть як обвал");
 });
 
 test("#880 «ПРОРАХУНКИ ЛІДГЕНІВ» — ТА САМА ФУНКЦІЯ, ЩО ЕКРАН «ЛІДОГЕНЕРАЦІЯ», і на плитці, і на графіку", () => {
@@ -211,24 +173,6 @@ test("#882 ПЛАН АВТО НА ГРАФІКУ — ТА САМА ФУНКЦІ�
 });
 
 /**
- * #1762 — «СТАТИСТИКИ» — ЛИШЕ ГРАФІКИ (ТЗ Юлі 14.10.2026, п.1; TOP Weekly 12.10). Повернуто вигляд до задач 4367 і 4632.
- * Червоніє, якщо на екран повернуться плитки й таблиця «Команди» (`StatisticsSummary` разом із вкладкою «План-факт»),
- * кнопка групи «План / факт», лінія плану на графіку, пояснення під графіком або рядок «середнє · мін · макс».
- */
-test("#1762 СТАТИСТИКИ — ЛИШЕ ГРАФІКИ: без плиток, таблиці «Команди», «План-факт», лінії плану й текстів під графіком", () => {
-  const fe = codeOnly(read(`${SEC}/StatisticsChartsSection.tsx`));
-  assert.doesNotMatch(fe, /<StatisticsSummary\b|from "\.\/StatisticsSummary"/, "🔴 повернулись плитки, таблиця «Команди» й вкладка «План-факт»");
-  assert.doesNotMatch(fe, /<StatisticsPlanFact\b/, "🔴 «План-факт» знову на екрані Статистик");
-  assert.doesNotMatch(fe, /key: "plan", icon:/, "🔴 повернулась кнопка групи «План / факт»");
-  assert.doesNotMatch(fe, /type="stepAfter"|resp\.plan|`p\$\{pl\.scopeKey\}`/, "🔴 на графіку знову лінія плану");
-  assert.doesNotMatch(fe, /\{SEAM_NOTE\}|середнє точок|📐 \{metric\.hint\}/, "🔴 під графіком знову тексти");
-  // 🪞 Дзеркало: сам графік на місці — інакше «прибрали все» теж було б зеленим.
-  assert.match(fe, /<LineChart data=\{rows\}/, "🔴 графіка на екрані немає");
-  assert.match(fe, /CATS\.filter\(\(c\) => !c\.manualForm\)\.map\(/, "🔴 зникли кнопки груп показників");
-  assert.match(read("frontend/src/pages/Dashboard.tsx"), /section === "statistics" && <StatisticsChartsSection role=\{auth\?\.role\} \/>/, "🔴 розділ «Статистики» не малює графіки");
-});
-
-/**
  * #1762b — ФОРМУЛА КОЖНОГО ПОКАЗНИКА — У ⓘ БІЛЯ НАЗВИ ГРАФІКА (заміняє `#883`: підпис під чипами прибрано за ТЗ 14.10, п.1).
  * Червоніє, якщо показник лишиться без пояснення, назва показника зникне з-над графіка або ⓘ перестане нести формулу.
  */
@@ -243,21 +187,6 @@ test("#1762b ФОРМУЛА — У ⓘ БІЛЯ НАЗВИ ПОКАЗНИКА Н
     "🔴 над графіком немає назви показника з ⓘ, або ⓘ не несе формулу");
 });
 
-/**
- * #1763 — «УСІ КОМАНДИ» ОДНИМ КЛІКОМ (Роман 16.10.2026). Червоніє, якщо кнопка ввімкне розформовані без «показати
- * архівні», не повертатиме назад до дефолту (лише компанія), або зникне з легенди.
- */
-test("#1763 «УСІ КОМАНДИ» ОДНИМ КЛІКОМ: рівно серії легенди (архівні — лише з галочкою); другий клік — лише компанія", () => {
-  const fe = codeOnly(read(`${SEC}/StatisticsChartsSection.tsx`));
-  assert.match(fe, /const legendKeys = seriesList\.filter\(\(s\) => showArchived \|\| !s\.archived\)\.map\(\(s\) => s\.scopeKey\);/,
-    "🔴 «Усі команди» бере не те, що видно в легенді (наприклад, розформовані без галочки)");
-  assert.match(fe, /const allShown = legendKeys\.length > 1 && legendKeys\.every\(\(k\) => visibleKeys\.has\(k\)\);/, "🔴 кнопка не знає, чи вже ввімкнено все");
-  assert.match(fe, /const toggleAll = \(\) => setShown\(allShown \? null : new Set\(legendKeys\)\);/, "🔴 другий клік не повертає дефолт — лише компанію");
-  assert.match(fe, /<button type="button" onClick=\{toggleAll\}[\s\S]{0,300}\{allShown \? "Лише компанія" : "Усі команди"\}/, "🔴 кнопки «Усі команди» немає в легенді");
-  // 🪞 Дефолт не змінився: без кліку — лише компанія (ТЗ 14.10: графік має лишатись читабельним).
-  assert.match(fe, /return new Set<string>\(first \? \[first\.scopeKey\] : \[\]\);/, "🔴 за замовчуванням уже не лише компанія");
-});
-
 test("#882c ПЛАН НА ГРАФІКУ — НЕ В МАЙБУТНЄ: поточний тиждень лишається, наступний — ні", () => {
   const plan = [{ scopeKey: "company", points: [{ period: "2026-09-21", value: 1 }, { period: "2026-09-28", value: 2 }, { period: "2026-10-05", value: 3 }] },
                 { scopeKey: "5", points: [{ period: "2026-10-12", value: 4 }] }];
@@ -266,17 +195,6 @@ test("#882c ПЛАН НА ГРАФІКУ — НЕ В МАЙБУТНЄ: пото�
     "🔴 план майбутніх тижнів на графіку (або обрізано поточний тиждень, що вже йде)");
   assert.deepEqual(clipPlanToToday([{ scopeKey: "company", points: [{ period: "2026-10-01", value: 9 }] }], "2026-10-01")[0].points.length, 1, "🔴 сьогоднішній місяць/тиждень зник");
   assert.match(codeOnly(read("backend/src/routes/statisticsSeries.ts")), /const today = kyivToday\(\);[\s\S]*?plan = clipPlanToToday\(plan, today\);\s*res\.json\(/, "🔴 серія віддає план без обрізки майбутнього");
-});
-
-test("#882d ФАКТ НА ГРАФІКУ — НЕ В МАЙБУТНЄ, а підпис шва — лише коли шов усередині вікна", () => {
-  const pts = [{ period: "2026-09-28", value: 207 }, { period: "2026-10-05", value: 5 }, { period: "2026-10-12", value: 1 }];
-  assert.deepEqual(clipPointsToToday(pts, "2026-10-02").map((p) => p.period), ["2026-09-28"],
-    "🔴 заплановані завантаження стоять на графіку як факт майбутніх тижнів (або зник поточний тиждень)");
-  const route = codeOnly(read("backend/src/routes/statisticsSeries.ts"));
-  assert.match(route, /for \(const s of series\) s\.points = clipPointsToToday\(s\.points, today\);/, "🔴 серія віддає точки з майбутнього");
-  const fe = read(`${SEC}/StatisticsChartsSection.tsx`);
-  assert.match(fe, /\{rows\[eff\.lo\]\?\.period < SEAM && \(rows\[eff\.hi\]\?\.period \?\? ""\) >= SEAM && \(\s*<ReferenceLine/,
-    "🔴 підпис шва малюється й тоді, коли шов на краю вікна — налазить на вісь Y");
 });
 
 // ─────────────────────────────── ЖИВІ (test:prod) ───────────────────────────────

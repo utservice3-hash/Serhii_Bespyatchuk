@@ -4,6 +4,7 @@ import { weekPlansForMonth, type WeekPlanRow } from "./weekPlan.js";
 import { receivedByMgr } from "./money.js";
 import { hasPlanSql, stateJoinSql } from "./managerState.js";
 import { teamAtSql, sqlDate } from "./teamAt.js";
+import { poolApplies } from "./planTransferRules.js";
 
 /**
  * ЄДИНЕ ДЖЕРЕЛО «плану на менеджера для ДИСПЛЕЮ» (цеглина 1 міграції, рішення власника).
@@ -18,6 +19,12 @@ import { teamAtSql, sqlDate } from "./teamAt.js";
  *
  * 🔴 Раніше розподіл жив інлайном лише в `buildPeriod` (dashboard.ts), а `/teams` показував
  * сирий актив-план → живий розрив (team14: −25 000). Тепер обидва місця кличуть це ядро.
+ *
+ * 🔁 З ЛИСТОПАДА 2026 АВТОПОДІЛУ НЕМАЄ (задача 10477, `planTransferRules.poolApplies`). План того, хто
+ * пішов, не лягає сам ні на кого: `sharePlan = 0`, а вся сума йде в `orphanPlanByTeam` - тепер це «не
+ * розподілено», а не лише «0 активних у команді». Σ (rows.plan + orphanPlanByTeam) лишається тією самою,
+ * тож план команди не рухається; змінюється лише те, НА КОМУ він лежить. Далі його вручну передає КВП
+ * (`core/planTransfer.ts`). Місяці до листопада рахуються як раніше - закриті місяці заднім числом не чіпаємо.
  */
 
 export interface PlanScope {
@@ -36,7 +43,7 @@ export interface ManagerPlanRow {
 
 export interface ManagerPlanResult {
   rows: ManagerPlanRow[];                 // по одному рядку на АКТИВНОГО менеджера
-  orphanPlanByTeam: Map<number, number>;  // teamId → план звільнених там, де 0 активних
+  orphanPlanByTeam: Map<number, number>;  // teamId → план тих, хто пішов, який ні на кому не лежить (з 11.2026 - увесь)
 }
 
 export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
@@ -95,8 +102,9 @@ export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
     if (!activeByTeam.has(r.team_id)) activeByTeam.set(r.team_id, []);
     activeByTeam.get(r.team_id)!.push(r);
   }
+  const pooled = poolApplies(s.month);
   const share = new Map<number, number>();
-  for (const [tid, members] of activeByTeam) {
+  for (const [tid, members] of pooled ? [] : activeByTeam) {
     const a = tid != null ? agg.get(tid) : undefined;
     if (!a || a.deact <= 0 || members.length === 0) continue;
     const base = Math.floor(a.deact / members.length);
@@ -112,7 +120,7 @@ export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
 
   const orphanPlanByTeam = new Map<number, number>();
   for (const [tid, a] of agg) {
-    if (tid != null && a.nactive === 0 && a.deact > 0) orphanPlanByTeam.set(tid, a.deact);
+    if (tid != null && (pooled || a.nactive === 0) && a.deact > 0) orphanPlanByTeam.set(tid, a.deact);
   }
 
   return { rows, orphanPlanByTeam };
@@ -468,6 +476,30 @@ export async function proratedMonthPlanByManager(from: string, to: string, teamI
     if (frac <= 0) continue;
     const mp = await managerPlan(teamId ? { month: mo, teamId } : { month: mo });
     for (const row of mp.rows) out.set(row.managerId, (out.get(row.managerId) ?? 0) + row.plan * frac);
+  }
+  return out;
+}
+
+/**
+ * 🔁 ПЛАН ТИХ, ХТО ПІШОВ, НА ДОВІЛЬНИЙ ПЕРІОД (задача 10477) - та сама розкладка по робочих днях, що вище, але для
+ * `orphanPlanByTeam`. Екран, що складає план команди з рядків менеджерів, мусить додати це число: з листопада 2026
+ * план того, хто пішов, ні на кому не лежить, і без нього команда «схудла» б рівно на нього. До листопада - нуль
+ * (там діяв автоподіл, і сума вже сиділа в рядках менеджерів).
+ */
+export async function proratedGonePlan(from: string, to: string, teamId: number | null): Promise<number> {
+  let out = 0;
+  for (const mo of monthsInRange(from, to)) {
+    if (!poolApplies(mo)) continue;
+    const wdMonth = workingDaysBetween(mo, monthEndOf(mo));
+    if (wdMonth <= 0) continue;
+    const oF = mo > from ? mo : from;
+    const meEnd = monthEndOf(mo);
+    const oT = meEnd < to ? meEnd : to;
+    if (oF > oT) continue;
+    const frac = workingDaysBetween(oF, oT) / wdMonth;
+    if (frac <= 0) continue;
+    const mp = await managerPlan(teamId ? { month: mo, teamId } : { month: mo });
+    for (const v of mp.orphanPlanByTeam.values()) out += v * frac;
   }
   return out;
 }

@@ -244,7 +244,7 @@ test("#834 ПРОВОДКА ФРОНТУ: меню → секція → три �
   assert.match(layout, /label: "Продаж",\s*items: \[\s*\{ key: "ai-calls"/, "🔴 пункту «Перший дотик · AI» у групі «Продаж» немає");
   const dash = readFileSync(FE("pages/Dashboard.tsx"), "utf8");
   assert.match(dash, /import \{ AiCallsSection \} from "\.\/dashboard\/sections\/AiCallsSection";/, "🔴 секція не імпортована статично");
-  assert.match(dash, /section === "ai-calls" && \([\s\S]{0,200}<AiCallsSection \/>/, "🔴 секція не рендериться на своєму ключі");
+  assert.match(dash, /section === "ai-calls" && \([\s\S]{0,200}<AiCallsSection canSeeCarriers=\{!!screens\?\.includes\("carrier-calls"\)\} roleKey=\{auth\?\.roleKey \?\? null\} \/>/, "🔴 секція не рендериться на своєму ключі");
   assert.doesNotMatch(dash, /lazy\([^)]*AiCallsSection/, "🔴 lazy-імпорт розбив би бандл (#225)");
   // Картку з 29.09.2026 вантажить панель `AiCallDrawer.tsx` — секція разом із нею кличе всі три роути.
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8")
@@ -369,7 +369,11 @@ test("#838 КАРТКА ДЗВІНКА: рядок відкриває панел
   assert.equal(V.promisesLabel(0, 0), "обіцянок немає");
 
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /onClick=\{\(\) => setOpen\(r\.uniqueid\)\}/, "🔴 клік по рядку не відкриває картку цього дзвінка");
+  // 🪟 З 23.11.2026 («два вікна»): клік по рядку ставить розмову в праву панель, а картку ЦЬОГО дзвінка відкриває «Повна
+  // картка» панелі (на вузькому екрані, де панелі немає, — сам клік). Твердження те саме: з рядка — у картку цього дзвінка.
+  assert.match(sec, /const pickRow = \(uniqueid: string\) => \{ if \(narrow\(\)\) setOpen\(uniqueid\); else setSel\(uniqueid\); \};/, "🔴 клік по рядку не веде ні в панель, ні в картку");
+  assert.match(sec, /onClick=\{\(\) => pickRow\(r\.uniqueid\)\}/, "🔴 рядок списку не клікається");
+  assert.match(sec, /onOpenCard=\{\(\) => setOpen\(cur\.uniqueid\)\}/, "🔴 клік по рядку не відкриває картку цього дзвінка");
   assert.match(sec, /<AiCallDrawer uniqueid=\{open\} onClose=\{closeCard\}[\s\S]{0,120}?\/>/, "🔴 секція не малює панель картки");
   assert.ok(!/colSpan=\{7\}/.test(sec), "🔴 повернулось розгортання рядка замість панелі");
   assert.match(sec, /useState<string \| null>\(\(\) => parseCallParam\(window\.location\.search\)\)/, "🔴 ?call= не відкриває картку при завантаженні");
@@ -466,7 +470,8 @@ test("#793 ОБІЦЯНКИ НА ЕКРАНІ: підписи станів, фі
   assert.match(V.deadlineBasisLabel("default_minutes"), /20 хв/);
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /applyListFilter\(d\.rows, lf\)/, "🔴 список не проходить через фільтр воронки/команди/нецільових");
-  assert.match(sec, /PROMISE_UI\[r\.promiseState\]/, "🔴 колонка «Обіцянка» не з серверного стану");
+  // 🪟 З 23.11.2026 стан обіцянки показує права панель (колишня колонка «Обіцянка»).
+  assert.match(readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8"), /PROMISE_UI\[r\.promiseState\]/, "🔴 колонка «Обіцянка» не з серверного стану");
   assert.match(sec, /прибрано: \$\{String\(nonTargetHidden\)\}/, "🔴 не видно, скільки нецільових прибрано");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /c\.promiseChecks\[i\]/, "🔴 картка не показує термін і стан обіцянки");
@@ -489,8 +494,8 @@ test("#855 ТИП РОЗМОВИ: вантаж — у звіт, непевне (
   const ov = (isCargo: boolean) => ({ isCargo, byName: "Т", at: "2026-09-30T10:00:00Z" });
   assert.equal(typeVerdict("vendor", 0.99, ov(true)).inReport, true, "🔴 «Це вантаж» тімліда не повернуло розмову у звіт");
   assert.equal(typeVerdict("cargo_request", 0.99, ov(false)).inReport, false, "🔴 «Це не вантаж» тімліда не прибрало розмову зі звіту");
-  for (const k of ["admin", "team_lead"]) assert.equal(canEditType(k), true, `дзеркало: ${k} мусить змінювати тип`);
-  for (const k of ["ceo", "opdir", "kvp", "manager", "financier", "hr", null]) assert.equal(canEditType(k), false, `🔴 ${String(k)} може змінювати тип`);
+  for (const k of ["admin", "ceo", "team_lead"]) assert.equal(canEditType(k), true, `дзеркало: ${k} мусить змінювати тип`);
+  for (const k of ["opdir", "kvp", "manager", "financier", "hr", null]) assert.equal(canEditType(k), false, `🔴 ${String(k)} може змінювати тип`);
 });
 
 /**
@@ -595,9 +600,9 @@ test("#862 ЗВІТ ТІМЛІДА · ЯДРО: лише звіт, відсот�
 test("#863 КОМЕНТАРІ Й ЗАПИС: права за видом коментаря, заміна й прибирання, роути — право першим, скоуп до запису", async (t) => {
   const { canWriteNote } = await import("./callAiScreen.js");
   for (const k of ["admin", "team_lead", "manager"]) assert.equal(canWriteNote(k, "price"), true, `дзеркало: ${k} пише «чому не озвучено ціну»`);
-  for (const k of ["ceo", "opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "price"), false, `🔴 ${k} пише коментар до ціни`);
+  for (const k of ["opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "price"), false, `🔴 ${k} пише коментар до ціни`);
   for (const k of ["admin", "team_lead"]) assert.equal(canWriteNote(k, "missed"), true, `дзеркало: ${k} пише «Опрацьовано»`);
-  for (const k of ["manager", "ceo"]) assert.equal(canWriteNote(k, "missed"), false, `🔴 ${k} пише «Опрацьовано» — банер гасив би сам собі`);
+  for (const k of ["manager", "opdir"]) assert.equal(canWriteNote(k, "missed"), false, `🔴 ${k} пише «Опрацьовано» — банер гасив би сам собі`);
   assert.equal(canWriteNote("admin", "other"), false);
   const route = SRC("routes/dashboard.ts");
   const body = (head: string) => { const at = route.indexOf(head); assert.ok(at > 0, `🔴 роуту ${head} немає`); const nx = route.indexOf("dashboardRouter.", at + 10); return route.slice(at, nx > at ? nx : undefined); };
@@ -644,7 +649,7 @@ test("#7701 КАРТКА «ПЕРШИЙ ДОТИК»: пул і банер — �
   assert.ok(listenBlock.includes("<CallConversation "), "🔴 плеєр не за дозволом listen");
   assert.match(drw, /const can = c\.noteRights\[kind\];/, "🔴 право писати коментар — не з сервера");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /\{d\.canSeeExcluded && <button type="button" role="tab"/, "🔴 менеджер бачить вкладку «Виключені»");
+  assert.match(sec, /\{d\.canSeeExcluded && <button type="button" className=\{`ftd-pill\$\{tab === "excluded" \? " on" : ""\}`\}/, "🔴 менеджер бачить вкладку «Виключені»");
 });
 
 
@@ -1127,7 +1132,7 @@ test("#899 ЕКРАН D: менеджери не зникають і вибір 
 test("#899b ОДНА КАРТКА: рядок завжди відкриває картку, чек-лист спільний, «Розібрано» — за прапорцями сервера", () => {
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.ok(!/r\.needsReview \? openQueue/.test(sec), "🔴 рядок з черги знову відкриває інший вигляд");
-  assert.match(sec, /onClick=\{\(\) => openQueue\(\)\}>\{reviewedN > 0 \? "Продовжити розбір ›" : "Почати розбір ›"\}/, "🔴 режим «Розбір» не відкривається зі смуги");
+  assert.match(sec, /onClick=\{\(\) => openQueue\(\)\}>\{needNow\.length === 0 \? "Усе розібрано ✓" : reviewedN > 0 \? "Продовжити розбір ›" : "Почати розбір ›"\}/, "🔴 режим «Розбір» не відкривається зі смуги");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
   for (const [name, src] of [["картка", drw], ["черга", qx]] as const) {
@@ -1165,7 +1170,7 @@ test("#900 ПОЗА ТЕЛЕФОНІЄЮ: позначка = виконано, �
 
   const { canWriteNote } = await import("./callAiScreen.js");
   for (const k of ["admin", "team_lead"]) assert.equal(canWriteNote(k, "offline"), true, `дзеркало: ${k} позначає «поза телефонією»`);
-  for (const k of ["manager", "ceo", "opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "offline"), false, `🔴 ${k} позначає «поза телефонією» (менеджеру вимкнено 08.10.2026)`);
+  for (const k of ["manager", "opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "offline"), false, `🔴 ${k} позначає «поза телефонією» (менеджеру вимкнено 08.10.2026)`);
 
   const V = await loadView() as unknown as { PROMISE_UI: Record<string, { label: string; tone: string }> };
   assert.equal(V.PROMISE_UI.broken.tone === "bad", false, "🔴 «немає дзвінка в телефонії» знову червоне — вирок до звірки людиною");
@@ -1336,15 +1341,23 @@ test("#907 ЦІЛЬ ЦІНИ: 50 % за замовчуванням, 1…100, з 
  * `is-closed`, а при «зменшенні руху» — без анімації. Замінює `#796` (стара таблиця з колонкою «Стан»).
  * 08.10.2026 (ТЗ «фінальні доробки»): додано колонку «Успіх» (стан угоди в Kommo). Замінює `#898c`.
  * 🧨 Червоніє, якщо переставити колонки, показати чергу менеджеру, сховати стан «У черзі» чи прибрати анімацію/її вимкнення.
+ *
+ * 🔁 24.11.2026 — НОВИЙ НОМЕР `#10802` (було `#909`): темну смугу «Точка контролю» знято (Роман: «плашка про 23 розмови
+ * зайва, прибери»), тож твердження «смуга черги — лише з правом» стало твердженням про КНОПКУ черги під фільтрами списку.
+ * Решта тверджень перенесена без змін.
  */
-test("#909 ЕКРАН D: колонки з «Успіх», черга лише для тімліда й адміна, згортання в смугу", () => {
+test("#10802 ЕКРАН D: чек-лист і стан у рядку; черга з плеєром — і кнопка, і сама черга — лише для тімліда й адміна; згортання без руху", () => {
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  const heads = [...sec.matchAll(/<th style=\{cell\}>([^<]+)<\/th>/g)].map((m) => m[1]);
-  assert.deepEqual(heads, ["Розмова", "Менеджер", "Про що (AI)", "Чек-лист", "Обіцянка", "Успіх", "Реакція", "Розбір"], `🔴 колонки: ${heads.join(" · ")}`);
-  assert.match(sec, /\{d\.canReview && \(\s*<section aria-label="Черга розбору"/, "🔴 смуга черги без перевірки права");
-  assert.match(sec, /\{d\.canReview && \(\s*<FirstTouchQueue rows=\{queue\} open=\{queueOpen\}/, "🔴 черга без перевірки права");
+  // 🪟 З 23.11.2026 («два вікна») колонок немає: чек-лист і «Розбір» — у рядку списку, «Обіцянка», «Успіх» і «Реакція» —
+  // у правій панелі. Перевіряємо, що жодна з колишніх колонок не зникла з екрана (повний перелік — #10792).
+  const pane909 = readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8");
+  const facts = [/обіцянка: \{PROMISE_UI\[r\.promiseState\]\.label/, /<span className="ftd-sub">обіцянок не було<\/span>/, /угода: \{r\.dealOutcome\.state === "success" \? "успіх"/, /реакція: \{r\.reactionMin == null/].filter((re) => !re.test(pane909));
+  assert.deepEqual(facts.map(String), [], `🔴 колонки: у панелі немає ${facts.map(String).join(" · ")}`);
+  assert.match(sec, /<div className="ftd-li-meta">[\s\S]{0,900}className="ftd-dots"[\s\S]{0,1600}: r\.needsReview \? reviewTodoCell\(r\)/, "🔴 у рядку списку немає чек-листа або стану розбору");
+  assert.match(sec, /\{d\.canReview && <button type="button" className="ftd-pill ftd-qbtn" disabled=\{needNow\.length === 0\}/, "🔴 кнопка черги без перевірки права");
+  assert.match(sec, /\{d\.canReview && \(\s*<FirstTouchQueue rows=\{needNow\} open=\{queueOpen\}/, "🔴 черга без перевірки права");
   assert.match(sec, /const queue = queueRows\(rows\);/, "🔴 черга не з прапорця сервера");
-  assert.match(sec, /: r\.state === "done" \? null : <StateChip state=\{r\.state\} \/>\}<\/td>/, "🔴 стан нерозібраної розмови сховано");
+  assert.match(sec, /: r\.state === "done" \? null : <StateChip state=\{r\.state\} \/>\}\s*<div className="ftd-li-rev">/, "🔴 стан нерозібраної розмови сховано");
   const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
   assert.match(qx, /className=\{`ftd-queue\$\{open \? "" : " is-closed"\}`\}/, "🔴 черга не згортається класом");
   // 28.10.2026 (7183): текст позначки — «Розібрано» або «Погоджено коментар менеджера» (`reviewNoteText`), позначка та сама.
@@ -1728,8 +1741,9 @@ test("#929 ЗГОДА ПІСЛЯ ЦІНИ: тік лише з 13.10, роут в
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /\{sortHead\("decision", "Згода після ціни"\)\}/, "🔴 у блоці менеджерів немає колонки згоди");
   assert.match(sec, /\["agreedLost", "Погодився, а в Kommo втрачено"\]/, "🔴 немає фільтра «погодився, а в Kommo втрачено»");
-  assert.match(sec, />Після ціни<\/th>/, "🔴 у таблиці немає колонки «Після ціни»");
-  assert.match(sec, /r\.checklist\?\.price === "y"\n\s+\? <span className="ftd-sub" title="Згода після ціни розбирається для розмов від 13\.10\.2026">не розбиралось<\/span>/,
+  // 🪟 З 23.11.2026 «Після ціни» — у правій панелі (колишня колонка таблиці).
+  assert.match(readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8"), /після ціни: \{DECISION_UI\[r\.clientDecision\.value\]\.label\}/, "🔴 у таблиці немає колонки «Після ціни»");
+  assert.match(readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8"), /r\.checklist\?\.price === "y"\n\s+\? <span className="ftd-sub" title="Згода після ціни розбирається для розмов від 13\.10\.2026">не розбиралось<\/span>/,
     "🔴 ціну назвали до 13.10 — показано порожнечу замість «не розбиралось»");
   assert.doesNotMatch(sec, /clientDecision[^\n]*priceDiscussed|priceDiscussed[^\n]*clientDecision/, "🔴 фронт сам вирішує, чи показувати згоду");
   const ck = readFileSync(FE("pages/dashboard/sections/FirstTouchChecklist.tsx"), "utf8");
@@ -1760,8 +1774,9 @@ test("#938b ЗГОДА ПОМІТНА І ШУКАЄТЬСЯ: значок у к�
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /\["agreed", "Погодився після ціни"\], \["thinking", "Думає"\], \["declined", "Відмовив"\]/, "🔴 немає трьох кнопок «Погодився / Думає / Відмовив»");
   assert.doesNotMatch(sec, /"Не погодився"/, "🔴 на екрані лишилось «Не погодився»");
-  assert.match(sec, /onClick=\{\(\) => setPreset\(preset === k \? "all" : k\)\}>\{label\} <b>\{scoped\.filter\(TILE_MATCH\[k\]\)\.length\}<\/b>/, "🔴 число на кнопці рахується не тим правилом, що список");
-  assert.match(sec, /<b aria-hidden="true">\{DECISION_UI\[r\.clientDecision\.value\]\.mark\}<\/b>/, "🔴 у таблиці немає значка рішення");
+  assert.match(sec, /onClick=\{\(\) => \{ setPreset\(preset === k \? "all" : k\); goList\(\); \}\}>\{label\} <b>\{scoped\.filter\(TILE_MATCH\[k\]\)\.length\}<\/b>/, "🔴 число на кнопці рахується не тим правилом, що список");
+  // 🪟 З 23.11.2026 значок рішення — у правій панелі (колишня колонка «Після ціни»).
+  assert.match(readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8"), /<b aria-hidden="true">\{DECISION_UI\[r\.clientDecision\.value\]\.mark\}<\/b>/, "🔴 у таблиці немає значка рішення");
   const ck = readFileSync(FE("pages/dashboard/sections/FirstTouchChecklist.tsx"), "utf8");
   assert.match(ck, /className="ftd-decision-mark" style=\{\{ background: tone\.fg \}\}>\{ui\?\.mark \?\? "–"\}<\/span>/, "🔴 у картці немає значка рішення");
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
@@ -1802,7 +1817,7 @@ test("#1780 ЗАКРИТИ УГОДУ · ПРАВИЛА: межа «до Від�
     [{ id: 5, pipeline_id: R.FC_PIPELINE, status_id: 69693668, custom_fields_values: [{ field_id: 2097265, values: null }] }], "🔴 «повернути» не на попередній етап");
   assert.match(R.closeNote("Олена Тімлід", "Відмова ОПР: дорого", "2026-10-16T09:00:00Z"), /Олена Тімлід.*«Відмова ОПР: дорого»/, "🔴 примітка без імені чи причини");
   assert.deepEqual(["team_lead", "admin", "kvp", "manager", "ceo", "opdir", "hr", "financier"].map(R.canCloseDeal),
-    [true, true, true, false, false, false, false, false], "🔴 кнопку отримала не та роль");
+    [true, true, true, false, true, false, false, false], "🔴 кнопку отримала не та роль");
 });
 
 /**
@@ -2035,7 +2050,9 @@ test("#2212 ПРОВОДКА 7183: роут зворотного звʼязку 
   const queue = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
   assert.match(queue, /\{c\.canFeedback && cur && <FeedbackButton uniqueid=\{cur\.uniqueid\} \/>\}/, "🔴 кнопка в черзі не за правом сервера");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /\{d\.canFeedback && <div style=\{\{ marginTop: 4 \}\}><FeedbackButton uniqueid=\{r\.uniqueid\} small \/><\/div>\}/, "🔴 кнопка біля угоди не за правом сервера");
+  // 🪟 З 23.11.2026 кнопка — у правій панелі; право те саме, серверне (`d.canFeedback` → `canFeedback`).
+  assert.match(sec, /<FirstTouchPane key=\{cur\.uniqueid\} row=\{cur\} canReview=\{d\.canReview\} canFeedback=\{d\.canFeedback\}/, "🔴 панель отримує право не від сервера");
+  assert.match(readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8"), /\{canFeedback && <FeedbackButton uniqueid=\{r\.uniqueid\} \/>\}/, "🔴 кнопка біля угоди не за правом сервера");
   assert.match(sec, /CLOSURE_UI\[r\.reviewClosure\]\.label/, "🔴 у таблиці немає підпису, чим закрито");
 });
 
@@ -2965,4 +2982,348 @@ test("#4060 ПІДПИС: імʼя з Kommo перемагає ручне імʼ
   assert.equal(await A.actorDisplayName(c.db, null, "fallback"), "fallback");
   const routes = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
   assert.equal((routes.match(/SELECT full_name AS name FROM users WHERE id = \$1/g) ?? []).length, 0, "🔴 роут знову підписує ручним іменем акаунта");
+});
+
+/**
+ * #10780 — СЕО = АДМІН НА «ПЕРШОМУ ДОТИКУ» (Роман 23.11.2026, «роби і викочуй»; план plans/ceo-first-touch/plan.md).
+ * Олександр Ступаківський заходить роллю СЕО (kriptokoval). Роль СЕО лишається своєю, бо в ній 1×1, якого в адміна немає,
+ * тож розширено шість перевірок екрана, а не роль. Дзеркало: ОД, КВП, менеджер, HR, фінансист — як були
+ * (відкрити «всім адмін-рівня» замість СЕО — червоніє).
+ */
+test("#10780 СЕО = АДМІН НА «ПЕРШОМУ ДОТИКУ»: розбір, коментарі, тип, закриття угоди, зворотний звʼязок, месенджер; решта ролей як були", async () => {
+  const { canWriteNote } = await import("./callAiScreen.js");
+  const { canEditType } = await import("./callAiType.js");
+  const { canCloseDeal } = await import("./firstTouchClose.js");
+  const { canSendCallFeedback } = await import("./firstTouchFeedback.js");
+  const { canSeeMessengerSignal } = await import("./firstTouchMessenger.js");
+  const KINDS = ["price", "offline", "missed", "review", "explain"] as const;
+  const profile = (k: string) => [
+    ...KINDS.map((kind) => canWriteNote(k, kind)), canEditType(k), canCloseDeal(k), canSendCallFeedback(k),
+    canSeeMessengerSignal(k, false), canWriteNote(k, "other"),
+  ];
+  assert.deepEqual(profile("admin"), [true, true, true, true, true, true, true, true, true, false], "дзеркало: профіль адміна змінився — гейт треба перечитати");
+  assert.deepEqual(profile("ceo"), profile("admin"), "🔴 СЕО на «Першому дотику» не дорівнює адміну");
+  const before: Record<string, boolean[]> = {
+    opdir: [false, false, false, false, false, false, false, false, false, false],
+    kvp: [false, false, false, false, false, false, true, true, true, false],
+    manager: [true, false, false, false, true, false, false, false, false, false],
+    hr: [false, false, false, false, false, false, false, false, false, false],
+    financier: [false, false, false, false, false, false, false, false, false, false],
+  };
+  for (const [k, p] of Object.entries(before)) assert.deepEqual(profile(k), p, `🔴 права «${k}» на «Першому дотику» змінились разом із СЕО`);
+});
+
+/**
+ * #10781 — «ПОТРЕБУЄ ДІЇ» = ЛИШЕ ВІДКРИТІ УГОДИ (Роман 23.11.2026, задача 10734 п.1; зустріч 20.11: Юлія 32:33, Сергій 44:38).
+ * Розмова з причиною розбору — рівно в одному кошику: не розібрана й угода відкрита (або невідома) → «Потребує дії»;
+ * не розібрана, а угоду закрито → «Закриті без розбору»; розібрана чи дійшла до рахунку → «Розібрані». У «Розборі по
+ * командах» «Потребує дії» + «Закриті без розбору» = «Лишилось». Число на вкладці «Розбір», черга й типовий список тімліда —
+ * з «Потребує дії».
+ * 🧨 Червоніє, якщо закриту угоду лишити в «Потребує дії», невідому угоду винести з неї, розібрану покласти в «Закриті»,
+ * черзі знову віддати всі нерозібрані, або на вкладці показати інше число, ніж у черзі.
+ *
+ * 🔁 24.11.2026 — НОВИЙ НОМЕР `#10800` (було `#10781`): темної смуги більше немає (Роман: «плашка про 23 розмови зайва,
+ * прибери»), число «Потребує дії» стоїть на вкладці «Розбір». Кошики й команди — ті самі твердження.
+ */
+test("#10800 «ПОТРЕБУЄ ДІЇ» — ЛИШЕ ВІДКРИТІ: три кошики по обидва боки, команди = лишилось, число на вкладці «Розбір» і черга — з відкритих", async () => {
+  const V = await loadView() as unknown as {
+    reviewBucket: (r: unknown) => string | null; inListMode: (r: unknown, m: string) => boolean;
+    reviewByTeam: (rows: readonly unknown[], monday: string) => { teams: { teamId: number | null; week: { left: number } }[]; total: { week: { left: number } } };
+    reviewClosedLeft: (rows: readonly unknown[], monday: string) => { byTeam: Map<number | null, number>; total: number } };
+  const b = (reviewReason: string | null, needsReview: boolean, state: string | null) => V.reviewBucket({ reviewReason, needsReview, dealOutcome: state == null ? null : { state, lossReason: null } });
+  assert.equal(b("noPrice", true, "open"), "need", "🔴 відкрита нерозібрана — не в «Потребує дії»");
+  assert.equal(b("noPrice", true, null), "need", "🔴 невідома угода вийшла з «Потребує дії» через брак даних");
+  assert.equal(b("lost", true, "lost"), "closed", "🔴 закрита «не реалізовано» лишилась у «Потребує дії»");
+  assert.equal(b("noCall", true, "success"), "closed", "🔴 закрита успіхом лишилась у «Потребує дії»");
+  assert.equal(b("noPrice", false, "lost"), "reviewed", "🔴 розібрана закрита потрапила в «Закриті без розбору»");
+  assert.equal(b("late", false, "open"), "reviewed");
+  assert.equal(b(null, false, "lost"), null, "🔴 розмова без причини розбору потрапила в кошик");
+  const row = { reviewReason: "lost", needsReview: true, dealOutcome: { state: "lost" } };
+  assert.deepEqual(["need", "closed", "reviewed", "all"].map((m) => V.inListMode(row, m)), [false, true, false, true], "🔴 режим списку не за кошиком");
+
+  const MON = "2026-11-16";
+  const r = (teamId: number | null, reason: string | null, closure: string | null, state: string | null, day = "2026-11-17") => ({
+    inReport: true, teamId, teamName: teamId == null ? null : `Команда ${String(teamId)}`, calledAt: `${day}T09:00:00Z`, reviewReason: reason,
+    reviewClosure: closure, needsReview: reason != null && closure == null, dealOutcome: state == null ? null : { state, lossReason: null } });
+  const rows = [r(1, "noPrice", null, "open"), r(1, "lost", null, "lost"), r(1, "lost", null, "lost"), r(1, "noPrice", "approved", "lost"),
+    r(2, "noCall", null, "success"), r(2, "late", null, null), r(null, "lost", null, "lost"), r(1, "lost", null, "lost", "2026-11-10")];
+  const rep = V.reviewByTeam(rows, MON), cl = V.reviewClosedLeft(rows, MON);
+  assert.deepEqual([...cl.byTeam.entries()].sort((a, c) => String(a[0]).localeCompare(String(c[0]))), [[1, 2], [2, 1], [null, 1]], "🔴 закриті без розбору по командах не ті (або чужий тиждень)");
+  assert.equal(cl.total, 4);
+  for (const t of rep.teams) {
+    const need = rows.filter((x) => x.teamId === t.teamId && x.calledAt >= `${MON}` && V.reviewBucket(x) === "need").length;
+    assert.equal(t.week.left - (cl.byTeam.get(t.teamId) ?? 0), need, `🔴 команда ${String(t.teamId)}: «Потребує дії» ≠ лишилось − закриті`);
+  }
+  assert.equal(rep.total.week.left - cl.total, 2, "🔴 разом: «Потребує дії» ≠ лишилось − закриті");
+
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /const needNow = queue\.filter\(\(r\) => reviewBucket\(r\) === "need"\);/, "🔴 «Потребує дії» рахується не кошиком");
+  assert.equal(sec.split("const needNow = ").length - 1, 1, "🔴 «Потребує дії» рахується у двох місцях — вкладка й черга розійдуться");
+  assert.match(sec, /\{k === "ctrl" && d\?\.canReview && <b className=\{`ftd-tab-n[^>]*><AnimatedNumber value=\{needNow\.length\} \/><\/b>\}/, "🔴 на вкладці «Розбір» не число «Потребує дії» (або його бачить той, хто не розбирає)");
+  assert.ok(sec.indexOf("const needNow = ") > 0 && sec.indexOf("const needNow = ") < sec.indexOf("const pageTabs = ("), "🔴 число для вкладки рахується після шапки — на скелеті й «Перевізниках» його не буде");
+  assert.match(sec, /<FirstTouchQueue rows=\{needNow\}/, "🔴 черга знову з усіх нерозібраних, і закриті угоди в ній лишились");
+  assert.match(sec, /mode \?\? \(d\.canReview \? "need" : "all"\)/, "🔴 тімлід не починає з «Потребує дії»");
+  assert.match(sec, /const shownD = shown\.filter\(\(r\) => inListMode\(r, listMode\)/, "🔴 список не фільтрується режимом");
+  const blk = readFileSync(FE("pages/dashboard/sections/ReviewByTeamBlock.tsx"), "utf8");
+  assert.match(blk, /const need = l\.week\.left - nClosed;/, "🔴 «Потребує дії» команди — не лишилось − закриті");
+  assert.match(blk, /kvp \? <th style=\{\{ textAlign: "right" \}\}>Лишилось<\/th>/, "🔴 у Звіті КВП зникла колонка «Лишилось» (там — як було)");
+  assert.match(blk, /aria-expanded=\{!collapsed\} aria-controls="ftd-team-body"/, "🔴 «Розбір по командах» не згортається");
+});
+
+/**
+ * #10801 — ВКЛАДКИ «ПЕРШОГО ДОТИКУ» (Роман 23.11.2026, задача 10734 п.2 — обрав «Вкладки на екрані» замість пункту «Аналіз AI»;
+ * 24.11.2026 — фінальний макет: «давай тепер реально таке робити»). «Розбір» — перша: лише список розмов із фільтрами і згорнуте
+ * «Технічне» (конвеєр і витрати); рідкісні фільтри — у панелі «Ще фільтри». «Статистика» — шість плиток ПЕРШИМИ («хочеться бачити
+ * ось ці цифри як основні»), далі «Розбір по командах», ціна, причини, менеджери, адаптація, чіпи. «Перевізники за розмовою» —
+ * тим, кому відкрито екран, і з меню пункт прибрано (ключ і адреса лишились).
+ * 🧨 Червоніє, якщо блоки розповзуться між вкладками, рідкісний фільтр загубиться при переїзді з «Технічного», плитки перестануть
+ * бути першими, «Перевізників» покажуть без права, пункт повернеться в меню чи зникне з редактора ролей, або адреса
+ * `/carrier-calls` перестане відкриватись.
+ *
+ * 🔁 НОВИЙ НОМЕР (було `#10782`): вкладки звались «Контроль» / «Аналітика», на першій стояли темна смуга й «Розбір по командах»,
+ * а фільтри типу запиту, воронки, нецільових і виключених жили в «Технічному». Тепер усе це інакше — твердження нове.
+ */
+test("#10801 ВКЛАДКИ ЕКРАНА: Розбір / Статистика / Перевізники; на «Розборі» — список, рідкісні фільтри в «Ще фільтри», технічне згорнуто; плитки «Статистики» перші; «Перевізники» — з меню у вкладку", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /const FT_PAGE_UA: Record<FtPageT, string> = \{ ctrl: "Розбір", an: "Статистика", car: "Перевізники за розмовою" \};/, "🔴 вкладки названо не «Розбір» / «Статистика» / «Перевізники за розмовою»");
+  const ctrl = sec.indexOf('{page === "ctrl" && (<>'), an = sec.indexOf('{page === "an" && (<>');
+  assert.ok(ctrl > 0 && an > ctrl, "🔴 немає вкладок «Розбір» і «Статистика»");
+  const at = (s: string) => { const i = sec.indexOf(s); assert.ok(i > 0, `🔴 немає ${s}`); return i; };
+  for (const s of ['aria-label="Розмови"', "<MoreFilters count={moreActive}>", '<details className="ftd-card ftd-card-pad ftd-tech">'])
+    assert.ok(at(s) > ctrl && at(s) < an, `🔴 ${s} не в «Розборі»`);
+  const order = ['aria-label="Головні числа"', '<ReviewByTeamBlock variant="ftd"', 'aria-label="Як назвали ціну"', 'aria-label="Чому не назвали ціну"', 'aria-label="Менеджери за чек-листом"', 'aria-label="На адаптації"', 'aria-label="Фільтри розмов"'];
+  for (const s of order) assert.ok(at(s) > an, `🔴 ${s} не в «Статистиці»`);
+  assert.deepEqual(order.map(at), order.map(at).slice().sort((x, y) => x - y), "🔴 блоки «Статистики» не в тому порядку — шість плиток мають стояти першими");
+  // Темної смуги немає — і сказано, ДЕ тепер те, що вона показувала: число на вкладці (`#10800`) і кнопка черги (`#10802`).
+  assert.ok(!sec.includes('<section aria-label="Черга розбору"'), "🔴 темна смуга «Точка контролю» повернулась");
+  assert.ok(sec.includes("ftd-tab-n") && sec.includes('className="ftd-pill ftd-qbtn"'), "🔴 смугу знято, а числа на вкладці чи кнопки черги немає — «Потребує дії» ніде не видно");
+  assert.match(sec, /useState<FtPageT>\("ctrl"\)/, "🔴 першою відкривається не «Розбір»");
+  assert.match(sec, /const pages: FtPageT\[\] = canSeeCarriers \? \["ctrl", "an", "car"\] : \["ctrl", "an"\];/, "🔴 «Перевізники» видно без права на екран (або не видно з правом)");
+  assert.match(sec, /if \(page === "car"\) return \([\s\S]{0,200}<CarrierCallsSection roleKey=\{roleKey\} \/>/, "🔴 вкладка «Перевізники» не рендерить екран перевізників");
+  // Рідкісні фільтри переїхали з «Технічного» в «Ще фільтри» — усі сім, жоден не загубився; у «Технічному» лишився конвеєр.
+  const more = sec.slice(at("<MoreFilters count={moreActive}>"), at("</MoreFilters>"));
+  for (const s of ['id="ai-reqkind"', 'aria-label="Воронка"', 'id="ai-filter"', 'id="ai-nontarget"', 'id="ai-silence"', "Виключені · {excludedCount}", 'id="ai-extype"']) assert.ok(more.includes(s), `🔴 «Ще фільтри» без ${s}`);
+  const techAt = at('<details className="ftd-card ftd-card-pad ftd-tech">');
+  const tech = sec.slice(techAt, sec.indexOf("</details>", techAt));
+  assert.ok(tech.includes("{techMeta}"), "🔴 «Технічне» без рядка конвеєра й витрат");
+  assert.ok(!/id="ai-|aria-label="Воронка"/.test(tech), "🔴 у «Технічному» знову фільтри — їх місце в «Ще фільтри»");
+  assert.match(sec, /const goList = \(\) => \{ setTab\("report"\); setMode\("all"\); setPage\("ctrl"\);/, "🔴 клік у «Статистиці» не веде до списку");
+
+  const layout = readFileSync(FE("components/Layout.tsx"), "utf8");
+  const tm = /TAB_NOT_MENU: ReadonlySet<string> = new Set<string>\(\[([^\]]*)\]\)/.exec(layout);
+  assert.deepEqual(tm ? [...tm[1].matchAll(/"([a-z0-9-]+)"/g)].map((m) => m[1]) : null, ["carrier-calls"], "🔴 з меню прибрано не те (дзеркало: «Перший дотик» має лишитись)");
+  assert.match(layout, /\.filter\(\(it\) => !HIDDEN_NAV\.has\(it\.key\) && !TAB_NOT_MENU\.has\(it\.key\) && allowed\(it\)\)/, "🔴 меню не фільтрує пункти-вкладки");
+  assert.match(layout, /\{ key: "carrier-calls", label: "Перевізники за розмовою"/, "🔴 ключ зник з NAV_GROUPS — тумблер у ролях і адреса зламаються");
+  assert.doesNotMatch(/HIDDEN_NAV[^=]*=\s*new Set[^(]*\(\[([^\]]*)\]/.exec(layout)?.[1] ?? "", /carrier-calls/, "🔴 «Перевізники» в HIDDEN_NAV — адреса редіректить на «Звіт»");
+  const dash = readFileSync(FE("pages/Dashboard.tsx"), "utf8");
+  assert.match(dash, /section === "carrier-calls" && \([\s\S]{0,200}<CarrierCallsSection roleKey=\{auth\?\.roleKey \?\? null\} \/>/, "🔴 адреса /carrier-calls більше не відкриває екран");
+});
+
+/**
+ * #10783 — «ПРАВИЛА РОБОТИ» (Роман 23.11.2026, задача 10734 п.3; Сергій 20.11, 47:11): кнопка поруч із заголовком, панель
+ * з правилами для менеджера й тімліда. Текст — лише про те, що екран робить зараз: повернення закритих угод (8137) не
+ * затверджене, тож у правилах його немає.
+ * 🧨 Червоніє, якщо кнопку прибрати, у правилах немає цілі «0», або туди потрапить незатверджене повернення угод.
+ */
+test("#10783 ПРАВИЛА РОБОТИ: кнопка в шапці, правила менеджера й тімліда, ціль 0; незатвердженого повернення угод немає", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /onClick=\{\(\) => setRulesOpen\(true\)\}>📘 Правила роботи<\/button>/, "🔴 кнопки «Правила роботи» немає");
+  assert.match(sec, /const rulesEl = rulesOpen \? <FirstTouchRules onClose=\{closeRules\} \/> : null;/, "🔴 кнопка нічого не відкриває");
+  assert.ok(sec.indexOf("{rulesEl}") > 0 && sec.indexOf("{rulesEl}") < sec.indexOf("const header = ("), "🔴 панель правил не в шапці — на «Перевізниках» чи скелеті не відкриється");
+  const rules = readFileSync(FE("pages/dashboard/sections/FirstTouchRules.tsx"), "utf8");
+  const text = rules.slice(rules.indexOf("export const RULES_MANAGER"), rules.indexOf("export function FirstTouchRules"));
+  assert.match(text, /«Потребує дії» має бути 0/, "🔴 у правилах тімліда немає цілі 0");
+  assert.match(text, /лише коментар, який написав сам менеджер розмови/, "🔴 правило 7351 зникло з правил");
+  assert.match(text, /«Закриті без розбору»/, "🔴 правила не пояснюють, куди йдуть закриті угоди");
+  assert.doesNotMatch(text, /поверта|8137/i, "🔴 у правилах незатверджене повернення закритих угод (8137)");
+});
+
+/**
+ * #10790 — «РОЗБІР У ДВА ВІКНА», ГРУПИ ПО ДНЯХ (Роман 23.11.2026, макет А). Список ліворуч має підзаголовки днів. День —
+ * ЗА КИЄВОМ: розмова о 22:30 UTC у листопаді — це вже 00:30 наступного київського дня. Група на день одна, навіть коли
+ * рядки дня йдуть не підряд (інакше однакові підзаголовки й однакові React-ключі: на фікстурі це дало 44 рядки з 39).
+ * 🧨 Червоніє, якщо день рахувати за UTC, групувати лише сусідні рядки або переставити розмови всередині дня.
+ */
+test("#10790 ДВА ВІКНА · ГРУПИ ПО ДНЯХ: день за Києвом, одна група на день, найсвіжіший зверху, порядок у дні не міняється", async () => {
+  const V = await loadView() as unknown as {
+    groupByDay: (rows: { calledAt: string; id: string }[], today: string) => { day: string; label: string; rows: { id: string }[] }[];
+    dayLabelUa: (day: string, today: string) => string; kyivDay: (iso: string) => string;
+  };
+  const rows = [
+    { calledAt: "2026-11-22T10:00:00Z", id: "a" },   // 22.11, 12:00 за Києвом
+    { calledAt: "2026-11-23T08:00:00Z", id: "b" },   // 23.11
+    { calledAt: "2026-11-22T22:30:00Z", id: "c" },   // 23.11, 00:30 за Києвом — за UTC це ще 22.11
+    { calledAt: "2026-11-22T21:59:00Z", id: "d" },   // 22.11, 23:59 за Києвом — по інший бік межі
+  ];
+  const g = V.groupByDay(rows, "2026-11-23");
+  assert.deepEqual(g.map((x) => [x.day, x.rows.map((r) => r.id).join("")]), [["2026-11-23", "bc"], ["2026-11-22", "ad"]],
+    "🔴 дні не за Києвом, група не одна на день або порядок у дні змінено");
+  assert.deepEqual(g.map((x) => x.label), ["Сьогодні, 23.11", "Вчора, 22.11"], "🔴 підзаголовки «Сьогодні / Вчора»");
+  assert.equal(V.dayLabelUa("2026-11-21", "2026-11-23"), "21.11, субота", "🔴 старший день без дня тижня");
+  assert.equal(V.kyivDay("2026-06-30T21:30:00Z"), "2026-07-01", "🔴 літній час: 21:30 UTC — це вже наступний київський день");
+  assert.deepEqual(V.groupByDay([], "2026-11-23"), [], "🔴 порожній список дає групу-привид");
+});
+
+/**
+ * #10791 — «ДВА ВІКНА», ЯКУ РОЗМОВУ ПОКАЗАТИ ПРАВОРУЧ. Погодив третю — маєш опинитись на четвертій, а не на початку
+ * списку. Фікстура по обидва боки: обрана на місці · зникла з середини · зникла остання · сусід теж зник · порожньо.
+ * 🧨 Червоніє, якщо після зникнення обраної завжди брати першу.
+ */
+test("#10791 ДВА ВІКНА · ВИБІР: обрана лишається; зникла — наступна за нею, з кінця — попередня; порожній список — нічого", async () => {
+  const V = await loadView() as unknown as { pickSelected: (prev: string[], shown: string[], sel: string | null) => string | null };
+  assert.equal(V.pickSelected(["a", "b", "c"], ["a", "b", "c"], "b"), "b", "🔴 обрана є в списку, а вибір перестрибнув");
+  assert.equal(V.pickSelected(["a", "b", "c", "d"], ["a", "b", "d"], "c"), "d", "🔴 зникла з середини — має стати наступна");
+  assert.equal(V.pickSelected(["a", "b", "c"], ["a", "b"], "c"), "b", "🔴 зникла остання — має стати попередня, а не перша");
+  assert.equal(V.pickSelected(["a", "b", "c", "d", "e"], ["a", "e"], "b"), "e", "🔴 сусіди теж зникли — найближча наступна, що лишилась");
+  assert.equal(V.pickSelected(["a", "b"], [], "a"), null, "🔴 порожній список, а щось обрано");
+  assert.equal(V.pickSelected([], ["x", "y"], null), "x", "🔴 нічого не обрано — перша");
+  assert.equal(V.pickSelected(["a", "b"], ["x", "y"], "zzz"), "x", "🔴 обраної не було й у старому порядку — перша");
+});
+
+/**
+ * #10792 — «ДВА ВІКНА», ТЕКСТ ЧИТАЄТЬСЯ. Привід: скрін Романа 23.11 — у таблиці на 9 колонок опис «Про що (AI)» стискався
+ * до ~250 px і розтягувався на 18 рядків. Тепер у списку опис обрізано до ДВОХ рядків, а повний стоїть у правій панелі.
+ * Дзеркало: обрізка не «ріже всім» — у панелі її немає; а де панелі немає (вузький екран), клік відкриває повну картку.
+ * 🧨 Червоніє, якщо зняти обрізку в списку, обрізати текст у панелі або повернути таблицю з колонкою «Про що (AI)».
+ */
+test("#10792 ДВА ВІКНА · ТЕКСТ ЧИТАЄТЬСЯ: у списку опис у два рядки, у панелі повністю; на вузькому екрані — картка", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const pane = readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  const rule = (sel: string) => new RegExp(`\\n${sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\{([^}]*)\\}`).exec(css)?.[1] ?? null;
+  assert.match(sec, /<p className="ftd-li-sum">\{r\.summary \?\? <span className="ftd-sub">опису ще немає<\/span>\}<\/p>/, "🔴 опис у списку не в обрізаному абзаці (або порожній опис знову «—»)");
+  const li = rule(".ftd-li-sum");
+  assert.ok(li, "🔴 правила .ftd-li-sum немає");
+  assert.match(li!, /-webkit-line-clamp: 2;/, "🔴 опис у списку не обрізано до двох рядків — рядок знову розтягується");
+  assert.match(li!, /overflow: hidden;/, "🔴 обрізка без overflow не працює");
+  // Дзеркало: у панелі той самий опис — повністю.
+  assert.match(pane, /<p className="ftd-pane-text">\{r\.summary\}<\/p>/, "🔴 панель не показує опис");
+  const full = rule(".ftd-pane-text");
+  assert.ok(full, "🔴 правила .ftd-pane-text немає");
+  assert.doesNotMatch(full!, /line-clamp|overflow|max-height|nowrap/, "🔴 опис у панелі теж обрізано — повного тексту немає ніде");
+  assert.doesNotMatch(sec, /Про що \(AI\)<\/th>/, "🔴 повернулась таблиця з вузькою колонкою «Про що (AI)»");
+  // Вузький екран: панель схована, тож клік мусить вести в повну картку (перевірка кліку — #838).
+  assert.match(css, /@media \(max-width: 900px\) \{\s*\.ftd-two \{[^}]*\}\s*\.ftd-list \{[^}]*\}\s*\.ftd-pane \{ display: none; \}/, "🔴 на вузькому екрані панель не ховається");
+  assert.match(sec, /const narrow = \(\) => window\.matchMedia\("\(max-width: 900px\)"\)\.matches;/, "🔴 поріг вузького екрана в коді й у CSS розійшлись");
+  // Порядок на екрані й хід стрілками — з одних груп.
+  assert.match(sec, /const dayGroups = groupByDay\(shownD, today\);\s*const shownIds = dayGroups\.flatMap\(\(g\) => g\.rows\.map\(\(r\) => r\.uniqueid\)\);/, "🔴 стрілки ходять не тим порядком, що на екрані");
+  assert.match(sec, /\{dayGroups\.map\(\(g\) => \(/, "🔴 список малюється не з тих самих груп");
+});
+
+/**
+ * #10793 — «ДВА ВІКНА», ПОГОДЖЕННЯ З ПАНЕЛІ. Четверте місце з кнопкою «Погоджую» (список, черга, картка — #9229c). Правило
+ * те саме: стан — `approveState`, запис — `review` + `reviewNoteText(true)`; сервер однаково відмовить без коментаря
+ * менеджера. Enter погоджує за ТИМ САМИМ станом. «Скасувати» знімає позначку порожнім текстом. Рух вимикається.
+ * 🧨 Червоніє, якщо кнопку показати без стану «can», Enter погоджуватиме будь-яку розмову, або зникне «Скасувати».
+ */
+test("#10793 ДВА ВІКНА · ПОГОДЖЕННЯ: кнопка лише за approveState, той самий запис, Enter за тим самим правилом, «Скасувати», рух вимикається", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const pane = readFileSync(FE("pages/dashboard/sections/FirstTouchPane.tsx"), "utf8");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(pane, /const ap = approveState\(r, canReview\);/, "🔴 панель рахує стан кнопки власною умовою");
+  assert.match(pane, /: ap\?\.kind === "can"\s*\? <button[^>]*onClick=\{onApprove\}[\s\S]{0,200}: ap && <span[^>]*>\{approveWaitText\(ap\)\}<\/span>\}/, "🔴 кнопка в панелі не за станом «can»");
+  assert.ok(!/managerCommented\s*\?\s*<button/.test(pane), "🔴 панель: кнопка за власною умовою managerCommented");
+  assert.match(pane, /import \{ ChecklistBlock \} from "\.\/FirstTouchChecklist";/, "🔴 чек-лист у панелі не спільний з чергою й карткою");
+  assert.match(sec, /const approvePane = async \(uniqueid: string\) => \{[\s\S]{0,260}await putAiCallNote\(uniqueid, "review", reviewNoteText\(true\)\);/, "🔴 панель пише інший запис, ніж черга й картка");
+  assert.match(sec, /else if \(approveState\(cur, d\.canReview\)\?\.kind === "can"\) void approvePane\(cur\.uniqueid\);/, "🔴 Enter погоджує не за станом «can»");
+  assert.match(sec, /if \(\(e\.target as HTMLElement\)\.closest\("button, a, input, textarea, select"\)\) return;/, "🔴 клавіші списку перехоплюють кнопки й поля");
+  assert.match(sec, /await putAiCallNote\(u, "review", ""\); wantSel\.current = u; setReload\(/, "🔴 «Скасувати» не знімає позначку або не повертає до розмови");
+  assert.match(sec, /<button type="button" onClick=\{\(\) => void undoApprove\(\)\}>Скасувати<\/button>/, "🔴 кнопки «Скасувати» немає");
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-li, \.ftd-li::before, \.ftd-seg\.has-ink::before \{ transition: none; \}\s*\.ftd-pane-in, \.ftd-undo, [^{]*\{ animation: none; \}/, "🔴 нові анімації не вимкнено при «зменшенні руху»");
+});
+
+/**
+ * #10803 — «ЩЕ ФІЛЬТРИ» НЕ ВИЇЖДЖАЄ ЗА КРАЙ (Роман 24.11.2026: «кнопка ще фільтри погано відкриває»). Панель стоїть під кнопкою
+ * і зсувається рівно настільки, щоб уміститись у вікно з відступом 12 px; панель, ширша за вікно, притискається до лівого краю.
+ * Зсув рахує чиста `fitShift` (`aiCallsView.ts`), міряє й застосовує `FirstTouchMore.tsx` — на кожному рендері, поки панель
+ * відкрита: вибір усередині змінює рядок фільтрів, кнопка зсувається, і панель мусить піти за нею.
+ * 🧨 Червоніє, якщо панель, що не вміщається, лишити на місці; зсунути ту, що вміщається; міряти прямокутник (він бреше під час
+ * анімації входу); ставити панель один раз при відкритті; або прибрати закриття клавішею Esc чи кліком повз.
+ */
+test("#10803 «ЩЕ ФІЛЬТРИ» НЕ ВИЇЖДЖАЄ ЗА КРАЙ: зсув по обидва боки межі, широка — до лівого краю; панель іде за кнопкою, закривається Esc і кліком повз", async () => {
+  const V = await loadView() as unknown as { fitShift: (l: number, r: number, vw: number, edge?: number) => number; MORE_EDGE_PX: number };
+  assert.equal(V.MORE_EDGE_PX, 12);
+  // вміщається — стоїть рівно під кнопкою (обидва боки правої межі: 1488 ще вміщається, 1489 — уже ні)
+  assert.equal(V.fitShift(100, 440, 1500), 0, "🔴 панель, що вміщається, зсунуто");
+  assert.equal(V.fitShift(1148, 1488, 1500), 0, "🔴 панель рівно на відступі від правого краю зсунуто");
+  assert.equal(V.fitShift(1149, 1489, 1500), -1, "🔴 панель на піксель за відступом лишилась на місці");
+  assert.equal(V.fitShift(1272, 1612, 1500), -124, "🔴 панель за правим краєм не повернулась у вікно");
+  // лівий край — так само по обидва боки
+  assert.equal(V.fitShift(12, 352, 1500), 0, "🔴 панель рівно на відступі від лівого краю зсунуто");
+  assert.equal(V.fitShift(4, 344, 1500), 8, "🔴 панель за лівим краєм не повернулась у вікно");
+  // ширша за вікно — до лівого краю, а не до правого
+  assert.equal(V.fitShift(232, 572, 320), -220, "🔴 панель, ширша за вікно, не притиснута до лівого краю");
+  // властивість на сітці: усе, що в принципі вміщається, після зсуву лежить у вікні; а що вже лежало — не рухається
+  let checked = 0;
+  for (const vw of [360, 390, 760, 1000, 1180, 1500]) for (const w of [280, 300, 336]) for (let left = -40; left <= vw; left += 17) {
+    const dx = V.fitShift(left, left + w, vw);
+    assert.ok(left + dx >= 12 && left + w + dx <= vw - 12, `🔴 після зсуву панель поза вікном: vw=${String(vw)} w=${String(w)} left=${String(left)} dx=${String(dx)}`);
+    if (left >= 12 && left + w <= vw - 12) assert.equal(dx, 0, `🔴 панель, що вміщалась, зсунуто: vw=${String(vw)} left=${String(left)}`);
+    checked++;
+  }
+  assert.ok(checked > 500, "🔴 сітка порожня — властивість нічого не перевірила");
+
+  const more = readFileSync(FE("pages/dashboard/sections/FirstTouchMore.tsx"), "utf8");
+  assert.match(more, /const left = h\.getBoundingClientRect\(\)\.left;\s*const dx = Math\.round\(fitShift\(left, left \+ el\.offsetWidth, document\.documentElement\.clientWidth\)\);/, "🔴 панель міряє не кнопку й свою ширину — під час анімації входу виміряє менше, ніж є");
+  assert.match(more, /useLayoutEffect\(\(\) => \{ if \(open\) place\(\); \}\);/, "🔴 панель ставиться не на кожному рендері — не піде за кнопкою, коли рядок фільтрів зміниться");
+  assert.match(more, /window\.addEventListener\("resize", place\)/, "🔴 панель не переставляється при зміні ширини вікна");
+  assert.match(more, /if \(e\.key === "Escape"\) \{ setOpen\(false\); btn\.current\?\.focus\(\); \}/, "🔴 Esc не закриває панель (або фокус не повертається на кнопку)");
+  assert.match(more, /if \(host\.current && !host\.current\.contains\(e\.target as Node\)\) setOpen\(false\);/, "🔴 клік повз не закриває панель");
+  assert.match(more, /role="dialog" aria-label="Ще фільтри"/, "🔴 панель не названа для читача екрана");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.ok(!sec.includes('<details className="ftd-fdrop"'), "🔴 повернулась випадна панель на <details> — вона не знає про край вікна");
+  assert.match(sec, /<MoreFilters count=\{moreActive\}>/, "🔴 рідкісні фільтри не в панелі «Ще фільтри»");
+});
+
+/**
+ * #10804 — ФІЛЬТРИ «РОЗБОРУ» ЧИТАЮТЬСЯ З ЕКРАНА (Роман 24.11.2026: «фільтра трішки покращ що було більше інтуєтивно»; 23.11:
+ * «додай фільтри по датах як у "звіт"»). Усе ввімкнене — ОДНИМ переліком `active`: з нього плашки під фільтрами, число на
+ * «Ще фільтри» і «Скинути все», тож фільтр не може діяти невидимо. «Стан» фільтрує тим самим `approveState`, що малює кнопку
+ * «Погоджую», і діє лише там, де його видно («Потребує дії» в того, хто розбирає). Період — той самий перемикач, що у «Звіті».
+ * 🧨 Червоніє, якщо фільтр списку не потрапить у перелік (діятиме без плашки), «Скинути все» щось лишить увімкненим або
+ * зачепить «Команду» з шапки, «Стан» матиме власну умову чи фільтруватиме потай в іншому режимі, або період повернеться на
+ * старі кнопки.
+ */
+test("#10804 ФІЛЬТРИ «РОЗБОРУ»: усе ввімкнене — одним переліком (плашки, число на «Ще фільтри», «Скинути все»); «Стан» — тим самим approveState і лише там, де його видно; період — перемикач «Звіту»", async () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const aAt = sec.indexOf("const active: {");
+  assert.ok(aAt > 0, "🔴 немає єдиного переліку ввімкнених фільтрів");
+  const active = sec.slice(aAt, sec.indexOf("\n  ];", aAt));
+  // кожен стан, що звужує список, має рядок у переліку; `more` — ті, що живуть у панелі «Ще фільтри»
+  const want: [string, boolean][] = [['key: "ex"', true], ['key: "tile"', false], ['key: "why"', false], ["key: `r-${k}`", false], ['key: "state"', false], ['key: "mgr"', false],
+    ['key: "kind"', true], ['key: "group"', true], ['key: "nt"', true], ['key: "silence"', true], ['key: "ai"', true], ['key: "q"', false]];
+  for (const [k, inMore] of want) {
+    const line = active.split("\n").find((l) => l.includes(k));
+    assert.ok(line, `🔴 фільтр ${k} не в переліку — діятиме без плашки`);
+    assert.equal(line.includes("more: true"), inMore, `🔴 ${k}: ${inMore ? "живе в «Ще фільтри», а в її число не входить" : "не з панелі, а рахується в її числі"}`);
+  }
+  assert.equal(active.split("\n").filter((l) => l.includes("key: ")).length, want.length + 1, "🔴 у переліку зʼявився фільтр, якого гейт не знає — додай його сюди свідомо");
+  assert.match(sec, /const moreActive = active\.filter\(\(a\) => a\.more\)\.length;/, "🔴 число на «Ще фільтри» рахується не з переліку");
+  assert.match(sec, /\{active\.filter\(\(a\) => a\.key !== "mgr"\)\.map\(\(a\) => <button key=\{a\.key\} type="button" className="ftd-pill on ftd-fpill" onClick=\{a\.off\}/, "🔴 плашки під фільтрами малюються не з переліку");
+  assert.match(sec, /\{active\.length > 0 && <button type="button" className="ftd-reset" onClick=\{resetAll\}>Скинути все<\/button>\}/, "🔴 «Скинути все» видно не тоді, коли щось увімкнено");
+  const rAt = sec.indexOf("const resetAll = () => {");
+  const reset = sec.slice(rAt, sec.indexOf("\n  };", rAt));
+  for (const s of ["setFReasons([])", 'setFApprove("all")', 'setPreset("all")', "setReasonPick(null)", 'setQ("")', "setSilenceOnly(false)", 'setFilter("all")', 'setTab("report")', 'setExType("all")'])
+    assert.ok(reset.includes(s), `🔴 «Скинути все» не робить ${s}`);
+  assert.ok(reset.includes("setLf({ ...DEFAULT_LIST_FILTER, teamId: lf.teamId })"), "🔴 «Скинути все» не скидає менеджера, воронку, тип запиту й нецільові — або скидає «Команду» з шапки");
+
+  // «Стан»: одне правило з кнопкою «Погоджую», три стани — рівно ті, що вміє approveState
+  assert.match(sec, /const stateOn = d\.canReview && tab === "report" && listMode === "need";\s*const fAp = stateOn \? fApprove : "all";/, "🔴 «Стан» діє й там, де його не видно");
+  assert.match(sec, /&& \(fAp === "all" \|\| approveState\(r, d\.canReview\)\?\.kind === fAp\)/, "🔴 «Стан» фільтрує власною умовою, а не approveState — розійдеться з кнопкою «Погоджую»");
+  assert.match(sec, /\{stateOn && \(\s*<select id="ai-approve"/, "🔴 вибір «Стан» видно не лише в «Потребує дії» того, хто розбирає");
+  const ui = /const APPROVE_FILTER_UA: Record<ApproveState\["kind"\], string> = \{([^}]*)\};/.exec(sec)?.[1] ?? "";
+  const V = await loadView() as unknown as { approveState: (r: unknown, can: boolean) => { kind: string } | null };
+  const row = (managerCommented: boolean, note: boolean) => ({ needsReview: true, managerCommented, explainNote: note ? { byName: "Тімлід" } : null });
+  const kinds = [V.approveState(row(true, true), true), V.approveState(row(false, true), true), V.approveState(row(false, false), true)].map((x) => x?.kind);
+  assert.deepEqual(kinds, ["can", "notManager", "wait"], "🔴 approveState більше не дає трьох станів");
+  assert.deepEqual([...ui.matchAll(/(\w+): "/g)].map((m) => m[1]).sort(), kinds.slice().sort(), "🔴 у виборі «Стан» не ті стани, що вміє approveState");
+  assert.equal(V.approveState(row(true, true), false), null, "🔴 той, хто не розбирає, отримав стан погодження");
+
+  // Період — перемикач «Звіту», і запит іде з нього
+  assert.match(sec, /import \{ PeriodStepper, stepperLabel \} from "\.\.\/PeriodStepper";/, "🔴 екран не бере перемикач періоду «Звіту»");
+  assert.match(sec, /const navBar = <PeriodStepper state=\{nav\} onPatch=\{\(patch\) => setNav\(\(st\) => \(\{ \.\.\.st, \.\.\.patch \}\)\)\} today=\{today\} \/>;/, "🔴 період перемикається не тим самим перемикачем, що у «Звіті»");
+  assert.ok(!/from "\.\.\/PeriodNav"/.test(sec), "🔴 на екрані знову старі кнопки періоду");
+  assert.match(sec, /const \{ from, to \} = periodOf\(nav\);/, "🔴 межі запиту — не з перемикача");
+  assert.match(sec, /fetchAiCalls\(\{ from, to \}\)/, "🔴 запит іде не з періоду перемикача");
+  assert.match(sec, /\{stepperLabel\(nav, today\)\}/, "🔴 під фільтрами не сказано, за який період список");
 });

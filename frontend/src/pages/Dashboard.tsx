@@ -1172,7 +1172,7 @@ export function Dashboard() {
       )}
       {section === "ai-calls" && (
         /* 🎧 «Перший дотик · AI». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */
-        <AiCallsSection />
+        <AiCallsSection canSeeCarriers={!!screens?.includes("carrier-calls")} roleKey={auth?.roleKey ?? null} />
       )}
       {section === "carrier-calls" && (
         /* 🚚 «Перевізники за розмовою». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */

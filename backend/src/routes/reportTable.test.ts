@@ -912,17 +912,20 @@ test("#7706 КОРОТКЕ ПОЯСНЕННЯ: у кожної колонки, �
 });
 
 /**
- * #7707 — ШИРИНА «МЕНЕДЖЕР»: межі 70…480, особистий ключ, «як було» = відсутність запису (не нуль).
+ * #10735b — ШИРИНА «МЕНЕДЖЕР»: межі 130…480 (до 10735 було 70: імʼя тепер переноситься, а на 70 px прізвище не влазить у жодну кількість рядків), особистий ключ, «як було» = відсутність запису (не нуль).
  * 🧨 Червоніє, якщо ширину не обмежити (колонка 0 px або на весь екран), писати спільним ключем або
  * читати сміття як число.
  */
-test("#7707 ШИРИНА «МЕНЕДЖЕР»: межі 70…480, ключ rptMgrWidth:<userId>, скидання прибирає запис, сміття — null", async () => {
+test("#10735b ШИРИНА «МЕНЕДЖЕР»: межі 130…480, ключ rptMgrWidth:<userId>, скидання прибирає запис, сміття — null", async () => {
   const { readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_MIN, MGR_W_MAX } = await loadCols();
   assert.deepEqual([clampMgrWidth(5), clampMgrWidth(200.4), clampMgrWidth(5000)], [MGR_W_MIN, 200, MGR_W_MAX]);
   const st: any = { ...memStore(), removeItem(k: string) { st.data.delete(k); } };
   assert.equal(readMgrWidth(st, 42), null, "🔴 без запису ширина не «природна»");
   writeMgrWidth(st, 42, 30);
-  assert.equal(st.getItem("rptMgrWidth:42"), "70", "🔴 ширина пишеться не особистим ключем або без межі");
+  assert.equal(st.getItem("rptMgrWidth:42"), "130", "🔴 ширина пишеться не особистим ключем або без межі 130");
+  assert.equal(MGR_W_MIN, 130, "🔴 «Менеджер» можна звузити вужче за 130 — прізвище не влізе навіть у два рядки");
+  // Збережена до 10735 ширина 70 читається як 130, а не ламає колонку.
+  assert.equal(readMgrWidth({ getItem: () => "70", setItem() {} }, 1), 130, "🔴 стара ширина 70 не підтягується до нової межі");
   assert.equal(readMgrWidth(st, 7), null, "🔴 ширина одного користувача дісталась іншому");
   writeMgrWidth(st, 42, 1000);
   assert.equal(readMgrWidth(st, 42), MGR_W_MAX);
@@ -1010,10 +1013,12 @@ test("#7721 ЧИП СТАНУ ЗВУЖУЄ СПИСОК, А НЕ ПІДСУМО�
   const t = codeOnly(readFileSync(TABLE_TSX, "utf8"));
   assert.match(t, /statusFilter \? data\.managers\.filter\(\(m\) => m\.status === statusFilter\) : data\.managers/,
     "🔴 таблиця звужує рядки не чипом стану");
-  assert.match(t, /scopeLabel = statusFilter \? "Обрані рядки"/, "🔴 підсумок звуженого списку підписаний як «Весь відділ»");
+  // 10752 (23.11.2026): підпис рахує чиста `rowsScopeLabel` (mgrPick.ts) — і від чипа стану, і від вибору менеджерів;
+  // що чип стану дає «Обрані рядки», виконанням стереже `#10752c`. Твердження цього гейта не змінилось — лише форма виразу.
+  assert.match(t, /scopeLabel = rowsScopeLabel\(\{ role: auth\.role, statusFiltered: statusFilter != null,/, "🔴 підсумок звуженого списку підписаний як «Весь відділ»");
   assert.equal(/glance\s*[:=]/.test(t), false, "🔴 у таблиці зʼявився власний розрахунок glance");
   const r = codeOnly(readFileSync(REPORT_TSX, "utf8"));
-  assert.match(r, /shownManagers = \(data\?\.managers \?\? \[\]\)\.filter\(\(m\) => !statusFilter \|\| m\.status === statusFilter\)/,
+  assert.match(r, /shownManagers = pickManagers\(\(data\?\.managers \?\? \[\]\)\.filter\(\(m\) => !statusFilter \|\| m\.status === statusFilter\)/,
     "🔴 картки звужуються не тим самим фільтром, що таблиця");
   assert.match(r, /className="rv-fpill">лише «/, "🔴 немає плашки «лише «…»» — звужений список читається як повний");
   assert.match(r, /statusFilter=\{statusFilter\}/, "🔴 таблиця не отримує фільтр стану");
@@ -1245,7 +1250,7 @@ test("#9510 ШИРИНА КОЛОНОК ЗВІТУ: межі 44…360, ключ 
   assert.deepEqual(readColWidths({ getItem: () => { throw new Error("private"); }, setItem() {} }, 1), {}, "🔴 недоступне сховище ламає таблицю");
   // CSS: позиція = індекс ключа в ПОТОЧНОМУ порядку (+1), лише для колонок із записом.
   const a = colWidthCss(".t", ["rank", "name", "fact", "plan"], { plan: 100 });
-  assert.match(a, /^\.t tr:not\(\.g\) > :nth-child\(4\):not\(\[colspan\]\) \{ width: 100px; min-width: 100px; max-width: 100px;/, "🔴 ширина не на позиції колонки або без обрізання");
+  assert.match(a, /^\.t tr:not\(\.g\) > :nth-child\(4\):not\(\[colspan\]\) \{ width: 100px; min-width: 100px;/, "🔴 ширина не на позиції колонки");
   const b = colWidthCss(".t", ["rank", "name", "plan", "fact"], { plan: 100 });
   assert.match(b, /:nth-child\(3\)/, "🔴 після перестановки ширина лишилась на старій позиції — дісталась сусідові");
   assert.equal(colWidthCss(".t", ["rank", "name", "fact"], { name: 200, rank: 50 }), "", "🔴 «Менеджер» або «#» отримали ширину з цього механізму");
@@ -1264,4 +1269,49 @@ test("#9511 ПРОВОДКА ШИРИНИ: ручка на кожній неза
   assert.match(t, /<style>\{colWidthCss\("table\.rpt-table", colKeys, colW\)\}<\/style>/, "🔴 CSS ширин не за поточним порядком колонок");
   assert.match(t, /onDragStart: \(e: React\.DragEvent\) => \{\s*if \(resizing\.current\) \{ e\.preventDefault\(\); return; \}/, "🔴 під час зміни ширини колонка ще й перетягується");
   assert.match(t, /const \[colW, setColW\] = useState<Record<string, number>>\(\(\) => readColWidths\(colStore\(\), userId\)\);/, "🔴 ширини не читаються з особистого сховища");
+});
+
+/**
+ * #10735 — ↩️ ЗВУЖЕНА КОЛОНКА ПЕРЕНОСИТЬ, А НЕ РІЖЕ (задача 10735, зустріч 20.11.2026: «текст робиться в два рядки»).
+ * До 10735 `colWidthCss` ставив `max-width` + `overflow: hidden` + «…», і в підсумку Звіту читалось «2 041 88…».
+ * Тепер: шапка звуженої колонки переходить на другий рядок; клітинки рядків НЕ обрізаються (лишаються `nowrap`),
+ * тож колонка не стає вужчою за найдовше число.
+ * 🧨 Червоніє, якщо повернути `max-width` / `overflow: hidden` / `text-overflow`, прибрати перенос шапки або
+ * перенести його й на клітинки з числами (число «283 860 ₴» розірвалось би перед «₴»).
+ */
+test("#10735 ЗВУЖЕНА КОЛОНКА ЗВІТУ ПЕРЕНОСИТЬ НАЗВУ, А НЕ РІЖЕ «…»; ЧИСЛА НЕ РІЖУТЬСЯ І НЕ ПЕРЕНОСЯТЬСЯ", async () => {
+  const { colWidthCss } = await loadCols();
+  const css = colWidthCss(".t", ["rank", "name", "fact", "plan"], { fact: 60 });
+  assert.ok(css.length > 0, "🔴 CSS ширини порожній — перевіряти нічого (порожньо = провал)");
+  assert.ok(!/max-width|overflow|text-overflow|ellipsis/.test(css), `🔴 звужена колонка знову обрізає вміст: ${css}`);
+  assert.match(css, /\.t thead tr:not\(\.g\) > th:nth-child\(3\) \{ white-space: normal !important; \}/, "🔴 назва звуженої колонки не переноситься");
+  const cellRule = (css as string).split("\n").find((l: string) => l.includes(":not([colspan])")) ?? "";
+  assert.ok(cellRule.includes("width: 60px") && !/white-space/.test(cellRule), `🔴 перенос зачепив клітинки з числами: ${cellRule}`);
+  // Дзеркало: незвужена колонка нічого не отримує — назви інших колонок лишаються в один рядок, як у макеті 13.11.
+  assert.ok(!/nth-child\(4\)/.test(css), "🔴 перенос дістався колонці, яку не звужували");
+  // Клітинки рядків тримають один рядок інлайном — саме на цьому стоїть «числа не ріжуться».
+  const t = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  assert.match(t, /const tdBase: React\.CSSProperties = \{[^}]*whiteSpace: "nowrap"/s, "🔴 клітинки таблиці більше не в один рядок — число розірветься");
+});
+
+/**
+ * #10735c — ↩️ «МЕНЕДЖЕР» У ЗВУЖЕНІЙ КОЛОНЦІ: імʼя й команда до двох рядків (а не «…» в один), слово стану ховається
+ * вужче за MGR_W_WORD (смужка кольору лишається), повне імʼя, команда й стан — у підказці клітинки.
+ * 🧨 Червоніє, якщо повернути обрізання імені в один рядок, показувати слово стану на будь-якій ширині або прибрати
+ * стан із підказки (тоді у вузькій колонці стан читався б лише кольором).
+ */
+test("#10735c «МЕНЕДЖЕР» ЗВУЖЕНИЙ: імʼя й команда до 2 рядків, слово стану ховається вужче за поріг, стан — у підказці", async () => {
+  const { MGR_W_WORD, MGR_W_MIN, MGR_W_TIGHT } = await loadCols();
+  assert.ok(MGR_W_MIN < MGR_W_WORD && MGR_W_WORD < MGR_W_TIGHT, "🔴 поріг слова стану поза межами ширини — ховатись не буде ніколи або завжди");
+  const t = codeOnly(readFileSync(TABLE_TSX, "utf8"));
+  const cell = t.split('case "name":')[1]?.split('case "status":')[0] ?? "";
+  assert.ok(cell.length > 0, "🔴 клітинку «Менеджер» не знайдено — перевіряти нічого");
+  assert.match(cell, /\{\(mgrW == null \|\| mgrW >= MGR_W_WORD\) && <span className="rv-word"/, "🔴 слово стану не ховається у вузькій колонці");
+  assert.match(cell, /fontWeight: 650, \.\.\.\(mgrW != null \? twoLines :/, "🔴 імʼя у звуженій колонці не переноситься на 2 рядки");
+  assert.match(cell, /fontSize: 11\.5, \.\.\.\(mgrW != null \? twoLines :/, "🔴 команда у звуженій колонці не переноситься на 2 рядки");
+  assert.match(cell, /title=\{mgrW != null \? `\$\{m\.name\} · [^`]*\$\{STATUS_LBL\[m\.status\]/, "🔴 у підказці звуженої клітинки немає стану — у вузькій колонці він читався б лише кольором");
+  assert.ok(!/textOverflow: "ellipsis" \} : \{ minWidth: 210 \}/.test(cell), "🔴 звужена клітинка знову обрізає «…»");
+  const two = t.split("const twoLines: React.CSSProperties = {")[1]?.split("};")[0] ?? "";
+  assert.match(two, /WebkitLineClamp: 2/, "🔴 «до двох рядків» не два");
+  assert.match(two, /whiteSpace: "normal"/, "🔴 без переносу рядків «два рядки» лишаться одним");
 });

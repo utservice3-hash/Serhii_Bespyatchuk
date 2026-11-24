@@ -27,7 +27,7 @@ export type Currency = (typeof CURRENCIES)[number];
 export const VAT_TYPES = ["Без ПДВ", "ПДВ в тому числі", "ПДВ зверху"] as const;
 export type VatType = (typeof VAT_TYPES)[number];
 
-export type OrgKey = "uts" | "elogist" | "avtomuv" | "fop";
+export type OrgKey = "uts" | "elogist" | "avtomuv" | "fop" | "safe";
 export interface OrgRule {
   key: OrgKey;
   short: string;
@@ -41,7 +41,12 @@ export interface OrgRule {
   /** ФОП приймає оплату на кілька рахунків — без явного банку 1С обрала б будь-який (основний не вказано). */
   needsBank?: boolean;
   waits?: string;
+  /** Що сказати, коли `needsBank`, а 1С рахунків не віддала (за замовчуванням — «1С не віддала рахунки ФОП»). */
+  noBanksWaits?: string;
 }
+
+/** Поки 1С не віддає рахунки «Облік сейфу» в `/organizations` — що бачить менеджер замість кнопки. */
+export const SAFE_WAITS = "«Облік сейфу» ще не відкрита в 1С для віджета — щойно 1С її додасть, зʼявиться тут сама.";
 
 /**
  * Коди організацій 1С: 000000002 ЮНАЙТЕД, 000000004 АвтоМув (лист 1С 25.10.2026), 000000012 ТОВ «ЄЛОГІСТ» (Роман,
@@ -54,6 +59,11 @@ export function orgRules(): OrgRule[] {
     { key: "elogist", short: "Єлогіст", name: "ТОВ «ЄЛОГІСТ»", code: "000000012", vat: "with", match: "логіст" },
     { key: "avtomuv", short: "АвтоМув", name: "ТОВ «АвтоМув»", code: "000000004", vat: "without", match: "автомув" },
     { key: "fop", short: "ФОП", name: "ФОП Беспятчук С. С.", code: "000000011", vat: "without", match: "беспятчук", needsBank: true },
+    // 23.11.2026, Роман: «робимо все як у Genesis». У Genesis — 43 рахунки з липня: без ПДВ, UAH (41) / USD / EUR, клієнт
+    // обирає рахунок (Приват UAH чи EUR «Фізична особа» — скрин від 1С), послуги «за маршрутом» і «міжнародного».
+    // Код 000000009 — відповідь 1С 23.11.2026 («не змінюється»). Доступна, щойно `/organizations` віддасть її рахунки.
+    { key: "safe", short: "Сейф", name: "Облік сейфу", code: "000000009", vat: "without", match: "сейф",
+      needsBank: true, noBanksWaits: SAFE_WAITS },
   ];
 }
 
@@ -65,9 +75,11 @@ export function orgRules(): OrgRule[] {
 export const SERVICES: { name: string; orgs: OrgKey[] | "all"; code: string; en?: string }[] = [
   { name: "Організація перевезення в межах території України за маршрутом", orgs: ["uts", "elogist"], code: "000000092" },
   // Англійською — дослівно як у валютних рахунках Genesis (АвтоМув №9130, 02.11.2026).
-  { name: "Організація перевезення за маршрутом", orgs: ["avtomuv", "fop"], code: "000000008", en: "Organization of cargo transportation along the route" },
+  { name: "Організація перевезення за маршрутом", orgs: ["avtomuv", "fop", "safe"], code: "000000008", en: "Organization of cargo transportation along the route" },
   // Як найчастіше в рахунках Genesis (11 із 32 валютних PDF з поля «Посилання інвойс €», 06.11.2026).
   { name: "Організація міжнародного перевезення", orgs: ["avtomuv"], code: "000000179", en: "Organization of international transportation" },
+  // Лише «Облік сейфу»: так у 22 з 43 її рахунків Genesis (лист 1С 23.11.2026); для інших 28.10 вирішили не додавати.
+  { name: "Транспортні послуги", orgs: ["safe"], code: "000000094" },
   { name: "Експедиторські послуги", orgs: "all", code: "000000252" },
   { name: "Штрафні санкції за простій автомобільного транспорту", orgs: "all", code: "000000180" },
 ];

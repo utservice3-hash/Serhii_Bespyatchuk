@@ -99,6 +99,7 @@ import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { overviewCache, OVERVIEW_TTL_MS } from "./core/lazyCache.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
+import { warmStatsSeries, statsSeriesCacheStatus } from "./routes/statisticsSeries.js";
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
@@ -115,14 +116,11 @@ import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { callAiJob } from "./jobs/callAiJob.js";
 import { firstTouchAutoTasks } from "./jobs/firstTouchAutoTasks.js";
 import { carrierCallJob } from "./jobs/carrierCallJob.js";
-import { linkedinQueueJob } from "./jobs/linkedinQueueJob.js";
+import { linkedinStageJob } from "./jobs/linkedinStageJob.js";
 import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
 import { clientLimitsMirror, clientLimitsReset, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON } from "./jobs/counterpartyJobs.js";
 import { minusDealsRouter } from "./routes/minusRegistry.js";
-import { linkedinQueueRouter } from "./routes/linkedinQueue.js";
 import { linkedinRouter } from "./routes/linkedin.js";
-import { leadsBotRouter } from "./routes/leadsBot.js";
-import { leadsBotEnsureWebhook } from "./bot/leadsBot.js";
 import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
 import { payrollRouter } from "./routes/payroll.js";
 import { notificationsRouter } from "./routes/notifications.js";
@@ -224,9 +222,9 @@ app.use("/api/constructor", constructorRouter); // 📄 Конструктор �
 app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)
 app.use("/api/prozorro", prozorroRouter); // 🏛 «Тендери Prozorro» (#5299): статистика + налаштування, межа — вкладка prozorro
 app.use("/api/minus-deals", minusDealsRouter); // 📒 Реєстр мінусових угод — пакет Сергія (20.10.2026), пункт меню «Реєстри»
-app.use("/api/linkedin-queue", linkedinQueueRouter); // 🔗 Черга LinkedIn — список кола й журнал (задача 7361, Налаштування)
-app.use("/api/leads-bot", leadsBotRouter); // 🤖 бот «UTS Заявки» — вебхук (секрет Telegram) і підключення власного акаунта
-app.use("/api/linkedin", linkedinRouter); // 🔗 «Клієнти → LinkedIn» — статистика черги (вкладка linkedin)
+// ⛔ `/api/linkedin-queue` і `/api/leads-bot` (бот черги «UTS Заявки») НЕ МОНТУЮТЬСЯ з задачі 10743 (TOP Weekly 19.11.2026):
+// бота вимкнено, модулі лишено в репозиторії для повернення одним revert.
+app.use("/api/linkedin", linkedinRouter); // 🔗 «Клієнти → LinkedIn» — угоди з LinkedIn і етап «LinkedIn» (вкладка linkedin)
 app.use("/api/counterparty", counterpartyRouter); // 🤝 Узгодження й перевірка контрагента — пакет Сергія (23.10.2026), «Реєстри та узгодження»
 app.use("/api/client-limits", clientLimitsRouter); // 💳 Ліміти клієнтів — той самий пакет, вкладка «Дебіторської заборгованості»
 app.use("/api/payroll", payrollRouter); // 💰 «Зарплата» — пакет Сергія 03.11.2026: система, кабінет «Моя зарплата»
@@ -357,6 +355,10 @@ app.get("/api/health", async (req, res) => {
       // `alertChannel`. `oldestAgeSec` > TTL не буває: протухле не рахується.
       overviewCache: { ttlSec: Math.round(OVERVIEW_TTL_MS / 1000), ...overviewCache.stats() },
       statistics: getStatisticsStatus(),
+      // ⚡ ПАМʼЯТЬ РЯДІВ «СТАТИСТИК» (21.11.2026). Число на картці може бути до `staleSec` старішим за базу — тож
+      // механізм показує себе тут: скільки рядів свіжих, скільки віддано «з фоновим перерахунком», коли й за скільки
+      // пройшов фоновий розрахунок і скільки рядів у ньому не вдалось (`warm.failed` > 0 = дивитись `firstError`).
+      statsSeriesCache: statsSeriesCacheStatus(),
       ringostat: getRingostatStatus(),
       cashIncome: getCashIncomeStatus(),
     });
@@ -524,6 +526,14 @@ cron.schedule("20,50 * * * *", () => {
   if (isKommoPaused()) return;
   void runJob("syncKommoScreens", () => syncKommoScreens());
 }, { timezone: "Europe/Kyiv" });
+
+/**
+ * ⚡ Фоновий розрахунок стандартного набору «Статистик» (21.11.2026, ціль «будь-який графік швидше 3 с») — кожні 10 хв
+ * о :08, :18 … за Києвом, з 07:00 до 21:59: після тіків `syncKommo` (:00/:30), повз десятихвилинні синки (:04, :05).
+ * Вночі не гріємо: екран тоді рахує на вимогу. НЕ через `runJob` і не під наглядом: зупинка фону цифр не псує (ряд
+ * порахується на вимогу), а стан видно в `/api/health` → `statsSeriesCache.warm`. Сам `warmStatsSeries` не кидає.
+ */
+cron.schedule("8-59/10 7-21 * * *", () => { void warmStatsSeries(); }, { timezone: "Europe/Kyiv" });
 
 // 📌 Задачі клієнтам ↔ Kommo (задача 8345) — кожні 10 хв: повтор невдалих і статус «виконано» в обидва боки.
 cron.schedule("5,15,25,35,45,55 * * * *", () => {
@@ -862,12 +872,11 @@ cron.schedule("4,9,14,19,24,29,34,39,44,49,54,59 * * * *", () => {
   void runJob("carrierCallJob", () => carrierCallJob());
 });
 
-// 🔗 ЧЕРГА LINKEDIN (задача 7361, рішення Юлі 03.11.2026): раз на 2 хв — вікно на «Взяти» 15 хв робочого часу, синк
-// угод (30 хв) для нього запізно. Kommo — ОДИН запит на читання (угоди на етапі). Непарні хвилини: не збігаються з
-// :00/:30 `syncKommo`. Перелік, а не «1-59/2» (той самий node-cron, що читає крок у діапазоні інакше — див. carrierCallJob).
-// Під наглядом (`monitoredJobs.ts`), everyMin == крону. Режим — LINKEDIN_QUEUE (порожньо = пробний, лише журнал).
-cron.schedule("1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51,53,55,57,59 * * * *", () => {
-  void runJob("linkedinQueueJob", () => linkedinQueueJob());
+// 📅 ЕТАП «LINKEDIN» БЕЗ БОТА (задача 10743, Роман 23.11.2026): раз на 30 хв — хто зараз на етапі, і раз на добу —
+// хто пішов (плитка «Нових на етапі LinkedIn»). Бот черги з 2-хвилинним тіком вимкнено. Хвилини :11/:41 не збігаються
+// з :00/:30 `syncKommo` і :15/:45 `syncStageEvents`. Kommo — лише читання. Під наглядом, everyMin == крону.
+cron.schedule("11,41 * * * *", () => {
+  void runJob("linkedinStageJob", () => linkedinStageJob());
 });
 
 // 📒 РЕЄСТР МІНУСОВИХ УГОД (пакет Сергія 20.10.2026): звірка відкритих запитів із Kommo раз на 10 хв (ТЗ §9) —
@@ -1152,7 +1161,6 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["catchUpAiChat", () => catchUpAiChat()],
   ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
   ["vaultBotEnsureWebhook", () => vaultBotEnsureWebhook()],
-  ["leadsBotEnsureWebhook", () => leadsBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
   ["freezeNominations", () => runFreezeNominations()],
   ["docText", () => runDocText()],
@@ -1191,3 +1199,6 @@ for (const [name, fn] of deferredStartup) {
   }, startupDelayMs);
   startupDelayMs += 45_000; // сходинки по 45с
 }
+// ⚡ Перший фоновий розрахунок «Статистик» — ПІСЛЯ всіх стартових синків (ще одна сходинка): до нього екран рахує на вимогу.
+setTimeout(() => { void warmStatsSeries(); }, startupDelayMs).unref();
+

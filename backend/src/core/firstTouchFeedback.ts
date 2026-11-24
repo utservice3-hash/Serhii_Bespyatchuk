@@ -8,7 +8,7 @@
 
 /** Хто бачить кнопку й пише: тімлід, КВП, адмін. Менеджеру — ні (інакше «система неправа» на кожну розмову без ціни). */
 export const canSendCallFeedback = (roleKey: string | null | undefined): boolean =>
-  roleKey === "team_lead" || roleKey === "kvp" || roleKey === "admin";
+  roleKey === "team_lead" || roleKey === "kvp" || roleKey === "admin" || roleKey === "ceo"; // ceo — Роман 23.11.2026
 
 export const CALL_FEEDBACK_SECTION = "Перший дотик · AI";
 export const CALL_FEEDBACK_MAX = 2000;

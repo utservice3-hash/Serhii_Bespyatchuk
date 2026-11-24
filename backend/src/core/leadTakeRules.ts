@@ -78,13 +78,21 @@ export interface DealTake {
   offHours: boolean;
 }
 
+/**
+ * ⚙️ ФОРМАТЕР КИЇВСЬКОГО ЧАСУ — ОДИН НА МОДУЛЬ (23.11.2026). Тут стояв `new Intl.DateTimeFormat(...)` УСЕРЕДИНІ `kyivParts`,
+ * тобто новий форматер на кожну заявку. Заміряно: 30 тис. викликів = 2 с ЧИСТОГО процесора, і серія «Часу опрацювання»
+ * кликала його двічі на заявку. Тому холодний графік на проді тримався на 2,3 с, коли база відповідала за 0,3 с, а
+ * фоновий розрахунок раз на 10 хв блокував процес (і відповіді ВСІМ користувачам) шматками по 2 с. Параметри форматера
+ * ті самі — результат не змінюється ні на хвилину; що він один і що числа ті самі, тримає `#10424`.
+ */
+const KYIV_PARTS_FMT = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false,
+});
+
 /** Київські складові моменту (день тижня 0=Нд, година, хвилина, дата). */
 export function kyivParts(ms: number): { y: number; mo: number; d: number; dow: number; h: number; mi: number } {
-  const f = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false,
-  });
-  const p = Object.fromEntries(f.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  const p = Object.fromEntries(KYIV_PARTS_FMT.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
   const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday);
   return { y: Number(p.year), mo: Number(p.month), d: Number(p.day), dow, h: Number(p.hour) % 24, mi: Number(p.minute) };
 }
@@ -283,4 +291,30 @@ export function statsByBucket<R extends TakeRowInput & { createdAt: number }>(ro
     if (arr) arr.push(r); else by.set(k, [r]);
   }
   return [...by.keys()].sort().map((bucket) => ({ bucket, stats: statsOf(by.get(bucket)!, null) }));
+}
+
+/** Рядок серії: рівно те, що потрібно кошику й розрізу, — без назв, посилань і тексту (десятки тисяч заявок у памʼяті). */
+export interface TakeSeriesRow extends TakeRowInput { createdAt: number; teamId: number | null; managerId: number | null }
+
+/**
+ * ✂️ РОЗРІЗ І ПІДПЕРІОД — З УЖЕ ЗАВАНТАЖЕНИХ ЗАЯВОК (21.11.2026). Заміряно на проді: розгорнутий графік робив СІМ
+ * однакових за вагою вибірок (компанія + 6 команд, 1,7 с кожна окремо, 12 с разом), а картка місяця, картка тижня і
+ * графік — ще три, хоча всі вони є підмножинами однієї: заявки команди — це заявки компанії з `team_id` цієї команди
+ * (`leadSelection` у `core/leadTake.ts` ставить рівно таку умову), заявки менеджера — з його `manager_id`, коротший
+ * період — заявки, чия київська дата створення лежить у ньому. Тут ті самі три умови застосовано до рядків, а не до SQL.
+ * 🔴 Умови мусять лишатись ДЗЕРКАЛОМ `leadSelection`: інша умова команди чи дати там — і тут. Тримає `#10420`
+ * (фікстура по обидва боки кожної межі) і `#2444` (серія команди == вікно Звіту на живому Postgres).
+ */
+export function seriesOfTakeRows(rows: readonly TakeSeriesRow[], sel: { from?: string; to?: string; teamId?: number | null; managerId?: number | null }, g: TakeGran): { bucket: string; stats: TakeStats }[] {
+  const picked = rows.filter((r) => {
+    if (sel.managerId && r.managerId !== sel.managerId) return false;
+    if (sel.teamId && r.teamId !== sel.teamId) return false;
+    if (sel.from || sel.to) {
+      const day = kyivBucket(r.createdAt, "day");
+      if (sel.from && day < sel.from) return false;
+      if (sel.to && day > sel.to) return false;
+    }
+    return true;
+  });
+  return statsByBucket(picked, g);
 }

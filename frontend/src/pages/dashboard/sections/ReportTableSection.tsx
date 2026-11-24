@@ -5,7 +5,7 @@ import {
   REPORT_COLS, OPTIONAL_COLS, sortRows, footValue, firstTouchLabel,
   COL_GROUPS, COL_GROUP_OF, readColPrefs, writeColPrefs, resetColPrefs, allColPrefs,
   applyColOrder, moveCol, moveColStep, isPinnedCol, readColOrder, writeColOrder, resetColOrder,
-  isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT,
+  isLockedCol, colVisible, COL_SHORT, readMgrWidth, writeMgrWidth, clampMgrWidth, MGR_W_TIGHT, MGR_W_WORD,
   readColWidths, writeColWidths, clampColWidth, colWidthCss,
   fmtCallback, callbackTone, remakeResetOnce, restoreColsOnce,
   type ColDef, type ColKey, type ColsStore,
@@ -13,6 +13,7 @@ import {
 import { narrowToSlice, type Slice } from "../klassSlice";
 import { VacationMark } from "../VacationMark";
 import { getAuthPayload } from "../../../auth";
+import { pickManagers, isPickNarrowed, rowsScopeLabel } from "../mgrPick";
 
 /**
  * 📊 ТАБЛИЧНИЙ ВИГЛЯД ЗВІТУ — рядок на менеджера за обраний період.
@@ -45,8 +46,11 @@ const viewerUserId = (): number | null => {
 const TOKEN: Record<string, string> = { g: "--ok", a: "--warn", r: "--danger" };
 const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відстає", r: "Зрив" };
 
+/** Типово не приховано нікого — стала посилка, щоб `useMemo` рядків не перераховувався щорендеру. */
+const NO_HIDDEN: readonly number[] = [];
+
 export function ReportTableSection({
-  data, auth, periodLabel, responseByMgr, month, slice, statusFilter, toolbar,
+  data, auth, periodLabel, responseByMgr, month, slice, statusFilter, toolbar, hiddenMgrs = NO_HIDDEN, mgrPicker = null,
 }: {
   data: ReportPlan;
   auth: { role: string; managerId: number | null; teamId: number | null };
@@ -70,6 +74,10 @@ export function ReportTableSection({
    * екран» таблиця додає праворуч у ТОЙ САМИЙ ряд (макет, 13.11.2026).
    */
   toolbar?: React.ReactNode;
+  /** 👥 Приховані менеджери (задача 10752, `mgrPick.ts`) — ще один фільтр рядків поруч із чипом стану. */
+  hiddenMgrs?: readonly number[];
+  /** Кнопка «Менеджери · N з M» від контейнера — стає праворуч, перед «Колонки». */
+  mgrPicker?: React.ReactNode;
 }) {
   const [sortKey, setSortKey] = useState<ColKey>("fact");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -213,7 +221,7 @@ export function ReportTableSection({
     onDragEnd: () => { dragCol.current = null; setDropOn(null); },
   });
   const rows = useMemo(() => {
-    const picked = statusFilter ? data.managers.filter((m) => m.status === statusFilter) : data.managers;
+    const picked = pickManagers(statusFilter ? data.managers.filter((m) => m.status === statusFilter) : data.managers, hiddenMgrs);
     /**
      * 🔀 ЗРІЗ ЗАСТОСОВУЄТЬСЯ ДО РЯДКА ОДИН РАЗ — ТУТ, ПЕРЕД СОРТУВАННЯМ І ПЕРЕД
      * РЕЄСТРОМ КОЛОНОК.
@@ -230,7 +238,7 @@ export function ReportTableSection({
     // лежить у рядку менеджера. Без нього клік по цій колонці нічого не робив би —
     // чип є, сортування мертве.
     return sortRows(base, sortKey, sortDir, { slowByMgr: responseByMgr });
-  }, [data.managers, statusFilter, sortKey, sortDir, responseByMgr, slice]);
+  }, [data.managers, statusFilter, hiddenMgrs, sortKey, sortDir, responseByMgr, slice]);
 
   const onSort = (k: ColKey) => {
     if (k === "rank") return;
@@ -238,7 +246,10 @@ export function ReportTableSection({
     else { setSortKey(k); setSortDir(k === "name" ? 1 : -1); }
   };
 
-  const scopeLabel = statusFilter ? "Обрані рядки" : auth.role === "manager" ? "Команда" : "Весь відділ";
+  /** Рядки звужено — чипом стану чи вибором менеджерів. Від цього залежать підпис і «загальні» числа підсумку. */
+  const pickNarrowed = isPickNarrowed(data.managers, hiddenMgrs);
+  const filtered = statusFilter != null || pickNarrowed;
+  const scopeLabel = rowsScopeLabel({ role: auth.role, statusFiltered: statusFilter != null, pickNarrowed });
   /** Тінь на правому краю — лише коли праворуч справді є сховані колонки (макет, п.4). */
   const scroller = useRef<HTMLDivElement | null>(null);
   const [moreRight, setMoreRight] = useState(false);
@@ -268,6 +279,7 @@ export function ReportTableSection({
       <div className="rv-bar">
         {toolbar}
         <span style={{ flex: 1 }} />
+        {mgrPicker}
         <ColumnPicker
           toggleable={OPTIONAL_COLS.filter((c) => c.key !== "factUndef")}
           locked={REPORT_COLS.filter((c) => isLockedCol(c.key))}
@@ -398,7 +410,8 @@ export function ReportTableSection({
               <tr>
                 {cols.map((c) => (
                   <FootCell key={c.key} col={c} rows={rows} scopeLabel={scopeLabel} count={rows.length}
-                    callbackMedian={statusFilter ? null : data.missedMeta?.medianMin ?? null} />
+                    planGone={filtered ? 0 : data.glance.planGone ?? 0}
+                    callbackMedian={filtered ? null : data.missedMeta?.medianMin ?? null} />
                 ))}
               </tr>
             </tfoot>
@@ -407,7 +420,7 @@ export function ReportTableSection({
       </div>
 
       <div className="rv-under">
-        <MissedOutside data={data} rows={rows} filtered={statusFilter != null} />
+        <MissedOutside data={data} rows={rows} filtered={filtered} />
         <details className="rv-how">
           <summary>Як читати таблицю</summary>
           <p>
@@ -434,6 +447,13 @@ const tdBase: React.CSSProperties = {
   borderBottom: "1px solid var(--border)", fontSize: 13,
 };
 const none = <span style={{ color: "var(--text-muted)", opacity: 0.6 }}>—</span>;
+/**
+ * ↩️ До двох рядків, далі «…» (10735): для імені й команди у ЗВУЖЕНІЙ колонці «Менеджер». Переносимо за словами;
+ * ПІБ із трьох слів, що не влізло й у два рядки, закінчується «…», а повне — у підказці клітинки.
+ */
+const twoLines: React.CSSProperties = {
+  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "normal",
+};
 
 /**
  * Бейдж «Виконано» — у КОЛЬОРІ СТАНУ, як на макеті (13.11.2026). Колір береться з ТОГО САМОГО
@@ -470,23 +490,24 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
       // 🚦 Стан — смужка й слово в клітинці «Менеджер» (макет, п.5): не крапка лише кольором,
       // і не зникає при скролі вправо, бо клітинка закріплена.
       return (
-        <td className="sticky-mgr rv-mcell" title={mgrW != null ? m.name : undefined}
+        <td className="sticky-mgr rv-mcell" title={mgrW != null ? `${m.name} · ${m.teamName ?? "Поза командами"} · ${STATUS_LBL[m.status].toLowerCase()}` : undefined}
           aria-expanded={isOpen}
           style={{ ...st, position: "sticky", left: 0, zIndex: 1, background: isOpen ? "var(--rv-hover)" : "var(--card-bg)", boxShadow: "1px 0 0 var(--border)",
             ["--sc" as string]: `var(${TOKEN[m.status]})`,
-            ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden", textOverflow: "ellipsis" } : { minWidth: 210 }) }}>
-          {/* Як у макеті: імʼя й команда ліворуч, слово стану праворуч. Імʼя обрізається «…»,
-              слово не стискається — у вузькій колонці воно не налазить на прізвище. */}
+            ...(mgrW != null ? { width: mgrW, minWidth: mgrW, maxWidth: mgrW, overflow: "hidden", whiteSpace: "normal" } : { minWidth: 210 }) }}>
+          {/* Як у макеті: імʼя й команда ліворуч, слово стану праворуч. ↩️ Звужена колонка (10735): імʼя й команда
+              ПЕРЕНОСЯТЬСЯ до двох рядків (`twoLines`), а не ріжуться «…»; повне — у підказці клітинки. Вужче за
+              MGR_W_WORD слово стану ховається — лишається смужка кольору стану й підказка. */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
             <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
               <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                <span style={{ fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</span>
+                <span style={{ fontWeight: 650, ...(mgrW != null ? twoLines : { overflow: "hidden", textOverflow: "ellipsis" }) }}>{m.name}</span>
                 {(mgrW == null || mgrW >= MGR_W_TIGHT) && <LevelChip level={m.level} />}
                 <VacationMark managerId={m.managerId} />
               </span>
-              <span style={{ color: "var(--text-muted)", fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" }}>{m.teamName ?? "Поза командами"}</span>
+              <span style={{ color: "var(--text-muted)", fontSize: 11.5, ...(mgrW != null ? twoLines : { overflow: "hidden", textOverflow: "ellipsis" }) }}>{m.teamName ?? "Поза командами"}</span>
             </div>
-            <span className="rv-word" style={{ flexShrink: 0 }}>{STATUS_LBL[m.status].toLowerCase()}</span>
+            {(mgrW == null || mgrW >= MGR_W_WORD) && <span className="rv-word" style={{ flexShrink: 0 }}>{STATUS_LBL[m.status].toLowerCase()}</span>}
           </div>
         </td>
       );
@@ -612,7 +633,9 @@ function CellInner({ col, m, idx, isOpen, responseByMgr, mgrW }: {
   }
 }
 
-function FootCell({ col, rows, scopeLabel, count, group, callbackMedian }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
+function FootCell({ col, rows, scopeLabel, count, group, callbackMedian, planGone = 0 }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
+  /** 🔁 10477: план тих, хто пішов, - ні на кому з рядків не лежить, але в план підсумку входить. Лише для загального підсумку. */
+  planGone?: number;
   /** Підсумок ГРУПИ (команди) всередині таблиці — тонший, ніж загальний унизу. */
   group?: boolean;
   /** ⏱ Медіана передзвону ЦЬОГО підсумку — з сервера одним запитом (медіани не складаються). */
@@ -640,7 +663,12 @@ function FootCell({ col, rows, scopeLabel, count, group, callbackMedian }: { col
     const n = rows.reduce((s, m) => s + (m.missed?.missed ?? 0), 0), nc = rows.reduce((s, m) => s + (m.missed?.noCallback ?? 0), 0);
     return <td style={st}>{n}{nc > 0 && <span style={{ color: "var(--danger)", fontSize: 11, fontWeight: 500 }}> ({nc})</span>}</td>;
   }
-  const f = footValue(col.key, rows);
+  const f0 = footValue(col.key, rows);
+  // 🔁 10477: без цього підсумок плану «схуд» би рівно на план тих, хто пішов, а відсоток виріс би сам собою.
+  const f = planGone > 0 && col.key === "plan" && f0.value != null ? { ...f0, value: f0.value + planGone }
+    : planGone > 0 && col.key === "pct" && f0.extra ? (() => { const e = f0.extra as { num: number; den: number }; const den = e.den + planGone;
+        return { ...f0, value: den > 0 ? Math.round((e.num / den) * 100) : null }; })()
+    : f0;
   // 🎯 Підсумок групи, де жодної людини не виміряно, — «не вимірюється», а не «—» (рецензія 17.09.2026).
   if (col.key === "firstTouch" && rows.length > 0 && rows.every((m) => m.firstTouch?.state !== "measured")) {
     return <td style={{ ...st, color: "var(--text-muted)", fontWeight: 500 }}>не вимірюється</td>;

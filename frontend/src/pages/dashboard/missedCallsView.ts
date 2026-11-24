@@ -1,4 +1,4 @@
-import { addDays, type PeriodState } from "./periodRules";
+import { addDays, navBy, periodOf, type PeriodState } from "./periodRules";
 
 /**
  * 📵 ЧИСТІ ПРАВИЛА ВКЛАДКИ «ПРОПУЩЕНІ ДЗВІНКИ» — без React, щоб гейти бекенду їх ВИКОНУВАЛИ
@@ -120,4 +120,108 @@ export function normLabel(pct: number | null, norm: number | null): string {
   if (norm == null) return "ціль не задана";
   if (pct == null) return `ціль ${String(norm)}%`;
   return pct >= norm ? `ціль ${String(norm)}% · у нормі` : `ціль ${String(norm)}% · нижче норми`;
+}
+
+/* ═══════════════ РЕДИЗАЙН ЕКРАНА 20.11.2026 (план `plans/missed-calls/redesign/redesign-plan.md`) ═══════════════ */
+
+/**
+ * 📱 РОЗБИВКА «НА ЛІНІЮ / НА МОБІЛЬНІ» (рішення Романа 20.11.2026). Дві частини ОДНІЄЇ множини: Σ частин = «Пропущено»
+ * за побудовою. «На лінію» збігається з фільтром Юлі в Ringostat. Відсоток — для ширини смужки.
+ */
+export function mobileSplit(missed: number, missedMobile: number): { line: number; mobile: number; linePct: number } {
+  const mobile = Math.max(0, Math.min(missed, missedMobile));
+  const line = missed - mobile;
+  return { line, mobile, linePct: missed > 0 ? Math.round((line / missed) * 100) : 0 };
+}
+
+/** % передзвону за 24 год від пропущених; `null` — пропущених немає, рахувати нема з чого (не «0 %»). */
+export function callbackPct(r: { missed: number; callbackSelf: number; callbackColleague: number }): number | null {
+  return r.missed > 0 ? Math.round(((r.callbackSelf + r.callbackColleague) / r.missed) * 100) : null;
+}
+
+/**
+ * Попередній ТАКИЙ САМИЙ період — для колонки «Зміна»: вчора для дня, минулий тиждень для тижня, минулий місяць для
+ * місяця, відрізок тієї ж довжини одразу перед діапазоном. Той самий крок, що в стрілки «‹» (`navBy`), тож «зміна»
+ * завжди порівнює з тим, що людина побачить, натиснувши «‹». `null` — діапазон зіпсований.
+ */
+export function prevPeriodOf(s: PeriodState): { from: string; to: string } | null {
+  const patch = navBy(s, -1);
+  return patch ? periodOf({ ...s, ...patch }) : null;
+}
+
+/** Слово для підпису колонки «Зміна»: «до попереднього дня / тижня / місяця / періоду». */
+export function prevPeriodWord(mode: PeriodState["mode"]): string {
+  return mode === "day" ? "дня" : mode === "week" ? "тижня" : mode === "month" ? "місяця" : "періоду";
+}
+
+/** Зміна % передзвону в п.п.; `null`, коли хоча б з одного боку відсотка немає (порожній період ≠ нуль). */
+export function changePp(cur: number | null, prev: number | null): number | null {
+  return cur == null || prev == null ? null : cur - prev;
+}
+
+/**
+ * 🚚 ЗВІДКИ «ПЕРЕВІЗНИКИ» НА ОБОХ ВКЛАДКАХ (Роман 23.11.2026: «пропущені угоди наче звʼязані з аналізом на перевізника,
+ * чи можна це десь прописати»). Один текст на «Дзвінки» і «Угоди», бо довідник один (`carrier_phones`, словник §11/§11a).
+ * AI «Перевізники за розмовою» (§17) у довідник не пише — він закриває угоду в Kommo «Перевізник», а довідник
+ * перебудовується щогодини з історії CRM. Довідник — знімок без історії, тому номер, визнаний перевізником пізніше,
+ * зникає з пропущених і за минулі дні.
+ */
+export const CARRIER_DIRECTORY_HINT =
+  "Перевізники — номери, які в CRM закривали як «Перевізник» (зокрема AI «Перевізники за розмовою» після розмови на мобільний) "
+  + "або які виставляють машини на Ларді; номер з угодою замовника перевізником не є. Список оновлюється щогодини і не памʼятає, "
+  + "коли номер став перевізником: якщо після передзвону номер визнали перевізником, його дзвінки й угоди зникають із пропущених "
+  + "і за минулі дні, тож число за минулий період може трохи зменшитись.";
+
+/**
+ * ⏱ ТРИВАЛІСТЬ СЛОВАМИ: до години — хвилини, далі — години й хвилини, від доби — дні й години.
+ * Баг 20.11.2026 (прохід по екрану на проді): «1334 хв» і «через 790 хв» читались як шум — ніхто не ділить на 60 в голові.
+ * Число те саме, змінюється лише запис; `null` — «—» (рахувати не було з чого), а не «0 хв».
+ */
+export function durText(min: number | null): string {
+  if (min == null || !Number.isFinite(min)) return "—";
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `${String(m)} хв`;
+  const h = Math.floor(m / 60), r = m % 60;
+  if (h < 24) return r ? `${String(h)} год ${String(r)} хв` : `${String(h)} год`;
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh ? `${String(d)} д ${String(rh)} год` : `${String(d)} д`;
+}
+
+export interface CopyRow { name: string; missed: number; pct: number | null; medianMin: number | null; waiting: number; change: number | null }
+/**
+ * Текст «Скопіювати для звіту» — з ТИХ САМИХ рядків, що на екрані таблиці «По командах» (замість окремого блоку «Звіт
+ * тижня», питання 2 плану): тиждень = перемикач «Тиждень», «зміна» = до попереднього такого самого періоду.
+ */
+export function teamsCopyText(title: string, rows: readonly CopyRow[]): string {
+  const p = (v: number | null) => (v == null ? "—" : `${String(v)}%`);
+  const ch = (v: number | null) => (v == null ? "" : ` (${v > 0 ? "+" : ""}${String(v)} п.п.)`);
+  return [`📵 Пропущені дзвінки, ${title}`, ...rows.map((r) =>
+    `${r.name}: пропущено ${String(r.missed)}, передзвонили за 24 год ${p(r.pct)}${ch(r.change)}`
+    + `${r.medianMin != null ? `, час до передзвону ${durText(r.medianMin)}` : ""}, чекають ${String(r.waiting)}`)].join("\n");
+}
+
+/**
+ * 🕳 ЧОМУ В РЯДКУ, ЩО ЧЕКАЄ, НЕМАЄ КНОПКИ «ЗАДАЧА» (баг 20.11.2026: клітинка була порожня, без пояснення).
+ * Причини — рівно ті умови, якими сервер відбирає рядки під задачу (`noCallbackSql`), по черзі:
+ * ще не минула доба · номер невідомий · задача вже стоїть на інший дзвінок того самого номера · номер — перевізник за
+ * історією CRM (єдина умова, що лишається, коли попередні не спрацювали). `null` — пояснювати нема чого.
+ */
+export interface TaskLookup {
+  loaded: boolean;
+  /** Список під задачі обрізано стелею — тоді «немає в списку» нічого не доводить, і причину не вигадуємо. */
+  truncated: boolean;
+  byId: { has: (uniqueid: string) => boolean };
+  byPhone: { get: (phone: string) => { at: string } | undefined };
+  res: Record<string, unknown>;
+}
+export function noTaskReason(t: TaskLookup, r: { uniqueid: string; phone: string | null; waiting: boolean; waitH: number }): string | null {
+  if (!r.waiting || !t.loaded || t.byId.has(r.uniqueid) || t.res[r.uniqueid]) return null;
+  if (r.waitH < 24) return "задача — коли мине доба";
+  if (r.phone == null) return "номер невідомий";
+  const other = t.byPhone.get(r.phone);
+  if (other) {
+    const at = new Date(other.at).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    return `задача — на дзвінок ${at}`;
+  }
+  return t.truncated ? null : "перевізник за історією CRM";
 }

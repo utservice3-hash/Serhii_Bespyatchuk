@@ -471,20 +471,20 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/ai-calls/:uniqueid/recording", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
-  /* Ручний тип розмови (ТЗ 30.09.2026): лише адмін і тімлід (своя команда). Менеджер має вкладку, тож 403 йому дає
+  /* Ручний тип розмови (ТЗ 30.09.2026): лише адмін (і СЕО — Роман 23.11.2026) і тімлід (своя команда). Менеджер має вкладку, тож 403 йому дає
      обробник першим оператором; HR — tab-гейт. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/type", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   /* Коментарі (ТЗ 30.09.2026 п.5, п.6.3): право — першим оператором обробника за видом коментаря. */
   { method: "PUT", path: "/api/dashboard/ai-calls/:uniqueid/note", cls: "deny-only",
     allow: [], deny: ["hr"] },
-  /* ❌ Закрити / повернути угоду в Kommo з картки (рішення Романа 16.10.2026): тімлід (своя команда), адмін, КВП.
+  /* ❌ Закрити / повернути угоду в Kommo з картки (рішення Романа 16.10.2026): тімлід (своя команда), адмін, СЕО (23.11.2026), КВП.
      Запис у Kommo — тож проба лише на відмову. Менеджер — 403 першим оператором; HR — без вкладки. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/close-deal", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/close-deal/revert", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
-  /* 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін; запис у `feedback` — проба лише на відмову.
+  /* 💬 «Зворотний звʼязок» з розмови (задача 7183): тімлід, КВП, адмін, СЕО (23.11.2026); запис у `feedback` — проба лише на відмову.
      Менеджер — 403 першим оператором (`canSendCallFeedback`); HR — без вкладки. */
   { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/feedback", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
@@ -1393,6 +1393,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
   //    вимагає права в ADMIN_DENIED_BY_PERM, а тут межа — роль, не право. Їх 403 стереже `#1542` (`canSetCallsNorm`).
   { method: "POST", path: "/api/plans/calls-norm", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🔁 10477: передати або зняти план менеджера, який пішов, - лише КВП і адмін (`canTransferPlan`), 403 ДО запису.
+  //    CEO/опдир/фінансист теж отримують 403, але в deny їх не пишемо з тієї ж причини, що в нормі дзвінків вище;
+  //    їх 403 стереже `#4033`.
+  { method: "POST", path: "/api/plans/transfer", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/plans/transfer/drop", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/plans/formation/approve", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/plans/formation/repeat-clients", cls: "GET",
@@ -1576,15 +1583,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "POST", path: "/api/telegram/sign-webhook", cls: "deny-only",
     allow: [], deny: [] },
-  // 🤖 Бот «UTS Заявки» (черга LinkedIn, задача 7361): вебхук — секрет Telegram; решта — власний акаунт (як telegram-link).
-  { method: "POST", path: "/api/leads-bot/webhook", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "GET", path: "/api/leads-bot/me", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "POST", path: "/api/leads-bot/link", cls: "deny-only",
-    allow: [], deny: [] },
-  { method: "POST", path: "/api/leads-bot/unlink", cls: "deny-only",
-    allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/integrations/google-ads/conversions.csv", cls: "deny-only",
@@ -1716,9 +1714,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   /* 🎯 «Хантинг» (15.11.2026, ТЗ Івана): межа ПОІМЕННА (`hunt_access`: Іван, Сергій, Олександр), роль не дає нічого —
      навіть адмінська. Проба матриці ходить від userId 0, якого в списку немає, тож КОЖНА роль бачить 403; «людина зі списку
-     може / інша з тією ж роллю ні» тримає живий гейт ядра #3961. Відкритий лише `/access` (тільки «чи показувати пункт»). */
+     може / інша з тією ж роллю ні» тримає живий гейт ядра #3961. Відкритий лише `/access` (тільки «чи показувати пункт»).
+     👁 ФІНАНСИСТ У `allow` З 23.11.2026 (рішення Романа, картка 23.11): 20.11 йому повернули «Найм» на перегляд, а `/api/hunt`
+     стоїть за вкладкою `hiring` — тож `/access` відповідає йому 200 з `allowed:false` (людина не зі списку). Матриця #11 на
+     викаті 47fe375 показала «було 403, стало 200»; рядок відставав від рішення, поведінка коду не мінялась. Решта роутів
+     «Хантингу» нижче лишаються 403 усім ролям, фінансисту теж. */
   { method: "GET", path: "/api/hunt/access", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead", "financier"], deny: ["manager"] },
   { method: "GET", path: "/api/hunt/radar", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/hunt/contacts/activity", cls: "deny-only",
@@ -1995,13 +1997,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🔗 «Клієнти → LinkedIn» (задача 7361): вкладка `linkedin`; менеджер — лише себе, тімлід — команду, керівництво — усіх (Роман 04.11.2026).
   { method: "GET", path: "/api/linkedin/stats", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["financier", "hr"] },
-  // 🔗 Черга LinkedIn (задача 7361): список кола веде Юля (КВП) і адмін — право `manage_linkedin_queue`, перший middleware.
-  { method: "GET", path: "/api/linkedin-queue", cls: "GET",
-    allow: ["admin", "kvp"], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
-  { method: "PUT", path: "/api/linkedin-queue/members", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
-  { method: "PUT", path: "/api/linkedin-queue/pause", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/minus-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/minus-deals/counter", cls: "GET",
@@ -2167,6 +2162,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "DELETE", path: "/api/org/units/:id", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   { method: "PUT", path: "/api/org/people/:employeeId/unit", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
+  /* 🏢 «Офісний» зі схеми (10740, 23.11.2026): той самий `edit_org` (admin, HR, бізнес-асистент). СЕО, ОД, КВП ставлять
+     галочку в картці Найму (`PATCH /api/secrets/employees/:id`), тут — 403 по праву. Тримає #10740e. */
+  { method: "PUT", path: "/api/org/people/:employeeId/office", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "financier", "team_lead", "manager"] },
   /* 👥 КОМАНДИ KOMMO + ДАШБОРД (27.10.2026): список — усім, хто бачить орг-структуру; запис — право `manage_teams`
      (керівництво й HR — рішення Романа 27.10). КВП і фінансист адмінського рівня, але права не мають: 403 по ПРАВУ.

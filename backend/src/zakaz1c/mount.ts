@@ -72,10 +72,12 @@ function orgsForWindow(banks: Map<string, BankAccount[]> | null) {
     const noBanks = o.needsBank && (!own || own.length === 0);
     return {
       key: o.key, short: o.short, name: o.name, match: o.match, available: !!o.code && !noBanks,
-      waits: o.waits ?? (noBanks ? ONEC_WAITS.fopBanks : null),
+      waits: o.waits ?? (noBanks ? (o.noBanksWaits ?? ONEC_WAITS.fopBanks) : null),
       vatTypes: vatTypesFor(o), itemVats: itemVatsFor(o), services: servicesFor(o.key).map((x) => x.name),
       servicesEn: Object.fromEntries(servicesFor(o.key).filter((x) => x.en).map((x) => [x.name, x.en])),
-      banks: own ? own.map((b) => ({ uid: b.uid, label: b.bank || b.name, currency: b.currency, isMain: b.isMain })) : null,
+      // Єдиний рахунок у валюті — обраний одразу (у «Облік сейфу» основний у 1С не вказано: лист 1С 23.11.2026).
+      banks: own ? own.map((b) => ({ uid: b.uid, label: b.bank || b.name, currency: b.currency,
+        isMain: b.isMain || own.filter((x) => x.currency === b.currency).length === 1 })) : null,
     };
   });
 }

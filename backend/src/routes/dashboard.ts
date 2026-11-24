@@ -138,6 +138,7 @@ import * as receivableNotePick from "../core/receivableNotePick.js";
 import { agreementActual, defaultAgreementDeal } from "../core/receivableAgreement.js";
 import * as callLink from "../core/receivableCallLink.js";
 import { callsNormFor } from "../core/callsNormPlan.js";
+import { gonePlans } from "../core/planTransfer.js";
 import { RUBRIC_DEBT_V1, type DebtResult } from "../core/receivableCallAi.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { FX_UAH_SQL } from "../core/receivablesFxSql.js";
@@ -10608,8 +10609,15 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const dFact = dismissed.reduce((s, m) => s + m.fact, 0);
   const dSuc = dismissed.reduce((s, m) => s + m.factSuccess, 0);
   const dPaid = dismissed.reduce((s, m) => s + m.factPaid, 0);
+  // 🔁 10477: план тих, хто пішов, з листопада 2026 ні на кому не лежить («не розподілено»), тож у плані команди
+  // він іде окремим доданком - інакше команда «схудла» б на нього. Список людей - лише коли період у межах одного
+  // місяця: пул місячний, і на «з – по» через межу місяців поіменний розклад збрехав би.
+  const gonePlanTotal = Math.round(await plans.proratedGonePlan(from, to, teamId));
+  const goneList = gonePlanTotal > 0 && from.slice(0, 7) === to.slice(0, 7) && !managerId
+    ? await gonePlans(`${from.slice(0, 7)}-01`, teamId) : [];
   const glance = {
-    plan: managers.reduce((s, m) => s + m.plan, 0),
+    plan: managers.reduce((s, m) => s + m.plan, 0) + (managerId ? 0 : gonePlanTotal),
+    planGone: managerId ? 0 : gonePlanTotal,
     fact: managers.reduce((s, m) => s + m.fact, 0) + dFact,
     factSuccess: managers.reduce((s, m) => s + m.factSuccess, 0) + dSuc,
     factPaid: managers.reduce((s, m) => s + m.factPaid, 0) + dPaid,
@@ -10684,6 +10692,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // писати «минуло 4 з 21 (19%)»: сама частка не дає сказати, ЧОГО 19%.
       workingDaysTotal: wdTotal, workingDaysElapsed: wdElapsed },
     role: auth.role, viewerManagerId, elapsed, remainingWorkdays: remWd, glance, managers,
+    // 🔁 10477: хто пішов із планом за цей місяць. `pool` - не розподілено, `kept` - лишено за людиною як виконане.
+    gonePlans: goneList.map((g) => ({ managerId: g.managerId, name: g.name, teamId: g.teamId, plan: g.plan, kept: g.kept, pool: g.pool, fact: g.fact })),
     // Окремим масивом, а не серед `managers`: у них немає плану, %, світлофора й темпу,
     // тож змішувати їх у той самий список означало б рахувати статуси по людях, яких немає.
     dismissed,
@@ -11892,7 +11902,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
       const residualCarry = { amount: teamCo.amount - acc.amount, deals: teamCo.deals - acc.deals };
       if (residualPlan > 0 || residualFact > 0 || residualCarry.deals !== 0) {
         rows.push({
-          managerId: 0, name: `⚠️ ${tf?.name ?? "команда"}: без активного менеджера (звільнені)`, teamId: tid,
+          managerId: 0, name: `⚠️ ${tf?.name ?? "команда"}: ті, хто пішов (їхній факт і нерозподілений план)`, teamId: tid,
           plan: residualPlan, fact: residualFact,
           pctPlan: residualPlan > 0 ? Math.round((residualFact / residualPlan) * 100) : null,
           remaining: Math.max(0, residualPlan - residualFact), expectedThisMonth: 0,
@@ -12447,15 +12457,21 @@ dashboardRouter.get("/missed-calls/list", async (req, res) => {
   const day = dateParam(req.query.day) ?? kyivToday();
   const scope = missedScopeFor(req.auth!, req.query);
   const onlyNoCallback = req.query.noCallback === "1";
-  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback);
+  // 20.11.2026: `to` — список за весь обраний період (тиждень, місяць), щоб «Кому передзвонити» збігався з числом у смузі.
+  // Не довше 31 дня і не раніше `day`; інакше — один день, як і було. Стеля рядків і `truncated` — ті самі.
+  const toQ = dateParam(req.query.to);
+  const spanDays = toQ ? (Date.parse(toQ) - Date.parse(day)) / 86_400_000 : -1;
+  const to = toQ && spanDays >= 0 && spanDays <= 31 ? toQ : day;
+  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback, to);
   res.json({
-    day, onlyNoCallback, truncated,
+    day, to, onlyNoCallback, truncated,
     // Явний перелік полів, а не `...r`: нова властивість рядка не поїде назовні сама (#17e2).
     rows: rows.map((r) => ({
       uniqueid: r.uniqueid, at: r.at, phone: r.phone, clientKey: r.clientKey,
       managerId: r.managerId, managerName: r.managerName, bucket: r.bucket,
       next: r.next, nextMin: r.nextMin, dealId: r.dealId,
       dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId),
+      mobile: r.mobile, waiting: r.waiting, waitH: r.waitH,
     })),
   });
 });

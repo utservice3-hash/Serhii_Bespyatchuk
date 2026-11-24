@@ -556,6 +556,41 @@ export function reviewByTeam(rows: readonly ReviewTeamRow[], monday: string): Re
   return { days, teams, total };
 }
 
+// ─── 🎯 «Потребує дії» — нуль у черзі (Роман 23.11.2026, задача 10734 п.1; зустріч 20.11: Юлія 32:33, Сергій 44:38) ─────
+/**
+ * Розмова з причиною розбору лежить рівно в одному кошику:
+ *   • `need` — ще не розібрана, угода ВІДКРИТА: це і є «Потребує дії», ціль — 0;
+ *   • `closed` — ще не розібрана, а угоду вже закрито в Kommo («не реалізовано» чи успіх): з «Потребує дії» вона виходить,
+ *     але не зникає — лежить у «Закриті без розбору» і там її можна погодити як завжди;
+ *   • `reviewed` — розібрана тімлідом або дійшла до «Виставлення рахунку».
+ * Без причини розбору — `null`. Стан угоди — від сервера (`dealOutcome`); невідома угода вважається відкритою, щоб
+ * розмова не вийшла з «Потребує дії» через брак даних.
+ */
+export type ReviewBucketT = "need" | "closed" | "reviewed";
+export function reviewBucket(r: { reviewReason: ReviewReasonT | null; needsReview: boolean; dealOutcome: { state: string } | null }): ReviewBucketT | null {
+  if (r.reviewReason == null) return null;
+  if (!r.needsReview) return "reviewed";
+  return r.dealOutcome != null && r.dealOutcome.state !== "open" ? "closed" : "need";
+}
+/** Режим списку: три кошики і «Усі заявки». Підписи — одні на перемикач і на смугу. */
+export type ListModeT = ReviewBucketT | "all";
+export const LIST_MODE_UA: Record<ListModeT, string> = { need: "Потребує дії", closed: "Закриті без розбору", reviewed: "Розібрані", all: "Усі заявки" };
+export const inListMode = (r: Parameters<typeof reviewBucket>[0], mode: ListModeT): boolean => mode === "all" || reviewBucket(r) === mode;
+/**
+ * Скільки з «лишилось» у «Розборі по командах» — уже закриті угоди («Закриті без розбору»), по командах і разом, за той самий
+ * тиждень і тим самим днем розмови, що `reviewByTeam`. Тож «Потребує дії» команди = лишилось − закриті.
+ */
+export function reviewClosedLeft(rows: readonly (ReviewTeamRow & { needsReview: boolean; dealOutcome: { state: string } | null })[], monday: string): { byTeam: Map<number | null, number>; total: number } {
+  const days = new Set(Array.from({ length: 7 }, (_, i) => addDays(monday, i)));
+  const byTeam = new Map<number | null, number>();
+  let total = 0;
+  for (const r of rows) {
+    if (!r.inReport || r.reviewClosure != null || !days.has(kyivDayOf(r.calledAt)) || reviewBucket(r) !== "closed") continue;
+    byTeam.set(r.teamId, (byTeam.get(r.teamId) ?? 0) + 1); total++;
+  }
+  return { byTeam, total };
+}
+
 /** Медіана хвилин (реакція по втрачених) — `null`, якщо даних немає. */
 export function medianMin(xs: readonly (number | null | undefined)[]): number | null {
   const v = xs.filter((x): x is number => typeof x === "number").sort((a, b) => a - b);
@@ -801,4 +836,67 @@ export function priceFormStats(rows: readonly TileRow[]): { lines: PriceFormLine
     return { form, n: g.length, decided, agreed, pct: decided ? Math.round((agreed / decided) * 100) : null };
   });
   return { lines, analysed: named.length, unknown: named.length - lines.reduce((s, l) => s + l.n, 0) };
+}
+
+/**
+ * 🪟 «РОЗБІР У ДВА ВІКНА» (Роман 23.11.2026, макет А): список розмов ліворуч, обрана розмова праворуч.
+ *
+ * `kyivDay` — день розмови ЗА КИЄВОМ (правило проєкту: дати завжди по-київськи). Розмова о 23:30 UTC — це вже наступний
+ * київський день; групувати за UTC означало б покласти вечірні розмови під учорашній підзаголовок.
+ */
+export function kyivDay(iso: string): string {
+  return new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+}
+const WEEKDAY_UA = ["неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"] as const;
+/** Підзаголовок дня у списку: «Сьогодні, 23.11» · «Вчора, 22.11» · «21.11, субота». `today` — київська дата `YYYY-MM-DD`. */
+export function dayLabelUa(day: string, today: string): string {
+  const [y, m, dd] = day.split("-").map(Number);
+  const short = `${String(dd).padStart(2, "0")}.${String(m).padStart(2, "0")}`;
+  const t = Date.UTC(y, m - 1, dd);
+  const [ty, tm, td] = today.split("-").map(Number);
+  const diff = Math.round((Date.UTC(ty, tm - 1, td) - t) / 86400000);
+  if (diff === 0) return `Сьогодні, ${short}`;
+  if (diff === 1) return `Вчора, ${short}`;
+  return `${short}, ${WEEKDAY_UA[new Date(t).getUTCDay()]}`;
+}
+/**
+ * Розмови одного київського дня — ОДНА група, навіть коли у вхідному списку вони йдуть не підряд (сервер сортує не за
+ * часом розмови). Дні — від найсвіжішого; усередині дня порядок рядків як прийшов. Список на екрані й хід стрілками
+ * беруть порядок саме звідси (`groups.flatMap(g => g.rows)`), інакше стрілка «вниз» стрибала б між днями.
+ */
+export function groupByDay<T extends { calledAt: string }>(rows: readonly T[], today: string): { day: string; label: string; rows: T[] }[] {
+  const by = new Map<string, T[]>();
+  for (const r of rows) {
+    const day = kyivDay(r.calledAt);
+    const g = by.get(day);
+    if (g) g.push(r); else by.set(day, [r]);
+  }
+  return [...by.entries()].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0)).map(([day, rs]) => ({ day, label: dayLabelUa(day, today), rows: rs }));
+}
+/**
+ * Яку розмову показувати праворуч. Обрана ще в списку — вона. Обрана ЗНИКЛА (погодили, змінили фільтр) — найближча
+ * наступна з попереднього порядку, що лишилась; за нею — найближча попередня. Не «завжди перша»: після погодження
+ * третьої тімлід має опинитись на четвертій, а не стрибнути на початок списку.
+ */
+export function pickSelected(prevOrder: readonly string[], shown: readonly string[], selected: string | null): string | null {
+  if (shown.length === 0) return null;
+  if (selected != null && shown.includes(selected)) return selected;
+  const i = selected == null ? -1 : prevOrder.indexOf(selected);
+  if (i < 0) return shown[0];
+  const keep = new Set(shown);
+  return [...prevOrder.slice(i + 1), ...prevOrder.slice(0, i).reverse()].find((id) => keep.has(id)) ?? shown[0];
+}
+
+/** Відступ панелі «Ще фільтри» від краю вікна, px. */
+export const MORE_EDGE_PX = 12;
+/**
+ * 🔽 «ЩЕ ФІЛЬТРИ» НЕ ВИЇЖДЖАЄ ЗА КРАЙ (Роман 24.11.2026: «кнопка ще фільтри погано відкриває»). На скільки зсунути панель по
+ * горизонталі, щоб вона вмістилась у вікно: відʼємне — ліворуч, додатне — праворуч, 0 — уже вміщається. `left` / `right` —
+ * краї панелі, якби вона стояла рівно під кнопкою. Панель, ширша за вікно, притискається до ЛІВОГО краю: початок тексту
+ * важливіший за кінець. Чиста функція — гейт ганяє її без браузера; міряє й застосовує `FirstTouchMore.tsx`.
+ */
+export function fitShift(left: number, right: number, viewport: number, edge = MORE_EDGE_PX): number {
+  if (left < edge || right - left > viewport - edge * 2) return edge - left;
+  if (right > viewport - edge) return viewport - edge - right;
+  return 0;
 }

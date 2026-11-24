@@ -578,6 +578,23 @@ CREATE TABLE IF NOT EXISTS calls_norm_plan (
   set_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 🔁 ПЕРЕДАЧА ПЛАНУ МЕНЕДЖЕРА, ЯКИЙ ПІШОВ (задача 10477, 23.11.2026; `core/planTransfer.ts`). Журнал: хто, коли, від кого,
+-- кому, скільки. `transfer` - передано отримувачу; `drop` - знято з плану команди; `keep` - лишено за тим, хто пішов,
+-- як уже виконане (режим «тільки залишок»), і в пул «не розподілено» більше не входить. Самі числа плану живуть у `plans`.
+CREATE TABLE IF NOT EXISTS plan_transfers (
+  id              SERIAL PRIMARY KEY,
+  batch_id        TEXT NOT NULL,
+  month           DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  from_manager_id INTEGER NOT NULL REFERENCES managers(id),
+  to_manager_id   INTEGER REFERENCES managers(id),
+  amount          NUMERIC NOT NULL CHECK (amount > 0),
+  kind            TEXT NOT NULL CHECK (kind IN ('transfer', 'drop', 'keep')),
+  created_by      INTEGER REFERENCES users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((kind = 'transfer') = (to_manager_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_plan_transfers_month ON plan_transfers (month, from_manager_id);
+
 -- 🎯 ЦІЛЬ СЕРЕДНЬОГО ЧЕКА КОМАНДИ НА МІСЯЦЬ (4632, Юля 10.10.2026; `core/avgCheckTarget.ts`). Записується першим
 -- зверненням у місяці й до кінця місяця не рухається. `target` NULL — у команди за 3 місяці менше 30 успішних угод.
 CREATE TABLE IF NOT EXISTS avg_check_targets (
@@ -869,6 +886,11 @@ UPDATE ringostat_calls SET
  WHERE utm_source = '' OR utm_medium = '' OR utm_campaign = '' OR utm_term = '' OR utm_content = '';
 CREATE INDEX IF NOT EXISTS idx_rc_utm_campaign ON ringostat_calls(utm_campaign) WHERE utm_campaign IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rc_client_key ON ringostat_calls(client_key, calldate DESC) WHERE client_key IS NOT NULL;
+-- ⏱ Перший ВИХІДНИЙ дзвінок клієнту після створення заявки («Час опрацювання заявки», `core/leadTake.ts loadRows`).
+-- EXPLAIN ANALYZE на проді 21.11.2026: через idx_rc_client_key цей пошук читав усі дзвінки клієнта й відкидав
+-- невихідні в купі (29 709 пошуків, 505 053 відкинуті рядки, 46 404 блоки з диска, 1,16 с із 1,68 с запиту).
+-- Частковий індекс лише вихідних дає перший дзвінок одним кроком по індексу. Числа не змінює: це шлях доступу, не умова.
+CREATE INDEX IF NOT EXISTS idx_rc_client_out ON ringostat_calls(client_key, calldate) WHERE call_type IN ('out', 'transitout');
 CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_manager    ON ringostat_calls(manager_id, calldate DESC) WHERE manager_id IS NOT NULL;
@@ -7153,6 +7175,11 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS category TEXT;
 ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_category_check;
 ALTER TABLE employees ADD CONSTRAINT employees_category_check
   CHECK (category IS NULL OR category IN ('manager','teamlead','leadgen','accounting','finance','management','office','it'));
+-- 🏢 ОФІСНИЙ (23.11.2026, задача 10740, рішення Романа): галочка в картці Найму. true = людина працює в офісі, і таймтрекер
+-- не чекає від неї даних (порожній день — «в офісі», не прогул). Їде в реєстр трекера полем `office` (`auth/trackerRoster.ts`).
+-- НЕ залежить від категорії (категорія `office` — це вид роботи, а не формат). Бекфілу немає: false усім, ставить HR руками.
+-- ⚠️ revert коду колонку не прибирає, але без коду її ніхто не читає.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_office BOOLEAN NOT NULL DEFAULT false;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'employees_one_team') THEN
     ALTER TABLE employees ADD CONSTRAINT employees_one_team CHECK (team_id IS NULL OR dashboard_team_id IS NULL);

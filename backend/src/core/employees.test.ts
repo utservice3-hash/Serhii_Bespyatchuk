@@ -321,6 +321,34 @@ test("#569 ЖИВИЙ SQL: редагування — статус узгодж�
 });
 
 /**
+ * #10740c — «ОФІСНИЙ» У КАРТЦІ НАЙМУ (задача 10740, рішення Романа 23.11.2026): галочка зберігається лише справжнім
+ * true/false — рядок «так», «true», 1 чи null дають 400 і нічого не пишуть (не вгадуємо); true → false → true пишеться,
+ * повтор без зміни — ні; у списку реєстру галочка видна.
+ * 🧨 Червоніє, якщо прибрати перевірку типу (рядок піде в колонку) або не віддавати `is_office` у списку.
+ */
+test("#10740c ЖИВИЙ SQL: «Офісний» — лише true/false, «так» і 1 — 400 без запису; список віддає галочку", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const emp = await import("./employees.js");
+  try {
+    await emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active");
+    const id = (await s.c.query(`SELECT id FROM employees WHERE import_key = 'сидоренко марія'`)).rows[0].id as number;
+    const office = async () => (await s.c.query(`SELECT is_office FROM employees WHERE id = $1`, [id])).rows[0].is_office;
+    assert.equal(await office(), false, "🔴 нова людина не «не офісна» за замовчуванням");
+    const bad = (e: unknown) => (e as { status?: number }).status === 400;
+    for (const v of ["так", "true", 1, null])
+      await assert.rejects(emp.updateEmployee(s.db, s.ivan, id, { is_office: v }), bad, `🔴 «${String(v)}» прийнято як галочку`);
+    assert.equal(await office(), false, "🔴 відмова все одно записала галочку");
+    assert.deepEqual((await emp.updateEmployee(s.db, s.ivan, id, { is_office: true })).changed, ["is_office"]);
+    assert.equal(await office(), true, "🔴 галочка не записалась");
+    assert.deepEqual((await emp.updateEmployee(s.db, s.ivan, id, { is_office: true })).changed, [], "🔴 зміна без змін записана");
+    const row = (await emp.listEmployees(s.db)).find((r) => r.id === id);
+    assert.equal(row?.is_office, true, "🔴 список реєстру не віддає галочку — картка її не покаже");
+    assert.deepEqual((await emp.updateEmployee(s.db, s.ivan, id, { is_office: false })).changed, ["is_office"]);
+    assert.equal(await office(), false, "🔴 галочку не зняти");
+  } finally { await s.done(); }
+});
+
+/**
  * #570 — ІМПОРТ ПАКЕТАМИ: 1554 паролі поштучно йшли 3 хв, і браузер не дочікувався відповіді (18.09.2026).
  * Тепер на людину — upsert + одне вставлення записів + одне аудиту; наявні записи — одним запитом на весь імпорт.
  * Результат той самий: лічильники, шифр розшифровується, повтор нічого не додає.
