@@ -30,7 +30,7 @@ import { pushDealFields } from "./dealFields.js";
 import {
   CURRENCIES, PIB_RULE, actPdfFrom1c, buildCreateCustomerBody, buildCreateInvoiceBody, buildPersonCustomerBody, buildUpdateInvoiceBody, codeOfService,
   createCustomerIn1c, createInvoiceIn1c, customerInfoByUid, customerInfoFrom1c, invoiceAllowed, invoicePdfFrom1c, invoiceUidByNumber, itemVatsFor, kyivIso, orgRules, organizationsFrom1c,
-  genesisDealFields, parseInvoiceForm, serviceSwaps, servicesFor, updateInvoiceIn1c, vatTypesFor, type BankAccount, type CreatedInvoice, type InvoiceForm,
+  genesisDealFields, parseInvoiceForm, stageAllowed, serviceSwaps, servicesFor, updateInvoiceIn1c, vatTypesFor, type BankAccount, type CreatedInvoice, type InvoiceForm,
   type OrgRule,
 } from "./invoice.js";
 import {
@@ -205,8 +205,11 @@ export function buildZakaz1cRouter(): Router {
       person ? customerInfoByUid(onecServiceBase(), person.uid) : Promise.resolve(null),
       listInvoices(pool, leadId, today), kommoUserName(req.kommoCaller!.userId), organizationsFrom1c(onecServiceBase()), ownerInfo(leadId, lead)]);
     const who = { testEdrpou: zakaz1cTestEdrpou(), userId: req.kommoCaller!.userId, testers: zakaz1cTesters() };
-    const allowed = invoiceAllowed(mode, { ...who, edrpou: code });
-    const allowedPerson = invoiceAllowed(mode, { ...who, edrpou: "", person: true });
+    // Етап — після режиму: у вимкненому чи тестовому режимі причина та, що й раніше.
+    const stage = stageAllowed(lead);
+    const gate = (a: { ok: true } | { ok: false; why: string }) => (a.ok ? stage : a);
+    const allowed = gate(invoiceAllowed(mode, { ...who, edrpou: code }));
+    const allowedPerson = gate(invoiceAllowed(mode, { ...who, edrpou: "", person: true }));
     // Дата акту з поля угоди → 1С одразу, щойно менеджер відкрив вкладку (не чекаючи щогодинної звірки). Лише рахунки віджета.
     let invoices = listed;
     if (listed.length && lead.actDate && listed.some((i) => !i.realized && i.act_date !== lead.actDate)) {
@@ -308,6 +311,8 @@ export function buildZakaz1cRouter(): Router {
     const isPerson = req.body?.customerKind === "person";
     const allowed = invoiceAllowed(mode, { edrpou: code, testEdrpou: zakaz1cTestEdrpou(), userId: caller.userId, testers: zakaz1cTesters(), person: isPerson });
     if (!allowed.ok) return res.status(403).json({ error: allowed.why });
+    const stage = stageAllowed(lead);
+    if (!stage.ok) return res.status(409).json({ error: stage.why });
     // Фізособа — лише та, кого віджет уже знайшов/створив для ЦІЄЇ угоди (uid з журналу), а не будь-хто з браузера.
     let customerUid = "";
     if (isPerson) {

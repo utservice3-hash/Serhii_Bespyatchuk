@@ -5,7 +5,7 @@ import path from "node:path";
 import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
 import { KOMMO_FIELDS, moneyOf } from "./kommoApi.js";
-import { genesisDealFields as gdf, codeKind, invoiceUidByNumber } from "./invoice.js";
+import { genesisDealFields as gdf, codeKind, invoiceUidByNumber, INVOICE_STAGE, STAGE_WHY, stageAllowed } from "./invoice.js";
 import { sameDealFields } from "./dealFields.js";
 import {
   actPdfFrom1c, actRefusal, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, canEdit, customerInfoFrom1c, dealFieldsOf,
@@ -928,4 +928,30 @@ test("#7148 «ОБЛІК СЕЙФУ» ЯК У GENESIS: код 1С 000000009; б�
   // Вікно: пояснення «Сейфу» замість «рахунки ФОП»; єдиний рахунок у валюті — обраний сам.
   assert.match(MOUNT(), /o\.noBanksWaits \?\? ONEC_WAITS\.fopBanks/);
   assert.match(MOUNT(), /isMain: b\.isMain \|\| own\.filter\(\(x\) => x\.currency === b\.currency\)\.length === 1/);
+});
+
+test("#7149 НОВИЙ РАХУНОК ЛИШЕ З ЕТАПУ «ВИСТАВЛЕННЯ РАХУНКУ» (Перевозки New): інші етапи й воронки — кнопка сіра з причиною і сервер відмовляє до запиту в 1С; виправлення, PDF і акти — на будь-якому етапі", () => {
+  assert.deepEqual(INVOICE_STAGE, { pipelineId: 8921932, statusId: 100274340 });
+  assert.deepEqual(stageAllowed({ pipelineId: 8921932, statusId: 100274340 }), { ok: true });
+  // Інші етапи тієї ж воронки — і до, і після «Виставлення рахунку».
+  for (const statusId of [69716260, 69716300, 69716304, 98470988, 69716312, 69716460, 142, 143]) {
+    assert.deepEqual(stageAllowed({ pipelineId: 8921932, statusId }), { ok: false, why: STAGE_WHY }, String(statusId));
+  }
+  // Інші воронки (стара «Повний цикл», Кваліфікація) і невідоме — заборонено, навіть з тим самим status_id.
+  for (const pipelineId of [155304, 8921928, null]) assert.equal(stageAllowed({ pipelineId, statusId: 100274340 }).ok, false);
+  assert.equal(stageAllowed({ pipelineId: 8921932, statusId: null }).ok, false);
+  assert.match(STAGE_WHY, /«Виставлення рахунку»/);
+  const src = MOUNT();
+  // Вікно: і юрособа, і фізособа — через той самий етап; режим off/test лишає свою причину.
+  assert.match(src, /const allowed = gate\(invoiceAllowed\(mode, \{ \.\.\.who, edrpou: code \}\)\);/);
+  assert.match(src, /const allowedPerson = gate\(invoiceAllowed\(mode, \{ \.\.\.who, edrpou: "", person: true \}\)\);/);
+  // Створення: відмова ДО createInvoice.
+  const create = src.slice(src.indexOf('r.post("/lead/:leadId/invoice", '), src.indexOf("createInvoiceIn1c(", src.indexOf('r.post("/lead/:leadId/invoice", ')));
+  assert.match(create, /const stage = stageAllowed\(lead\);\s*if \(!stage\.ok\) return res\.status\(409\)/);
+  // Виправлення, PDF, прикріплення й акт — без етапу.
+  for (const route of ['"/lead/:leadId/invoice/:uid/update"', '"/lead/:leadId/invoice/:uid/pdf"', '"/lead/:leadId/invoice/:uid/attach"', '"/lead/:leadId/invoice/:uid/act"']) {
+    const at = src.indexOf(route); assert.ok(at > 0, route);
+    const body = src.slice(at, src.indexOf("\n  r.", at + 10));
+    assert.doesNotMatch(body, /stageAllowed/, route);
+  }
 });

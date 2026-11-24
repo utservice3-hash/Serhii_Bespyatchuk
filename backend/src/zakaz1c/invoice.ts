@@ -214,6 +214,17 @@ export function invoiceAllowed(mode: Zakaz1cMode, a: { edrpou: string; testEdrpo
   return { ok: true };
 }
 
+/**
+ * Новий рахунок — лише з етапу «Виставлення рахунку» воронки «Перевозки (Продажі повний цикл) (New)» (Роман, 24.11.2026:
+ * «рахунок може тільки виставлятись з етапу «Виставлення рахунку»»; в інших воронках і на інших етапах — заборонено).
+ * Лише НОВИЙ: виправити, роздрукувати, прикріпити вже виставлений рахунок і взяти акт можна на будь-якому етапі.
+ */
+export const INVOICE_STAGE = { pipelineId: 8921932, statusId: 100274340 } as const;
+export const STAGE_WHY = "Рахунок виставляється лише на етапі «Виставлення рахунку» (воронка «Перевозки (Продажі повний цикл) (New)»). Переведіть угоду на цей етап і відкрийте вкладку знову.";
+export function stageAllowed(lead: { pipelineId: number | null; statusId: number | null }): { ok: true } | { ok: false; why: string } {
+  return lead.pipelineId === INVOICE_STAGE.pipelineId && lead.statusId === INVOICE_STAGE.statusId ? { ok: true } : { ok: false, why: STAGE_WHY };
+}
+
 /** Коментар рахунку — дослівно як у Genesis (бухгалтерія просила саме так, 27.10.2026). */
 export const genesisComment = (manager: string, dealId: number) =>
   `${manager ? `${manager}, ` : ""}Загружен из amoCRM по сделке №${dealId}`;
