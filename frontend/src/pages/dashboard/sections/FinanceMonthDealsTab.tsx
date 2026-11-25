@@ -7,8 +7,9 @@ import {
 
 /**
  * 📒 «УГОДИ МІСЯЦЯ» (#5583, 26.10.2026; Роман: «окремою таблицею всі угоди по кожному менеджеру, як окрему вкладку»).
- * Одна таблиця всіх угод місяця — як вкладка «Сделки» таблиці Тетяни, — згрупована за тим, хто закривав: заголовок групи
- * з числами СЕРВЕРА (ті самі, що в «Результаті місяця»), угоди, підсумок групи. Фільтри (менеджер, на перевірці, мінусові,
+ * Одна таблиця всіх угод місяця — як вкладка «Сделки» таблиці Тетяни, — згрупована по менеджерах: заголовок групи
+ * з числами СЕРВЕРА (ті самі, що в «Результаті місяця»), угоди, підсумок групи. Група — відповідальний у CRM зараз (як ядро й
+ * «Зарплата», Сергій 25.11.2026); хто закривав, видно підписом «закривав: …» у перепризначених. Фільтри (менеджер, на перевірці, мінусові,
  * з рішенням, Kommo ≠ 1С, без 1С), пошук за угодою чи клієнтом, блоки Kommo / 1С / Оплати згортаються; шапка й колонка
  * угоди закріплені. Рішення — прямо в рядку. Дані — той самий `GET /finance/month-result`, що й зведення.
  */
@@ -44,10 +45,10 @@ export function FinanceMonthDealsTab({ ask, toast, ym, setYm, manager, setManage
   const groups = useMemo(() => {
     if (!data) return [];
     const needle = q.trim().toLowerCase();
-    const pass = (d: MRDeal) => (manager === "all" || d.closer === manager)
+    const pass = (d: MRDeal) => (manager === "all" || d.current === manager)
       && (!flags.size || FLAGS.some(([f, , t]) => flags.has(f) && t(d)))
       && (!needle || String(d.id).includes(needle) || (d.client ?? d.name).toLowerCase().includes(needle));
-    return data.managers.map((m) => ({ m, all: data.deals.filter((d) => d.closer === m.kommoUserId) }))
+    return data.managers.map((m) => ({ m, all: data.deals.filter((d) => d.current === m.kommoUserId) }))
       .map((g) => ({ ...g, shown: g.all.filter(pass) }))
       .filter((g) => g.shown.length > 0);
   }, [data, manager, flags, q]);
@@ -153,7 +154,7 @@ export function FinanceMonthDealsTab({ ask, toast, ym, setYm, manager, setManage
                             {link(d.id)}{d.isMinus && <span style={{ ...pill("rgba(220,38,38,0.12)", "#dc2626"), marginLeft: 6 }}>мінус</span>} <span style={{ fontSize: 11.5 }}>{d.client ?? d.name}</span>
                           </div>
                           {(d.paymentType || d.reassigned) && <div style={{ fontSize: 11, color: MUTED, whiteSpace: "nowrap" }}>
-                            {d.paymentType}{d.reassigned && <span title="Відповідального змінили після закриття — угода рахується тому, хто закривав">{d.paymentType ? " · " : ""}зараз: {name(d.current).split(" ")[0]}</span>}
+                            {d.paymentType}{d.reassigned && <span title="Відповідального змінили після закриття — угода рахується тому, хто відповідальний у CRM зараз (як ядро й «Зарплата»)">{d.paymentType ? " · " : ""}закривав: {(d.closerName ?? name(d.closer)).split(" ")[0]}</span>}
                           </div>}
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>{dmy(d.closedAt)}{d.closedMonth.slice(0, 7) !== ym && <div style={{ fontSize: 11, color: MUTED }}>з {ymName(d.closedMonth.slice(0, 7))}</div>}</td>

@@ -6,8 +6,10 @@
  * «Повного циклу», закритих у місяці як «Успішна» (142). Мінусові входять (зменшують результат) і показуються окремо.
  *
  * Що додає екран до її таблиці:
- *  · угода рахується тому, хто був відповідальним У МОМЕНТ ЗАКРИТТЯ (`closerAt` над `deal_responsible_events`), а не
- *    тому, на кому висить зараз (вересень: 19 угод Янчевського перепризначили на Михальчевську після закриття);
+ *  · угода рахується тому, хто відповідальний у CRM ЗАРАЗ (`deals.manager_id`) — як ядро `successByMgr` і вкладка «Зарплата»
+ *    (Сергій 25.11.2026: «результат місяця (успішне) має йти з ядра»; Тетяна: 62862171 «має йти Михальчевській, на ній
+ *    в CRM висить»). До 25.11 рахувалось тому, хто закривав, — тепер це лише підпис «закривав: …» (`closerAt` над
+ *    `deal_responsible_events`): угоди звільнених, перейняті кимось, ідуть тому, хто перейняв;
  *  · перевірки — що варто глянути Тетяні (`checksOf`): немає рахунку, немає приходу, готівковий розхід без запиту чи
  *    оплачено перевізнику більше за план, валюта; угоди «на перевірці» в результаті ЛИШАЮТЬСЯ (як у її таблиці), але
  *    видно окремим числом — рішення за нею;
@@ -72,7 +74,10 @@ export interface Override { kommoId: number; action: OverrideAction; targetMonth
 
 export interface MRDeal {
   id: number; name: string; client: string | null; closedAt: string; closedMonth: string; price: number; isMinus: boolean; paymentType: string | null;
+  /** `current` — відповідальний у CRM зараз, йому й рахується угода; `closer` — хто закривав (підпис, коли `reassigned`). */
   closer: number | null; current: number | null; reassigned: boolean;
+  /** Імʼя того, хто закривав, — лише коли `reassigned` (його може не бути серед груп місяця: звільнений без угод). */
+  closerName?: string | null;
   checks: string[]; override: Override | null; included: boolean; profit: number;
   /** Блоки «як у таблиці Тетяни» (прохід 2): Kommo за типами, 1С, оплати клієнтів з 1С, плановий PNL (з 1С). */
   createdAt: string | null; kommo: (Flows & { untyped: number }) | null; onec: OnecBlock | null; paid: PaidBlock | null; planPnl: number | null;
@@ -86,13 +91,13 @@ export function placeInMonth(d: Pick<MRDeal, "closedMonth" | "price">, ov: Overr
 
 export interface MRManager { kommoUserId: number | null; name: string; active: boolean; deals: number; result: number; review: { n: number; sum: number }; minus: { n: number; sum: number }; overrides: number }
 const r2 = (n: number) => Math.round(n * 100) / 100;
-/** Зведення по тих, хто закривав: кількість і результат — лише враховані угоди; перевірки й мінусові — серед врахованих. */
+/** Зведення по відповідальних у CRM (як ядро): кількість і результат — лише враховані угоди; перевірки й мінусові — серед врахованих. */
 export function summarize(deals: readonly MRDeal[], names: ReadonlyMap<number, { name: string; active: boolean }>): MRManager[] {
   const by = new Map<string, MRManager>();
   for (const d of deals) {
-    const key = String(d.closer ?? "—");
-    const m = by.get(key) ?? { kommoUserId: d.closer, name: d.closer != null ? names.get(d.closer)?.name ?? `ID ${d.closer}` : "відповідальний невідомий",
-      active: d.closer != null ? names.get(d.closer)?.active ?? false : false, deals: 0, result: 0, review: { n: 0, sum: 0 }, minus: { n: 0, sum: 0 }, overrides: 0 };
+    const who = d.current, key = String(who ?? "—");
+    const m = by.get(key) ?? { kommoUserId: who, name: who != null ? names.get(who)?.name ?? `ID ${who}` : "відповідальний невідомий",
+      active: who != null ? names.get(who)?.active ?? false : false, deals: 0, result: 0, review: { n: 0, sum: 0 }, minus: { n: 0, sum: 0 }, overrides: 0 };
     if (d.override) m.overrides++;
     if (d.included) {
       m.deals++; m.result = r2(m.result + d.profit);
@@ -161,6 +166,7 @@ export async function loadMonthResult(db: Db, month: string, deps: {
     const onec = onecBlock(inv.get(id) ?? []), paid = paidBlock(pay.get(id) ?? []);
     deals.push({ id, name: x.name ?? "", client: x.client_name, closedAt: new Date(x.closed).toISOString(), closedMonth: x.cm, price: Number(x.price ?? 0), isMinus: !!x.is_minus,
       paymentType: x.payment_type, closer, current: cur, reassigned: closer !== cur,
+      closerName: closer !== cur && closer != null ? names.get(closer)?.name ?? `ID ${closer}` : null,
       checks: checksOf({ price: Number(x.price ?? 0), isMinus: !!x.is_minus, paymentType: x.payment_type, orderNo: lf?.orderNo ?? null, paid1c: lf?.paid1c ?? false,
         bankPaid: paidBank.has(id), cashExpense: lf?.cashExpense ?? null, requestsPaid: rq.paid, requestsOpen: rq.open,
         budget1c: onec?.budget ?? null, fx1c: onec?.fx.length ? onec.fx.map((f) => `${fmt(f.sum)} ${f.currency}`).join(", ") : null }),
