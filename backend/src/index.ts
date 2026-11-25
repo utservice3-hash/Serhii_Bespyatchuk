@@ -134,6 +134,7 @@ import { syncLardi } from "./jobs/syncLardi.js";
 import { huntReminders } from "./jobs/huntReminders.js";
 import { buildLeadgenLtv } from "./jobs/buildLeadgenLtv.js";
 import { rebuildCarrierPhones } from "./jobs/rebuildCarrierPhones.js";
+import { lardiPhoneLookup } from "./jobs/lardiPhoneLookup.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
 import { prozorroTasks } from "./jobs/prozorroTasks.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
@@ -947,6 +948,14 @@ cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 * * * *", () => {
 // Щогодини о :22 — осторонь :20/:25 і :00/:30 `syncKommo`. Під наглядом (`monitoredJobs.ts`), everyMin == крону.
 cron.schedule("22 * * * *", () => {
   void runJob("rebuildCarrierPhones", () => rebuildCarrierPhones());
+});
+
+// 🔎 Номери пропущених → пошук на Ларді (Роман 25.11.2026: «якщо ларді каже що такий номер знайдено це автоматом
+// перевізник»). Щогодини о :07 — до перебудови довідника о :22 і осторонь живого скану Ларді (:04/:19/:34/:49); прохід
+// ≤ 7.5 хв (`core/lardiPhoneLookup.ts`). Під наглядом (`monitoredJobs.ts`), everyMin == крону. На старті не біжить —
+// 300 запитів до Ларді на кожен рестарт не потрібні.
+cron.schedule("7 * * * *", () => {
+  void runJob("lardiPhoneLookup", () => lardiPhoneLookup());
 });
 
 // 🏛 Prozorro-ліди (задача #5299): щодня о 06:05 за Києвом — переможці тендерів від 500 тис. ₴. О :05, а не :00 —
