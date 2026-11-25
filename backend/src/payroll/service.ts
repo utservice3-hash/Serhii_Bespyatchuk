@@ -321,7 +321,7 @@ export async function remindersTick(pool: Pool): Promise<number> {
   const N = nameMap(e);
   await emitAll(pool, due.filter((r) => N[String(r.user_id)] !== undefined).map((r) => {
     const L = e.zp.advanceLimit(String(r.user_id), mk) as { amount: number };
-    return { type: "adv.open", to: [String(r.user_id)], act: false, title: "Заявки на аванс відкрито", text: `Можна взяти до ${uahTxt(L.amount)} — подайте заявку в кабінеті «Моя зарплата».`, go: { tab: "cab", mz: { tab: "pay", focus: "#adv" } }, empId: String(r.user_id) };
+    return { type: "adv.open", to: [String(r.user_id)], act: false, title: "Заявки на аванс відкрито", text: `Можна взяти до ${uahTxt(L.amount)} — подайте заявку в кабінеті «Моя зарплата».`, go: { tab: "cab", mz: { tab: "pay", focus: "#zc-avans" } }, empId: String(r.user_id) };
   }));
   await pool.query(`UPDATE payroll_reminders SET sent_at = now() WHERE id = ANY($1::bigint[])`, [due.map((r) => Number(r.id))]);
   return due.length;

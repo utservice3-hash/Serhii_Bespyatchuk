@@ -115,7 +115,7 @@
 .zc-pl__sum.is-ok { color: var(--ok); } .zc-pl__sum.is-bad { color: var(--danger); }
 
 /* аванс */
-.zc-adv { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.zc-avans-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 
 /* найближчі дати */
 .zc-tl { list-style: none; margin: 0; padding: 0; display: grid; }

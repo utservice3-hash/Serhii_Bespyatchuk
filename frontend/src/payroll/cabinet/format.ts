@@ -5,6 +5,13 @@
 import type { Obj } from "../api";
 import { money, type Tone } from "../ui";
 
+/**
+ * Якір блоку «Аванс» у кабінеті. НЕ «adv»: у RuAdList (стандартний список блокувальників реклами в укр/рос браузерах)
+ * є загальне правило `###adv` — блок із кнопкою заявки зникав у менеджерів з блокувальником (25.11.2026). Тримає #10940.
+ */
+export const ADVANCE_BLOCK_ID = "zc-avans";
+/** Старі посилання сповіщень (`focus=adv`) → новий якір. */
+export const FOCUS_ALIAS: Record<string, string> = { adv: ADVANCE_BLOCK_ID };
 export const plural = (n: number, a: string, b: string, c: string) => {
   const m10 = Math.abs(n) % 10, m100 = Math.abs(n) % 100;
   return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c;

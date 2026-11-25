@@ -7,7 +7,7 @@ import { errText, payrollApi, type Obj } from "../api";
 import { Pill, money } from "../ui";
 import { useToast } from "../../components/Toasts";
 import { Block } from "./Block";
-import { ADV_STATUS, dt, monthGen, monthLow, payHow, limitRule } from "./format";
+import { ADV_STATUS, ADVANCE_BLOCK_ID, dt, monthGen, monthLow, payHow, limitRule } from "./format";
 import { PayLines } from "./PayLines";
 import { useAdvanceRemind } from "./remind";
 import { draftBody, draftTotal, initDraft, type PayDraft } from "./payDraft";
@@ -55,7 +55,7 @@ export function AdvanceBlock({ me, onChanged }: { me: Obj; onChanged: () => Prom
             </div>
           </div>
         ) : (
-          <div className="zc-adv">
+          <div className="zc-avans-row">
             <div>
               <div className="zp-k">Можна взяти до</div>
               <div className="zc-mid zp-num">{money(L?.amount ?? 0)}</div>
@@ -71,7 +71,7 @@ export function AdvanceBlock({ me, onChanged }: { me: Obj; onChanged: () => Prom
               )}
           </div>
         )}
-        {!draft && <p className="zp-hint">На одну чи кілька карт, частину можна готівкою. Аванс вирахуємо із ЗП за {monthLow(mk)} при закритті місяця.</p>}
+        {!draft && <p className="zp-hint">На одну чи кілька карт або готівкою. Аванс вирахуємо із ЗП за {monthLow(mk)} при закритті місяця.</p>}
       </>
     );
   } else if (st === "requested") {
@@ -94,5 +94,5 @@ export function AdvanceBlock({ me, onChanged }: { me: Obj; onChanged: () => Prom
   }
   const chip = st ? <Pill tone={ADV_STATUS[st]?.[1] ?? "muted"}>{ADV_STATUS[st]?.[0] ?? st}</Pill>
     : <Pill tone={A.open ? "info" : "muted"}>{A.open ? "заявки відкрито" : `з ${A.fromDay} ${monthGen(mk)}`}</Pill>;
-  return <Block id="adv" title={`Аванс · ${monthTitle(mk)}`} aside={chip}>{body}</Block>;
+  return <Block id={ADVANCE_BLOCK_ID} title={`Аванс · ${monthTitle(mk)}`} aside={chip}>{body}</Block>;
 }

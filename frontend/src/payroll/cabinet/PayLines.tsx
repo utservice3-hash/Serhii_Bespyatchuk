@@ -1,6 +1,6 @@
 /**
  * Форма «куди виплатити» — спільна для форми на виплату ЗП і заявки на аванс (макет `c04-pay.js`, `plHtml`):
- * одна чи кілька карт (збережені або нова — номер і отримувач) + частина готівкою. До 4 карт.
+ * одна чи кілька карт (збережені або нова — номер і отримувач) + частина готівкою або «Усе готівкою». До 4 карт.
  * Перевірку Луна, дублікатів і «сходиться на копійку» робить сервер (`checkPayoutForm` рушія) — тут лише підказка «лишилось».
  */
 import { useMemo, useState } from "react";
@@ -63,6 +63,10 @@ export function PayLines({ cards, draft, onChange, due, dueLabel, defaultHolder 
             onChange({ ...draft, lines: [...draft.lines, free ? { card: Number(free.id), amount: Math.max(0, rest), number: "", holder: "" } : { card: "new", amount: Math.max(0, rest), number: "", holder: defaultHolder }] });
           }}>+ Ще одна карта</button>
         {!cashOpen && <button type="button" className="zp-btn zp-btn--sm zp-btn--ghost" onClick={() => setCashOpen(true)}>+ Частину готівкою</button>}
+        {/* усе готівкою (Тетяна 25.11: «аванс також мають можливість взяти готівкою») — карти в нуль, рядки з нулем сервер пропускає */}
+        {Math.round(draft.cash) !== Math.round(due) && due > 0 && (
+          <button type="button" className="zp-btn zp-btn--sm" onClick={() => { setCashOpen(true); onChange({ cash: Math.round(due), lines: draft.lines.map((l) => ({ ...l, amount: 0 })) }); }}>Усе готівкою</button>
+        )}
       </div>
       {cashOpen && (
         <label className="zp-field zc-pl__cash">

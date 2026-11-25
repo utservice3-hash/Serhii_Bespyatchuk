@@ -10,7 +10,7 @@ import { useNavigate } from "react-router-dom";
 import { payrollApi, type Obj } from "../api";
 import { Pill, money, nextMonth, prevMonth, useLoad } from "../ui";
 import { Block } from "./Block";
-import { ceilE, dd, ddy, levelName, levelWho, monthGen, monthLow, nf, pc, plural, limitRule } from "./format";
+import { ceilE, dd, ddy, levelName, levelWho, monthGen, monthLow, nf, pc, plural, limitRule, ADVANCE_BLOCK_ID } from "./format";
 import { CloseCard } from "./CloseCard";
 import { AdvanceBlock } from "./Advance";
 import { LeaveBlock } from "./ClearanceMine";
@@ -191,7 +191,7 @@ function todoItems(me: Obj, go: Go, ex: Ex): Todo[] {
   }
   // аванс — ще не відкрито
   const A = lv.advance as Obj, L = A.limit as Obj | null;
-  if (!A.request && !A.open && L && L.amount > 0) it.push({ v: 0, cls: "info", imp: money(L.amount), lbl: "аванс", h: `Аванс — з ${A.fromDay} ${monthGen(mk)}`, p: `На сьогодні можна було б взяти до ${money(L.amount)} (${limitRule(L)}). Вираховується при закритті місяця.`, act: { label: ex.remind.label, run: ex.remind.toggle, busy: ex.remind.busy }, act2: { label: "Виплати", run: () => go("pay", "adv") } });
+  if (!A.request && !A.open && L && L.amount > 0) it.push({ v: 0, cls: "info", imp: money(L.amount), lbl: "аванс", h: `Аванс — з ${A.fromDay} ${monthGen(mk)}`, p: `На сьогодні можна було б взяти до ${money(L.amount)} (${limitRule(L)}). Вираховується при закритті місяця.`, act: { label: ex.remind.label, run: ex.remind.toggle, busy: ex.remind.busy }, act2: { label: "Виплати", run: () => go("pay", ADVANCE_BLOCK_ID) } });
   const rank = (x: Todo) => (x.cls === "risk" || x.cls === "gain" ? 0 : x.cls === "info" ? 1 : 2);
   return it.sort((x, y) => rank(x) - rank(y) || y.v - x.v);
 }
