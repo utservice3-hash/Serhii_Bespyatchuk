@@ -72,7 +72,7 @@ export const ADV_STATUS: Record<string, [string, Tone]> = {
 /** «15 % від маржі «Успішно реалізовано» 33 400 ₴» — правило ліміту авансу. */
 export function limitRule(L: Obj | null | undefined): string {
   if (!L) return "";
-  const basis = L.basis === "margin" ? "маржі «Успішно реалізовано»" : L.basis === "teamMargin" ? "маржі команди" : "ставки";
+  const basis = L.basis === "margin" ? "маржі «Успішно реалізовано»" : L.basis === "ownMargin" ? "вашої маржі «Успішно реалізовано»" : L.basis === "teamMargin" ? "маржі команди" : "ставки";
   return `${L.pct} % від ${basis} ${money(L.base)}`;
 }
 

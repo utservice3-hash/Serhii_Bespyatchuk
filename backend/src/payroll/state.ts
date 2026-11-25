@@ -155,6 +155,11 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   const byManager = new Map<number, string>();
   for (const e of employees) { const m = managerOf[e.id]; if (m != null && e.role === "manager") byManager.set(m, e.id); }
   const managerIds = [...byManager.keys()];
+  // Тімліди з акаунтом Kommo: їхні ВЛАСНІ угоди потрібні лише для ліміту авансу (правка 25.11: «тім-лід аванс за свій результат 15%»).
+  // Їдуть окремим полем `ownDeals`, а НЕ в `deals`: інакше їх побачили б маржа компанії, ТТН, обхідний і авто-«Профі». Тримає #10965.
+  const byLead = new Map<number, string>();
+  for (const e of employees) { const m = managerOf[e.id]; if (m != null && e.role === "lead") byLead.set(m, e.id); }
+  const dealManagerIds = [...managerIds, ...byLead.keys()];
 
   // ---------- відділи, команди ----------
   const depQ = await db.query<{ code: string; name: string; is_sales: boolean }>(`SELECT code, name, is_sales FROM payroll_departments`);
@@ -175,8 +180,9 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
 
   // ---------- угоди «Успішно реалізовано» ----------
   const deals: Record<string, Record<string, unknown[]>> = {};
+  const ownDeals: Record<string, Record<string, unknown[]>> = {};
   const ttnAt: Record<string, string | null> = {};
-  if (managerIds.length) {
+  if (dealManagerIds.length) {
     const dq = await db.query<{ kommo_id: string; manager_id: number; day: string; mk: string; client: string | null; ck: string | null; name: string | null; price: string; paid: boolean; over: boolean; seen_at: Date | null }>(
       `SELECT d.kommo_id::text, d.manager_id, to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM-DD') AS day,
               to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM') AS mk, d.client_name AS client, d.client_key AS ck, d.name, d.price,
@@ -187,10 +193,12 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
         WHERE d.status_id = ANY($5) AND d.pipeline_id = ANY($6) AND d.closed_at_kommo IS NOT NULL AND d.manager_id = ANY($1)
           AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2::date AND $3::date
         ORDER BY d.closed_at_kommo, d.kommo_id`,
-      [managerIds, monthStart(fromMonth), `${live}-${lastDay(live)}`, today, STAGE_SUCCESS, FC_PIPELINES]);
+      [dealManagerIds, monthStart(fromMonth), `${live}-${lastDay(live)}`, today, STAGE_SUCCESS, FC_PIPELINES]);
     for (const r of dq.rows) {
-      const e = byManager.get(r.manager_id); if (!e) continue;
-      ((deals[e] ??= {})[r.mk] ??= []).push({ id: r.kommo_id, date: r.day, client: r.client || r.name || `угода ${r.kommo_id}`, ck: r.ck, margin: Number(r.price), pay: r.paid ? "paid" : r.over ? "over" : "wait" });
+      const d = { id: r.kommo_id, date: r.day, client: r.client || r.name || `угода ${r.kommo_id}`, ck: r.ck, margin: Number(r.price), pay: r.paid ? "paid" : r.over ? "over" : "wait" };
+      const e = byManager.get(r.manager_id);   // менеджер — першим: його угоди рухатись не можуть
+      if (!e) { const lead = byLead.get(r.manager_id); if (lead) ((ownDeals[lead] ??= {})[r.mk] ??= []).push(d); continue; }
+      ((deals[e] ??= {})[r.mk] ??= []).push(d);
       ttnAt[r.kommo_id] = kyivIso(r.seen_at);
     }
   }
@@ -290,7 +298,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   settings.birthday = { ...(settings.birthday as object ?? {}), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — теж не налаштування
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };
   return {
-    now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, kpi, ttnAt, ttnLegacy,
+    now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, ttnLegacy,
     records, advances, archive, clientHistory: {}, clearances, responsibles: await loadResponsibles(db), tasks, holidays: [],
     meta: { managerOf },
   };

@@ -68,6 +68,7 @@
  * @property {Object<string,{name:string}>} teams
  * @property {Object<string,Object<string,number>>} plans          plans[month][empId] — затверджений план (₴ маржі)
  * @property {Object<string,Object<string,Deal[]>>} deals          deals[empId][month] — угоди «Успішно реалізовано»
+ * @property {Object<string,Object<string,Deal[]>>} [ownDeals]     ownDeals[empId][month] — власні угоди тімліда; лише для ліміту авансу
  * @property {Object<string,Object<string,Kpi>>} kpi                kpi[empId][month] — на зараз (поточний) / підсумок (закритий)
  * @property {Object<string,string|null>} ttnAt                      ttnAt[dealId] — коли з’явилась ТТН; null — немає
  * @property {Object} [ttnLegacy]       ttnLegacy[empId][month] = {total, done, held, fix:{at, n}} — місяці до запуску
@@ -222,6 +223,8 @@ export function createPayroll(state) {
   const counts = d => S.payMode === 'success' || (S.payMode === 'paid' ? d.pay === 'paid' : d.pay !== 'over');
   const allDeals = (id, mk) => ((state.deals || {})[id] && state.deals[id][mk]) || [];
   const dealsOf = (id, mk) => allDeals(id, mk).filter(d => d.date <= today);
+  /** Власні угоди тімліда (state.ownDeals) — лише для ліміту авансу; у маржу команди й компанії не входять */
+  const ownMargin = (e, mk) => sum((((state.ownDeals || {})[e.id] || {})[mk] || []).filter(d => d.date <= today).filter(counts).map(d => d.margin));
   const kpiOf = (id, mk) => ((state.kpi || {})[id] && state.kpi[id][mk]) || EMPTY_KPI;
   const kpiStep = conv => S.kpi.ladder.reduce((a, s) => (conv >= s[0] ? s : a), null);
   /** Умови оферу з КПІ діють для місяця mk (S.kpi.offerFrom — «YYYY-MM» або null) */
@@ -360,10 +363,13 @@ export function createPayroll(state) {
   const advanceStatus = a => (!a ? null : a.rejectedAt && seen(a.rejectedAt) ? 'rejected' : a.paidAt && seen(a.paidAt) ? 'paid' : 'requested');
   const advancePaid = (id, mk) => { const a = advanceOf(id, mk); return a && advanceStatus(a) === 'paid' ? a.amount : 0; };
   const advanceWindowOpen = mk => isLive(mk) && +today.slice(8, 10) >= S.advance.fromDay;
-  /** Ліміт: менеджер — % маржі «Успішно реалізовано», тім-лід — % маржі команди, ставка — % ставки; не більше нарахованого */
+  /** Ліміт: менеджер — % своєї маржі «Успішно реалізовано», тім-лід — % своєї маржі (ownDeals), ставка — % ставки; не більше нарахованого */
   function advanceLimit(e, mk) {
     const c = calcE(e, mk);
-    const [base, pct, basis] = c.kind === 'manager' ? [c.margin, S.advance.managerPct, 'margin'] : c.kind === 'lead' ? [c.margin, S.advance.leadPct, 'teamMargin'] : [c.now.rate, S.advance.staffPct, 'rate'];
+    // тімлід — від СВОЄЇ маржі (правка 25.11: «тім-лід аванс за свій результат 15%»), коли стан несе `ownDeals`; угод немає — 0.
+    // Без `ownDeals` — як у пакеті: від маржі команди (так його золоті звірки й лишаються зеленими).
+    const own = c.kind === 'lead' && state.ownDeals !== undefined;
+    const [base, pct, basis] = c.kind === 'manager' ? [c.margin, S.advance.managerPct, 'margin'] : own ? [ownMargin(e, mk), S.advance.leadPct, 'ownMargin'] : c.kind === 'lead' ? [c.margin, S.advance.leadPct, 'teamMargin'] : [c.now.rate, S.advance.staffPct, 'rate'];
     // бонус — лише до ЗП, не до авансу (Тетяна 24.11): стеля авансу — нараховане без постійного бонусу
     const byRule = Math.max(0, Math.floor(base * pct / 100)), cap = Math.max(0, Math.floor(c.now.total - (c.now.adjBonus || 0)));
     return { basis, base, pct, byRule, cap, amount: Math.min(byRule, cap), capped: cap < byRule, calc: c };
