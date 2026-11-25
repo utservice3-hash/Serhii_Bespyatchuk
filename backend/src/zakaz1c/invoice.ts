@@ -225,6 +225,15 @@ export function stageAllowed(lead: { pipelineId: number | null; statusId: number
   return lead.pipelineId === INVOICE_STAGE.pipelineId && lead.statusId === INVOICE_STAGE.statusId ? { ok: true } : { ok: false, why: STAGE_WHY };
 }
 
+/**
+ * «Расход 1» — обов'язковий для НОВОГО рахунку (Сергій, 25.11.2026: «без розходу рахунок виставити неможливо»; Роман того ж
+ * дня: лише «Расход 1», заповнене будь-чим — і 0 теж; для всіх організацій; «Змінити» — як і раніше, без цієї умови).
+ */
+export const EXPENSE_WHY = "Заповніть в угоді поле «Расход 1» — без нього рахунок не виставляється. Потім відкрийте вкладку знову.";
+export function expenseAllowed(expense1: string | null | undefined): { ok: true } | { ok: false; why: string } {
+  return String(expense1 ?? "").trim() ? { ok: true } : { ok: false, why: EXPENSE_WHY };
+}
+
 /** Коментар рахунку — дослівно як у Genesis (бухгалтерія просила саме так, 27.10.2026). */
 export const genesisComment = (manager: string, dealId: number) =>
   `${manager ? `${manager}, ` : ""}Загружен из amoCRM по сделке №${dealId}`;
