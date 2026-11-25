@@ -125,6 +125,10 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   // окремий відсоток за своїми клієнтами менеджера (знято — не діє; `valid_from` — з якого місяця)
   const crQ = await db.query<{ id: string; user_id: number; client_key: string; client_name: string; pct: string; mk: string }>(
     `SELECT id::text, user_id, client_key, client_name, pct, to_char(valid_from, 'YYYY-MM') AS mk FROM payroll_client_rates WHERE removed_at IS NULL ORDER BY user_id, id`);
+  // постійний бонус / корекція на період (задача 10723): зняте не діє; `to` NULL — безстроково
+  const adjQ = await db.query<{ id: string; user_id: number; kind: string; amount: string; note: string; f: string; t: string | null }>(
+    `SELECT id::text, user_id, kind, amount, note, to_char(from_month, 'YYYY-MM') AS f, to_char(to_month, 'YYYY-MM') AS t
+       FROM payroll_adjustments WHERE removed_at IS NULL ORDER BY user_id, from_month, id`);
   const offQ = await db.query<{ user_id: number; valid_from: Date; amount: string; deduct: boolean }>(
     `SELECT user_id, valid_from, amount, deduct FROM payroll_official ORDER BY user_id, valid_from, id`);
   const dateOnly = (d: Date) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
@@ -144,6 +148,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       ...(r.offer_code ? { offer: r.offer_code } : {}),
       startDate: dateOnly(r.start_date), birthday: r.birthday_md, terms, official,
       clientRates: crQ.rows.filter((c) => c.user_id === r.user_id).map((c) => ({ id: Number(c.id), client: c.client_key, name: c.client_name, pct: Number(c.pct), from: c.mk })),
+      adjustments: adjQ.rows.filter((x) => x.user_id === r.user_id).map((x) => ({ id: Number(x.id), kind: x.kind, amount: Number(x.amount), note: x.note, from: x.f, to: x.t })),
       leave: r.leave_date ? { date: dateOnly(r.leave_date), type: r.leave_type } : null, isFinance: r.is_finance,
     };
   });

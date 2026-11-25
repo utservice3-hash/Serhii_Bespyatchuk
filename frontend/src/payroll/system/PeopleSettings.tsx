@@ -28,6 +28,64 @@ function LevelTag({ level }: { level: string | null }) {
   return <span className={`zps-lvl ${level === "profi" ? "zps-lvl--profi" : ""}`}>{level === "profi" ? "Профі" : "Старт"}</span>;
 }
 
+const ADJ_KIND: Record<string, string> = { bonus: "Бонус", correction: "Корекція" };
+const ym = (m: string) => `${m.slice(5, 7)}.${m.slice(0, 4)}`;
+/**
+ * Постійний «Бонус» / «Корекція» на період (задача 10723, ТЗ Тетяни): сума щомісяця з/по, коментар «за що» бачить людина в кабінеті.
+ * Бонус — лише до ЗП, не до авансу; корекція зменшує нараховане, але не нижче нуля. Початок — не раніше поточного місяця.
+ */
+function Adjustments({ p, live, onDone }: { p: Obj; live: string; onDone: () => void }) {
+  const toast = useToast();
+  const list = ((p.adjustments ?? []) as Obj[]).filter((a) => !a.to || a.to >= live);
+  const [kind, setKind] = useState<"bonus" | "correction">("bonus");
+  const [amt, setAmt] = useState("");
+  const [note, setNote] = useState("");
+  const [from, setFrom] = useState(live);
+  const [to, setTo] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function add() {
+    setErr(null);
+    const v = toNum(amt);
+    if (!(v != null && v > 0)) { setErr("Сума — більше нуля."); return; }
+    if (!note.trim()) { setErr("Напишіть, за що — це бачить людина в кабінеті."); return; }
+    if (!from || from < live) { setErr(`Початок — не раніше поточного місяця (${monthTitle(live)}).`); return; }
+    if (to && to < from) { setErr("Місяць кінця — не раніше початку."); return; }
+    setBusy(true);
+    try { await payrollApi.addAdjustment(p.userId, { kind, amount: v, note: note.trim(), from, to: to || null }); toast(`${ADJ_KIND[kind]} збережено.`); setAmt(""); setNote(""); setTo(""); onDone(); }
+    catch (e) { setErr(errText(e)); } finally { setBusy(false); }
+  }
+  async function remove(a: Obj) {
+    setBusy(true);
+    try { await payrollApi.removeAdjustment(p.userId, a.id); toast(a.from < live ? `${ADJ_KIND[a.kind]} завершено: у закритих місяцях лишається.` : `${ADJ_KIND[a.kind]} знято.`); onDone(); }
+    catch (e) { toast(errText(e), { error: true }); } finally { setBusy(false); }
+  }
+  return (
+    <Field label="Постійний бонус / корекція" hint="Сума щомісяця на період. Бонус — лише до ЗП, не до авансу; корекція зменшує нараховане, але не нижче нуля. Коментар бачить людина в кабінеті.">
+      {list.length ? (
+        <table className="zp-table"><tbody>
+          {list.map((a) => (
+            <tr key={a.id}><td><b>{ADJ_KIND[a.kind] ?? a.kind}</b><div className="zp-hint">{a.note}</div></td>
+              <td className="r">{a.kind === "correction" ? "−" : "+"}{money(a.amount)}<div className="zp-hint">з {ym(String(a.from))}{a.to ? ` по ${ym(String(a.to))}` : " · безстроково"}</div></td>
+              <td className="r"><button className="zp-btn zp-btn--sm" disabled={busy} onClick={() => void remove(a)}>{a.from < live ? "Завершити" : "Зняти"}</button></td></tr>
+          ))}
+        </tbody></table>
+      ) : <div className="zp-hint">Немає.</div>}
+      <div className="zp-row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <Seg items={[["bonus", "Бонус"], ["correction", "Корекція"]]} value={kind} onChange={setKind} />
+        <input className="zp-input zp-input--num" inputMode="decimal" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="₴ щомісяця" />
+        <input className="zp-input" type="month" value={from} min={live} onChange={(e) => setFrom(e.target.value)} title="з місяця" />
+        <input className="zp-input" type="month" value={to} min={from} onChange={(e) => setTo(e.target.value)} title="по місяць (порожньо — безстроково)" />
+      </div>
+      <div className="zp-row" style={{ gap: 8, marginTop: 8 }}>
+        <input className="zp-input" style={{ flex: 1 }} value={note} onChange={(e) => setNote(e.target.value)} placeholder="за що (бачить людина)" />
+        <button className="zp-btn zp-btn--primary" disabled={busy} onClick={() => void add()}>Додати</button>
+      </div>
+      {err && <div className="zp-err">{err}</div>}
+    </Field>
+  );
+}
+
 /** Окремий відсоток за своїми клієнтами менеджера (без розголосу: задають фінансист і ОД). Діє одразу після збереження. */
 function ClientRates({ p, live, onDone }: { p: Obj; live: string; onDone: () => void }) {
   const toast = useToast();
@@ -176,6 +234,7 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
       </div>
       <label className="zp-check"><input type="checkbox" checked={f.isFinance} onChange={(e) => set("isFinance", e.target.checked)} />Фінансист (його ЗП перевіряє ОД)</label>
       {p.role === "manager" && <ClientRates p={p} live={live} onDone={onDone} />}
+      <Adjustments p={p} live={live} onDone={onDone} />
       <Field label="З якого місяця діють ставка, рівень, % і офіційна ЗП" hint="Посада, відділ, команда й дати змінюються одразу.">
         <Seg items={[["cur", `з поточного — ${monthTitle(live)}`], ["next", `з наступного — ${monthTitle(nextMonth(live))}`]]} value={from} onChange={setFrom} />
       </Field>

@@ -8148,6 +8148,24 @@ CREATE TABLE IF NOT EXISTS payroll_client_rates (
   removed_at  TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payroll_client_rates_live ON payroll_client_rates (user_id, client_key) WHERE removed_at IS NULL;
+-- Постійний «Бонус» / «Корекція» на період (задача 10723, ТЗ Тетяни 23.11.2026, затвердив Сергій 24.11): сума щомісяця з
+-- `from_month` до `to_month` включно (NULL — безстроково), обовʼязковий коментар «за що». Бонус — лише до ЗП, не до авансу;
+-- корекція зменшує нараховане, але не нижче нуля (правило рушія). Знята не видаляється — removed_at.
+-- Відкат даних: таблиця нова, без бекфілу; зняти рядок = removed_at, видалити таблицю = повернути розрахунок як був.
+CREATE TABLE IF NOT EXISTS payroll_adjustments (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  kind        TEXT NOT NULL CHECK (kind IN ('bonus', 'correction')),
+  amount      NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  note        TEXT NOT NULL CHECK (btrim(note) <> ''),
+  from_month  DATE NOT NULL CHECK (from_month = date_trunc('month', from_month)::date),
+  to_month    DATE CHECK (to_month IS NULL OR (to_month = date_trunc('month', to_month)::date AND to_month >= from_month)),
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  removed_by  INTEGER REFERENCES users(id),
+  removed_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS payroll_adjustments_user ON payroll_adjustments (user_id) WHERE removed_at IS NULL;
 -- Канал «email» центру сповіщень: коли лист пішов (SMTP_URL у .env; без нього канал не працює і так і пише в налаштуваннях).
 ALTER TABLE notification_recipients ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ;
 
@@ -8169,7 +8187,7 @@ REVOKE ALL ON payroll_settings_versions, payroll_departments, payroll_teams, pay
   payroll_leaves, payroll_cards, payroll_months, payroll_records, payroll_record_extras, payroll_payout_forms, payroll_payout_lines,
   payroll_advances, payroll_advance_lines, payroll_ttn_seen, payroll_ttn_legacy, payroll_archive, payroll_offer_docs,
   payroll_clearances, payroll_clearance_signatures, payroll_clearance_drafts, payroll_clearance_files, payroll_history,
-  notify_rules, notifications, notification_recipients, payroll_reminders, payroll_client_rates FROM ai_readonly;
+  notify_rules, notifications, notification_recipients, payroll_reminders, payroll_client_rates, payroll_adjustments FROM ai_readonly;
 
 -- 🗝 Вкладка «Зарплата» — кожному, крім кандидата (кабінет є в кожного, хто є в payroll_employees; решта бачить порожній стан).
 UPDATE roles SET screen_access = screen_access || '{"payroll":true}'::jsonb

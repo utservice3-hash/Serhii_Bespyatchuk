@@ -150,7 +150,10 @@ function VerifyWindow({ mk, userId, S, ctx, onSaved, prev, next, onGo }: {
   const pctV = overriddenPct ? p("pct") : touched.margin && derivedPct !== null ? derivedPct : Number(cur.pct ?? 0);
   const shownPct = touched.pct ? vals.pct : String(pctV);
   const rate = fields.includes("rate") ? p("rate") : Number(cur.rate ?? 0), bonus = fields.includes("bonus") ? p("bonus") : Number(cur.bonus ?? 0);
-  const total = rate + margin * pctV / 100 + bonus + Number(f.birthday ?? 0) + Number(f.extras ?? 0);
+  // постійний бонус / корекція (задача 10723) — поверх правок, корекція не нижче нуля, як у рушії (corrCap)
+  const adjs = (f.adjustments ?? []) as Obj[], adjB = Number(f.adjBonus ?? 0), adjC = adjs.filter((x) => x.kind === "correction").reduce((s, x) => s + Number(x.amount), 0);
+  const pre = rate + margin * pctV / 100 + bonus + Number(f.birthday ?? 0) + Number(f.extras ?? 0), adjCorr = Math.min(adjC, Math.max(0, pre + adjB));
+  const total = pre + adjB - adjCorr;
   const pay = total - Number(f.advance ?? 0) - Number(f.officialDeducted ?? 0) + Number(f.ttn ?? 0);
   const changed = fields.filter((k) => touched[k] && Math.round(p(k) * 100) !== Math.round(Number(cur[k] ?? 0) * 100));
   const dirty = changed.length > 0;
@@ -297,6 +300,14 @@ function VerifyWindow({ mk, userId, S, ctx, onSaved, prev, next, onGo }: {
             )) : <div className="zp-hint" style={{ padding: "8px 0" }}>Немає днів народження цього місяця.</div>}
           </div>
 
+          {adjs.length ? <>
+            <Lbl>Постійний бонус / корекція — з налаштувань людини, на період</Lbl>
+            <div className="zf-box">
+              {adjs.map((x) => <Line key={x.id} label={x.kind === "bonus" ? "Бонус" : "Корекція"} sub={`${x.note} · з ${String(x.from).slice(5, 7)}.${String(x.from).slice(0, 4)}${x.to ? ` по ${String(x.to).slice(5, 7)}.${String(x.to).slice(0, 4)}` : " безстроково"}${x.kind === "bonus" ? " · лише до ЗП" : ""}`}
+                value={x.kind === "bonus" ? money(x.amount, { sign: true }) : money(-x.amount)} tone={x.kind === "bonus" ? "ok" : "danger"} />)}
+            </div>
+          </> : null}
+
           {kind === "manager" && (
             <>
               <Lbl>ТТН — автоматично з «ТТН моніторинг»</Lbl>
@@ -394,6 +405,8 @@ function VerifyWindow({ mk, userId, S, ctx, onSaved, prev, next, onGo }: {
               {bonus ? <Line label="Бонус за КПІ" value={money(bonus)} /> : null}
               {bdays.map((b, i) => <Line key={i} label={b.kind === "gift" ? "День народження" : b.kind === "fund" ? "Фонд днів народження" : `ДН колеги: ${b.who?.name || "колега"}`} value={signed(b.amount)} tone={signTone(b.amount)} />)}
               {extras.map((x) => <Line key={x.id} label={x.label} value={x.sign < 0 ? money(-x.amount) : money(x.amount, { sign: true })} tone={x.sign < 0 ? "danger" : "ok"} />)}
+              {adjs.map((x) => <Line key={`adj${x.id}`} label={`${x.kind === "bonus" ? "Бонус" : "Корекція"}: ${x.note}`} value={x.kind === "bonus" ? money(x.amount, { sign: true }) : money(-x.amount)} tone={x.kind === "bonus" ? "ok" : "danger"} />)}
+              {adjC > adjCorr ? <Line label="Корекцію обмежено: нараховане не буває мінусом" value={money(adjC - adjCorr, { sign: true })} tone="ok" /> : null}
             </div>
             <div className="zf-box">
               <Line label="Нараховано" value={money(total)} />

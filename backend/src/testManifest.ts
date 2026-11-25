@@ -77,6 +77,7 @@ export const MANIFEST_FILES: string[] = [
   "payroll/termsMonth.test.js",
   "payroll/naimSync.test.js",
   "payroll/birthdayV2.test.js",
+  "payroll/adjustments.test.js",
   "core/receivablesFxSql.test.js",
   "core/dealFinFields.test.js",
   "core/taskVisibility.test.js",
@@ -477,7 +478,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "payroll_leaves", "payroll_cards", "payroll_months", "payroll_records", "payroll_record_extras", "payroll_payout_forms", "payroll_payout_lines",
   "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
   "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
-  "notify_rules", "notifications", "notification_recipients", "payroll_reminders", "payroll_client_rates",
+  "notify_rules", "notifications", "notification_recipients", "payroll_reminders", "payroll_client_rates", "payroll_adjustments",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -2824,6 +2825,12 @@ export const MANIFEST_TESTS: string[] = [
   "#10881 ФОНД ДН: один рядок −100 щомісяця кожному працюючому при 0, 1 і 3 іменинниках; до v2From — збір колег",
   "#10882 ДН У РОЗРАХУНКУ: «зараз» несе подарунок мінус фонд (+1 500 іменинниці), не іменинник — рівно −100",
   "#10883 ДН З ЛИСТОПАДА: v2From = 2026-11 у розрахунку й налаштуваннях; фонд видно в кабінеті, листі й «Перевірці»",
+  // payroll/adjustments.test.ts — постійний «Бонус» / «Корекція» на період (задача 10723, 25.11.2026)
+  "#10885 БОНУС НА ПЕРІОД: діє з/по включно, до початку й після кінця — нуль; безстроковий діє й через рік",
+  "#10886 КОРЕКЦІЯ: менша за нараховане — повністю, більша — до нуля; у закритті місяця так само, і після правки фінансиста",
+  "#10887 АВАНС: постійний бонус до авансу не йде — стеля без бонусу; без бонусу стеля = нараховане",
+  "#10888 ЗАКРИТТЯ = КАБІНЕТ: без правок нараховане однакове в розрахунку й у закритті місяця, з бонусом, корекцією й обома",
+  "#10889 БОНУС/КОРЕКЦІЯ: таблиця з коментарем і періодом, не для AI; не заднім числом; маршрути з payroll_edit; видно на 4 екранах",
   // bankIdent/cardPeople.test.ts — робоча картка «Беспятчук white (Моно)», «люди картки» (13.11.2026).
   "#3930 КАРТКА: поповнення з ФОП — лише з правом, витрати — з правом або «людині картки», поповнення — свій переказ",
   "#3930b ЖИВИЙ SQL: поповнення з ФОП — однаково в SQL стрічки, TS і AI-вью; «люди картки» знаходяться за id",

@@ -87,6 +87,9 @@ export const payrollApi = {
   clientSearch: (q: string) => g<Obj[]>("/payroll/client-search", { q }),
   addClientRate: (userId: string | number, body: { clientKey: string; clientName: string; pct: number; from: "now" | "next" }) => p(`/payroll/employees/${userId}/client-rates`, body),
   removeClientRate: async (userId: string | number, id: number) => { await api.delete(`/payroll/employees/${userId}/client-rates/${id}`); },
+  // постійний бонус / корекція на період (задача 10723)
+  addAdjustment: (userId: string | number, body: { kind: "bonus" | "correction"; amount: number; note: string; from: string; to: string | null }) => p(`/payroll/employees/${userId}/adjustments`, body),
+  removeAdjustment: async (userId: string | number, id: number) => { await api.delete(`/payroll/employees/${userId}/adjustments/${id}`); },
   saveDepartment: (body: Obj) => p("/payroll/departments", body),
   saveTeam: (body: Obj) => p("/payroll/teams", body),
   history: (userId?: string | number) => g<Obj[]>("/payroll/history", userId ? { userId } : undefined),

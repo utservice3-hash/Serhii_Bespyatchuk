@@ -241,6 +241,11 @@ function partsOf(me: Obj, c: Obj, plan: boolean): Array<{ k: string; s: string; 
   if (g) out.push({ k: `Ваш день народження · ${dd(g.date)}`, s: "нараховуємо автоматично", v: Number(g.amount), color: "var(--zp-gift)" });
   if (gv.length) out.push({ k: gv.length > 1 ? `Збір на дні народження колег · ${gv.length}` : "Збір на день народження колеги", s: `${gv.map((b) => `${b.who?.name ?? ""}, ${dd(b.date)}`).join("; ")} — ${nf(S.birthday.each)} ₴ з кожного, автоматично`, v: sumOf(gv), color: "var(--text-muted)" });
   if (fd.length) out.push({ k: "Фонд днів народження", s: `${nf(S.birthday.each)} ₴ з кожного щомісяця, скільки б не було іменинників — автоматично`, v: sumOf(fd), color: "var(--text-muted)" });
+  // постійний бонус / корекція (задача 10723): окремими сумами з коментарем «за що»; корекцію рушій обмежує, щоб нараховане не стало мінусом
+  const adj = (c.adjustments ?? []) as Obj[];
+  for (const b of adj.filter((a) => a.kind === "bonus")) out.push({ k: "Бонус", s: `${b.note} · лише до ЗП, не до авансу`, v: Number(b.amount), color: "var(--info)" });
+  const corr = adj.filter((a) => a.kind === "correction"), corrAll = sumOf(corr);
+  if (corr.length) out.push({ k: "Корекція", s: `${corr.map((a) => a.note).join("; ")}${Number(x.adjCorr) < corrAll ? ` · утримано ${money(x.adjCorr)} з ${money(corrAll)}: виплата не буває мінусовою` : ""}`, v: -Number(x.adjCorr ?? 0), color: "var(--text-muted)" });
   return out;
 }
 function PartsBlock({ me }: { me: Obj }) {

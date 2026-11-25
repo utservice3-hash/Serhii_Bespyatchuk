@@ -108,6 +108,9 @@ payrollRouter.patch("/employees/:userId", h(EDIT, (req, _r, v) => P.updateEmploy
 payrollRouter.get("/client-search", h(EDIT, (req) => P.clientSearch(pool, req.query.q)));
 payrollRouter.post("/employees/:userId/client-rates", h(EDIT, async (req, res, v) => { const r = await P.addClientRate(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
 payrollRouter.delete("/employees/:userId/client-rates/:id", h(EDIT, (req, _r, v) => P.removeClientRate(pool, v, intP(req.params.userId), intP(req.params.id))));
+// постійний бонус / корекція на період (задача 10723): задають ті самі, хто править розрахунок
+payrollRouter.post("/employees/:userId/adjustments", h(EDIT, async (req, res, v) => { const r = await P.addAdjustment(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
+payrollRouter.delete("/employees/:userId/adjustments/:id", h(EDIT, (req, _r, v) => P.removeAdjustment(pool, v, intP(req.params.userId), intP(req.params.id))));
 payrollRouter.post("/departments", h(["payroll_settings"], (req, _r, v) => P.saveDepartment(pool, v, body(req))));
 payrollRouter.post("/teams", h(["payroll_settings"], (req, _r, v) => P.saveTeam(pool, v, body(req))));
 payrollRouter.get("/history", h(VIEW, (req) => P.historyView(pool, req.query.userId ? intP(req.query.userId) : null)));

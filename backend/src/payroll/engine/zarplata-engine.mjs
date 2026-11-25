@@ -339,7 +339,18 @@ export function createPayroll(state) {
     nowP.total = nowP.rate + nowP.pctAmount + bday; planP.total = planP.rate + planP.pctAmount + bday;
     return { kind: 'staff', empId: e.id, month: mk, live, days: dy, margin: base, marginPlan: basePlan, plan, planDone: !!r && plan > 0 && base >= plan, pctRule: r, birthdays, now: nowP, atPlan: planP };
   }
-  const calcE = (e, mk) => (e.role === 'manager' ? calcManager(e, mk) : e.role === 'lead' ? calcLead(e, mk) : calcStaff(e, mk));
+  // ---------- постійний «Бонус» / «Корекція» на період (задача 10723, ТЗ Тетяни 23.11.2026) ----------
+  /** e.adjustments = [{id, kind: 'bonus'|'correction', amount, note, from, to|null}] — діє щомісяця з from до to включно (to null — безстроково) */
+  const adjustmentsOf = (e, mk) => (e.adjustments || []).filter(a => a.from <= mk && (!a.to || mk <= a.to));
+  const adjSums = (e, mk) => { const xs = adjustmentsOf(e, mk); return { list: xs, B: sum(xs.filter(a => a.kind === 'bonus').map(a => a.amount)), C: sum(xs.filter(a => a.kind === 'correction').map(a => a.amount)) }; };
+  /** Бонус додається до нарахованого; корекція зменшує, але не нижче нуля: виплата від неї мінусовою не стає (Тетяна 24.11) */
+  const corrCap = (pre, B, C) => Math.min(C, Math.max(0, pre + B));
+  function withAdj(c, e, mk) {
+    const { list, B, C } = adjSums(e, mk);
+    for (const P of [c.now, c.atPlan]) { P.adjBonus = B; P.adjCorr = corrCap(P.total, B, C); P.total = P.total + B - P.adjCorr; }
+    c.adjustments = list; return c;
+  }
+  const calcE = (e, mk) => withAdj(e.role === 'manager' ? calcManager(e, mk) : e.role === 'lead' ? calcLead(e, mk) : calcStaff(e, mk), e, mk);
 
   // ---------- офіційна ЗП: статична, щомісяця, поки фінансист або ОД не змінить ----------
   const officialOf = (e, mk) => { const o = (e.official || []).filter(x => x.from <= mk).sort((a, b) => a.from.localeCompare(b.from)).pop(); return o && o.amount > 0 ? o : null; };
@@ -353,7 +364,8 @@ export function createPayroll(state) {
   function advanceLimit(e, mk) {
     const c = calcE(e, mk);
     const [base, pct, basis] = c.kind === 'manager' ? [c.margin, S.advance.managerPct, 'margin'] : c.kind === 'lead' ? [c.margin, S.advance.leadPct, 'teamMargin'] : [c.now.rate, S.advance.staffPct, 'rate'];
-    const byRule = Math.max(0, Math.floor(base * pct / 100)), cap = Math.max(0, Math.floor(c.now.total));
+    // бонус — лише до ЗП, не до авансу (Тетяна 24.11): стеля авансу — нараховане без постійного бонусу
+    const byRule = Math.max(0, Math.floor(base * pct / 100)), cap = Math.max(0, Math.floor(c.now.total - (c.now.adjBonus || 0)));
     return { basis, base, pct, byRule, cap, amount: Math.min(byRule, cap), capped: cap < byRule, calc: c };
   }
 
@@ -415,11 +427,12 @@ export function createPayroll(state) {
     // свої клієнти з окремим відсотком: їхня маржа — поза шкалою (фінансист правив загальну маржу — правка лягає на решту)
     const sp = c.kind === 'manager' && c.special ? c.special : { margin: 0, amount: 0 };
     const pctAmount = (v.margin - sp.margin) * v.pct / 100 + sp.amount;
-    const total = v.rate + pctAmount + v.bonus + bday + extras;
-    const autoTotal = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + auto.bonus + bday;
+    const pre = v.rate + pctAmount + v.bonus + bday + extras, autoPre = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + auto.bonus + bday;
+    const { B: adjBonus, C } = adjSums(e, mk), adjCorr = corrCap(pre, adjBonus, C);   // постійні бонус/корекція — поверх правок фінансиста
+    const total = pre + adjBonus - adjCorr, autoTotal = autoPre + adjBonus - corrCap(autoPre, adjBonus, C);
     const advance = advancePaid(e.id, mk), official = officialOf(e, mk), officialDeducted = official && official.deduct ? official.amount : 0;
     const tl = ttnLines(e, mk), ttn = sum(tl.map(x => x.amount));
-    return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn, pay: total - advance - officialDeducted + ttn };
+    return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, adjBonus, adjCorr, adjustments: c.adjustments, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn, pay: total - advance - officialDeducted + ttn };
   }
   /** Форма на виплату: готівка + карти разом мають дорівнювати «До виплати»; нова карта (isNew) — номер за Луном і власник */
   function checkPayoutForm(e, mk, form) {
@@ -603,7 +616,7 @@ export function createPayroll(state) {
     // дні народження
     birthdayIn: W(birthdayIn), tenureMonths: W(tenureMonths), birthdayGift: W(birthdayGift), birthdayLines: W(birthdayLines), bdayV2,
     // розрахунок
-    record, verifiedMargin, companyMargin, companyPlan, calc: W(calcE),
+    record, verifiedMargin, companyMargin, companyPlan, calc: W(calcE), adjustmentsOf: W(adjustmentsOf),
     // офіційна ЗП, аванс
     officialOf: W(officialOf), officialSeparateOf: W(officialSeparateOf), advanceOf, advanceStatus, advancePaid, advanceWindowOpen, advanceLimit: W(advanceLimit),
     // ТТН

@@ -31,6 +31,10 @@ function Slip({ f, kind, lines = [] }: { f: Obj; kind: string; lines?: Obj[] }) 
   if (gift) rows.push({ k: `Ваш день народження · ${dd(gift.date)}`, v: money(gift.amount, { sign: true }), cls: "zp-tone--ok" });
   if (gives.length) rows.push({ k: gives.length > 1 ? `Збір на ДН колег · ${gives.map((b) => String(b.who?.name ?? "").split(" ")[0]).join(", ")}` : `Збір на ДН колеги · ${gives[0].who?.name ?? ""}`, v: money(gives.reduce((s, b) => s + Number(b.amount), 0)), cls: "zp-tone--muted" });
   if (fund.length) rows.push({ k: "Фонд днів народження", v: money(fund.reduce((s, b) => s + Number(b.amount), 0)), cls: "zp-tone--muted" });
+  // постійний бонус / корекція (задача 10723): окремо, з коментарем «за що»
+  for (const b of ((f.adjustments ?? []) as Obj[]).filter((x) => x.kind === "bonus")) rows.push({ k: `Бонус · ${b.note}`, v: money(b.amount, { sign: true }), cls: "zp-tone--ok" });
+  const corr = ((f.adjustments ?? []) as Obj[]).filter((x) => x.kind === "correction");
+  if (corr.length) rows.push({ k: `Корекція · ${corr.map((x) => x.note).join("; ")}`, v: money(-Number(f.adjCorr ?? 0)), cls: "zp-tone--danger" });
   // премії / утримання — рядками з сервера (вид і сума; коментар фінансиста внутрішній); старий сервер — однією сумою
   if (lines.length) for (const x of lines) rows.push({ k: String(x.label), v: money(x.amount, { sign: true }), cls: Number(x.amount) > 0 ? "zp-tone--ok" : "zp-tone--danger" });
   else if (Number(f.extras)) rows.push({ k: "Премії, утримання й корекції", v: money(f.extras, { sign: true }), cls: Number(f.extras) > 0 ? "zp-tone--ok" : "zp-tone--danger" });

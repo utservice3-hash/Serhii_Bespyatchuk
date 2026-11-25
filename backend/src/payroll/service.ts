@@ -911,7 +911,7 @@ export async function employeesView(db: Db) {
   const people = (e.zp.employees as Array<Record<string, unknown>>).map((p) => ({ userId: p.id, name: p.name, title: p.title, role: p.role, dept: p.dept, team: p.team, leadsTeam: p.leadsTeam,
     offer: e.zp.offerCode(p), level: e.zp.levelOf(p, live), levelChange: e.zp.levelChangeAfter(p, live), rate: e.zp.rateOf(p, live), pctRule: e.zp.pctRuleOf(p, live),
     official: e.zp.officialOf(p, live), startDate: p.startDate, birthday: p.birthday, isFinance: p.isFinance, leave: p.leave, simple: e.zp.isSimple(p), terms: p.terms,
-    clientRates: p.clientRates ?? [],
+    clientRates: p.clientRates ?? [], adjustments: p.adjustments ?? [],
     // останній чинний документ оферу: підписано / чекає підпису (анульовані — не показуємо)
     offerDoc: offerDocOf(e, p.id as string) }));
   const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: string | null; birth: string | null; position: string | null; team_id: number | null; level: string | null }>(
@@ -1060,6 +1060,48 @@ export async function removeClientRate(pool: Pool, v: Viewer, uid: number, id: n
       `UPDATE payroll_client_rates SET removed_at = now(), removed_by = $3 WHERE id = $1 AND user_id = $2 AND removed_at IS NULL RETURNING client_name, pct`, [id, uid, v.userId]);
     if (!r.rows.length) fail(404, "Такого відсотка немає або його вже знято.");
     await history(c, v.userId, uid, `Знято окремий відсоток за клієнтом: ${r.rows[0].client_name} — ${Number(r.rows[0].pct)} %`, "окремі умови за своїми клієнтами");
+  });
+  await after(pool);
+  return { ok: true };
+}
+const ADJ_NAME: Record<string, string> = { bonus: "Бонус", correction: "Корекція" };
+/**
+ * Постійний «Бонус» / «Корекція» на період (задача 10723, ТЗ Тетяни 23.11.2026, затвердив Сергій 24.11): сума щомісяця з `from`
+ * до `to` включно (порожнє `to` — безстроково), коментар «за що» обовʼязковий — його бачить людина в кабінеті. Початок — не раніше
+ * поточного місяця: рушій перераховує закриті місяці наживо, і запис «заднім числом» мовчки змінив би вже виплачене.
+ */
+export async function addAdjustment(pool: Pool, v: Viewer, uid: number, body: Record<string, unknown>) {
+  const kind = String(body.kind ?? ""); if (!ADJ_NAME[kind]) fail(422, "Оберіть: бонус чи корекція.", "kind");
+  const amount = Math.round(Number(body.amount) * 100) / 100; if (!(amount > 0)) fail(422, "Сума — більше нуля.", "amount");
+  const note = String(body.note ?? "").trim(); if (!note) fail(422, "Напишіть, за що — це бачить людина в кабінеті.", "note");
+  const from = String(body.from ?? ""), to = body.to ? String(body.to) : null;
+  if (!/^\d{4}-\d{2}$/.test(from)) fail(422, "Місяць початку.", "from");
+  if (to !== null && (!/^\d{4}-\d{2}$/.test(to) || to < from)) fail(422, "Місяць кінця — не раніше початку.", "to");
+  await tx(pool, async (c) => {
+    const e = await engine(c, { fresh: true });
+    if (!e.zp.person(String(uid))) fail(404, "Такої людини в зарплаті немає.");
+    if (from < e.zp.liveMonth) fail(422, `Початок — не раніше поточного місяця (${e.zp.liveMonth}): закриті місяці вже пораховано.`, "from");
+    await c.query(`INSERT INTO payroll_adjustments (user_id, kind, amount, note, from_month, to_month, created_by) VALUES ($1,$2,$3,$4,$5::date,$6::date,$7)`,
+      [uid, kind, amount, note, monthStart(from), to ? monthStart(to) : null, v.userId]);
+    await history(c, v.userId, uid, `${ADJ_NAME[kind]} ${amount} ₴ щомісяця з ${from}${to ? ` по ${to}` : " безстроково"}: ${note}`, "постійний бонус / корекція");
+  });
+  await after(pool);
+  return { ok: true };
+}
+/**
+ * Зняти бонус/корекцію: що вже діяло в закритих місяцях — лишається (кінець = попередній місяць), що ще не почалось — знімається.
+ * Інакше зняття заднім числом змінило б уже виплачені місяці.
+ */
+export async function removeAdjustment(pool: Pool, v: Viewer, uid: number, id: number) {
+  await tx(pool, async (c) => {
+    const e = await engine(c, { fresh: true }); const live = e.zp.liveMonth, prev = prevMonth(live);
+    const r = await c.query<{ kind: string; amount: string; note: string; f: string; t: string | null }>(
+      `SELECT kind, amount, note, to_char(from_month, 'YYYY-MM') AS f, to_char(to_month, 'YYYY-MM') AS t FROM payroll_adjustments
+        WHERE id = $1 AND user_id = $2 AND removed_at IS NULL FOR UPDATE`, [id, uid]);
+    const a = r.rows[0]; if (!a || (a.t !== null && a.t < live)) fail(404, "Такого бонусу чи корекції немає, або вони вже не діють.");
+    if (a.f < live) await c.query(`UPDATE payroll_adjustments SET to_month = $3::date WHERE id = $1 AND user_id = $2`, [id, uid, monthStart(prev)]);
+    else await c.query(`UPDATE payroll_adjustments SET removed_at = now(), removed_by = $3 WHERE id = $1 AND user_id = $2`, [id, uid, v.userId]);
+    await history(c, v.userId, uid, `${ADJ_NAME[a.kind] ?? a.kind} ${Number(a.amount)} ₴ (${a.note}) — ${a.f < live ? `завершено: останній місяць ${prev}` : "знято"}`, "постійний бонус / корекція");
   });
   await after(pool);
   return { ok: true };
