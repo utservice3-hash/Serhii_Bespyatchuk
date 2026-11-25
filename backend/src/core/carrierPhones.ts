@@ -76,6 +76,10 @@ export const CARRIER_PHONES_SELECT_SQL = `
 export async function rebuildCarrierPhones(db: Db): Promise<number> {
   await db.query("BEGIN");
   try {
+    // Дві перебудови можуть зустрітись (щогодинна о :22 і та, що кличе пошук на Ларді, коли знайшов номер). Без
+    // замка друга не бачить рядків, щойно вставлених першою, і падає на ключі. SHARE ROW EXCLUSIVE конфліктує сам із
+    // собою, тож перебудови йдуть по черзі; читачі (екрани) не чекають — читання з ним сумісне.
+    await db.query("LOCK TABLE carrier_phones IN SHARE ROW EXCLUSIVE MODE");
     await db.query("DELETE FROM carrier_phones");
     const r = await db.query(`INSERT INTO carrier_phones (p9, via_lardi, via_history, via_lardi_user, history_deal, lardi_company)
                               ${CARRIER_PHONES_SELECT_SQL}`);
