@@ -7778,8 +7778,8 @@ UPDATE roles SET screen_access = screen_access - 'linkedin'
  WHERE key = 'financier';
 
 -- 📵 ДОВІДНИК НОМЕРІВ ПЕРЕВІЗНИКІВ (задача 7359, ТЗ Юлії «Контакти клієнтів», етап 1). Останні 9 цифр номера з
--- машин Lardi (`side='lorry'`) або з угод, закритих як «Перевізник», МІНУС номери з угодою замовника («Успіх» чи в
--- роботі; рішення Романа 03.11.2026). Похідна таблиця: повністю перебудовується з `lardi_offers` і `deals` джобою
+-- машин Lardi (`side='lorry'`), з угод, закритих як «Перевізник» (без винятку для угод замовника — задача 10991, 24.11.2026),
+-- або номер пропущеного, який знаходить пошук Ларді (`lardi_phone_lookup`, 25.11.2026). Похідна таблиця: повністю перебудовується з `lardi_offers` і `deals` джобою
 -- `rebuildCarrierPhones` (щогодини + старт), визначення — `core/carrierPhones.ts`. Читачі: розмови на екрані клієнтів,
 -- «Якість даних», «Взяти в роботу» в нічийних. Порожня таблиця = нічого не виключено (поведінка до задачі).
 -- ⚠️ revert коду таблицю не прибирає, але без коду її ніхто не читає. Відкат даних: DROP TABLE carrier_phones.
@@ -7792,6 +7792,24 @@ CREATE TABLE IF NOT EXISTS carrier_phones (
   rebuilt_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (via_lardi OR via_history)
 );
+
+-- 🔎 НОМЕРИ ПРОПУЩЕНИХ, ЗНАЙДЕНІ НА ЛАРДІ (Роман 25.11.2026: «якщо ларді каже що такий номер знайдено це автоматом
+-- перевізник, не тільки по архіву а взагалом»). Останній УСПІШНИЙ пошук користувача Ларді за номером (`GET /v2/users/search`);
+-- збій Ларді сюди не пишеться — «не відповів» ≠ «не знайдено». Пише джоба `lardiPhoneLookup` (щогодини :07), правила —
+-- `core/lardiPhoneLookup.ts`; `users > 0` → номер у довіднику `carrier_phones` (`via_lardi_user`).
+-- Відкат даних: DROP TABLE lardi_phone_lookup (кеш пошуку; без коду його ніхто не читає) і DROP COLUMN нижче.
+CREATE TABLE IF NOT EXISTS lardi_phone_lookup (
+  p9         TEXT PRIMARY KEY CHECK (p9 ~ '^[0-9]{9}$'),
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  users      INT NOT NULL CHECK (users >= 0),
+  name       TEXT
+);
+ALTER TABLE carrier_phones ADD COLUMN IF NOT EXISTS via_lardi_user BOOLEAN NOT NULL DEFAULT false;
+-- Джерело довідника тепер одне з ТРЬОХ. Старе безіменне `carrier_phones_check` (двох джерел) знімаємо, нове — з іменем,
+-- щоб повторний прогін міграції був ідемпотентним.
+ALTER TABLE carrier_phones DROP CONSTRAINT IF EXISTS carrier_phones_check;
+ALTER TABLE carrier_phones DROP CONSTRAINT IF EXISTS carrier_phones_source_chk;
+ALTER TABLE carrier_phones ADD CONSTRAINT carrier_phones_source_chk CHECK (via_lardi OR via_history OR via_lardi_user);
 
 -- ☎️ ТЕЛЕФОНИ З КАРТКИ КОМПАНІЇ (задача 7359, 03.11.2026): у частини клієнтів у Kommo немає контактів, телефон лише в полі
 -- «Телефон» компанії. Нормалізовані (`utils/phone.ts`). NULL = ще не прочитано (до дозаповнення) — НЕ «телефонів немає»;

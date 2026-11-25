@@ -15,7 +15,10 @@ import { LARDI_SIDE, PHONE9 } from "./carrierLardi.js";
  * зважаючи ні на що»; «перевізник це той хто бється по ларді (якщо є номер на ларді він 100 відсотків перевізник). Також
  * перевізник це ті хто по історії crm перевізник»). Причина — 380976560785: контакти перевізника прикріплюють до угод
  * замовників як перевізника рейсу, і виняток робив його «клієнтом». «Номер на Ларді» — це номер у пропозиціях МАШИН
- * (`lardi_offers.side='lorry'`); вантажі й сама реєстрація на Ларді перевізником не роблять (Роман 20.11.2026).
+ * (`lardi_offers.side='lorry'`) АБО номер пропущеного, який знаходить пошук Ларді (`core/lardiPhoneLookup.ts`, Роман 25.11.2026:
+ * «якщо ларді каже що такий номер знайдено це автоматом перевізник, не тільки по архіву а взагалом» — скасовує 20.11
+ * «вантажі й сама реєстрація на Ларді перевізником не роблять»). Вантажі АРХІВУ без пошуку й далі не рахуються: архів
+ * знає ВСІ 150 тис. пропозицій, і правило Романа — про номери пропущених, а не про весь Ларді.
  * Номер → угоди — двома шляхами: назва угоди з цифр номера і телефони контактів угоди.
  * 📐 Замір перед рішенням 24.11.2026 (лише для історії): +1 680 номерів до 10 730; 64 з них мали відкриту угоду «Повного
  * циклу», 30 — основним контактом; «Чекають» за 17–23.11 −26 номерів.
@@ -34,7 +37,10 @@ import { LARDI_SIDE, PHONE9 } from "./carrierLardi.js";
  * Модуль чистий (без `pool`): SQL-тексти й чисті функції; БД приходить параметром.
  */
 
-/** Звідки номер у довіднику. `historyDeal` — найсвіжіша угода, закрита як «Перевізник». */
+/**
+ * Звідки номер у довіднику. `historyDeal` — найсвіжіша угода, закрита як «Перевізник». `lardi` — машини Lardi в архіві
+ * АБО користувач, якого знаходить пошук Ларді (25.11.2026); `lardiCompany` — назва з пропозиції чи з профілю.
+ */
 export interface CarrierPhoneSource { lardi: boolean; history: boolean; historyDeal: number | null; lardiCompany: string | null }
 
 /** Угоди номера (обидва шляхи) — CTE-тіло з колонками угоди і `p9`. */
@@ -46,17 +52,22 @@ const DEAL_PHONES_SQL = `
   SELECT d.kommo_id, d.status_id, d.pipeline_id, d.reject_reason, right(${NAME_DIGITS("d")}, 9)
     FROM deals d WHERE ${NAME_DIGITS("d")} ~ '^380[0-9]{9}$'`;
 
-/** Рядки довідника: номер (9 цифр) з Lardi-машин або з «Перевізник» в історії — завжди, без винятку для угод замовника. */
+/**
+ * Рядки довідника: номер (9 цифр) з Lardi-машин, з «Перевізник» в історії або номер пропущеного, який знаходить пошук
+ * Ларді (`lardi_phone_lookup`, `core/lardiPhoneLookup.ts`) — завжди, без винятку для угод замовника.
+ */
 export const CARRIER_PHONES_SELECT_SQL = `
   WITH dp AS (${DEAL_PHONES_SQL}),
   lardi AS (SELECT ${PHONE9("p->>'n'")} AS p9, max(NULLIF(o.company, '')) AS company
               FROM lardi_offers o, jsonb_array_elements(o.phones) p WHERE o.side = '${LARDI_SIDE}' GROUP BY 1),
   hist AS (SELECT p9, max(kommo_id) AS deal FROM dp
-            WHERE status_id = ${String(LOST_STATUS_ID)} AND reject_reason = '${CARRIER_REJECT_REASON}' GROUP BY p9)
-  SELECT COALESCE(l.p9, h.p9) AS p9, (l.p9 IS NOT NULL) AS via_lardi, (h.p9 IS NOT NULL) AS via_history,
-         h.deal AS history_deal, l.company AS lardi_company
+            WHERE status_id = ${String(LOST_STATUS_ID)} AND reject_reason = '${CARRIER_REJECT_REASON}' GROUP BY p9),
+  lu AS (SELECT p9, NULLIF(name, '') AS name FROM lardi_phone_lookup WHERE users > 0)
+  SELECT COALESCE(l.p9, h.p9, u.p9) AS p9, (l.p9 IS NOT NULL) AS via_lardi, (h.p9 IS NOT NULL) AS via_history,
+         (u.p9 IS NOT NULL) AS via_lardi_user, h.deal AS history_deal, COALESCE(l.company, u.name) AS lardi_company
     FROM lardi l FULL JOIN hist h ON h.p9 = l.p9
-   WHERE length(COALESCE(l.p9, h.p9)) = 9`;
+    FULL JOIN lu u ON u.p9 = COALESCE(l.p9, h.p9)
+   WHERE length(COALESCE(l.p9, h.p9, u.p9)) = 9`;
 
 /**
  * Перебудувати довідник повністю. Повертає кількість номерів. `db` — ОДНЕ зʼєднання (не пул): перебудова — одна
@@ -66,7 +77,7 @@ export async function rebuildCarrierPhones(db: Db): Promise<number> {
   await db.query("BEGIN");
   try {
     await db.query("DELETE FROM carrier_phones");
-    const r = await db.query(`INSERT INTO carrier_phones (p9, via_lardi, via_history, history_deal, lardi_company)
+    const r = await db.query(`INSERT INTO carrier_phones (p9, via_lardi, via_history, via_lardi_user, history_deal, lardi_company)
                               ${CARRIER_PHONES_SELECT_SQL}`);
     await db.query("COMMIT");
     return r.rowCount ?? 0;
@@ -106,7 +117,8 @@ export const CLIENT_PHONES_SQL = `
     UNION
     SELECT k, k, 'contact' FROM unnest($1::text[]) k WHERE k ~ '^[0-9]{9,15}$'),
   one AS (SELECT DISTINCT ON (client_key, phone) client_key, phone, src FROM ph ORDER BY client_key, phone, src DESC)
-  SELECT one.client_key, one.phone, one.src, c.via_lardi, c.via_history, c.history_deal::text AS history_deal, c.lardi_company
+  SELECT one.client_key, one.phone, one.src, c.via_lardi OR c.via_lardi_user AS via_lardi, c.via_history,
+         c.history_deal::text AS history_deal, c.lardi_company
     FROM one LEFT JOIN carrier_phones c ON c.p9 = right(one.phone, 9)
    ORDER BY one.client_key, one.phone`;
 
