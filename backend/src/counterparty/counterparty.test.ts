@@ -66,6 +66,7 @@ test("#2405 РОЛІ УЗГОДЖЕННЯ: Сергій погоджує, бух
   const want: Record<string, string | null> = {
     admin: "viewer", team_lead: "lead", manager: "manager", kvp: "staff", financier: "viewer", hr: "staff", ceo: "viewer",
     opdir: "viewer", [ACCOUNTING_ROLE_KEY]: "accounting", candidate: null, business_assistant: "staff",
+    staff: "staff",   // «Співробітник» (25.11.2026, Тищенко): «інші співробітники — лише перевірка»
   };
   for (const d of ROLE_DECLARATIONS) {
     assert.ok(d.key in want, `роль «${d.key}» (${d.name}) задекларована, а ролі в узгодженні для неї не вирішено`);

@@ -8643,3 +8643,20 @@ CREATE TABLE IF NOT EXISTS lardi_registry_cache (
   info       jsonb NOT NULL,                                             -- lardiCheckRules.RegistryInfo
   fetched_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Роль «Співробітник» (задача 10723, 25.11.2026). Людина, якій у дашборді потрібні лише своя зарплата й дрібниці:
+-- «Зарплата» (без прав зарплати — тільки свій кабінет), «Оргструктура», «Новини», «Навчання», «Регламенти», «Опитування»,
+-- «Зворотний звʼязок». Перша — Тищенко Олександр (фінансист поза дашбордом; рішення Сергія й Романа 25.11).
+-- Роль спершу створено в Налаштуваннях, цей сід — її близнюк (оголошення в `db/roleDeclarations.ts`, #15).
+-- Решта екранів — ЯВНИМ `false`: схема вище щодеплою вмикає `bank` кожній ролі, де ключа немає (рядок про `bank`).
+-- `DO NOTHING`: сід не перетирає правок адміна.
+INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
+VALUES ('staff', 'Співробітник', false, 'own',
+  '{"payroll":true,"org":true,"news":true,"training":true,"documents":true,"surveys":true,"feedback":true,
+    "bank":false,"ba":false,"ads":false,"kvp":false,"duty":false,"goals":false,"plans":false,"rates":false,"tasks":false,
+    "teams":false,"aiwork":false,"hiring":false,"report":false,"finance":false,"leadgen":false,"loyalty":false,"reports":false,
+    "ai-calls":false,"depstats":false,"linkedin":false,"managers":false,"oneonone":false,"overview":false,"prozorro":false,
+    "settings":false,"messenger":false,"registries":false,"statistics":false,"constructor":false,"dataquality":false,
+    "nominations":false,"receivables":false,"missed-calls":false,"carrier-calls":false,"manager-report":false}'::jsonb,
+  '{}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
