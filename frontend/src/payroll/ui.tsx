@@ -55,8 +55,9 @@ export type Tone = "ok" | "warn" | "danger" | "info" | "violet" | "muted";
 export function Pill({ tone = "muted", children, title }: { tone?: Tone; children: ReactNode; title?: string }) {
   return <span className={`zp-pill zp-pill--${tone}`} title={title}>{children}</span>;
 }
-export function StatusPill({ status }: { status: string }) {
-  const [label, tone] = RECORD_STATUS[status] ?? [status, "muted" as Tone];
+/** `employee` — кабінет працівника: «paid» там «Схвалено до виплати», бо позначка фінансиста — не зарахування на карту (Дар'я 25.11). */
+export function StatusPill({ status, employee = false }: { status: string; employee?: boolean }) {
+  const [label, tone] = employee && status === "paid" ? ["Схвалено до виплати", "ok" as Tone] : RECORD_STATUS[status] ?? [status, "muted" as Tone];
   return <Pill tone={tone}>{label}</Pill>;
 }
 

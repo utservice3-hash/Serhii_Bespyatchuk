@@ -48,7 +48,7 @@ function Slip({ f, kind, lines = [] }: { f: Obj; kind: string; lines?: Obj[] }) 
 
 function SlipPay({ f, hold, adv }: { f: Obj; hold: number; adv: Obj | null }) {
   const rows: Array<{ k: string; v: string; cls?: string }> = [];
-  if (Number(f.advance)) rows.push({ k: `Аванс${adv?.paidAt ? `, виплачено ${dd(adv.paidAt)}` : ""}`, v: money(-f.advance), cls: "zp-tone--danger" });
+  if (Number(f.advance)) rows.push({ k: `Аванс${adv?.paidAt ? `, схвалено ${dd(adv.paidAt)}` : ""}`, v: money(-f.advance), cls: "zp-tone--danger" });
   const o = f.official as Obj | null;
   if (o) rows.push(o.deduct ? { k: "Офіційна ЗП — отримуєте окремо, тут вираховуємо", v: money(-o.amount), cls: "zp-tone--danger" } : { k: "Офіційна ЗП — окремо, понад цю суму", v: money(o.amount), cls: "zp-tone--muted" });
   for (const x of (f.ttnLines ?? []) as Obj[]) {
@@ -159,7 +159,8 @@ export function CloseCard({ me, onChanged }: { me: Obj; onChanged: () => Promise
           const pl = r.payout as Obj | null, useDiff = pl && pl.diff && st !== "paid";
           return (
             <div className="zp-note zp-note--ok">
-              <b>{st === "paid" ? `Виплачено ${dt(r.paidAt)}` : `Форму подано ${dt(r.form?.at)}`}:</b> {payHow(useDiff ? pl : r.form)}.
+              <b>{st === "paid" ? `Схвалено до виплати ${dt(r.paidAt)}` : `Форму подано ${dt(r.form?.at)}`}:</b> {payHow(useDiff ? pl : r.form)}.
+              {st === "paid" ? " Гроші надійдуть після переказу, строк залежить від банку." : ""}
               {st === "submitted" && (fin && r.payNeedsOd ? " Виплата — після погодження розрахунку ОД (п. 9 обхідного листа)." : ` Виплата до ${S.payByDay} ${nm}.`)}
               {useDiff ? ` ТТН закрито після подання форми — ${money(pl!.diff, { sign: true })} додано до виплати.` : ""}
             </div>
@@ -183,7 +184,7 @@ export function CloseCard({ me, onChanged }: { me: Obj; onChanged: () => Promise
     );
   }
   return (
-    <Block id="close" title={`${monthTitle(mk)} — закриття${fin ? " й фінальний розрахунок" : ""}`} aside={st === "review" ? <Pill tone="warn">перевіряє фінансист</Pill> : <StatusPill status={st} />}>
+    <Block id="close" title={`${monthTitle(mk)} — закриття${fin ? " й фінальний розрахунок" : ""}`} aside={st === "review" ? <Pill tone="warn">перевіряє фінансист</Pill> : <StatusPill status={st} employee />}>
       <ol className="zc-stepper" style={{ ["--n" as string]: steps.length }}>
         {steps.map((s, i) => <li key={i} className={i < idx || st === "paid" ? "is-done" : i === idx ? "is-now" : ""}><b>{s[0]}</b>{s[1] && <span>{s[1]}</span>}</li>)}
       </ol>

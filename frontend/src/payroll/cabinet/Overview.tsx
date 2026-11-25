@@ -73,7 +73,7 @@ function Hero({ me }: { me: Obj }) {
   let k2: string, big2: string, s2: ReactNode, cls2 = "zp-hero__sum--plan";
   if (flat) {
     const o = e.official as Obj | null, ded = o && o.deduct ? Number(o.amount) : 0, adv = lv.advance?.request?.status === "paid" ? Number(lv.advance.request.amount) : 0;
-    if (ded || adv) { k2 = "До виплати за місяць"; big2 = money(c.now.total - ded - adv); s2 = [ded ? `офіційну ${money(ded)} отримуєте окремо — тут її вирахуємо` : "", adv ? `аванс ${money(adv)} уже виплачено` : ""].filter(Boolean).join(" · "); }
+    if (ded || adv) { k2 = "До виплати за місяць"; big2 = money(c.now.total - ded - adv); s2 = [ded ? `офіційну ${money(ded)} отримуєте окремо — тут її вирахуємо` : "", adv ? `аванс ${money(adv)} уже схвалено` : ""].filter(Boolean).join(" · "); }
     else { k2 = "Ставка за місяць"; big2 = money(e.rate); s2 = "без плану й відсотка — стабільно"; }
   } else if (c.planDone) { k2 = "План виконано"; big2 = money(10000 * c.now.pct / 100, { sign: true }); s2 = `за кожні наступні 10 000 ₴ маржі${c.kind === "lead" ? " команди" : ""} — ${pc(c.now.pct)}`; cls2 = "zc-ok"; }
   else if (c.kind === "manager" && !c.plan) { k2 = "Плану керівника немає"; big2 = pc(c.now.pct); s2 = `${S.profi.pct2} % — від ${money(S.profi.threshold)} маржі`; }
@@ -256,7 +256,7 @@ function PartsBlock({ me }: { me: Obj }) {
   const ps = partsOf(me, c, plan), pos = ps.filter((x) => x.v > 0), sp = pos.reduce((s, x) => s + x.v, 0) || 1;
   const total = plan ? c.atPlan.total : c.now.total;
   const o = e.official as Obj | null, adv = lv.advance?.request?.status === "paid" ? Number(lv.advance.request.amount) : 0, extra: string[] = [];
-  if (adv) extra.push(`аванс ${money(adv)} уже виплачено — вирахуємо`);
+  if (adv) extra.push(`аванс ${money(adv)} схвалено — вирахуємо`);
   if (o) extra.push(o.deduct ? `офіційну ЗП ${money(o.amount)} отримуєте окремо — з цієї суми її вирахуємо` : `офіційна ЗП ${money(o.amount)} — окремо, понад цю суму`);
   return (
     <Block title="З чого складається" aside={single ? undefined : (
