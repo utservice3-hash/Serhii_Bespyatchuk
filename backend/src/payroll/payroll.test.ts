@@ -226,19 +226,29 @@ test("#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, за
 
     // ---------- форма на виплату ----------
     const due = Math.round(r.j.settlement.pay);
-    r = await call("mar", "POST", `/payroll/me/records/${pm}/payout-form`, { cash: 0, lines: [{ newCard: { number: "4111111111111111", holder: "Марина Коваль" }, amount: due - 100 }] });
+    r = await call("mar", "POST", `/payroll/me/records/${pm}/payout-form`, { cash: 0, lines: [{ newCard: { number: "4111111111111111", holder: "Марина Коваль", bank: "Монобанк" }, amount: due - 100 }] });
     assert.equal(r.s, 422); assert.match(r.j.error, /Не сходиться на 100/);
     r = await call("mar", "POST", `/payroll/me/records/${pm}/payout-form`, { cash: 0, lines: [{ newCard: { number: "4111111111111112", holder: "Марина" }, amount: due }] });
     assert.equal(r.s, 422, "карта не за Луном прийнята");
     r = await call("mar", "POST", `/payroll/me/records/${pm}/payout-form`, { cash: 100, lines: [{ newCard: { number: "4111 1111 1111 1111", holder: "Марина Коваль" }, amount: due - 100 }] });
+    assert.equal(r.s, 422, "🔴 нова карта без банку прийнята (#10960)"); assert.match(r.j.error, /банк/i);
+    assert.equal((await c.query(`SELECT 1 FROM payroll_cards WHERE user_id = 3`)).rowCount, 0, "відмова — без карти в БД");
+    r = await call("mar", "POST", `/payroll/me/records/${pm}/payout-form`, { cash: 100, lines: [{ newCard: { number: "4111 1111 1111 1111", holder: "Марина Коваль", bank: " Монобанк " }, amount: due - 100 }] });
     assert.equal(r.s, 200, JSON.stringify(r.j)); assert.equal(r.j.status, "submitted");
-    const enc = await c.query(`SELECT number_enc, last4 FROM payroll_cards WHERE user_id = 3`);
+    const enc = await c.query(`SELECT id, number_enc, last4, bank FROM payroll_cards WHERE user_id = 3`);
+    assert.equal(enc.rows[0].bank, "Монобанк", "банк нової карти з форми записано (обрізано)");
+    // «Вказати банк» (#10961): чужу карту — ні, свою — так
+    assert.equal((await call("nat", "POST", `/payroll/me/cards/${enc.rows[0].id}/bank`, { bank: "ПриватБанк" })).s, 404, "🔴 банк чужої карти змінено");
+    assert.equal((await call("mar", "POST", `/payroll/me/cards/${enc.rows[0].id}/bank`, { bank: "" })).s, 422, "🔴 порожній банк прийнято");
+    assert.equal((await call("mar", "POST", `/payroll/me/cards/${enc.rows[0].id}/bank`, { bank: "А-Банк" })).s, 200, "дзеркало: свою карту — можна");
+    assert.equal((await c.query(`SELECT bank FROM payroll_cards WHERE id = $1`, [enc.rows[0].id])).rows[0].bank, "А-Банк");
     assert.equal(enc.rows[0].last4, "1111"); assert.ok(!Buffer.from(enc.rows[0].number_enc).toString("utf8").includes("4111111111111111"), "🔴 номер карти в БД відкрито");
 
     // ---------- відомість і виплата ----------
     r = await call("fin", "GET", `/payroll/statement?month=${pm}`);
     const st = r.j.filter((x: Record<string, unknown>) => x.userId === "3");
     assert.deepEqual(st.map((x: Record<string, unknown>) => [x.cash, x.card, x.cardLast4, x.cardNo]), [[100, 0, null, null], [0, due - 100, "1111", null]], "відомість — рядок на карту, готівка окремо, без повного номера");
+    assert.deepEqual(st.map((x: Record<string, unknown>) => x.bank), [null, "А-Банк"], "🔴 відомість не бачить банк, указаний ПІСЛЯ подачі форми (#10962)");
     assert.equal((await call("od", "GET", `/payroll/statement/export?month=${pm}`)).s, 200);
     assert.equal((await call("nat", "GET", `/payroll/statement/export?month=${pm}`)).s, 403, "🔴 Excel з номерами карт — КВП");
     r = await call("fin", "POST", "/payroll/statement/mark-paid", { month: pm, userIds: [3, 4] });

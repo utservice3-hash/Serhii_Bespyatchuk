@@ -2241,6 +2241,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["candidate"] },
   { method: "POST", path: "/api/payroll/me/cards", cls: "deny-only",
     allow: [], deny: ["candidate"] },
+  { method: "POST", path: "/api/payroll/me/cards/:id/bank", cls: "deny-only",
+    allow: [], deny: ["candidate"] },
   { method: "POST", path: "/api/payroll/me/level", cls: "deny-only",
     allow: [], deny: ["candidate"] },
   { method: "POST", path: "/api/payroll/me/clearance/shots", cls: "deny-only",

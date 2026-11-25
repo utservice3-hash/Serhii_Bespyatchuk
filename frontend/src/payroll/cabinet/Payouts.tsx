@@ -9,6 +9,7 @@ import { useToast } from "../../components/Toasts";
 import { Block } from "./Block";
 import { ADV_STATUS, dd, lastDay, monthGen, monthLow, monthShort, payHow, limitRule } from "./format";
 import { AdvanceBlock } from "./Advance";
+import { BankField } from "./BankField";
 
 const d2 = (n: number, mk: string) => `${String(n).padStart(2, "0")}.${mk.slice(5)}`;
 
@@ -112,15 +113,23 @@ function AdvancesHistory({ me }: { me: Obj }) {
 function CardsBlock({ me, onChanged }: { me: Obj; onChanged: () => Promise<void> }) {
   const toast = useToast();
   const cards = (me.cards ?? []) as Obj[];
-  const [add, setAdd] = useState<{ number: string; holder: string } | null>(null);
+  const [add, setAdd] = useState<{ number: string; holder: string; bank: string } | null>(null);
+  const [bankFor, setBankFor] = useState<{ id: number; bank: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [del, setDel] = useState<number | null>(null);
   async function save() {
     if (!add) return;
     setBusy(true); setErr(null);
-    try { await payrollApi.addCard(add.number.replace(/\s/g, ""), add.holder.trim()); toast("Карту збережено."); setAdd(null); await onChanged(); }
+    try { await payrollApi.addCard(add.number.replace(/\s/g, ""), add.holder.trim(), add.bank.trim()); toast("Карту збережено."); setAdd(null); await onChanged(); }
     catch (e) { setErr(errText(e)); }
+    finally { setBusy(false); }
+  }
+  async function saveBank() {
+    if (!bankFor) return;
+    setBusy(true);
+    try { await payrollApi.setCardBank(bankFor.id, bankFor.bank.trim()); toast("Банк збережено."); setBankFor(null); await onChanged(); }
+    catch (e) { toast(errText(e), { error: true }); }
     finally { setBusy(false); }
   }
   async function archive(id: number) {
@@ -137,7 +146,18 @@ function CardsBlock({ me, onChanged }: { me: Obj; onChanged: () => Promise<void>
           {cards.map((c) => (
             <li key={c.id} className="zc-card">
               <span className="zc-card__plate" aria-hidden="true" />
-              <div className="zp-grow"><span className="zp-num zc-card__no">•••• {c.last4}</span><small>{c.holder}</small></div>
+              <div className="zp-grow">
+                <span className="zp-num zc-card__no">•••• {c.last4}</span>
+                <small>{c.holder} · {c.bank ? c.bank : <b className="zc-card__nobank">Банк не вказано</b>}</small>
+                {bankFor && bankFor.id === c.id && (
+                  <div className="zp-row">
+                    <BankField value={bankFor.bank} onChange={(v) => setBankFor({ id: c.id, bank: v })} autoFocus />
+                    <button type="button" className="zp-btn zp-btn--dark zp-btn--sm" disabled={busy || !bankFor.bank.trim()} onClick={() => void saveBank()}>Зберегти</button>
+                    <button type="button" className="zp-btn zp-btn--sm" onClick={() => setBankFor(null)}>Скасувати</button>
+                  </div>
+                )}
+              </div>
+              {bankFor?.id !== c.id && <button type="button" className={`zp-btn zp-btn--sm ${c.bank ? "zp-btn--ghost" : "zp-btn--dark"}`} onClick={() => setBankFor({ id: c.id, bank: c.bank ?? "" })}>{c.bank ? "Змінити банк" : "Вказати банк"}</button>}
               {del === c.id ? (
                 <span className="zp-row">
                   <button type="button" className="zp-btn zp-btn--danger zp-btn--sm" disabled={busy} onClick={() => void archive(c.id)}>Прибрати</button>
@@ -156,14 +176,15 @@ function CardsBlock({ me, onChanged }: { me: Obj; onChanged: () => Promise<void>
           <label className="zp-field"><span>Отримувач — прізвище, імʼя (як у банку)</span>
             <input className="zp-input" autoComplete="off" value={add.holder} onChange={(e) => setAdd({ ...add, holder: e.target.value })} />
           </label>
+          <BankField value={add.bank} onChange={(v) => setAdd({ ...add, bank: v })} />
           {err && <p className="zp-err">{err}</p>}
           <div className="zp-row">
-            <button type="button" className="zp-btn zp-btn--dark" disabled={busy || !add.number || !add.holder.trim()} onClick={() => void save()}>Зберегти карту</button>
+            <button type="button" className="zp-btn zp-btn--dark" disabled={busy || !add.number || !add.holder.trim() || !add.bank.trim()} onClick={() => void save()}>Зберегти карту</button>
             <button type="button" className="zp-btn" onClick={() => { setAdd(null); setErr(null); }}>Скасувати</button>
           </div>
         </div>
-      ) : <div className="zp-row"><button type="button" className="zp-btn" onClick={() => setAdd({ number: "", holder: me.employee?.name ?? "" })}>+ Додати карту</button></div>}
-      <p className="zp-hint">Карта може бути будь-яка і на будь-кого — вкажіть отримувача, як у банку. На екрані — лише останні 4 цифри; повний номер бачить фінансист у відомості.</p>
+      ) : <div className="zp-row"><button type="button" className="zp-btn" onClick={() => setAdd({ number: "", holder: me.employee?.name ?? "", bank: "" })}>+ Додати карту</button></div>}
+      <p className="zp-hint">Карта може бути будь-яка і на будь-кого — вкажіть отримувача, як у банку, і банк. На екрані — лише останні 4 цифри; повний номер бачить фінансист у відомості.</p>
     </Block>
   );
 }

@@ -25,6 +25,14 @@ export function validateCard(number: string, holder: string): string | null {
   if (!String(holder ?? "").trim()) return "Вкажіть ПІБ отримувача — карта може бути на іншу людину.";
   return null;
 }
+/** Банк карти (Тетяна 25.11.2026, #10960): обовʼязковий для нової карти й для «Вказати банк»; вільний текст до 60 символів. */
+export const BANK_MAX = 60;
+export function validateBank(bank: unknown): string | null {
+  const b = String(bank ?? "").trim();
+  if (!b) return "Вкажіть банк карти (наприклад, Монобанк чи ПриватБанк).";
+  if (b.length > BANK_MAX) return `Назва банку — до ${BANK_MAX} символів.`;
+  return null;
+}
 export function encryptCard(number: string): { enc: Buffer; last4: string; hash: string } {
   const k = key(), d = digitsOf(number), iv = randomBytes(12);
   const c = createCipheriv("aes-256-gcm", k, iv);

@@ -58,8 +58,9 @@ export function payHow(f: Obj | null | undefined): string {
   const cards = ((f.cards ?? []) as Obj[]).filter((c) => Number(c.amount));
   const tail = (c: Obj) => String(c.last4 ?? String(c.no ?? "").slice(-4));
   const parts: string[] = [];
-  if (cards.length === 1 && !Number(f.cash)) return `на карту •••• ${tail(cards[0])}`;
-  cards.forEach((c) => parts.push(`•••• ${tail(c)} — ${money(c.amount)}`));
+  const bank = (c: Obj) => (c.bank ? ` · ${c.bank}` : "");
+  if (cards.length === 1 && !Number(f.cash)) return `на карту •••• ${tail(cards[0])}${bank(cards[0])}`;
+  cards.forEach((c) => parts.push(`•••• ${tail(c)}${bank(c)} — ${money(c.amount)}`));
   if (Number(f.cash)) parts.push(`готівкою ${money(f.cash)}`);
   return parts.length ? parts.join(", ") : "—";
 }

@@ -14,7 +14,7 @@ import { dt, dayGen, monthLow } from "./fmt";
 
 /** Колонки — ті самі ключі, що `COLS` у `service.ts` (Excel рахує сервер). */
 const COLS: Array<[string, string]> = [["n", "№"], ["name", "ПІБ"], ["title", "Посада"], ["team", "Команда"], ["acc", "Нараховано"], ["adv", "Аванс"], ["off", "Офіційна ЗП"],
-  ["ttn", "ТТН"], ["pay", "До виплати"], ["cash", "Готівка"], ["card", "На карти"], ["cardNo", "Карти"], ["who", "Отримувач"], ["st", "Стан"], ["sign", "Підпис"]];
+  ["ttn", "ТТН"], ["pay", "До виплати"], ["cash", "Готівка"], ["card", "На карти"], ["cardNo", "Карти"], ["bank", "Банк"], ["who", "Отримувач"], ["st", "Стан"], ["sign", "Підпис"]];
 const DEFAULT_COLS = COLS.map(([k]) => k).filter((k) => k !== "team" && k !== "sign");
 const LS_KEY = "zp.statement.cols";
 const loadCols = (): string[] => {
@@ -23,7 +23,7 @@ const loadCols = (): string[] => {
 };
 
 interface Person { userId: string; n: number; name: string; title: string; team: string | null; accrued: number; advance: number; official: number; ttn: number; pay: number;
-  status: string; blocked: boolean; needsOd: boolean; paidAt: string | null; cash: number; cards: Array<{ last4: string | null; holder: string | null; amount: number }> }
+  status: string; blocked: boolean; needsOd: boolean; paidAt: string | null; cash: number; cards: Array<{ last4: string | null; holder: string | null; bank: string | null; amount: number }> }
 
 export default function StatementTab({ ctx }: { ctx: PayrollCtx }) {
   const toast = useToast();
@@ -47,7 +47,7 @@ export default function StatementTab({ ctx }: { ctx: PayrollCtx }) {
         m.set(r.userId, p);
       }
       p.cash += Number(r.cash ?? 0);
-      if (r.cardLast4 || Number(r.card)) p.cards.push({ last4: r.cardLast4, holder: r.holder, amount: Number(r.card ?? 0) });
+      if (r.cardLast4 || Number(r.card)) p.cards.push({ last4: r.cardLast4, holder: r.holder, bank: r.bank ?? null, amount: Number(r.card ?? 0) });
     }
     return [...m.values()].sort((a, b) => a.n - b.n);
   }, [data]);
@@ -111,7 +111,7 @@ export default function StatementTab({ ctx }: { ctx: PayrollCtx }) {
                 {on("n") && <th>№</th>}{on("name") && <th>ПІБ</th>}{on("title") && <th>Посада</th>}{on("team") && <th>Команда</th>}
                 {on("acc") && <th className="r">Нараховано</th>}{on("adv") && <th className="r">Аванс</th>}{on("off") && <th className="r">Офіційна ЗП</th>}
                 {on("ttn") && <th className="r">ТТН</th>}{on("pay") && <th className="r">До виплати</th>}{on("cash") && <th className="r">Готівка</th>}
-                {on("card") && <th className="r">На карти</th>}{on("cardNo") && <th>Карти</th>}{on("who") && <th>Отримувач</th>}{on("st") && <th>Стан</th>}{on("sign") && <th>Підпис</th>}
+                {on("card") && <th className="r">На карти</th>}{on("cardNo") && <th>Карти</th>}{on("bank") && <th>Банк</th>}{on("who") && <th>Отримувач</th>}{on("st") && <th>Стан</th>}{on("sign") && <th>Підпис</th>}
               </tr>
             </thead>
             <tbody>
@@ -131,6 +131,7 @@ export default function StatementTab({ ctx }: { ctx: PayrollCtx }) {
                   {on("cash") && <td className="r">{p.cash ? money(p.cash) : "—"}</td>}
                   {on("card") && <td className="r">{p.cards.length ? money(p.cards.reduce((s, c) => s + c.amount, 0)) : "—"}</td>}
                   {on("cardNo") && <td className="zf-cards">{p.cards.length ? p.cards.map((c, i) => <div key={i}>•••• {c.last4 ?? "????"} — {money(c.amount)}</div>) : "—"}</td>}
+                  {on("bank") && <td>{p.cards.length ? p.cards.map((c, i) => <div key={i}>{c.bank ?? "не вказано"}</div>) : "—"}</td>}
                   {on("who") && <td>{[...new Set(p.cards.map((c) => c.holder).filter(Boolean))].join(", ") || (p.cash ? "готівкою" : "—")}</td>}
                   {on("st") && <td>{p.status === "paid" ? <Pill tone="ok">Виплачено</Pill> : p.blocked || p.needsOd ? <Pill tone="warn">Чекає обхідного</Pill> : <Pill tone="ok">Форму подано</Pill>}
                     {why(p) && p.status !== "paid" && <div className="zp-hint">{why(p)}</div>}</td>}
@@ -143,7 +144,7 @@ export default function StatementTab({ ctx }: { ctx: PayrollCtx }) {
                 {canEdit && <td />}{on("n") && <td />}{on("name") && <td>Разом</td>}{on("title") && <td />}{on("team") && <td />}
                 {on("acc") && <td className="r">{money(T("accrued"))}</td>}{on("adv") && <td className="r">{money(-T("advance"))}</td>}{on("off") && <td className="r">{money(-T("official"))}</td>}
                 {on("ttn") && <td className="r">{money(T("ttn"))}</td>}{on("pay") && <td className="r">{money(T("pay"))}</td>}{on("cash") && <td className="r">{money(T("cash"))}</td>}
-                {on("card") && <td className="r">{money(totalCard)}</td>}{on("cardNo") && <td />}{on("who") && <td />}{on("st") && <td />}{on("sign") && <td />}
+                {on("card") && <td className="r">{money(totalCard)}</td>}{on("cardNo") && <td />}{on("bank") && <td />}{on("who") && <td />}{on("st") && <td />}{on("sign") && <td />}
               </tr>
             </tfoot>
           </table>

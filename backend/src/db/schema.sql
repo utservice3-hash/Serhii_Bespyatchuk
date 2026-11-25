@@ -7907,6 +7907,8 @@ CREATE TABLE IF NOT EXISTS payroll_cards (
   archived_at TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payroll_cards_uniq ON payroll_cards (user_id, number_hash) WHERE archived_at IS NULL;
+-- Банк карти (Тетяна 25.11.2026, обовʼязковий для нової карти; старим картам людина вказує сама в кабінеті, NULL = «не вказано»).
+ALTER TABLE payroll_cards ADD COLUMN IF NOT EXISTS bank TEXT;
 CREATE TABLE IF NOT EXISTS payroll_months (
   month     DATE PRIMARY KEY CHECK (month = date_trunc('month', month)::date),
   status    TEXT NOT NULL CHECK (status IN ('live', 'closed')),

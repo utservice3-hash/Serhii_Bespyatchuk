@@ -216,8 +216,8 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   const recIds = recQ.rows.map((r) => r.id);
   const exQ = recIds.length ? await db.query<{ record_id: string; kind: string; amount: string; note: string }>(
     `SELECT record_id::text, kind, amount, note FROM payroll_record_extras WHERE record_id = ANY($1::bigint[]) AND deleted_at IS NULL ORDER BY id`, [recIds]) : { rows: [] };
-  const fmQ = recIds.length ? await db.query<{ record_id: string; cash: string; submitted_at: Date; card_id: string | null; last4: string | null; holder: string | null; amount: string | null }>(
-    `SELECT f.record_id::text, f.cash, f.submitted_at, l.card_id::text, c.last4, c.holder, l.amount
+  const fmQ = recIds.length ? await db.query<{ record_id: string; cash: string; submitted_at: Date; card_id: string | null; last4: string | null; holder: string | null; bank: string | null; amount: string | null }>(
+    `SELECT f.record_id::text, f.cash, f.submitted_at, l.card_id::text, c.last4, c.holder, c.bank, l.amount
        FROM payroll_payout_forms f LEFT JOIN payroll_payout_lines l ON l.form_id = f.id LEFT JOIN payroll_cards c ON c.id = l.card_id
       WHERE f.record_id = ANY($1::bigint[]) ORDER BY l.id`, [recIds]) : { rows: [] };
   for (const r of recQ.rows) {
@@ -229,7 +229,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       ...(r.agreed_at ? { agreedAt: kyivIso(r.agreed_at) } : {}),
       ...(r.dispute_text ? { dispute: { text: r.dispute_text, at: kyivIso(r.dispute_at) } } : {}),
       ...(r.reply ? { reply: r.reply } : {}),
-      ...(fl.length ? { form: { cash: Number(fl[0].cash), at: kyivIso(fl[0].submitted_at), cards: fl.filter((f) => f.card_id).map((f) => ({ no: `${f.card_id}-${f.last4}`, cardId: Number(f.card_id), who: f.holder, amount: Number(f.amount) })) } } : {}),
+      ...(fl.length ? { form: { cash: Number(fl[0].cash), at: kyivIso(fl[0].submitted_at), cards: fl.filter((f) => f.card_id).map((f) => ({ no: `${f.card_id}-${f.last4}`, cardId: Number(f.card_id), who: f.holder, bank: f.bank, amount: Number(f.amount) })) } } : {}),
       ...(r.paid_at ? { paidAt: kyivIso(r.paid_at), paidBy: String(r.paid_by) } : {}),
       recordId: Number(r.id),
     };
@@ -239,15 +239,15 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   // ---------- аванси: на місяць — остання не скасована заявка ----------
   const advances: Record<string, Record<string, unknown>> = {};
   const advQ = await db.query<{ id: string; mk: string; user_id: number; amount: string; cash: string; status: string; requested_at: Date; paid_at: Date | null; paid_by: number | null;
-    rejected_at: Date | null; rejected_by: number | null; reason: string | null; cancelled_at: Date | null; lines: Array<{ cardId: number; last4: string; holder: string; amount: string }> | null }>(
+    rejected_at: Date | null; rejected_by: number | null; reason: string | null; cancelled_at: Date | null; lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
     `SELECT a.id::text, to_char(a.month, 'YYYY-MM') AS mk, a.user_id, a.amount, a.cash, a.status, a.requested_at, a.paid_at, a.paid_by, a.rejected_at, a.rejected_by, a.reason, a.cancelled_at,
-            (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'amount', l.amount) ORDER BY l.id)
+            (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'bank', c.bank, 'amount', l.amount) ORDER BY l.id)
                FROM payroll_advance_lines l JOIN payroll_cards c ON c.id = l.card_id WHERE l.advance_id = a.id) AS lines
        FROM payroll_advances a WHERE a.month >= $1::date AND a.status <> 'cancelled' ORDER BY a.requested_at, a.id`, [monthStart(fromMonth)]);
   for (const a of advQ.rows) {
     (advances[a.mk] ??= {})[String(a.user_id)] = {
       id: Number(a.id), amount: Number(a.amount), cash: Number(a.cash),
-      cards: (a.lines ?? []).map((l) => ({ no: `${l.cardId}-${l.last4}`, cardId: l.cardId, who: l.holder, amount: Number(l.amount) })),
+      cards: (a.lines ?? []).map((l) => ({ no: `${l.cardId}-${l.last4}`, cardId: l.cardId, who: l.holder, bank: l.bank, amount: Number(l.amount) })),
       requestedAt: kyivIso(a.requested_at),
       ...(a.paid_at ? { paidAt: kyivIso(a.paid_at), paidBy: String(a.paid_by) } : {}),
       ...(a.rejected_at ? { rejectedAt: kyivIso(a.rejected_at), rejectedBy: String(a.rejected_by), reason: a.reason } : {}),

@@ -29,12 +29,13 @@ export const payrollApi = {
   myGoal: (q: Obj = {}) => g("/payroll/me/goal", q),
   agree: (month: string) => p(`/payroll/me/records/${month}/agree`),
   dispute: (month: string, text: string) => p(`/payroll/me/records/${month}/dispute`, { text }),
-  /** lines: [{ cardId, amount }] або [{ newCard: { number, holder }, amount }]; cash — готівкою. */
+  /** lines: [{ cardId, amount }] або [{ newCard: { number, holder, bank }, amount }]; cash — готівкою. */
   submitForm: (month: string, body: { cash: number; lines: Obj[] }) => p(`/payroll/me/records/${month}/payout-form`, body),
   requestAdvance: (body: { cash?: number; lines?: Obj[] }) => p("/payroll/me/advances", body),
   cancelAdvance: (id: number) => p(`/payroll/me/advances/${id}/cancel`),
   myCards: () => g<Obj[]>("/payroll/me/cards"),
-  addCard: (number: string, holder: string) => p("/payroll/me/cards", { number, holder }),
+  addCard: (number: string, holder: string, bank: string) => p("/payroll/me/cards", { number, holder, bank }),
+  setCardBank: (id: number, bank: string) => p(`/payroll/me/cards/${id}/bank`, { bank }),
   archiveCard: async (id: number) => { await api.delete(`/payroll/me/cards/${id}`); },
   chooseProfi: () => p("/payroll/me/level", { level: "profi" }),
   /** files: data URL-и скріншотів (обхідний лист, менеджер → тім-ліду). */
