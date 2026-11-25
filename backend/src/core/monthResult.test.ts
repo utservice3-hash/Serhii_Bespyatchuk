@@ -71,7 +71,7 @@ test("#1282c РІШЕННЯ: перенесена — лише в цільово
   const names = new Map([[7, { name: "Менеджер А", active: true }], [8, { name: "Менеджер Б", active: false }]]);
   const s = summarize([
     deal({ id: 1, profit: 1000 }), deal({ id: 2, profit: 500, checks: ["немає рахунку"] }), deal({ id: 3, included: false, profit: 9999, override: ov({}) }),
-    deal({ id: 4, profit: -200, isMinus: true }), deal({ id: 5, closer: 8, profit: 300, override: ov({ action: "profit", profit: 300 }) }), deal({ id: 6, closer: null, profit: 50 }),
+    deal({ id: 4, profit: -200, isMinus: true }), deal({ id: 5, closer: 7, current: 8, profit: 300, override: ov({ action: "profit", profit: 300 }) }), deal({ id: 6, closer: 7, current: null, profit: 50 }),
   ], names);
   const a = s.find((m) => m.kommoUserId === 7)!;
   assert.deepEqual([a.deals, a.result, a.review, a.minus, a.overrides], [3, 1300, { n: 1, sum: 500 }, { n: 1, sum: -200 }, 1], "🔴 зведення менеджера хибне");
@@ -105,14 +105,15 @@ async function scratchDb(t: { skip: (m: string) => void }) {
 }
 
 /**
- * #1282d — ЖИВИЙ SQL. Вересень: межа місяця за Києвом (30.09 23:30 Києва — вересень, 01.10 00:30 — жовтень); не «Повний
- * цикл» і не успішна — поза; перепризначена після закриття — тому, хто закривав (`reassigned`, «зараз»); готівковий розхід
+ * #10950 — ЖИВИЙ SQL (заміняє `#1282d`, 25.11.2026: угода — відповідальному в CRM, як ядро). Вересень: межа місяця за
+ * Києвом (30.09 23:30 Києва — вересень, 01.10 00:30 — жовтень); не «Повний цикл» і не успішна — поза; перепризначена після
+ * закриття — тому, хто відповідальний ЗАРАЗ, а хто закривав — підписом (`reassigned`, `closerName`); готівковий розхід
  * без запиту — на перевірці; рішення: «в інший місяць» переносить угоду з вересня в жовтень, «не рахувати» лишає в списку
  * без суми, «Повернути» повертає як у Kommo; без примітки, на той самий місяць, з кривим профітом, на чужу угоду — 400/404,
  * і відмова нічого не пише.
- * 🧨 Червоніє, якщо зламати межу місяця, пустити чужу воронку, рахувати поточного відповідального чи дати рішення без примітки.
+ * 🧨 Червоніє, якщо зламати межу місяця, пустити чужу воронку, рахувати того, хто закривав, чи дати рішення без примітки.
  */
-test("#1282d ЖИВИЙ SQL: межа місяця за Києвом, лише успішні «Повного циклу», хто закривав, рішення й «Повернути», відмови нічого не пишуть", async (t) => {
+test("#10950 ЖИВИЙ SQL: межа місяця за Києвом, лише успішні «Повного циклу», угода — відповідальному в CRM, «закривав» — підписом; рішення й «Повернути», відмови нічого не пишуть", async (t) => {
   const s = await scratchDb(t);
   if (!s) return;
   const { c } = s;
@@ -137,8 +138,9 @@ test("#1282d ЖИВИЙ SQL: межа місяця за Києвом, лише �
     const sep = await load("2026-09-01");
     assert.deepEqual(sep.deals.map((d) => d.id), [101, 106, 102], "🔴 склад вересня: межа за Києвом, воронка чи статус");
     const d101 = sep.deals.find((d) => d.id === 101)!;
-    assert.deepEqual([d101.closer, d101.current, d101.reassigned], [14431884, 12782896, true], "🔴 перепризначену віддано тому, хто зараз");
-    assert.deepEqual(sep.managers.map((m) => [m.name, m.deals, m.result]), [["Янчевський", 1, 5000], ["Михальчевська", 1, 700], ["Третій", 1, -300]], "🔴 зведення вересня");
+    assert.deepEqual([d101.closer, d101.current, d101.reassigned, d101.closerName], [14431884, 12782896, true, "Янчевський"], "🔴 хто закривав / хто зараз / підпис");
+    assert.equal(sep.deals.find((d) => d.id === 102)!.closerName, null, "🔴 підпис «закривав» у неперепризначеної");
+    assert.deepEqual(sep.managers.map((m) => [m.name, m.deals, m.result]), [["Михальчевська", 2, 5700], ["Третій", 1, -300]], "🔴 зведення вересня: угоду віддано тому, хто закривав, а не відповідальному в CRM");
     assert.deepEqual([sep.totals.deals, sep.totals.result, sep.totals.minus], [3, 5400, { n: 1, sum: -300 }], "🔴 підсумок вересня");
     assert.match(sep.deals.find((d) => d.id === 106)!.checks.join(), /а запиту на оплату немає/, "🔴 готівковий розхід без запиту не на перевірці");
     assert.deepEqual((await load("2026-10-01")).deals.map((d) => d.id), [103], "🔴 00:30 01.10 Києва — не жовтень");
@@ -196,7 +198,7 @@ test("#1282e ПРОВОДКА: межі роутів і матриця, AI за�
   assert.match(tab, /\{data\.canEdit && <td/, "🔴 кнопки рішень не за правом сервера");
   assert.match(tab, /downloadMonthResultXlsx\(ym\)/, "🔴 Excel не завантажується");
   assert.match(tab, /\$\{data\.kommoBase\}\/leads\/detail\/\$\{id\}/, "🔴 немає посилання на угоду в Kommo");
-  assert.match(tab, /зараз: \{name\(d\.current\)/, "🔴 перепризначену не позначено");
+  assert.match(tab, /\{d\.reassigned && <span[^>]*>[^<]*закривав: /, "🔴 перепризначену не позначено");
 });
 
 /**
@@ -232,4 +234,27 @@ test("#1284 РОЗРАХУНОК У ФОНІ: 202 pending і опитуванн�
   const fe = ["FinanceMonthResultTab.tsx", "FinanceMonthDealsTab.tsx", "financeMonthShared.tsx"].map((f) => FE(`pages/dashboard/sections/${f}`)).join("\n");
   assert.match(fe, /if \("pending" in d\) \{ setPending\(true\); poll\.current = window\.setTimeout\(\(\) => load\(false\), 4000\); return; \}/, "🔴 екран не перепитує");
   assert.match(fe, /return \(\) => window\.clearTimeout\(poll\.current\);/, "🔴 опитування не зупиняється при виході");
+});
+
+/**
+ * #10951 — ЯК ЯДРО (Сергій 25.11.2026: «результат місяця (успішне) має йти з ядра»). Відповідальний угоди — той самий, що в
+ * ядрі `successByMgr` і у «Зарплаті»: `deals.manager_id` → `kommo_user_id`; зведення, вкладка «Угоди місяця» і Excel групують
+ * за ним; хто закривав — лише підпис «закривав» і колонка «Закривав (id)».
+ * 🧨 Червоніє, якщо будь-де повернути групування за тим, хто закривав.
+ */
+test("#10951 ЯК ЯДРО: відповідальний — deals.manager_id, як successByMgr і «Зарплата»; зведення, «Угоди місяця» й Excel групують за ним; «закривав» — підпис", () => {
+  const core = SRC("core/monthResult.ts"), money = SRC("core/money.ts"), zp = SRC("payroll/state.ts");
+  assert.match(core, /mg\.kommo_user_id::text AS cur\s+FROM deals d LEFT JOIN managers mg ON mg\.id = d\.manager_id/, "🔴 відповідальний не з deals.manager_id");
+  assert.match(money, /SELECT d\.kommo_id, d\.closed_at_kommo AS anchor_at, d\.manager_id, d\.price/, "🔴 ядро ① більше не за deals.manager_id — звірити заново");
+  assert.match(zp, /d\.manager_id = ANY\(\$1\)/, "🔴 «Зарплата» більше не за deals.manager_id — звірити заново");
+  assert.match(core, /const who = d\.current, key = String\(who \?\? "—"\);/, "🔴 зведення не за відповідальним у CRM");
+  assert.doesNotMatch(core, /String\(d\.closer \?\? "—"\)/, "🔴 зведення за тим, хто закривав");
+  const fe = FE("pages/dashboard/sections/FinanceMonthDealsTab.tsx");
+  assert.match(fe, /data\.deals\.filter\(\(d\) => d\.current === m\.kommoUserId\)/, "🔴 «Угоди місяця» групують не за відповідальним");
+  assert.match(fe, /manager === "all" \|\| d\.current === manager/, "🔴 фільтр менеджера не за відповідальним");
+  assert.match(fe, /закривав: \{\(d\.closerName \?\? name\(d\.closer\)\)/, "🔴 немає підпису «закривав»");
+  const x = SRC("jobs/monthResultData.ts");
+  assert.match(x, /dmyD\(d\.onec\?\.actOn \?\? null\), d\.current,/, "🔴 Excel: «ID відповідального» не з CRM");
+  assert.equal((x.match(/d\.current === id/g) ?? []).length, 2, "🔴 Excel: примітки й перевірки менеджера не за відповідальним");
+  assert.match(x, /"Закривав \(id\)"/, "🔴 Excel: немає колонки «Закривав»");
 });

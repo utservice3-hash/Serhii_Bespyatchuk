@@ -115,7 +115,7 @@
 .zc-pl__sum.is-ok { color: var(--ok); } .zc-pl__sum.is-bad { color: var(--danger); }
 
 /* аванс */
-.zc-adv { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.zc-avans-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 
 /* найближчі дати */
 .zc-tl { list-style: none; margin: 0; padding: 0; display: grid; }
@@ -145,6 +145,7 @@
 .zc-card__plate { width: 40px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, var(--text-muted), var(--text)); opacity: .85; }
 .zc-card__no { font-weight: 650; display: block; }
 .zc-card small { color: var(--text-muted); font-size: 12.5px; }
+.zc-card__nobank { color: var(--danger); font-weight: 600; }
 
 /* обхідний лист */
 .zc-clr { display: grid; gap: 8px; margin-top: 10px; }

@@ -66,6 +66,14 @@ export interface KpiSource { (from: string, to: string, managerIds: number[], to
  */
 export const OFFER_KPI = { offerFrom: "2026-11", normCalls: 50, minSuccessCalls: 990, minLeads: 50 } as const;
 
+/**
+ * 🎂 НОВЕ ПРАВИЛО ДНІВ НАРОДЖЕННЯ (задача 10723: ТЗ Тетяни 23.11.2026, затвердив Сергій 24.11, Роман: «з сьогодні» → з листопада
+ * 2026). Іменинникові — 100 ₴ × повні місяці стажу (не більше 12, тобто від року 1 200) + від компанії 400 / тім-ліду 600; з кожного
+ * працюючого — 100 ₴ щомісяця «Фонд днів народження», незалежно від кількості іменинників (Тетяна 24.11: «з усіх, незважаючи ні
+ * на що»). Місяці до листопада рахуються, як раніше. Це правило, а не налаштування: версія з БД його не перекриває. Тримає #10880.
+ */
+export const BIRTHDAY_V2_FROM = "2026-11";
+
 /** КПІ з ядра: дні з нормою дзвінків + цільові звернення / цільові угоди (лінива загрузка ядра — без пулу на імпорті). */
 export const coreKpi: KpiSource = async (from, to, managerIds, today, normOverride) => {
   const out = new Map<number, { normDays: number; leads: number; targetDeals: number; successCalls: number }>();
@@ -117,6 +125,10 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   // окремий відсоток за своїми клієнтами менеджера (знято — не діє; `valid_from` — з якого місяця)
   const crQ = await db.query<{ id: string; user_id: number; client_key: string; client_name: string; pct: string; mk: string }>(
     `SELECT id::text, user_id, client_key, client_name, pct, to_char(valid_from, 'YYYY-MM') AS mk FROM payroll_client_rates WHERE removed_at IS NULL ORDER BY user_id, id`);
+  // постійний бонус / корекція на період (задача 10723): зняте не діє; `to` NULL — безстроково
+  const adjQ = await db.query<{ id: string; user_id: number; kind: string; amount: string; note: string; f: string; t: string | null }>(
+    `SELECT id::text, user_id, kind, amount, note, to_char(from_month, 'YYYY-MM') AS f, to_char(to_month, 'YYYY-MM') AS t
+       FROM payroll_adjustments WHERE removed_at IS NULL ORDER BY user_id, from_month, id`);
   const offQ = await db.query<{ user_id: number; valid_from: Date; amount: string; deduct: boolean }>(
     `SELECT user_id, valid_from, amount, deduct FROM payroll_official ORDER BY user_id, valid_from, id`);
   const dateOnly = (d: Date) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
@@ -136,6 +148,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       ...(r.offer_code ? { offer: r.offer_code } : {}),
       startDate: dateOnly(r.start_date), birthday: r.birthday_md, terms, official,
       clientRates: crQ.rows.filter((c) => c.user_id === r.user_id).map((c) => ({ id: Number(c.id), client: c.client_key, name: c.client_name, pct: Number(c.pct), from: c.mk })),
+      adjustments: adjQ.rows.filter((x) => x.user_id === r.user_id).map((x) => ({ id: Number(x.id), kind: x.kind, amount: Number(x.amount), note: x.note, from: x.f, to: x.t })),
       leave: r.leave_date ? { date: dateOnly(r.leave_date), type: r.leave_type } : null, isFinance: r.is_finance,
     };
   });
@@ -203,8 +216,8 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   const recIds = recQ.rows.map((r) => r.id);
   const exQ = recIds.length ? await db.query<{ record_id: string; kind: string; amount: string; note: string }>(
     `SELECT record_id::text, kind, amount, note FROM payroll_record_extras WHERE record_id = ANY($1::bigint[]) AND deleted_at IS NULL ORDER BY id`, [recIds]) : { rows: [] };
-  const fmQ = recIds.length ? await db.query<{ record_id: string; cash: string; submitted_at: Date; card_id: string | null; last4: string | null; holder: string | null; amount: string | null }>(
-    `SELECT f.record_id::text, f.cash, f.submitted_at, l.card_id::text, c.last4, c.holder, l.amount
+  const fmQ = recIds.length ? await db.query<{ record_id: string; cash: string; submitted_at: Date; card_id: string | null; last4: string | null; holder: string | null; bank: string | null; amount: string | null }>(
+    `SELECT f.record_id::text, f.cash, f.submitted_at, l.card_id::text, c.last4, c.holder, c.bank, l.amount
        FROM payroll_payout_forms f LEFT JOIN payroll_payout_lines l ON l.form_id = f.id LEFT JOIN payroll_cards c ON c.id = l.card_id
       WHERE f.record_id = ANY($1::bigint[]) ORDER BY l.id`, [recIds]) : { rows: [] };
   for (const r of recQ.rows) {
@@ -216,7 +229,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       ...(r.agreed_at ? { agreedAt: kyivIso(r.agreed_at) } : {}),
       ...(r.dispute_text ? { dispute: { text: r.dispute_text, at: kyivIso(r.dispute_at) } } : {}),
       ...(r.reply ? { reply: r.reply } : {}),
-      ...(fl.length ? { form: { cash: Number(fl[0].cash), at: kyivIso(fl[0].submitted_at), cards: fl.filter((f) => f.card_id).map((f) => ({ no: `${f.card_id}-${f.last4}`, cardId: Number(f.card_id), who: f.holder, amount: Number(f.amount) })) } } : {}),
+      ...(fl.length ? { form: { cash: Number(fl[0].cash), at: kyivIso(fl[0].submitted_at), cards: fl.filter((f) => f.card_id).map((f) => ({ no: `${f.card_id}-${f.last4}`, cardId: Number(f.card_id), who: f.holder, bank: f.bank, amount: Number(f.amount) })) } } : {}),
       ...(r.paid_at ? { paidAt: kyivIso(r.paid_at), paidBy: String(r.paid_by) } : {}),
       recordId: Number(r.id),
     };
@@ -226,15 +239,15 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   // ---------- аванси: на місяць — остання не скасована заявка ----------
   const advances: Record<string, Record<string, unknown>> = {};
   const advQ = await db.query<{ id: string; mk: string; user_id: number; amount: string; cash: string; status: string; requested_at: Date; paid_at: Date | null; paid_by: number | null;
-    rejected_at: Date | null; rejected_by: number | null; reason: string | null; cancelled_at: Date | null; lines: Array<{ cardId: number; last4: string; holder: string; amount: string }> | null }>(
+    rejected_at: Date | null; rejected_by: number | null; reason: string | null; cancelled_at: Date | null; lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
     `SELECT a.id::text, to_char(a.month, 'YYYY-MM') AS mk, a.user_id, a.amount, a.cash, a.status, a.requested_at, a.paid_at, a.paid_by, a.rejected_at, a.rejected_by, a.reason, a.cancelled_at,
-            (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'amount', l.amount) ORDER BY l.id)
+            (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'bank', c.bank, 'amount', l.amount) ORDER BY l.id)
                FROM payroll_advance_lines l JOIN payroll_cards c ON c.id = l.card_id WHERE l.advance_id = a.id) AS lines
        FROM payroll_advances a WHERE a.month >= $1::date AND a.status <> 'cancelled' ORDER BY a.requested_at, a.id`, [monthStart(fromMonth)]);
   for (const a of advQ.rows) {
     (advances[a.mk] ??= {})[String(a.user_id)] = {
       id: Number(a.id), amount: Number(a.amount), cash: Number(a.cash),
-      cards: (a.lines ?? []).map((l) => ({ no: `${l.cardId}-${l.last4}`, cardId: l.cardId, who: l.holder, amount: Number(l.amount) })),
+      cards: (a.lines ?? []).map((l) => ({ no: `${l.cardId}-${l.last4}`, cardId: l.cardId, who: l.holder, bank: l.bank, amount: Number(l.amount) })),
       requestedAt: kyivIso(a.requested_at),
       ...(a.paid_at ? { paidAt: kyivIso(a.paid_at), paidBy: String(a.paid_by) } : {}),
       ...(a.rejected_at ? { rejectedAt: kyivIso(a.rejected_at), rejectedBy: String(a.rejected_by), reason: a.reason } : {}),
@@ -274,6 +287,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
 
   const settings = { ...(setQ.rows[0]?.settings ?? {}) } as Record<string, unknown>;
   settings.kpi = { ...(settings.kpi as object ?? {}), ...OFFER_KPI };   // умови оферу — не налаштування: їх не перекриває версія з БД
+  settings.birthday = { ...(settings.birthday as object ?? {}), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — теж не налаштування
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };
   return {
     now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, kpi, ttnAt, ttnLegacy,

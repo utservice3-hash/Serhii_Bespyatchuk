@@ -142,8 +142,8 @@ export function MonthSwitch({ ym, setYm }: { ym: string; setYm: (ym: string) => 
 export function SourcesNote({ data }: { data: MonthResultData }) {
   return (
     <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
-      Успішні угоди «Повного циклу», закриті в місяці (разом із мінусовими), сума бюджетів Kommo. Угода — тому, хто був відповідальним у момент закриття
-      {data.eventsSince ? ` (перепризначення звірено ${stamp(data.eventsSince)})` : " (перепризначення ще не звірялись — рахується поточний відповідальний)"}.
+      Успішні угоди «Повного циклу», закриті в місяці (разом із мінусовими), сума бюджетів Kommo. Угода — тому, хто відповідальний у CRM зараз, як у ядрі й «Зарплаті»; хто закривав — підписом «закривав»
+      {data.eventsSince ? ` (перепризначення звірено ${stamp(data.eventsSince)})` : " (перепризначення ще не звірялись — підпису «закривав» може не бути)"}.
       {" "}{data.onecSince ? `1С по угодах — станом на ${stamp(data.onecSince)}.` : "1С по угодах ще не завантажено — блоки 1С порожні."}
       {data.onecError && <span style={{ color: "#b45309" }}> Останній синк 1С не вдався: {data.onecError}</span>}
     </div>

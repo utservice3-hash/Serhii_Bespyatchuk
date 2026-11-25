@@ -6700,7 +6700,7 @@ export async function downloadFinCalendarHistory(): Promise<{ blob: Blob; filena
 export interface MRCheckOverride { kommoId: number; action: "exclude" | "move" | "profit"; targetMonth: string | null; profit: number | null; note: string; setBy: string | null; setAt: string }
 export interface MRDeal {
   id: number; name: string; client: string | null; closedAt: string; closedMonth: string; price: number; isMinus: boolean; paymentType: string | null;
-  closer: number | null; current: number | null; reassigned: boolean; checks: string[]; override: MRCheckOverride | null; included: boolean; profit: number;
+  closer: number | null; current: number | null; reassigned: boolean; closerName?: string | null; checks: string[]; override: MRCheckOverride | null; included: boolean; profit: number;
   createdAt: string | null; kommo: (MRFlows & { untyped: number }) | null; planPnl: number | null;
   onec: { organization: string; flows: MRFlows; budget: number | null; fx: { currency: string; sum: number }[]; actOn: string | null } | null;
   paid: { vat: number; novat: number; cash: number; total: number; fx: { currency: string; sum: number }[]; lastOn: string | null } | null;

@@ -10,10 +10,11 @@ import { effectiveFromFor } from "../core/effectiveManager.js";
 import { kyivToday } from "../core/dates.js";
 import { createPayroll, nextStatus, nextMonth, prevMonth, lastDay, CLEARANCE_ITEMS, CLEARANCE_ROLES, LEAVE_TYPES, EXTRA_KINDS, DEFAULT_SETTINGS, type Payroll, type PayrollState } from "./engine/zarplata-engine.mjs";
 import { createNotifier, OFFER_TITLES } from "./engine/notify.mjs";
-import { loadState, kyivNow, kyivIso, monthStart, NAME_SQL, NAME_JOIN } from "./state.js";
+import { loadState, kyivNow, kyivIso, monthStart, NAME_SQL, NAME_JOIN, BIRTHDAY_V2_FROM } from "./state.js";
 import { emitAll, closeDone, type EngineNotification } from "./notifyCenter.js";
-import { naimChanges, loadNaim, offerTeams, type Level } from "./naimSync.js";
-import { encryptCard, decryptCard, validateCard, cardHash, cardsAvailable, CardKeyMissing } from "./cards.js";
+import { naimChanges, loadNaim, offerTeams, naimPlacement, deptMapRows, type Level } from "./naimSync.js";
+import { loadOrg } from "../core/orgTree.js";
+import { encryptCard, decryptCard, validateCard, validateBank, cardHash, cardsAvailable, CardKeyMissing } from "./cards.js";
 
 type Db = Pool | PoolClient;
 export class PayrollError extends Error {
@@ -69,7 +70,7 @@ function birthdaysOut(e: Engine, list: Array<Record<string, unknown>>) {
   const N = nameMap(e);
   return list.map((b) => ({ kind: b.kind, amount: b.amount, date: b.kind === "gift" ? (b.gift as { date: string }).date : b.date,
     who: b.kind === "give" ? { id: b.who, name: N[b.who as string] ?? "" } : null,
-    gift: b.kind === "gift" ? { months: (b.gift as Record<string, unknown>).months, young: (b.gift as Record<string, unknown>).young, company: (b.gift as Record<string, unknown>).company,
+    gift: b.kind === "gift" ? { months: (b.gift as Record<string, unknown>).months, young: (b.gift as Record<string, unknown>).young, v2: !!(b.gift as Record<string, unknown>).v2, company: (b.gift as Record<string, unknown>).company,
       givers: ((b.gift as Record<string, unknown>).givers as string[]).length, fromTeam: (b.gift as Record<string, unknown>).fromTeam, fromMonths: (b.gift as Record<string, unknown>).fromMonths } : null }));
 }
 /** calc() для показу: тім-ліду — маржа й план людей команди, БЕЗ їхніх зарплат; угоди — лише власні. */
@@ -97,7 +98,7 @@ function recordOut(e: Engine, empId: string, mk: string, forEmployee: boolean) {
   const base = {
     month: mk, status: r.status, reply: r.reply ?? null, payBlocked: e.zp.payBlocked(empId, mk), payNeedsOd: e.zp.payNeedsOd(empId, mk),
     verifiedAt: r.verifiedAt ?? null, agreedAt: r.agreedAt ?? null, paidAt: r.paidAt ?? null,
-    dispute: r.dispute ?? null, form: r.form ? { cash: r.form.cash, at: r.form.at, cards: r.form.cards.map((c: Record<string, unknown>) => ({ cardId: c.cardId, last4: String(c.no).slice(-4), holder: c.who, amount: c.amount })) } : null,
+    dispute: r.dispute ?? null, form: r.form ? { cash: r.form.cash, at: r.form.at, cards: r.form.cards.map((c: Record<string, unknown>) => ({ cardId: c.cardId, last4: String(c.no).slice(-4), holder: c.who, bank: c.bank ?? null, amount: c.amount })) } : null,
     payout: e.zp.payoutLines(empId, mk),
     settlement: r.status === "review" && forEmployee ? null : settlementOut(e, f, forEmployee),
     // премії / утримання рядками — вид і сума зі знаком; коментар фінансиста внутрішній і сюди не йде
@@ -110,8 +111,8 @@ function recordOut(e: Engine, empId: string, mk: string, forEmployee: boolean) {
 
 // ===================================================================== кабінет
 async function cardsOf(db: Db, userId: number) {
-  return (await db.query<{ id: string; last4: string; holder: string }>(`SELECT id::text, last4, holder FROM payroll_cards WHERE user_id = $1 AND archived_at IS NULL ORDER BY id`, [userId]))
-    .rows.map((c) => ({ id: Number(c.id), last4: c.last4, holder: c.holder }));
+  return (await db.query<{ id: string; last4: string; holder: string; bank: string | null }>(`SELECT id::text, last4, holder, bank FROM payroll_cards WHERE user_id = $1 AND archived_at IS NULL ORDER BY id`, [userId]))
+    .rows.map((c) => ({ id: Number(c.id), last4: c.last4, holder: c.holder, bank: c.bank }));
 }
 function ttnOut(e: Engine, p: Record<string, unknown>, mk: string) {
   const t = e.zp.ttnStats(p, mk);
@@ -227,7 +228,7 @@ export async function dispute(pool: Pool, v: Viewer, mk: string, text: unknown) 
 
 /** Рядки форми / авансу: існуючі карти людини або нові (шифруємо й зберігаємо в «Мої карти»). */
 async function resolveLines(c: PoolClient, userId: number, lines: unknown, byUser: number) {
-  const out: Array<{ cardId: number; amount: number; last4: string; holder: string; isNew: boolean; no: string }> = [];
+  const out: Array<{ cardId: number; amount: number; last4: string; holder: string; bank: string | null; isNew: boolean; no: string }> = [];
   for (const raw of (Array.isArray(lines) ? lines : []) as Array<Record<string, unknown>>) {
     const amount = money(raw.amount);
     if (!(amount > 0)) continue;
@@ -235,16 +236,19 @@ async function resolveLines(c: PoolClient, userId: number, lines: unknown, byUse
       const nc = raw.newCard as Record<string, unknown>;
       const bad = validateCard(String(nc.number ?? ""), String(nc.holder ?? ""));
       if (bad) fail(422, bad, "card");
+      const badBank = validateBank(nc.bank); if (badBank) fail(422, badBank, "bank");
+      const bank = String(nc.bank).trim();
       const { enc, last4, hash } = encryptCard(String(nc.number));
       const ex = await c.query<{ id: string }>(`SELECT id::text FROM payroll_cards WHERE user_id = $1 AND number_hash = $2 AND archived_at IS NULL`, [userId, hash]);
+      if (ex.rows[0]) await c.query(`UPDATE payroll_cards SET bank = $2 WHERE id = $1 AND bank IS NULL`, [Number(ex.rows[0].id), bank]);
       const cardId = ex.rows[0] ? Number(ex.rows[0].id) : Number((await c.query<{ id: string }>(
-        `INSERT INTO payroll_cards (user_id, number_enc, last4, number_hash, holder, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id::text`,
-        [userId, enc, last4, hash, String(nc.holder).trim(), byUser])).rows[0].id);
-      out.push({ cardId, amount, last4, holder: String(nc.holder).trim(), isNew: true, no: `${cardId}-${last4}` });
+        `INSERT INTO payroll_cards (user_id, number_enc, last4, number_hash, holder, bank, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`,
+        [userId, enc, last4, hash, String(nc.holder).trim(), bank, byUser])).rows[0].id);
+      out.push({ cardId, amount, last4, holder: String(nc.holder).trim(), bank, isNew: true, no: `${cardId}-${last4}` });
     } else {
-      const card = await c.query<{ id: string; last4: string; holder: string }>(`SELECT id::text, last4, holder FROM payroll_cards WHERE id = $1 AND user_id = $2 AND archived_at IS NULL`, [Number(raw.cardId), userId]);
+      const card = await c.query<{ id: string; last4: string; holder: string; bank: string | null }>(`SELECT id::text, last4, holder, bank FROM payroll_cards WHERE id = $1 AND user_id = $2 AND archived_at IS NULL`, [Number(raw.cardId), userId]);
       if (!card.rows[0]) fail(422, "Карту не знайдено серед ваших карт — оновіть сторінку.", "card");
-      out.push({ cardId: Number(card.rows[0].id), amount, last4: card.rows[0].last4, holder: card.rows[0].holder, isNew: false, no: `${card.rows[0].id}-${card.rows[0].last4}` });
+      out.push({ cardId: Number(card.rows[0].id), amount, last4: card.rows[0].last4, holder: card.rows[0].holder, bank: card.rows[0].bank, isNew: false, no: `${card.rows[0].id}-${card.rows[0].last4}` });
     }
   }
   if (new Set(out.map((x) => x.cardId)).size !== out.length) fail(422, "Одна карта двічі — об’єднайте суми в одному рядку.", "card");
@@ -320,7 +324,7 @@ export async function remindersTick(pool: Pool): Promise<number> {
   const N = nameMap(e);
   await emitAll(pool, due.filter((r) => N[String(r.user_id)] !== undefined).map((r) => {
     const L = e.zp.advanceLimit(String(r.user_id), mk) as { amount: number };
-    return { type: "adv.open", to: [String(r.user_id)], act: false, title: "Заявки на аванс відкрито", text: `Можна взяти до ${uahTxt(L.amount)} — подайте заявку в кабінеті «Моя зарплата».`, go: { tab: "cab", mz: { tab: "pay", focus: "#adv" } }, empId: String(r.user_id) };
+    return { type: "adv.open", to: [String(r.user_id)], act: false, title: "Заявки на аванс відкрито", text: `Можна взяти до ${uahTxt(L.amount)} — подайте заявку в кабінеті «Моя зарплата».`, go: { tab: "cab", mz: { tab: "pay", focus: "#zc-avans" } }, empId: String(r.user_id) };
   }));
   await pool.query(`UPDATE payroll_reminders SET sent_at = now() WHERE id = ANY($1::bigint[])`, [due.map((r) => Number(r.id))]);
   return due.length;
@@ -337,13 +341,24 @@ export async function addCard(pool: Pool, v: Viewer, body: Record<string, unknow
   const exists = (await pool.query(`SELECT 1 FROM payroll_employees WHERE user_id = $1`, [v.userId])).rowCount;
   if (!exists) fail(403, "Вас немає в зарплаті — зверніться до фінансиста.");
   const bad = validateCard(String(body.number ?? ""), String(body.holder ?? "")); if (bad) fail(422, bad, "number");
+  const badBank = validateBank(body.bank); if (badBank) fail(422, badBank, "bank");
+  const bank = String(body.bank).trim();
   const hash = cardHash(String(body.number));
   if ((await pool.query(`SELECT 1 FROM payroll_cards WHERE user_id = $1 AND number_hash = $2 AND archived_at IS NULL`, [v.userId, hash])).rowCount) fail(422, "Ця карта вже є у ваших картах.", "number");
   const { enc, last4 } = encryptCard(String(body.number));
-  const r = await pool.query<{ id: string }>(`INSERT INTO payroll_cards (user_id, number_enc, last4, number_hash, holder, created_by) VALUES ($1,$2,$3,$4,$5,$1) RETURNING id::text`,
-    [v.userId, enc, last4, hash, String(body.holder).trim()]);
-  await history(pool, v.userId, v.userId, `Додано карту •••• ${last4}`, String(body.holder).trim());
-  return { id: Number(r.rows[0].id), last4, holder: String(body.holder).trim() };
+  const r = await pool.query<{ id: string }>(`INSERT INTO payroll_cards (user_id, number_enc, last4, number_hash, holder, bank, created_by) VALUES ($1,$2,$3,$4,$5,$6,$1) RETURNING id::text`,
+    [v.userId, enc, last4, hash, String(body.holder).trim(), bank]);
+  await history(pool, v.userId, v.userId, `Додано карту •••• ${last4} (${bank})`, String(body.holder).trim());
+  return { id: Number(r.rows[0].id), last4, holder: String(body.holder).trim(), bank };
+}
+/** «Вказати банк» для вже збереженої карти (#10961): лише своєї й не прибраної; подані заявки підхоплять банк одразу, бо читають його з карти. */
+export async function setCardBank(pool: Pool, v: Viewer, cardId: number, body: Record<string, unknown>) {
+  const badBank = validateBank(body.bank); if (badBank) fail(422, badBank, "bank");
+  const bank = String(body.bank).trim();
+  const r = await pool.query<{ last4: string }>(`UPDATE payroll_cards SET bank = $3 WHERE id = $1 AND user_id = $2 AND archived_at IS NULL RETURNING last4`, [cardId, v.userId, bank]);
+  if (!r.rows[0]) fail(404, "Карту не знайдено серед ваших карт — оновіть сторінку.");
+  await history(pool, v.userId, v.userId, `Банк карти •••• ${r.rows[0].last4}: ${bank}`);
+  return { id: cardId, last4: r.rows[0].last4, bank };
 }
 export async function archiveCard(pool: Pool, v: Viewer, cardId: number) {
   const r = await pool.query<{ last4: string }>(`UPDATE payroll_cards SET archived_at = now() WHERE id = $1 AND user_id = $2 AND archived_at IS NULL RETURNING last4`, [cardId, v.userId]);
@@ -533,6 +548,9 @@ async function statementRows(db: Db, e: Engine, mk: string, full: boolean) {
   const enc = full ? new Map((await db.query<{ id: string; number_enc: Buffer }>(
     `SELECT c.id::text, c.number_enc FROM payroll_cards c JOIN payroll_payout_lines l ON l.card_id = c.id JOIN payroll_payout_forms f ON f.id = l.form_id
        JOIN payroll_records r ON r.id = f.record_id WHERE r.month = $1::date`, [monthStart(mk)])).rows.map((r) => [Number(r.id), r.number_enc])) : new Map<number, Buffer>();
+  const banks = new Map((await db.query<{ id: string; bank: string | null }>(
+    `SELECT DISTINCT c.id::text, c.bank FROM payroll_cards c JOIN payroll_payout_lines l ON l.card_id = c.id JOIN payroll_payout_forms f ON f.id = l.form_id
+       JOIN payroll_records r ON r.id = f.record_id WHERE r.month = $1::date`, [monthStart(mk)])).rows.map((r) => [Number(r.id), r.bank]));
   for (const p of e.zp.employees as Array<Record<string, unknown>>) {
     const id = p.id as string, r = e.zp.record(id, mk);
     if (!r || !["submitted", "paid"].includes(r.status)) continue;
@@ -542,14 +560,14 @@ async function statementRows(db: Db, e: Engine, mk: string, full: boolean) {
       status: r.status, blocked: e.zp.payBlocked(id, mk), needsOd: e.zp.payNeedsOd(id, mk), paidAt: r.paidAt ?? null };
     n++;
     const lines: Array<Record<string, unknown>> = [];
-    if (pl.cash) lines.push({ ...base, n, cash: pl.cash, card: 0, cardId: null, cardLast4: null, cardNo: null, holder: null });
+    if (pl.cash) lines.push({ ...base, n, cash: pl.cash, card: 0, cardId: null, cardLast4: null, cardNo: null, holder: null, bank: null });
     for (const c of pl.cards as Array<Record<string, unknown>>) {
       const cardId = Number(c.cardId ?? String(c.no).split("-")[0]);
       let cardNo: string | null = null;
       if (full && enc.get(cardId)) { try { cardNo = decryptCard(enc.get(cardId)!); } catch { cardNo = null; } }
-      lines.push({ ...base, n, cash: 0, card: c.amount, cardId, cardLast4: String(c.no).slice(-4), cardNo, holder: c.who });
+      lines.push({ ...base, n, cash: 0, card: c.amount, cardId, cardLast4: String(c.no).slice(-4), cardNo, holder: c.who, bank: banks.get(cardId) ?? null });
     }
-    if (!lines.length) lines.push({ ...base, n, cash: 0, card: 0, cardId: null, cardLast4: null, cardNo: null, holder: null });
+    if (!lines.length) lines.push({ ...base, n, cash: 0, card: 0, cardId: null, cardLast4: null, cardNo: null, holder: null, bank: null });
     out.push(...lines);
   }
   return out;
@@ -559,7 +577,7 @@ const COLS: Record<string, [string, (r: Record<string, unknown>) => string | num
   n: ["№", (r) => r.n as number], name: ["ПІБ", (r) => r.name as string], title: ["Посада", (r) => r.title as string], team: ["Команда", (r) => (r.team as string) ?? ""],
   acc: ["Нараховано", (r) => Math.round(r.accrued as number)], adv: ["Аванс", (r) => Math.round(r.advance as number)], off: ["Офіційна ЗП", (r) => Math.round(r.official as number)],
   ttn: ["ТТН", (r) => Math.round(r.ttn as number)], pay: ["До виплати", (r) => Math.round(r.pay as number)], cash: ["Готівка", (r) => Math.round(r.cash as number)],
-  card: ["На карти", (r) => Math.round(r.card as number)], cardNo: ["Карта", (r) => (r.cardNo as string) ?? (r.cardLast4 ? `•••• ${r.cardLast4}` : "")], who: ["Отримувач", (r) => (r.holder as string) ?? ""],
+  card: ["На карти", (r) => Math.round(r.card as number)], cardNo: ["Карта", (r) => (r.cardNo as string) ?? (r.cardLast4 ? `•••• ${r.cardLast4}` : "")], bank: ["Банк", (r) => (r.cardLast4 ? (r.bank as string) ?? "не вказано" : "")], who: ["Отримувач", (r) => (r.holder as string) ?? ""],
   st: ["Стан", (r) => (r.status === "paid" ? "виплачено" : "форму подано")], sign: ["Підпис", () => ""],
 };
 export async function statementXlsx(pool: Pool, v: Viewer, mk: string, columns: string[]) {
@@ -600,15 +618,15 @@ export async function markPaid(pool: Pool, v: Viewer, mk: string, ids: number[])
 export async function advancesView(db: Db, mk: string) {
   const e = await engine(db);
   const reqs = (await db.query<{ id: string; user_id: number; amount: string; cash: string; status: string; reason: string | null; limit_at_request: string; requested_at: Date; paid_at: Date | null; rejected_at: Date | null;
-    lines: Array<{ cardId: number; last4: string; holder: string; amount: string }> | null }>(
+    lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
     `SELECT a.id::text, a.user_id, a.amount, a.cash, a.status, a.reason, a.limit_at_request, a.requested_at, a.paid_at, a.rejected_at,
-            (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'amount', l.amount) ORDER BY l.id)
+            (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'bank', c.bank, 'amount', l.amount) ORDER BY l.id)
                FROM payroll_advance_lines l JOIN payroll_cards c ON c.id = l.card_id WHERE l.advance_id = a.id) AS lines
        FROM payroll_advances a WHERE a.month = $1::date AND a.status <> 'cancelled' ORDER BY a.requested_at`, [monthStart(mk)])).rows;
   const N = nameMap(e);
   const requests = reqs.map((a) => ({ id: Number(a.id), userId: String(a.user_id), name: N[String(a.user_id)] ?? "", amount: Number(a.amount), cash: Number(a.cash), status: a.status, reason: a.reason,
     limit: Number(a.limit_at_request), requestedAt: a.requested_at.toISOString(), paidAt: a.paid_at?.toISOString() ?? null, rejectedAt: a.rejected_at?.toISOString() ?? null,
-    lines: (a.lines ?? []).map((l) => ({ cardId: l.cardId, last4: l.last4, holder: l.holder, amount: Number(l.amount) })) }));
+    lines: (a.lines ?? []).map((l) => ({ cardId: l.cardId, last4: l.last4, holder: l.holder, bank: l.bank, amount: Number(l.amount) })) }));
   const active = new Set(requests.filter((r) => r.status !== "rejected").map((r) => r.userId));
   const notYet = e.zp.isLive(mk) ? (e.zp.employees as Array<Record<string, unknown>>).filter((p) => e.zp.employedIn(p, mk) && !active.has(p.id as string))
     .map((p) => ({ userId: p.id, name: p.name, title: p.title, limit: e.zp.advanceLimit(p, mk).amount })) : [];
@@ -634,16 +652,16 @@ export async function rejectAdvance(pool: Pool, v: Viewer, advId: number, reason
 export async function advancesXlsx(pool: Pool, v: Viewer, mk: string) {
   const { buildXlsx } = await import("../core/xlsxWrite.js");
   const e = await engine(pool); const N = nameMap(e);
-  const rows = (await pool.query<{ user_id: number; amount: string; cash: string; status: string; line_amount: string | null; number_enc: Buffer | null; last4: string | null; holder: string | null }>(
-    `SELECT a.user_id, a.amount, a.cash, a.status, l.amount AS line_amount, c.number_enc, c.last4, c.holder
+  const rows = (await pool.query<{ user_id: number; amount: string; cash: string; status: string; line_amount: string | null; number_enc: Buffer | null; last4: string | null; holder: string | null; bank: string | null }>(
+    `SELECT a.user_id, a.amount, a.cash, a.status, l.amount AS line_amount, c.number_enc, c.last4, c.holder, c.bank
        FROM payroll_advances a LEFT JOIN payroll_advance_lines l ON l.advance_id = a.id LEFT JOIN payroll_cards c ON c.id = l.card_id
       WHERE a.month = $1::date AND a.status IN ('requested', 'paid') ORDER BY a.requested_at, l.id`, [monthStart(mk)])).rows;
-  const out: (string | number | null)[][] = [["ПІБ", "Сума", "Спосіб", "Номер карти", "Отримувач", "Стан"]];
+  const out: (string | number | null)[][] = [["ПІБ", "Сума", "Спосіб", "Номер карти", "Банк", "Отримувач", "Стан"]];
   const seenCash = new Set<number>();
   for (const r of rows) {
-    if (Number(r.cash) > 0 && !seenCash.has(r.user_id)) { seenCash.add(r.user_id); out.push([N[String(r.user_id)] ?? "", Number(r.cash), "готівка", "", "", r.status === "paid" ? "виплачено" : "заявка"]); }
+    if (Number(r.cash) > 0 && !seenCash.has(r.user_id)) { seenCash.add(r.user_id); out.push([N[String(r.user_id)] ?? "", Number(r.cash), "готівка", "", "", "", r.status === "paid" ? "виплачено" : "заявка"]); }
     if (r.line_amount) { let no = ""; try { no = r.number_enc ? decryptCard(r.number_enc) : ""; } catch { no = r.last4 ? `•••• ${r.last4}` : ""; }
-      out.push([N[String(r.user_id)] ?? "", Number(r.line_amount), "карта", no, r.holder, r.status === "paid" ? "виплачено" : "заявка"]); }
+      out.push([N[String(r.user_id)] ?? "", Number(r.line_amount), "карта", no, r.bank ?? "не вказано", r.holder, r.status === "paid" ? "виплачено" : "заявка"]); }
   }
   await history(pool, v.userId, null, `Аванси ${mk} — вивантажено Excel`, `${out.length - 1} рядків`);
   return buildXlsx([{ name: `Аванси ${mk}`, rows: out }]);
@@ -877,6 +895,7 @@ export async function settingsView(db: Db, mk: string) {
        FROM payroll_settings_versions v ORDER BY v.valid_from DESC`)).rows;
   const cur = versions.find((x) => x.mk <= mk);
   const merged = mergeDeep(DEFAULT_SETTINGS, cur?.settings ?? {});
+  merged.birthday = { ...(merged.birthday as object), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — як у розрахунку (state.ts), не з версії
   return { month: mk, settings: merged, defaults: DEFAULT_SETTINGS, versions: versions.map((x) => ({ id: Number(x.id), validFrom: x.mk, reason: x.reason, at: x.changed_at.toISOString(), by: x.by, settings: x.settings })),
     departments: (await db.query(`SELECT code, name, is_sales AS "isSales" FROM payroll_departments ORDER BY is_sales DESC, name`)).rows,
     teams: (await db.query(`SELECT p.code, p.name, p.dept_code AS "dept", p.offer_code AS "offer", p.kommo_team_id AS "kommoTeamId" FROM payroll_teams p ORDER BY p.name`)).rows };
@@ -910,11 +929,11 @@ export async function employeesView(db: Db) {
   const people = (e.zp.employees as Array<Record<string, unknown>>).map((p) => ({ userId: p.id, name: p.name, title: p.title, role: p.role, dept: p.dept, team: p.team, leadsTeam: p.leadsTeam,
     offer: e.zp.offerCode(p), level: e.zp.levelOf(p, live), levelChange: e.zp.levelChangeAfter(p, live), rate: e.zp.rateOf(p, live), pctRule: e.zp.pctRuleOf(p, live),
     official: e.zp.officialOf(p, live), startDate: p.startDate, birthday: p.birthday, isFinance: p.isFinance, leave: p.leave, simple: e.zp.isSimple(p), terms: p.terms,
-    clientRates: p.clientRates ?? [],
+    clientRates: p.clientRates ?? [], adjustments: p.adjustments ?? [],
     // останній чинний документ оферу: підписано / чекає підпису (анульовані — не показуємо)
     offerDoc: offerDocOf(e, p.id as string) }));
-  const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: string | null; birth: string | null; position: string | null; team_id: number | null; level: string | null }>(
-    `SELECT u.id, ${NAME_SQL} AS name, COALESCE(u.role_override, u.role) AS role, to_char(e.hired_at, 'YYYY-MM-DD') AS hired_at, to_char(e.birth_date, 'MM-DD') AS birth, e.position, m.team_id,
+  const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: string | null; birth: string | null; position: string | null; team_id: number | null; employee_id: number | null; level: string | null }>(
+    `SELECT u.id, ${NAME_SQL} AS name, COALESCE(u.role_override, u.role) AS role, to_char(e.hired_at, 'YYYY-MM-DD') AS hired_at, to_char(e.birth_date, 'MM-DD') AS birth, e.position, m.team_id, e.id AS employee_id,
             (SELECT el.level FROM employee_levels el WHERE el.employee_id = e.id ORDER BY el.from_month DESC LIMIT 1) AS level
        FROM users u ${NAME_JOIN} LEFT JOIN LATERAL (SELECT * FROM employees x WHERE x.user_id = u.id ORDER BY x.id DESC LIMIT 1) e ON true
       WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate' AND NOT EXISTS (SELECT 1 FROM payroll_employees pe WHERE pe.user_id = u.id)
@@ -923,11 +942,20 @@ export async function employeesView(db: Db) {
   // команди для «Оферів»: з людьми — спершу, порожні — у кінці з позначкою (задача 10723)
   const offerTeamList = offerTeams(teams.map((t) => ({ code: t.code, name: t.name, offer: t.offer_code })), people);
   // що в «Наймі» розходиться із «Зарплатою» — лише показуємо, дію робить людина (задача 10723)
+  // відділ і команда з «Найму» (прохід 3): блок «Оргструктури» → відділ за таблицею відповідності, команда — за командою Kommo блоку
+  const org = await loadOrg(db, null);
+  const known = new Set((await db.query<{ code: string }>(`SELECT code FROM payroll_departments`)).rows.map((r) => r.code));
+  const dmap = new Map((await db.query<{ unit_id: number; dept_code: string | null }>(`SELECT unit_id, dept_code FROM payroll_dept_map`)).rows.map((r) => [r.unit_id, r.dept_code] as [number, string | null]));
+  const units = org.units.map((u) => ({ id: u.id, parentId: u.parentId, name: u.name, dept: u.dept, teamKey: u.teamKey }));
+  const place = naimPlacement(units, org.people, dmap, teams.map((t) => ({ code: t.code, kommoTeamId: t.kommo_team_id })), known);
   const naim = naimChanges(people.map((p) => ({ userId: String(p.userId), name: String(p.name), role: String(p.role), level: (p.level ?? null) as Level | null,
-    levelChange: (p.levelChange ?? null) as { level: Level } | null, leave: p.leave ?? null })), await loadNaim(db));
-  return { month: live, people, naim, offerTeams: offerTeamList, candidates: candidates.map((c) => ({ userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at, birthday: c.birth,
-    title: c.position, team: teams.find((t) => t.kommo_team_id === c.team_id)?.code ?? null, level: c.level === "pro" ? "profi" : c.level === "start" ? "start" : null,
-    role: c.role === "team_lead" ? "lead" : c.role === "manager" ? "manager" : "staff" })) };
+    levelChange: (p.levelChange ?? null) as { level: Level } | null, leave: p.leave ?? null,
+    dept: (p.dept ?? null) as string | null, team: (p.team ?? null) as string | null, leadsTeam: (p.leadsTeam ?? null) as string | null })), await loadNaim(db), place);
+  return { month: live, people, naim, offerTeams: offerTeamList, candidates: candidates.map((c) => { const pl = c.employee_id != null ? place.get(c.employee_id) : undefined; return { userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at, birthday: c.birth,
+    // «Додати в зарплату» підставляє відділ і команду з «Найму»; без блоку — команда за командою Kommo, як було
+    title: c.position, dept: pl?.dept ?? null, team: pl?.team ?? teams.find((t) => t.kommo_team_id === c.team_id)?.code ?? null, level: c.level === "pro" ? "profi" : c.level === "start" ? "start" : null,
+    role: c.role === "team_lead" ? "lead" : c.role === "manager" ? "manager" : "staff" }; }),
+    deptMap: deptMapRows(units, dmap, known) };
 }
 export async function addEmployee(pool: Pool, v: Viewer, body: Record<string, unknown>) {
   const uid = Number(body.userId); if (!Number.isInteger(uid)) fail(422, "Оберіть людину.", "userId");
@@ -1063,6 +1091,48 @@ export async function removeClientRate(pool: Pool, v: Viewer, uid: number, id: n
   await after(pool);
   return { ok: true };
 }
+const ADJ_NAME: Record<string, string> = { bonus: "Бонус", correction: "Корекція" };
+/**
+ * Постійний «Бонус» / «Корекція» на період (задача 10723, ТЗ Тетяни 23.11.2026, затвердив Сергій 24.11): сума щомісяця з `from`
+ * до `to` включно (порожнє `to` — безстроково), коментар «за що» обовʼязковий — його бачить людина в кабінеті. Початок — не раніше
+ * поточного місяця: рушій перераховує закриті місяці наживо, і запис «заднім числом» мовчки змінив би вже виплачене.
+ */
+export async function addAdjustment(pool: Pool, v: Viewer, uid: number, body: Record<string, unknown>) {
+  const kind = String(body.kind ?? ""); if (!ADJ_NAME[kind]) fail(422, "Оберіть: бонус чи корекція.", "kind");
+  const amount = Math.round(Number(body.amount) * 100) / 100; if (!(amount > 0)) fail(422, "Сума — більше нуля.", "amount");
+  const note = String(body.note ?? "").trim(); if (!note) fail(422, "Напишіть, за що — це бачить людина в кабінеті.", "note");
+  const from = String(body.from ?? ""), to = body.to ? String(body.to) : null;
+  if (!/^\d{4}-\d{2}$/.test(from)) fail(422, "Місяць початку.", "from");
+  if (to !== null && (!/^\d{4}-\d{2}$/.test(to) || to < from)) fail(422, "Місяць кінця — не раніше початку.", "to");
+  await tx(pool, async (c) => {
+    const e = await engine(c, { fresh: true });
+    if (!e.zp.person(String(uid))) fail(404, "Такої людини в зарплаті немає.");
+    if (from < e.zp.liveMonth) fail(422, `Початок — не раніше поточного місяця (${e.zp.liveMonth}): закриті місяці вже пораховано.`, "from");
+    await c.query(`INSERT INTO payroll_adjustments (user_id, kind, amount, note, from_month, to_month, created_by) VALUES ($1,$2,$3,$4,$5::date,$6::date,$7)`,
+      [uid, kind, amount, note, monthStart(from), to ? monthStart(to) : null, v.userId]);
+    await history(c, v.userId, uid, `${ADJ_NAME[kind]} ${amount} ₴ щомісяця з ${from}${to ? ` по ${to}` : " безстроково"}: ${note}`, "постійний бонус / корекція");
+  });
+  await after(pool);
+  return { ok: true };
+}
+/**
+ * Зняти бонус/корекцію: що вже діяло в закритих місяцях — лишається (кінець = попередній місяць), що ще не почалось — знімається.
+ * Інакше зняття заднім числом змінило б уже виплачені місяці.
+ */
+export async function removeAdjustment(pool: Pool, v: Viewer, uid: number, id: number) {
+  await tx(pool, async (c) => {
+    const e = await engine(c, { fresh: true }); const live = e.zp.liveMonth, prev = prevMonth(live);
+    const r = await c.query<{ kind: string; amount: string; note: string; f: string; t: string | null }>(
+      `SELECT kind, amount, note, to_char(from_month, 'YYYY-MM') AS f, to_char(to_month, 'YYYY-MM') AS t FROM payroll_adjustments
+        WHERE id = $1 AND user_id = $2 AND removed_at IS NULL FOR UPDATE`, [id, uid]);
+    const a = r.rows[0]; if (!a || (a.t !== null && a.t < live)) fail(404, "Такого бонусу чи корекції немає, або вони вже не діють.");
+    if (a.f < live) await c.query(`UPDATE payroll_adjustments SET to_month = $3::date WHERE id = $1 AND user_id = $2`, [id, uid, monthStart(prev)]);
+    else await c.query(`UPDATE payroll_adjustments SET removed_at = now(), removed_by = $3 WHERE id = $1 AND user_id = $2`, [id, uid, v.userId]);
+    await history(c, v.userId, uid, `${ADJ_NAME[a.kind] ?? a.kind} ${Number(a.amount)} ₴ (${a.note}) — ${a.f < live ? `завершено: останній місяць ${prev}` : "знято"}`, "постійний бонус / корекція");
+  });
+  await after(pool);
+  return { ok: true };
+}
 export async function saveDepartment(pool: Pool, v: Viewer, body: Record<string, unknown>) {
   const code = String(body.code ?? "").trim(); if (!/^[a-z0-9_]{1,30}$/.test(code)) fail(422, "Код — латиниця, цифри, _.", "code");
   const name = String(body.name ?? "").trim(); if (!name) fail(422, "Назва відділу.", "name");
@@ -1078,6 +1148,23 @@ export async function saveTeam(pool: Pool, v: Viewer, body: Record<string, unkno
     [code, String(body.name ?? code), String(body.dept ?? "sales"), offer, body.kommoTeamId ? Number(body.kommoTeamId) : null]).catch(() => fail(422, "Перевірте відділ команди."));
   await history(pool, v.userId, null, `Команда «${body.name ?? code}»: офер ${offer}`);
   invalidate(); return { ok: true };
+}
+/**
+ * Таблиця відповідності «блок Оргструктури → відділ Зарплати» (прохід 3): `dept` — код відділу, `null` — не зіставляти,
+ * `"default"` — прибрати свій рядок (тоді — за відділом блоку). Лише підказка для «Перевести»: розрахунок від неї не міняється.
+ */
+export async function saveDeptMap(pool: Pool, v: Viewer, body: Record<string, unknown>) {
+  const unitId = Number(body.unitId); if (!Number.isInteger(unitId)) fail(422, "Оберіть блок.", "unitId");
+  const unit = (await pool.query<{ name: string }>(`SELECT name FROM org_units WHERE id = $1`, [unitId])).rows[0]; if (!unit) fail(404, "Такого блоку в «Оргструктурі» немає.");
+  if (body.dept === "default") await pool.query(`DELETE FROM payroll_dept_map WHERE unit_id = $1`, [unitId]);
+  else {
+    const dept = body.dept == null || body.dept === "" ? null : String(body.dept);
+    await pool.query(`INSERT INTO payroll_dept_map (unit_id, dept_code, updated_by) VALUES ($1,$2,$3)
+                      ON CONFLICT (unit_id) DO UPDATE SET dept_code = EXCLUDED.dept_code, updated_by = EXCLUDED.updated_by, updated_at = now()`, [unitId, dept, v.userId])
+      .catch((err: { code?: string }) => { if (err.code === "23503") fail(422, "Такого відділу в «Зарплаті» немає.", "dept"); throw err; });
+  }
+  await history(pool, v.userId, null, `Відповідність «${unit.name}» → ${body.dept === "default" ? "за відділом блоку" : body.dept ? `відділ ${body.dept}` : "не зіставляти"}`, "відділи «Найму» → «Зарплати»");
+  return { ok: true };
 }
 export async function offerTasks(db: Db) {
   const e = await engine(db); const N = nameMap(e);

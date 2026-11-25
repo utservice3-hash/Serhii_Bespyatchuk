@@ -7925,6 +7925,8 @@ CREATE TABLE IF NOT EXISTS payroll_cards (
   archived_at TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payroll_cards_uniq ON payroll_cards (user_id, number_hash) WHERE archived_at IS NULL;
+-- Банк карти (Тетяна 25.11.2026, обовʼязковий для нової карти; старим картам людина вказує сама в кабінеті, NULL = «не вказано»).
+ALTER TABLE payroll_cards ADD COLUMN IF NOT EXISTS bank TEXT;
 CREATE TABLE IF NOT EXISTS payroll_months (
   month     DATE PRIMARY KEY CHECK (month = date_trunc('month', month)::date),
   status    TEXT NOT NULL CHECK (status IN ('live', 'closed')),
@@ -8166,6 +8168,24 @@ CREATE TABLE IF NOT EXISTS payroll_client_rates (
   removed_at  TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payroll_client_rates_live ON payroll_client_rates (user_id, client_key) WHERE removed_at IS NULL;
+-- Постійний «Бонус» / «Корекція» на період (задача 10723, ТЗ Тетяни 23.11.2026, затвердив Сергій 24.11): сума щомісяця з
+-- `from_month` до `to_month` включно (NULL — безстроково), обовʼязковий коментар «за що». Бонус — лише до ЗП, не до авансу;
+-- корекція зменшує нараховане, але не нижче нуля (правило рушія). Знята не видаляється — removed_at.
+-- Відкат даних: таблиця нова, без бекфілу; зняти рядок = removed_at, видалити таблицю = повернути розрахунок як був.
+CREATE TABLE IF NOT EXISTS payroll_adjustments (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES payroll_employees(user_id),
+  kind        TEXT NOT NULL CHECK (kind IN ('bonus', 'correction')),
+  amount      NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  note        TEXT NOT NULL CHECK (btrim(note) <> ''),
+  from_month  DATE NOT NULL CHECK (from_month = date_trunc('month', from_month)::date),
+  to_month    DATE CHECK (to_month IS NULL OR (to_month = date_trunc('month', to_month)::date AND to_month >= from_month)),
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  removed_by  INTEGER REFERENCES users(id),
+  removed_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS payroll_adjustments_user ON payroll_adjustments (user_id) WHERE removed_at IS NULL;
 -- Канал «email» центру сповіщень: коли лист пішов (SMTP_URL у .env; без нього канал не працює і так і пише в налаштуваннях).
 ALTER TABLE notification_recipients ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ;
 
@@ -8181,13 +8201,29 @@ SELECT 't' || t.id, t.name, 'sales', CASE WHEN t.kommo_group_id = 691208 THEN 'l
  WHERE NOT EXISTS (SELECT 1 FROM payroll_teams p WHERE p.kommo_team_id = t.id)
    AND EXISTS (SELECT 1 FROM managers m WHERE m.team_id = t.id AND m.is_active)
 ON CONFLICT (code) DO NOTHING;
+-- Відділи «Найму» → «Зарплати» (задача 10723, прохід 3, «роби» Романа 25.11.2026): блок «Оргструктури» → відділ «Зарплати».
+-- Рядка немає — за відділом блоку (`ORG_DEPT_DEFAULT` у `payroll/naimSync.ts`); `dept_code` NULL — блок не зіставляти. Таблиця лише
+-- ПІДКАЗУЄ рядок «Перевести» в «Змінах з «Найму»» — сама «Зарплата» від неї не міняється. Перевіряє й править Тетяна.
+-- Відкат даних: таблицю можна видалити цілком — зникнуть лише підказки.
+CREATE TABLE IF NOT EXISTS payroll_dept_map (
+  unit_id    INTEGER PRIMARY KEY REFERENCES org_units(id) ON DELETE CASCADE,
+  dept_code  TEXT REFERENCES payroll_departments(code),
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Наперед: Бізнес-асистент — свій відділ; «Операційне управління» — контейнер, людей у ньому не зіставляємо (інакше за відділом
+-- блоку вийшло б «Керівництво»). Решта — за відділом блоку. Лише якщо рядка ще немає — правки Тетяни не перетираються.
+INSERT INTO payroll_dept_map (unit_id, dept_code)
+SELECT u.id, v.dept FROM (VALUES ('ba', 'ba'), ('ops', NULL)) AS v(k, dept) JOIN org_units u ON u.seed_key = v.k
+ WHERE v.dept IS NULL OR EXISTS (SELECT 1 FROM payroll_departments d WHERE d.code = v.dept)
+ON CONFLICT (unit_id) DO NOTHING;
 
 -- 🔒 Зарплати, карти, обхідні листи й сповіщення — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON payroll_settings_versions, payroll_departments, payroll_teams, payroll_employees, payroll_terms, payroll_official,
   payroll_leaves, payroll_cards, payroll_months, payroll_records, payroll_record_extras, payroll_payout_forms, payroll_payout_lines,
   payroll_advances, payroll_advance_lines, payroll_ttn_seen, payroll_ttn_legacy, payroll_archive, payroll_offer_docs,
   payroll_clearances, payroll_clearance_signatures, payroll_clearance_drafts, payroll_clearance_files, payroll_history,
-  notify_rules, notifications, notification_recipients, payroll_reminders, payroll_client_rates FROM ai_readonly;
+  notify_rules, notifications, notification_recipients, payroll_reminders, payroll_client_rates, payroll_adjustments, payroll_dept_map FROM ai_readonly;
 
 -- 🗝 Вкладка «Зарплата» — кожному, крім кандидата (кабінет є в кожного, хто є в payroll_employees; решта бачить порожній стан).
 UPDATE roles SET screen_access = screen_access || '{"payroll":true}'::jsonb

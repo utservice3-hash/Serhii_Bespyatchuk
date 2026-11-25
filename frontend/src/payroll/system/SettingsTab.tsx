@@ -36,7 +36,7 @@ const SCALES: Array<[string, Array<[string, string]>]> = [
   ["Тім-лід", [["lead.pctLow", "% — план команди не виконано"], ["lead.pctHigh", "% — виконано"]]],
   ["Бонус за КПІ («Старт») — лише до жовтня 2026; з листопада діють умови оферу", [["kpi.waiveFrom", "Без дзвінків від маржі, ₴"], ["kpi.missDaysAllowed", "Днів без норми без втрати бонусу"]]],
   ["Аванс", [["advance.fromDay", "Заявки з числа"], ["advance.managerPct", "Менеджер, % маржі"], ["advance.leadPct", "Тім-лід, % маржі команди"], ["advance.staffPct", "Ставка, % ставки"]]],
-  ["Дні народження", [["birthday.each", "З кожного колеги, ₴"], ["birthday.company", "Від компанії, ₴"], ["birthday.lead", "Тім-ліду від компанії, ₴"], ["birthday.perMonth", "Стаж до року: за місяць, ₴"]]],
+  ["Дні народження", [["birthday.each", "Фонд з кожного щомісяця, ₴"], ["birthday.company", "Від компанії, ₴"], ["birthday.lead", "Тім-ліду від компанії, ₴"], ["birthday.perMonth", "За місяць стажу (до 12), ₴"]]],
   ["ТТН", [["ttn.minPct", "Мінімум угод з ТТН, %"], ["ttn.hold", "Утримання, ₴"]]],
   ["Офер команди Лілії Шаврової", [["offers.ls.startRate", "Ставка «Старту», ₴"], ["offers.ls.startPlan", "План «Старту», ₴"], ["offers.ls.autoProfiFrom", "Автоперехід: маржа понад, ₴"]]],
 ];
@@ -102,7 +102,9 @@ function Rules({ S }: { S: Obj }) {
       : `норма ${S.kpi?.normCalls} дзвінків на день — з «Планів» дашборда · днів: усі робочі мінус ${S.kpi?.missDaysAllowed} · від ${num(S.kpi?.waiveFrom)} маржі — без дзвінків · ${(S.kpi?.ladder ?? []).map((s: number[]) => `${s[0]} % → ${num(s[1])}`).join(", ")}`],
     ["Тім-лід", `ставка — у кожного своя · ${S.lead?.pctLow} % / ${S.lead?.pctHigh} % від маржі команди без власних угод (план команди — з «Планів»)`],
     ["Аванс", `заявка з ${S.advance?.fromDay} числа до кінця місяця · менеджер — до ${S.advance?.managerPct} % маржі «Успішно реалізовано» · тім-лід — до ${S.advance?.leadPct} % маржі команди · ставка — до ${S.advance?.staffPct} % ставки · не більше нарахованого на дату заявки · при закритті місяця аванс вираховується`],
-    ["Дні народження", `з кожного колеги ${num(S.birthday?.each)} ₴, автоматично (у місяці дня народження) · іменинник — збір + ${num(S.birthday?.company)} ₴ від компанії, тім-лід — ${num(S.birthday?.lead)} ₴ · стаж до року — ${num(S.birthday?.perMonth)} ₴ × відпрацьовані місяці + ${num(S.birthday?.company)} ₴ від компанії, без збору`],
+    ["Дні народження", S.birthday?.v2From
+      ? `з ${String(S.birthday.v2From).slice(5, 7)}.${String(S.birthday.v2From).slice(0, 4)}: з кожного працюючого ${num(S.birthday?.each)} ₴ щомісяця у фонд днів народження, автоматично, скільки б не було іменинників · іменинник — ${num(S.birthday?.perMonth)} ₴ × повні місяці стажу (від року — ${num(12 * Number(S.birthday?.perMonth ?? 0))} ₴) + ${num(S.birthday?.company)} ₴ від компанії, тім-лід — ${num(S.birthday?.lead)} ₴ · до того — збір колег на кожного іменинника`
+      : `з кожного колеги ${num(S.birthday?.each)} ₴, автоматично (у місяці дня народження) · іменинник — збір + ${num(S.birthday?.company)} ₴ від компанії, тім-лід — ${num(S.birthday?.lead)} ₴ · стаж до року — ${num(S.birthday?.perMonth)} ₴ × відпрацьовані місяці + ${num(S.birthday?.company)} ₴ від компанії, без збору`],
     ["ТТН", `якщо в закритому місяці ТТН є менш ніж у ${S.ttn?.minPct} % угод (дані — «Бізнес-асистент → ТТН моніторинг»), ${money(S.ttn?.hold)} утримуємо з виплати · закрили ТТН до виплати — сума йде в цю виплату · після виплати — переходить на наступний місяць`],
     ["Обхідний лист", "при звільненні — обовʼязково; створюється, щойно фінансист оформив звільнення · підписують тім-лід, бізнес-асистент, бухгалтерія, HR; останній пункт — ОД · поки не підписали всі — форма на виплату й виплата заблоковані (п. 11 оферу)"],
     ["Офіційна ЗП", "у кожного своя — у картці працівника; повторюється щомісяця, поки фінансист або операційний директор не змінить · «вираховувати з загальної ЗП»: так — решту доплачуємо готівкою або на карту; ні — офіційна окремо, понад загальну"],
@@ -243,7 +245,7 @@ export default function SettingsTab({ ctx }: { ctx: PayrollCtx }) {
       <Offers S={S} teams={(data.emp.offerTeams ?? []) as Obj[]} />
       <PeopleSettings emp={data.emp} org={data.cur} settings={S} canEdit={canEdit} onChanged={() => { void reload(); }}
         onLeave={(userId, date) => ctx.go("clearances", { leaveFor: userId, date })} />
-      <OrgSettings org={data.cur} people={(data.emp.people ?? []) as Obj[]} canEdit={canSet} onChanged={() => { void reload(); }} />
+      <OrgSettings org={data.cur} people={(data.emp.people ?? []) as Obj[]} deptMap={(data.emp.deptMap ?? []) as Obj[]} canEdit={canSet} onChanged={() => { void reload(); }} />
       {canNotify && <NotifyRules />}
       <Card title="Історія змін" aside="умови, шкали, офіційна ЗП, перевірки, аванси, згоди, виплати">
         {data.hist.length ? (

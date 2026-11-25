@@ -88,28 +88,28 @@ export function warmMonthResults(now = new Date()): void {
   for (const m of [d.toISOString().slice(0, 7), ym]) monthResult(m, true).catch((e) => console.error(`warmMonthResults ${m}:`, (e as Error).message));
 }
 
-/** Колонки аркуша «Угоди» — у порядку вкладки «Сделки» Тетяни (те, що відтворюємо), далі наші: хто закривав, рішення. */
+/** Колонки аркуша «Угоди» — у порядку вкладки «Сделки» Тетяни (те, що відтворюємо), далі наші: хто закривав, рішення. Відповідальний — як у CRM зараз (ядро). */
 export const DEAL_HEAD = ["Сделка", "Дата создания", "Дата закрытия", "Дата акта", "ID відповідального",
   "Бюджет Коммо", "Прихід: Безнал с НДС", "Прихід: Безнал без НДС", "Прихід: Наличные", "Розхід: Безнал с НДС", "Розхід: Безнал без НДС", "Розхід: Оплата на выгрузке", "Розхід: Наличные",
   "Бюджет Коммо-1С", "Organization", "1С прихід: Безнал с НДС", "1С прихід: Безнал без НДС", "1С прихід: Наличные", "1С розхід: Безнал с НДС", "1С розхід: Безнал без НДС", "1С розхід: Оплата на выгрузке", "1С розхід: Наличные",
   "Оплати клієнтів з 1С: з ПДВ", "Оплати клієнтів з 1С: без ПДВ", "Оплати клієнтів з 1С: нал", "Плановий профіт PNL",
-  "Клієнт", "Зараз відповідальний (id)", "У результаті", "Враховано", "Перевірити", "Рішення", "Примітка"] as const;
+  "Клієнт", "Закривав (id)", "У результаті", "Враховано", "Перевірити", "Рішення", "Примітка"] as const;
 const dmy = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric" }) : "");
 const dmyD = (d: string | null) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : "-");
 function dealRow(d: MonthResult["deals"][number]): (string | number | null)[] {
   const k = d.kommo, o = d.onec?.flows;
-  return [d.id, dmy(d.createdAt), dmy(d.closedAt), dmyD(d.onec?.actOn ?? null), d.closer,
+  return [d.id, dmy(d.createdAt), dmy(d.closedAt), dmyD(d.onec?.actOn ?? null), d.current,
     d.price, k?.in.vat ?? null, k?.in.novat ?? null, k?.in.cash ?? null, k?.out.vat ?? null, k?.out.novat ?? null, k?.out.unload ?? null, k?.out.cash ?? null,
     d.onec?.budget ?? null, d.onec?.organization ?? "", o?.in.vat ?? null, o?.in.novat ?? null, o?.in.cash ?? null, o?.out.vat ?? null, o?.out.novat ?? null, o?.out.unload ?? null, o?.out.cash ?? null,
     d.paid?.vat ?? null, d.paid?.novat ?? null, d.paid?.cash ?? null, d.planPnl,
-    d.client, d.current, d.included ? d.profit : null, d.included ? "так" : "ні", d.checks.join("; "),
+    d.client, d.closer, d.included ? d.profit : null, d.included ? "так" : "ні", d.checks.join("; "),
     d.override ? (d.override.action === "exclude" ? "не рахувати" : d.override.action === "move" ? `в ${d.override.targetMonth}` : "свій профіт") : "", d.override?.note ?? ""];
 }
 
 /** Excel: «Результат» — колонки аркуша Тетяни (№, ПІБ, id менеджера, Кількість угод, Результат, Коментар, Угода) + усі угоди. */
 export function monthResultXlsx(r: MonthResult): Buffer {
-  const notes = (id: number | null) => r.deals.filter((d) => d.closer === id && d.override).map((d) => `${d.id} ${d.override!.action === "exclude" ? "не рахуємо" : d.override!.action === "move" ? `→ ${d.override!.targetMonth!.slice(5, 7)}.${d.override!.targetMonth!.slice(0, 4)}` : `профіт ${d.override!.profit}`} — ${d.override!.note}`).join("\n");
-  const review = (id: number | null) => r.deals.filter((d) => d.closer === id && d.included && d.checks.length).map((d) => `${d.id}: ${d.checks.join("; ")}`).join("\n");
+  const notes = (id: number | null) => r.deals.filter((d) => d.current === id && d.override).map((d) => `${d.id} ${d.override!.action === "exclude" ? "не рахуємо" : d.override!.action === "move" ? `→ ${d.override!.targetMonth!.slice(5, 7)}.${d.override!.targetMonth!.slice(0, 4)}` : `профіт ${d.override!.profit}`} — ${d.override!.note}`).join("\n");
+  const review = (id: number | null) => r.deals.filter((d) => d.current === id && d.included && d.checks.length).map((d) => `${d.id}: ${d.checks.join("; ")}`).join("\n");
   return xlsxBook([
     { name: "Результат", rows: [["№", "ПІБ", "id менеджера", "Кількість угод", "Результат", "Коментар", "Угода", "На перевірці"],
       ...r.managers.map((m, i) => [i + 1, m.name, m.kommoUserId, m.deals, m.result, m.minus.n ? `мінусових ${m.minus.n} на ${m.minus.sum}` : "", notes(m.kommoUserId), review(m.kommoUserId)]),

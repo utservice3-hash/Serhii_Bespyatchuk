@@ -93,7 +93,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     offerFrom: null, minSuccessCalls: 990, minLeads: 50 },
   lead: { pctLow: 3, pctHigh: 6 },
   advance: { fromDay: 25, managerPct: 15, leadPct: 15, staffPct: 50 },
-  birthday: { each: 100, company: 400, lead: 600, perMonth: 100 },
+  // v2From (задача 10723, Тетяна 23.11.2026, затвердив Сергій 24.11): з місяця «YYYY-MM» — іменинникові 100 ₴ × повні місяці
+  // стажу, не більше 12 (тобто від року — 1 200), + від компанії; з кожного працюючого — один рядок «Фонд днів народження»
+  // `each` щомісяця, незалежно від іменинників. null — правило пакета (збір колег на кожного іменинника).
+  birthday: { each: 100, company: 400, lead: 600, perMonth: 100, v2From: null },
   ttn: { minPct: 70, hold: 3000 },
   offers: {
     std: { name: 'Стандартний офер', kpi: true, startRate: null, startPlan: null, autoProfiFrom: null, regularOnProfi: false },
@@ -249,18 +252,25 @@ export function createPayroll(state) {
     const [sy, sm, sd] = e.startDate.split('-').map(Number), [y, m, d] = iso.split('-').map(Number);
     return Math.max(0, (y - sy) * 12 + (m - sm) - (d < sd ? 1 : 0));
   }
-  /** Іменинник: стаж від року — збір колег + від компанії; до року — 100 ₴ × місяці + від компанії (без збору) */
+  /** Нове правило ДН діє для місяця mk (S.birthday.v2From — «YYYY-MM» або null) */
+  const bdayV2 = mk => !!S.birthday.v2From && mk >= S.birthday.v2From;
+  /**
+   * Іменинник. Правило пакета: стаж від року — збір колег + від компанії; до року — 100 ₴ × місяці + від компанії (без збору).
+   * З v2From: 100 ₴ × повні місяці стажу, не більше 12 (від року — 1 200), + від компанії; збору колег немає.
+   */
   function birthdayGift(e, mk) {
     const iso = birthdayIn(e, mk); if (!iso) return null;
-    const months = tenureMonths(e, iso), young = months < 12;
+    const months = tenureMonths(e, iso), young = months < 12, v2 = bdayV2(mk);
     const company = e.role === 'lead' ? S.birthday.lead : S.birthday.company;
-    const givers = young ? [] : E.filter(x => x !== e && employedIn(x, mk)).map(x => x.id);
-    const fromTeam = givers.length * S.birthday.each, fromMonths = young ? months * S.birthday.perMonth : 0;
-    return { date: iso, months, young, company, givers, fromTeam, fromMonths, amount: fromTeam + fromMonths + company };
+    const givers = young || v2 ? [] : E.filter(x => x !== e && employedIn(x, mk)).map(x => x.id);
+    const fromTeam = givers.length * S.birthday.each, fromMonths = v2 ? Math.min(months, 12) * S.birthday.perMonth : young ? months * S.birthday.perMonth : 0;
+    return { date: iso, months, young, v2, company, givers, fromTeam, fromMonths, amount: fromTeam + fromMonths + company };
   }
+  /** Рядки ДН людини за місяць: свій подарунок (+) і внески (−). З v2From внесок один — «Фонд днів народження» з кожного працюючого. */
   function birthdayLines(e, mk) {
     const out = [], g = birthdayGift(e, mk);
     if (g) out.push({ kind: 'gift', amount: g.amount, gift: g });
+    if (bdayV2(mk)) { if (employedIn(e, mk)) out.push({ kind: 'fund', amount: -S.birthday.each, date: `${mk}-01` }); return out; }
     E.forEach(x => { if (x === e) return; const gx = birthdayGift(x, mk); if (gx && gx.givers.includes(e.id)) out.push({ kind: 'give', amount: -S.birthday.each, who: x.id, date: gx.date }); });
     return out;
   }
@@ -329,7 +339,18 @@ export function createPayroll(state) {
     nowP.total = nowP.rate + nowP.pctAmount + bday; planP.total = planP.rate + planP.pctAmount + bday;
     return { kind: 'staff', empId: e.id, month: mk, live, days: dy, margin: base, marginPlan: basePlan, plan, planDone: !!r && plan > 0 && base >= plan, pctRule: r, birthdays, now: nowP, atPlan: planP };
   }
-  const calcE = (e, mk) => (e.role === 'manager' ? calcManager(e, mk) : e.role === 'lead' ? calcLead(e, mk) : calcStaff(e, mk));
+  // ---------- постійний «Бонус» / «Корекція» на період (задача 10723, ТЗ Тетяни 23.11.2026) ----------
+  /** e.adjustments = [{id, kind: 'bonus'|'correction', amount, note, from, to|null}] — діє щомісяця з from до to включно (to null — безстроково) */
+  const adjustmentsOf = (e, mk) => (e.adjustments || []).filter(a => a.from <= mk && (!a.to || mk <= a.to));
+  const adjSums = (e, mk) => { const xs = adjustmentsOf(e, mk); return { list: xs, B: sum(xs.filter(a => a.kind === 'bonus').map(a => a.amount)), C: sum(xs.filter(a => a.kind === 'correction').map(a => a.amount)) }; };
+  /** Бонус додається до нарахованого; корекція зменшує, але не нижче нуля: виплата від неї мінусовою не стає (Тетяна 24.11) */
+  const corrCap = (pre, B, C) => Math.min(C, Math.max(0, pre + B));
+  function withAdj(c, e, mk) {
+    const { list, B, C } = adjSums(e, mk);
+    for (const P of [c.now, c.atPlan]) { P.adjBonus = B; P.adjCorr = corrCap(P.total, B, C); P.total = P.total + B - P.adjCorr; }
+    c.adjustments = list; return c;
+  }
+  const calcE = (e, mk) => withAdj(e.role === 'manager' ? calcManager(e, mk) : e.role === 'lead' ? calcLead(e, mk) : calcStaff(e, mk), e, mk);
 
   // ---------- офіційна ЗП: статична, щомісяця, поки фінансист або ОД не змінить ----------
   const officialOf = (e, mk) => { const o = (e.official || []).filter(x => x.from <= mk).sort((a, b) => a.from.localeCompare(b.from)).pop(); return o && o.amount > 0 ? o : null; };
@@ -343,7 +364,8 @@ export function createPayroll(state) {
   function advanceLimit(e, mk) {
     const c = calcE(e, mk);
     const [base, pct, basis] = c.kind === 'manager' ? [c.margin, S.advance.managerPct, 'margin'] : c.kind === 'lead' ? [c.margin, S.advance.leadPct, 'teamMargin'] : [c.now.rate, S.advance.staffPct, 'rate'];
-    const byRule = Math.max(0, Math.floor(base * pct / 100)), cap = Math.max(0, Math.floor(c.now.total));
+    // бонус — лише до ЗП, не до авансу (Тетяна 24.11): стеля авансу — нараховане без постійного бонусу
+    const byRule = Math.max(0, Math.floor(base * pct / 100)), cap = Math.max(0, Math.floor(c.now.total - (c.now.adjBonus || 0)));
     return { basis, base, pct, byRule, cap, amount: Math.min(byRule, cap), capped: cap < byRule, calc: c };
   }
 
@@ -405,11 +427,12 @@ export function createPayroll(state) {
     // свої клієнти з окремим відсотком: їхня маржа — поза шкалою (фінансист правив загальну маржу — правка лягає на решту)
     const sp = c.kind === 'manager' && c.special ? c.special : { margin: 0, amount: 0 };
     const pctAmount = (v.margin - sp.margin) * v.pct / 100 + sp.amount;
-    const total = v.rate + pctAmount + v.bonus + bday + extras;
-    const autoTotal = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + auto.bonus + bday;
+    const pre = v.rate + pctAmount + v.bonus + bday + extras, autoPre = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + auto.bonus + bday;
+    const { B: adjBonus, C } = adjSums(e, mk), adjCorr = corrCap(pre, adjBonus, C);   // постійні бонус/корекція — поверх правок фінансиста
+    const total = pre + adjBonus - adjCorr, autoTotal = autoPre + adjBonus - corrCap(autoPre, adjBonus, C);
     const advance = advancePaid(e.id, mk), official = officialOf(e, mk), officialDeducted = official && official.deduct ? official.amount : 0;
     const tl = ttnLines(e, mk), ttn = sum(tl.map(x => x.amount));
-    return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn, pay: total - advance - officialDeducted + ttn };
+    return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, adjBonus, adjCorr, adjustments: c.adjustments, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn, pay: total - advance - officialDeducted + ttn };
   }
   /** Форма на виплату: готівка + карти разом мають дорівнювати «До виплати»; нова карта (isNew) — номер за Луном і власник */
   function checkPayoutForm(e, mk, form) {
@@ -591,9 +614,9 @@ export function createPayroll(state) {
     // угоди, КПІ, відсоток
     dealsOf, allDeals, kpiOf, kpiStep, managerPct, counts, offerKpi, clientPctOf: W(clientPctOf),
     // дні народження
-    birthdayIn: W(birthdayIn), tenureMonths: W(tenureMonths), birthdayGift: W(birthdayGift), birthdayLines: W(birthdayLines),
+    birthdayIn: W(birthdayIn), tenureMonths: W(tenureMonths), birthdayGift: W(birthdayGift), birthdayLines: W(birthdayLines), bdayV2,
     // розрахунок
-    record, verifiedMargin, companyMargin, companyPlan, calc: W(calcE),
+    record, verifiedMargin, companyMargin, companyPlan, calc: W(calcE), adjustmentsOf: W(adjustmentsOf),
     // офіційна ЗП, аванс
     officialOf: W(officialOf), officialSeparateOf: W(officialSeparateOf), advanceOf, advanceStatus, advancePaid, advanceWindowOpen, advanceLimit: W(advanceLimit),
     // ТТН

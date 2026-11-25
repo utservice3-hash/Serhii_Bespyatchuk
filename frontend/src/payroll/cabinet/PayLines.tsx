@@ -1,12 +1,13 @@
 /**
  * Форма «куди виплатити» — спільна для форми на виплату ЗП і заявки на аванс (макет `c04-pay.js`, `plHtml`):
- * одна чи кілька карт (збережені або нова — номер і отримувач) + частина готівкою. До 4 карт.
+ * одна чи кілька карт (збережені або нова — номер і отримувач) + частина готівкою або «Усе готівкою». До 4 карт.
  * Перевірку Луна, дублікатів і «сходиться на копійку» робить сервер (`checkPayoutForm` рушія) — тут лише підказка «лишилось».
  */
 import { useMemo, useState } from "react";
 import type { Obj } from "../api";
 import { money } from "../ui";
 import { draftTotal, type PayDraft, type PayLine } from "./payDraft";
+import { BankField, cardTag } from "./BankField";
 
 const toNum = (s: string) => { const n = Number(String(s).replace(/[\s ₴]/g, "").replace(",", ".")); return Number.isFinite(n) ? n : 0; };
 const fmtCard = (s: string) => s.replace(/\D/g, "").slice(0, 19).replace(/(\d{4})(?=\d)/g, "$1 ");
@@ -32,7 +33,7 @@ export function PayLines({ cards, draft, onChange, due, dueLabel, defaultHolder 
             <span>Карта{many ? ` ${i + 1}` : ""}</span>
             <select className="zp-select" value={String(l.card)} onChange={(e) => set(i, { card: e.target.value === "new" ? "new" : Number(e.target.value), holder: e.target.value === "new" && !l.holder ? defaultHolder : l.holder })}>
               {cards.map((c) => (
-                <option key={c.id} value={c.id} disabled={usedCards.has(Number(c.id)) && l.card !== Number(c.id)}>•••• {c.last4} · {String(c.holder).split(" ").slice(0, 2).join(" ")}</option>
+                <option key={c.id} value={c.id} disabled={usedCards.has(Number(c.id)) && l.card !== Number(c.id)}>{cardTag(c.last4, c.bank)} · {String(c.holder).split(" ").slice(0, 2).join(" ")}</option>
               ))}
               <option value="new">+ Нова карта</option>
             </select>
@@ -52,6 +53,7 @@ export function PayLines({ cards, draft, onChange, due, dueLabel, defaultHolder 
                 <span>Отримувач — прізвище, імʼя (як у банку)</span>
                 <input className="zp-input" autoComplete="off" value={l.holder} onChange={(e) => set(i, { holder: e.target.value })} />
               </label>
+              <BankField value={l.bank ?? ""} onChange={(v) => set(i, { bank: v })} />
             </div>
           )}
         </div>
@@ -60,9 +62,13 @@ export function PayLines({ cards, draft, onChange, due, dueLabel, defaultHolder 
         <button type="button" className="zp-btn zp-btn--sm" disabled={draft.lines.length >= 4}
           onClick={() => {
             const free = cards.find((c) => !usedCards.has(Number(c.id)));
-            onChange({ ...draft, lines: [...draft.lines, free ? { card: Number(free.id), amount: Math.max(0, rest), number: "", holder: "" } : { card: "new", amount: Math.max(0, rest), number: "", holder: defaultHolder }] });
+            onChange({ ...draft, lines: [...draft.lines, free ? { card: Number(free.id), amount: Math.max(0, rest), number: "", holder: "" } : { card: "new", amount: Math.max(0, rest), number: "", holder: defaultHolder, bank: "" }] });
           }}>+ Ще одна карта</button>
         {!cashOpen && <button type="button" className="zp-btn zp-btn--sm zp-btn--ghost" onClick={() => setCashOpen(true)}>+ Частину готівкою</button>}
+        {/* усе готівкою (Тетяна 25.11: «аванс також мають можливість взяти готівкою») — карти в нуль, рядки з нулем сервер пропускає */}
+        {Math.round(draft.cash) !== Math.round(due) && due > 0 && (
+          <button type="button" className="zp-btn zp-btn--sm" onClick={() => { setCashOpen(true); onChange({ cash: Math.round(due), lines: draft.lines.map((l) => ({ ...l, amount: 0 })) }); }}>Усе готівкою</button>
+        )}
       </div>
       {cashOpen && (
         <label className="zp-field zc-pl__cash">

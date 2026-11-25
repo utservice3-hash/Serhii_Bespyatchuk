@@ -29,12 +29,13 @@ export const payrollApi = {
   myGoal: (q: Obj = {}) => g("/payroll/me/goal", q),
   agree: (month: string) => p(`/payroll/me/records/${month}/agree`),
   dispute: (month: string, text: string) => p(`/payroll/me/records/${month}/dispute`, { text }),
-  /** lines: [{ cardId, amount }] або [{ newCard: { number, holder }, amount }]; cash — готівкою. */
+  /** lines: [{ cardId, amount }] або [{ newCard: { number, holder, bank }, amount }]; cash — готівкою. */
   submitForm: (month: string, body: { cash: number; lines: Obj[] }) => p(`/payroll/me/records/${month}/payout-form`, body),
   requestAdvance: (body: { cash?: number; lines?: Obj[] }) => p("/payroll/me/advances", body),
   cancelAdvance: (id: number) => p(`/payroll/me/advances/${id}/cancel`),
   myCards: () => g<Obj[]>("/payroll/me/cards"),
-  addCard: (number: string, holder: string) => p("/payroll/me/cards", { number, holder }),
+  addCard: (number: string, holder: string, bank: string) => p("/payroll/me/cards", { number, holder, bank }),
+  setCardBank: (id: number, bank: string) => p(`/payroll/me/cards/${id}/bank`, { bank }),
   archiveCard: async (id: number) => { await api.delete(`/payroll/me/cards/${id}`); },
   chooseProfi: () => p("/payroll/me/level", { level: "profi" }),
   /** files: data URL-и скріншотів (обхідний лист, менеджер → тім-ліду). */
@@ -87,8 +88,13 @@ export const payrollApi = {
   clientSearch: (q: string) => g<Obj[]>("/payroll/client-search", { q }),
   addClientRate: (userId: string | number, body: { clientKey: string; clientName: string; pct: number; from: "now" | "next" }) => p(`/payroll/employees/${userId}/client-rates`, body),
   removeClientRate: async (userId: string | number, id: number) => { await api.delete(`/payroll/employees/${userId}/client-rates/${id}`); },
+  // постійний бонус / корекція на період (задача 10723)
+  addAdjustment: (userId: string | number, body: { kind: "bonus" | "correction"; amount: number; note: string; from: string; to: string | null }) => p(`/payroll/employees/${userId}/adjustments`, body),
+  removeAdjustment: async (userId: string | number, id: number) => { await api.delete(`/payroll/employees/${userId}/adjustments/${id}`); },
   saveDepartment: (body: Obj) => p("/payroll/departments", body),
   saveTeam: (body: Obj) => p("/payroll/teams", body),
+  // відділи «Найму» → «Зарплати» (задача 10723): dept — код, null — не зіставляти, "default" — за відділом блоку
+  saveDeptMap: (body: { unitId: number; dept: string | null }) => p("/payroll/dept-map", body),
   history: (userId?: string | number) => g<Obj[]>("/payroll/history", userId ? { userId } : undefined),
   offerTasks: () => g<Obj[]>("/payroll/offer-tasks"),
   offerTaskDone: (id: number) => p(`/payroll/offer-tasks/${id}/done`),

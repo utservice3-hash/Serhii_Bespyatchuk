@@ -11,6 +11,7 @@ import Overview, { type CabTab } from "./Overview";
 import Goal from "./Goal";
 import Payouts from "./Payouts";
 import Terms from "./Terms";
+import { FOCUS_ALIAS } from "./format";
 import "./cabinet.css";
 
 const LABELS: Record<CabTab, string> = { home: "Огляд", goal: "Ціль", pay: "Виплати", terms: "Умови" };
@@ -20,7 +21,8 @@ export default function Cabinet({ ctx }: { ctx: PayrollCtx }) {
   const tabs: CabTab[] = me.simple || me.employee?.role !== "manager" ? ["home", "pay", "terms"] : ["home", "goal", "pay", "terms"];
   const want = ctx.goExtra?.cab as CabTab | undefined;
   const [tab, setTab] = useState<CabTab>(want && tabs.includes(want) ? want : "home");
-  const [focus, setFocus] = useState<string | null>((ctx.goExtra?.focus as string | undefined) ?? null);
+  const anchor = (f: unknown): string | null => (f ? FOCUS_ALIAS[String(f)] ?? String(f) : null);
+  const [focus, setFocus] = useState<string | null>(anchor(ctx.goExtra?.focus));
 
   // новий перехід зі сповіщення, поки кабінет відкритий: підхоплюємо під час рендеру (без каскаду ефектів)
   const [seenGo, setSeenGo] = useState(ctx.goExtra);
@@ -28,7 +30,7 @@ export default function Cabinet({ ctx }: { ctx: PayrollCtx }) {
     setSeenGo(ctx.goExtra);
     const t = ctx.goExtra?.cab as CabTab | undefined;
     if (t && tabs.includes(t)) setTab(t);
-    if (ctx.goExtra?.focus) setFocus(String(ctx.goExtra.focus));
+    if (ctx.goExtra?.focus) setFocus(anchor(ctx.goExtra.focus));
   }
   // прокрутка до блоку після рендеру вкладки
   useEffect(() => {

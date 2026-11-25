@@ -43,7 +43,7 @@ const LABELS: Record<TabKey, string> = {
   clearances: "Обхідні листи", archive: "Архів", settings: "Налаштування", tasks: "Задачі", cabinet: "Мій кабінет",
 };
 
-/** Куди відкрити за адресою (посилання зі сповіщень): `?tab=verify&user=12`, `?tab=cabinet&cab=pay&focus=adv`. */
+/** Куди відкрити за адресою (посилання зі сповіщень): `?tab=verify&user=12`, `?tab=cabinet&cab=pay&focus=zc-avans`. */
 function fromSearch(search: string): { tab: TabKey | null; extra: Obj | null } {
   const q = new URLSearchParams(search);
   const t = q.get("tab");

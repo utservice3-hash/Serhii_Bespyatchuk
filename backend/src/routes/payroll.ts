@@ -54,6 +54,7 @@ payrollRouter.post("/me/advance-remind", h(null, (_q, _r, v) => P.toggleAdvanceR
 payrollRouter.post("/me/advances/:id/cancel", h(null, (req, _r, v) => P.cancelAdvance(pool, v, intP(req.params.id))));
 payrollRouter.get("/me/cards", h(null, (_q, _r, v) => P.myCards(pool, v)));
 payrollRouter.post("/me/cards", h(null, async (req, res, v) => { const r = await P.addCard(pool, v, body(req)); res.status(201); return r; }));
+payrollRouter.post("/me/cards/:id/bank", h(null, (req, _r, v) => P.setCardBank(pool, v, intP(req.params.id), body(req))));
 payrollRouter.delete("/me/cards/:id", h(null, async (req, _r, v) => { await P.archiveCard(pool, v, intP(req.params.id)); return undefined; }));
 payrollRouter.post("/me/level", h(null, (req, _r, v) => { if (body(req).level !== "profi") throw new P.PayrollError(422, "Можна обрати лише «Профі»."); return P.chooseProfi(pool, v); }));
 payrollRouter.post("/me/clearance/shots", h(null, (req, _r, v) => P.sendShots(pool, v, body(req))));
@@ -108,8 +109,13 @@ payrollRouter.patch("/employees/:userId", h(EDIT, (req, _r, v) => P.updateEmploy
 payrollRouter.get("/client-search", h(EDIT, (req) => P.clientSearch(pool, req.query.q)));
 payrollRouter.post("/employees/:userId/client-rates", h(EDIT, async (req, res, v) => { const r = await P.addClientRate(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
 payrollRouter.delete("/employees/:userId/client-rates/:id", h(EDIT, (req, _r, v) => P.removeClientRate(pool, v, intP(req.params.userId), intP(req.params.id))));
+// постійний бонус / корекція на період (задача 10723): задають ті самі, хто править розрахунок
+payrollRouter.post("/employees/:userId/adjustments", h(EDIT, async (req, res, v) => { const r = await P.addAdjustment(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
+payrollRouter.delete("/employees/:userId/adjustments/:id", h(EDIT, (req, _r, v) => P.removeAdjustment(pool, v, intP(req.params.userId), intP(req.params.id))));
 payrollRouter.post("/departments", h(["payroll_settings"], (req, _r, v) => P.saveDepartment(pool, v, body(req))));
 payrollRouter.post("/teams", h(["payroll_settings"], (req, _r, v) => P.saveTeam(pool, v, body(req))));
+// відділи «Найму» → «Зарплати» (задача 10723, прохід 3): лише підказка «Перевести», правка — тим, хто веде оргструктуру зарплати
+payrollRouter.post("/dept-map", h(["payroll_settings"], (req, _r, v) => P.saveDeptMap(pool, v, body(req))));
 payrollRouter.get("/history", h(VIEW, (req) => P.historyView(pool, req.query.userId ? intP(req.query.userId) : null)));
 payrollRouter.get("/offer-tasks", h(["payroll_offer_tasks", "payroll_final_word"], () => P.offerTasks(pool)));
 payrollRouter.post("/offer-tasks/:id/done", h(["payroll_offer_tasks", "payroll_final_word"], (req, _r, v) => P.offerTaskDone(pool, v, intP(req.params.id))));

@@ -10,6 +10,7 @@ import { Card, Empty, Loading, Pill, Stat, money, useLoad, saveBlob } from "../u
 import { useToast } from "../../components/Toasts";
 import { MonthSwitch } from "./common";
 import { ADV_STATUS, dt, monthGen } from "./fmt";
+import { cardTag } from "../cabinet/BankField";
 
 export default function AdvancesTab({ ctx }: { ctx: PayrollCtx }) {
   const toast = useToast();
@@ -44,7 +45,7 @@ export default function AdvancesTab({ ctx }: { ctx: PayrollCtx }) {
     try { saveBlob(await payrollApi.advancesXlsx(mk), `Avans_${mk}.xlsx`); toast("Excel завантажено — вивантаження записано в історію змін."); }
     catch (e) { toast(errText(e), { error: true }); }
   }
-  const how = (r: Obj) => [Number(r.cash) ? `готівка ${money(r.cash)}` : "", ...((r.lines ?? []) as Obj[]).map((l) => `•••• ${l.last4} — ${money(l.amount)}`)].filter(Boolean).join(" · ") || "—";
+  const how = (r: Obj) => [Number(r.cash) ? `готівка ${money(r.cash)}` : "", ...((r.lines ?? []) as Obj[]).map((l) => `${cardTag(l.last4, l.bank ?? "банк не вказано")} — ${money(l.amount)}`)].filter(Boolean).join(" · ") || "—";
 
   return (
     <>

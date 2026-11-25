@@ -5,6 +5,13 @@
 import type { Obj } from "../api";
 import { money, type Tone } from "../ui";
 
+/**
+ * Якір блоку «Аванс» у кабінеті. НЕ «adv»: у RuAdList (стандартний список блокувальників реклами в укр/рос браузерах)
+ * є загальне правило `###adv` — блок із кнопкою заявки зникав у менеджерів з блокувальником (25.11.2026). Тримає #10940.
+ */
+export const ADVANCE_BLOCK_ID = "zc-avans";
+/** Старі посилання сповіщень (`focus=adv`) → новий якір. */
+export const FOCUS_ALIAS: Record<string, string> = { adv: ADVANCE_BLOCK_ID };
 export const plural = (n: number, a: string, b: string, c: string) => {
   const m10 = Math.abs(n) % 10, m100 = Math.abs(n) % 100;
   return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c;
@@ -41,6 +48,8 @@ export const lastDay = (mk: string) => new Date(Date.UTC(+mk.slice(0, 4), +mk.sl
 export const nf = (n: number) => Math.round(n).toLocaleString("uk-UA").replace(/\s/g, " ");
 export const pc = (x: number | null | undefined) => (x == null || !Number.isFinite(x) ? "—" : `${String(Math.round(x * 10) / 10).replace(".", ",")} %`);
 export const ceilE = (x: number) => Math.ceil(x - 1e-9);
+/** Нове правило днів народження діє для місяця mk (задача 10723, з листопада 2026: фонд 100 ₴ з кожного щомісяця, без збору на іменинника). */
+export const bdayV2 = (S: Obj | null | undefined, mk: string | null | undefined) => !!(S?.birthday?.v2From && mk && mk >= S.birthday.v2From);
 export const levelName = (lv: string | null | undefined) => (lv === "profi" ? "«Профі»" : lv === "start" ? "«Старт»" : "без рівня");
 
 /** Як виплачено / як подано: «готівкою 1 000 ₴ і на карту •••• 1111 — 5 000 ₴». */
@@ -49,8 +58,9 @@ export function payHow(f: Obj | null | undefined): string {
   const cards = ((f.cards ?? []) as Obj[]).filter((c) => Number(c.amount));
   const tail = (c: Obj) => String(c.last4 ?? String(c.no ?? "").slice(-4));
   const parts: string[] = [];
-  if (cards.length === 1 && !Number(f.cash)) return `на карту •••• ${tail(cards[0])}`;
-  cards.forEach((c) => parts.push(`•••• ${tail(c)} — ${money(c.amount)}`));
+  const bank = (c: Obj) => (c.bank ? ` · ${c.bank}` : "");
+  if (cards.length === 1 && !Number(f.cash)) return `на карту •••• ${tail(cards[0])}${bank(cards[0])}`;
+  cards.forEach((c) => parts.push(`•••• ${tail(c)}${bank(c)} — ${money(c.amount)}`));
   if (Number(f.cash)) parts.push(`готівкою ${money(f.cash)}`);
   return parts.length ? parts.join(", ") : "—";
 }

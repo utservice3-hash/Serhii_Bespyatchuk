@@ -58,7 +58,51 @@ function TeamModal({ t, depts, onClose, onDone }: { t: Obj | null; depts: Obj[];
   );
 }
 
-export function OrgSettings({ org, people, canEdit, onChanged }: { org: Obj; people: Obj[]; canEdit: boolean; onChanged: () => void }) {
+/**
+ * «Блок Оргструктури → відділ Зарплати» (задача 10723, прохід 3, план §Д): заповнено наперед за відділом блоку, Тетяна перевіряє й править.
+ * Лише підказка для рядка «Перевести» у «Змінах з «Найму»» і для «Додати в зарплату» — розрахунок від неї не міняється.
+ */
+function DeptMap({ rows, depts, canEdit, onChanged }: { rows: Obj[]; depts: Obj[]; canEdit: boolean; onChanged: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const name = (c: string | null) => (c ? depts.find((d) => d.code === c)?.name ?? c : null);
+  async function save(r: Obj, v: string) {
+    setBusy(true);
+    try { await payrollApi.saveDeptMap({ unitId: r.unitId, dept: v === "__none" ? null : v }); toast(`«${r.name}» збережено.`); onChanged(); }
+    catch (e) { toast(errText(e), { error: true }); } finally { setBusy(false); }
+  }
+  if (!rows.length) return null;
+  return (
+    <>
+      <div className="zps-lbl">Відділи «Найму» → «Зарплати»</div>
+      <div className="zp-hint">Блок людини в «Оргструктурі» «Найму» підказує її відділ тут: рядок «Перевести» в «Змінах з «Найму»» і відділ у «Додати в зарплату». Самі відділи в «Зарплаті» від цього не змінюються.</div>
+      <div className="zp-table-wrap">
+        <table className="zp-table">
+          <thead><tr><th>Блок «Оргструктури»</th><th>Відділ «Зарплати»</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.unitId}>
+                <td><b>{r.name}</b><div className="zp-hint">{r.path}</div></td>
+                <td>
+                  {canEdit ? (
+                    <select className="zp-select" disabled={busy} value={r.own ? (r.ownDept ?? "__none") : "default"} onChange={(e) => void save(r, e.target.value)}>
+                      <option value="default">за відділом блоку — {name(r.defaultDept) ?? "не зіставляти"}</option>
+                      {depts.map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                      <option value="__none">не зіставляти</option>
+                    </select>
+                  ) : <>{name(r.dept) ?? <span className="zp-hint">не зіставляємо</span>}</>}
+                  {r.own && r.ownDept && !r.dept && <div className="zp-tone--warn zp-hint">відділу «{r.ownDept}» у «Зарплаті» немає — не зіставляємо</div>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+export function OrgSettings({ org, people, deptMap = [], canEdit, onChanged }: { org: Obj; people: Obj[]; deptMap?: Obj[]; canEdit: boolean; onChanged: () => void }) {
   const [dept, setDept] = useState<Obj | null | undefined>(undefined);
   const [team, setTeam] = useState<Obj | null | undefined>(undefined);
   const depts = (org.departments ?? []) as Obj[], teams = (org.teams ?? []) as Obj[];
@@ -115,6 +159,7 @@ export function OrgSettings({ org, people, canEdit, onChanged }: { org: Obj; peo
         ) : <Empty>Команд немає — без них менеджера в зарплату не додати.</Empty>}
         {canEdit && <div className="zp-row"><button className="zp-btn zp-btn--sm" onClick={() => setDept(null)}>Новий відділ</button><button className="zp-btn zp-btn--sm" onClick={() => setTeam(null)}>Нова команда</button></div>}
         <div className="zp-hint">Новий відділ — рядок тут; аналітика «ЗП до результату» рахує його автоматично. Новий офер (інші умови) — окрема зміна правил.</div>
+        <DeptMap rows={deptMap} depts={depts} canEdit={canEdit} onChanged={onChanged} />
       </div>
       {dept !== undefined && <DeptModal d={dept} onClose={() => setDept(undefined)} onDone={() => { setDept(undefined); onChanged(); }} />}
       {team !== undefined && <TeamModal t={team} depts={depts} onClose={() => setTeam(undefined)} onDone={() => { setTeam(undefined); onChanged(); }} />}
