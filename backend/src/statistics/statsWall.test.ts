@@ -139,14 +139,15 @@ test("#10403 ЕКРАН: стіна карток (scope=main, cardFigures), ре
 });
 
 /**
- * #10404 — ВІДДІЛИ Й «ЧАС ОПРАЦЮВАННЯ» (заміняє `#2445`). Порядок рейки — як на макеті; медіана й «до 5 хв» — у «Продажах»
+ * #11054 — ВІДДІЛИ Й «ЧАС ОПРАЦЮВАННЯ» (заміняє `#10404`, а той — `#2445`). Порядок рейки — як на макеті 20.11 плюс
+ * «📵 Пропущені дзвінки» після HR (перенесено з вкладки, Роман 25-26.11.2026); медіана й «до 5 хв» — у «Продажах»
  * з ядра вікна (`leadTakeSeries` + фільтр вікна), у каталозі CRM_ABLE, із застереженням про порожні до вересня поле й нотатки.
  */
-test("#10404 ВІДДІЛИ: порядок рейки; «Час опрацювання» — у «Продажах», з ядра вікна і зі застереженням", async () => {
+test("#11054 ВІДДІЛИ: порядок рейки з «Пропущеними дзвінками» після HR; «Час опрацювання» — у «Продажах», з ядра вікна і зі застереженням", async () => {
   const fe = read(`${SEC}/StatisticsChartsSection.tsx`);
   const cats = fe.slice(fe.indexOf("const CATS"), fe.indexOf("const MULTI_POOL"));
   assert.deepEqual([...cats.matchAll(/^\s{2}\{ key: "(\w+)", icon:/gm)].map((m) => m[1]),
-    ["sales", "ads", "leadgen", "tenders", "logistics", "finance", "hr", "manual"], "🔴 склад або порядок відділів не той, що на макеті");
+    ["sales", "ads", "leadgen", "tenders", "logistics", "finance", "hr", "missed", "manual"], "🔴 склад або порядок відділів не той, що на макеті");
   const sales = cats.slice(cats.indexOf(`{ key: "sales"`), cats.indexOf(`{ key: "ads"`));
   assert.match(sales, /\{ key: "lead_take_median", block: "sales", label: "Медіана часу опрацювання заявки, хв", unit: "хв",/);
   assert.match(sales, /\{ key: "lead_take_m5_pct", block: "sales", label: "Взято до 5 хв, %", unit: "%",/);

@@ -884,13 +884,6 @@ export async function fetchCarrierCallsMeta(): Promise<CarrierCallsMetaResp> {
   return data;
 }
 
-/** 📈 Динаміка: ряди по днях / тижнях / місяцях. `key`: total | team:<id> | noteam | ownerless. */
-export type MissedSeriesGranularity = "day" | "week" | "month";
-export interface MissedSeriesPoint { period: string; missed: number; callback: number; clientSelf: number; medianMin: number | null }
-export interface MissedSeriesResp {
-  granularity: MissedSeriesGranularity; from: string; to: string; ownerlessInScope: boolean;
-  series: { key: string; name: string | null; points: MissedSeriesPoint[] }[];
-}
 /** 📞 «Відповідь на заявку» (5148) — дзеркало `ResponseLine` у `core/leadResponse.ts`. */
 export interface ResponseLineT {
   key: string; label: string; n: number; dialed: number; notDialed: number; medianMin: number | null;
@@ -903,10 +896,6 @@ export async function fetchLeadResponse(params: { from: string; to: string }): P
   return data;
 }
 
-export async function fetchMissedSeries(params: { granularity: MissedSeriesGranularity } & MissedFilterParams): Promise<MissedSeriesResp> {
-  const { data } = await api.get<MissedSeriesResp>("/dashboard/missed-calls/series", { params });
-  return data;
-}
 
 /** Блок C. Типи — дзеркало `core/missedCalls.ts` (`MissedListRow`) + `dealUrl` з роуту. */
 export type MissedNextStep = "callback_talked" | "callback_no_answer" | "client_self" | "nothing";

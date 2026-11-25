@@ -5,7 +5,7 @@ import {
 import { effGranOf } from "../statsGran";
 import { MAX_METRICS, canAdd, drawnScopes, multiLines, multiRows } from "../statsMulti";
 import {
-  cardFigures, cardDelta, asOfLabel, makeCardMemo, parseMine, periodStartOf, MINE_KEY, MINE_MAX, type Better, type CardGran,
+  cardFigures, cardDelta, asOfLabel, makeCardMemo, parseMine, periodStartOf, initialCatKey, MINE_KEY, MINE_MAX, type Better, type CardGran,
   parseWallView, stackPeriods, effStackPeriod, wallFrom, stackWindow, WALL_VIEW_KEY, type WallView, type StackPeriod,
 } from "../statsCards";
 import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
@@ -36,6 +36,9 @@ const LEAD_TAKE_SHARE_HINT = `частка заявок, узятих у роб�
 const AD_HINT = "ті самі гроші, що плитка «Надійшло» на екрані «Реклама» (ядро `money.adReceivedByDay`): оплата отримана ∪ успішно реалізовано угод рекламних клієнтів (правило Сергія: клієнт прийшов з реклами — далі всі його угоди реклама), за датою надходження; лише компанія";
 const LG_HINT = "гроші й машини з екрана «Лідогенерація» (правило Ярослава, словник §13): угоди менеджерів із передач лідгена будь-якої давності; лише компанія і лише помісячно, як тренд того екрана";
 const FIN_HINT = "рядок екрана «Фінанси → Тиждень і місяць» тим самим ядром (`core/financeKpiRefs.ts`); бачать ті, кому відкрито «Фінанси»";
+/* 📵 Перенесено з вкладки «Пропущені дзвінки» 26.11.2026 (Роман: «перенести все у статистики, щоб не дублювалась
+   інформація») — те саме ядро, що вкладка (`core/missedCalls.missedSeries`). */
+const MISSED_HINT = "те саме ядро, що вкладка «Пропущені дзвінки»: вхідний без розмови (NO ANSWER / BUSY), плечі одного дзвінка склеєні, перевізники поза; ряд з 09.2025; остання точка — учора (доба на передзвін ще не минула); лінії — компанія, кожна команда, «Поза командами» і «Без відповідального»; бачать ті, кому відкрито вкладку «Пропущені дзвінки»";
 const HR_HINT = "реєстр людей, та сама формула, що «Плинність» на екрані «Люди» (`core/churn.ts`): працювали в місяці = прийняті до його кінця і не звільнені до його початку; бачать ті, кому відкрито реєстр людей";
 
 /**
@@ -93,6 +96,12 @@ const CATS: Cat[] = [
     { key: "hr_hired", block: "hr", label: "Прийнято", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "прийняті в місяці за датою прийому; " + HR_HINT },
     { key: "hr_fired", block: "hr", label: "Звільнено", better: "down", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "звільнені в місяці за датою звільнення (з невідомою датою — поза розрахунком); " + HR_HINT },
     { key: "hr_turnover_total", block: "hr", label: "Плинність", unit: "%", better: "down", monthOnly: true, companyOnly: true, src: "реєстр людей", hint: "звільнено ÷ працювали в місяці × 100 — уже у відсотках (20 = 20%), а не частка; " + HR_HINT },
+  ] },
+  { key: "missed", icon: "📵", label: "Пропущені дзвінки", metrics: [
+    { key: "missed_count", block: "missed", label: "Пропущено", better: "down", src: "Ringostat", hint: "пропущені вхідні за датою дзвінка (Київ); " + MISSED_HINT },
+    { key: "missed_nocb_pct", block: "missed", label: "Не передзвонили за 24 год, %", unit: "%", better: "down", src: "Ringostat", hint: "частка пропущених, на які за 24 год не було жодного нашого вихідного на той самий номер — з лічильників точки, не середнє відсотків; " + MISSED_HINT },
+    { key: "missed_cb_median", block: "missed", label: "Медіана передзвону, хв", unit: "хв", better: "down", src: "Ringostat", hint: "медіана хвилин від пропущеного до першого нашого вихідного — окремо за кожну точку, медіани не усереднюються; " + MISSED_HINT },
+    { key: "missed_self_pct", block: "missed", label: "Клієнт передзвонив сам, %", unit: "%", better: "neutral", src: "Ringostat", hint: "частка пропущених, де клієнт сам набрав знову й дочекався відповіді; це НЕ наш передзвін; " + MISSED_HINT },
   ] },
   /* 📣 Окремий розділ меню «Реклама» (ТЗ 28.09, блок 4, п.6) — див. `AdsPage.tsx`; тут лише його числа картками. */
   { key: "manual", icon: "✍️", label: "Ручні", manualForm: true, metrics: [
@@ -182,7 +191,8 @@ const srcOf = (m: Metric) => m.src ?? "CRM";
  * План на графіку й надалі не малюється (ТЗ 14.10). `StatisticsSummary` / `StatisticsPlanFact` лишаються без входу.
  */
 export default function StatisticsChartsSection({ role }: { role?: string }) {
-  const [catKey, setCatKey] = useState("sales");
+  /* 🔗 `?cat=missed` — посилання з вкладки «Пропущені дзвінки» відкриває одразу свій розділ (`initialCatKey`). */
+  const [catKey, setCatKey] = useState(() => initialCatKey(typeof window === "undefined" ? "" : window.location.search, CATS.filter((c) => !c.manualForm).map((c) => c.key)));
   /* ★ «Мій набір» — у браузері (Роман 20.11). Сміття в ключі не кладе екран: `parseMine` лишає лише відомі ключі. */
   const [mine, setMine] = useState<string[]>(() => {
     try { return parseMine(localStorage.getItem(MINE_KEY), WALL_POOL.map((m) => m.key)); } catch { return []; }

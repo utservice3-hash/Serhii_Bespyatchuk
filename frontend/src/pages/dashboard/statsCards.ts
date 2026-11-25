@@ -194,3 +194,12 @@ export function makeCardMemo<V>(maxAgeMs: number, now: () => number = Date.now) 
     set(key: string, v: V): void { store.set(key, { at: now(), v }); if (store.size > 400) store.delete(store.keys().next().value as string); },
   };
 }
+
+/**
+ * 🔗 Розділ, з якого відкриваються «Статистики»: `?cat=<ключ>` (посилання з вкладки «Пропущені дзвінки», 26.11.2026),
+ * інакше «Продажі». Невідомий ключ — теж «Продажі», а не порожній екран.
+ */
+export function initialCatKey(search: string, keys: readonly string[]): string {
+  const c = new URLSearchParams(search).get("cat");
+  return c && keys.includes(c) ? c : "sales";
+}

@@ -32,6 +32,10 @@ import type { AuthPayload } from "../auth/auth.js";
 import { memoize } from "../statistics/seriesMemo.js";
 import { SeriesCache, SERIES_FRESH_MS, SERIES_STALE_MS } from "../statistics/seriesCache.js";
 import { SERIES_DEFAULT_FROM, seriesDefaultTo, warmTasks } from "../statistics/seriesWarmSet.js";
+import { missedSeries as missedSeriesRaw } from "../core/missedCalls.js";
+import {
+  MISSED_BLOCK, isMissedMetric, missedSeriesKey, missedPointsOf, missedSetFor, missedViewerOf, missedSeriesTo,
+} from "../statistics/missedStats.js";
 
 /**
  * Вкладка «Статистики» (стіна графіків). Кожна серія — ЛИШЕ з CRM (ядро) або з розділу дашборда («Фінанси», реєстр
@@ -127,6 +131,41 @@ const hrC = (pick: (m: ChurnM) => number | null): Computer => async (g, from, to
   return r.months.flatMap((m) => { const v = pick(m); return v == null ? [] : [P(`${m.month}-01`, v)]; });
 };
 
+/**
+ * 📵 ПРОПУЩЕНІ ДЗВІНКИ (перенесено з вкладки 26.11.2026) — ТЕ САМЕ ЯДРО, що графік вкладки (`core/missedCalls.missedSeries`).
+ * Один виклик ядра віддає компанію й усі лінії разом, тож чотири показники, кожна команда, «Поза командами» і «Без
+ * відповідального» беруться з ОДНОГО спільного виклику на крок і період (`seriesMemo`). Менеджер — окремим викликом зі
+ * своїм скоупом (його лінії в компанійній відповіді немає). Кінець ряду — учора (`missedSeriesTo`), як на вкладці.
+ * 🔴 СКОУП ЗВУЖУЄ ВІДПОВІДЬ, А НЕ РОЗРАХУНОК: лінія команди — це серія `team:N` компанійного виклику, а не виклик зі
+ * зрізом; ядро розподіляє дзвінки по всіх плечах доби й лише потім відбирає (`missedBaseCte`), тож це те саме число.
+ */
+const missedSeriesM = memoize("missedSeries", missedSeriesRaw);
+async function missedPoints(metric: string, g: Gran, from: string, to: string, scopeType: string, scopeKey: string, managerId: number | null): Promise<Point[]> {
+  if (!isMissedMetric(metric)) return [];
+  const end = missedSeriesTo(to, kyivToday());
+  if (end < from) return [];
+  const r = await missedSeriesM(g, from, end, managerId != null ? { managerId } : {});
+  return missedPointsOf(r.series, missedSeriesKey(scopeType, scopeKey), metric).map((x) => P(x.period, x.value));
+}
+
+/** Лінії глядача для пропущених — дзеркало клампу вкладки (`missedScopeFor`); правило набору — `missedSetFor`. */
+async function missedSet(auth: { role: string; managerId: number | null; teamId: number | null }, g: Gran, from: string, to: string): Promise<ScopeSpec[]> {
+  const v = missedViewerOf(auth);
+  if (v.kind === "manager") return missedSetFor(v, {});
+  if (v.kind === "team_lead") {
+    if (v.teamId == null) return missedSetFor(v, {});
+    const t = await pool.query<{ name: string }>("SELECT name FROM teams WHERE id = $1", [v.teamId]);
+    const mgrs = await pool.query<{ id: number; name: string }>(
+      "SELECT id, name FROM managers WHERE team_id = $1 AND is_active ORDER BY name", [v.teamId]);
+    return missedSetFor(v, { teamName: t.rows[0]?.name ?? null, managers: mgrs.rows });
+  }
+  const cf = from > STATS_CRM_FROM ? from : STATS_CRM_FROM, end = missedSeriesTo(to, kyivToday());
+  return missedSetFor(v, { series: end < cf ? [] : (await missedSeriesM(g, cf, end, {})).series });
+}
+/** Обчислювач для компанії / команди / менеджера (лінії «Поза командами» й «Без відповідального» — гілкою `seriesPoints`). */
+const missedC = (metric: string): Computer => (g, from, to, teamId, managerId) =>
+  missedPoints(metric, g, from, to, managerId != null ? "manager" : teamId != null ? "team_lead" : "company", String(managerId ?? teamId ?? "company"), managerId);
+
 export const COMPUTERS: Record<string, Computer> = {
   // Медіана, а не середнє (рішення власника): один «забутий» лід на добу тягнув би середнє на години.
   lead_take_median: leadTakeC((s) => s.medianMin),
@@ -208,6 +247,11 @@ export const COMPUTERS: Record<string, Computer> = {
   hr_fired: hrC((m) => m.dismissed),
   hr_turnover_total: hrC((m) => m.turnover),
   // План/факт: місячна серія «% виконання» = received-fact ÷ plan (payment_amount). Тижневих планів нема.
+  // 📵 Пропущені дзвінки — ядро вкладки (`core/missedCalls.missedSeries`), 26.11.2026
+  missed_count: missedC("missed_count"),
+  missed_nocb_pct: missedC("missed_nocb_pct"),
+  missed_cb_median: missedC("missed_cb_median"),
+  missed_self_pct: missedC("missed_self_pct"),
   plan_execution: async (g, from, to, teamId, managerId) => {
     if (g !== "month") return [];
     const fact = await receivedByBucket({ from, to, teamId, managerId }, "month");
@@ -227,6 +271,7 @@ export const COMPUTERS: Record<string, Computer> = {
   },
 };
 const hasLive = (block: string, metric: string): boolean => (metric in COMPUTERS) || hasDepstats(block, metric);
+
 
 // ── depstats-read (calls/finance/hr): statistics_values, лише source IN (auto,manual) ≥шов ──
 function teamLeadForStats(teamId: number | null): string | null {
@@ -271,7 +316,8 @@ async function seriesPoints(block: string, metric: string, g: Gran, cf: string, 
   scopeType: string, scopeKey: string, teamId: number | null, managerId: number | null): Promise<Point[]> {
   let crm: Point[] = [];
   const liveScope = scopeType === "company" || teamId != null || managerId != null;
-  if (liveScope && to >= cf) {
+  if (block === MISSED_BLOCK) crm = await missedPoints(metric, g, cf, to, scopeType, scopeKey, managerId);
+  else if (liveScope && to >= cf) {
     if (metric in COMPUTERS) crm = await COMPUTERS[metric](g, cf, to, teamId, managerId);
     else if (hasDepstats(block, metric)) crm = await depstatsRead(block, metric, g, cf, to, { scopeType, teamId });
   }
@@ -325,7 +371,10 @@ export const statsSeriesCacheStatus = () => ({ freshSec: SERIES_FRESH_MS / 1000,
 // ЛИШЕ як агрегат-бенчмарк (одна серія значень; чужих команд/менеджерів у payload НЕМА).
 // `unit` (напрямок: Міжнародка/Тендери/ЛідгенМіжн/ВЛТ) — окрема unit-серія, ЛИШЕ admin/КВП
 // (напрямки не командні); team_lead/manager → порожньо.
-async function seriesSet(auth: { role: string; roleKey: string; teamId: number | null; managerId: number | null }, unit: string | null): Promise<ScopeSpec[]> {
+async function seriesSet(auth: { role: string; roleKey: string; teamId: number | null; managerId: number | null }, unit: string | null,
+  q?: { block: string; g: Gran; from: string; to: string }): Promise<ScopeSpec[]> {
+  // 📵 Пропущені дзвінки — свій набір ліній: дзеркало клампу вкладки й лінії з відповіді ядра (`missedSet`).
+  if (q?.block === MISSED_BLOCK) return unit ? [] : missedSet(auth, q.g, q.from, q.to);
   if (unit) return isAdminScope(auth)
     ? [{ scopeType: "unit", scopeKey: unit, scopeName: unit, teamId: null, managerId: null }]
     : [];
@@ -362,7 +411,7 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const denied = blockDenied(block, { tab: (t) => roleHasTab(auth.roleKey, t), perm: (p) => roleHasPerm(auth.roleKey, p) });
   if (denied) return res.status(403).json({ error: denied });
   const unit = req.query.unit ? String(req.query.unit) : null; // напрямок (unit-scope)
-  const full = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
+  const full = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit, { block, g, from, to });
   // 🧱 Картки стіни (20.11.2026): `scope=main` — лише головна серія глядача з УЖЕ обрізаного набору (`mainSpec`),
   //    без команд і без плану. 8 карток відділу × (компанія + 6 команд) вантажились 8,2 с; картці потрібне одне число.
   //    `scope=first` (21.11.2026) — перша лінія розгорнутого графіка (`firstSpec`): її видно одразу, команди — слідом.
