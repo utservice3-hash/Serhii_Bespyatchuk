@@ -2248,9 +2248,8 @@ SELECT * FROM (VALUES
 ) AS v(company, bank, label, currency, env_key_name, is_active, legal_name)
 WHERE NOT EXISTS (SELECT 1 FROM bank_accounts);
 
--- Ключ-карта ФОП — сид ПІСЛЯ рахунків, лише якщо порожньо (правки адміна в панелі не перетираємо).
-UPDATE bank_accounts SET key_card = '4246001043604218' WHERE company = 'fop_privat' AND key_card IS NULL;
-UPDATE bank_accounts SET key_card = '5408810042466572' WHERE company = 'fop_mono'   AND key_card IS NULL;
+-- Ключ-карта ФОП: номер вводить адмін у Налаштуваннях → Банк (`bank_accounts.key_card`).
+-- Сид із номерами карток прибрано 25.11.2026: репозиторій був публічним (інцидент витоку).
 
 -- ───────────── Звʼязок УГОДА ↔ КОНТАКТ (для нотаток контактів / дзвінків) ─────────────
 -- Kommo вішає телефонію (Ringostat) на КОНТАКТ, а не на лід: у стрічці угоди дзвінок
