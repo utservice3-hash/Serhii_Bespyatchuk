@@ -62,3 +62,13 @@ test("#10942 УСЕ ГОТІВКОЮ: у формі (аванс і виплат�
   assert.match(FRONT("cabinet/payDraft.ts"), /lines: d\.lines\.filter\(\(l\) => l\.amount > 0\)/, "нульові карти в запит не йдуть");
   assert.match(SRC("payroll/service.ts"), /if \(!\(amount > 0\)\) continue;/, "сервер пропускає нульовий рядок карти (нова карта без номера не валідується)");
 });
+
+test("#10943 «НАЙБЛИЖЧІ ДАТИ»: відкритий аванс без заявки — одразу після «Сьогодні», підсвічено, «з DD.MM»; перед «Сьогодні» — лише поданий чи виплачений", () => {
+  const pay = FRONT("cabinet/Payouts.tsx");
+  assert.match(pay, /const advOpenNow = !!A\.open && !req, advPast = \+today\.slice\(8, 10\) >= A\.fromDay && !advOpenNow;/, "🔴 відкритий аванс у день відкриття вважається минулим");
+  assert.match(pay, /if \(advPast\) T\.splice\(0, 0, advItem\); else if \(advOpenNow\) T\.splice\(1, 0, advItem\); else T\.push\(advItem\);/, "🔴 порядок: минулий — перед «Сьогодні», відкритий — одразу після");
+  assert.match(pay, /cls: advOpenNow \? "is-next" : ""/, "🔴 відкритий аванс не підсвічено");
+  assert.doesNotMatch(pay, /advItem\.cls = ""/, "🔴 підсвітку знову гасять для відкритого авансу");
+  // «Сьогодні» — перший рядок, тож splice(1) ставить аванс одразу після нього
+  assert.match(pay, /if \(lv\) T\.push\(\{ d: dd\(today\), cls: "is-now", b: "Сьогодні"/);
+});

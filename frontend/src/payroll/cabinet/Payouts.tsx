@@ -33,10 +33,12 @@ export function CalendarBlock({ me }: { me: Obj }) {
   if (r && r.status !== "paid") T.push({ d: `до ${d2(S.payByDay, nextMonth(r.month))}`, cls: "is-next", b: `Виплата за ${monthLow(r.month)}`, s: closedLine(me) });
   if (lv) {
     const mk = lv.month as string, A = lv.advance as Obj, req = A.request as Obj | null, nmk = nextMonth(mk);
-    const advItem = { d: d2(A.fromDay, mk), cls: A.open && !req ? "is-next" : "", b: "Аванс",
+    // Аванс відкритий і заявки ще немає — це дія ЗАРАЗ: одразу після «Сьогодні», підсвічено, «з 25.11» (Роман 25.11: у день відкриття
+    // аванс стояв ПЕРЕД «Сьогодні» сірим, ніби вже минув). Позаду він лише тоді, коли заявку вже подано / виплачено.
+    const advOpenNow = !!A.open && !req, advPast = +today.slice(8, 10) >= A.fromDay && !advOpenNow;
+    const advItem = { d: advOpenNow ? `з ${d2(A.fromDay, mk)}` : d2(A.fromDay, mk), cls: advOpenNow ? "is-next" : "", b: "Аванс",
       s: req ? `${money(req.amount)} · ${(ADV_STATUS[req.status]?.[0] ?? req.status).toLowerCase()}` : A.open ? `заявки відкрито — до ${money(A.limit?.amount)}` : `заявка з ${A.fromDay} числа; на сьогодні — до ${money(A.limit?.amount)}` };
-    // аванс уже був (сьогодні після його дня) — ставимо перед «Сьогодні»
-    if (+today.slice(8, 10) >= A.fromDay) { advItem.cls = ""; T.splice(0, 0, advItem); } else T.push(advItem);
+    if (advPast) T.splice(0, 0, advItem); else if (advOpenNow) T.splice(1, 0, advItem); else T.push(advItem);
     T.push({ d: d2(lastDay(mk), mk), cls: "", b: "Закриття місяця", s: me.employee?.role === "manager" ? `ТТН від ${S.ttn?.minPct} % угод — щоб ${money(S.ttn?.hold)} не утримали` : "нарахування фіксуються" });
     T.push({ d: `до ${d2(S.verifyByDay, nmk)}`, cls: "", b: "Перевірка фінансиста", s: "розрахунковий лист у кабінеті: погоджуєте або пишете, з чим не згодні" });
     T.push({ d: `до ${d2(S.payByDay, nmk)}`, cls: "", b: "Виплата", s: "готівкою або на карти — як вкажете у формі" });
