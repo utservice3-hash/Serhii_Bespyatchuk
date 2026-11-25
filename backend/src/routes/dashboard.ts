@@ -654,7 +654,8 @@ dashboardRouter.get("/leadgen-ltv-clients", async (req, res) => {
 
 // 🔎 «ПЕРЕВІРИТИ НОМЕР НА ЛАРДІ» (задача 8136): лідген вводить номер і бачить, що про нього відомо на Ларді, — щоб не
 // передавати менеджеру прорахунок від експедиції. Межа — як у решти вкладки (`leadgenViewer`), першим оператором;
-// номер перевіряється ПІСЛЯ межі (403 раніше за 400). Нічого не пишемо. Правила — `core/lardiCheckRules.ts`.
+// номер перевіряється ПІСЛЯ межі (403 раніше за 400). У Ларді не пишемо; у базу — лише кеш ЄДР (вид діяльності з
+// YouControl за кодом фірми з Ларді, 24.11.2026). Правила — `core/lardiCheckRules.ts`.
 dashboardRouter.get("/leadgen-lardi-check", async (req, res) => {
   const viewer = leadgenViewer(await leadgenViewerAuth(req.auth!));
   if (viewer.kind === "deny") return res.status(403).json({ error: viewer.error });

@@ -8579,3 +8579,13 @@ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS idx_tasks_o2o_employee ON tasks(o2o_employee_id, o2o_type)
   WHERE task_type = 'oneonone' AND o2o_resolution IS NULL;
+
+-- 🏛 ЄДР (YouControl) ЗА КОДОМ ФІРМИ З ЛАРДІ (24.11.2026): вид діяльності (КВЕД) для блока «Перевірити номер на Ларді»
+-- у Лідогенерації. Кеш на 30 днів (`core/lardiRegistry.ts`), бо кожен запит до YouControl — транзакція тарифу. Окремо
+-- від `youscore_cache` конструктора: там картка договору з ПДВ, тут — лише назва, стан і КВЕДи. Дані публічного реєстру.
+-- Відкат даних: таблицю можна очистити або видалити цілком — це лише кеш, наступна перевірка спитає реєстр знову.
+CREATE TABLE IF NOT EXISTS lardi_registry_cache (
+  code       text PRIMARY KEY CHECK (code ~ '^([0-9]{8}|[0-9]{10})$'),  -- ЄДРПОУ (8) або ІПН ФОП (10)
+  info       jsonb NOT NULL,                                             -- lardiCheckRules.RegistryInfo
+  fetched_at timestamptz NOT NULL DEFAULT now()
+);
