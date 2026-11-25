@@ -48,6 +48,10 @@ export function createNotifier(zp, state) {
   const make = (type, at, to, o) => ({ type, at, to: [...new Set(to)].filter(Boolean), act: NOTIFICATION_TYPES[type][1], ...o });
   const leaveText = p => `${ddy(p.leave.date)} — ${LEAVE_TYPES[p.leave.type][0]}`;
   const TASKS = CLEARANCE_ITEMS.filter(x => !x.final);
+  // «Схвалено» замість «виплачено» в сповіщеннях працівнику: позначка фінансиста — не зарахування на карту (Дар'я 25.11).
+  // Вмикає `state.payWording === 'approved'`; без нього тексти як у пакета (золоті звірки макета).
+  const approved = state.payWording === 'approved';
+  const BANK = ' Гроші надійдуть після переказу, строк залежить від банку.';
 
   const build = {
     /** Обхідний лист створено: кожному відповідальному — його пункти одним завданням; працівнику — його дії; фінансистам і ОД — до відома */
@@ -111,7 +115,7 @@ export function createNotifier(zp, state) {
     },
     paid(empId, mk, at) {
       const p = P(empId), f = zp.settlement(p.id, mk), pl = zp.payoutLines(p.id, mk);
-      return [make('paid', at, [p.id], { empId: p.id, title: `ЗП за ${monthLow(mk)} виплачено`, text: `${uah(f.pay)} — ${payHow(pl || (f.record && f.record.form) || {})}.`, go: inCab('pay') })];
+      return [make('paid', at, [p.id], { empId: p.id, title: `ЗП за ${monthLow(mk)} ${approved ? 'схвалено до виплати' : 'виплачено'}`, text: `${uah(f.pay)} — ${payHow(pl || (f.record && f.record.form) || {})}.${approved ? BANK : ''}`, go: inCab('pay') })];
     },
     advanceRequested(empId, mk) {
       const p = P(empId), a = state.advances[mk][empId];
@@ -120,7 +124,7 @@ export function createNotifier(zp, state) {
     },
     advancePaid(empId, mk) {
       const p = P(empId), a = state.advances[mk][empId];
-      return [make('adv.res', a.paidAt, [p.id], { empId: p.id, title: `Аванс ${uah(a.amount)} виплачено`, text: `${capFirst(payHow(a))}. Вирахуємо із ЗП за ${monthLow(mk)} при закритті місяця.`, go: inCab('pay', '#adv') })];
+      return [make('adv.res', a.paidAt, [p.id], { empId: p.id, title: `Аванс ${uah(a.amount)} ${approved ? 'схвалено' : 'виплачено'}`, text: `${capFirst(payHow(a))}.${approved ? BANK : ''} Вирахуємо із ЗП за ${monthLow(mk)} при закритті місяця.`, go: inCab('pay', '#adv') })];
     },
     advanceRejected(empId, mk) {
       const p = P(empId), a = state.advances[mk][empId];

@@ -30,7 +30,7 @@ export function AdvanceBlock({ me, onChanged }: { me: Obj; onChanged: () => Prom
     if (!draft) return;
     if (draftTotal(draft) <= 0) { toast("Вкажіть суму авансу.", { error: true }); return; }
     setBusy(true);
-    try { await payrollApi.requestAdvance(draftBody(draft)); toast("Заявку на аванс подано — фінансист виплатить і позначить «Виплачено»."); setDraft(null); await onChanged(); }
+    try { await payrollApi.requestAdvance(draftBody(draft)); toast("Заявку на аванс подано — фінансист розгляне й позначить «Схвалено»."); setDraft(null); await onChanged(); }
     catch (e) { toast(errText(e), { error: true }); }
     finally { setBusy(false); }
   }
@@ -77,7 +77,7 @@ export function AdvanceBlock({ me, onChanged }: { me: Obj; onChanged: () => Prom
   } else if (st === "requested") {
     body = (
       <>
-        <div className="zp-note zp-note--warn"><b>Заявку подано {dt(req.requestedAt)}: {money(req.amount)}</b> — {payHow(req)}. Фінансист виплатить і позначить «Виплачено».</div>
+        <div className="zp-note zp-note--warn"><b>Заявку подано {dt(req.requestedAt)}: {money(req.amount)}</b> — {payHow(req)}. Фінансист розгляне й позначить «Схвалено».</div>
         <div className="zp-row">
           {askCancel ? (
             <>
@@ -90,7 +90,7 @@ export function AdvanceBlock({ me, onChanged }: { me: Obj; onChanged: () => Prom
       </>
     );
   } else {
-    body = <div className="zp-note zp-note--ok"><b>Аванс {money(req.amount)} виплачено {dt(req.paidAt)}</b> — {payHow(req)}. Вирахуємо із ЗП за {monthLow(mk)} при закритті місяця.</div>;
+    body = <div className="zp-note zp-note--ok"><b>Аванс {money(req.amount)} схвалено {dt(req.paidAt)}</b> — {payHow(req)}. Гроші надійдуть після переказу, строк залежить від банку. Вирахуємо із ЗП за {monthLow(mk)} при закритті місяця.</div>;
   }
   const chip = st ? <Pill tone={ADV_STATUS[st]?.[1] ?? "muted"}>{ADV_STATUS[st]?.[0] ?? st}</Pill>
     : <Pill tone={A.open ? "info" : "muted"}>{A.open ? "заявки відкрито" : `з ${A.fromDay} ${monthGen(mk)}`}</Pill>;

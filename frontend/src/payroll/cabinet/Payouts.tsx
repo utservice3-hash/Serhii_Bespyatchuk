@@ -81,7 +81,7 @@ function HistoryBlock({ me }: { me: Obj }) {
           {rows.slice().reverse().map((x) => (
             <li key={x.mk}>
               <span className="zc-hist__m">{monthTitle(x.mk)}</span>
-              {x.st === "live" ? <Pill tone="warn">{x.single ? "іде · зараз" : "іде · при плані"}</Pill> : <StatusPill status={x.st} />}
+              {x.st === "live" ? <Pill tone="warn">{x.single ? "іде · зараз" : "іде · при плані"}</Pill> : <StatusPill status={x.st} employee />}
               <b className="zp-num">{Number.isFinite(x.total) ? money(x.total) : "перевіряється"}</b>
               {x.pay !== undefined && <small>{x.adv ? `аванс −${money(x.adv)} · ` : ""}до виплати {money(x.pay)}{x.how ? ` · ${x.how}` : ""}</small>}
             </li>
@@ -104,7 +104,7 @@ function AdvancesHistory({ me }: { me: Obj }) {
             <span className="zc-hist__m">{monthTitle(a.month)}</span>
             <Pill tone={ADV_STATUS[a.status]?.[1] ?? "muted"}>{ADV_STATUS[a.status]?.[0] ?? a.status}</Pill>
             <b className="zp-num">{money(a.amount)}</b>
-            <small>подано {dd(a.requestedAt)}{a.paidAt ? ` · виплачено ${dd(a.paidAt)}` : ""}{a.reason ? ` · ${a.reason}` : ""}</small>
+            <small>подано {dd(a.requestedAt)}{a.paidAt ? ` · схвалено ${dd(a.paidAt)}` : ""}{a.reason ? ` · ${a.reason}` : ""}</small>
           </li>
         ))}
       </ul>
