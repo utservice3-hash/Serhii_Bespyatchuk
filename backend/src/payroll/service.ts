@@ -12,7 +12,8 @@ import { createPayroll, nextStatus, nextMonth, prevMonth, lastDay, CLEARANCE_ITE
 import { createNotifier, OFFER_TITLES } from "./engine/notify.mjs";
 import { loadState, kyivNow, kyivIso, monthStart, NAME_SQL, NAME_JOIN, BIRTHDAY_V2_FROM } from "./state.js";
 import { emitAll, closeDone, type EngineNotification } from "./notifyCenter.js";
-import { naimChanges, loadNaim, offerTeams, type Level } from "./naimSync.js";
+import { naimChanges, loadNaim, offerTeams, naimPlacement, deptMapRows, type Level } from "./naimSync.js";
+import { loadOrg } from "../core/orgTree.js";
 import { encryptCard, decryptCard, validateCard, cardHash, cardsAvailable, CardKeyMissing } from "./cards.js";
 
 type Db = Pool | PoolClient;
@@ -914,8 +915,8 @@ export async function employeesView(db: Db) {
     clientRates: p.clientRates ?? [], adjustments: p.adjustments ?? [],
     // останній чинний документ оферу: підписано / чекає підпису (анульовані — не показуємо)
     offerDoc: offerDocOf(e, p.id as string) }));
-  const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: string | null; birth: string | null; position: string | null; team_id: number | null; level: string | null }>(
-    `SELECT u.id, ${NAME_SQL} AS name, COALESCE(u.role_override, u.role) AS role, to_char(e.hired_at, 'YYYY-MM-DD') AS hired_at, to_char(e.birth_date, 'MM-DD') AS birth, e.position, m.team_id,
+  const candidates = (await db.query<{ id: number; name: string; role: string; hired_at: string | null; birth: string | null; position: string | null; team_id: number | null; employee_id: number | null; level: string | null }>(
+    `SELECT u.id, ${NAME_SQL} AS name, COALESCE(u.role_override, u.role) AS role, to_char(e.hired_at, 'YYYY-MM-DD') AS hired_at, to_char(e.birth_date, 'MM-DD') AS birth, e.position, m.team_id, e.id AS employee_id,
             (SELECT el.level FROM employee_levels el WHERE el.employee_id = e.id ORDER BY el.from_month DESC LIMIT 1) AS level
        FROM users u ${NAME_JOIN} LEFT JOIN LATERAL (SELECT * FROM employees x WHERE x.user_id = u.id ORDER BY x.id DESC LIMIT 1) e ON true
       WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate' AND NOT EXISTS (SELECT 1 FROM payroll_employees pe WHERE pe.user_id = u.id)
@@ -924,11 +925,20 @@ export async function employeesView(db: Db) {
   // команди для «Оферів»: з людьми — спершу, порожні — у кінці з позначкою (задача 10723)
   const offerTeamList = offerTeams(teams.map((t) => ({ code: t.code, name: t.name, offer: t.offer_code })), people);
   // що в «Наймі» розходиться із «Зарплатою» — лише показуємо, дію робить людина (задача 10723)
+  // відділ і команда з «Найму» (прохід 3): блок «Оргструктури» → відділ за таблицею відповідності, команда — за командою Kommo блоку
+  const org = await loadOrg(db, null);
+  const known = new Set((await db.query<{ code: string }>(`SELECT code FROM payroll_departments`)).rows.map((r) => r.code));
+  const dmap = new Map((await db.query<{ unit_id: number; dept_code: string | null }>(`SELECT unit_id, dept_code FROM payroll_dept_map`)).rows.map((r) => [r.unit_id, r.dept_code] as [number, string | null]));
+  const units = org.units.map((u) => ({ id: u.id, parentId: u.parentId, name: u.name, dept: u.dept, teamKey: u.teamKey }));
+  const place = naimPlacement(units, org.people, dmap, teams.map((t) => ({ code: t.code, kommoTeamId: t.kommo_team_id })), known);
   const naim = naimChanges(people.map((p) => ({ userId: String(p.userId), name: String(p.name), role: String(p.role), level: (p.level ?? null) as Level | null,
-    levelChange: (p.levelChange ?? null) as { level: Level } | null, leave: p.leave ?? null })), await loadNaim(db));
-  return { month: live, people, naim, offerTeams: offerTeamList, candidates: candidates.map((c) => ({ userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at, birthday: c.birth,
-    title: c.position, team: teams.find((t) => t.kommo_team_id === c.team_id)?.code ?? null, level: c.level === "pro" ? "profi" : c.level === "start" ? "start" : null,
-    role: c.role === "team_lead" ? "lead" : c.role === "manager" ? "manager" : "staff" })) };
+    levelChange: (p.levelChange ?? null) as { level: Level } | null, leave: p.leave ?? null,
+    dept: (p.dept ?? null) as string | null, team: (p.team ?? null) as string | null, leadsTeam: (p.leadsTeam ?? null) as string | null })), await loadNaim(db), place);
+  return { month: live, people, naim, offerTeams: offerTeamList, candidates: candidates.map((c) => { const pl = c.employee_id != null ? place.get(c.employee_id) : undefined; return { userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at, birthday: c.birth,
+    // «Додати в зарплату» підставляє відділ і команду з «Найму»; без блоку — команда за командою Kommo, як було
+    title: c.position, dept: pl?.dept ?? null, team: pl?.team ?? teams.find((t) => t.kommo_team_id === c.team_id)?.code ?? null, level: c.level === "pro" ? "profi" : c.level === "start" ? "start" : null,
+    role: c.role === "team_lead" ? "lead" : c.role === "manager" ? "manager" : "staff" }; }),
+    deptMap: deptMapRows(units, dmap, known) };
 }
 export async function addEmployee(pool: Pool, v: Viewer, body: Record<string, unknown>) {
   const uid = Number(body.userId); if (!Number.isInteger(uid)) fail(422, "Оберіть людину.", "userId");
@@ -1121,6 +1131,23 @@ export async function saveTeam(pool: Pool, v: Viewer, body: Record<string, unkno
     [code, String(body.name ?? code), String(body.dept ?? "sales"), offer, body.kommoTeamId ? Number(body.kommoTeamId) : null]).catch(() => fail(422, "Перевірте відділ команди."));
   await history(pool, v.userId, null, `Команда «${body.name ?? code}»: офер ${offer}`);
   invalidate(); return { ok: true };
+}
+/**
+ * Таблиця відповідності «блок Оргструктури → відділ Зарплати» (прохід 3): `dept` — код відділу, `null` — не зіставляти,
+ * `"default"` — прибрати свій рядок (тоді — за відділом блоку). Лише підказка для «Перевести»: розрахунок від неї не міняється.
+ */
+export async function saveDeptMap(pool: Pool, v: Viewer, body: Record<string, unknown>) {
+  const unitId = Number(body.unitId); if (!Number.isInteger(unitId)) fail(422, "Оберіть блок.", "unitId");
+  const unit = (await pool.query<{ name: string }>(`SELECT name FROM org_units WHERE id = $1`, [unitId])).rows[0]; if (!unit) fail(404, "Такого блоку в «Оргструктурі» немає.");
+  if (body.dept === "default") await pool.query(`DELETE FROM payroll_dept_map WHERE unit_id = $1`, [unitId]);
+  else {
+    const dept = body.dept == null || body.dept === "" ? null : String(body.dept);
+    await pool.query(`INSERT INTO payroll_dept_map (unit_id, dept_code, updated_by) VALUES ($1,$2,$3)
+                      ON CONFLICT (unit_id) DO UPDATE SET dept_code = EXCLUDED.dept_code, updated_by = EXCLUDED.updated_by, updated_at = now()`, [unitId, dept, v.userId])
+      .catch((err: { code?: string }) => { if (err.code === "23503") fail(422, "Такого відділу в «Зарплаті» немає.", "dept"); throw err; });
+  }
+  await history(pool, v.userId, null, `Відповідність «${unit.name}» → ${body.dept === "default" ? "за відділом блоку" : body.dept ? `відділ ${body.dept}` : "не зіставляти"}`, "відділи «Найму» → «Зарплати»");
+  return { ok: true };
 }
 export async function offerTasks(db: Db) {
   const e = await engine(db); const N = nameMap(e);

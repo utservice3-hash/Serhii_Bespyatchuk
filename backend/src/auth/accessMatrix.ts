@@ -2313,6 +2313,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
   { method: "POST", path: "/api/payroll/teams", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
+  /* Відділи «Найму» → «Зарплати» (задача 10723, прохід 3, 25.11.2026): право payroll_settings, як відділи й команди. */
+  { method: "POST", path: "/api/payroll/dept-map", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
   { method: "GET", path: "/api/payroll/offer-tasks", cls: "GET",
     allow: ["hr", "opdir"], deny: ["admin", "ceo", "kvp", "financier", "team_lead", "manager", "candidate"] },
   { method: "POST", path: "/api/payroll/offer-tasks/:id/done", cls: "deny-only",

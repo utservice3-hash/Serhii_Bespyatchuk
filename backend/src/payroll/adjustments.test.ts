@@ -114,7 +114,7 @@ test("#10889 БОНУС/КОРЕКЦІЯ: таблиця з коментарем
   assert.match(t, /kind\s+TEXT NOT NULL CHECK \(kind IN \('bonus', 'correction'\)\)/, "🔴 вид — лише бонус або корекція");
   assert.match(t, /note\s+TEXT NOT NULL CHECK \(btrim\(note\) <> ''\)/, "🔴 коментар «за що» обовʼязковий і на рівні бази");
   assert.match(t, /to_month\s+DATE CHECK \(to_month IS NULL OR \(.*to_month >= from_month\)\)/, "🔴 кінець періоду — не раніше початку");
-  assert.match(schema, /payroll_client_rates, payroll_adjustments FROM ai_readonly;/, "🔴 таблиця має бути закрита від AI-запитів");
+  assert.match(schema, /payroll_client_rates, payroll_adjustments(, [a-z_]+)* FROM ai_readonly;/, "🔴 таблиця має бути закрита від AI-запитів");
   assert.match(SRC("ai/metricTools.ts"), /"payroll_adjustments"/, "🔴 дзеркало FORBIDDEN_TABLES не знає таблиці");
   assert.match(st, /FROM payroll_adjustments WHERE removed_at IS NULL/, "🔴 стан має читати лише незняті");
   assert.match(svc, /if \(from < e\.zp\.liveMonth\) fail\(422/, "🔴 запис заднім числом змінив би вже виплачене");

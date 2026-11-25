@@ -113,6 +113,8 @@ payrollRouter.post("/employees/:userId/adjustments", h(EDIT, async (req, res, v)
 payrollRouter.delete("/employees/:userId/adjustments/:id", h(EDIT, (req, _r, v) => P.removeAdjustment(pool, v, intP(req.params.userId), intP(req.params.id))));
 payrollRouter.post("/departments", h(["payroll_settings"], (req, _r, v) => P.saveDepartment(pool, v, body(req))));
 payrollRouter.post("/teams", h(["payroll_settings"], (req, _r, v) => P.saveTeam(pool, v, body(req))));
+// відділи «Найму» → «Зарплати» (задача 10723, прохід 3): лише підказка «Перевести», правка — тим, хто веде оргструктуру зарплати
+payrollRouter.post("/dept-map", h(["payroll_settings"], (req, _r, v) => P.saveDeptMap(pool, v, body(req))));
 payrollRouter.get("/history", h(VIEW, (req) => P.historyView(pool, req.query.userId ? intP(req.query.userId) : null)));
 payrollRouter.get("/offer-tasks", h(["payroll_offer_tasks", "payroll_final_word"], () => P.offerTasks(pool)));
 payrollRouter.post("/offer-tasks/:id/done", h(["payroll_offer_tasks", "payroll_final_word"], (req, _r, v) => P.offerTaskDone(pool, v, intP(req.params.id))));

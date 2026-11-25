@@ -60,6 +60,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/payroll/settings": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/departments": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/teams": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
+  "POST /api/payroll/dept-map": "право-ключ «Зарплати» payroll_settings (відділи «Найму» → «Зарплати», задача 10723) — у обробнику ДО читання тіла",
   "POST /api/payroll/offer-tasks/:id/done": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "PUT /api/notifications/rules/:type": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/ba/utb": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",

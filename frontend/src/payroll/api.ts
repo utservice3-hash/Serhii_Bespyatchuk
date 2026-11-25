@@ -92,6 +92,8 @@ export const payrollApi = {
   removeAdjustment: async (userId: string | number, id: number) => { await api.delete(`/payroll/employees/${userId}/adjustments/${id}`); },
   saveDepartment: (body: Obj) => p("/payroll/departments", body),
   saveTeam: (body: Obj) => p("/payroll/teams", body),
+  // відділи «Найму» → «Зарплати» (задача 10723): dept — код, null — не зіставляти, "default" — за відділом блоку
+  saveDeptMap: (body: { unitId: number; dept: string | null }) => p("/payroll/dept-map", body),
   history: (userId?: string | number) => g<Obj[]>("/payroll/history", userId ? { userId } : undefined),
   offerTasks: () => g<Obj[]>("/payroll/offer-tasks"),
   offerTaskDone: (id: number) => p(`/payroll/offer-tasks/${id}/done`),

@@ -78,6 +78,7 @@ export const MANIFEST_FILES: string[] = [
   "payroll/naimSync.test.js",
   "payroll/birthdayV2.test.js",
   "payroll/adjustments.test.js",
+  "payroll/naimMove.test.js",
   "core/receivablesFxSql.test.js",
   "core/dealFinFields.test.js",
   "core/taskVisibility.test.js",
@@ -478,7 +479,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "payroll_leaves", "payroll_cards", "payroll_months", "payroll_records", "payroll_record_extras", "payroll_payout_forms", "payroll_payout_lines",
   "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
   "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
-  "notify_rules", "notifications", "notification_recipients", "payroll_reminders", "payroll_client_rates", "payroll_adjustments",
+  "notify_rules", "notifications", "notification_recipients", "payroll_reminders", "payroll_client_rates", "payroll_adjustments", "payroll_dept_map",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -2831,6 +2832,11 @@ export const MANIFEST_TESTS: string[] = [
   "#10887 АВАНС: постійний бонус до авансу не йде — стеля без бонусу; без бонусу стеля = нараховане",
   "#10888 ЗАКРИТТЯ = КАБІНЕТ: без правок нараховане однакове в розрахунку й у закритті місяця, з бонусом, корекцією й обома",
   "#10889 БОНУС/КОРЕКЦІЯ: таблиця з коментарем і періодом, не для AI; не заднім числом; маршрути з payroll_edit; видно на 4 екранах",
+  // payroll/naimMove.test.ts — відділи й команди «Найму» → «Зарплати» (задача 10723, прохід 3, 25.11.2026)
+  "#10930 НАЙМ → ЗАРПЛАТА: відділ за блоком і таблицею (свій рядок головний, NULL — не зіставляти), команда — за командою Kommo блоку",
+  "#10931 ПЕРЕВЕСТИ: інший відділ чи команда — рядок; однакове, невідома команда, звільнений — без рядка; тім-лід — за командою, яку веде",
+  "#10932 СЕРВЕР: payroll_dept_map не для AI, заповнена наперед; employeesView передає підказки, таблицю й відділ кандидата; маршрут — payroll_settings",
+  "#10933 ЕКРАН: «Перевести» в «Змінах з Найму», тім-ліду — leadsTeam; таблиця відповідності в «Оргструктурі»; відділ кандидата",
   // bankIdent/cardPeople.test.ts — робоча картка «Беспятчук white (Моно)», «люди картки» (13.11.2026).
   "#3930 КАРТКА: поповнення з ФОП — лише з правом, витрати — з правом або «людині картки», поповнення — свій переказ",
   "#3930b ЖИВИЙ SQL: поповнення з ФОП — однаково в SQL стрічки, TS і AI-вью; «люди картки» знаходяться за id",

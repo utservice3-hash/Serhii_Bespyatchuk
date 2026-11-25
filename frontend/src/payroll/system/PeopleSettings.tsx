@@ -255,8 +255,9 @@ function AddModal({ candidates, org, live, initial, onClose, onDone }: { candida
   function pick(id: string) {
     setUid(id);
     const c = candidates.find((x) => x.userId === id);
+    // відділ — з «Найму» (блок «Оргструктури» за таблицею відповідності, задача 10723); немає — як було
     if (c) setF((x) => ({ ...x, role: c.role ?? x.role, title: c.title ?? "", team: c.team ?? "", leadsTeam: c.role === "lead" ? c.team ?? "" : "", startDate: c.startDate ?? "",
-      birthday: c.birthday ? bday(c.birthday) : "", level: c.level ?? "start", dept: c.role === "staff" ? (x.dept === "sales" ? "" : x.dept) : "sales" }));
+      birthday: c.birthday ? bday(c.birthday) : "", level: c.level ?? "start", dept: c.dept ?? (c.role === "staff" ? (x.dept === "sales" ? "" : x.dept) : "sales") }));
   }
   // «Додати в зарплату» з блоку «Зміни з «Найму»» — людина вже обрана (задача 10723)
   useEffect(() => { if (initial) pick(initial); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -323,8 +324,17 @@ function AddModal({ candidates, org, live, initial, onClose, onDone }: { candida
  * звільнення, нові офери»). Сервер лише ПОРІВНЮЄ (`payroll/naimSync.ts`), нічого не пише сам; дія — кнопкою в рядку.
  * Люди без акаунта — одним рядком-числом з розгортанням: їх може бути багато, і в кожному рядку той самий підпис став би шпалерами.
  */
-const NAIM_TAG: Record<string, [string, string]> = { dismissed: ["у «Наймі» звільнений", "zps-tag--warn"], new: ["новий у «Наймі»", "zps-tag--ok"], level: ["інший рівень", "zps-tag--lvl"] };
-function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel }: { rows: Obj[]; canEdit: boolean; onLeave: (r: Obj) => void; onAdd: (r: Obj) => void; onLevel: (r: Obj) => void }) {
+const NAIM_TAG: Record<string, [string, string]> = { dismissed: ["у «Наймі» звільнений", "zps-tag--warn"], new: ["новий у «Наймі»", "zps-tag--ok"], level: ["інший рівень", "zps-tag--lvl"], move: ["інший відділ чи команда", "zps-tag--lvl"] };
+/** «Було → у «Наймі»» для рядка переведення: лише те, що різниться. Невідомий код — самим кодом, не порожнім місцем. */
+function moveText(r: Obj, names: { dept: Record<string, string>; team: Record<string, string> }): string {
+  const d = (c: string | null) => (c ? names.dept[c] ?? c : "без відділу"), t = (c: string | null) => (c ? names.team[c] ?? c : "поза командою");
+  const parts: string[] = [];
+  if (r.naimDept !== r.payrollDept) parts.push(`відділ: ${d(r.payrollDept)} → ${d(r.naimDept)}`);
+  if (r.naimTeam !== r.payrollTeam) parts.push(`команда: ${t(r.payrollTeam)} → ${t(r.naimTeam)}`);
+  return `У «Наймі» — блок «${r.unit}». ${parts.join("; ")}. Зміна команди міняє офер, тому переводимо кнопкою.`;
+}
+function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel, onMove, names }: { rows: Obj[]; canEdit: boolean; onLeave: (r: Obj) => void; onAdd: (r: Obj) => void; onLevel: (r: Obj) => void;
+  onMove: (r: Obj) => void; names: { dept: Record<string, string>; team: Record<string, string> } }) {
   const [openNo, setOpenNo] = useState(false);
   const main = rows.filter((r) => r.kind !== "noAccount"), noAcc = rows.filter((r) => r.kind === "noAccount");
   if (!rows.length) return <div className="zp-hint">Змін з «Найму», не внесених у «Зарплату», немає.</div>;
@@ -341,10 +351,12 @@ function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel }: { rows: Obj[]; ca
                 <span className={`zps-tag ${NAIM_TAG[r.kind]?.[1] ?? ""}`}>{r.kind === "dismissed" ? `у «Наймі» звільнений${r.date ? ` ${ddy(r.date)}` : ", дату не вказано"}` : r.kind === "level" ? `${lvl(r.naimLevel)} у «Наймі»` : NAIM_TAG[r.kind]?.[0]}</span>
                 <div className="zp-hint">{r.kind === "dismissed" ? "У «Зарплаті» досі працює: рахуємо ставку і збір на дні народження, поки немає обхідного листа."
                   : r.kind === "new" ? "У «Зарплаті» немає."
+                  : r.kind === "move" ? moveText(r, names)
                   : `У «Зарплаті» — ${lvl(r.payrollLevel)}. Рівні ведуться окремо; гроші рахуються за «Зарплатою».`}</div>
               </td>
               <td className="r">{canEdit && (r.kind === "dismissed" ? <button className="zp-btn zp-btn--sm" onClick={() => onLeave(r)}>Оформити обхідний лист</button>
                 : r.kind === "new" ? <button className="zp-btn zp-btn--sm" onClick={() => onAdd(r)}>Додати в зарплату</button>
+                : r.kind === "move" ? <button className="zp-btn zp-btn--sm" onClick={() => onMove(r)}>Перевести</button>
                 : <button className="zp-btn zp-btn--sm" onClick={() => onLevel(r)}>Змінити рівень</button>)}</td>
             </tr>
           ))}
@@ -361,15 +373,46 @@ function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel }: { rows: Obj[]; ca
   );
 }
 
+/**
+ * «Перевести» з рядка «Змін з «Найму»» (задача 10723, прохід 3): відділ і команда «Зарплати» — як у «Наймі». Тім-ліду міняється команда,
+ * яку він веде. Причина — у журнал; зміна діє одразу (як правка відділу й команди в картці людини).
+ */
+function MoveModal({ r, person, names, onClose, onDone }: { r: Obj; person: Obj | null; names: { dept: Record<string, string>; team: Record<string, string> }; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [reason, setReason] = useState(`переведення за «Наймом»: блок «${r.unit}»`);
+  const [err, setErr] = useState<string | null>(null), [busy, setBusy] = useState(false);
+  const lead = person?.role === "lead";
+  async function save() {
+    setErr(null); if (reason.trim().length < 3) { setErr("Вкажіть причину."); return; }
+    const body: Obj = { reason: reason.trim() };
+    if (r.naimDept && r.naimDept !== r.payrollDept) body.dept = r.naimDept;
+    if (r.naimTeam !== r.payrollTeam) body[lead ? "leadsTeam" : "team"] = r.naimTeam ?? "";
+    setBusy(true);
+    try { await payrollApi.updateEmployee(r.userId, body); toast(`${r.name}: переведено.`); onDone(); }
+    catch (e) { setErr(errText(e)); } finally { setBusy(false); }
+  }
+  return (
+    <Modal title={`Перевести · ${r.name}`} onClose={onClose}
+      foot={<><button className="zp-btn zp-btn--primary" disabled={busy} onClick={() => void save()}>Перевести</button><button className="zp-btn" onClick={onClose}>Скасувати</button></>}>
+      <div className="zp-hint">{moveText(r, names)}</div>
+      {r.naimTeam !== r.payrollTeam && <div className="zp-hint">Зміна команди міняє офер людини на офер нової команди — так само, як правка команди в картці людини.</div>}
+      <Field label="Причина" req><input className="zp-input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+      {err && <div className="zp-err">{err}</div>}
+    </Modal>
+  );
+}
+
 export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave }: { emp: Obj; org: Obj; settings: Obj; canEdit: boolean; onChanged: () => void; onLeave: (userId: string, date: string | null) => void }) {
   const [edit, setEdit] = useState<Obj | null>(null);
   const [add, setAdd] = useState<false | { uid: string | null }>(false);
+  const [move, setMove] = useState<Obj | null>(null);
   // за замовчуванням — лише ті, хто працює; звільнені — окремим фільтром (задача 10723)
   const [show, setShow] = useState<"work" | "left">("work");
   const all = (emp.people ?? []) as Obj[];
   const people = all.filter((p) => (show === "left" ? !!p.leave : !p.leave));
   const nLeft = all.filter((p) => !!p.leave).length;
   const teamName = useMemo(() => Object.fromEntries(((org.teams ?? []) as Obj[]).map((t) => [t.code, t.name])), [org]);
+  const names = useMemo(() => ({ team: teamName as Record<string, string>, dept: Object.fromEntries(((org.departments ?? []) as Obj[]).map((d) => [d.code, d.name])) as Record<string, string> }), [org, teamName]);
   const S = settings;
   return (
     <Card title="Працівники й умови" aside={canEdit ? "клік — змінити умови: рівень, ставка, %, офіційна ЗП, день народження" : "лише перегляд"}>
@@ -377,7 +420,8 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave
         <NaimBlock rows={(emp.naim ?? []) as Obj[]} canEdit={canEdit}
           onLeave={(r) => onLeave(String(r.userId), r.date ?? null)}
           onAdd={(r) => setAdd({ uid: String(r.userId) })}
-          onLevel={(r) => { const p = all.find((x) => String(x.userId) === String(r.userId)); if (p) setEdit(p); }} />
+          onLevel={(r) => { const p = all.find((x) => String(x.userId) === String(r.userId)); if (p) setEdit(p); }}
+          onMove={(r) => setMove(r)} names={names} />
         {canEdit && <div className="zp-row"><button className="zp-btn" onClick={() => setAdd({ uid: null })}>Додати в зарплату</button><span className="zp-hint">Кандидатів: {(emp.candidates ?? []).length}. Звільнення — у вкладці «Обхідні листи».</span></div>}
         <Seg<"work" | "left"> value={show} onChange={setShow} items={[["work", `Працюють · ${all.length - nLeft}`], ["left", `Звільнені · ${nLeft}`]]} />
         {people.length ? (
@@ -408,6 +452,7 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave
       </div>
       {edit && <PersonModal p={edit} org={org} live={emp.month} settings={S} onClose={() => setEdit(null)} onDone={() => { setEdit(null); onChanged(); }} />}
       {add && <AddModal candidates={(emp.candidates ?? []) as Obj[]} org={org} live={emp.month} initial={add.uid} onClose={() => setAdd(false)} onDone={() => { setAdd(false); onChanged(); }} />}
+      {move && <MoveModal r={move} person={all.find((x) => String(x.userId) === String(move.userId)) ?? null} names={names} onClose={() => setMove(null)} onDone={() => { setMove(null); onChanged(); }} />}
     </Card>
   );
 }
