@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  dueForLookup, isLardiCarrier, lookupRow, lookupMissedPhones, RECHECK_FOUND_DAYS, RECHECK_MISSING_DAYS,
+  dueForLookup, isLardiCarrier, lookupRow, lookupMissedPhones, LOOKUP_BUDGET_MS, RECHECK_FOUND_DAYS, RECHECK_MISSING_DAYS,
   type LardiSearch, type LardiSearchResult,
 } from "./lardiPhoneLookup.js";
 
@@ -17,12 +17,14 @@ const DAY = 86_400_000;
 
 type Client = { query<R = Record<string, unknown>>(q: string, p?: unknown[]): Promise<{ rows: R[]; rowCount: number | null }>; end(): Promise<void> };
 let ready: Promise<Client | string> | null = null;
+let scratchUrl = "";
 function db(): Promise<Client | string> {
   ready ??= (async () => {
     const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
     const scratch = provisionScratch();
     if ("unavailable" in scratch) return skipReason(scratch);
     process.env.DATABASE_URL = scratch.url;
+    scratchUrl = scratch.url;
     process.env.JWT_SECRET ??= "test";
     process.env.KOMMO_BASE_URL ??= "https://x.invalid";
     process.env.KOMMO_API_TOKEN ??= "test";
@@ -116,7 +118,7 @@ test("#11031 ПРОХІД: питаємо лише номери пропущен
     "🔴 Ларді питали не про ті номери або не в тому порядку (свіжий дзвінок першим)");
   assert.deepEqual(await rows(c), { [P.a.slice(-9)]: 1, [P.mobile.slice(-9)]: 0, [P.b.slice(-9)]: 0 },
     "🔴 у таблиці пошуку не те: знайдене/не знайдене загубилось або збій записано результатом");
-  assert.deepEqual(rep, { candidates: 4, checked: 3, found: 1, failed: 1, failStatus: 429 });
+  assert.deepEqual(rep, { candidates: 4, checked: 3, found: 1, outOfTime: false, failed: 1, failStatus: 429 });
 });
 
 /**
@@ -134,7 +136,7 @@ test("#11032 ВІДМОВА ЛАРДІ НА ПЕРШОМУ НОМЕРІ — па
 
   await reset(c);
   const E = fake({});
-  assert.deepEqual(await lookupMissedPhones(c, E.search, { pauseMs: 0 }), { candidates: 0, checked: 0, found: 0, failed: 0, failStatus: null });
+  assert.deepEqual(await lookupMissedPhones(c, E.search, { pauseMs: 0 }), { candidates: 0, checked: 0, found: 0, outOfTime: false, failed: 0, failStatus: null });
   assert.deepEqual(E.asked, [], "🔴 без пропущених Ларді все одно питали");
 });
 
@@ -195,11 +197,81 @@ test("#11034 ДОВІДНИК: знайдений пошуком Ларді — 
   assert.equal(ph[0]?.carrier?.lardi, true, "🔴 на екрані клієнтів номер, знайдений пошуком Ларді, не позначено «Lardi»");
 
   const idx = SRC("index.ts");
-  assert.match(idx, /cron\.schedule\("7 \* \* \* \*", \(\) => \{\s*void runJob\("lardiPhoneLookup", \(\) => lardiPhoneLookup\(\)\);/, "🔴 джоба пошуку на Ларді не під кроном о :07");
+  assert.match(idx, /cron\.schedule\("1,6,11,16,21,26,31,36,41,46,51,56 \* \* \* \*", \(\) => \{\s*void runJob\("lardiPhoneLookup", \(\) => lardiPhoneLookup\(\)\);/,
+    "🔴 джоба пошуку на Ларді не під кроном кожні 5 хв (Роман 25.11: «давай цю джобу частіше ранити»)");
   const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
-  assert.equal(MONITORED_JOBS.find((j) => j.name === "lardiPhoneLookup")?.everyMin, 60, "🔴 джоба пошуку на Ларді не під наглядом раз на 60 хв");
+  assert.equal(MONITORED_JOBS.find((j) => j.name === "lardiPhoneLookup")?.everyMin, 5, "🔴 джоба пошуку на Ларді не під наглядом раз на 5 хв (== крону)");
   const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "missedCallsView.ts"), "utf8");
   assert.match(fe, /знаходяться пошуком Ларді за номером/, "🔴 підказка «перевізники» не каже про пошук Ларді");
   const gl = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "docs", "METRICS_GLOSSARY.md"), "utf8");
   assert.match(gl, /ЗНАЙДЕНО НА ЛАРДІ = ПЕРЕВІЗНИК \(з 25\.11\.2026[\s\S]{0,1600}«Відсів» \(§17a\) це джерело НЕ читає/, "🔴 словник не каже правила 25.11");
+});
+
+/**
+ * #11035 — ЧАСТІШЕ Й ОДРАЗУ НА ЕКРАН (Роман 25.11.2026: «давай цю джобу частіше ранити»). Прохід кожні 5 хв має стелю
+ * часу — зупиняється й лишає решту наступному тіку (але один номер перевіряє завжди); знайшов хоч одного — одразу кличе
+ * перебудову довідника, не знайшов нікого — не кличе. Джоба передає саме перебудову довідника.
+ * 🧨 Червоніє, якщо прибрати стелю, зламати умову виклику перебудови або не передати її з джоби.
+ */
+test("#11035 ПОШУК НА ЛАРДІ КОЖНІ 5 ХВ: прохід має стелю часу (решта — наступним тіком); знайдено — одразу перебудова довідника, не знайдено — без неї", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  assert.ok(LOOKUP_BUDGET_MS > 0 && LOOKUP_BUDGET_MS < 5 * 60_000, "🔴 стеля проходу не вкладається в 5 хв між тіками — проходи наклались би");
+  const P = ["380671400001", "380671400002", "380671400003"];
+  const seed = async () => { await reset(c); for (const [i, p] of P.entries()) await call(c, `b${i}`, p, { ago: i + 1 }); };
+
+  await seed();
+  let rebuilt = 0;
+  const A = fake({ [P[0].slice(-9)]: found("ФОП Один"), [P[1].slice(-9)]: none, [P[2].slice(-9)]: none });
+  const cut = await lookupMissedPhones(c, A.search, { pauseMs: 0, budgetMs: 0, onFound: async () => { rebuilt++; } });
+  assert.deepEqual(A.asked, [P[0].slice(-9)], "🔴 прохід не зупинився на стелі часу (або не перевірив жодного номера)");
+  assert.deepEqual([cut.checked, cut.found, cut.outOfTime], [1, 1, true]);
+  assert.equal(rebuilt, 1, "🔴 знайдений на Ларді номер не перебудував довідник одразу — дійде до екрана лише о :22");
+
+  await seed();
+  rebuilt = 0;
+  const B = fake({ [P[0].slice(-9)]: none, [P[1].slice(-9)]: none, [P[2].slice(-9)]: none });
+  const all = await lookupMissedPhones(c, B.search, { pauseMs: 0, onFound: async () => { rebuilt++; } });
+  assert.deepEqual([B.asked.length, all.checked, all.outOfTime], [3, 3, false], "🔴 без вичерпаної стелі прохід перевірив не всіх");
+  assert.equal(rebuilt, 0, "🔴 довідник перебудовується, хоча Ларді нікого не знайшов");
+
+  assert.match(SRC("jobs/lardiPhoneLookup.ts"), /lookupMissedPhones\(pool, lardiUsersByPhone, \{ onFound: \(\) => rebuildCarrierPhones\(\) \}\)/,
+    "🔴 джоба не передає перебудову довідника — знайдені номери чекатимуть :22");
+});
+
+/**
+ * #11036 — ДВІ ПЕРЕБУДОВИ ДОВІДНИКА ЙДУТЬ ПО ЧЕРЗІ. Тепер довідник перебудовує не лише крон о :22, а й пошук на Ларді
+ * (о :21 прохід може зайти на :22). Конкурент — перебудова без замка, що стоїть посеред транзакції (DELETE + INSERT,
+ * не закомічено); наша мусить дочекатись і пройти. 🧨 Без `LOCK TABLE` наша не бачить вставлених конкурентом рядків
+ * і падає на ключі `carrier_phones_pkey`.
+ */
+test("#11036 ДВІ ПЕРЕБУДОВИ ДОВІДНИКА ОДНОЧАСНО: друга чекає першу й проходить, а не падає на ключі", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  await reset(c);
+  await c.query("INSERT INTO lardi_phone_lookup(p9, users, name) VALUES ('971794867', 1, 'ФОП'), ('501822899', 1, 'ТОВ')");
+  const { rebuildCarrierPhones, CARRIER_PHONES_SELECT_SQL } = await import("./carrierPhones.js");
+  assert.equal(await rebuildCarrierPhones(c), 2);
+
+  const { default: pg } = await import("pg");
+  const other = new pg.Client({ connectionString: scratchUrl });
+  await other.connect();
+  try {
+    await other.query("BEGIN");
+    await other.query("DELETE FROM carrier_phones");
+    await other.query(`INSERT INTO carrier_phones (p9, via_lardi, via_history, via_lardi_user, history_deal, lardi_company) ${CARRIER_PHONES_SELECT_SQL}`);
+    const ours = rebuildCarrierPhones(c).then((n) => ({ n }), (e: unknown) => ({ e }));
+    let waiting = false;
+    for (let i = 0; i < 100 && !waiting; i++) {
+      const w = await other.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()");
+      waiting = (w.rows[0]?.n ?? 0) > 0;
+      if (!waiting) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(waiting, "🔴 наша перебудова не чекала на конкурента — фікстура не відтворила зустрічі двох перебудов");
+    await other.query("COMMIT");
+    const res = await ours;
+    assert.deepEqual(res, { n: 2 }, `🔴 друга перебудова довідника впала замість дочекатись першої: ${"e" in res ? String(res.e) : ""}`);
+  } finally {
+    await other.query("ROLLBACK").catch(() => undefined);
+    await other.end();
+  }
 });

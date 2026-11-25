@@ -12,13 +12,15 @@ import { INBOUND_TYPES, MISSED_DISPOSITIONS } from "./missedCallsRules.js";
  * не виставляв і в CRM «Перевізником» не закривався, тож довідник його не знав. Замір 25.11 по живому API: за 23.11
  * Ларді знаходить 8 з 23 номерів «Чекають».
  *
- * Як: щогодини джоба `lardiPhoneLookup` бере номери пропущених за `LOOKUP_DAYS`, яких ще немає в довіднику, і питає
+ * Як: кожні 5 хв (Роман 25.11.2026: «давай цю джобу частіше ранити») джоба `lardiPhoneLookup` бере номери пропущених
+ * за `LOOKUP_DAYS`, яких ще немає в довіднику, і питає
  * Ларді «пошук користувача» (`GET /v2/users/search`, базовий API, той самий виклик, що в «Перевірити номер на Ларді»,
  * `core/lardiCheck.ts`). Результат — у `lardi_phone_lookup`; перебудова довідника (`core/carrierPhones.ts`) бере звідти
- * знайдені номери. YouControl не кличемо: тип компанії для правила не потрібен.
+ * знайдені номери. Знайшли хоч один — джоба одразу перебудовує довідник (`onFound`), не чекаючи :22: номер зникає
+ * з «Чекають» за ~5 хв після дзвінка, а не за годину. YouControl не кличемо: тип компанії для правила не потрібен.
  *
  * 🔴 «ЛАРДІ НЕ ВІДПОВІВ» ≠ «НЕ ЗНАЙДЕНО». Збій не пишеться взагалі: номер лишається неперевіреним і піде в наступну
- * годину. Інакше 403 (не оплачено API) за годину тихо записав би сотні номерів «клієнтами» на тиждень.
+ * прохід. Інакше 403 (не оплачено API) за годину тихо записав би сотні номерів «клієнтами» на тиждень.
  *
  * Перевіряємо лише номери пропущених, не всі номери клієнтів: правило Романа — про екран пропущених. На екрані клієнтів
  * позначка «Lardi» з'являється тільки для тих номерів, що пропускали дзвінки. «Відсів» (закриття угод у Kommo) цю
@@ -36,10 +38,15 @@ export const RECHECK_FOUND_DAYS = 30;
  * (замір 19.11.2026, `docs/sql/carrier-lardi-missed-2026-11-19.cjs`).
  */
 export const RECHECK_MISSING_DAYS = 7;
-/** Стеля запитів до Ларді за прохід: перший прохід (~1 000 номерів) розтягується на кілька годин. */
+/** Стеля запитів до Ларді за прохід (запас на випадок, коли черга велика — після простою чи першого запуску). */
 export const LOOKUP_PER_RUN = 300;
-/** Пауза між запитами: 300 × 1.5 с = 7.5 хв, прохід о :07 закінчується до перебудови довідника о :22. */
+/** Пауза між запитами до Ларді. */
 export const LOOKUP_PAUSE_MS = 1500;
+/**
+ * Стеля часу проходу: 4 хв при кроні кожні 5 хв — прохід закінчується до наступного тіку, тож два проходи не
+ * питають Ларді одночасно. Решта черги піде наступним тіком. Звичайний тік — кілька нових номерів, секунди.
+ */
+export const LOOKUP_BUDGET_MS = 4 * 60_000;
 
 /** Що відповів Ларді на один номер. `ok=false` — не 200 (стан у `status`), це НЕ «не знайдено». */
 export interface LardiSearchResult { ok: boolean; status: number; users: ReadonlyArray<{ name: string }> }
@@ -91,6 +98,8 @@ export const LOOKUP_UPSERT_SQL = `
 
 export interface LookupReport {
   candidates: number; checked: number; found: number;
+  /** Прохід зупинено стелею часу `LOOKUP_BUDGET_MS`; решта кандидатів — наступним тіком. */
+  outOfTime: boolean;
   /** Ларді не відповів 200 — прохід зупинено на цьому номері; `status` першого збою. */
   failed: number; failStatus: number | null;
 }
@@ -100,11 +109,18 @@ export interface LookupReport {
  * саме). Збій на ПЕРШОМУ ж номері — помилка джоби: інакше відмова Ларді (403) годинами йшла б «успіхом» із нулем, як
  * було з архівом цін 17.09–12.10.2026.
  */
-export async function lookupMissedPhones(db: Db, search: LardiSearch, o: { limit?: number; pauseMs?: number } = {}): Promise<LookupReport> {
-  const limit = o.limit ?? LOOKUP_PER_RUN, pauseMs = o.pauseMs ?? LOOKUP_PAUSE_MS;
+export async function lookupMissedPhones(
+  db: Db, search: LardiSearch,
+  o: { limit?: number; pauseMs?: number; budgetMs?: number; onFound?: () => Promise<unknown> } = {},
+): Promise<LookupReport> {
+  const limit = o.limit ?? LOOKUP_PER_RUN, pauseMs = o.pauseMs ?? LOOKUP_PAUSE_MS, budgetMs = o.budgetMs ?? LOOKUP_BUDGET_MS;
+  const started = Date.now();
   const cand = (await db.query<{ p9: string }>(LOOKUP_CANDIDATES_SQL, [LOOKUP_DAYS, RECHECK_FOUND_DAYS, RECHECK_MISSING_DAYS, limit])).rows;
-  const rep: LookupReport = { candidates: cand.length, checked: 0, found: 0, failed: 0, failStatus: null };
+  const rep: LookupReport = { candidates: cand.length, checked: 0, found: 0, outOfTime: false, failed: 0, failStatus: null };
   for (const [i, { p9 }] of cand.entries()) {
+    // Стеля перевіряється ПІСЛЯ першого номера: хоч один запит прохід робить завжди, інакше нульовий бюджет мовчки
+    // перетворив би джобу на «успіх» без жодного запиту.
+    if (i > 0 && Date.now() - started >= budgetMs) { rep.outOfTime = true; break; }
     if (i > 0 && pauseMs > 0) await new Promise((r) => setTimeout(r, pauseMs));
     const res = await search(p9);
     const row = lookupRow(res);
@@ -114,5 +130,8 @@ export async function lookupMissedPhones(db: Db, search: LardiSearch, o: { limit
     if (isLardiCarrier(row.users)) rep.found++;
   }
   if (rep.checked === 0 && rep.failed > 0) throw new Error(`Ларді не відповів на пошук номера (статус ${String(rep.failStatus)}) — номери пропущених не перевірено`);
+  // Знайдені мусять дійти до екрана зараз, а не о :22. Збій перебудови — помилка джоби (не ковтаємо): записані номери
+  // нікуди не діваються, їх підбере наступна перебудова.
+  if (rep.found > 0 && o.onFound) await o.onFound();
   return rep;
 }
