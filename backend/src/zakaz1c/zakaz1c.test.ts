@@ -5,7 +5,7 @@ import path from "node:path";
 import jwt from "jsonwebtoken";
 import { verifyKommoToken, requireKommoCaller } from "./kommoAuth.js";
 import { KOMMO_FIELDS, moneyOf } from "./kommoApi.js";
-import { genesisDealFields as gdf, codeKind, invoiceUidByNumber, INVOICE_STAGE, STAGE_WHY, stageAllowed } from "./invoice.js";
+import { genesisDealFields as gdf, codeKind, invoiceUidByNumber, INVOICE_STAGE, STAGE_WHY, stageAllowed, EXPENSE_WHY, expenseAllowed } from "./invoice.js";
 import { sameDealFields } from "./dealFields.js";
 import {
   actPdfFrom1c, actRefusal, buildCreateCustomerBody, buildCreateInvoiceBody, buildUpdateInvoiceBody, canEdit, customerInfoFrom1c, dealFieldsOf,
@@ -953,5 +953,22 @@ test("#7149 НОВИЙ РАХУНОК ЛИШЕ З ЕТАПУ «ВИСТАВЛЕ�
     const at = src.indexOf(route); assert.ok(at > 0, route);
     const body = src.slice(at, src.indexOf("\n  r.", at + 10));
     assert.doesNotMatch(body, /stageAllowed/, route);
+  }
+});
+
+test("#7150 «РАСХОД 1» ОБОВ'ЯЗКОВИЙ ДЛЯ НОВОГО РАХУНКУ: порожній — кнопка сіра з причиною і сервер відмовляє до запиту в 1С; будь-яке значення (і 0) — можна; для всіх організацій; «Змінити», PDF і акти — без умови", () => {
+  for (const v of ["", "   ", null, undefined]) assert.deepEqual(expenseAllowed(v as any), { ok: false, why: EXPENSE_WHY }, String(v));
+  for (const v of ["0", "36 000", "1500", "наліч", " 12 "]) assert.deepEqual(expenseAllowed(v), { ok: true }, v);
+  assert.match(EXPENSE_WHY, /«Расход 1»/);
+  const src = MOUNT();
+  // Вікно: та сама «брама», що й етап — після режиму і етапу; юрособа й фізособа однаково.
+  assert.match(src, /const expense = expenseAllowed\(lead\.raw\.expense_1\);\s*const gate = \(a: [^)]*\) => \(!a\.ok \? a : !stage\.ok \? stage : expense\);/);
+  // Створення: відмова ДО createInvoice; організація не впливає.
+  const at = src.indexOf('r.post("/lead/:leadId/invoice", ');
+  const create = src.slice(at, src.indexOf("createInvoiceIn1c(", at));
+  assert.match(create, /const expense = expenseAllowed\(lead\.raw\.expense_1\);\s*if \(!expense\.ok\) return res\.status\(409\)/);
+  for (const route of ['"/lead/:leadId/invoice/:uid/update"', '"/lead/:leadId/invoice/:uid/pdf"', '"/lead/:leadId/invoice/:uid/attach"', '"/lead/:leadId/invoice/:uid/act"']) {
+    const i = src.indexOf(route); assert.ok(i > 0, route);
+    assert.doesNotMatch(src.slice(i, src.indexOf("\n  r.", i + 10)), /expenseAllowed/, route);
   }
 });
