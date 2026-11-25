@@ -9,7 +9,7 @@ import { AUTO_CLOSE_CALLBACK_PREFIX, AUTO_CLOSE_CARRIER_PREFIX } from "./missedC
  * 🚚 ЗАДАЧА 4373, БЛОК 1 — «ПЕРЕВІЗНИК» ЗА ІСТОРІЄЮ CRM (ТЗ Юлії 17.09.2026; рішення Романа 02.10.2026).
  *
  * ТЗ: номер уже закривали як «Перевізник» → нова угода закривається з тією ж причиною й тегом «авто-перевізник»,
- * задача менеджеру не ставиться. Виняток: по номеру є угода в «Успіх» або в роботі (перевізник як замовник).
+ * задача менеджеру не ставиться. Виняток «угода в «Успіх» або в роботі» знято рішенням Романа 24.11.2026 (`#10991`, `#10991b`).
  * Кожне твердження — по обидва боки межі; поведінку ганяємо на СВОЄМУ кластері з керованим «зараз».
  */
 const FRONT = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "signalTaskNotify.ts"), "utf8");
@@ -51,27 +51,30 @@ const hist = async (c: Client, phone: string, self: number | null = null) => {
   return (await c.query<{ v: string | null }>(`SELECT ${carrierHistorySql("$1::text", "$2::bigint")}::text AS v`, [phone, self])).rows[0].v;
 };
 
-test("#1302 ІСТОРІЯ CRM: «Перевізник» у минулому → так; угода замовника в «Успіх» чи в роботі → ні; воронки перевізника й етап фільтра — не виняток", async (t) => {
+/**
+ * #10991 — ІСТОРІЯ CRM БЕЗ ВИНЯТКУ (рішення Романа 24.11.2026, задача 10991: «якщо номер на якому є угода перевізник - то
+ * ми його закриваємо не зважаючи ні на що»). Заміняє `#1302` (`RETIRED_GATES`): угода замовника в «Успіх» чи в роботі
+ * більше не рятує номер. Межа по обидва боки: закрита з ІНШОЮ причиною угода й сама угода, яку перевіряємо, — не історія.
+ * 🧨 Червоніє, якщо повернути виняток «є угода замовника» (номери success/open стануть NULL), брати будь-яку причину
+ * закриття або дати угоді перевіряти саму себе.
+ */
+test("#10991 ІСТОРІЯ CRM БЕЗ ВИНЯТКУ: «Перевізник» у минулому → так, і угода замовника в «Успіх» чи в роботі цього не скасовує; інша причина й сама угода — ні", async (t) => {
   const c = await db(); if (typeof c === "string") return t.skip(c);
-  const P = { plain: "380671302001", success: "380671302002", open: "380671302003", payment: "380671302004", stage: "380671302005", contact: "380671302006", none: "380671302007" };
-  await deal(c, 9001, P.plain, STAGE.p, 143, "Перевізник");
-  await deal(c, 9002, P.success, STAGE.p, 143, "Перевізник"); await deal(c, 9003, P.success, 8921932, 142);          // замовник, «Успіх»
-  await deal(c, 9004, P.open, STAGE.p, 143, "Перевізник"); await deal(c, 9005, P.open, 8921932, 61234567);            // угода в роботі
-  await deal(c, 9006, P.payment, STAGE.p, 143, "Перевізник"); await deal(c, 9007, P.payment, NOT_CLIENT_PIPELINES[0], 142); // оплата перевізнику
-  await deal(c, 9008, P.stage, STAGE.p, 143, "Перевізник"); await deal(c, 9009, P.stage, STAGE.p, STAGE.s);          // свіжа угода фільтра
-  await deal(c, 9010, "ТОВ Вантаж", STAGE.p, 143, "Перевізник");                                                  // номер — лише в контакті
-  await c.query("INSERT INTO deal_contacts(deal_kommo_id, contact_id) VALUES (9010, 77)");
-  await c.query("INSERT INTO contact_phones(contact_id, phone) VALUES (77, $1)", [P.contact]);
-  await deal(c, 9011, P.none, STAGE.p, 143, "Дубль");                                                            // інша причина
+  const P = { plain: "380671099101", success: "380671099102", open: "380671099103", contact: "380671099104", none: "380671099105" };
+  await deal(c, 1099101, P.plain, STAGE.p, 143, "Перевізник");
+  await deal(c, 1099102, P.success, STAGE.p, 143, "Перевізник"); await deal(c, 1099103, P.success, 8921932, 142);    // замовник, «Успіх»
+  await deal(c, 1099104, P.open, STAGE.p, 143, "Перевізник"); await deal(c, 1099105, P.open, 8921932, 61234567);      // угода в роботі
+  await deal(c, 1099106, "ТОВ Вантаж", STAGE.p, 143, "Перевізник");                                                // номер — лише в контакті
+  await c.query("INSERT INTO deal_contacts(deal_kommo_id, contact_id) VALUES (1099106, 1099177)");
+  await c.query("INSERT INTO contact_phones(contact_id, phone) VALUES (1099177, $1)", [P.contact]);
+  await deal(c, 1099107, P.none, STAGE.p, 143, "Дубль"); await deal(c, 1099108, P.none, 8921932, 142);             // інша причина
 
-  assert.equal(await hist(c, P.plain), "9001", "🔴 номер, який закривали як «Перевізник», не впізнано");
-  assert.equal(await hist(c, P.success), null, "🔴 перевізник, що став ЗАМОВНИКОМ (угода в «Успіх»), — закрили б живого клієнта; ТЗ: виняток");
-  assert.equal(await hist(c, P.open), null, "🔴 по номеру є угода в роботі — однаково «перевізник»; ТЗ: виняток");
-  assert.equal(await hist(c, P.payment), "9006", "🔴 угода «оплата перевізнику» зарахована як угода замовника — перевізника не закрито");
-  assert.equal(await hist(c, P.stage), "9008", "🔴 свіжа угода етапу фільтра (її створив сам дзвінок) зарахована винятком");
-  assert.equal(await hist(c, P.contact), "9010", "🔴 номер лише в телефоні контакту — історію не знайдено");
+  assert.equal(await hist(c, P.plain), "1099101", "🔴 номер, який закривали як «Перевізник», не впізнано");
+  assert.equal(await hist(c, P.success), "1099102", "🔴 угода замовника в «Успіх» врятувала номер, який закривали «Перевізник» — рішення 24.11: без винятку");
+  assert.equal(await hist(c, P.open), "1099104", "🔴 угода замовника в роботі врятувала номер, який закривали «Перевізник» — рішення 24.11: без винятку");
+  assert.equal(await hist(c, P.contact), "1099106", "🔴 номер лише в телефоні контакту — історію не знайдено");
   assert.equal(await hist(c, P.none), null, "🔴 закрита з ІНШОЮ причиною угода зарахована «перевізником»");
-  assert.equal(await hist(c, P.plain, 9001), null, "🔴 угода перевіряє сама себе — власна закрита угода стала «історією»");
+  assert.equal(await hist(c, P.plain, 1099101), null, "🔴 угода перевіряє сама себе — власна закрита угода стала «історією»");
 });
 
 test("#1302b СИГНАЛ: на номер перевізника задачу не ставимо (слід у журналі — раз), відкриту закриваємо; клієнту — ставимо", async (t) => {
@@ -278,12 +281,19 @@ test("#1371 ЗАСТАРІЛИЙ СИНК УГОД: «історія» не ст
   assert.equal(s2.closedCarrier, 2, "🔴 свіжий синк, а задачі перевізників не закрито");
 });
 
-test("#1372 ПОВТОРНА ПЕРЕВІРКА ПЕРЕД ЗАКРИТТЯМ: угода клієнта зʼявилась після вердикту — Kommo не чіпаємо, угода в черзі; синк застарів — чекаємо", async (t) => {
+/**
+ * #10991b — ПОВТОРНА ПЕРЕВІРКА ПЕРЕД ЗАКРИТТЯМ БЕЗ ВИНЯТКУ (рішення Романа 24.11.2026). Заміняє `#1372` (`RETIRED_GATES`):
+ * угода замовника, що зʼявилась після вердикту «історія», закриття більше НЕ скасовує. Скасовує лише зникле джерело —
+ * угоду «Перевізник» повернули в роботу людиною. Синк угод застарів — у Kommo не пишемо, як і раніше.
+ * 🧨 Червоніє, якщо повернути виняток (A не закриється), прибрати повторну перевірку (B закриється без джерела) або
+ * захист свіжості (закриття на застарілих угодах).
+ */
+test("#10991b ПОВТОРНА ПЕРЕВІРКА: угода замовника після вердикту НЕ рятує; угоду-джерело повернули — Kommo не чіпаємо, угода в черзі; синк застарів — чекаємо", async (t) => {
   const c = await db(); if (typeof c === "string") return t.skip(c);
   const { runCarrierClose } = await import("./carrierClose.js");
-  const DAY = "2026-09-17", NOW = new Date(`${DAY} 12:00:00+03`);
-  const A = "380671372001", B = "380671372002";
-  for (const [src, id, ph] of [[13711, 13712, A], [13721, 13722, B]] as const) {
+  const DAY = "2026-09-19", NOW = new Date(`${DAY} 12:00:00+03`);
+  const A = "380671099201", B = "380671099202";
+  for (const [src, id, ph] of [[1099211, 1099212, A], [1099221, 1099222, B]] as const) {
     await deal(c, src, ph, STAGE.p, 143, "Перевізник");
     await deal(c, id, ph, STAGE.p, STAGE.s);
     await c.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state,history_from) VALUES ($1,$2,$3,$3,'history',$4)`,
@@ -291,7 +301,7 @@ test("#1372 ПОВТОРНА ПЕРЕВІРКА ПЕРЕД ЗАКРИТТЯМ: �
   }
   const patched: number[] = [];
   const kommo = { patchLeads: async (b: unknown[]) => { for (const x of b) patched.push((x as { id: number }).id); return {}; }, addNotes: async () => ({}) };
-  const onStage = new Set([13712, 13722]);
+  const onStage = new Set([1099212, 1099222]);
 
   // Синк угод 2 год тому — історію не закриваємо, лише журнал.
   await syncAt(c, `${DAY} 10:00:00+03`);
@@ -300,15 +310,16 @@ test("#1372 ПОВТОРНА ПЕРЕВІРКА ПЕРЕД ЗАКРИТТЯМ: �
   assert.equal(r0.historyPaused, 2);
   assert.equal(patched.length, 0, "🔴 Kommo викликано на паузі");
 
-  // Синк свіжий, але по номеру A тим часом відкрили угоду замовника.
-  await deal(c, 13713, A, 8921932, 61234567);
+  // Синк свіжий. По номеру A тим часом відкрили угоду замовника; у номера B угоду-джерело повернули з «Перевізник» у роботу.
+  await deal(c, 1099213, A, 8921932, 61234567);
+  await c.query("UPDATE deals SET status_id = 61234567, reject_reason = NULL WHERE kommo_id = 1099221");
   await syncAt(c, `${DAY} 11:55:00+03`);
   const r1 = await runCarrierClose(c, NOW, "live", onStage, kommo, "dry", "live");
-  assert.ok(!patched.includes(13712), "🔴 закрито угоду номера, що вже має угоду замовника в роботі — закрили клієнта");
+  assert.ok(patched.includes(1099212), "🔴 угода номера, який закривали «Перевізник», не закрита через угоду замовника — рішення 24.11: без винятку");
+  assert.ok(!patched.includes(1099222), "🔴 закрито угоду, чиє джерело «Перевізник» повернули в роботу — історії вже немає");
   assert.equal(r1.historyRevoked, 1);
-  const st = (await c.query<{ state: string; history_from: string | null }>("SELECT state, history_from::text FROM carrier_call_deals WHERE kommo_id = 13712")).rows[0];
+  const st = (await c.query<{ state: string; history_from: string | null }>("SELECT state, history_from::text FROM carrier_call_deals WHERE kommo_id = 1099222")).rows[0];
   assert.deepEqual(st, { state: "waiting", history_from: null }, "🔴 знятий вердикт лишився «історією» — наступний прохід закрив би знову");
-  assert.ok(patched.includes(13722), "🔴 сусідня угода без клієнта не закрита — перевірка гасить усіх");
 });
 
 test("#1373 ДЗЕРКАЛО ЗАХИСТУ: свіжий синк і жодного клієнта — угода історії закривається, як і до захисту", async (t) => {
