@@ -93,7 +93,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     offerFrom: null, minSuccessCalls: 990, minLeads: 50 },
   lead: { pctLow: 3, pctHigh: 6 },
   advance: { fromDay: 25, managerPct: 15, leadPct: 15, staffPct: 50 },
-  birthday: { each: 100, company: 400, lead: 600, perMonth: 100 },
+  // v2From (задача 10723, Тетяна 23.11.2026, затвердив Сергій 24.11): з місяця «YYYY-MM» — іменинникові 100 ₴ × повні місяці
+  // стажу, не більше 12 (тобто від року — 1 200), + від компанії; з кожного працюючого — один рядок «Фонд днів народження»
+  // `each` щомісяця, незалежно від іменинників. null — правило пакета (збір колег на кожного іменинника).
+  birthday: { each: 100, company: 400, lead: 600, perMonth: 100, v2From: null },
   ttn: { minPct: 70, hold: 3000 },
   offers: {
     std: { name: 'Стандартний офер', kpi: true, startRate: null, startPlan: null, autoProfiFrom: null, regularOnProfi: false },
@@ -249,18 +252,25 @@ export function createPayroll(state) {
     const [sy, sm, sd] = e.startDate.split('-').map(Number), [y, m, d] = iso.split('-').map(Number);
     return Math.max(0, (y - sy) * 12 + (m - sm) - (d < sd ? 1 : 0));
   }
-  /** Іменинник: стаж від року — збір колег + від компанії; до року — 100 ₴ × місяці + від компанії (без збору) */
+  /** Нове правило ДН діє для місяця mk (S.birthday.v2From — «YYYY-MM» або null) */
+  const bdayV2 = mk => !!S.birthday.v2From && mk >= S.birthday.v2From;
+  /**
+   * Іменинник. Правило пакета: стаж від року — збір колег + від компанії; до року — 100 ₴ × місяці + від компанії (без збору).
+   * З v2From: 100 ₴ × повні місяці стажу, не більше 12 (від року — 1 200), + від компанії; збору колег немає.
+   */
   function birthdayGift(e, mk) {
     const iso = birthdayIn(e, mk); if (!iso) return null;
-    const months = tenureMonths(e, iso), young = months < 12;
+    const months = tenureMonths(e, iso), young = months < 12, v2 = bdayV2(mk);
     const company = e.role === 'lead' ? S.birthday.lead : S.birthday.company;
-    const givers = young ? [] : E.filter(x => x !== e && employedIn(x, mk)).map(x => x.id);
-    const fromTeam = givers.length * S.birthday.each, fromMonths = young ? months * S.birthday.perMonth : 0;
-    return { date: iso, months, young, company, givers, fromTeam, fromMonths, amount: fromTeam + fromMonths + company };
+    const givers = young || v2 ? [] : E.filter(x => x !== e && employedIn(x, mk)).map(x => x.id);
+    const fromTeam = givers.length * S.birthday.each, fromMonths = v2 ? Math.min(months, 12) * S.birthday.perMonth : young ? months * S.birthday.perMonth : 0;
+    return { date: iso, months, young, v2, company, givers, fromTeam, fromMonths, amount: fromTeam + fromMonths + company };
   }
+  /** Рядки ДН людини за місяць: свій подарунок (+) і внески (−). З v2From внесок один — «Фонд днів народження» з кожного працюючого. */
   function birthdayLines(e, mk) {
     const out = [], g = birthdayGift(e, mk);
     if (g) out.push({ kind: 'gift', amount: g.amount, gift: g });
+    if (bdayV2(mk)) { if (employedIn(e, mk)) out.push({ kind: 'fund', amount: -S.birthday.each, date: `${mk}-01` }); return out; }
     E.forEach(x => { if (x === e) return; const gx = birthdayGift(x, mk); if (gx && gx.givers.includes(e.id)) out.push({ kind: 'give', amount: -S.birthday.each, who: x.id, date: gx.date }); });
     return out;
   }
@@ -591,7 +601,7 @@ export function createPayroll(state) {
     // угоди, КПІ, відсоток
     dealsOf, allDeals, kpiOf, kpiStep, managerPct, counts, offerKpi, clientPctOf: W(clientPctOf),
     // дні народження
-    birthdayIn: W(birthdayIn), tenureMonths: W(tenureMonths), birthdayGift: W(birthdayGift), birthdayLines: W(birthdayLines),
+    birthdayIn: W(birthdayIn), tenureMonths: W(tenureMonths), birthdayGift: W(birthdayGift), birthdayLines: W(birthdayLines), bdayV2,
     // розрахунок
     record, verifiedMargin, companyMargin, companyPlan, calc: W(calcE),
     // офіційна ЗП, аванс

@@ -8,7 +8,7 @@ import { errText, payrollApi, type Obj } from "../api";
 import { Pill, money, nextMonth, prevMonth } from "../ui";
 import { useToast } from "../../components/Toasts";
 import { Block } from "./Block";
-import { dd, ddy, levelName, levelWho, monthGen, monthLow, nf, pc } from "./format";
+import { bdayV2, dd, ddy, levelName, levelWho, monthGen, monthLow, nf, pc } from "./format";
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthName = (mk: string) => MONTHS[+mk.slice(5, 7) - 1] ?? mk;
@@ -62,7 +62,7 @@ function OfferBlock({ me }: { me: Obj }) {
         <p className="zc-calcline">
           <span className="zp-k">Ваш розрахунок зараз</span>
           <span className="zp-num">{parts.join(" + ")}{bd} = <b>{money(x.total)}</b></span>
-          {x.birthday ? <small className="zp-hint">± — дні народження: ваш (+) і колег (−{nf(S.birthday.each)} ₴ з кожного)</small> : null}
+          {x.birthday ? <small className="zp-hint">{bdayV2(S, mk) ? `± — дні народження: ваш (+) і фонд днів народження (−${nf(S.birthday.each)} ₴ щомісяця)` : `± — дні народження: ваш (+) і колег (−${nf(S.birthday.each)} ₴ з кожного)`}</small> : null}
         </p>
       )}
     </Block>
@@ -167,7 +167,9 @@ function RulesBlock({ me }: { me: Obj }) {
     ["Аванс", `з ${S.advance.fromDay} числа, ${advRule}, не більше нарахованого; на одну чи кілька карт або готівкою. Вираховується при закритті місяця.`],
     e.role === "manager" ? ["ТТН", `якщо в закритому місяці ТТН є менш ніж у ${S.ttn.minPct} % угод — ${money(S.ttn.hold)} утримуємо з виплати. Закрили ТТН до виплати — сума в цій виплаті; після виплати — у наступному місяці.`] : null,
     e.role === "manager" ? ["Оплата клієнта", S.payMode === "success" ? "маржа йде в ЗП місяця, коли угода перейшла в «Успішно реалізовано» — борг клієнта на ЗП не впливає." : S.payMode === "paid" ? "маржа йде в ЗП, лише коли клієнт оплатив угоду." : "маржа йде в ЗП місяця «Успішно реалізовано», крім угод із простроченою оплатою."] : null,
-    ["Дні народження", `з кожного — ${nf(S.birthday.each)} ₴ на колегу, автоматично, просто фіксуємо в розрахунку. У ваш — збір колег + ${nf(comp)} ₴ від компанії, нараховуємо самі; стаж до року — ${nf(S.birthday.perMonth)} ₴ × місяці + ${nf(comp)} ₴ від компанії, без збору.`],
+    bdayV2(S, me.live?.month)
+      ? ["Дні народження", `щомісяця з кожного — ${nf(S.birthday.each)} ₴ у фонд днів народження, автоматично, скільки б не було іменинників. У ваш — ${nf(S.birthday.perMonth)} ₴ × повні місяці стажу (від року — ${nf(12 * S.birthday.perMonth)} ₴) + ${nf(comp)} ₴ від компанії, нараховуємо самі.`]
+      : ["Дні народження", `з кожного — ${nf(S.birthday.each)} ₴ на колегу, автоматично, просто фіксуємо в розрахунку. У ваш — збір колег + ${nf(comp)} ₴ від компанії, нараховуємо самі; стаж до року — ${nf(S.birthday.perMonth)} ₴ × місяці + ${nf(comp)} ₴ від компанії, без збору.`],
     ["Офіційна ЗП", o ? `${money(o.amount)} щомісяця — ${o.deduct ? "вираховується з загальної ЗП: решту отримуєте готівкою або на карту" : "окремо, понад загальну ЗП"}.` : "немає."],
     ["Перевірка й виплата", `фінансист перевіряє до ${S.verifyByDay}-го — ви бачите розрахунковий лист і погоджуєте або пишете, з чим не згодні; далі форма на виплату, виплата до ${S.payByDay}-го.`],
     ["Звільнення", "попередити за 2 тижні. Обхідний лист обов’язковий: бухгалтерія, бізнес-асистент, керівник відділу продажу або ОД. Розрахунок — лише після всіх підписів."],

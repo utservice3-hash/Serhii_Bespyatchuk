@@ -41,6 +41,8 @@ export const lastDay = (mk: string) => new Date(Date.UTC(+mk.slice(0, 4), +mk.sl
 export const nf = (n: number) => Math.round(n).toLocaleString("uk-UA").replace(/\s/g, " ");
 export const pc = (x: number | null | undefined) => (x == null || !Number.isFinite(x) ? "—" : `${String(Math.round(x * 10) / 10).replace(".", ",")} %`);
 export const ceilE = (x: number) => Math.ceil(x - 1e-9);
+/** Нове правило днів народження діє для місяця mk (задача 10723, з листопада 2026: фонд 100 ₴ з кожного щомісяця, без збору на іменинника). */
+export const bdayV2 = (S: Obj | null | undefined, mk: string | null | undefined) => !!(S?.birthday?.v2From && mk && mk >= S.birthday.v2From);
 export const levelName = (lv: string | null | undefined) => (lv === "profi" ? "«Профі»" : lv === "start" ? "«Старт»" : "без рівня");
 
 /** Як виплачено / як подано: «готівкою 1 000 ₴ і на карту •••• 1111 — 5 000 ₴». */

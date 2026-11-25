@@ -237,9 +237,10 @@ function partsOf(me: Obj, c: Obj, plan: boolean): Array<{ k: string; s: string; 
   if (c.kind !== "staff" || c.pctRule) out.push({ k: `Відсоток · ${pc(x.pct)}`, s: `від ${c.kind === "lead" ? "маржі команди" : c.kind === "staff" ? "маржі компанії" : sp.lines.length ? "решти маржі" : "маржі"} ${money((plan ? c.marginPlan : c.margin) - sp.margin)}`, v: x.pctAmount - sp.amount, color: "var(--brand)" });
   for (const l of sp.lines as Obj[]) out.push({ k: `Свої клієнти · ${pc(l.pct)}`, s: `${l.name}: маржа ${money(l.margin)}`, v: Number(l.amount), color: "var(--brand)" });
   if (c.kind === "manager" && c.kpi) { const k = c.kpi as Obj; out.push({ k: "Бонус за КПІ", s: k.noBonus ? "звільнення — без бонусу" : k.fewLeads ? `цільових звернень ${k.leads} з ${k.minLeads} — конверсія ще не рахується` : k.step ? `конверсія ${pc(k.conv)} → сходинка ${k.step[0]} %${x.bonus ? "" : k.strict ? (k.bonusPending && !plan ? ` · умовно ${money(k.bonusPending)} — після виконання КПІ` : " · КПІ не виконано — 0") : " · без норми дзвінків — 0"}` : `конверсія ${pc(k.conv)} — нижче ${S.kpi.ladder?.[0]?.[0]} %`, v: x.bonus, color: "var(--info)" }); }
-  const bl = (c.birthdays ?? []) as Obj[], g = bl.find((b) => b.kind === "gift"), gv = bl.filter((b) => b.kind === "give");
+  const bl = (c.birthdays ?? []) as Obj[], g = bl.find((b) => b.kind === "gift"), gv = bl.filter((b) => b.kind === "give"), fd = bl.filter((b) => b.kind === "fund");
   if (g) out.push({ k: `Ваш день народження · ${dd(g.date)}`, s: "нараховуємо автоматично", v: Number(g.amount), color: "var(--zp-gift)" });
   if (gv.length) out.push({ k: gv.length > 1 ? `Збір на дні народження колег · ${gv.length}` : "Збір на день народження колеги", s: `${gv.map((b) => `${b.who?.name ?? ""}, ${dd(b.date)}`).join("; ")} — ${nf(S.birthday.each)} ₴ з кожного, автоматично`, v: sumOf(gv), color: "var(--text-muted)" });
+  if (fd.length) out.push({ k: "Фонд днів народження", s: `${nf(S.birthday.each)} ₴ з кожного щомісяця, скільки б не було іменинників — автоматично`, v: sumOf(fd), color: "var(--text-muted)" });
   return out;
 }
 function PartsBlock({ me }: { me: Obj }) {
@@ -360,7 +361,8 @@ function BdayBlock({ me }: { me: Obj }) {
   if (!g) return null;
   const S = me.settings as Obj, mk = me.live.month as string;
   const done = String(g.date) <= String(me.today);
-  const how = g.young ? `стаж ${g.months} ${plural(g.months, "місяць", "місяці", "місяців")}: ${g.months} × ${nf(S.birthday.perMonth)} + ${nf(g.company)} ₴ від компанії`
+  const how = g.v2 && !g.young ? `стаж від року: ${nf(g.fromMonths)} + ${nf(g.company)} ₴ від компанії`
+    : g.young ? `стаж ${g.months} ${plural(g.months, "місяць", "місяці", "місяців")}: ${g.months} × ${nf(S.birthday.perMonth)} + ${nf(g.company)} ₴ від компанії`
     : `збір колег ${(g.givers ?? []).length} × ${nf(S.birthday.each)} ₴ + ${nf(g.company)} ₴ від компанії`;
   return (
     <Block id="bday" tone="gift">

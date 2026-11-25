@@ -19,7 +19,7 @@ function Slip({ f, kind, lines = [] }: { f: Obj; kind: string; lines?: Obj[] }) 
   const of = kind === "lead" ? "маржі команди" : kind === "staff" ? "маржі компанії" : "маржі";
   const c = f.calc as Obj;
   const bl = (c.birthdays ?? []) as Obj[];
-  const gift = bl.find((b) => b.kind === "gift"), gives = bl.filter((b) => b.kind === "give");
+  const gift = bl.find((b) => b.kind === "gift"), gives = bl.filter((b) => b.kind === "give"), fund = bl.filter((b) => b.kind === "fund");
   const rows: Array<{ k: string; v: string; cls?: string; was?: string }> = [];
   if (kind !== "staff" || c.pctRule) {
     const wm = was("margin"), wp = was("pct");
@@ -30,6 +30,7 @@ function Slip({ f, kind, lines = [] }: { f: Obj; kind: string; lines?: Obj[] }) 
   if (kind === "manager" && c.kpi) { const w = was("bonus"); rows.push({ k: "Бонус за КПІ", v: money(v.bonus), was: w !== null ? `у кабінеті було ${money(w)}` : undefined }); }
   if (gift) rows.push({ k: `Ваш день народження · ${dd(gift.date)}`, v: money(gift.amount, { sign: true }), cls: "zp-tone--ok" });
   if (gives.length) rows.push({ k: gives.length > 1 ? `Збір на ДН колег · ${gives.map((b) => String(b.who?.name ?? "").split(" ")[0]).join(", ")}` : `Збір на ДН колеги · ${gives[0].who?.name ?? ""}`, v: money(gives.reduce((s, b) => s + Number(b.amount), 0)), cls: "zp-tone--muted" });
+  if (fund.length) rows.push({ k: "Фонд днів народження", v: money(fund.reduce((s, b) => s + Number(b.amount), 0)), cls: "zp-tone--muted" });
   // премії / утримання — рядками з сервера (вид і сума; коментар фінансиста внутрішній); старий сервер — однією сумою
   if (lines.length) for (const x of lines) rows.push({ k: String(x.label), v: money(x.amount, { sign: true }), cls: Number(x.amount) > 0 ? "zp-tone--ok" : "zp-tone--danger" });
   else if (Number(f.extras)) rows.push({ k: "Премії, утримання й корекції", v: money(f.extras, { sign: true }), cls: Number(f.extras) > 0 ? "zp-tone--ok" : "zp-tone--danger" });

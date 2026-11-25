@@ -10,7 +10,7 @@ import { effectiveFromFor } from "../core/effectiveManager.js";
 import { kyivToday } from "../core/dates.js";
 import { createPayroll, nextStatus, nextMonth, prevMonth, lastDay, CLEARANCE_ITEMS, CLEARANCE_ROLES, LEAVE_TYPES, EXTRA_KINDS, DEFAULT_SETTINGS, type Payroll, type PayrollState } from "./engine/zarplata-engine.mjs";
 import { createNotifier, OFFER_TITLES } from "./engine/notify.mjs";
-import { loadState, kyivNow, kyivIso, monthStart, NAME_SQL, NAME_JOIN } from "./state.js";
+import { loadState, kyivNow, kyivIso, monthStart, NAME_SQL, NAME_JOIN, BIRTHDAY_V2_FROM } from "./state.js";
 import { emitAll, closeDone, type EngineNotification } from "./notifyCenter.js";
 import { naimChanges, loadNaim, offerTeams, type Level } from "./naimSync.js";
 import { encryptCard, decryptCard, validateCard, cardHash, cardsAvailable, CardKeyMissing } from "./cards.js";
@@ -69,7 +69,7 @@ function birthdaysOut(e: Engine, list: Array<Record<string, unknown>>) {
   const N = nameMap(e);
   return list.map((b) => ({ kind: b.kind, amount: b.amount, date: b.kind === "gift" ? (b.gift as { date: string }).date : b.date,
     who: b.kind === "give" ? { id: b.who, name: N[b.who as string] ?? "" } : null,
-    gift: b.kind === "gift" ? { months: (b.gift as Record<string, unknown>).months, young: (b.gift as Record<string, unknown>).young, company: (b.gift as Record<string, unknown>).company,
+    gift: b.kind === "gift" ? { months: (b.gift as Record<string, unknown>).months, young: (b.gift as Record<string, unknown>).young, v2: !!(b.gift as Record<string, unknown>).v2, company: (b.gift as Record<string, unknown>).company,
       givers: ((b.gift as Record<string, unknown>).givers as string[]).length, fromTeam: (b.gift as Record<string, unknown>).fromTeam, fromMonths: (b.gift as Record<string, unknown>).fromMonths } : null }));
 }
 /** calc() для показу: тім-ліду — маржа й план людей команди, БЕЗ їхніх зарплат; угоди — лише власні. */
@@ -877,6 +877,7 @@ export async function settingsView(db: Db, mk: string) {
        FROM payroll_settings_versions v ORDER BY v.valid_from DESC`)).rows;
   const cur = versions.find((x) => x.mk <= mk);
   const merged = mergeDeep(DEFAULT_SETTINGS, cur?.settings ?? {});
+  merged.birthday = { ...(merged.birthday as object), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — як у розрахунку (state.ts), не з версії
   return { month: mk, settings: merged, defaults: DEFAULT_SETTINGS, versions: versions.map((x) => ({ id: Number(x.id), validFrom: x.mk, reason: x.reason, at: x.changed_at.toISOString(), by: x.by, settings: x.settings })),
     departments: (await db.query(`SELECT code, name, is_sales AS "isSales" FROM payroll_departments ORDER BY is_sales DESC, name`)).rows,
     teams: (await db.query(`SELECT p.code, p.name, p.dept_code AS "dept", p.offer_code AS "offer", p.kommo_team_id AS "kommoTeamId" FROM payroll_teams p ORDER BY p.name`)).rows };

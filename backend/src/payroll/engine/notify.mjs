@@ -143,11 +143,12 @@ export function createNotifier(zp, state) {
     },
     birthdays(mk, at) {
       const gs = zp.employees.map(p => ({ p, g: zp.birthdayGift(p, mk) })).filter(x => x.g), out = [];
-      const how = g => (g.young ? `стаж ${g.months} ${plural(g.months, 'місяць', 'місяці', 'місяців')}: ${g.months} × ${nf(S.birthday.perMonth)} + ${nf(g.company)} ₴ від компанії` : `збір колег ${g.givers.length} × ${nf(S.birthday.each)} ₴ + ${nf(g.company)} ₴ від компанії`);
+      const how = g => (g.v2 && !g.young ? `стаж від року: ${nf(g.fromMonths)} + ${nf(g.company)} ₴ від компанії` : g.young ? `стаж ${g.months} ${plural(g.months, 'місяць', 'місяці', 'місяців')}: ${g.months} × ${nf(S.birthday.perMonth)} + ${nf(g.company)} ₴ від компанії` : `збір колег ${g.givers.length} × ${nf(S.birthday.each)} ₴ + ${nf(g.company)} ₴ від компанії`);
+      const v2 = zp.bdayV2 ? zp.bdayV2(mk) : false;
       gs.forEach(({ p, g }) => out.push(make('bday', at, [p.id], { empId: p.id, title: `${dd(g.date)} — ваш день народження`,
         text: `За день народження буде нараховано +${uah(g.amount)} — автоматично, у виплаті за ${monthLow(mk)}. ${capFirst(how(g))}.`, go: inCab('home', '#bday') })));
       if (gs.length) out.push(make('bday', at, FIN, { title: `Дні народження: ${monthLow(mk)}`,
-        text: `${gs.map(({ p, g }) => `${p.name} — ${dd(g.date)}, +${uah(g.amount)}${g.young ? ' (стаж до року, без збору)' : ''}`).join('; ')}. З колег — по ${S.birthday.each} ₴; рядки додано автоматично.`, go: { tab: 'acc' } }));
+        text: `${gs.map(({ p, g }) => `${p.name} — ${dd(g.date)}, +${uah(g.amount)}${g.young ? (v2 ? ' (стаж до року)' : ' (стаж до року, без збору)') : ''}`).join('; ')}. ${v2 ? `Фонд днів народження — по ${S.birthday.each} ₴ з кожного щомісяця` : `З колег — по ${S.birthday.each} ₴`}; рядки додано автоматично.`, go: { tab: 'acc' } }));
       return out;
     },
     /** Зміна рівня → задача рекрутеру, поки не підписано; менеджеру — до відома. task: {id, level, from, due, why, created} */

@@ -66,6 +66,14 @@ export interface KpiSource { (from: string, to: string, managerIds: number[], to
  */
 export const OFFER_KPI = { offerFrom: "2026-11", normCalls: 50, minSuccessCalls: 990, minLeads: 50 } as const;
 
+/**
+ * 🎂 НОВЕ ПРАВИЛО ДНІВ НАРОДЖЕННЯ (задача 10723: ТЗ Тетяни 23.11.2026, затвердив Сергій 24.11, Роман: «з сьогодні» → з листопада
+ * 2026). Іменинникові — 100 ₴ × повні місяці стажу (не більше 12, тобто від року 1 200) + від компанії 400 / тім-ліду 600; з кожного
+ * працюючого — 100 ₴ щомісяця «Фонд днів народження», незалежно від кількості іменинників (Тетяна 24.11: «з усіх, незважаючи ні
+ * на що»). Місяці до листопада рахуються, як раніше. Це правило, а не налаштування: версія з БД його не перекриває. Тримає #10880.
+ */
+export const BIRTHDAY_V2_FROM = "2026-11";
+
 /** КПІ з ядра: дні з нормою дзвінків + цільові звернення / цільові угоди (лінива загрузка ядра — без пулу на імпорті). */
 export const coreKpi: KpiSource = async (from, to, managerIds, today, normOverride) => {
   const out = new Map<number, { normDays: number; leads: number; targetDeals: number; successCalls: number }>();
@@ -274,6 +282,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
 
   const settings = { ...(setQ.rows[0]?.settings ?? {}) } as Record<string, unknown>;
   settings.kpi = { ...(settings.kpi as object ?? {}), ...OFFER_KPI };   // умови оферу — не налаштування: їх не перекриває версія з БД
+  settings.birthday = { ...(settings.birthday as object ?? {}), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — теж не налаштування
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };
   return {
     now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, kpi, ttnAt, ttnLegacy,

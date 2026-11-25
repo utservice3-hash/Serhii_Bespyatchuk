@@ -34,9 +34,11 @@ test("#2600 РУШІЙ ЗАРПЛАТИ: 63 тести пакета (40 золо
   // ✏️ 13.11.2026 рушій змінено СВІДОМО (Роман: «офер — джерело правди»): умови КПІ оферу з `kpi.offerFrom` і окремий відсоток
   // за своїми клієнтами (`clientRates`). Без offerFrom і clientRates рушій рахує як у пакеті — тому 63 тести пакета зелені й далі.
   // Хеш пакета був eafed8b8…; нову поведінку стережуть #2606/#2607.
+  // ✏️ 25.11.2026 рушій і сповіщення змінено СВІДОМО (задача 10723, Сергій 24.11): нове правило днів народження з `birthday.v2From`
+  // (стаж × 100, не більше 12, + компанія; фонд −100 з кожного щомісяця). Без v2From — як у пакеті. Було 4d1deefa… / 413661dc…; стережуть #10880–#10883.
   const PKG: Record<string, string> = {
-    "zarplata-engine.mjs": "4d1deefad94659b46d3a847165dabca1374d29941a9901b11c8b1643255c9044",
-    "notify.mjs": "413661dcd19936ff1a084b95133bdeb3561569a9f99504971b5f3ab74d699223",
+    "zarplata-engine.mjs": "7b9a321f920c66eaa3eadc855c1d5a85682fbf95b3a1ae2fcdcbe5cf72845295",
+    "notify.mjs": "29a85ca59374a675e538d0f605fe9d5f17075898bc5c2eb9afe4db10408fb26a",
     "format.mjs": "c22786b4978d87e582b076e6712eb1986b1d9f0ed61aa32de875eca3e6b6d7d2",
     "test/golden.test.mjs": "c18e2fbcd0e4f61da8c6a631d04377521981450b39f4bcf714717ac1d7128ef2",
     "test/rules.test.mjs": "1b153325de8ad5849aab7cdec38a8dc902ca497b20c41595367b814f6188fdbd",

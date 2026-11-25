@@ -291,8 +291,8 @@ function VerifyWindow({ mk, userId, S, ctx, onSaved, prev, next, onGo }: {
           <Lbl>Дні народження — автоматично за правилом</Lbl>
           <div className="zf-box">
             {bdays.length ? bdays.map((b, i) => (
-              <Line key={i} label={b.kind === "gift" ? "Ваш день народження" : `ДН колеги: ${b.who?.name || "колега"}`}
-                sub={b.kind === "gift" ? `${dd(b.date)} · збір колег і подарунок компанії${b.gift?.young ? " · стаж до року" : ""}` : dd(b.date)}
+              <Line key={i} label={b.kind === "gift" ? "Ваш день народження" : b.kind === "fund" ? "Фонд днів народження" : `ДН колеги: ${b.who?.name || "колега"}`}
+                sub={b.kind === "gift" ? `${dd(b.date)} · ${b.gift?.v2 ? "стаж і подарунок компанії" : "збір колег і подарунок компанії"}${b.gift?.young ? " · стаж до року" : ""}` : b.kind === "fund" ? "з кожного щомісяця" : dd(b.date)}
                 value={signed(b.amount)} tone={signTone(b.amount)} />
             )) : <div className="zp-hint" style={{ padding: "8px 0" }}>Немає днів народження цього місяця.</div>}
           </div>
@@ -392,7 +392,7 @@ function VerifyWindow({ mk, userId, S, ctx, onSaved, prev, next, onGo }: {
               {(kind !== "staff" || c.pctRule) && <Line label="Відсоток" value={`${pct(pctV)} = ${money(margin * pctV / 100)}`} />}
               {rate ? <Line label="Ставка" value={money(rate)} /> : null}
               {bonus ? <Line label="Бонус за КПІ" value={money(bonus)} /> : null}
-              {bdays.map((b, i) => <Line key={i} label={b.kind === "gift" ? "День народження" : `ДН колеги: ${b.who?.name || "колега"}`} value={signed(b.amount)} tone={signTone(b.amount)} />)}
+              {bdays.map((b, i) => <Line key={i} label={b.kind === "gift" ? "День народження" : b.kind === "fund" ? "Фонд днів народження" : `ДН колеги: ${b.who?.name || "колега"}`} value={signed(b.amount)} tone={signTone(b.amount)} />)}
               {extras.map((x) => <Line key={x.id} label={x.label} value={x.sign < 0 ? money(-x.amount) : money(x.amount, { sign: true })} tone={x.sign < 0 ? "danger" : "ok"} />)}
             </div>
             <div className="zf-box">

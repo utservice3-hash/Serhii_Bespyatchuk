@@ -121,7 +121,7 @@ export default function AccrualsTab({ ctx }: { ctx: PayrollCtx }) {
         </div>
         <div className="zp-hint" style={{ padding: "0 16px 14px" }}>
           ТТН — {live ? `частка угод з ТТН зараз (на закриття потрібно від ${S?.ttn?.minPct ?? 70} %)` : `утримання ${money(S?.ttn?.hold ?? 3000)} до закриття ТТН або повернення за минулий місяць`}.
-          ДН — дні народження за правилом (−{num(S?.birthday?.each ?? 100)} ₴ за колегу, іменинникові — збір і подарунок компанії). Аванс — заявка цього місяця.
+          ДН — дні народження за правилом ({S?.birthday?.v2From ? <>з {String(S.birthday.v2From).slice(5, 7)}.{String(S.birthday.v2From).slice(0, 4)} — −{num(S?.birthday?.each ?? 100)} ₴ щомісяця у фонд з кожного, іменинникові — стаж і подарунок компанії</> : <>−{num(S?.birthday?.each ?? 100)} ₴ за колегу, іменинникові — збір і подарунок компанії</>}). Аванс — заявка цього місяця.
         </div>
       </Card>
     </>
