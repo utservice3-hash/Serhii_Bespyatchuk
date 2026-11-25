@@ -181,44 +181,46 @@ test("#464 КОМАНДИ Й КЛІЄНТ: розкладка без втрат,
 });
 
 /**
- * #10147 — ДИНАМІКА НА ФРОНТІ Й ПОРЯДОК БЛОКІВ ПІСЛЯ РЕДИЗАЙНУ (Роман 20.11.2026: прототип «окей виглядає супер»,
- * «давай викочувати»). Змінює твердження `#474` (знято через `RETIRED_GATES`): «угоди немає» більше НЕ нагорі — екран
- * відповідає на питання «кому дзвонити зараз», тож порядок: смуга чисел → «Кому передзвонити» → «По командах» →
- * «Детальніше» (динаміка, години, «дзвінок без угоди», автозадачі — згорнуто). Частки точки — з її лічильників; підсумок вікна
- * — зі СУМ, не середнім відсотків; медіана не усереднюється. Діапазони й вікно — ті самі функції, що на Статистиках.
- * Червоніє, якщо: список опуститься під таблицю команд; «Детальніше» підніметься вище списку; динаміку чи «угоди немає»
- * винести з «Детальніше» або намалювати двічі; завести власну копію діапазонів.
+ * #11052 — ГРАФІКА НА ВКЛАДЦІ БІЛЬШЕ НЕМАЄ, Є ВХІД У «СТАТИСТИКИ» (Роман 25.11.2026: «із вкладки пропущених дзвінків
+ * забрати ці графіки, а перенести все у вкладку статистики, щоб не дублювалась інформація»). Змінює твердження `#10147`
+ * (знято через `RETIRED_GATES`): «Динаміки» в «Детальніше» немає, на її місці посилання `MISSED_STATS_HREF`, і воно відкриває
+ * саме розділ «📵 Пропущені дзвінки» (`initialCatKey`). Порядок решти блоків той самий: числа → «Кому передзвонити» →
+ * «По командах» → «Детальніше» («угоди немає» всередині, один раз). Показники розділу — ті самі чотири, що бекенд рахує.
+ * Червоніє, якщо: повернути графік чи запит рядів на вкладку; загубити посилання або дати йому адресу, що не відкриває
+ * розділ; переставити блоки; розійтись складом показників фронту й бекенду.
  */
-test("#10147 ПОРЯДОК І ДИНАМІКА: числа → кому передзвонити → команди → «Детальніше» (динаміка й «угоди немає» всередині); частки зі сум; логіка Статистик без копії", async () => {
+test("#11052 ПРОПУЩЕНІ БЕЗ ГРАФІКА: на вкладці лише вхід у «Статистики → 📵 Пропущені дзвінки», порядок блоків той самий", async () => {
   const periodUrl = await transpile("pages/dashboard/periodRules.ts");
-  const V = await load<{ SERIES_METRICS: { key: string; value: (p: object) => number | null; total: (ps: object[]) => number | null }[] }>(
-    "pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
-  const m = (k: string) => V.SERIES_METRICS.find((x) => x.key === k)!;
-  const pts = [{ missed: 2, callback: 0, clientSelf: 0, medianMin: null }, { missed: 100, callback: 80, clientSelf: 10, medianMin: 12 }];
-  assert.equal(m("noCallbackPct").value(pts[0]), 100);
-  assert.equal(m("noCallbackPct").total(pts), 21.6, "🔴 «не передзвонили» за вікно — не Σ не передзвонених ÷ Σ пропущених (22/102); середнє відсотків дало б 60%");
-  assert.equal(m("noCallbackPct").value({ missed: 0, callback: 0, clientSelf: 0, medianMin: null }), null, "🔴 день без пропущених показано як 0%, а не «немає даних»");
-  assert.equal(m("medianMin").total(pts), null, "🔴 медіану за вікно усереднено з медіан точок");
-  assert.equal(m("missed").total(pts), 102);
-  assert.equal(m("clientSelfPct").total(pts), 9.8);
+  const V = await load<{ MISSED_STATS_HREF: string }>("pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
+  const C = await load<{ initialCatKey: (search: string, keys: readonly string[]) => string }>("pages/dashboard/statsCards.ts");
+  const statsSrc = stripComments(readFileSync(FE("pages/dashboard/sections/StatisticsChartsSection.tsx"), "utf8"));
+  const cats = statsSrc.slice(statsSrc.indexOf("const CATS"), statsSrc.indexOf('{ key: "manual"'));
+  const catKeys = [...cats.matchAll(/^ {2}\{ key: "(\w+)", icon:/gm)].map((m) => m[1]);
+  assert.ok(catKeys.includes("sales") && catKeys.length >= 8, `🔴 зріз розділів зламався: ${catKeys.join(", ")}`);
+  const search = V.MISSED_STATS_HREF.slice(V.MISSED_STATS_HREF.indexOf("?"));
+  assert.ok(V.MISSED_STATS_HREF.startsWith("/statistics?"), "🔴 посилання веде не на «Статистики»");
+  assert.equal(C.initialCatKey(search, catKeys), "missed", "🔴 посилання відкриває «Статистики» не на розділі пропущених");
+  assert.equal(C.initialCatKey("", catKeys), "sales", "🔴 без параметра «Статистики» відкриваються не на «Продажах»");
+  assert.equal(C.initialCatKey("?cat=nonsense", catKeys), "sales", "🔴 невідомий розділ дав порожній екран");
+  const missedCat = cats.slice(cats.indexOf('{ key: "missed", icon:'));
+  const feMetrics = [...missedCat.slice(0, missedCat.indexOf("] },")).matchAll(/\{ key: "(\w+)", block: "missed"/g)].map((m) => m[1]);
+  const { MISSED_METRICS } = await import("../statistics/missedStats.js");
+  assert.deepEqual(feMetrics, [...MISSED_METRICS], "🔴 показники розділу на фронті ≠ тим, що рахує бекенд");
 
   const sec = stripComments(readFileSync(FE("pages/dashboard/sections/MissedCallsSection.tsx"), "utf8"));
+  assert.doesNotMatch(sec, /from "recharts"|<LineChart\b|fetchMissedSeries|MissedDynamicsBlock/, "🔴 графік повернувся на вкладку — інформація знову дублюється");
   const main = sec.slice(sec.indexOf("export function MissedCallsSection("), sec.indexOf("\nfunction nextLabel("));
   const at = (needle: string) => main.indexOf(needle);
   const iHero = at('className="mc-hero"'), iList = at("<MissedListBlock "), iTeams = at("<TeamsBlock "), iMore = at("<DetailsBlock ");
   assert.ok(main.length > 0 && iHero > 0 && iList > 0 && iTeams > 0 && iMore > 0, "🔴 на вкладці бракує блоку");
-  assert.ok(iHero < iList && iList < iTeams && iTeams < iMore,
-    "🔴 порядок екрана зламано: мусить бути числа → «Кому передзвонити» → «По командах» → «Детальніше»");
-  const details = sec.slice(sec.indexOf("function DetailsBlock("), sec.indexOf("\nfunction MissedDynamicsBlock("));
+  assert.ok(iHero < iList && iList < iTeams && iTeams < iMore, "🔴 порядок екрана зламано: мусить бути числа → «Кому передзвонити» → «По командах» → «Детальніше»");
+  const details = sec.slice(sec.indexOf("function DetailsBlock("), sec.indexOf("\n}\n", sec.indexOf("function DetailsBlock(")));
   assert.ok(details.length > 0, "🔴 блоку «Детальніше» немає");
-  assert.match(details, /<MissedDynamicsBlock\b/, "🔴 динаміка винесена з «Детальніше»");
+  assert.match(details, /<a href=\{MISSED_STATS_HREF\} onClick=\{\(e\) => \{ e\.preventDefault\(\); navigate\(MISSED_STATS_HREF\); \}\}>Статистиках → 📵 Пропущені дзвінки<\/a>/,
+    "🔴 у «Детальніше» немає входу в «Статистики → 📵 Пропущені дзвінки»");
   assert.match(details, /<NoDealBlock /, "🔴 «Дзвінок був, а угоди немає» винесено з «Детальніше»");
   assert.equal((sec.match(/<NoDealBlock /g) ?? []).length, 1, "🔴 блок «угоди немає» намальовано двічі");
-  assert.equal((sec.match(/<MissedDynamicsBlock\b/g) ?? []).length, 1, "🔴 динаміку намальовано двічі");
-  assert.match(sec, /import \{ RANGES, MIN_WIN, rangeWindow, shortDate, COLORS \} from "\.\/StatisticsChartsSection"/,
-    "🔴 діапазони й вікно графіка не зі Статистик — друга копія логіки розійдеться з першою");
-  assert.doesNotMatch(sec, /const RANGES|function rangeWindow/, "🔴 у вкладці завелась власна копія діапазонів");
-  assert.match(sec, /fetchMissedSeries\(\{ granularity: gran(, \.\.\.fp)? \}\)/, "🔴 графік не тягне ряди з роуту динаміки");
+  assert.doesNotMatch(details, /summary="[^"]*динаміка/, "🔴 підпис «Детальніше» обіцяє динаміку, якої там немає");
 });
 
 interface SplitMod { mobileSplit: (missed: number, missedMobile: number) => { line: number; mobile: number; linePct: number } }

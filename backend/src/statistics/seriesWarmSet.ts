@@ -44,6 +44,9 @@ export const WALL_METRICS: readonly WallMetric[] = [
   // 🧑‍💼 HR
   { block: "hr", metric: "hr_headcount", monthOnly: true }, { block: "hr", metric: "hr_hired", monthOnly: true },
   { block: "hr", metric: "hr_fired", monthOnly: true }, { block: "hr", metric: "hr_turnover_total", monthOnly: true },
+  // 📵 Пропущені дзвінки (26.11.2026) — один спільний виклик ядра на крок і період гріє всі чотири
+  { block: "missed", metric: "missed_count" }, { block: "missed", metric: "missed_nocb_pct" },
+  { block: "missed", metric: "missed_cb_median" }, { block: "missed", metric: "missed_self_pct" },
 ];
 
 /** Звідки починається ряд картки: 13 місяців / 13 тижнів — ТА САМА арифметика, що `cardFrom` фронту. */

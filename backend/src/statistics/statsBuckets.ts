@@ -68,5 +68,7 @@ export function firstSpec<T extends { scopeType: string }>(set: readonly T[]): T
 export function blockDenied(block: string, can: { tab: (t: string) => boolean; perm: (p: string) => boolean }): string | null {
   if (block === "finance" && !can.tab("finance")) return "числа «Фінансів» бачать ті, кому відкрито розділ «Фінанси»";
   if (block === "hr" && !can.perm("view_employee_secrets")) return "числа HR бачать ті, кому відкрито реєстр людей";
+  // 📵 Пропущені дзвінки (перенесено з вкладки 26.11.2026) — межа та сама, що у вкладки: `missed-calls`.
+  if (block === "missed" && !can.tab("missed-calls")) return "числа «Пропущених дзвінків» бачать ті, кому відкрито цю вкладку";
   return null;
 }
