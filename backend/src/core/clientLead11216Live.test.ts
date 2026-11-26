@@ -99,3 +99,35 @@ test("#11219b ЖИВИЙ SQL РОКУ: межі за Києвом з обох к
   assert.deepEqual(prev.get("рік-а"), { revenue: 5000, income: 50000, missing: 0, deals: 1 }, "🔴 угода 31.12 не в минулому році — межа року не за Києвом");
   assert.deepEqual([...(await successPeriodByClientKey([], "2026-01-01", "2026-11-18")).keys()], [], "🔴 з порожнього списку ключів зʼявились рядки");
 });
+
+/**
+ * #11221b — ЖИВА АНКЕТА: збережене читається тим самим, що записали (усі пʼять колонок — кожна на своє питання); друге
+ * збереження ЗАМІНЮЄ анкету цілком, а не доклеює; клієнт без анкети в мапі відсутній (а не «заповнений порожнім»);
+ * хто і коли змінив — видно. Колонки таблиці == перелік питань ядра.
+ * 🧨 Червоніє, якщо відповідь ляже не у своє питання, стара відповідь переживе збереження, або клієнт без анкети отримає рядок.
+ */
+test("#11221b ЖИВА АНКЕТА: відповідь у своєму питанні; збереження замінює цілком; клієнт без анкети — без рядка; видно, хто змінив", async (t) => {
+  const l = await liveDb();
+  if ("skip" in l) return t.skip(l.skip);
+  const { c } = l;
+  const cp = await import("./clientProfile.js");
+  await c.query(`INSERT INTO users (id, email, password_hash, role, full_name, is_active) VALUES (97901, 'anketa@x.ua', 'x', 'manager', 'Анкетний Менеджер', true)`);
+  const cols = (await c.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name = 'client_profiles'`)).rows.map((r) => r.column_name);
+  for (const f of cp.PROFILE_FIELDS) assert.ok(cols.includes(f.column), `🔴 у таблиці немає колонки ${f.column} для питання «${f.label}»`);
+  const a1 = { business: "меблі", volume: "5 машин на тиждень", share: "половину, решту возить власний транспорт", international: "Польща раз на місяць", airSea: "ні" };
+  assert.equal(await cp.saveProfile(c, { clientKey: "анкета-а", userId: 97901, answers: a1 }), 5);
+  const m1 = await cp.profilesFor(c, ["анкета-а", "анкета-нема"]);
+  assert.deepEqual(m1.get("анкета-а")?.answers, a1, "🔴 відповідь лягла не у своє питання");
+  assert.equal(m1.get("анкета-а")?.filled, 5);
+  assert.equal(m1.get("анкета-а")?.updatedBy, "Анкетний Менеджер", "🔴 не видно, хто заповнив анкету");
+  assert.match(m1.get("анкета-а")?.updatedDay ?? "", /^\d{4}-\d{2}-\d{2}$/, "🔴 не видно, коли заповнили анкету");
+  assert.equal(m1.has("анкета-нема"), false, "🔴 клієнт без анкети отримав рядок");
+  // Друге збереження — заміна цілком: прибрана відповідь не переживає.
+  const a2 = cp.cleanProfile({ business: "меблі та двері", volume: "5 машин на тиждень" });
+  assert.equal(await cp.saveProfile(c, { clientKey: "анкета-а", userId: null, answers: a2 }), 2);
+  const m2 = await cp.profilesFor(c, ["анкета-а"]);
+  assert.deepEqual(m2.get("анкета-а")?.answers, { business: "меблі та двері", volume: "5 машин на тиждень", share: "", international: "", airSea: "" }, "🔴 збереження доклеює, а не замінює — стара відповідь пережила");
+  assert.equal(m2.get("анкета-а")?.filled, 2, "🔴 число відповідей не з того, що лежить у базі");
+  assert.equal((await c.query(`SELECT 1 FROM client_profiles WHERE client_key = 'анкета-а'`)).rowCount, 1, "🔴 на клієнта більше однієї анкети");
+  assert.deepEqual([...(await cp.profilesFor(c, [])).keys()], [], "🔴 з порожнього списку ключів зʼявились анкети");
+});

@@ -176,6 +176,7 @@ import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as orphanRelease from "../core/orphanRelease.js";
 import * as problemClient from "../core/problemClient.js";
+import * as clientProfile from "../core/clientProfile.js";
 import * as clientCommentLog from "../core/clientCommentLog.js";
 import * as clientKindFacts from "../core/clientKindFacts.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
@@ -6709,6 +6710,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // 🌙 Сезонний не в сезоні — не в реактивації (задача 8351): ні вкладки, ні циклу.
   // ⚠️ Проблемний клієнт (8350): діюча позначка — до першого замовлення ПІСЛЯ неї (рахунок чи оплата).
   const problemMarks = await problemClient.problemsFor(pool, clientKeys);
+  // 📋 Анкета клієнта (11221): у рядку — лише скільки питань із пʼяти мають відповідь; самі відповіді — у картці.
+  const profileByKey = await clientProfile.profilesFor(pool, clientKeys);
   // 🧾 «Поїздку поза CRM» прибрано (11220, зустріч 25.11.2026): замовлення = лише рахунок і оплата з CRM.
   // `reactInv` — єдиний вхід циклу на цьому екрані, щоб вкладка й кнопки не розійшлись.
   const reactInv = (key: string) => lastInvByKey.get(key) ?? null;
@@ -7034,6 +7037,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
             state: stepState(stepByKey.get(c.client_key)!.due_date, null, todayKyiv) }
         : null,
       phone: phoneState(phonesByKey.get(c.client_key) ?? 0),
+      profile: { filled: profileByKey.get(c.client_key)?.filled ?? 0, total: clientProfile.PROFILE_TOTAL },
       // 💰 МАРЖА ЗА 6 МІС = Σ останніх 6 помісячних бакетів ЯДРА (price = маржа в цьому продукті;
       // ті самі гроші, що на Звіті, без власного SQL — ворота #17c). null, якщо оплат не було.
       margin6m: (() => { const a = histByKey.get(c.client_key); if (!a) return null; const last6 = a.slice(-6); return last6.some((v) => v > 0) ? Math.round(last6.reduce((x, y) => x + y, 0)) : null; })(),
@@ -8068,6 +8072,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
   const handoff = await orphanRelease.handoffState(pool, clientKey);
   // ⚠️ «Проблемний» (8350): позначка діє до першого замовлення ПІСЛЯ неї — та сама дата, що в списку.
   const problemMark = (await problemClient.problemsFor(pool, [clientKey])).get(clientKey) ?? null;
+  // 📋 Анкета клієнта (11221): відповіді, хто і коли змінив. Немає анкети — `null`, а питання екран бере з `fields`.
+  const cardProfile = (await clientProfile.profilesFor(pool, [clientKey])).get(clientKey) ?? null;
   const cardLastInv = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
   const problemOn = problemMark != null
     && problemClient.problemActive(problemMark.day, clientLeadRules.lastOrderDate(h?.last_paid ?? null, cardLastInv));
@@ -8199,6 +8205,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
             ? { state: "done" as const, url: kommoLeadUrl(Number(cardStep.rows[0].kommo_lead_id)) }
             : { state: "waiting" as const, error: cardStep.rows[0].kommo_error } }
       : null,
+    profile: { fields: clientProfile.PROFILE_FIELDS.map((f) => ({ key: f.key, label: f.label, hint: f.hint })),
+      max: clientProfile.PROFILE_ANSWER_MAX, total: clientProfile.PROFILE_TOTAL, filled: cardProfile?.filled ?? 0,
+      answers: cardProfile?.answers ?? null, updatedDay: cardProfile?.updatedDay ?? null, updatedBy: cardProfile?.updatedBy ?? null },
     phone: phoneState(Number(cardPhones.rows[0]?.n ?? 0)),
     phonesCount: Number(cardPhones.rows[0]?.n ?? 0),
     lastCall: cardLastCall.rows[0]
@@ -8524,6 +8533,21 @@ dashboardRouter.post("/client-problem", async (req, res) => {
   await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
     [clientKey, auth.userId, `⚠️ Проблемний клієнт — ${problemClient.problemLabel(reason)}: ${note}`]);
   res.json({ ok: true, clientKey, reason });
+});
+
+/**
+ * 📋 АНКЕТА КЛІЄНТА (задача 11221; зустріч по дашборду 25.11.2026): пʼять питань, одна анкета на клієнта. Зберігає той,
+ * хто бачить клієнта (`canSeeClient` ПЕРШИМ оператором): менеджер свого, тімлід своєї команди, КВП / ОД / адмін —
+ * будь-якого. Анкета їде цілою; порожню цілком не зберігаємо — це не «заповнено».
+ */
+dashboardRouter.post("/client-profile", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const answers = clientProfile.cleanProfile(req.body?.answers);
+  if (clientProfile.filledCount(answers) === 0) return res.status(400).json({ error: "Дайте відповідь хоча б на одне питання анкети" });
+  const filled = await clientProfile.saveProfile(pool, { clientKey, userId: auth.userId, answers });
+  res.json({ ok: true, clientKey, filled, total: clientProfile.PROFILE_TOTAL });
 });
 
 /** Зняти позначку «Проблемний» руками — та сама межа. */

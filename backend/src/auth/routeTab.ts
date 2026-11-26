@@ -56,6 +56,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/client-seasonal"), tabs: ["loyalty"] },
     // ⚠️ «Проблемний клієнт» (8350) — та сама вкладка, що решта дій над клієнтом.
     { test: pre("/api/dashboard/client-problem"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/client-profile"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-manager"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/reactivation-list"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/orphan-clients"), tabs: ["loyalty"] },

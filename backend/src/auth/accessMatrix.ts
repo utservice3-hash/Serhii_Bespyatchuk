@@ -920,6 +920,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-problem/clear", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 📋 Анкета клієнта (11221, зустріч 25.11.2026): та сама межа — `canSeeClient` ПЕРШИМ оператором; менеджер і тімлід
+  // заповнюють своїх, у deny лише hr.
+  { method: "POST", path: "/api/dashboard/client-profile", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   // 🚫 «Закрити» в «Нічийних» (задача 7187) — той самий допуск, що «Взяти в роботу»: менеджер без прапорця — 403.
   { method: "POST", path: "/api/dashboard/orphan-clients/close", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },

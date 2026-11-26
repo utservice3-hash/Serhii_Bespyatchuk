@@ -8661,3 +8661,19 @@ VALUES ('staff', 'Співробітник', false, 'own',
     "nominations":false,"receivables":false,"missed-calls":false,"carrier-calls":false,"manager-report":false}'::jsonb,
   '{}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
+
+-- 📋 АНКЕТА КЛІЄНТА (задача 11221; зустріч по дашборду 25.11.2026) — див. core/clientProfile.ts.
+-- Одна на клієнта (канонічний client_key), пʼять відповідей текстом: чим займається; як часто і який обʼєм возить;
+-- яку частку возимо ми і чому не 100%; міжнародні; авіа / море. Зберігається цілою — часткового оновлення немає.
+-- Нова таблиця, порожня; бекфілу немає. Відкат даних: таблицю можна видалити цілком — код без неї не стартує з анкетою,
+-- тож спершу revert коду. Revert коду таблицю й відповіді НЕ прибирає.
+CREATE TABLE IF NOT EXISTS client_profiles (
+  client_key    TEXT PRIMARY KEY,
+  business      TEXT NOT NULL DEFAULT '',
+  volume        TEXT NOT NULL DEFAULT '',
+  share         TEXT NOT NULL DEFAULT '',
+  international TEXT NOT NULL DEFAULT '',
+  air_sea       TEXT NOT NULL DEFAULT '',
+  updated_by    INTEGER REFERENCES users(id),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);

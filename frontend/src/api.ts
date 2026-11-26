@@ -5023,6 +5023,8 @@ export interface ClientPlanRow {
   /** 📌 Наступний крок з датою і станом; `phone: "none"` — у клієнта немає жодного номера. */
   nextStep?: { text: string; due: string | null; state: "none" | "planned" | "today" | "overdue" | "done" } | null;
   phone?: "has" | "none";
+  /** 📋 Анкета клієнта (11221): скільки питань із `total` мають відповідь; самі відповіді — у картці. */
+  profile?: { filled: number; total: number };
   /** 💰 Σ price (= маржа) оплат за 6 міс; null — оплат не було. 🛑 debtHold — є прострочена дебіторка. */
   margin6m?: number | null;
   debtHold?: boolean;
@@ -5251,6 +5253,9 @@ export interface ClientCard {
     kommo?: { state: "done"; url: string } | { state: "waiting"; error: string | null } } | null;
   phone?: "has" | "none";
   phonesCount?: number;
+  /** 📋 Анкета клієнта (11221): питання й межу довжини дає сервер; `answers: null` — анкети ще немає. */
+  profile?: { fields: { key: string; label: string; hint: string }[]; max: number; total: number; filled: number;
+    answers: Record<string, string> | null; updatedDay: string | null; updatedBy: string | null };
   lastCall?: { at: string; manager: string | null; billsec: number; direction: "in" | "out" } | null;
   /** 📌 Місяць обґрунтування (екрана, з якого відкрили картку) і поточне закріплення. */
   basisMonth?: string;
@@ -5526,6 +5531,11 @@ export async function setClientProblem(clientKey: string, reason: string, note: 
 }
 export async function clearClientProblem(clientKey: string): Promise<void> {
   await api.post("/dashboard/client-problem/clear", { clientKey });
+}
+/** 📋 Анкета клієнта (11221): пʼять відповідей одним записом; повертає, скільки питань мають відповідь. */
+export async function saveClientProfile(clientKey: string, answers: Record<string, string>): Promise<{ filled: number; total: number }> {
+  const { data } = await api.post<{ filled: number; total: number }>("/dashboard/client-profile", { clientKey, answers });
+  return data;
 }
 /** 🧭 «В нічийні» (8135): коментар обовʼязковий; 409 — уже в нічийних / у пулі / в архіві. */
 export async function releaseOrphanClient(clientKey: string, note: string): Promise<{ deadline: string; notified: number }> {

@@ -20,6 +20,8 @@ export interface LeadViewRow {
   lastTalk?: string | null; lastTalkDays?: number | null;
   /** 📵 11226: стан номера з сервера (`phoneState`); `"none"` — у контактах клієнта в Kommo немає жодного номера. */
   phone?: "has" | "none";
+  /** 📋 11221: анкета клієнта — скільки питань із `total` мають відповідь (рахує сервер). */
+  profile?: { filled: number; total: number };
   lifetimeRevenue?: number;
 }
 
@@ -54,12 +56,14 @@ export interface LeadFilter {
   overRhythm: boolean;
   /** 📵 11226: лише клієнти без жодного номера в Kommo — розмову з ними телефонія привʼязати не може. */
   noPhone: boolean;
+  /** 📋 11221: лише клієнти, у яких анкета не заповнена до кінця (включно з тими, де її немає зовсім). */
+  profileOpen: boolean;
 }
-export const DEFAULT_LEAD_FILTER: LeadFilter = { work: "all", talk: "all", overRhythm: false, noPhone: false };
+export const DEFAULT_LEAD_FILTER: LeadFilter = { work: "all", talk: "all", overRhythm: false, noPhone: false, profileOpen: false };
 
 /** Чи фільтр щось звужує — щоб показати «скинути» і не ховати зелених мовчки. */
 export function leadFilterActive(f: LeadFilter): boolean {
-  return f.work !== "all" || f.talk !== "all" || f.overRhythm || f.noPhone;
+  return f.work !== "all" || f.talk !== "all" || f.overRhythm || f.noPhone || f.profileOpen;
 }
 
 /** Звуження списку. Кожна умова — «і»; вимкнена умова нічого не відсікає. */
@@ -70,6 +74,7 @@ export function applyLeadFilter<T extends LeadViewRow>(rows: readonly T[], f: Le
     if (!talkMatches(r, f.talk)) return false;
     if (f.overRhythm && !overRhythm(r)) return false;
     if (f.noPhone && !noPhone(r)) return false;
+    if (f.profileOpen && !profileOpen(r)) return false;
     return true;
   });
 }
@@ -85,6 +90,14 @@ export function overRhythm(r: LeadViewRow): boolean {
  */
 export function noPhone(r: LeadViewRow): boolean {
   return r.phone === "none";
+}
+
+/**
+ * 📋 Анкета не заповнена до кінця (11221; зустріч 25.11.2026: «пʼять питань, і один раз обовʼязково менеджер має
+ * дізнатися»). Без жодної відповіді — теж сюди. Рядок без ознаки (старий сервер) — ні: невідоме не видаємо за борг.
+ */
+export function profileOpen(r: LeadViewRow): boolean {
+  return r.profile != null && r.profile.filled < r.profile.total;
 }
 
 /** «Працюють X з N» для набору рядків: сума двох частин завжди дорівнює набору. */

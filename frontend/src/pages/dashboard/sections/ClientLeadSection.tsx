@@ -8,7 +8,7 @@ import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { monthsLabel } from "./ClientSeasonBlock";
 import { readLeadNav, leadNavSearch, backTarget, backIsHistoryBack, type LeadNav } from "../clientLeadNav";
-import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, overRhythm, noPhone, talkMatches, sortLead, TALK_AGE_DAYS, DEFAULT_LEAD_FILTER, type LeadSort, type LeadGroup, type LeadFilter } from "../clientLeadView";
+import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, overRhythm, noPhone, profileOpen, talkMatches, sortLead, TALK_AGE_DAYS, DEFAULT_LEAD_FILTER, type LeadSort, type LeadGroup, type LeadFilter } from "../clientLeadView";
 
 /**
  * 🚦 «З КИМ З ПОСТІЙНИХ ГОВОРИТИ» — ПРОСТИЙ ЕКРАН ТІМЛІДА (ТЗ Юлі 28.10.2026, етап 2; задача 7360).
@@ -337,6 +337,10 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
               {L.problem && <span style={S.chip("#b45309", "#fff")} title={`«${L.problem.note}» — ${L.problem.byName ?? ""}, ${dm(L.problem.day)}`}>⚠️ Проблемний · {L.problem.label}</span>}
               {L.offSeason && <span style={S.chip("#eef2ff", "#4338ca")} title={`сезонний клієнт: возить ${monthsLabel(c.seasonMonths)} — зараз не сезон, дзвонити не треба`}>🌙 не сезон</span>}
               {L.newRepeat && <span style={S.chip("#dcfce7", "#166534")} title={`друга оплата — цього місяця · звідки: ${SOURCE[L.source]}`}>новий постійний</span>}
+              {c.profile && c.profile.filled > 0 && (
+                <span style={c.profile.filled === c.profile.total ? S.chip("#dcfce7", "#166534") : S.chip("#fffbeb", "#b45309")}
+                  title="анкета клієнта: чим займається, як часто і скільки возить, яку частку возимо ми, міжнародні, авіа / море. Відкрийте клієнта, щоб прочитати або дописати">📋 анкета {c.profile.filled}/{c.profile.total}</span>
+              )}
             </div>
             {!mgrRows && <div style={grey}>{c.managerName}{teamEff == null && c.teamName ? ` · ${c.teamName}` : ""}</div>}
           </td>
@@ -487,6 +491,8 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
       </label>
       {fchip(filter.overRhythm, `⏰ пропустили ритм ${baseRows.filter(overRhythm).length}`, () => setFilter((f) => ({ ...f, overRhythm: !f.overRhythm })),
         "днів без замовлення більше, ніж звичайний інтервал клієнта")}
+      {fchip(filter.profileOpen, `📋 анкета не заповнена ${baseRows.filter(profileOpen).length}`, () => setFilter((f) => ({ ...f, profileOpen: !f.profileOpen })),
+        "анкета клієнта (пʼять питань у картці) не заповнена до кінця або її немає зовсім")}
       {fchip(filter.noPhone, `📵 без номера ${baseRows.filter(noPhone).length}`, () => setFilter((f) => ({ ...f, noPhone: !f.noPhone })),
         "у контактах клієнта в Kommo немає жодного номера — розмови з ним не привʼязуються")}
       {leadFilterActive(filter) && fchip(false, "✕ скинути фільтри", () => setFilter(DEFAULT_LEAD_FILTER))}

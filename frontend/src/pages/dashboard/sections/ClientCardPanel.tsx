@@ -9,6 +9,7 @@ import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { ClientSeasonBlock } from "./ClientSeasonBlock";
 import { ClientReleaseBlock } from "./ClientReleaseBlock";
 import { ClientProblemBlock } from "./ClientProblemBlock";
+import { ClientProfileBlock } from "./ClientProfileBlock";
 import { formatAmountFull } from "../format";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 
@@ -117,6 +118,9 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
           </div>
         </div>
       )}
+
+      {/* 📋 Анкета клієнта (задача 11221, зустріч 25.11.2026): пʼять питань, одна на клієнта; питання дає сервер. */}
+      <ClientProfileBlock card={card} onSaved={() => { load(); onChanged?.(); }} />
 
       {/* 🛠 ДІЇ КЕРУВАННЯ КЛІЄНТОМ — САМЕ ТУТ, поруч із гістограмою й угодами,
           бо це і є підстава для рішення (рішення власника 04.08.2026, підтверджене

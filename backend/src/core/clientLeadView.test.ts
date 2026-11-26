@@ -24,6 +24,7 @@ interface View {
   sortLead: (rows: readonly Row[], by: "money" | "talk" | "order") => Row[];
   TALK_AGE_DAYS: readonly number[];
   noPhone: (r: Row) => boolean;
+  profileOpen: (r: Row) => boolean;
 }
 async function loadView(): Promise<View> {
   const ts = (await import("typescript")).default;
@@ -282,4 +283,60 @@ test("#11226 🪞 БЕЗ НОМЕРА: у списку рівно ті, у ко�
   assert.match(lead, /\{noPhone\(c\) && \(/, "🔴 у рядку не видно, що в клієнта немає номера");
   assert.match(lead, /📵 нема номера/, "🔴 підпис «нема номера» зник із рядка");
   assert.match(lead, /fchip\(filter\.noPhone, `📵 без номера \$\{baseRows\.filter\(noPhone\)\.length\}`/, "🔴 кнопки «без номера» немає або число на ній не з правила відбору");
+});
+
+/**
+ * #11221 🪞 — АНКЕТА КЛІЄНТА: ПʼЯТЬ ПИТАНЬ ІЗ ЗУСТРІЧІ 25.11.2026, ОДНА НА КЛІЄНТА. Питання живуть у ядрі
+ * (`core/clientProfile.ts`), картка малює те, що дав сервер; відповідь — лише рядок, обрізаний по межі; «заповнено» —
+ * коли відповіді є на всі пʼять. Зберігає той, хто бачить клієнта: 403 — ПЕРШИМ оператором, до перевірки тіла.
+ * 🧨 Червоніє, якщо питань стане не пʼять, порожня відповідь порахується заповненою, анкета 4 з 5 зникне зі списку
+ * «не заповнена», або перевірка тіла стане перед межею доступу.
+ */
+test("#11221 🪞 АНКЕТА КЛІЄНТА: рівно пʼять питань; відповідь — лише непорожній рядок; «не заповнена» — поки відповідей менше пʼяти; 403 раніше за 400", async () => {
+  const cp = await import("./clientProfile.js");
+  assert.deepEqual(cp.PROFILE_FIELDS.map((f) => f.key), ["business", "volume", "share", "international", "airSea"], "🔴 питань анкети не пʼять або вони не ті, що на зустрічі 25.11.2026");
+  assert.equal(cp.PROFILE_TOTAL, 5);
+  const clean = cp.cleanProfile({ business: "  меблі  ", volume: 12, share: "   ", international: "x".repeat(cp.PROFILE_ANSWER_MAX + 50), extra: "зайве" });
+  assert.deepEqual(Object.keys(clean), ["business", "volume", "share", "international", "airSea"], "🔴 в анкету пройшло чуже поле або зникло своє");
+  assert.equal(clean.business, "меблі", "🔴 пробіли по краях не зрізано");
+  assert.equal(clean.volume, "", "🔴 не-рядок став відповіддю");
+  assert.equal(clean.share, "", "🔴 самі пробіли стали відповіддю");
+  assert.equal(clean.international.length, cp.PROFILE_ANSWER_MAX, "🔴 відповідь довша за межу");
+  assert.equal(clean.airSea, "");
+  assert.equal(cp.filledCount(clean), 2, "🔴 порожня відповідь порахована заповненою або заповнена — ні");
+  assert.equal(cp.filledCount(null), 0); assert.equal(cp.filledCount(cp.cleanProfile(null)), 0); assert.equal(cp.filledCount(cp.cleanProfile("рядок")), 0);
+  assert.equal(cp.filledCount({ business: "а", volume: "б", share: "в", international: "г", airSea: "д" }), 5);
+
+  const v = await loadView();
+  const rows: Row[] = [
+    row("p0", "red", false, { profile: { filled: 0, total: 5 } }),
+    row("p4", "yellow", true, { profile: { filled: 4, total: 5 } }),
+    row("p5", "green", true, { profile: { filled: 5, total: 5 } }),
+    row("unknown", "red", false),
+  ];
+  assert.equal(ids(rows.filter(v.profileOpen)), "p0,p4", "🔴 «анкета не заповнена»: 4 з 5 вже не в списку, 5 з 5 ще в ньому, або невідомий стан видано за борг");
+  assert.equal(ids(v.applyLeadFilter(rows, { ...v.DEFAULT_LEAD_FILTER, profileOpen: true })), "p0,p4", "🔴 фільтр анкети показує не тих");
+  assert.equal(ids(v.applyLeadFilter(rows, v.DEFAULT_LEAD_FILTER)), "p0,p4,p5,unknown", "🔴 вимкнений фільтр анкети щось відсікає");
+  assert.equal(v.leadFilterActive({ ...v.DEFAULT_LEAD_FILTER, profileOpen: true }), true);
+
+  const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+  const dash = codeOnly(readFileSync(`${ROOT}backend/src/routes/dashboard.ts`, "utf8"));
+  const route = dash.slice(dash.indexOf('dashboardRouter.post("/client-profile"'));
+  const body = route.slice(0, route.indexOf("\n});"));
+  assert.ok(body.length > 200, "🔴 перевіряти нічого: роуту анкети немає");
+  const gate = body.indexOf("if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403)");
+  assert.ok(gate > 0, "🔴 анкету зберігає не той, хто бачить клієнта");
+  assert.ok(gate < body.indexOf("cleanProfile(") && gate < body.indexOf("status(400)"), "🔴 перевірка тіла стоїть перед межею доступу — 400 замість 403");
+  assert.match(body, /if \(clientProfile\.filledCount\(answers\) === 0\) return res\.status\(400\)/, "🔴 порожня анкета зберігається як заповнена");
+  assert.match(dash, /profile: \{ filled: profileByKey\.get\(c\.client_key\)\?\.filled \?\? 0, total: clientProfile\.PROFILE_TOTAL \},/, "🔴 рядок клієнта не несе стан анкети");
+  assert.match(dash, /profile: \{ fields: clientProfile\.PROFILE_FIELDS\.map\(/, "🔴 картка не віддає питання анкети з ядра");
+  const sections = "sections/";
+  assert.match(codeOnly(readFileSync(FE(`${sections}ClientCardPanel.tsx`), "utf8")), /<ClientProfileBlock card=\{card\}/, "🔴 у картці клієнта немає анкети");
+  const block = codeOnly(readFileSync(FE(`${sections}ClientProfileBlock.tsx`), "utf8"));
+  assert.match(block, /\{p\.fields\.map\(\(f\) => \(/, "🔴 анкета малює не ті питання, що дав сервер");
+  assert.match(block, /saveClientProfile\(card\.clientKey, draft\)/, "🔴 анкета не зберігається цілою");
+  assert.doesNotMatch(block, /Чим займається|міжнародн|авіа/i, "🔴 питання анкети продубльовано на фронті — зʼїдуть із ядром");
+  const lead = codeOnly(readFileSync(FE(`${sections}ClientLeadSection.tsx`), "utf8"));
+  assert.match(lead, /fchip\(filter\.profileOpen, `📋 анкета не заповнена \$\{baseRows\.filter\(profileOpen\)\.length\}`/, "🔴 кнопки «анкета не заповнена» немає або число на ній не з правила відбору");
+  assert.match(lead, /📋 анкета \{c\.profile\.filled\}\/\{c\.profile\.total\}/, "🔴 у рядку не видно, скільки питань анкети мають відповідь");
 });
