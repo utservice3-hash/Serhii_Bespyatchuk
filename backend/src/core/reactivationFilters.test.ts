@@ -41,7 +41,9 @@ test("#692 фільтри реактивації: межі no_talk / step_overdu
 test("#692b РОУТ /client-plans: margin6m, debtHold, три цифри через isReturned; фронт — фільтри, сортування, картки", () => {
   const src = path.join(import.meta.dirname, "..", "..", "src");
   const d = readFileSync(path.join(src, "routes", "dashboard.ts"), "utf8");
-  const i = d.indexOf('dashboardRouter.get("/client-plans"'); const body = d.slice(i, d.indexOf("\n});", i));
+  // 26.11.2026 (швидкість екрана): тіло екрана переїхало у збирач одразу під обробником, тож зріз — до наступного роуту.
+  const i = d.indexOf('dashboardRouter.get("/client-plans"'); const body = d.slice(i, d.indexOf("\ndashboardRouter.", i + 10));
+  assert.match(body, /async function buildClientPlans\(/, "зріз не дістав до збирача екрана — перевіряти нічого");
   assert.match(body, /margin6m: \(\(\) => \{ const a = histByKey\.get\(c\.client_key\)/, "маржа не з помісячних бакетів ядра (hist)");
   assert.match(body, /a\.slice\(-6\)/, "маржа має бути за останні 6 місяців");
   assert.doesNotMatch(body, /SUM\(d\.price\) AS margin/, "власний SQL по грошах — повз ядро (#17c)");

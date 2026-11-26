@@ -187,7 +187,15 @@ const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
  */
 export async function clientStates(
   s: ReactivationScope,
-  opts: { includeActive?: boolean } = {}
+  opts: {
+    includeActive?: boolean;
+    /**
+     * Уже завантажені сегменти (або читання, що вже летить) — той самий результат `loadClientSegments()`.
+     * `/client-plans` вантажить їх сам для ростера; без цього параметра вони рахувались би двічі за одне
+     * відкриття екрана (заміряно 26.11.2026: друге читання — 0,19 с). Не передано — функція читає сама, як досі.
+     */
+    segments?: Awaited<ReturnType<typeof loadClientSegments>> | ReturnType<typeof loadClientSegments>;
+  } = {}
 ): Promise<ReactivationClient[]> {
   const taskMap = await reactivationTasksByClient();
   const taskKeys = [...taskMap.keys()];
@@ -293,7 +301,7 @@ export async function clientStates(
   // живить екран планування. Окремим запитом, а не CTE всередині цього: підстановка
   // фрагмента сюди коштувала 10.5 с замість 0.7 с (замір 05.08.2026, деталі у
   // шапці `clientSegments.ts`).
-  const seg = await loadClientSegments();
+  const seg = await (opts.segments ?? loadClientSegments());
 
   // 🎯 РАЗОВІ СЮДИ НЕ ПОТРАПЛЯЮТЬ (двошляхова кваліфікація, рішення власника
   // 05.08.2026): реактивувати того, хто ніколи не був постійним, нема сенсу —

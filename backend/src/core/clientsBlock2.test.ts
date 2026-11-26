@@ -185,8 +185,11 @@ test("#717b ФАКТ З РАХУНКУ ЖИВЕ РІВНО НА ЕКРАНІ К�
   const start = dash.indexOf('dashboardRouter.get("/client-plans"');
   assert.ok(start > 0, "🔴 обробник /client-plans не впізнано");
   const body = dash.slice(start, dash.indexOf("\ndashboardRouter.", start + 10));
-  assert.match(body, /money\.fromInvoiceByClientKey\(scope\),\s*money\.fromInvoiceByClientWeek\(scope\),/,
+  // 26.11.2026 (швидкість екрана): обидва читання стартують наперед через чергу збирача; вид грошей і скоуп ті самі.
+  assert.match(body, /const monthFactP = early\(lim\.run\(\(\) => money\.fromInvoiceByClientKey\(scope\)\)\);\s*const weekFactP = early\(lim\.run\(\(\) => money\.fromInvoiceByClientWeek\(scope\)\)\);/,
     "🔴 факт і тижні списку клієнтів не з «рахунку і далі»");
+  assert.match(body, /\[monthFact, weekFact, hist, commentsRes, prevPlans, reactRows, monthSuccess\] = await Promise\.all\(\[\s*monthFactP,\s*weekFactP,/,
+    "🔴 факт і тижні в рядку — не з тих читань, що стартували як «з рахунку»");
   assert.match(body, /factBasis: "fromInvoice" as const,/, "🔴 відповідь не каже, з чого факт — підпис на фронті вгадуватиме");
   // Третій вид НЕ розповзається: у роутах він трапляється лише в цьому обробнику.
   const outside = dash.slice(0, start) + dash.slice(start + body.length);

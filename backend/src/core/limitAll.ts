@@ -1,0 +1,74 @@
+/**
+ * 🚦 ОДНОЧАСНІ ЧИТАННЯ ЗІ СТЕЛЕЮ — ЧИСТИЙ МОДУЛЬ БЕЗ ІМПОРТІВ (26.11.2026, швидкість списку постійних клієнтів).
+ *
+ * 📐 ЧОМУ. `/client-plans` робив 45 читань у 21 крок ОДИН ЗА ОДНИМ: 4,8 с, з яких сам Node — 0,06 с (замір обробника
+ * в процесі на проді 26.11.2026). Читання не залежали одне від одного, вони просто стояли в черзі. Пустити їх разом —
+ * означає зайняти з'єднання пулу: їх 15 на весь процес (`db/pool.ts`), і один користувач не має права забрати всі.
+ * Тому стеля — на ЗАПИТ ЕКРАНА, а не на пул: одне відкриття списку тримає не більше `max` читань у польоті.
+ *
+ * 🔑 ДВІ ЧЕРГИ. `urgent` стає ПОПЕРЕД звичайних: найдовший ланцюжок екрана (вид клієнта → ростер → факти розмов)
+ * визначає час відповіді, і якщо він чекатиме позаду двадцяти коротких читань, стеля з'їсть увесь виграш.
+ *
+ * ⚠️ ОБГОРТАТИ ЛИШЕ ЛИСТЯ. Завдання, яке тримає місце і саме чекає місця для вкладеного читання, зависне, щойно всі
+ * місця зайняті такими самими. Тому або функції дають обмежену базу (`limitedDb`) і її НЕ обгортають, або її
+ * обгортають цілою (`run`) і всередині вона ходить у базу сама, по одному читанню за раз.
+ */
+
+export type Task<T> = () => Promise<T>;
+
+export interface Limiter {
+  /** Звичайна черга. */
+  run<T>(fn: Task<T>): Promise<T>;
+  /** Попереду звичайних — для найдовшого ланцюжка. */
+  urgent<T>(fn: Task<T>): Promise<T>;
+  /** Найбільша кількість завдань, що летіли одночасно (для гейта й замірів). */
+  peak(): number;
+}
+
+export function limiter(max: number): Limiter {
+  if (!Number.isInteger(max) || max < 1) throw new Error(`limiter: стеля має бути цілим числом від 1, прийшло ${String(max)}`);
+  let flying = 0;
+  let top = 0;
+  const queue: (() => void)[] = [];
+  const next = () => {
+    if (flying >= max) return;
+    const start = queue.shift();
+    if (start) start();
+  };
+  const add = <T>(fn: Task<T>, first: boolean): Promise<T> => new Promise<T>((resolve, reject) => {
+    const start = () => {
+      flying++;
+      if (flying > top) top = flying;
+      // `fn` може кинути синхронно — це теж відмова завдання, а не обрив черги.
+      let p: Promise<T>;
+      try { p = fn(); } catch (e) { p = Promise.reject(e); }
+      p.then(resolve, reject).finally(() => { flying--; next(); });
+    };
+    if (first) queue.unshift(start); else queue.push(start);
+    next();
+  });
+  return { run: (fn) => add(fn, false), urgent: (fn) => add(fn, true), peak: () => top };
+}
+
+/** Мінімум, який потрібен від бази: той самий контракт, що `Db` у модулях фактів (`pool` йому відповідає). */
+export interface QueryDb {
+  query: <R = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<{ rows: R[]; rowCount: number | null }>;
+}
+
+/** База, кожне читання якої проходить через стелю. `via` — `lim.run` або `lim.urgent`. */
+export function limitedDb(db: QueryDb, via: <T>(fn: Task<T>) => Promise<T>): QueryDb {
+  return { query: <R = Record<string, unknown>>(sql: string, params?: unknown[]) => via(() => db.query<R>(sql, params)) };
+}
+
+/**
+ * ⏩ ЧИТАННЯ СТАРТУЄ ЗАРАЗ, РЕЗУЛЬТАТ ЗАБИРАЮТЬ ПІЗНІШЕ.
+ *
+ * 🔴 НАВІЩО ОБГОРТКА, А НЕ ПРОСТО ЗМІННА З ПРОМІСОМ. Проміс, який відхилився ДО того, як на нього зробили `await`,
+ * Node вважає необробленою відмовою — і за замовчуванням ВАЛИТЬ ПРОЦЕС. Тобто «запустив наперед, забрав через
+ * три рядки» без обробника — це рестарт прода на першій же помилці запиту. Порожній `catch` тут нічого не ховає:
+ * справжній `await` нижче отримає ту саму відмову й кине її в обробник роуту.
+ */
+export function early<T>(p: Promise<T>): Promise<T> {
+  p.catch(() => { /* відмову кине await того, хто забирає результат */ });
+  return p;
+}

@@ -27,6 +27,8 @@ import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
 import { klassOf } from "../core/klassFilter.js";
 import { overviewCache } from "../core/lazyCache.js";
+import { clientPlansCache } from "../core/scopeCache.js";
+import { limiter, limitedDb, early } from "../core/limitAll.js";
 
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, linkedinCount: 0, prozorroCount: 0, otherCount: 0, noChannelCount: 0 } as const;
@@ -6576,14 +6578,6 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const auth = req.auth!;
   const monthStr = String(req.query.month ?? "").match(/^\d{4}-\d{2}$/)
     ? String(req.query.month) : kyivToday().slice(0, 7);
-  const monthStart = `${monthStr}-01`;
-  const daysInMonth = new Date(Number(monthStr.slice(0, 4)), Number(monthStr.slice(5, 7)), 0).getDate();
-  const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
-  const prevMonthStart = (() => {
-    const d = new Date(`${monthStart}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 1);
-    return d.toISOString().slice(0, 10);
-  })();
-
   // Скоуп: менеджер — лише свої клієнти; тімлід — своя команда; КВП/ОД — усі
   // (з необовʼязковим вибором менеджера). HR сюди не потрапляє — межа вкладки.
   let managerId: number | null = null;
@@ -6601,6 +6595,45 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     if (req.query.managerId) managerId = Number(req.query.managerId);
     else if (req.query.teamId) teamId = Number(req.query.teamId);
   }
+  // ⏱ ПАМ'ЯТЬ ВІДПОВІДІ (26.11.2026): 60 с, ключ — рівно ті аргументи, з яких збирач будує відповідь (`core/scopeCache.ts`).
+  // Усе, що залежить від того, ХТО питає, пораховано вище й передано аргументом: охоплення (менеджер / команда),
+  // право бачити плани без клієнта в списку, доступ до пулу лідгенів. Самого `auth` збирач не бачить — тож відповідь
+  // одного користувача не може дістатись іншому з іншим охопленням: у них різні ключі за побудовою.
+  const leadgenPool = await leadgenPoolAccess(auth);
+  res.json(await clientPlansCache.call("clientPlans", buildClientPlans, monthStr, managerId, teamId, isAdminScope(auth), leadgenPool));
+});
+
+/** Стільки читань одного відкриття списку летить одночасно: пул має 15 з'єднань на весь процес (`db/pool.ts`). */
+const CLIENT_PLANS_PARALLEL = 6;
+
+/**
+ * 🧱 ЗБИРАЧ ВІДПОВІДІ `/client-plans` — усе, що раніше стояло в обробнику, без `req` / `res` / `auth`.
+ *
+ * ⏩ ПОРЯДОК ЧИТАНЬ (26.11.2026). Було 45 читань у 21 крок один за одним — 4,8 с, з них Node 0,06 с (замір обробника
+ * в процесі на проді). Тепер читання СТАРТУЮТЬ, щойно є їхні вхідні дані, а результат забирають там, де він потрібен:
+ *   ① одразу — усе, чому досить охоплення: сегменти, список клієнтів, плани, стан реактивації, гроші місяця;
+ *   ② щойно є ключі клієнтів — усе «по ключах» разом;
+ *   ③ щойно є вид клієнта й плани — ростер, і від нього найдовше читання (факти розмов).
+ * Жодне число від цього не залежить: змінився лише момент старту. Стеля одночасності й черга — `core/limitAll.ts`.
+ *
+ * 🔴 НОВЕ ЧИТАННЯ СЮДИ — ЧЕРЕЗ `ldb` / `udb` / `lim.run`, НЕ ЧЕРЕЗ `pool`. Читання повз стелю забирає з'єднання
+ * в решти користувачів; це стереже гейт.
+ */
+async function buildClientPlans(monthStr: string, managerId: number | null, teamId: number | null,
+  canSeeUnattached: boolean, leadgenPool: { canSee: boolean; canTake: boolean }) {
+  const lim = limiter(CLIENT_PLANS_PARALLEL);
+  /** Звичайні читання екрана. */
+  const ldb = limitedDb(pool, lim.run);
+  /** Читання найдовшого ланцюжка (список → вид клієнта → ростер → факти розмов) — попереду черги. */
+  const udb = limitedDb(pool, lim.urgent);
+  const monthStart = `${monthStr}-01`;
+  const daysInMonth = new Date(Number(monthStr.slice(0, 4)), Number(monthStr.slice(5, 7)), 0).getDate();
+  const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
+  const prevMonthStart = (() => {
+    const d = new Date(`${monthStart}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 1);
+    return d.toISOString().slice(0, 10);
+  })();
+
   const scope: money.MoneyScope = { from: monthStart, to: monthEnd, managerId: managerId ?? undefined, teamId: teamId ?? undefined };
 
   const weeks = money.monthWeeks(monthStr);
@@ -6624,13 +6657,54 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   if (managerId != null) { mgrParams.push(managerId); mgrCond = `AND b.manager_id = $${mgrParams.length}`; }
   else if (teamId != null) { mgrParams.push(teamId); mgrCond = `AND b.team_id = $${mgrParams.length}`; }
 
+  // ── ФАКТ І ТИЖНІ — ЯДРО (①). Один виклик на місяць + один на тиждень.
+  const histFrom = (() => { const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 5); return d.toISOString().slice(0, 7) + "-01"; })();
+  // Явний обʼєкт, а не спред scope: ворота #17e2 вимагають, щоб кожен спред був
+  // названим у реєстрі — тут дешевше не спредити, ніж пояснювати спред.
+  const histScope: money.MoneyScope = {
+    from: histFrom, to: monthEnd,
+    managerId: managerId ?? undefined, teamId: teamId ?? undefined,
+  };
+
+  type PlanDbRow = { client_key: string; plan: string; status: string; manager_id: number | null;
+    review_note: string | null; manager_name: string | null };
+  // 🔴 ПЛАНИ ЧИТАЮТЬСЯ ПО МІСЯЦЮ, А НЕ ПО СПИСКУ АКТИВНИХ (виправлено 21.08.2026).
+  //
+  // Було: `AND client_key = ANY(clientKeys)`, де `clientKeys` — це ті, хто
+  // активний СЬОГОДНІ. Для минулого місяця це означало, що план клієнта, який
+  // відтоді заснув, зникав з екрана мовчки. Заміряно на проді за липень: у БД
+  // 92 плани / 954 171 ₴, на екрані 27 / 367 901 ₴ — випало 586 270 ₴.
+  //
+  // ⚠️ СКОУП ПЕРЕЇХАВ РАЗОМ ІЗ ФІЛЬТРОМ, інакше менеджер побачив би чужі плани.
+  // Раніше межу тримав `clientKeys` (він уже був у скоупі); тепер її тримає
+  // `rp.manager_id` / `m.team_id` — це ТА САМА межа, лише названа явно.
+  /** Плани МІСЯЦЯ у скоупі перегляду — без огляду на те, чи клієнт активний зараз. */
+  const planQ = () => {
+    const pp: unknown[] = [monthStart];
+    let cond = "";
+    if (managerId != null) { pp.push(managerId); cond = `AND rp.manager_id = $${pp.length}`; }
+    else if (teamId != null) { pp.push(teamId); cond = `AND m.team_id = $${pp.length}`; }
+    return udb.query<PlanDbRow>(
+      `SELECT rp.client_key, rp.plan, rp.status, rp.manager_id, rp.review_note, m.name AS manager_name
+         FROM repeat_client_plans rp
+         LEFT JOIN managers m ON m.id = rp.manager_id
+        WHERE rp.month = $1 ${cond}`, pp);
+  };
+
+  /**
+   * 👥 ПОРІВНЯННЯ З СЕРЕДНІМ І «ЗАМОВЛЯЛИ РАНІШЕ» (задача 5609, ТЗ 12.10.2026, розділ 7): ті самі гроші «з рахунку»
+   * у тому самому скоупі, лише інші вікна — правила вікон у `core/repeatScreenRules.ts`.
+   */
+  const win = repeatScreenRules.sameWindows(monthStr, kyivToday());
+  const winScope = (w: repeatScreenRules.DayWindow): money.MoneyScope => ({ from: w.from, to: w.to, managerId: managerId ?? undefined, teamId: teamId ?? undefined });
+  // ⏩ ① ОДРАЗУ: усе, чому досить охоплення. Термінові (`udb`, `lim.urgent`) — те, від чого залежить найдовший ланцюжок.
   // 🔴 Сегмент/стан — зі СПІЛЬНОГО джерела (`core/clientSegments.ts`), того самого,
   // що живить реактивацію. Окремим запитом, а не CTE всередині запиту нижче:
   // підстановка фрагмента в цей запит коштувала 20.8 с при вартовому 20.0 с, тобто
   // 503 на екрані (замір 05.08.2026, деталі й таблиця — у шапці `clientSegments.ts`).
-  const seg = await loadClientSegments();
+  const segP = early(lim.urgent(() => loadClientSegments()));
 
-  const clientsRes = await pool.query<{
+  const clientsP = early(udb.query<{
     client_key: string; name: string | null; orders: string; revenue: string;
     first_paid: string | null; last_paid: string | null; manager_id: number;
     manager_name: string; payment_type: string | null; pinned_manager_id: number | null;
@@ -6651,47 +6725,78 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     // про 146 тис. Порядок даних — частина умов задачі, а не деталь.
     clientsListSql(mgrCond, monthStr),
     mgrParams
-  );
+  ));
   // 🚪 8349: «передані лідгенам не висять у менеджера і не псують його цифри». Клієнт у «Нічийних» (віддав менеджер,
   // 8135) або в пулі лідгенів — геть зі списку ДО всіх лічильників (без роботи, без задачі, кольори, реактивація).
   // Одна множина (`HANDED_OFF_SQL`) на всі читачі; повертається сам, щойно позначку знімуть (взяли / ожив / відкликали).
-  const handedOff = await orphanRelease.handedOffKeys(pool);
+  const handedOffP = early(orphanRelease.handedOffKeys(udb));
+  const todayP = early(udb.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`));
+  const settingsP = early(lim.urgent(() => getSettings()));
+  // Плани місяця потрібні ростеру (хто має план — той у списку), тому теж попереду.
+  const plansP = early(planQ());
+  /**
+   * 🔗 ЗБАГАЧЕННЯ, А НЕ ДЖЕРЕЛО РЯДКІВ. Задачі, останню розмову, цінність і
+   * сезонність бере та сама `clientStates`, яку кличе колишня вкладка — з
+   * прапорцем, що не відсіює активних. Рядки списку й далі приходять з
+   * основного запиту: інакше в ростер потрапили б клієнти з `teamName: null`
+   * (у реактиваційному запиті команда не мапиться на «Без команди»), і `#30c`
+   * почервонів би на цілком робочому коді.
+   *
+   * ⏱ Сегменти їй передано ГОТОВИМИ (`segments: segP`): до 26.11.2026 вона рахувала їх удруге в тому самому запиті
+   * екрана (0,19 с). Це найдовше читання серед тих, що не чекають ключів (0,9 с), тому стартує тут, а не нижче.
+   */
+  const reactRowsP = early(lim.run(() => reactivation.clientStates({ managerId: managerId ?? undefined, teamId: teamId ?? undefined },
+    { includeActive: true, segments: segP })));
+  // 🧾 ФАКТ ЕКРАНА — «з рахунку і далі» (ТЗ Юлі 22.09, п.2.1): угода йде у факт, коли вперше
+  // дійшла до «Виставлення рахунку» або далі. Лише ТУТ; Звіт і КВП лишаються на ①/②.
+  const monthFactP = early(lim.run(() => money.fromInvoiceByClientKey(scope)));
+  const weekFactP = early(lim.run(() => money.fromInvoiceByClientWeek(scope)));
+  const histP = early(lim.run(() => money.successByClientBucket(histScope, "month")));
+  // «З них уже успішні» — ① того ж місяця, щоб видно було, яка частина факту вже гроші.
+  const monthSuccessP = early(lim.run(() => money.successByClientKey(scope)));
+  const prevWP = early(Promise.all(win.prev.map((w) => lim.run(() => money.fromInvoiceByClientKey(winScope(w))))));
+  const beforeWP = early(lim.run(() => money.fromInvoiceByClientKey(winScope(win.before))));
+  // 🧾 Історія 6 міс «з рахунку» (макет 5609: «гроші з рахунку по місяцях»), той самий скоуп і ті самі місяці, що `histMonths`.
+  const histInvP = early(lim.run(() => money.fromInvoiceByClientBucket(histScope, "month")));
+  // 💬 9224: для «Роботи з клієнтом» — останній коментар ЛЮДИНИ, без записів задачі (📞 постановка, 📋 закриття).
+  const lastCommentP = early(lim.run(() => latestCommentByClient()));
+  const lastWorkCommentP = early(lim.run(() => latestCommentByClient({ withoutTaskLog: true })));
+
+  const [seg, clientsRes, handedOff, todayRes, settingsNow] = await Promise.all([segP, clientsP, handedOffP, todayP, settingsP]);
   // 🔢 Скільки прибрали — НАЗВАНО числом (`totals.handedOff`), інакше вони зникли б з Σ мовчки (#721b → #3823).
   const handedOffCount = clientsRes.rows.filter((c) => handedOff.has(c.client_key)).length;
   clientsRes.rows = clientsRes.rows.filter((c) => !handedOff.has(c.client_key));
   const clientKeys = clientsRes.rows.map((c) => c.client_key);
   const keySet = new Set(clientKeys);
+  const todayKyiv = todayRes.rows[0].d;
+
+  // ⏩ ② Є КЛЮЧІ КЛІЄНТІВ: усе «по ключах» стартує разом. Результати забирають нижче, у тому ж порядку, що й раніше.
+  // 🚶 8339: вид клієнта (юр/ФОП чи фіз) — одним пакетним запитом для всього списку. Першим і терміново: від нього
+  // залежить ростер, а від ростера — факти розмов, найдовше читання екрана.
+  const kindsP = early(clientKindFacts.kindsFor(udb, clientKeys));
   // 📱 Останній РУЧНИЙ контакт по кожному клієнту (Viber/Telegram/…): одним запитом на список.
   // 📎 8347: скрін з угоди Kommo — теж контакт, але ЛИШЕ переписка (`countsAsContactSql`; рішення Романа 11.11, п.1).
-  const manualRes = await pool.query<{ client_key: string; at: string; channel: string; has_file: boolean }>(
+  const manualP = early(ldb.query<{ client_key: string; at: string; channel: string; has_file: boolean }>(
     `SELECT DISTINCT ON (cc.client_key) cc.client_key, to_char(cc.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
             cc.channel, (cc.stored_name IS NOT NULL OR cc.kommo_file_uuid IS NOT NULL) AS has_file
        FROM client_contacts cc WHERE cc.client_key = ANY($1) AND ${countsAsContactSql("cc")}
-      ORDER BY cc.client_key, cc.created_at DESC`, [clientKeys]);
-  const manualByKey = new Map(manualRes.rows.map((r) => [r.client_key, r]));
+      ORDER BY cc.client_key, cc.created_at DESC`, [clientKeys]));
   // 📌 НАСТУПНИЙ КРОК і «нема номера» (ТЗ реактивації 23.09.2026, п.1–2) — окремим запитом по
   // тих самих ключах, щоб не чіпати ядро реактивації. Стан кроку рахується від київського
   // «сьогодні» (`stepState`), номер — станом, а не нулем (`phoneState`).
   const stepKeys = clientKeys;
-  const [stepRes, phoneRes] = await Promise.all([
-    pool.query<{ client_key: string; text: string; due_date: string | null }>(
+  const stepP = early(ldb.query<{ client_key: string; text: string; due_date: string | null }>(
       `SELECT DISTINCT ON (client_key) client_key, text, to_char(due_date, 'YYYY-MM-DD') AS due_date
-         FROM client_next_steps WHERE done_at IS NULL AND client_key = ANY($1) ORDER BY client_key, created_at DESC`, [stepKeys]),
-    pool.query<{ client_key: string; n: string }>(
+         FROM client_next_steps WHERE done_at IS NULL AND client_key = ANY($1) ORDER BY client_key, created_at DESC`, [stepKeys]));
+  const phoneP = early(ldb.query<{ client_key: string; n: string }>(
       `SELECT d.client_key, COUNT(DISTINCT cp.phone) AS n FROM deals d
          JOIN deal_contacts dc ON dc.deal_kommo_id = d.kommo_id JOIN contact_phones cp ON cp.contact_id = dc.contact_id
-        WHERE d.client_key = ANY($1) GROUP BY d.client_key`, [stepKeys]),
-  ]);
-  const stepByKey = new Map(stepRes.rows.map((r) => [r.client_key, r]));
-  const phonesByKey = new Map(phoneRes.rows.map((r) => [r.client_key, Number(r.n)]));
-  const todayKyiv = (await pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
+        WHERE d.client_key = ANY($1) GROUP BY d.client_key`, [stepKeys]));
   // 🧾 «БЕЗ РОБОТИ» (задача 6455, правило Сергія 20.10.2026): угода «від рахунку» або оплата у Виписці за період.
   // Період — налаштування (ядро `app_settings` не читає), факти — окремими пакетними запитами по ключах (стеля 20 с).
-  const noWorkDays = (await getSettings()).noWorkDays;
-  const [invoiceProofByKey, paymentProofByKey] = await Promise.all([
-    clientWorkProof.invoiceProofByClientKey(pool, clientKeys, repeatScreenRules.noWorkFrom(todayKyiv, noWorkDays), todayKyiv),
-    clientWorkProof.paymentProofByClientKey(pool, clientKeys, noWorkDays),
-  ]);
+  const noWorkDays = settingsNow.noWorkDays;
+  const invoiceProofP = early(clientWorkProof.invoiceProofByClientKey(ldb, clientKeys, repeatScreenRules.noWorkFrom(todayKyiv, noWorkDays), todayKyiv));
+  const paymentProofP = early(clientWorkProof.paymentProofByClientKey(ldb, clientKeys, noWorkDays));
   // 📞 Дзвінки за ОБРАНИЙ місяць (ТЗ 22.09, п.3.3) і 📌 обґрунтування плану цього місяця (там само) —
   // обидва ядром, по тих самих ключах.
   // 🔁 Цикл реактивації (ТЗ 22.09, блок 4): останній рахунок і рішення по кожному клієнту — від СЬОГОДНІ,
@@ -6699,161 +6804,36 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // 📅 11219 (зустріч 25.11.2026): оборот і дохід клієнта за цей календарний рік — ядро ①, по клієнту цілком
   // (без звуження за менеджером чи командою), від СЬОГОДНІ, як і стан клієнта.
   const yearWin = clientOrderHistory.thisYearWindow(todayKyiv);
-  const [callsMonthByKey, basisByKey, lastInvByKey, yearMoneyByKey, cyclesByKey] = await Promise.all([
-    clientCalls.callsByMonth(clientKeys, monthStr),
-    planBasis.basisForMonth(clientKeys, `${monthStr}-01`),
-    money.lastInvoiceByClientKey(clientKeys),
-    money.successPeriodByClientKey(clientKeys, yearWin.from, yearWin.to),
-    reactCycle.cyclesFor(pool, clientKeys),
-  ]);
-  const nowYm = kyivToday().slice(0, 7);
+  const callsMonthP = early(lim.run(() => clientCalls.callsByMonth(clientKeys, monthStr)));
+  const basisP = early(lim.run(() => planBasis.basisForMonth(clientKeys, `${monthStr}-01`)));
+  const lastInvP = early(lim.run(() => money.lastInvoiceByClientKey(clientKeys)));
+  const yearMoneyP = early(lim.run(() => money.successPeriodByClientKey(clientKeys, yearWin.from, yearWin.to)));
+  const cyclesP = early(reactCycle.cyclesFor(ldb, clientKeys));
   // 🌙 Сезонний не в сезоні — не в реактивації (задача 8351): ні вкладки, ні циклу.
   // ⚠️ Проблемний клієнт (8350): діюча позначка — до першого замовлення ПІСЛЯ неї (рахунок чи оплата).
-  const problemMarks = await problemClient.problemsFor(pool, clientKeys);
+  const problemsP = early(problemClient.problemsFor(ldb, clientKeys));
   // 📋 Анкета клієнта (11221): у рядку — лише скільки питань із пʼяти мають відповідь; самі відповіді — у картці.
-  const profileByKey = await clientProfile.profilesFor(pool, clientKeys);
-  // 🧾 «Поїздку поза CRM» прибрано (11220, зустріч 25.11.2026): замовлення = лише рахунок і оплата з CRM.
-  // `reactInv` — єдиний вхід циклу на цьому екрані, щоб вкладка й кнопки не розійшлись.
-  const reactInv = (key: string) => lastInvByKey.get(key) ?? null;
-  const activeProblem = new Map<string, problemClient.ProblemMark>();
-  for (const c of clientsRes.rows) {
-    const m = problemMarks.get(c.client_key);
-    if (m && problemClient.problemActive(m.day,
-      clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null))) {
-      activeProblem.set(c.client_key, m);
-    }
-  }
-  const inReactNow = (key: string) => !factsFor(seg, key).offSeason && !activeProblem.has(key)
-    && reactCycleRules.inReact(reactInv(key), nowYm);
+  const profilesP = early(clientProfile.profilesFor(ldb, clientKeys));
   // 🔗 Хто приєднаний до кожного рядка (ТЗ 22.09, п.2.3) — лише назви, у гроші не входить.
-  const aliasByKey = await clientAliasNames.aliasNamesFor(clientKeys);
+  const aliasP = early(lim.run(() => clientAliasNames.aliasNamesFor(clientKeys)));
   // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
-  const debtRes = await pool.query<{ client_key: string }>(
-    `SELECT DISTINCT client_key FROM receivables WHERE overdue_days > 0 AND client_key = ANY($1)`, [clientKeys]);
-  const debtKeys = new Set(debtRes.rows.map((r) => r.client_key));
+  const debtP = early(ldb.query<{ client_key: string }>(
+    `SELECT DISTINCT client_key FROM receivables WHERE overdue_days > 0 AND client_key = ANY($1)`, [clientKeys]));
+  // «ПОВЕРНУТО ЗА МІСЯЦЬ» — по ключах скоупу; правило isReturned із чистого модуля.
+  const retP = early(ldb.query<{ client_key: string; first_m: string; last_before: string | null; margin: string }>(
+    `WITH paid AS (
+       SELECT d.client_key, (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date AS dt, d.price
+         FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1)),
+     m AS (SELECT client_key, to_char(MIN(dt), 'YYYY-MM-DD') AS first_m, SUM(price) AS margin
+             FROM paid WHERE dt >= date_trunc('month', $2::date)::date AND dt < (date_trunc('month', $2::date) + INTERVAL '1 month')::date GROUP BY 1)
+     SELECT m.client_key, m.first_m, m.margin,
+            to_char((SELECT MAX(p.dt) FROM paid p WHERE p.client_key = m.client_key AND p.dt < date_trunc('month', $2::date)::date), 'YYYY-MM-DD') AS last_before
+       FROM m`, [clientKeys, monthStart]));
 
-  // ── ФАКТ І ТИЖНІ — ЯДРО (①). Один виклик на місяць + один на тиждень.
-  const histFrom = (() => { const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 5); return d.toISOString().slice(0, 7) + "-01"; })();
-  // Явний обʼєкт, а не спред scope: ворота #17e2 вимагають, щоб кожен спред був
-  // названим у реєстрі — тут дешевше не спредити, ніж пояснювати спред.
-  const histScope: money.MoneyScope = {
-    from: histFrom, to: monthEnd,
-    managerId: managerId ?? undefined, teamId: teamId ?? undefined,
-  };
-
-  type PlanDbRow = { client_key: string; plan: string; status: string; manager_id: number | null;
-    review_note: string | null; manager_name: string | null };
-  /** Плани МІСЯЦЯ у скоупі перегляду — без огляду на те, чи клієнт активний зараз. */
-  const planQ = () => {
-    const pp: unknown[] = [monthStart];
-    let cond = "";
-    if (managerId != null) { pp.push(managerId); cond = `AND rp.manager_id = $${pp.length}`; }
-    else if (teamId != null) { pp.push(teamId); cond = `AND m.team_id = $${pp.length}`; }
-    return pool.query<PlanDbRow>(
-      `SELECT rp.client_key, rp.plan, rp.status, rp.manager_id, rp.review_note, m.name AS manager_name
-         FROM repeat_client_plans rp
-         LEFT JOIN managers m ON m.id = rp.manager_id
-        WHERE rp.month = $1 ${cond}`, pp);
-  };
-
-  const [monthFact, weekFact, hist, plansRes, commentsRes, prevPlans, reactRows, monthSuccess] = await Promise.all([
-    // 🧾 ФАКТ ЕКРАНА — «з рахунку і далі» (ТЗ Юлі 22.09, п.2.1): угода йде у факт, коли вперше
-    // дійшла до «Виставлення рахунку» або далі. Лише ТУТ; Звіт і КВП лишаються на ①/②.
-    money.fromInvoiceByClientKey(scope),
-    money.fromInvoiceByClientWeek(scope),
-    money.successByClientBucket(histScope, "month"),
-    // 🔴 ПЛАНИ ЧИТАЮТЬСЯ ПО МІСЯЦЮ, А НЕ ПО СПИСКУ АКТИВНИХ (виправлено 21.08.2026).
-    //
-    // Було: `AND client_key = ANY(clientKeys)`, де `clientKeys` — це ті, хто
-    // активний СЬОГОДНІ. Для минулого місяця це означало, що план клієнта, який
-    // відтоді заснув, зникав з екрана мовчки. Заміряно на проді за липень: у БД
-    // 92 плани / 954 171 ₴, на екрані 27 / 367 901 ₴ — випало 586 270 ₴.
-    //
-    // ⚠️ СКОУП ПЕРЕЇХАВ РАЗОМ ІЗ ФІЛЬТРОМ, інакше менеджер побачив би чужі плани.
-    // Раніше межу тримав `clientKeys` (він уже був у скоупі); тепер її тримає
-    // `rp.manager_id` / `m.team_id` — це ТА САМА межа, лише названа явно.
-    planQ(),
-    clientKeys.length ? pool.query<{ client_key: string; n: string }>(
-      `SELECT client_key, COUNT(*) AS n FROM client_comments WHERE client_key = ANY($1) GROUP BY client_key`,
-      [clientKeys]) : { rows: [] as { client_key: string; n: string }[] },
-    // 💡 ПІДКАЗКА «минулого місяця було N планів на X ₴» — щоб порожній поточний
-    // місяць читався як «ще не заповнювали», а не як «дані зникли». Той самий
-    // скоуп, той самий вираз, лише інший місяць — копії правила тут немає.
-    (() => {
-      const pp: unknown[] = [prevMonthStart];
-      let cond = "";
-      if (managerId != null) { pp.push(managerId); cond = `AND rp.manager_id = $${pp.length}`; }
-      else if (teamId != null) { pp.push(teamId); cond = `AND m.team_id = $${pp.length}`; }
-      return pool.query<{ n: string; s: string }>(
-        `SELECT COUNT(*)::int AS n, COALESCE(SUM(rp.plan),0)::numeric AS s
-           FROM repeat_client_plans rp
-           LEFT JOIN managers m ON m.id = rp.manager_id
-          WHERE rp.month = $1 ${cond}`, pp);
-    })(),
-    /**
-     * 🔗 ЗБАГАЧЕННЯ, А НЕ ДЖЕРЕЛО РЯДКІВ. Задачі, останню розмову, цінність і
-     * сезонність бере та сама `clientStates`, яку кличе колишня вкладка — з
-     * прапорцем, що не відсіює активних. Рядки списку й далі приходять з
-     * основного запиту: інакше в ростер потрапили б клієнти з `teamName: null`
-     * (у реактиваційному запиті команда не мапиться на «Без команди»), і `#30c`
-     * почервонів би на цілком робочому коді.
-     */
-    reactivation.clientStates({ managerId: managerId ?? undefined, teamId: teamId ?? undefined },
-      { includeActive: true }),
-    // «З них уже успішні» — ① того ж місяця, щоб видно було, яка частина факту вже гроші.
-    money.successByClientKey(scope),
-  ]);
-  const reactByKey = new Map(reactRows.map((r) => [r.clientKey, r]));
-  const successByKey = new Map(monthSuccess.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
-  /**
-   * 👥 ПОРІВНЯННЯ З СЕРЕДНІМ І «ЗАМОВЛЯЛИ РАНІШЕ» (задача 5609, ТЗ 12.10.2026, розділ 7): ті самі гроші «з рахунку»
-   * у тому самому скоупі, лише інші вікна — правила вікон у `core/repeatScreenRules.ts`.
-   */
-  const win = repeatScreenRules.sameWindows(monthStr, kyivToday());
-  const winScope = (w: repeatScreenRules.DayWindow): money.MoneyScope => ({ from: w.from, to: w.to, managerId: managerId ?? undefined, teamId: teamId ?? undefined });
-  const [prevW, beforeW] = await Promise.all([
-    Promise.all(win.prev.map((w) => money.fromInvoiceByClientKey(winScope(w)))),
-    money.fromInvoiceByClientKey(winScope(win.before)),
-  ]);
-  const prevByKey = prevW.map((rows) => new Map(rows.map((r) => [r.key, r.revenue])));
-  // 🧾 Історія 6 міс «з рахунку» (макет 5609: «гроші з рахунку по місяцях»), той самий скоуп і ті самі місяці, що `histMonths`.
-  const histInv = await money.fromInvoiceByClientBucket(histScope, "month");
-  const orderedBeforeKeys = new Set(beforeW.filter((r) => r.deals > 0).map((r) => r.key));
-  const ordersThisMonth = new Map(monthFact.map((r) => [r.key, r.deals]));
-  const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
-  const weekByKey = new Map<string, number[]>();
-  for (const w of weekFact) {
-    if (!keySet.has(w.clientKey)) continue;
-    const arr = weekByKey.get(w.clientKey) ?? weeks.map(() => 0);
-    arr[w.weekIndex] = w.revenue;
-    weekByKey.set(w.clientKey, arr);
-  }
-  const histMonths: string[] = [];
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - i);
-    histMonths.push(d.toISOString().slice(0, 7));
-  }
-  const histByKey = new Map<string, number[]>();
-  for (const h of hist) {
-    if (!keySet.has(h.clientKey)) continue;
-    const idx = histMonths.indexOf(h.bucket.slice(0, 7));
-    if (idx < 0) continue;
-    const arr = histByKey.get(h.clientKey) ?? histMonths.map(() => 0);
-    arr[idx] += h.revenue;
-    histByKey.set(h.clientKey, arr);
-  }
-  // 📊 11218 (зустріч 25.11.2026): гроші «з рахунку» і число ЗАМОВЛЕНЬ у тих самих 6 місяцях — одним проходом по тих
-  // самих кошиках ядра (`core/clientOrderHistory.ts`), тож стовпчик і сума місяця не розходяться.
-  const { money: histInvByKey, deals: histInvDealsByKey } = clientOrderHistory.foldOrderHistory(histInv, histMonths, (k) => keySet.has(k));
+  // ⏩ ③ РОСТЕР — щойно є вид клієнта й плани; факти розмов стартують одразу за ним, не чекаючи решти читань.
+  const [kindByKey, plansRes] = await Promise.all([kindsP, plansP]);
   const planByKey = new Map(plansRes.rows.map((p) => [p.client_key, p]));
-  const commentsByKey = new Map(commentsRes.rows.map((c) => [c.client_key, Number(c.n)]));
-
-  // ── ПЛАН ТИЖНЯ = місячний план × робочі дні тижня / робочі дні місяця.
-  const totalWd = money.monthWorkingDays(monthStr);
-  const todayStr = kyivToday();
-  const dayOf = (ymd: string | null) =>
-    ymd ? Math.round((Date.parse(`${todayStr}T00:00:00Z`) - Date.parse(`${ymd}T00:00:00Z`)) / 86400000) : null;
-
   /**
    * 🌉 МІСТОК + РОЗБИВКА АКТИВНИХ — з ТИХ САМИХ рядків, що й список.
    *
@@ -6883,8 +6863,6 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const bridge = { sleeping: 0, lost: 0, longLapsed: 0, oneOff: 0, skippedGeneric: 0, skippedFewTrips: 0,
     bySegment: { vip: 0, regular: 0, episodic: 0, unknown: 0 } as Record<string, number> };
   const reactivationRows: typeof clientsRes.rows = [];
-  // 🚶 8339: вид клієнта (юр/ФОП чи фіз) — одним пакетним запитом для всього списку.
-  const kindByKey = await clientKindFacts.kindsFor(pool, clientsRes.rows.map((c) => c.client_key));
   const activeRows = clientsRes.rows.filter((c) => {
     const f = factsFor(seg, c.client_key);
     // 🎯 РАЗОВІ — НЕ постійні (двошляхова кваліфікація, рішення власника 05.08.2026).
@@ -6928,6 +6906,104 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const rosterOf = (key: string): "active" | "reactivation" | "planOnly" =>
     reactivationKeys.has(key) ? "reactivation" : planOnlyKeys.has(key) ? "planOnly" : "active";
 
+  // 🚦 Екран тімліда «з ким з постійних говорити» (задача 7360): колір, «працюють», «передати іншому», лічильники.
+  // Правило — `core/clientLeadRules.ts`, факти — `core/clientLeadFacts.ts`; місяць лічильників — поточний (київський).
+  const leadFactsP = early(clientLeadFacts.leadFactsFor(udb, rosterRows.map((c) => c.client_key)));
+
+  // ── Результати читань «по ключах» — у тому порядку, в якому їх споживає код нижче.
+  const manualRes = await manualP;
+  const manualByKey = new Map(manualRes.rows.map((r) => [r.client_key, r]));
+  const [stepRes, phoneRes] = await Promise.all([stepP, phoneP]);
+  const stepByKey = new Map(stepRes.rows.map((r) => [r.client_key, r]));
+  const phonesByKey = new Map(phoneRes.rows.map((r) => [r.client_key, Number(r.n)]));
+  const [invoiceProofByKey, paymentProofByKey] = await Promise.all([invoiceProofP, paymentProofP]);
+  const [callsMonthByKey, basisByKey, lastInvByKey, yearMoneyByKey, cyclesByKey] = await Promise.all([
+    callsMonthP, basisP, lastInvP, yearMoneyP, cyclesP,
+  ]);
+  const nowYm = kyivToday().slice(0, 7);
+  const problemMarks = await problemsP;
+  const profileByKey = await profilesP;
+  // 🧾 «Поїздку поза CRM» прибрано (11220, зустріч 25.11.2026): замовлення = лише рахунок і оплата з CRM.
+  // `reactInv` — єдиний вхід циклу на цьому екрані, щоб вкладка й кнопки не розійшлись.
+  const reactInv = (key: string) => lastInvByKey.get(key) ?? null;
+  const activeProblem = new Map<string, problemClient.ProblemMark>();
+  for (const c of clientsRes.rows) {
+    const m = problemMarks.get(c.client_key);
+    if (m && problemClient.problemActive(m.day,
+      clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null))) {
+      activeProblem.set(c.client_key, m);
+    }
+  }
+  const inReactNow = (key: string) => !factsFor(seg, key).offSeason && !activeProblem.has(key)
+    && reactCycleRules.inReact(reactInv(key), nowYm);
+  const aliasByKey = await aliasP;
+  const debtRes = await debtP;
+  const debtKeys = new Set(debtRes.rows.map((r) => r.client_key));
+
+  const [monthFact, weekFact, hist, commentsRes, prevPlans, reactRows, monthSuccess] = await Promise.all([
+    monthFactP,
+    weekFactP,
+    histP,
+    clientKeys.length ? ldb.query<{ client_key: string; n: string }>(
+      `SELECT client_key, COUNT(*) AS n FROM client_comments WHERE client_key = ANY($1) GROUP BY client_key`,
+      [clientKeys]) : { rows: [] as { client_key: string; n: string }[] },
+    // 💡 ПІДКАЗКА «минулого місяця було N планів на X ₴» — щоб порожній поточний
+    // місяць читався як «ще не заповнювали», а не як «дані зникли». Той самий
+    // скоуп, той самий вираз, лише інший місяць — копії правила тут немає.
+    (() => {
+      const pp: unknown[] = [prevMonthStart];
+      let cond = "";
+      if (managerId != null) { pp.push(managerId); cond = `AND rp.manager_id = $${pp.length}`; }
+      else if (teamId != null) { pp.push(teamId); cond = `AND m.team_id = $${pp.length}`; }
+      return ldb.query<{ n: string; s: string }>(
+        `SELECT COUNT(*)::int AS n, COALESCE(SUM(rp.plan),0)::numeric AS s
+           FROM repeat_client_plans rp
+           LEFT JOIN managers m ON m.id = rp.manager_id
+          WHERE rp.month = $1 ${cond}`, pp);
+    })(),
+    reactRowsP,
+    monthSuccessP,
+  ]);
+  const reactByKey = new Map(reactRows.map((r) => [r.clientKey, r]));
+  const successByKey = new Map(monthSuccess.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
+  const [prevW, beforeW] = await Promise.all([prevWP, beforeWP]);
+  const prevByKey = prevW.map((rows) => new Map(rows.map((r) => [r.key, r.revenue])));
+  const histInv = await histInvP;
+  const orderedBeforeKeys = new Set(beforeW.filter((r) => r.deals > 0).map((r) => r.key));
+  const ordersThisMonth = new Map(monthFact.map((r) => [r.key, r.deals]));
+  const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
+  const weekByKey = new Map<string, number[]>();
+  for (const w of weekFact) {
+    if (!keySet.has(w.clientKey)) continue;
+    const arr = weekByKey.get(w.clientKey) ?? weeks.map(() => 0);
+    arr[w.weekIndex] = w.revenue;
+    weekByKey.set(w.clientKey, arr);
+  }
+  const histMonths: string[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - i);
+    histMonths.push(d.toISOString().slice(0, 7));
+  }
+  const histByKey = new Map<string, number[]>();
+  for (const h of hist) {
+    if (!keySet.has(h.clientKey)) continue;
+    const idx = histMonths.indexOf(h.bucket.slice(0, 7));
+    if (idx < 0) continue;
+    const arr = histByKey.get(h.clientKey) ?? histMonths.map(() => 0);
+    arr[idx] += h.revenue;
+    histByKey.set(h.clientKey, arr);
+  }
+  // 📊 11218 (зустріч 25.11.2026): гроші «з рахунку» і число ЗАМОВЛЕНЬ у тих самих 6 місяцях — одним проходом по тих
+  // самих кошиках ядра (`core/clientOrderHistory.ts`), тож стовпчик і сума місяця не розходяться.
+  const { money: histInvByKey, deals: histInvDealsByKey } = clientOrderHistory.foldOrderHistory(histInv, histMonths, (k) => keySet.has(k));
+  const commentsByKey = new Map(commentsRes.rows.map((c) => [c.client_key, Number(c.n)]));
+
+  // ── ПЛАН ТИЖНЯ = місячний план × робочі дні тижня / робочі дні місяця.
+  const totalWd = money.monthWorkingDays(monthStr);
+  const todayStr = kyivToday();
+  const dayOf = (ymd: string | null) =>
+    ymd ? Math.round((Date.parse(`${todayStr}T00:00:00Z`) - Date.parse(`${ymd}T00:00:00Z`)) / 86400000) : null;
+
   /**
    * Стан клієнта словом — ВИДИМА позначка в кожному рядку (`#330`).
    *
@@ -6943,12 +7019,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     return f.state === "sleeping" || f.state === "lost" ? f.state : "active";
   };
 
-  // 💬 9224: для «Роботи з клієнтом» — останній коментар ЛЮДИНИ, без записів задачі (📞 постановка, 📋 закриття).
-  const [lastComment, lastWorkComment] = await Promise.all([latestCommentByClient(), latestCommentByClient({ withoutTaskLog: true })]);
-  // 🚦 Екран тімліда «з ким з постійних говорити» (задача 7360): колір, «працюють», «передати іншому», лічильники.
-  // Правило — `core/clientLeadRules.ts`, факти — `core/clientLeadFacts.ts`; місяць лічильників — поточний (київський).
-  const leadFacts = await clientLeadFacts.leadFactsFor(pool, rosterRows.map((c) => c.client_key));
-  const leadTaskCreated = await clientLeadFacts.taskCreatedFor(pool,
+  const [lastComment, lastWorkComment] = await Promise.all([lastCommentP, lastWorkCommentP]);
+  const leadFacts = await leadFactsP;
+  const leadTaskCreated = await clientLeadFacts.taskCreatedFor(udb,
     rosterRows.map((c) => reactByKey.get(c.client_key)?.taskId).filter((x): x is number => x != null));
   const leadYm = todayKyiv.slice(0, 7);
   /** Ручний контакт зберігається в UTC (`…Z`) — день беремо київський. */
@@ -7150,7 +7223,6 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    */
   const rosterKeySet = new Set(clientsRes.rows.map((c) => c.client_key));
   const unattachedRows = splitUnattached(plansRes.rows, (p) => p.client_key, rosterKeySet);
-  const canSeeUnattached = isAdminScope(auth);
   const unattachedSum = unattachedRows.reduce((s2, p) => s2 + Number(p.plan), 0);
   const unattachedApproved = unattachedRows
     .filter((p) => p.status === "approved").reduce((s2, p) => s2 + Number(p.plan), 0);
@@ -7174,20 +7246,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    */
   const atRisk = clients.filter((c) => c.inRoster === "active" && c.lastOrderDays != null && c.lastOrderDays > 30);
 
-  // «ПОВЕРНУТО ЗА МІСЯЦЬ» — по ключах скоупу; правило isReturned із чистого модуля.
-  const retRes = await pool.query<{ client_key: string; first_m: string; last_before: string | null; margin: string }>(
-    `WITH paid AS (
-       SELECT d.client_key, (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date AS dt, d.price
-         FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1)),
-     m AS (SELECT client_key, to_char(MIN(dt), 'YYYY-MM-DD') AS first_m, SUM(price) AS margin
-             FROM paid WHERE dt >= date_trunc('month', $2::date)::date AND dt < (date_trunc('month', $2::date) + INTERVAL '1 month')::date GROUP BY 1)
-     SELECT m.client_key, m.first_m, m.margin,
-            to_char((SELECT MAX(p.dt) FROM paid p WHERE p.client_key = m.client_key AND p.dt < date_trunc('month', $2::date)::date), 'YYYY-MM-DD') AS last_before
-       FROM m`, [clientKeys, monthStart]);
+  const retRes = await retP;
   const returned = retRes.rows.reduce((a, r) => isReturned(r.first_m, r.last_before) ? { count: a.count + 1, margin: a.margin + Math.round(Number(r.margin)) } : a, { count: 0, margin: 0 });
 
-  res.json({
+  return {
     month: monthStr,
     historyMonths: histMonths,
     /** 👥 Вікна «плюс / мінус до середнього» і «замовляли раніше» (задача 5609) — щоб екран підписав, з чим порівнює. */
@@ -7203,7 +7265,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     // 🗂 Порядок груп у «Всі» (ТЗ 22.09, п.3.1) — одна копія, у ядрі.
     tabGroupRank: clientTabs.TAB_GROUP_RANK,
     // 🔁 Пул лідгенів (ТЗ 22.09, п.4.2–4.4): хто бачить вкладку пулу і хто може брати.
-    leadgenPool: await leadgenPoolAccess(auth),
+    leadgenPool,
     reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, decisionDays: reactCycleRules.DECISION_DAYS,
                   selfGraceDays: reactCycleRules.SELF_GRACE_DAYS, weeklyCap: reactCycleRules.WEEKLY_CAP,
                   launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR,
@@ -7328,8 +7390,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       canSubmit: byStatus.draft > 0,
       canApprove: byStatus.pending > 0,
     },
-  });
-});
+  };
+}
 
 // ── ЦИКЛ ЗАТВЕРДЖЕННЯ ПЛАНУ ПО КЛІЄНТУ (рішення власника 03.08.2026)
 // ЧЕРНЕТКА → ПОДАНО → ЗАТВЕРДЖЕНО. Той самий цикл, що в місячного плану

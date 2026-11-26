@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { AuthPayload } from "../../../auth";
-import { fetchClientPlans, createClientReactivationTask, type ClientPlansResp, type ClientPlanRow } from "../../../api";
+import { createClientReactivationTask, type ClientPlanRow } from "../../../api";
+import { useClientPlans } from "../../../hooks/useClientPlans";
 import { SegmentBadge } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
 import { CreateTaskDialog } from "./ReactivationBits";
@@ -290,8 +291,8 @@ function LevelTable({ title, groups, onPick, onPickColor }: {
 
 export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   const [month] = useState(ym);
-  const [data, setData] = useState<ClientPlansResp | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // ⏱ Список — зі спільної пам'яті вкладки (одна копія на «З ким говорити» і «Плани»); `load` перечитує з сервера.
+  const { data, err, load } = useClientPlans(auth.userId, month);
   // 🔙 Задача 9225: команда й менеджер — з адреси (`?team=&mgr=`), щоб посилання й «назад» браузера вели туди ж.
   const [team, setTeam] = useState<number | null>(() => readLeadNav(window.location.search, auth.role, auth.teamId).team);
   const [mgr, setMgr] = useState<number | null>(() => readLeadNav(window.location.search, auth.role, auth.teamId).mgr);
@@ -332,12 +333,6 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [auth.role, auth.teamId]);
-
-  const load = useCallback(() => {
-    setErr(null);
-    fetchClientPlans({ month }).then(setData).catch((e) => setErr(e?.response?.data?.error ?? "не вдалося завантажити"));
-  }, [month]);
-  useEffect(load, [load]);
 
   if (err) return <div style={{ ...S.card, color: "#dc2626" }}>{err}</div>;
   if (!data) return <div style={{ ...S.card, color: "#6b7280" }}>завантаження…</div>;

@@ -2,6 +2,7 @@ import axios from "axios";
 import type { AiCallState, PromiseStateT, PipelineGroupT, ConversationTypeT } from "./pages/dashboard/aiCallsView";
 import { blobErrorBody } from "./pages/dashboard/aiCallsView";
 import type { CarrierBucketT } from "./pages/dashboard/carrierCallsView";
+import { clientPlansMemory, clearsClientPlans } from "./pages/dashboard/clientPlansStore";
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:4000/api",
@@ -52,6 +53,16 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+// ⏱ Успішний запис будь-чого (крім названого «я онлайн») скидає пам'ять списку постійних клієнтів у цій вкладці
+// (`clientPlansStore.ts`) — дзеркало
+// серверного правила (`backend/src/core/scopeCache.ts`). Список залежить від записів з різних екранів (архів,
+// об'єднання, передача, задачі), і перелік «хто впливає» збрехав би мовчки. Стоїть ПІСЛЯ перехоплювача вище:
+// відповідь-заглушку захисту (челендж) той уже відхилив, сюди доходять лише справжні успішні відповіді.
+api.interceptors.response.use((res) => {
+  if (clearsClientPlans(res.config?.method, res.config?.url)) clientPlansMemory.clear();
+  return res;
+});
 
 export interface FunnelStage {
   funnel_stage: string;

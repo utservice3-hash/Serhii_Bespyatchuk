@@ -159,7 +159,9 @@ test("#3448 ПРОВОДКА: lead у рядку /client-plans з ядра; вк
   // 🧾 11220: аргументів два — оплата й рахунок; «поїздку поза CRM» (9045) прибрано рішенням зустрічі 25.11.2026.
   assert.match(route, /clientLeadRules\.lastOrderDate\(c\.last_paid, lastInvByKey\.get\(c\.client_key\) \?\? null\)/,
     "🔴 колір рахується без рахунку — СМАР ТЕКС із рахунком у жовтні знову не зелений");
-  assert.match(route, /const leadFacts = await clientLeadFacts\.leadFactsFor\(pool, rosterRows\.map/, "🔴 факти беруться не для всього ростеру");
+  // 26.11.2026 (швидкість екрана): факти стартують одразу після ростера, забирають їх нижче; ростер той самий.
+  assert.match(route, /const leadFactsP = early\(clientLeadFacts\.leadFactsFor\(udb, rosterRows\.map\(\(c\) => c\.client_key\)\)\);/, "🔴 факти беруться не для всього ростеру");
+  assert.match(route, /const leadFacts = await leadFactsP;/, "🔴 рядок бере факти не з того читання, що стартувало по ростеру");
   const loy = codeOnly(read("frontend/src/pages/dashboard/sections/LoyaltySection.tsx"));
   assert.match(loy, /\{ key: "lead", label: "З ким говорити" \},\n\s*\{ key: "plan"/, "🔴 вкладка «З ким говорити» не перша");
   assert.match(loy, /: "lead";\n\}/, "🔴 типова вкладка — не «З ким говорити»");

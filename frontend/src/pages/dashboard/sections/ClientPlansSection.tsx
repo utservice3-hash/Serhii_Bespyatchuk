@@ -1,11 +1,11 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
-  fetchClientPlans,
   createClientReactivationTask, addClientContact, contactChannelLabel, closeReactivationTask,
   fetchClientComments, addClientComment,
-  type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
+  type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
+import { useClientPlans } from "../../../hooks/useClientPlans";
 import { formatAmountFull } from "../format";
 import { CARD_MATCH, cardStats, toggleCard, signedUah, type CardKey } from "../clientsCards";
 import { useToast } from "../../../components/Toasts";
@@ -225,8 +225,8 @@ const COL_COUNT = COLS.length;
 
 export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; managers?: ManagerOption[]; fromReact?: boolean }) {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const [data, setData] = useState<ClientPlansResp | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // ⏱ Список — зі спільної пам'яті вкладки (одна копія на «З ким говорити» і «Плани»); `load` перечитує з сервера.
+  const { data, err, load } = useClientPlans(auth.userId, month);
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** 👥 Картка зверху, якою відфільтровано таблицю (ТЗ 5609, п.3): «all» — без фільтра. */
@@ -259,12 +259,6 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   /** 🎧 Який запис грає просто в рядку (п.3.3): один ключ — одне аудіо, як у картці. */
   /** Запис, що зараз у закріпленій панелі (`RecordingDock`) — ▶ біля нього стає ⏹. */
   const dockSrc = useDockSrc();
-
-  const load = useCallback(() => {
-    setErr(null);
-    fetchClientPlans({ month }).then(setData).catch((e) => setErr(e?.response?.data?.error ?? "не вдалося завантажити"));
-  }, [month]);
-  useEffect(load, [load]);
 
   /**
    * 🔴 ВІДМОВА СЕРВЕРА МУСИТЬ БУТИ ВИДИМОЮ (борг 15). Окремий стан, а не `err`: той рендериться ЗАМІСТЬ усього екрана —
