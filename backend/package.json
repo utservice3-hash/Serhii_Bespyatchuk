@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "node scripts/transpileBuild.mjs && node scripts/copyAssets.mjs && node scripts/writeVersion.mjs && node scripts/typecheck.mjs",
+    "build": "node scripts/transpileBuild.mjs && node scripts/copyAssets.mjs && node scripts/lockDist.mjs && node scripts/writeVersion.mjs && node scripts/typecheck.mjs",
     "test": "node scripts/testRun.mjs --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\"",
     "reconcile": "node dist/scripts/reconcile.js",
     "start": "node dist/index.js",
