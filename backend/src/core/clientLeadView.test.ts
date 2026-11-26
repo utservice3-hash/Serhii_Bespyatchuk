@@ -20,6 +20,9 @@ interface View {
   leadFilterActive: (f: Record<string, unknown>) => boolean;
   workSplit: (rows: readonly Row[]) => { yes: number; no: number; all: number };
   DEFAULT_LEAD_FILTER: Record<string, unknown>;
+  talkMatches: (r: Row, t: "all" | "none" | number) => boolean;
+  sortLead: (rows: readonly Row[], by: "money" | "talk" | "order") => Row[];
+  TALK_AGE_DAYS: readonly number[];
 }
 async function loadView(): Promise<View> {
   const ts = (await import("typescript")).default;
@@ -187,4 +190,60 @@ test("#11228 🪞 РИТМ У РЯДКУ: межа інтервалу по об�
   const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
   assert.match(lead, /\{L\.rhythm && <RhythmLine r=\{L\.rhythm\} \/>\}/, "🔴 у клітинці «Замовлення» немає звичайного інтервалу клієнта");
   assert.match(lead, /baseRows\.filter\(overRhythm\)\.length/, "🔴 число на кнопці «пропустили ритм» — не з правила відбору");
+});
+
+/**
+ * #11224 🪞 — ДАВНІСТЬ ОСТАННЬОЇ РОЗМОВИ: ФІЛЬТР І ПОРЯДОК (зустріч 25.11.2026: «дата останньої розмови + фільтр»).
+ * «Понад N днів» — строго більше N, і туди ж ті, з ким не говорили ніколи; «не було» — лише вони. Порядок «розмова» і
+ * «замовлення» ставить найдавніших і тих, у кого дати немає, першими; порядок за грошима лишається, як був.
+ * 🧨 Червоніє, якщо межа зʼїде на день, клієнт без розмов випаде з «понад N», або сортування сховає їх у кінець.
+ */
+test("#11224 🪞 ОСТАННЯ РОЗМОВА: «понад N днів» по обидва боки межі, без розмов — у кожному «понад» і в «не було»; порядок — найдавніші й без дати першими", async () => {
+  const v = await loadView();
+  const rows: Row[] = [
+    row("t0", "green", true, { lastTalk: "2026-11-26", lastTalkDays: 0, lifetimeRevenue: 10 }),
+    row("t30", "yellow", true, { lastTalk: "2026-10-27", lastTalkDays: 30, lifetimeRevenue: 500 }),
+    row("t31", "yellow", false, { lastTalk: "2026-10-26", lastTalkDays: 31, lifetimeRevenue: 40 }),
+    row("t61", "red", false, { lastTalk: "2026-09-26", lastTalkDays: 61, lifetimeRevenue: 900 }),
+    row("never", "red", false, { lastTalk: null, lastTalkDays: null, lifetimeRevenue: 70 }),
+  ];
+  assert.deepEqual([...v.TALK_AGE_DAYS], [14, 30, 60], "🔴 пороги давності розмови змінились — це зміна екрана, не технічна правка");
+  const f = (talk: unknown) => ids(v.applyLeadFilter(rows, { ...v.DEFAULT_LEAD_FILTER, talk }));
+  assert.equal(f("all"), "t0,t30,t31,t61,never", "🔴 вимкнений фільтр розмови щось відсікає");
+  assert.equal(f(30), "t31,t61,never", "🔴 «понад 30 днів»: 30-й день уже в списку, 31-й ні, або зник клієнт без розмов");
+  assert.equal(f(14), "t30,t31,t61,never");
+  assert.equal(f(60), "t61,never", "🔴 «понад 60 днів» — не ті");
+  assert.equal(f("none"), "never", "🔴 «розмов не було» показує тих, з ким говорили");
+  assert.equal(v.talkMatches(rows[1], 30), false, "🔴 рівно 30 днів — уже «понад 30»");
+  assert.equal(v.talkMatches(rows[2], 30), true, "🔴 31 день — ще не «понад 30»");
+  assert.equal(v.leadFilterActive({ ...v.DEFAULT_LEAD_FILTER, talk: 30 }), true, "🔴 фільтр розмови не рахується активним — «скинути» не зʼявиться");
+  // Умови фільтра — «і»: розмова × робота.
+  assert.equal(ids(v.applyLeadFilter(rows, { ...v.DEFAULT_LEAD_FILTER, talk: 14, work: "yes" })), "t30", "🔴 фільтри розмови й роботи не перетинаються");
+
+  // ↕️ Порядок. Вхідний масив не чіпається.
+  const before = ids(rows);
+  assert.equal(ids(v.sortLead(rows, "talk")), "never,t61,t31,t30,t0", "🔴 порядок «розмова»: найдавніші й без розмов не зверху");
+  assert.equal(ids(v.sortLead(rows, "money")), "t61,t30,never,t31,t0", "🔴 порядок за грошима змінився");
+  assert.equal(ids(rows), before, "🔴 сортування змінило вхідний масив");
+  const ord: Row[] = [
+    row("o5", "green", true, { lead: { orderDays: 5 }, lifetimeRevenue: 1 }),
+    row("o90", "red", false, { lead: { orderDays: 90 }, lifetimeRevenue: 2 }),
+    row("oNull", "red", false, { lead: { orderDays: null }, lifetimeRevenue: 3 }),
+    row("o90b", "red", false, { lead: { orderDays: 90 }, lifetimeRevenue: 50 }),
+    row("hand", "yellow", false, { lead: { orderDays: 5, handOver: true }, lifetimeRevenue: 0 }),
+  ];
+  assert.equal(ids(v.sortLead(ord, "order")), "oNull,o90b,o90,hand,o5", "🔴 порядок «замовлення»: хто довше без замовлення — не зверху, або рівні не за грошима");
+  assert.equal(ids(v.sortLead(ord, "money")), "hand,o90b,oNull,o90,o5", "🔴 «передати іншому» більше не перші в порядку за грошима");
+
+  // Проводка: сервер віддає дату й давність, екран показує їх і кличе правило відбору, а не свій поріг.
+  const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+  const dash = codeOnly(readFileSync(`${ROOT}backend/src/routes/dashboard.ts`, "utf8"));
+  const plans = dash.slice(dash.indexOf('dashboardRouter.get("/client-plans"'), dash.indexOf('dashboardRouter.post("/client-plans/submit"'));
+  assert.match(plans, /\blastTalkDays\b/, "🔴 рядок клієнта не несе давність останньої розмови");
+  const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
+  assert.match(lead, /const sorted = sortLead\(rows, sortBy\);/, "🔴 список сортується не правилом із модуля");
+  assert.match(lead, /TALK_AGE_DAYS\.map\(\(d\) => fchip\(filter\.talk === d, `понад \$\{d\} дн\. · \$\{baseRows\.filter\(\(r\) => talkMatches\(r, d\)\)\.length\}`/, "🔴 кнопки «понад N днів» — не з порогів модуля або число на них не з правила відбору");
+  assert.match(lead, /baseRows\.filter\(\(r\) => talkMatches\(r, "none"\)\)\.length/, "🔴 число «розмов не було» — не з правила відбору");
+  assert.match(lead, /\{c\.lastTalkDays === 0 \? "сьогодні" : `\$\{c\.lastTalkDays\} дн\. тому`\}/, "🔴 у рядку немає давності останньої розмови");
+  assert.match(lead, /<select value=\{sortBy\} onChange=\{\(e\) => setSortBy\(e\.target\.value as LeadSort\)\}/, "🔴 перемикача порядку списку немає");
 });

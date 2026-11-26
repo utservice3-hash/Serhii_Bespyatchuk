@@ -8,7 +8,7 @@ import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { monthsLabel } from "./ClientSeasonBlock";
 import { readLeadNav, leadNavSearch, backTarget, backIsHistoryBack, type LeadNav } from "../clientLeadNav";
-import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, overRhythm, DEFAULT_LEAD_FILTER, type LeadGroup, type LeadFilter } from "../clientLeadView";
+import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, overRhythm, talkMatches, sortLead, TALK_AGE_DAYS, DEFAULT_LEAD_FILTER, type LeadSort, type LeadGroup, type LeadFilter } from "../clientLeadView";
 
 /**
  * 🚦 «З КИМ З ПОСТІЙНИХ ГОВОРИТИ» — ПРОСТИЙ ЕКРАН ТІМЛІДА (ТЗ Юлі 28.10.2026, етап 2; задача 7360).
@@ -237,6 +237,8 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   // 🎯 11227: обраний колір (клієнти цього кольору в поточному охопленні) і фільтр списку. Перехід між рівнями їх не скидає.
   const [pick, setPick] = useState<LeadGroup | null>(null);
   const [filter, setFilter] = useState<LeadFilter>(DEFAULT_LEAD_FILTER);
+  // ↕️ 11224: порядок списку — за грошима (як було), за давністю розмови або за днями без замовлення.
+  const [sortBy, setSortBy] = useState<LeadSort>("money");
   const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [actErr, setActErr] = useState<string | null>(null);
@@ -365,6 +367,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
                     {playing(c) ? "⏹" : "▶"}
                   </button>
                 )}
+                {c.lastTalkDays != null && <span style={grey} title="скільки днів тому була остання розмова">{c.lastTalkDays === 0 ? "сьогодні" : `${c.lastTalkDays} дн. тому`}</span>}
                 {c.lastTalkBy && <span style={grey}>{c.lastTalkBy}</span>}
               </div>
             ) : <span style={S.chip("#fef2f2", "#b91c1c")}>розмов не було</span>}
@@ -401,7 +404,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
 
   const group = (color: keyof typeof COLOR, rows: Row[]) => {
     const m = COLOR[color];
-    const sorted = [...rows].sort((a, b) => Number(b.lead.handOver) - Number(a.lead.handOver) || b.lifetimeRevenue - a.lifetimeRevenue);
+    const sorted = sortLead(rows, sortBy);
     // Зелені згорнуті, поки їх не просили: обраний колір або увімкнений фільтр — це і є прохання.
     const hidden = color === "green" && !showGreen && pick == null && !leadFilterActive(filter);
     return (
@@ -463,6 +466,20 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
         {fchip(filter.work === "yes", `працюють ${ws.yes}`, () => setFilter((f) => ({ ...f, work: "yes" })))}
         {fchip(filter.work === "no", `роботи немає ${ws.no}`, () => setFilter((f) => ({ ...f, work: "no" })))}
       </span>
+      <span style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "#6b7280" }} title="остання розмова з клієнтом у телефонії (без номерів перевізників)">Розмова:</span>
+        {fchip(filter.talk === "all", "усі", () => setFilter((f) => ({ ...f, talk: "all" })))}
+        {TALK_AGE_DAYS.map((d) => fchip(filter.talk === d, `понад ${d} дн. · ${baseRows.filter((r) => talkMatches(r, d)).length}`,
+          () => setFilter((f) => ({ ...f, talk: d })), `без розмови понад ${d} днів, включно з тими, з ким не говорили ніколи`))}
+        {fchip(filter.talk === "none", `не було · ${baseRows.filter((r) => talkMatches(r, "none")).length}`, () => setFilter((f) => ({ ...f, talk: "none" })), "розмов із клієнтом не було взагалі")}
+      </span>
+      <label style={{ fontSize: 12, color: "#6b7280" }}>Порядок{" "}
+        <select value={sortBy} onChange={(e) => setSortBy(e.target.value as LeadSort)} style={{ fontSize: 12 }}>
+          <option value="money">за грошима клієнта</option>
+          <option value="talk">давніша розмова зверху</option>
+          <option value="order">довше без замовлення зверху</option>
+        </select>
+      </label>
       {fchip(filter.overRhythm, `⏰ пропустили ритм ${baseRows.filter(overRhythm).length}`, () => setFilter((f) => ({ ...f, overRhythm: !f.overRhythm })),
         "днів без замовлення більше, ніж звичайний інтервал клієнта")}
       {leadFilterActive(filter) && fchip(false, "✕ скинути фільтри", () => setFilter(DEFAULT_LEAD_FILTER))}
