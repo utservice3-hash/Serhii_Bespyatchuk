@@ -53,6 +53,8 @@ const S = {
   btn: (primary?: boolean) => ({ fontSize: 12, fontWeight: primary ? 700 : 500, padding: "5px 10px", borderRadius: 8, cursor: "pointer",
     border: primary ? "none" : "1px solid #d1d5db", background: primary ? "#111827" : "#fff", color: primary ? "#fff" : "#374151" } as const),
 };
+/** Чип, якому можна переноситись: у вузькій колонці він не розпирає таблицю (рядок мусить вміщатись на екрані ноутбука). */
+const WRAP_CHIP = { whiteSpace: "normal", borderRadius: 10 } as const;
 
 /**
  * 📊 ПЕРІОДИЧНІСТЬ ЗАМОВЛЕНЬ ЗА 6 МІСЯЦІВ — ПРЯМО В РЯДКУ (11218; зустріч 25.11.2026). Стовпчик = скільки замовлень
@@ -331,7 +333,8 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
       <Fragment key={c.clientKey}>
         <tr onClick={toggle} style={{ cursor: "pointer", background: isOpen ? "#eff6ff" : undefined, boxShadow: `inset 4px 0 0 ${COLOR[groupOf(c)].line}` }}>
           <td style={{ ...S.td, minWidth: 220 }}>
-            <div style={{ fontWeight: 700 }}>{c.clientName}</div>
+            {/* назва буває одним «словом» на сотні символів (пошти й номери, злиті без пробілів) — без переносу вона розпирає таблицю за край екрана */}
+            <div style={{ fontWeight: 700, overflowWrap: "anywhere" }}>{c.clientName}</div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, flexWrap: "wrap" }}>
               <SegmentBadge segment={c.segment} tip={data.categoryRules?.segmentTips[c.segment]} />
               {L.handOver && <span style={S.chip("#dc2626", "#fff")} title="дедлайн задачі на дзвінок минув, а розмови від 10 с після неї не було (правило Сергія). Передає тімлід.">⚠️ передати іншому менеджеру</span>}
@@ -356,8 +359,8 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
             {L.problem
               ? <div style={{ fontSize: 12, maxWidth: 320 }}><b style={{ color: "#b45309" }}>{L.problem.label}</b>: «{L.problem.note}»<div style={grey}>{L.problem.byName ?? "—"}, {dm(L.problem.day)} · знімається сама, якщо клієнт знову замовить</div></div>
               : L.works.yes
-              ? <span style={S.chip("#dcfce7", "#166534")} title={`за ${L.works.windowDays} дн. (ритм сегмента) є робота`}>✅ працюють · {WORK_BY[L.works.by ?? ""]} {dm(L.works.at)}</span>
-              : <span style={S.chip("#fef2f2", "#b91c1c")} title="розмова від 10 с, нова угода чи рух угоди, замовлення, коментар, контакт або оплата у Виписці — нічого">роботи немає за {L.works.windowDays} дн.</span>}
+              ? <span style={{ ...S.chip("#dcfce7", "#166534"), ...WRAP_CHIP }} title={`за ${L.works.windowDays} дн. (ритм сегмента) є робота`}>✅ працюють · {WORK_BY[L.works.by ?? ""]} {dm(L.works.at)}</span>
+              : <span style={{ ...S.chip("#fef2f2", "#b91c1c"), ...WRAP_CHIP }} title="розмова від 10 с, нова угода чи рух угоди, замовлення, коментар, контакт або оплата у Виписці — нічого">роботи немає за {L.works.windowDays} дн.</span>}
           </td>
           <td style={{ ...S.td, minWidth: 170 }}>
             <RowComment clientKey={c.clientKey} value={c.lastComment} canWrite onSaved={load} />
