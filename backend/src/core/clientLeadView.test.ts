@@ -373,5 +373,6 @@ test("#11222 🪞 ПОЯСНЕННЯ ПІД «?»: довгий текст на 
   assert.match(tip, /\{open && \(\s*<span role="tooltip"/, "🔴 текст підказки показано завжди, а не за відкриттям");
   assert.match(tip, /onMouseEnter=\{\(\) => setOpen\(true\)\}/, "🔴 підказка не відкривається наведенням");
   assert.match(tip, /onFocus=\{\(\) => setOpen\(true\)\}/, "🔴 підказка не відкривається з клавіатури");
+  assert.match(tip, /onClick=\{\(e\) => \{ e\.stopPropagation\(\); setOpen\(true\); \}\}/, "🔴 клік перемикає підказку: дотик дає фокус (відкрито) і одразу клік (закрито) — на телефоні пояснення не видно");
   assert.match(tip, /aria-label=\{label\} aria-expanded=\{open\}/, "🔴 кнопка «?» без назви для читача екрана");
 });
