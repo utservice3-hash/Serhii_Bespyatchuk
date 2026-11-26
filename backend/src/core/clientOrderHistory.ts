@@ -31,3 +31,13 @@ export function foldOrderHistory(rows: readonly BucketRow[], months: readonly st
   }
   return { money, deals };
 }
+
+/**
+ * 📅 «ЗА ЦЕЙ РІК» (задача 11219; зустріч 25.11.2026: «оборот і дохід клієнта за цей рік»). Поточний календарний рік за
+ * Києвом: від 1 січня до сьогодні включно. `today` — київська дата `YYYY-MM-DD`.
+ * ⚠️ Прочитання «цей рік = календарний» — наше; «останні 12 місяців» дали б інше число. Екран підписує рік цифрою.
+ */
+export function thisYearWindow(today: string): { year: number; from: string; to: string } {
+  const year = Number(today.slice(0, 4));
+  return { year, from: `${today.slice(0, 4)}-01-01`, to: today.slice(0, 10) };
+}

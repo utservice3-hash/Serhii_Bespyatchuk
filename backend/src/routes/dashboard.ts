@@ -6695,10 +6695,14 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // обидва ядром, по тих самих ключах.
   // 🔁 Цикл реактивації (ТЗ 22.09, блок 4): останній рахунок і рішення по кожному клієнту — від СЬОГОДНІ,
   // а не від обраного місяця: вкладка «Реактивація» — це поточний стан, як і стан клієнта.
-  const [callsMonthByKey, basisByKey, lastInvByKey, cyclesByKey] = await Promise.all([
+  // 📅 11219 (зустріч 25.11.2026): оборот і дохід клієнта за цей календарний рік — ядро ①, по клієнту цілком
+  // (без звуження за менеджером чи командою), від СЬОГОДНІ, як і стан клієнта.
+  const yearWin = clientOrderHistory.thisYearWindow(todayKyiv);
+  const [callsMonthByKey, basisByKey, lastInvByKey, yearMoneyByKey, cyclesByKey] = await Promise.all([
     clientCalls.callsByMonth(clientKeys, monthStr),
     planBasis.basisForMonth(clientKeys, `${monthStr}-01`),
     money.lastInvoiceByClientKey(clientKeys),
+    money.successPeriodByClientKey(clientKeys, yearWin.from, yearWin.to),
     reactCycle.cyclesFor(pool, clientKeys),
   ]);
   const nowYm = kyivToday().slice(0, 7);
@@ -7081,6 +7085,14 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       periodDays: factsFor(seg, c.client_key).medianGapDays,
       /** 🧾 Гроші «з рахунку» по місяцях (останній — місяць екрана) і середнє за 3 повні місяці перед ним (макет 5609). */
       historyInv: histInvByKey.get(c.client_key) ?? histMonths.map(() => 0),
+      /**
+       * 📅 11219: ① за цей календарний рік — дохід (маржа), оборот (сума рахунку тих самих угод), скільки угод і в
+       * скількох з них суми рахунку немає (`missing` — оборот тоді неповний). Без успішних угод цього року — нулі.
+       */
+      yearMoney: (() => {
+        const y = yearMoneyByKey.get(c.client_key);
+        return { year: yearWin.year, revenue: Math.round(y?.revenue ?? 0), income: Math.round(y?.income ?? 0), deals: y?.deals ?? 0, missing: y?.missing ?? 0 };
+      })(),
       /** 📊 11218: кількість замовлень «з рахунку» по тих самих місяцях — міні-графік періодичності в рядку. */
       historyInvDeals: histInvDealsByKey.get(c.client_key) ?? histMonths.map(() => 0),
       avg3: (() => { const a = histInvByKey.get(c.client_key); return a ? Math.round((a[2] + a[3] + a[4]) / 3) : 0; })(),

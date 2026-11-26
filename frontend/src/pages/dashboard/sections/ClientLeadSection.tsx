@@ -82,6 +82,22 @@ function OrderSpark({ counts, money, months }: { counts: number[]; money: number
   );
 }
 
+const uah = (v: number) => `${Math.round(v).toLocaleString("uk-UA")} ₴`;
+/**
+ * 📅 ОБОРОТ І ДОХІД КЛІЄНТА ЗА ЦЕЙ РІК (11219; зустріч 25.11.2026). Обидва числа — з успішно реалізованих угод року:
+ * оборот — сума рахунків, дохід — маржа. Якщо в частини угод суми рахунку немає, оборот позначено «≥» і це названо.
+ */
+function YearMoney({ y }: { y: NonNullable<Row["yearMoney"]> }) {
+  if (y.deals === 0) return <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }} title={`успішно реалізованих угод за ${y.year} рік немає`}>{y.year}: успішних угод не було</div>;
+  const partial = y.missing > 0;
+  return (
+    <div style={{ fontSize: 11, color: "#374151", marginTop: 4, whiteSpace: "nowrap" }}
+      title={`успішно реалізовані угоди за ${y.year} рік: ${y.deals}. Оборот — сума рахунків цих угод, дохід — маржа.${partial ? ` У ${y.missing} з них суми рахунку в CRM немає — оборот неповний.` : ""}`}>
+      {y.year}: оборот <b>{partial ? "≥ " : ""}{uah(y.income)}</b> · дохід <b>{uah(y.revenue)}</b>
+    </div>
+  );
+}
+
 /** Підсумок набору рядків — одне місце для команди, менеджера й шапки. */
 function stats(rows: Row[]) {
   const s = { all: rows.length, green: 0, yellow: 0, red: 0, problem: 0, working: 0, handOver: 0, newRepeat: 0, lost: 0,
@@ -305,6 +321,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
             <div>{L.orderDays == null ? "замовлень не було" : L.orderDays === 0 ? "замовив сьогодні" : `не замовляв ${L.orderDays} дн.`}</div>
             <div style={grey} title="замовлення = рахунок («Виставлення рахунку» і далі) або оплата в CRM — що свіжіше">{L.lastOrder ? `останнє ${dm(L.lastOrder)}.${L.lastOrder.slice(2, 4)}` : ""}</div>
             {c.historyInvDeals && <OrderSpark counts={c.historyInvDeals} money={c.historyInv} months={data.historyMonths} />}
+            {c.yearMoney && <YearMoney y={c.yearMoney} />}
           </td>
           <td style={S.td}>
             {L.problem

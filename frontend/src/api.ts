@@ -4945,6 +4945,11 @@ export interface ClientPlanRow {
   historyInv: number[]; avg3: number;
   /** 📊 11218: кількість замовлень «з рахунку» по тих самих 6 місяцях, що `historyInv` — періодичність у рядку «З ким говорити». */
   historyInvDeals?: number[];
+  /**
+   * 📅 11219: ① за цей календарний рік — дохід (маржа) і оборот (сума рахунку тих самих успішних угод), число угод;
+   * `missing` — у скількох угод суми рахунку немає (оборот тоді неповний).
+   */
+  yearMoney?: { year: number; revenue: number; income: number; deals: number; missing: number };
   /** Без роботи (30 днів без контакту й без кроку з датою) · без задачі · задача прострочена — з сервера (`core/repeatScreenRules.ts`). */
   work: { noWork: boolean; noTask: boolean; overdue: boolean };
   /** 🧾 Чим підтверджено роботу за період (задача 6455): угода «від рахунку» і / або оплата у Виписці; обидва `null` — «без роботи». */
