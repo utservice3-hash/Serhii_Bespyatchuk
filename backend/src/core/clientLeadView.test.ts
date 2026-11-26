@@ -25,6 +25,9 @@ interface View {
   TALK_AGE_DAYS: readonly number[];
   noPhone: (r: Row) => boolean;
   profileOpen: (r: Row) => boolean;
+  LEAD_TILES: readonly string[];
+  inTile: (r: Row, tile: string) => boolean;
+  tileRows: (rows: readonly Row[], tile: string | null) => Row[];
 }
 async function loadView(): Promise<View> {
   const ts = (await import("typescript")).default;
@@ -89,11 +92,11 @@ test("#11227 🪞 КОЛІР КЛІКАБЕЛЬНИЙ: вибір дає рів�
 test("#11227b ЕКРАН: колір — кнопка в лічильнику й таблицях рівня; список кольору — з усього охоплення; фільтр «робота» над списком", () => {
   const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
   assert.match(lead, /from "\.\.\/clientLeadView";/, "🔴 екран не бере правило відбору з clientLeadView");
-  assert.match(lead, /const baseRows = pick != null \? pickRows\(scopeRows, pick\) : mgrRows \?\? \[\];/,
+  assert.match(lead, /const baseRows = [^;]*\bpick != null \? pickRows\(scopeRows, pick\) : mgrRows \?\? \[\];/,
     "🔴 з обраним кольором список не з усього охоплення (scopeRows) — «всі червоні всіх менеджерів» не вийде");
   assert.match(lead, /const listRows = applyLeadFilter\(baseRows, filter\);/, "🔴 список не проходить фільтр");
-  assert.match(lead, /const showClients = isManager \|\| mgrEff != null \|\| pick != null;/, "🔴 з обраним кольором на рівні компанії чи команди списку немає");
-  assert.match(lead, /<Counters rows=\{scopeRows\} month=\{month\} pick=\{pick\} onPick=\{togglePick\} \/>/, "🔴 лічильник не вміє обирати колір");
+  assert.match(lead, /const showClients = isManager \|\| mgrEff != null \|\| pick != null\b/, "🔴 з обраним кольором на рівні компанії чи команди списку немає");
+  assert.match(lead, /<Counters rows=\{scopeRows\} month=\{month\} pick=\{pick\} onPick=\{togglePick\} /, "🔴 лічильник не вміє обирати колір");
   for (const c of ["green", "yellow", "red"]) {
     assert.match(lead, new RegExp(`<ColorPick color="${c}" n=\\{s\\.${c}\\} pick=\\{pick\\} onPick=\\{onPick\\} />`), `🔴 у лічильнику ${c} — не кнопка`);
     assert.match(lead, new RegExp(`\\{num\\(g\\.id, "${c}", s\\.${c}, `), `🔴 у таблиці рівня ${c} — не кнопка`);
@@ -113,6 +116,95 @@ test("#11227b ЕКРАН: колір — кнопка в лічильнику й
  * поза вікном і клієнт поза списком не рахуються, порожній місяць — нуль (дірка в ритмі), а Σ стовпчиків = числу угод у вікні.
  * 🧨 Червоніє, якщо місяць зʼїде на сусідній, кошик поза вікном потрапить у графік, або кількість і гроші розійдуться.
  */
+/**
+ * #11227c — РЯДОК СПИСКУ НЕ РОЗПИРАЄ ТАБЛИЦЮ ЗА КРАЙ ЕКРАНА (знайдено на проді 26.11.2026 одразу після викату 11216).
+ * Список кольору по всій компанії (11227) зводить в одну таблицю клієнтів усіх менеджерів, і серед них є назва
+ * одним «словом» на сотні символів (пошти й номери без пробілів): колонка «Клієнт» ставала 612 пікселів, таблиця 1692
+ * при екрані 1217, і «Остання розмова» та «Задача» їхали за край. Друге: чип «працюють · оплата у Виписці 24.11»
+ * не переносився і тримав свою колонку на 252.
+ * Гейт читає джерело (вимірювати пікселі тут нічим): назва мусить мати перенос будь-де, чип роботи — дозвіл на перенос.
+ */
+test("#11227c ШИРИНА СПИСКУ: назва клієнта переноситься будь-де, чип роботи не тримає колонку — рядок не розпирає таблицю", () => {
+  const src = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
+  assert.match(src, /<div style=\{\{ fontWeight: 700, overflowWrap: "anywhere" \}\}>\{c\.clientName\}<\/div>/,
+    "🔴 назва клієнта без переносу будь-де: одна довга назва без пробілів розпирає таблицю за край екрана");
+  assert.match(src, /const WRAP_CHIP = \{ whiteSpace: "normal"/, "🔴 немає стилю чипа, якому можна переноситись");
+  const work = src.match(/\{L\.problem\s*\?[\s\S]*?<\/td>/)?.[0] ?? "";
+  assert.ok(work.includes("✅ працюють"), "🔴 перевіряти нічого: клітинку «Робота з клієнтом» не знайдено");
+  const chips = [...work.matchAll(/<span style=\{([^>]*?)\} title=/g)].map((m) => m[1]);
+  assert.equal(chips.length, 2, `🔴 у клітинці «Робота з клієнтом» очікував два чипи («працюють» і «роботи немає»), знайшов ${chips.length}`);
+  for (const c of chips) assert.ok(c.includes("...WRAP_CHIP"), `🔴 чип роботи не переноситься і тримає колонку широкою: ${c}`);
+});
+
+/**
+ * #11227d 🪞 — ПЛИТКА = СПИСОК ТИХ, КОГО ВОНА РАХУЄ (Роман 26.11.2026: «хочеться щоб оце клікалося теж і фільтрувалося»).
+ * «Нових постійних», «втратили», «передати» — кожна показує рівно клієнтів зі своєю ознакою сервера. Проблемний (8350)
+ * не входить у жодну плитку, хоч ознаку має: він рахується лише своїм числом. Рядок без ознаки (старий сервер) — ні.
+ * Число на плитці й список — ОДИН предикат (`inTile`), тож «23 втратили» і рядків під ними завжди порівну.
+ * 🧨 Червоніє, якщо в список за плиткою потрапить проблемний чи клієнт без ознаки, клієнт з ознакою загубиться,
+ * або фільтр панелі перестане діяти поверх плитки.
+ */
+test("#11227d 🪞 ПЛИТКА КЛІКАБЕЛЬНА: список за плиткою — рівно клієнти з її ознакою, без проблемних; число плитки = довжині списку", async () => {
+  const v = await loadView();
+  const t = (id: string, color: Row["lead"]["color"], works: boolean, lead: Record<string, unknown>) => row(id, color, works, { lead });
+  const rows: Row[] = [
+    t("n1", "green", true, { newRepeat: true, lostThisMonth: false, handOver: false }),
+    t("n2", "yellow", false, { newRepeat: true, lostThisMonth: false, handOver: false }),
+    t("l1", "red", true, { newRepeat: false, lostThisMonth: true, handOver: false }),
+    t("l2", "yellow", false, { newRepeat: false, lostThisMonth: true, handOver: false }),
+    t("h1", "red", false, { newRepeat: false, lostThisMonth: false, handOver: true }),
+    t("lh", "red", false, { newRepeat: false, lostThisMonth: true, handOver: true }),
+    t("x1", "green", true, { newRepeat: false, lostThisMonth: false, handOver: false }),
+    // Старий сервер: ознак немає взагалі — невідоме не видаємо за «так».
+    row("old", "red", false),
+    // Проблемний з усіма трьома ознаками — у жодну плитку.
+    t("p1", "red", false, { problem: { reason: "conflict" }, newRepeat: true, lostThisMonth: true, handOver: true }),
+  ];
+  assert.deepEqual([...v.LEAD_TILES], ["newRepeat", "lost", "handOver"], "🔴 склад плиток змінився — перевір, що кожна має кнопку на екрані");
+  assert.equal(ids(v.tileRows(rows, "newRepeat")), "n1,n2", "🔴 «нових постійних» — не рівно клієнти з ознакою");
+  assert.equal(ids(v.tileRows(rows, "lost")), "l1,l2,lh", "🔴 «втратили» — не рівно клієнти з ознакою (або туди потрапив проблемний)");
+  assert.equal(ids(v.tileRows(rows, "handOver")), "h1,lh", "🔴 «передати» — не рівно клієнти з ознакою (або туди потрапив проблемний)");
+  assert.equal(ids(v.tileRows(rows, null)), ids(rows), "🔴 без обраної плитки рядки змінились");
+  for (const tile of v.LEAD_TILES) {
+    const list = v.tileRows(rows, tile);
+    assert.ok(list.length > 0, `🔴 ${tile}: фікстура порожня — перевіряти нічого`);
+    assert.equal(rows.filter((r) => v.inTile(r, tile)).length, list.length, `🔴 ${tile}: число на плитці ≠ довжині списку`);
+    assert.ok(!list.some((r) => r.id === "p1"), `🔴 ${tile}: проблемний клієнт у списку плитки`);
+    assert.ok(!list.some((r) => r.id === "old" || r.id === "x1"), `🔴 ${tile}: у списку клієнт без ознаки`);
+    const ws = v.workSplit(list);
+    assert.equal(ws.yes + ws.no, list.length, `🔴 ${tile}: «працюють» + «роботи немає» ≠ список плитки`);
+  }
+  // Фільтр панелі діє поверх плитки так само, як поверх кольору.
+  assert.equal(ids(v.applyLeadFilter(v.tileRows(rows, "lost"), { ...v.DEFAULT_LEAD_FILTER, work: "no" })), "l2,lh", "🔴 «роботи немає» поверх плитки показує не тих");
+  assert.equal(ids(v.applyLeadFilter(v.tileRows(rows, "lost"), { ...v.DEFAULT_LEAD_FILTER, work: "yes" })), "l1", "🔴 «працюють» поверх плитки показує не тих");
+});
+
+/**
+ * #11227e — ЕКРАН КЛИЧЕ ПРАВИЛО ПЛИТКИ: три плитки — кнопки (нуль не натискається, крім уже обраної); число на плитці рахується тим самим
+ * `inTile`, що й список; список за плиткою — з УСЬОГО охоплення; плитка й колір не активні одночасно; з плиткою таблиця
+ * рівня поступається списку, а зелені не згорнуті (35 із 40 нових постійних на проді 26.11.2026 — зелені).
+ * 🧨 Червоніє, якщо плитку знову зробити простим числом, число плитки порахувати повз `inTile`, список за плиткою
+ * брати лише з клієнтів одного менеджера, або вибір плитки перестане знімати колір (і навпаки).
+ */
+test("#11227e ЕКРАН: три плитки — кнопки; число плитки й список — один предикат; список плитки з усього охоплення; плитка й колір — один вибір", () => {
+  const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
+  assert.match(lead, /<button type="button" disabled=\{n === 0 && !on\} aria-pressed=\{on\} onClick=\{\(\) => onTile\(tile\)\}/, "🔴 плитка — не кнопка, плитка з нулем натискається, або обрану плитку з нулем нічим зняти");
+  for (const tile of ["newRepeat", "lost", "handOver"]) {
+    assert.match(lead, new RegExp(`<TileButton tile="${tile}" n=\\{s\\.${tile}\\} `), `🔴 плитка ${tile} — не кнопка або показує не своє число`);
+  }
+  assert.match(lead, /if \(inTile\(r, "handOver"\)\) s\.handOver\+\+;/, "🔴 число «передати» рахується не тим предикатом, що список");
+  assert.match(lead, /if \(inTile\(r, "newRepeat"\)\) \{ s\.newRepeat\+\+;/, "🔴 число «нових постійних» рахується не тим предикатом, що список");
+  assert.match(lead, /if \(inTile\(r, "lost"\)\) s\.lost\+\+;/, "🔴 число «втратили» рахується не тим предикатом, що список");
+  assert.match(lead, /const baseRows = tile != null \? tileRows\(scopeRows, tile\) : /, "🔴 список за плиткою не з усього охоплення (scopeRows)");
+  assert.match(lead, /const togglePick = \(c: LeadGroup\) => \{[^}]*setTile\(null\);/, "🔴 вибір кольору не знімає плитку — на екрані два вибори одразу");
+  assert.match(lead, /const toggleTile = \(t: LeadTile\) => \{[^}]*setPick\(null\);/, "🔴 вибір плитки не знімає колір — на екрані два вибори одразу");
+  assert.match(lead, /onPick=\{togglePick\} tile=\{tile\} onTile=\{toggleTile\} \/>/, "🔴 лічильник не вміє обирати плитку");
+  assert.match(lead, /const showClients = isManager \|\| mgrEff != null \|\| pick != null \|\| tile != null;/, "🔴 з обраною плиткою на рівні компанії чи команди списку немає");
+  assert.equal((lead.match(/\{!isManager && pick == null && tile == null && teamEff /g) ?? []).length, 2, "🔴 з обраною плиткою таблиця команд / менеджерів лишається на місці списку");
+  assert.match(lead, /const hidden = color === "green" && !showGreen && pick == null && tile == null && /, "🔴 зелені згорнуті й під обраною плиткою — нових постійних не видно");
+  assert.match(lead, /tile != null \? listRows\.some\(\(c\) => groupOf\(c\) === k\) : /, "🔴 під плиткою показуються порожні групи кольору");
+});
+
 test("#11218 🪞 ПЕРІОДИЧНІСТЬ ЗА 6 МІС: замовлення й гроші з одних кошиків; поза вікном і поза списком — ні; дірка — нуль", async () => {
   const { foldOrderHistory } = await import("./clientOrderHistory.js");
   const months = ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"];
@@ -244,7 +336,7 @@ test("#11224 🪞 ОСТАННЯ РОЗМОВА: «понад N днів» по 
   assert.match(plans, /\blastTalkDays\b/, "🔴 рядок клієнта не несе давність останньої розмови");
   const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
   assert.match(lead, /const sorted = sortLead\(rows, sortBy\);/, "🔴 список сортується не правилом із модуля");
-  assert.match(lead, /TALK_AGE_DAYS\.map\(\(d\) => fchip\(filter\.talk === d, `понад \$\{d\} дн\. · \$\{baseRows\.filter\(\(r\) => talkMatches\(r, d\)\)\.length\}`/, "🔴 кнопки «понад N днів» — не з порогів модуля або число на них не з правила відбору");
+  assert.match(lead, /TALK_AGE_DAYS\.map\(\(d\) => segBtn\(filter\.talk === d, `понад \$\{d\} дн\.`, baseRows\.filter\(\(r\) => talkMatches\(r, d\)\)\.length,/, "🔴 кнопки «понад N днів» — не з порогів модуля або число на них не з правила відбору");
   assert.match(lead, /baseRows\.filter\(\(r\) => talkMatches\(r, "none"\)\)\.length/, "🔴 число «розмов не було» — не з правила відбору");
   assert.match(lead, /\{c\.lastTalkDays === 0 \? "сьогодні" : `\$\{c\.lastTalkDays\} дн\. тому`\}/, "🔴 у рядку немає давності останньої розмови");
   assert.match(lead, /<select value=\{sortBy\} onChange=\{\(e\) => setSortBy\(e\.target\.value as LeadSort\)\}/, "🔴 перемикача порядку списку немає");
@@ -282,7 +374,7 @@ test("#11226 🪞 БЕЗ НОМЕРА: у списку рівно ті, у ко�
   const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
   assert.match(lead, /\{noPhone\(c\) && \(/, "🔴 у рядку не видно, що в клієнта немає номера");
   assert.match(lead, /📵 нема номера/, "🔴 підпис «нема номера» зник із рядка");
-  assert.match(lead, /fchip\(filter\.noPhone, `📵 без номера \$\{baseRows\.filter\(noPhone\)\.length\}`/, "🔴 кнопки «без номера» немає або число на ній не з правила відбору");
+  assert.match(lead, /tog\(filter\.noPhone, "📵 без номера", baseRows\.filter\(noPhone\)\.length,/, "🔴 кнопки «без номера» немає або число на ній не з правила відбору");
 });
 
 /**
@@ -337,7 +429,7 @@ test("#11221 🪞 АНКЕТА КЛІЄНТА: рівно пʼять питан�
   assert.match(block, /saveClientProfile\(card\.clientKey, draft\)/, "🔴 анкета не зберігається цілою");
   assert.doesNotMatch(block, /Чим займається|міжнародн|авіа/i, "🔴 питання анкети продубльовано на фронті — зʼїдуть із ядром");
   const lead = codeOnly(readFileSync(FE(`${sections}ClientLeadSection.tsx`), "utf8"));
-  assert.match(lead, /fchip\(filter\.profileOpen, `📋 анкета не заповнена \$\{baseRows\.filter\(profileOpen\)\.length\}`/, "🔴 кнопки «анкета не заповнена» немає або число на ній не з правила відбору");
+  assert.match(lead, /tog\(filter\.profileOpen, "📋 анкета не заповнена", baseRows\.filter\(profileOpen\)\.length,/, "🔴 кнопки «анкета не заповнена» немає або число на ній не з правила відбору");
   assert.match(lead, /📋 анкета \{c\.profile\.filled\}\/\{c\.profile\.total\}/, "🔴 у рядку не видно, скільки питань анкети мають відповідь");
 });
 
