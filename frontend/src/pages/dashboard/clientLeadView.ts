@@ -15,7 +15,9 @@ export type LeadGroup = "green" | "yellow" | "red" | "problem";
 
 /** Мінімум рядка, який читає цей модуль (структурно сумісний із `ClientPlanRow`). */
 export interface LeadViewRow {
-  lead: { color: "green" | "yellow" | "red"; problem?: unknown; works: { yes: boolean }; rhythm?: { over: boolean }; handOver?: boolean; orderDays?: number | null };
+  lead: { color: "green" | "yellow" | "red"; problem?: unknown; works: { yes: boolean }; rhythm?: { over: boolean }; handOver?: boolean; orderDays?: number | null;
+    /** 🧩 Ознаки плиток (рахує сервер): друга оплата припала на цей місяць · 180-й день без замовлення припадає на цей місяць. */
+    newRepeat?: boolean; lostThisMonth?: boolean };
   /** 📞 Остання розмова (11224): київська дата і скільки днів тому; обидва `null` — розмов не було. */
   lastTalk?: string | null; lastTalkDays?: number | null;
   /** 📵 11226: стан номера з сервера (`phoneState`); `"none"` — у контактах клієнта в Kommo немає жодного номера. */
@@ -33,6 +35,27 @@ export function leadGroupOf(r: LeadViewRow): LeadGroup {
 /** Рядки обраної групи; `null` — колір не обрано, рядки як є. */
 export function pickRows<T extends LeadViewRow>(rows: readonly T[], pick: LeadGroup | null): T[] {
   return pick == null ? [...rows] : rows.filter((r) => leadGroupOf(r) === pick);
+}
+
+/**
+ * 🧩 ПЛИТКА = КНОПКА (запит Романа 26.11.2026: «хочеться щоб оце клікалося теж і фільтрувалося»). Три плитки над списком —
+ * «нових постійних», «втратили», «передати іншому менеджеру» — показують САМЕ ТИХ клієнтів, яких рахують.
+ * Ознаки дає сервер (`lead.newRepeat`, `lead.lostThisMonth`, `lead.handOver`); тут лише відбір.
+ * 🔴 ОДИН ПРЕДИКАТ НА ЧИСЛО Й НА СПИСОК: число на плитці рахує екран через `inTile`, список будує `tileRows` через нього ж —
+ * інакше «23 втратили» і 22 рядки під ними колись розійдуться. Проблемний (8350) не входить у жодну плитку: він
+ * рахується лише своїм числом.
+ */
+export type LeadTile = "newRepeat" | "lost" | "handOver";
+export const LEAD_TILES: readonly LeadTile[] = ["newRepeat", "lost", "handOver"];
+export function inTile(r: LeadViewRow, tile: LeadTile): boolean {
+  if (r.lead.problem) return false;
+  if (tile === "newRepeat") return r.lead.newRepeat === true;
+  if (tile === "lost") return r.lead.lostThisMonth === true;
+  return r.lead.handOver === true;
+}
+/** Рядки обраної плитки в охопленні; `null` — плитку не обрано, рядки як є. */
+export function tileRows<T extends LeadViewRow>(rows: readonly T[], tile: LeadTile | null): T[] {
+  return tile == null ? [...rows] : rows.filter((r) => inTile(r, tile));
 }
 
 export type WorkFilter = "all" | "yes" | "no";
