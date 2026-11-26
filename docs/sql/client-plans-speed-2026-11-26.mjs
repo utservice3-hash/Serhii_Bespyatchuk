@@ -12,6 +12,10 @@
 //                                                «інша == інша» означає, що дані за цей час не зрушили; тоді
 //                                                «ця == інша» доводить, що нова збірка віддає ту саму відповідь.
 //   … --scope=team:6 | --scope=manager:41     — те саме від імені тімліда команди або менеджера (типово адміністратор).
+//   … --scope=team:auto | --scope=manager:auto — команду або менеджера скрипт обирає сам: у кого найбільше клієнтів
+//                                                у списку адміністратора (охоплення гарантовано непорожнє).
+//                                                Друкує лише id і кількість.
+//   … --brief                                  — без таблиць окремих читань: рядок на прохід і підсумок.
 //   node cp.mjs [YYYY-MM] --explain[=N]        — після проходів показує план бази (EXPLAIN ANALYZE, BUFFERS) для N
 //                                                найважчих читань (типово 5). Кожне з них виконується ще раз.
 //
@@ -39,10 +43,12 @@ const month = argv.find((a) => /^\d{4}-\d{2}$/.test(a));
 const flag = (name) => { const a = argv.find((x) => x === `--${name}` || x.startsWith(`--${name}=`)); return a == null ? null : (a.includes("=") ? a.slice(a.indexOf("=") + 1) : ""); };
 const againstDir = flag("against");
 const explainN = flag("explain") == null ? 0 : (Number(flag("explain")) || 5);
-const scopeArg = /^(team|manager):(\d+)$/.exec(flag("scope") ?? "");
-if (flag("scope") != null && !scopeArg) { console.log("🔴 --scope має бути team:<id> або manager:<id>"); process.exit(2); }
+/** `--brief`: без таблиць окремих читань, лише рядок на прохід і підсумок (для повторних порівнянь в інших охопленнях). */
+const brief = flag("brief") != null;
+const scopeArg = /^(team|manager):(\d+|auto)$/.exec(flag("scope") ?? "");
+if (flag("scope") != null && !scopeArg) { console.log("🔴 --scope має бути team:<id> | manager:<id> | team:auto | manager:auto"); process.exit(2); }
 /** Від чийого імені викликати: адміністратор, тімлід команди або менеджер. Охоплення рахує сам обробник. */
-const AUTH = !scopeArg ? { userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null }
+let AUTH = !scopeArg ? { userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null }
   : scopeArg[1] === "team" ? { userId: 0, role: "team_lead", roleKey: "team_lead", managerId: null, teamId: Number(scopeArg[2]) }
     : { userId: 0, role: "manager", roleKey: "manager", managerId: Number(scopeArg[2]), teamId: null };
 
@@ -54,7 +60,9 @@ const label = (q) => {
 /** Хто покликав: перший кадр стека з dist (функція й файл:рядок) — багато запитів ядра починаються однаково. */
 const caller = () => {
   const lines = String(new Error().stack ?? "").split("\n").slice(2);
-  const hit = lines.find((l) => l.includes("/dist/") && !l.includes("/node_modules/"));
+  // Обгортка стелі одночасності (`core/limitAll.js`) — не «хто покликав»: шукаємо перший кадр поза нею.
+  const mineOnly = lines.filter((l) => l.includes("/dist/") && !l.includes("/node_modules/"));
+  const hit = mineOnly.find((l) => !l.includes("/core/limitAll.js")) ?? mineOnly[0];
   if (!hit) return "?";
   const m = hit.match(/at (?:async )?(?:(\S+) \()?.*?\/dist\/([^):]+):(\d+)/);
   return m ? `${m[2]}:${m[3]}${m[1] ? " " + m[1] : ""}` : hit.trim().slice(0, 60);
@@ -128,7 +136,7 @@ async function once(b, title, { fresh = true, table = true } = {}) {
   console.log(`усього ${Math.round(wall)} мс · читань ${recs.length} · одночасно щонайбільше ${peak} · у базі (хоч одне читання в польоті) ${Math.round(busy)} мс · `
     + `поза базою (Node) ${Math.round(wall - busy)} мс · сума всіх читань ${Math.round(sum)} мс · `
     + `відповідь ${Math.round(Buffer.byteLength(json) / 1024)} КБ, у JSON за ${Math.round(ser)} мс · відбиток ${hash}`);
-  if (table && recs.length) {
+  if (table && !brief && recs.length) {
     console.log("  №  старт,мс  трив,мс  рядків  запит");
     recs.forEach((r, i) => console.log(
       `${String(i + 1).padStart(3)}  ${String(Math.round(r.at)).padStart(8)}  ${String(Math.round(r.ms)).padStart(7)}  ${String(r.rows ?? "-").padStart(6)}  ${r.err ? "🔴 " + r.err + " · " : ""}[${r.who}] ${r.sql}`));
@@ -184,6 +192,20 @@ async function explain(b, recs, n) {
 const builds = [];
 try {
   const mine = await load(process.cwd(), "ця збірка"); builds.push(mine);
+  if (scopeArg && scopeArg[2] === "auto") {
+    // Кого взяти — з самого списку адміністратора: команда або менеджер із найбільшою кількістю клієнтів у ньому.
+    // Так охоплення гарантовано непорожнє (порівняння двох порожніх списків нічого не доводить).
+    const field = scopeArg[1] === "team" ? "teamId" : "managerId";
+    AUTH = { userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null };
+    const all = await once(mine, "ВИБІР ОХОПЛЕННЯ, список адміністратора", { table: false });
+    const cnt = new Map();
+    for (const c of all.body?.clients ?? []) if (c[field] != null) cnt.set(c[field], (cnt.get(c[field]) ?? 0) + 1);
+    const best = [...cnt.entries()].sort((a, c) => c[1] - a[1] || a[0] - c[0])[0];
+    if (!best) { console.log(`🔴 --scope=${scopeArg[1]}:auto: у списку адміністратора немає кого обрати — зупиняюсь`); process.exitCode = 2; throw new Error("немає охоплення для порівняння"); }
+    AUTH = scopeArg[1] === "team" ? { userId: 0, role: "team_lead", roleKey: "team_lead", managerId: null, teamId: best[0] }
+      : { userId: 0, role: "manager", roleKey: "manager", managerId: best[0], teamId: null };
+    scopeArg[0] = `${scopeArg[1]}:${best[0]}, обрано автоматично: найбільше клієнтів у списку (${best[1]})`;
+  }
   if (againstDir != null) {
     if (!againstDir) { console.log("🔴 --against потребує шляху до каталогу backend іншої збірки"); process.exitCode = 2; }
     else {
