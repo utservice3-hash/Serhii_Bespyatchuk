@@ -61,9 +61,20 @@ export async function churnReport(db: Db, from: unknown, to: unknown, category?:
   if (dFrom > dTo) throw new ChurnError(400, "Початок періоду пізніше за кінець");
   const cat = category == null || category === "" ? null : category === "none" ? "none" : isEmpCategory(category) ? category : undefined;
   if (cat === undefined) throw new ChurnError(400, "Невідома категорія");
-  const all = (await db.query<ChurnPerson & { id: number; full_name: string; category: string | null }>(
+  const all = (await db.query<ChurnRegistryRow>(
     `SELECT id, full_name, hired_at::text AS hired_at, dismissed_at::text AS dismissed_at, dismiss_reason, position, team_label,
             dismiss_date_unknown, category FROM employees`)).rows;
+  return churnFromPeople(all, dFrom, dTo, cat);
+}
+
+/** Рядок реєстру, з якого рахується плинність. */
+export type ChurnRegistryRow = ChurnPerson & { id: number; full_name: string; category: string | null };
+
+/**
+ * Чиста частина `churnReport`: період уже перевірено й розгорнуто в дні (обидва кінці включно), `cat` — ключ
+ * категорії, "none" або null («усі»). Винесено, щоб правила розрахунку стерегли тести без бази.
+ */
+export function churnFromPeople(all: ChurnRegistryRow[], dFrom: string, dTo: string, cat: string | null) {
   // 📉 Звільнені з невідомою датою (#2100) — поза розрахунком: невідома дата не має права ставати чиїмось місяцем.
   // Скільки таких — окремим числом, щоб невідоме лишалось видимим.
   const known = all.filter((p) => !(p.dismiss_date_unknown && p.dismissed_at != null))
