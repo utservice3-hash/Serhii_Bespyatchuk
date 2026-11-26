@@ -34,13 +34,12 @@ export const daysBetween = (a: string, b: string): number => Math.round((toMs(b)
 const addDays = (ymd: string, n: number): string => new Date(toMs(ymd) + n * dayMs).toISOString().slice(0, 10);
 
 /**
- * Дата останнього замовлення = найсвіжіша з дати останньої оплати, останнього рахунку і (9045) поїздки поза CRM,
- * яку підтвердив тімлід (`core/clientTripConfirm.ts`). `null` — немає жодної. Поїздка впливає лише на те, що
- * читає цю дату (колір, «днів тому», «Проблемний»); у гроші не йде.
+ * Дата останнього замовлення = найсвіжіша з дати останньої оплати й останнього рахунку. `null` — немає жодної.
+ * 🧾 «Поїздку поза CRM» (9045) прибрано рішенням зустрічі 25.11.2026 (задача 11220): замовлення — лише те, що є в CRM.
  */
-export function lastOrderDate(lastPaid: string | null, lastInvoice: string | null, tripDay?: string | null): string | null {
+export function lastOrderDate(lastPaid: string | null, lastInvoice: string | null): string | null {
   let out: string | null = null;
-  for (const x of [lastPaid, lastInvoice, tripDay]) {
+  for (const x of [lastPaid, lastInvoice]) {
     const d = x?.slice(0, 10) ?? null;
     if (d && (!out || d > out)) out = d;
   }

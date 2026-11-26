@@ -4932,11 +4932,7 @@ export interface ClientLead {
   offSeason: boolean;
   /** ⚠️ Діюча позначка «Проблемний клієнт» (8350); `null` — звичайний клієнт. */
   problem?: ProblemMark | null;
-  /** 🧾 Поїздка поза CRM, яку підтвердив тімлід (9045); `null` — немає. Рахується замовленням для кольору. */
-  trip?: TripConfirm | null;
 }
-/** 🧾 Підтверджена поїздка поза CRM (9045): день поїздки, коментар, хто подав і коли. */
-export interface TripConfirm { day: string; note: string; byName: string | null; at: string }
 
 export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
@@ -5039,8 +5035,6 @@ export interface ClientPlansResp {
   tabGroupRank: Record<"regular" | "yellow" | "react", number>;
   /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
   leadgenPool?: { canSee: boolean; canTake: boolean };
-  /** 🧾 Чи може поточний користувач подати / зняти поїздку поза CRM (9045) — лише тімлід. */
-  canConfirmTrip?: boolean;
   /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
   reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number;
     /** Чи ввімкнена передача лідгенам (`LEADGEN_POOL_ENABLED`); з 06.11.2026 — ні. */
@@ -5520,13 +5514,6 @@ export async function setClientProblem(clientKey: string, reason: string, note: 
 }
 export async function clearClientProblem(clientKey: string): Promise<void> {
   await api.post("/dashboard/client-problem/clear", { clientKey });
-}
-/** 🧾 «Поїздка була (поза CRM)» (9045): дата `YYYY-MM-DD` і коментар (№ рахунку, як оплачено). Лише тімлід. */
-export async function confirmClientTrip(clientKey: string, day: string, note: string): Promise<void> {
-  await api.post("/dashboard/client-trip-confirm", { clientKey, day, note });
-}
-export async function clearClientTrip(clientKey: string): Promise<void> {
-  await api.post("/dashboard/client-trip-confirm/clear", { clientKey });
 }
 /** 🧭 «В нічийні» (8135): коментар обовʼязковий; 409 — уже в нічийних / у пулі / в архіві. */
 export async function releaseOrphanClient(clientKey: string, note: string): Promise<{ deadline: string; notified: number }> {

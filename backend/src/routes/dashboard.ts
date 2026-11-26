@@ -175,7 +175,6 @@ import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as orphanRelease from "../core/orphanRelease.js";
 import * as problemClient from "../core/problemClient.js";
-import * as clientTripConfirm from "../core/clientTripConfirm.js";
 import * as clientCommentLog from "../core/clientCommentLog.js";
 import * as clientKindFacts from "../core/clientKindFacts.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
@@ -6705,16 +6704,14 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // 🌙 Сезонний не в сезоні — не в реактивації (задача 8351): ні вкладки, ні циклу.
   // ⚠️ Проблемний клієнт (8350): діюча позначка — до першого замовлення ПІСЛЯ неї (рахунок чи оплата).
   const problemMarks = await problemClient.problemsFor(pool, clientKeys);
-  // 🧾 Поїздка поза CRM, підтверджена тімлідом (9045): для кольору — замовлення, для циклу — рахунок (вимикач
-  // `TRIP_CLEARS_REACT`). У гроші не йде. `reactInv` — єдиний вхід циклу на цьому екрані, щоб вкладка й кнопки не розійшлись.
-  const tripByKey = await clientTripConfirm.tripsFor(pool, clientKeys);
-  const tripDayOf = (key: string) => tripByKey.get(key)?.day ?? null;
-  const reactInv = (key: string) => clientTripConfirm.reactInvoiceDate(lastInvByKey.get(key) ?? null, tripDayOf(key));
+  // 🧾 «Поїздку поза CRM» прибрано (11220, зустріч 25.11.2026): замовлення = лише рахунок і оплата з CRM.
+  // `reactInv` — єдиний вхід циклу на цьому екрані, щоб вкладка й кнопки не розійшлись.
+  const reactInv = (key: string) => lastInvByKey.get(key) ?? null;
   const activeProblem = new Map<string, problemClient.ProblemMark>();
   for (const c of clientsRes.rows) {
     const m = problemMarks.get(c.client_key);
     if (m && problemClient.problemActive(m.day,
-      clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null, tripDayOf(c.client_key)))) {
+      clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null))) {
       activeProblem.set(c.client_key, m);
     }
   }
@@ -6958,7 +6955,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const leadOf = (c: (typeof rosterRows)[number]) => {
     const f = leadFacts.get(c.client_key);
     const segment = factsFor(seg, c.client_key).segment;
-    const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null, tripDayOf(c.client_key));
+    const lastOrder = clientLeadRules.lastOrderDate(c.last_paid, lastInvByKey.get(c.client_key) ?? null);
     const orderDays = lastOrder ? clientLeadRules.daysBetween(lastOrder, todayKyiv) : null;
     // 🌙 Сезонний не в сезоні (8351) — зелений: дзвонити не треба, і «Немає роботи» на ньому не горить.
     const off = factsFor(seg, c.client_key).offSeason;
@@ -6987,8 +6984,6 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       offSeason: off,
       // ⚠️ Діюча позначка «Проблемний» (8350): причина, коментар, коли й хто. `null` — звичайний клієнт.
       problem: activeProblem.get(c.client_key) ?? null,
-      // 🧾 Діюче підтвердження поїздки поза CRM (9045): дата, коментар, хто й коли. `null` — немає.
-      trip: tripByKey.get(c.client_key) ?? null,
     };
   };
   const leadByKey = new Map(rosterRows.map((c) => [c.client_key, leadOf(c)]));
@@ -7194,9 +7189,6 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     tabGroupRank: clientTabs.TAB_GROUP_RANK,
     // 🔁 Пул лідгенів (ТЗ 22.09, п.4.2–4.4): хто бачить вкладку пулу і хто може брати.
     leadgenPool: await leadgenPoolAccess(auth),
-    // 🧾 Хто може подати / зняти поїздку поза CRM (9045): тімлід і адмін-рівень — та сама функція, що гейтить роут.
-    // Межа команди тімліда — у роуті.
-    canConfirmTrip: clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)),
     reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, decisionDays: reactCycleRules.DECISION_DAYS,
                   selfGraceDays: reactCycleRules.SELF_GRACE_DAYS, weeklyCap: reactCycleRules.WEEKLY_CAP,
                   launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR,
@@ -8066,10 +8058,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
   // ⚠️ «Проблемний» (8350): позначка діє до першого замовлення ПІСЛЯ неї — та сама дата, що в списку.
   const problemMark = (await problemClient.problemsFor(pool, [clientKey])).get(clientKey) ?? null;
   const cardLastInv = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
-  // 🧾 Поїздка поза CRM (9045) — те саме, що в списку: для «Проблемного» замовлення, для циклу рахунок.
-  const cardTripDay = (await clientTripConfirm.tripsFor(pool, [clientKey])).get(clientKey)?.day ?? null;
   const problemOn = problemMark != null
-    && problemClient.problemActive(problemMark.day, clientLeadRules.lastOrderDate(h?.last_paid ?? null, cardLastInv, cardTripDay));
+    && problemClient.problemActive(problemMark.day, clientLeadRules.lastOrderDate(h?.last_paid ?? null, cardLastInv));
   const [cardStep, cardPhones, cardLastCall, cardTodayRes] = await Promise.all([
     pool.query<{ id: number; text: string; due_date: string | null; author: string | null; kommo_lead_id: string | null; kommo_task_id: string | null; kommo_error: string | null }>(
       `SELECT s.id, s.text, to_char(s.due_date, 'YYYY-MM-DD') AS due_date, COALESCE(m.name, u.full_name, u.email) AS author,
@@ -8135,7 +8125,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
   const adminLog = await clientAdminLog(clientKey);
   // 🔁 Цикл реактивації (ТЗ 22.09, блок 4) — те саме правило й ті самі кнопки, що в рядку списку.
   const cardLastInvoice = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
-  const cardReactInv = clientTripConfirm.reactInvoiceDate(cardLastInvoice, cardTripDay);
+  const cardReactInv = cardLastInvoice;
   const cardCycles = await reactCycle.cyclesFor(pool, [clientKey]);
 
   res.json({
@@ -8533,44 +8523,6 @@ dashboardRouter.post("/client-problem/clear", async (req, res) => {
   if (!(await problemClient.clearProblem(pool, clientKey))) return res.status(409).json({ error: "Позначки «Проблемний» на клієнті немає" });
   await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
     [clientKey, auth.userId, "⚠️ Позначку «Проблемний клієнт» знято"]);
-  res.json({ ok: true, clientKey });
-});
-
-/**
- * 🧾 «ПОЇЗДКА БУЛА (ПОЗА CRM)» (задача 9045; ТЗ Юлі 16.11.2026; Роман 18.11.2026 «роби»). Подає тімлід (клієнта
- * своєї команди) і адмін-рівень (будь-якого; Роман 18.11 «подати можна всім (адмінам)»): роль (`canConfirmTrip`) і
- * межа (`canSeeClient`) — ПЕРШИМ оператором, разом (403 = гейт, не валідація). Дата поїздки + обовʼязковий коментар (№ рахунку, як оплачено). Дата рахується замовленням для
- * кольору й рахунком для циклу реактивації; у гроші не йде. Коментар дублюється в коментарі клієнта.
- */
-dashboardRouter.post("/client-trip-confirm", async (req, res) => {
-  const auth = req.auth!;
-  const clientKey = String(req.body?.clientKey ?? "").trim();
-  if (!clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)) || !clientKey || !(await canSeeClient(auth, clientKey))) {
-    return res.status(403).json({ error: "Підтвердити поїздку може тімлід команди клієнта або керівництво" });
-  }
-  const dayErr = clientTripConfirm.tripDayError(req.body?.day, kyivToday());
-  if (dayErr) return res.status(400).json({ error: dayErr });
-  const day = String(req.body.day);
-  const note = clientTripConfirm.cleanTripNote(req.body?.note);
-  if (!note) return res.status(400).json({ error: `Напишіть № рахунку і як оплачено (від ${clientTripConfirm.TRIP_NOTE_MIN} символів)` });
-  await clientTripConfirm.confirmTrip(pool, { clientKey, userId: auth.userId, day, note });
-  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
-    [clientKey, auth.userId, `🧾 Поїздка поза CRM ${day.split("-").reverse().join(".")}: ${note}`]);
-  res.json({ ok: true, clientKey, day });
-});
-
-/** Зняти підтвердження поїздки — та сама межа. Рядок лишається в історії (`revoked_at`). */
-dashboardRouter.post("/client-trip-confirm/clear", async (req, res) => {
-  const auth = req.auth!;
-  const clientKey = String(req.body?.clientKey ?? "").trim();
-  if (!clientTripConfirm.canConfirmTrip(auth.role, isAdminScope(auth)) || !clientKey || !(await canSeeClient(auth, clientKey))) {
-    return res.status(403).json({ error: "Зняти підтвердження може тімлід команди клієнта або керівництво" });
-  }
-  if (!(await clientTripConfirm.clearTrips(pool, clientKey, auth.userId))) {
-    return res.status(409).json({ error: "Підтвердженої поїздки на клієнті немає" });
-  }
-  await pool.query(`INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3)`,
-    [clientKey, auth.userId, "🧾 Підтвердження поїздки поза CRM знято"]);
   res.json({ ok: true, clientKey });
 });
 

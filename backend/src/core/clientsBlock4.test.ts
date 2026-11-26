@@ -72,8 +72,8 @@ test("#3815 ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДО�
     "🔴 група вкладки /client-plans рахується не від рахунку (п.4.1) або не від тієї дати, що «днів тому» (8333)");
   assert.match(dash, /const inReactNow = \(key: string\) => !factsFor\(seg, key\)\.offSeason && !activeProblem\.has\(key\)\s*&& reactCycleRules\.inReact\(reactInv\(key\), nowYm\);/,
     "🔴 «у реактивації» рахується не правилом ядра від дати останнього рахунку");
-  // 🧾 9045: `reactInv` = останній рахунок, а підтверджена тімлідом поїздка — лише за вимикачем `TRIP_CLEARS_REACT`.
-  assert.match(dash, /const reactInv = \(key: string\) => clientTripConfirm\.reactInvoiceDate\(lastInvByKey\.get\(key\) \?\? null, tripDayOf\(key\)\);/,
+  // 🧾 11220: `reactInv` = останній рахунок із CRM; «поїздку поза CRM» (9045) прибрано рішенням зустрічі 25.11.2026.
+  assert.match(dash, /const reactInv = \(key: string\) => lastInvByKey\.get\(key\) \?\? null;/,
     "🔴 «у реактивації» рахується не від дати останнього рахунку");
   assert.match(dash, /money\.lastInvoiceByClientKey\(clientKeys\)/, "🔴 дата останнього рахунку не з ядра грошей — розійдеться з фактом «з рахунку»");
   assert.match(dash, /tabGroupRank: clientTabs\.TAB_GROUP_RANK,/, "🔴 ранги груп не приходять із сервера");

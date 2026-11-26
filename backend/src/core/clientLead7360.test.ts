@@ -156,8 +156,8 @@ test("#3448 ПРОВОДКА: lead у рядку /client-plans з ядра; вк
   for (const fn of ["lastOrderDate(", "colorOf(", "workVerdict(", "handOverDue(", "becameRepeatIn(", "repeatSource(", "lostIn("]) {
     assert.ok(route.includes(`clientLeadRules.${fn}`), `🔴 /client-plans не кличе clientLeadRules.${fn}`);
   }
-  // 🧾 9045: третім аргументом — підтверджена тімлідом поїздка поза CRM; рахунок лишається другим.
-  assert.match(route, /clientLeadRules\.lastOrderDate\(c\.last_paid, lastInvByKey\.get\(c\.client_key\) \?\? null, tripDayOf\(c\.client_key\)\)/,
+  // 🧾 11220: аргументів два — оплата й рахунок; «поїздку поза CRM» (9045) прибрано рішенням зустрічі 25.11.2026.
+  assert.match(route, /clientLeadRules\.lastOrderDate\(c\.last_paid, lastInvByKey\.get\(c\.client_key\) \?\? null\)/,
     "🔴 колір рахується без рахунку — СМАР ТЕКС із рахунком у жовтні знову не зелений");
   assert.match(route, /const leadFacts = await clientLeadFacts\.leadFactsFor\(pool, rosterRows\.map/, "🔴 факти беруться не для всього ростеру");
   const loy = codeOnly(read("frontend/src/pages/dashboard/sections/LoyaltySection.tsx"));
