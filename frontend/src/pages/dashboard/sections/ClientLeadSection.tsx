@@ -174,19 +174,20 @@ function ColorPick({ color, n, pick, onPick }: { color: LeadGroup; n: number; pi
 
 /**
  * 🧩 Плитка-кнопка (запит Романа 26.11.2026): клік показує клієнтів, яких вона рахує, у поточному охопленні; повторний
- * клік знімає вибір. Плитка з нулем не натискається — показувати нічого.
+ * клік знімає вибір. Плитка з нулем не натискається — показувати нічого; але вже обрана лишається кнопкою і з нулем
+ * (змінили команду — у новій таких немає), інакше вибір не було б чим зняти на самій плитці.
  */
 function TileButton({ tile, n, label, sub, tone, active, onTile }: {
   tile: LeadTile; n: number; label: string; sub: string; tone?: string; active: LeadTile | null; onTile: (t: LeadTile) => void;
 }) {
   const on = active === tile;
   return (
-    <button type="button" disabled={n === 0} aria-pressed={on} onClick={() => onTile(tile)}
-      title={n === 0 ? "таких клієнтів зараз немає" : on ? "показано цих клієнтів — натисніть, щоб зняти вибір" : "показати цих клієнтів"}
-      style={{ ...S.card, minWidth: 170, textAlign: "left", font: "inherit", color: "#111827", position: "relative", cursor: n === 0 ? "default" : "pointer",
+    <button type="button" disabled={n === 0 && !on} aria-pressed={on} onClick={() => onTile(tile)}
+      title={on ? "показано цих клієнтів — натисніть, щоб зняти вибір" : n === 0 ? "таких клієнтів зараз немає" : "показати цих клієнтів"}
+      style={{ ...S.card, minWidth: 170, textAlign: "left", font: "inherit", color: "#111827", position: "relative", cursor: n === 0 && !on ? "default" : "pointer",
         display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "flex-start",
         ...(on ? { border: "2px solid #111827", padding: "11px 13px" } : {}) }}>
-      {n > 0 && (
+      {(n > 0 || on) && (
         <span style={{ position: "absolute", right: 10, top: 10, fontSize: 11, borderRadius: 999, padding: "1px 8px", whiteSpace: "nowrap",
           border: `1px solid ${on ? "#111827" : "#e5e7eb"}`, background: on ? "#111827" : "#fff", color: on ? "#fff" : "#6b7280" }}>
           {on ? "✓ показано · зняти" : "показати ›"}
@@ -625,7 +626,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
         .filter((k) => (pick != null ? k === pick : tile != null ? listRows.some((c) => groupOf(c) === k) : k !== "problem" || listRows.some((c) => groupOf(c) === "problem")))
         .map((k) => group(k, listRows.filter((c) => (k === "problem" ? c.lead.problem != null : !c.lead.problem && c.lead.color === k))))}
       {showClients && tile != null && listRows.length === 0 && (
-        <div style={{ ...S.card, fontSize: 13, color: "#6b7280" }}>За цими фільтрами нікого немає.</div>
+        <div style={{ ...S.card, fontSize: 13, color: "#6b7280" }}>{leadFilterActive(filter) ? "За цими фільтрами нікого немає." : "Таких клієнтів тут немає."}</div>
       )}
       {/* Список клієнтів довгий: після прокрутки верхньої кнопки вже не видно — та сама кнопка внизу. */}
       {showClients && backBtn && <div>{backBtn}</div>}
