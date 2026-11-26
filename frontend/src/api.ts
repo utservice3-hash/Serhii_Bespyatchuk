@@ -6115,6 +6115,8 @@ export interface EmployeeRow {
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
   /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
   dismiss_date_unknown?: boolean;
+  /** 🚪 «Не відпрацював жодного дня» (26.11.2026) — дата відома, але людина поза розрахунком плинності. */
+  churn_excluded?: boolean;
   /** 📎 Документи людини (без прибраних) і чи є серед них NDA / офер — за типом документа. */
   docs: number; has_nda: boolean; has_offer: boolean;
 }
@@ -6144,11 +6146,13 @@ export const EMP_CATEGORIES = [
 ] as const;
 export type EmpCategory = (typeof EMP_CATEGORIES)[number][0];
 export const empCategoryLabel = (k: string | null) => EMP_CATEGORIES.find(([c]) => c === k)?.[1] ?? "Без категорії";
-export interface ChurnPersonRow { id: number; full_name: string; category: EmpCategory | null; position: string | null; hired_at: string | null; dismissed_at: string; tenure_days: number | null }
+export interface ChurnPersonRow { id: number; full_name: string; category: EmpCategory | null; position: string | null; hired_at: string | null; dismissed_at: string; tenure_days: number | null;
+  /** 🚪 «Не відпрацював жодного дня» — у списку видно, у цифрах немає (26.11.2026). */
+  excluded?: boolean }
 export interface ChurnReport {
   from: string; to: string; wholeMonths: boolean;
   months: ChurnMonthRow[];
-  total: { dismissed: number; hired: number; early: number; avgTurnover: number | null; avgTenureDays: number | null; noHireDate: number; active: number; unknownDate?: number };
+  total: { dismissed: number; hired: number; early: number; avgTurnover: number | null; avgTenureDays: number | null; noHireDate: number; active: number; unknownDate?: number; excludedManual?: number };
   people: ChurnPersonRow[]; byCategory: Record<string, number>;
   reasons: { label: string; n: number }[]; positions: { label: string; n: number }[];
 }
@@ -6182,9 +6186,9 @@ export const promoteEmployeeLevel = async (id: number, b: { month: string; comme
   (await api.post<{ level: EmpLevel; from: string }>(`/secrets/employees/${id}/level`, b)).data;
 export const cancelEmployeeLevel = async (id: number) =>
   (await api.post<{ level: EmpLevel; from: string | null }>(`/secrets/employees/${id}/level/cancel`)).data;
-/** 📉 «Змінити дату звільнення» / «дата невідома» (#2100). */
-export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string; hiredAt?: string | null }) =>
-  (await api.post<{ dismissedAt: string | null; unknown: boolean }>(`/secrets/employees/${id}/dismiss-date`, b)).data;
+/** 📉 «Змінити дату звільнення» / «дата невідома» (#2100); `excluded` — «не відпрацював жодного дня» (26.11.2026). */
+export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string; hiredAt?: string | null; excluded?: boolean }) =>
+  (await api.post<{ dismissedAt: string | null; unknown: boolean; excluded: boolean }>(`/secrets/employees/${id}/dismiss-date`, b)).data;
 export const dismissNeedsConfirm = (e: unknown): boolean =>
   !!(e as { response?: { status?: number; data?: { needsConfirm?: boolean } } })?.response?.data?.needsConfirm;
 export const finishDismissal = async (id: number) =>

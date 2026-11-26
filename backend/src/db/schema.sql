@@ -4241,6 +4241,11 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES h
 -- активних, хоча вони давно пішли, Іван звільняє кнопкою — і дата дії ставала датою звільнення (жовтень 24% плинності).
 -- Прапорець прибирає людину з розрахунку плинності, а не вигадує дату.
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS dismiss_date_unknown BOOLEAN NOT NULL DEFAULT false;
+-- 🚪 «Не відпрацював жодного дня» (26.11.2026, запит HR: відмова в перший день навчання). Дата ВІДОМА — тому це не
+-- `dismiss_date_unknown`, а окрема причина: людина поза плинністю цілком (і в «звільнено», і в «працювало»), але у
+-- списку лишається з позначкою. Ставиться лише з коментарем (`setDismissDate`), повернення на роботу знімає.
+-- Додається порожньою (false усім), бекфілу немає. ⚠️ revert коду колонку не прибирає.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS churn_excluded BOOLEAN NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
 
 -- 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1): один живий крок на клієнта,

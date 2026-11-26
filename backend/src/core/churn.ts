@@ -13,7 +13,7 @@ import type { Db } from "./secrets.js";
 
 export class ChurnError extends Error { constructor(public status: number, message: string) { super(message); } }
 
-export interface ChurnPerson { hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null; position: string | null; team_label: string | null; dismiss_date_unknown?: boolean }
+export interface ChurnPerson { hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null; position: string | null; team_label: string | null; dismiss_date_unknown?: boolean; churn_excluded?: boolean }
 export interface ChurnMonth { month: string; headcount: number; hired: number; dismissed: number; turnover: number | null; early: number; noHireDate: number }
 
 const lastDay = (ym: string) => { const [y, m] = ym.split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
@@ -61,23 +61,44 @@ export async function churnReport(db: Db, from: unknown, to: unknown, category?:
   if (dFrom > dTo) throw new ChurnError(400, "Початок періоду пізніше за кінець");
   const cat = category == null || category === "" ? null : category === "none" ? "none" : isEmpCategory(category) ? category : undefined;
   if (cat === undefined) throw new ChurnError(400, "Невідома категорія");
-  const all = (await db.query<ChurnPerson & { id: number; full_name: string; category: string | null }>(
+  const all = (await db.query<ChurnRegistryRow>(
     `SELECT id, full_name, hired_at::text AS hired_at, dismissed_at::text AS dismissed_at, dismiss_reason, position, team_label,
-            dismiss_date_unknown, category FROM employees`)).rows;
+            dismiss_date_unknown, churn_excluded, category FROM employees`)).rows;
+  return churnFromPeople(all, dFrom, dTo, cat);
+}
+
+/** Рядок реєстру, з якого рахується плинність. */
+export type ChurnRegistryRow = ChurnPerson & { id: number; full_name: string; category: string | null };
+
+/**
+ * Чиста частина `churnReport`: період уже перевірено й розгорнуто в дні (обидва кінці включно), `cat` — ключ
+ * категорії, "none" або null («усі»). Винесено, щоб правила розрахунку стерегли тести без бази.
+ */
+export function churnFromPeople(all: ChurnRegistryRow[], dFrom: string, dTo: string, cat: string | null) {
   // 📉 Звільнені з невідомою датою (#2100) — поза розрахунком: невідома дата не має права ставати чиїмось місяцем.
   // Скільки таких — окремим числом, щоб невідоме лишалось видимим.
-  const known = all.filter((p) => !(p.dismiss_date_unknown && p.dismissed_at != null))
+  const withDate = all.filter((p) => !(p.dismiss_date_unknown && p.dismissed_at != null))
     .map((p) => ({ ...p, cat: effectiveCategory(p.category, p.position) }));
-  const ppl = cat == null ? known : known.filter((p) => (p.cat ?? "none") === cat);
+  // 🚪 «Не відпрацював жодного дня» (26.11.2026, запит HR: відмова в перший день навчання) — позначка на ЛЮДИНІ з
+  // коментарем (`setDismissDate`). Такий звільнений поза розрахунком ЦІЛКОМ: ні в «звільнено», ні в «працювало»,
+  // ні в стажі, але лишається у списку з прапорцем і окремим числом `excludedManual` — цифра відтворюється поіменно.
+  // Діє лише на звільненого: позначка, що пережила повернення на роботу, не має права вийняти працюючого з «працювало».
+  const excludedOf = (p: ChurnPerson) => !!p.churn_excluded && p.dismissed_at != null;
+  const known = withDate.filter((p) => !excludedOf(p));
+  const inScope = <T extends { cat: string | null }>(xs: T[]) => (cat == null ? xs : xs.filter((p) => (p.cat ?? "none") === cat));
+  const ppl = inScope(known);
   const left = (p: { dismissed_at: string | null }) => p.dismissed_at != null && p.dismissed_at >= dFrom && p.dismissed_at <= dTo;
+  const excludedIn = inScope(withDate.filter(excludedOf)).filter(left);
   const wholeMonths = dFrom.endsWith("-01") && dTo === lastDay(dTo.slice(0, 7));
   const months = wholeMonths ? monthsBetween(dFrom.slice(0, 7), dTo.slice(0, 7)).map((m) => monthRow(ppl, m)) : [];
   const inRange = ppl.filter(left);
   const tenure = (p: ChurnPerson) => (p.hired_at == null ? null : daysBetween(p.hired_at, p.dismissed_at!));
-  const people = inRange.map((p) => ({ id: p.id, full_name: p.full_name, category: p.cat, position: p.position,
-    hired_at: p.hired_at, dismissed_at: p.dismissed_at!, tenure_days: tenure(p) }))
+  const row = (excluded: boolean) => (p: (typeof withDate)[number]) => ({ id: p.id, full_name: p.full_name, category: p.cat, position: p.position,
+    hired_at: p.hired_at, dismissed_at: p.dismissed_at!, tenure_days: tenure(p), excluded });
+  const counted = inRange.map(row(false));
+  const people = [...counted, ...excludedIn.map(row(true))]
     .sort((a, b) => b.dismissed_at.localeCompare(a.dismissed_at) || a.full_name.localeCompare(b.full_name, "uk"));
-  const tenures = people.map((p) => p.tenure_days).filter((t): t is number => t != null);
+  const tenures = counted.map((p) => p.tenure_days).filter((t): t is number => t != null);
   const byCategory: Record<string, number> = {};
   for (const p of known.filter(left)) { const k = p.cat ?? "none"; byCategory[k] = (byCategory[k] ?? 0) + 1; }
   const avgTurnover = wholeMonths
@@ -89,9 +110,10 @@ export async function churnReport(db: Db, from: unknown, to: unknown, category?:
       hired: ppl.filter((p) => p.hired_at != null && p.hired_at >= dFrom && p.hired_at <= dTo).length,
       early: tenures.filter((t) => t <= 90).length,
       avgTurnover, avgTenureDays: tenures.length ? Math.round(tenures.reduce((a, t) => a + t, 0) / tenures.length) : null,
-      noHireDate: people.length - tenures.length,
+      noHireDate: counted.length - tenures.length,
       active: ppl.filter((p) => p.dismissed_at == null).length,
-      unknownDate: all.length - known.length,
+      unknownDate: all.length - withDate.length,
+      excludedManual: excludedIn.length,
     },
     reasons: top(inRange.map((p) => p.dismiss_reason), "причину не вказано"),
     positions: top(inRange.map((p) => p.position), "посада не вказана"),
