@@ -9,7 +9,7 @@ import {
 } from "../../../api";
 import { PeriodStepper } from "../PeriodStepper";
 import {
-  ddmm, dow, mondayOf, monthEnd, monthStart, sundayOf, todayKyiv,
+  addDays, ddmm, dow, mondayOf, monthEnd, monthStart, sundayOf, todayKyiv,
   periodOf, periodLabelOf, type PeriodMode, type PeriodState,
 } from "../periodRules";
 import { InfoHint } from "../widgets";
@@ -24,6 +24,7 @@ import { VacationMark } from "../VacationMark";
 import { ReportManagerPicker } from "./ReportManagerPicker";
 import { readHiddenMgrs, writeHiddenMgrs, pickManagers, type PickStore } from "../mgrPick";
 import { getAuthPayload } from "../../../auth";
+import { reportPlanMemory, reportPlanKey } from "../reportPlanCache";
 
 /**
  * 🔀 ПОЛОЖЕННЯ ПЕРЕМИКАЧА ЇДЕ КОНТЕКСТОМ, А НЕ ПРОПСОМ.
@@ -150,6 +151,24 @@ const pickStore = (): PickStore | null => {
   try { return window.localStorage; } catch { return null; }
 };
 
+/**
+ * 🔁 САМОВІДНОВЛЕННЯ (фікс порожнечі при транзієнтному відхиленні): 3 спроби з backoff.
+ * Челендж/429 → довший експоненційний backoff з cap (не тайт-петля, щоб не «годувати»
+ * хостинговий захист); звичайна помилка — коротший. base·2^i, cap 8с. Перерваний виклик
+ * (`isCancelled`) не повторюється. Раніше жило всередині єдиного ефекту і діяло лише на
+ * місяць; з 10989 ефектів три, і тиждень у режимі «Тиждень» — головне тіло, тож повтор у кожного.
+ */
+async function withRetry<T>(fn: () => Promise<T>, isCancelled: () => boolean, attempts = 3): Promise<T> {
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e) {
+      if (isCancelled() || i >= attempts - 1) throw e;
+      const challenge = (e as { isChallenge?: boolean })?.isChallenge === true;
+      await new Promise((r) => setTimeout(r, Math.min((challenge ? 2000 : 400) * 2 ** i, 8000)));
+    }
+  }
+}
+
 export function ReportPlanSection({ auth, teams }: {
   auth: { role: string; managerId: number | null; teamId: number | null };
   teams: Team[];
@@ -190,7 +209,6 @@ export function ReportPlanSection({ auth, teams }: {
   const [rangeLoading, setRangeLoading] = useState(false);
   const [weekData, setWeekData] = useState<ReportPlan | null>(null);   // тиждень-контекст смуги
   const [focus, setFocus] = useState<ReportPlan | null>(null);         // кластер фокус-дня
-  const [loading, setLoading] = useState(true);
   const [retryNonce, setRetryNonce] = useState(0); // ручний «Спробувати знову» перезапускає ефект
   const [openMgr, setOpenMgr] = useState<number | null>(null);
 
@@ -231,58 +249,130 @@ export function ReportPlanSection({ auth, teams }: {
    * діапазон). Розвилка «одна команда / кілька» стоїть ТУТ і ніде більше —
    * інакше злиття лягло б лише в один із чотирьох, і тиждень почав би показувати
    * інший набір людей, ніж місяць.
+   *
+   * ⏱ І ОДНА ПАМʼЯТЬ (задача 10989, рішення Романа 26.11.2026): `fetchScoped` спершу
+   * дивиться в `reportPlanMemory` — 80 с від ОСТАННЬОГО перегляду періоду. Ключ
+   * будується з тих самих аргументів, що й запит (користувач + набір команд + дати),
+   * тож розійтись ключу й запиту нема як. «Період» памʼять свідомо обходить
+   * (`memo: false`): проходу 10989 він не стосувався.
    */
   const scopeKey = teamIds.join(",");
-  const fetchScoped = useCallback(async (period: { from: string; to: string }): Promise<ReportPlan> => {
+  const [memUser] = useState<number | null>(() => { try { return getAuthPayload()?.userId ?? null; } catch { return null; } });
+  const keyOf = useCallback((period: { from: string; to: string }) =>
+    reportPlanKey({ userId: memUser, teamIds, from: period.from, to: period.to }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeKey, memUser]);
+  const fetchScopedRaw = useCallback(async (period: { from: string; to: string }): Promise<ReportPlan> => {
     if (teamIds.length >= 2)
       return mergeReportPlans(await Promise.all(teamIds.map((id) => fetchReportPlan({ ...period, teamId: id }))));
     return fetchReportPlan({ ...period, ...(teamIds.length === 1 ? { teamId: teamIds[0] } : {}) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey]);
+  const fetchScoped = useCallback((period: { from: string; to: string }, opts?: { memo?: boolean }): Promise<ReportPlan> =>
+    opts?.memo === false ? fetchScopedRaw(period) : reportPlanMemory.load(keyOf(period), () => fetchScopedRaw(period)),
+  [fetchScopedRaw, keyOf]);
+  /** Синхронний погляд у памʼять: тиждень, який щойно бачили, зʼявляється без жодного кадру «завантаження». */
+  const peekScoped = useCallback((period: { from: string; to: string }) =>
+    reportPlanMemory.peek(keyOf(period)) as ReportPlan | undefined, [keyOf]);
 
-  // САМОВІДНОВЛЕННЯ (фікс порожнечі при транзієнтному відхиленні):
-  //  • cancelled-guard: жоден перерваний/застарілий виклик не пише стан (антигонка).
-  //  • МІСЯЦЬ (головне тіло) — з авто-ретраєм (2 спроби + backoff); транзієнтний блимок
-  //    піднімається САМ, без ручного refresh. Провал ПІСЛЯ ретраїв → err (видима помилка+ретрай).
-  //  • ТИЖДЕНЬ/ФОКУС — best-effort (allSettled): їхня невдача НЕ обнуляє звіт (не «все або нічого»).
+  /**
+   * 📅 ДЕНЬ ПЛИТКИ «СЬОГОДНІ» — останній день обраного періоду, але не пізніше сьогодні.
+   * Смуги днів у новому вигляді немає (макет, 13.11.2026): конкретний день дивляться
+   * режимом «День». Тиждень картки рахується від цього ж дня — тобто це тиждень,
+   * у якому лежить показаний день, а не довільний.
+   * (Оголошено ДО ефектів завантаження: ефект дня чекає, поки `focusDay` дійде до нього.)
+   */
+  const dayShown = selectedPeriod.to > today ? today : selectedPeriod.to;
   useEffect(() => {
+    if (mode !== "day" && focusDay !== dayShown) setFocusDay(dayShown);
+  }, [mode, dayShown, focusDay]);
+
+  /**
+   * ⚡ ТРИ НЕЗАЛЕЖНІ ЕФЕКТИ ЗАМІСТЬ ОДНОГО (задача 10989, заміряно на проді 26.11.2026).
+   *
+   * Було: один ефект тягнув місяць → потім тиждень і день, і перезапускався на БУДЬ-ЯКУ
+   * зміну. Клік «‹» у режимі «Тиждень» перетягував той самий місяць (3-5 с), тиждень
+   * чекав на нього, а перший клік робив місяць ДВІЧІ (синхронізація `dayShown` нижче
+   * перезапускала ефект). Разом 10-11 с на клік.
+   *
+   * Тепер кожен запит залежить рівно від того, що його змінює:
+   *  • МІСЯЦЬ — лише в режимі «Місяць» (у решті режимів `monthData` не читає ніхто);
+   *  • ТИЖДЕНЬ — завжди (тіло режиму «Тиждень» + смуга тижня в картці); не чекає місяця;
+   *  • ДЕНЬ — завжди (плитка дня), але лише коли `focusDay` уже дійшов до `dayShown`,
+   *    інакше перший клік знову тягнув би проміжний день, який за мить буде замінено.
+   * Повтор із backoff (САМОВІДНОВЛЕННЯ) — у кожного свій, `cancelled`-захист — теж.
+   */
+  const [monthLoading, setMonthLoading] = useState(true);
+  const [weekLoading, setWeekLoading] = useState(true);
+  const [dayLoading, setDayLoading] = useState(true);
+
+  useEffect(() => {
+    if (mode !== "month") return;
+    const hit = peekScoped(monthPeriod);
+    if (hit) { setMonthData(hit); setMonthLoading(false); return; }
     let cancelled = false;
-    setLoading(true);
-    const withRetry = async (params: { from: string; to: string }, attempts = 3) => {
-      for (let i = 0; ; i++) {
-        try { return await fetchScoped(params); }
-        catch (e) {
-          if (cancelled) throw e;
-          if (i >= attempts - 1) throw e;
-          // Челендж/429 → довший експоненційний backoff з cap (не тайт-петля, щоб не «годувати»
-          // хостинговий захист); звичайна помилка — коротший. base·2^i, cap 8с.
-          const challenge = (e as { isChallenge?: boolean })?.isChallenge === true;
-          await new Promise((r) => setTimeout(r, Math.min((challenge ? 2000 : 400) * 2 ** i, 8000)));
-        }
-      }
-    };
+    setMonthLoading(true);
+    withRetry(() => fetchScoped(monthPeriod), () => cancelled)
+      .then((m) => { if (!cancelled) setMonthData(m); })
+      // Порожнечу мовчки не лишаємо: `periodData` стане null → екран покаже помилку з «Спробувати знову».
+      .catch(() => { if (!cancelled) setMonthData(null); })
+      .finally(() => { if (!cancelled) setMonthLoading(false); });
+    return () => { cancelled = true; };
+  }, [mode, monthPeriod.from, monthPeriod.to, scopeKey, retryNonce, fetchScoped, peekScoped]);
+
+  useEffect(() => {
+    const hit = peekScoped(weekPeriod);
+    if (hit) { setWeekData(hit); setWeekLoading(false); return; }
+    let cancelled = false;
+    setWeekLoading(true);
+    withRetry(() => fetchScoped(weekPeriod), () => cancelled)
+      .then((w) => { if (!cancelled) setWeekData(w); })
+      .catch(() => { if (!cancelled) setWeekData(null); })
+      .finally(() => { if (!cancelled) setWeekLoading(false); });
+    return () => { cancelled = true; };
+  }, [weekPeriod.from, weekPeriod.to, scopeKey, retryNonce, fetchScoped, peekScoped]);
+
+  useEffect(() => {
+    if (mode !== "day" && focusDay !== dayShown) return;
+    const hit = peekScoped({ from: focusDay, to: focusDay });
+    if (hit) { setFocus(hit); setDayLoading(false); return; }
+    let cancelled = false;
+    setDayLoading(true);
+    withRetry(() => fetchScoped({ from: focusDay, to: focusDay }), () => cancelled)
+      .then((f) => { if (!cancelled) setFocus(f); })
+      .catch(() => { if (!cancelled) setFocus(null); })
+      .finally(() => { if (!cancelled) setDayLoading(false); });
+    return () => { cancelled = true; };
+  }, [mode, focusDay, dayShown, scopeKey, retryNonce, fetchScoped, peekScoped]);
+
+  /**
+   * ⏭ ФОНОВЕ ДОВАНТАЖЕННЯ ПОПЕРЕДНЬОГО ТИЖНЯ (задача 10989): тімліди гортають «‹», тож
+   * наступний клік найчастіше йде саме туди. Стартує лише ПІСЛЯ того, як поточний тиждень
+   * показано, і по одному запиту — паралельний запит розтягував тиждень з 2,8 до 6,3 с
+   * (замір 26.11). Наступний тиждень не тягнемо: майбутнє порожнє, а назад гортають частіше.
+   */
+  useEffect(() => {
+    if (mode !== "week" || weekLoading || !weekData) return;
+    let cancelled = false;
+    const prevSun = addDays(weekPeriod.from, -1);
+    const prevWeek = { from: mondayOf(prevSun), to: prevSun };
     (async () => {
       try {
-        const m = await withRetry(monthPeriod);
+        await fetchScoped(prevWeek);
         if (cancelled) return;
-        setMonthData(m);
-        const [w, f] = await Promise.allSettled([
-          fetchScoped(weekPeriod),
-          fetchScoped({ from: focusDay, to: focusDay }),
-        ]);
-        if (cancelled) return;
-        if (w.status === "fulfilled") setWeekData(w.value);
-        if (f.status === "fulfilled") setFocus(f.value);
-      } catch {
-        // Порожнечу мовчки не лишаємо: `periodData` лишиться null → екран покаже
-        // помилку з кнопкою «Спробувати знову» (умова нижче — по ДАНИХ, не по прапорцю,
-        // тож вона накриває і тиждень, і день, і діапазон, а не лише місяць).
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+        await fetchScoped({ from: prevSun, to: prevSun });
+      } catch { /* фон: збій нічого не ламає, клік просто піде на сервер */ }
     })();
     return () => { cancelled = true; };
-  }, [monthPeriod.from, monthPeriod.to, weekPeriod.from, weekPeriod.to, focusDay, scopeKey, retryNonce, fetchScoped]);
+  }, [mode, weekLoading, weekData, weekPeriod.from, fetchScoped]);
+
+  /** Що зараз на екрані — таймер 80 с для цих ключів стоїть; зникло з екрана — пішов відлік. */
+  useEffect(() => {
+    const shown = [keyOf(weekPeriod), keyOf({ from: focusDay, to: focusDay })];
+    if (mode === "month") shown.push(keyOf(monthPeriod));
+    reportPlanMemory.setOnScreen(shown);
+  }, [mode, keyOf, monthPeriod, weekPeriod, focusDay]);
+  useEffect(() => () => reportPlanMemory.setOnScreen([]), []);
 
   /**
    * Довільний діапазон — ОКРЕМИЙ ефект, а не гілка в ефекті вище: місяць/тиждень/день
@@ -294,7 +384,7 @@ export function ReportPlanSection({ auth, teams }: {
     if (mode !== "range") return;
     let cancelled = false;
     setRangeLoading(true);
-    fetchScoped({ from: selectedPeriod.from, to: selectedPeriod.to })
+    fetchScoped({ from: selectedPeriod.from, to: selectedPeriod.to }, { memo: false })
       .then((r) => { if (!cancelled) setRangeData(r); })
       .catch(() => { if (!cancelled) setRangeData(null); })
       .finally(() => { if (!cancelled) setRangeLoading(false); });
@@ -335,7 +425,11 @@ export function ReportPlanSection({ auth, teams }: {
     : mode === "day" ? focus
     : monthData;
   const data = periodData;
-  const busy = loading || rangeLoading;
+  /** ⏳ «Вантажиться» — за тим, що ПОКАЗАНО: у режимі «Тиждень» чекаємо тиждень, а не місяць (задача 10989). */
+  const busy = mode === "range" ? rangeLoading
+    : mode === "week" ? weekLoading
+    : mode === "day" ? dayLoading
+    : monthLoading;
   const weekByMgr = useMemo(() => new Map((weekData?.managers ?? []).map((m) => [m.managerId, m])), [weekData]);
   const viewerId = data?.viewerManagerId ?? auth.managerId;
   const teamName = teamId ? teams.find((t) => t.id === Number(teamId))?.name : "";
@@ -343,16 +437,6 @@ export function ReportPlanSection({ auth, teams }: {
   // Навігація ←/→ живе в `navBy` (../periodRules) — те саме правило кроку тепер
   // виконує й «Реклама». Тіло не мінялось.
 
-  /**
-   * 📅 ДЕНЬ ПЛИТКИ «СЬОГОДНІ» — останній день обраного періоду, але не пізніше сьогодні.
-   * Смуги днів у новому вигляді немає (макет, 13.11.2026): конкретний день дивляться
-   * режимом «День». Тиждень картки рахується від цього ж дня — тобто це тиждень,
-   * у якому лежить показаний день, а не довільний.
-   */
-  const dayShown = selectedPeriod.to > today ? today : selectedPeriod.to;
-  useEffect(() => {
-    if (mode !== "day" && focusDay !== dayShown) setFocusDay(dayShown);
-  }, [mode, dayShown, focusDay]);
 
   /** Чип стану = фільтр списку в ОБОХ виглядах; підсумок угорі він не звужує. */
   const [statusFilter, setStatusFilter] = useState<"g" | "a" | "r" | null>(null);
@@ -411,7 +495,7 @@ export function ReportPlanSection({ auth, teams }: {
           <div style={{ marginBottom: 12 }}>
             Не вдалося завантажити звіт за {periodLabel} (тимчасовий збій зʼєднання).
           </div>
-          <button onClick={() => setRetryNonce((n) => n + 1)}
+          <button onClick={() => { reportPlanMemory.clear(); setRetryNonce((n) => n + 1); }}
             style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: BAR, color: "#fff", fontWeight: 700, cursor: "pointer" }}>
             Спробувати знову
           </button>
