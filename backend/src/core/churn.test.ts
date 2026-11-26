@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { monthRow, monthsBetween, type ChurnPerson } from "./churn.js";
+import { churnFromPeople, monthRow, monthsBetween, type ChurnPerson, type ChurnRegistryRow } from "./churn.js";
 
 /**
  * 📉 ПЛИННІСТЬ, EXIT, KOMMO (18.09.2026, етапи 4–5) — гейти `#583`–`#585`.
@@ -272,5 +272,96 @@ test("#7705 ЖИВИЙ SQL: рівень по менеджеру — Профі/
     assert.equal((await lv.levelByManager(s.db, [])).size, 0);
     await lv.cancelLastLevel(s.db, s.hr, ids[0]);
     assert.equal((await lv.levelByManager(s.db, [1])).get(1), "start", "🔴 скасований «Профі» лишився «Профі»");
+  } finally { await s.done(); }
+});
+
+/**
+ * 🚪 «НЕ ВІДПРАЦЮВАВ ЖОДНОГО ДНЯ — НЕ РАХУВАТИ В ПЛИННОСТІ» (26.11.2026, запит HR: відмова в перший день навчання) —
+ * гейти `#11400`–`#11404`. Позначка на ЛЮДИНІ з коментарем; така людина поза розрахунком цілком, але видна поіменно.
+ * Листопад-фікстура: А працює з 2025; Б звільнився 20.11 після 10 днів; В прийнятий і звільнений 25.11 (позначка).
+ */
+const R = (id: number, name: string, hired: string | null, dismissed: string | null, extra: Partial<ChurnRegistryRow> = {}): ChurnRegistryRow =>
+  ({ id, full_name: name, hired_at: hired, dismissed_at: dismissed, dismiss_reason: null, position: "віддалений менеджер", team_label: null, category: null, ...extra });
+const NOV = (vMark: boolean) => [R(1, "А Працює", "2025-03-01", null), R(2, "Б Десять", "2026-11-10", "2026-11-20"),
+  R(3, "В Нуль", "2026-11-25", "2026-11-25", { churn_excluded: vMark })];
+
+/**
+ * #11400 — позначений поза «звільнено» І поза «працювало»: листопад 1 ÷ 2 = 50%, а не 2 ÷ 3; поза «прийнято» і стажем.
+ * 🧨 Червоніє, якщо лишити позначеного в знаменнику (1 ÷ 3) або в чисельнику.
+ */
+test("#11400 НЕ ВІДПРАЦЮВАВ: позначений поза «звільнено» і поза «працювало» — листопад 1 із 2", () => {
+  const r = churnFromPeople(NOV(true), "2026-11-01", "2026-11-30", null);
+  const m = r.months[0];
+  assert.deepEqual([m.headcount, m.dismissed, m.hired, m.early, m.turnover], [2, 1, 1, 1, 50], "🔴 позначений рахується в місяці: " + JSON.stringify(m));
+  assert.deepEqual([r.total.dismissed, r.total.hired, r.total.early, r.total.avgTenureDays, r.total.avgTurnover], [1, 1, 1, 10, 50], "🔴 позначений у підсумках: " + JSON.stringify(r.total));
+});
+
+/**
+ * #11401 🪞 ДЗЕРКАЛО: виключає ПОЗНАЧКА, а не стаж — той самий нуль днів без позначки рахується (2 із 3); позначка на
+ * людині без дати звільнення (повернули на роботу) не виймає її з «працювало».
+ * 🧨 Червоніє, якщо виключати за коротким стажем або за самим прапорцем без дати звільнення.
+ */
+test("#11401 НЕ ВІДПРАЦЮВАВ 🪞: без позначки нуль днів рахується; позначка без звільнення працюючого не виймає", () => {
+  const r = churnFromPeople(NOV(false), "2026-11-01", "2026-11-30", null);
+  assert.deepEqual([r.months[0].headcount, r.months[0].dismissed, r.total.excludedManual], [3, 2, 0], "🔴 нуль днів без позначки не рахується");
+  const back = churnFromPeople([...NOV(true), R(4, "Г Повернувся", "2026-11-01", null, { churn_excluded: true })], "2026-11-01", "2026-11-30", null);
+  assert.deepEqual([back.months[0].headcount, back.total.active, back.total.excludedManual], [3, 2, 1], "🔴 позначка без дати звільнення вийняла працюючого");
+});
+
+/**
+ * #11402 — позначений ВИДНО: лишається в `people` з `excluded: true`, окремим числом `excludedManual`; `byCategory` у
+ * сумі = «звільнено» (без позначених); фільтр категорії звужує й позначених.
+ * 🧨 Червоніє, якщо прибрати позначеного зі списку, не порахувати його окремо або залишити в `byCategory`.
+ */
+test("#11402 НЕ ВІДПРАЦЮВАВ: у списку з позначкою, окремим числом, поза категоріями; фільтр категорії звужує", () => {
+  const r = churnFromPeople(NOV(true), "2026-11-01", "2026-11-30", null);
+  assert.deepEqual(r.people.map((p) => [p.full_name, p.excluded]), [["В Нуль", true], ["Б Десять", false]], "🔴 позначений зник зі списку або без прапорця");
+  assert.equal(r.total.excludedManual, 1, "🔴 позначених не видно окремим числом");
+  assert.equal(Object.values(r.byCategory).reduce((a, n) => a + n, 0), r.total.dismissed, "🔴 сума категорій ≠ «звільнено»");
+  assert.equal(churnFromPeople(NOV(true), "2026-11-01", "2026-11-30", "finance").total.excludedManual, 0, "🔴 фільтр категорії не звузив позначених");
+  assert.equal(churnFromPeople(NOV(true), "2026-11-16", "2026-11-22", null).total.excludedManual, 0, "🔴 позначений поза тижнем рахується в тижні");
+});
+
+/**
+ * #11404 — «дата невідома» живе як жила: окреме число `unknownDate`, у списку її немає, у `excludedManual` не потрапляє.
+ * 🧨 Червоніє, якщо злити дві позначки в одну або порахувати «дату невідому» серед «не відпрацював».
+ */
+test("#11404 НЕ ВІДПРАЦЮВАВ ≠ ДАТА НЕВІДОМА: дві причини — два окремі числа", () => {
+  const r = churnFromPeople([...NOV(true), R(5, "Д Невідома", "2025-01-01", "2026-11-03", { dismiss_date_unknown: true })], "2026-11-01", "2026-11-30", null);
+  assert.deepEqual([r.total.unknownDate, r.total.excludedManual, r.total.dismissed], [1, 1, 1], "🔴 причини змішались: " + JSON.stringify(r.total));
+  assert.ok(!r.people.some((p) => p.full_name === "Д Невідома"), "🔴 «дата невідома» зʼявилась у списку");
+});
+
+/**
+ * #11403 ЖИВИЙ SQL — позначку ставить `setDismissDate` лише з коментарем; разом із «дата невідома» — 400; запис у журнал
+ * (`excludedFrom/To`); без `excluded` позначка не скидається; реєстр і `churnReport` її бачать; повернення на роботу знімає.
+ * 🧨 Червоніє, якщо прибрати перевірку коментаря чи «різних причин», не читати колонку в `churnReport` або не знімати
+ * позначку в `revertDismissal`.
+ */
+test("#11403 ЖИВИЙ SQL: «не відпрацював» — з коментарем, не разом із «дата невідома», у журналі, повернення знімає", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const off = await import("./offboarding.js");
+  const emp = await import("./employees.js");
+  const ch = await import("./churn.js");
+  try {
+    const id = (await s.c.query(`INSERT INTO employees (full_name, import_key, status, position, hired_at, dismissed_at)
+      VALUES ('Грицик Тест','g','dismissed','віддалений менеджер','2026-11-25','2026-11-25') RETURNING id`)).rows[0].id as number;
+    await assert.rejects(off.setDismissDate(s.db, s.hr, id, { date: "2026-11-25", excluded: true }), /Коментар/);
+    await assert.rejects(off.setDismissDate(s.db, s.hr, id, { unknown: true, excluded: true, comment: "x" }), /різні причини/);
+    await off.setDismissDate(s.db, s.hr, id, { date: "2026-11-25", excluded: true, comment: "відмовилась у перший день навчання" });
+    const flag = async () => (await s.c.query(`SELECT churn_excluded AS x FROM employees WHERE id = $1`, [id])).rows[0].x as boolean;
+    assert.equal(await flag(), true, "🔴 позначка не збереглась");
+    const a = (await s.c.query(`SELECT details FROM access_audit WHERE action = 'employees.dismiss_date' ORDER BY id DESC LIMIT 1`)).rows[0].details;
+    assert.deepEqual([a.excludedFrom, a.excludedTo, a.comment], [false, true, "відмовилась у перший день навчання"], "🔴 журнал не бачить позначки");
+    await off.setDismissDate(s.db, s.hr, id, { date: "2026-11-25", comment: "лише дата" });
+    assert.equal(await flag(), true, "🔴 правка без `excluded` скинула позначку");
+    assert.equal((await emp.listEmployees(s.db)).find((x) => x.id === id)!.churn_excluded, true, "🔴 реєстр не віддає позначку");
+    const r = await ch.churnReport(s.db, "2026-11", "2026-11");
+    assert.deepEqual([r.total.dismissed, r.total.excludedManual, r.people[0]?.excluded], [0, 1, true], "🔴 churnReport не читає колонку");
+    await s.c.query(`UPDATE employees SET status = 'finishing' WHERE id = $1`, [id]);
+    await s.c.query(`INSERT INTO employee_offboarding (employee_id, stage, last_day, reason, prev)
+      VALUES ($1, 'finishing', '2026-11-25', 'тест', '{"status":"active","dismissed_at":null,"dismiss_reason":null,"mws":{},"user":null}')`, [id]);
+    await off.revertDismissal(s.db, s.hr, id);
+    assert.equal(await flag(), false, "🔴 повернення на роботу не зняло позначку");
   } finally { await s.done(); }
 });

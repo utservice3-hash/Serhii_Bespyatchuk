@@ -93,9 +93,11 @@ export function HiringChurnTab({ toast }: { toast: Toast }) {
           <div className="hr-muted">{d.wholeMonths ? (d.months.length > 1 ? "на місяць за період" : "звільнено ÷ працювало в місяці") : "для тижня не рахується — формула помісячна"}</div></div>
         <div className="kpi-card"><div className="kpi-label">Працює зараз</div><div className="kpi-value">{d.total.active}</div><div className="hr-muted">{noDate ? `без дати прийому: ${noDate}` : cat ? `у категорії «${empCategoryLabel(cat === "none" ? null : cat)}»` : "за реєстром"}</div></div>
       </div>
-      {(d.total.unknownDate ?? 0) > 0 && (
+      {((d.total.excludedManual ?? 0) > 0 || (d.total.unknownDate ?? 0) > 0) && (
         <div className="hr-muted" style={{ margin: "-6px 0 12px", fontSize: 12.5 }}>
-          Поза розрахунком: {d.total.unknownDate} звільнених із невідомою датою (позначено в картці людини — «дата невідома»).
+          Поза розрахунком:
+          {(d.total.excludedManual ?? 0) > 0 && <> {d.total.excludedManual} не відпрацювали жодного дня (позначено вручну, у списку нижче з позначкою «не в плинності»){(d.total.unknownDate ?? 0) > 0 ? ";" : "."}</>}
+          {(d.total.unknownDate ?? 0) > 0 && <> {d.total.unknownDate} звільнених із невідомою датою (позначено в картці людини — «дата невідома»).</>}
         </div>
       )}
       <div className="chart-card" style={{ marginBottom: 16 }}>
@@ -105,8 +107,8 @@ export function HiringChurnTab({ toast }: { toast: Toast }) {
             <table className="data-table compact" style={{ width: "100%" }}>
               <thead><tr><th>Співробітник</th><th>Категорія</th><th>Посада</th><th>Почав</th><th>Звільнився</th><th className="num">Стаж</th><th /></tr></thead>
               <tbody>{d.people.map((p) => (
-                <tr key={p.id}>
-                  <td><b>{p.full_name}</b></td>
+                <tr key={p.id} style={p.excluded ? { opacity: 0.6 } : undefined}>
+                  <td><b>{p.full_name}</b>{p.excluded && <span className="emp-pill warn" style={{ marginLeft: 6 }} title="Не відпрацював(ла) жодного дня — поза розрахунком плинності">не в плинності</span>}</td>
                   <td>{p.category ? empCategoryLabel(p.category) : <span className="hr-muted">без категорії</span>}</td>
                   <td className="hr-muted">{p.position ?? "—"}</td>
                   <td>{p.hired_at ? dmy(p.hired_at) : <span className="hr-muted">невідомо</span>}</td>
@@ -154,6 +156,7 @@ export function HiringChurnTab({ toast }: { toast: Toast }) {
 function TenureDialog({ p, onClose, onDone }: { p: ChurnPersonRow; onClose: () => void; onDone: (m: string) => void }) {
   const [hired, setHired] = useState(p.hired_at ?? "");
   const [left, setLeft] = useState(p.dismissed_at);
+  const [excluded, setExcluded] = useState(!!p.excluded);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -165,8 +168,8 @@ function TenureDialog({ p, onClose, onDone }: { p: ChurnPersonRow; onClose: () =
     if (!comment.trim()) { setErr("Коментар обовʼязковий"); return; }
     setBusy(true); setErr(null);
     try {
-      await setDismissDate(p.id, { date: left, comment: comment.trim(), ...(hired !== (p.hired_at ?? "") ? { hiredAt: hired || null } : {}) });
-      onDone(`${p.full_name}: ${dmy(hired || null)} – ${dmy(left)}${days != null && !bad ? `, стаж ${stazh(days)}` : ""}`);
+      await setDismissDate(p.id, { date: left, comment: comment.trim(), excluded, ...(hired !== (p.hired_at ?? "") ? { hiredAt: hired || null } : {}) });
+      onDone(`${p.full_name}: ${dmy(hired || null)} – ${dmy(left)}${days != null && !bad ? `, стаж ${stazh(days)}` : ""}${excluded ? " · не в плинності" : ""}`);
     } catch (e) { setErr(hiringError(e)); setBusy(false); }
   };
   return createPortal(
@@ -180,7 +183,13 @@ function TenureDialog({ p, onClose, onDone }: { p: ChurnPersonRow; onClose: () =
           <div className="wide hr-muted" style={{ fontSize: 13, color: bad ? "var(--danger)" : undefined }}>
             {bad ? "Дата початку пізніше за дату звільнення" : days != null ? <>Стаж: <b style={{ color: "var(--text)" }}>{stazh(days)}</b> · рахується сам</> : "Без дати початку стаж невідомий"}
           </div>
-          <label className="wide"><span>Коментар *</span><input className="hr-inp" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="напр.: вийшла на стажування раніше, ніж оформили" /></label>
+          {/* 🚪 26.11.2026, запит HR: відмова в перший день навчання — людина у списку лишається, у цифрах її немає. */}
+          <label className="wide" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <input type="checkbox" checked={excluded} onChange={(e) => setExcluded(e.target.checked)} style={{ marginTop: 3 }} />
+            <span style={{ color: "var(--text)" }}>Не відпрацював(ла) жодного дня — не рахувати в плинності
+              <span className="hr-muted" style={{ display: "block", fontSize: 12.5 }}>напр.: відмовився в перший день навчання. Людина лишається у списку з позначкою.</span></span>
+          </label>
+          <label className="wide"><span>Коментар *</span><input className="hr-inp" value={comment} onChange={(e) => setComment(e.target.value)} placeholder={excluded ? "напр.: відмовилась у перший день навчання" : "напр.: вийшла на стажування раніше, ніж оформили"} /></label>
         </div>
         {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
