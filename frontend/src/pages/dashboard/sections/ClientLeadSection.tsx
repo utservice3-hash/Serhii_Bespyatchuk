@@ -113,7 +113,7 @@ function YearMoney({ y }: { y: NonNullable<Row["yearMoney"]> }) {
   if (y.deals === 0) return <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }} title={`успішно реалізованих угод за ${y.year} рік немає`}>{y.year}: успішних угод не було</div>;
   const partial = y.missing > 0;
   return (
-    <div style={{ fontSize: 11, color: "#374151", marginTop: 4, whiteSpace: "nowrap" }}
+    <div style={{ fontSize: 11, color: "#374151", marginTop: 4, maxWidth: 170 }}
       title={`успішно реалізовані угоди за ${y.year} рік: ${y.deals}. Оборот — сума рахунків цих угод, дохід — маржа.${partial ? ` У ${y.missing} з них суми рахунку в CRM немає — оборот неповний.` : ""}`}>
       {y.year}: оборот <b>{partial ? "≥ " : ""}{uah(y.income)}</b> · дохід <b>{uah(y.revenue)}</b>
     </div>
@@ -359,10 +359,10 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
               ? <span style={S.chip("#dcfce7", "#166534")} title={`за ${L.works.windowDays} дн. (ритм сегмента) є робота`}>✅ працюють · {WORK_BY[L.works.by ?? ""]} {dm(L.works.at)}</span>
               : <span style={S.chip("#fef2f2", "#b91c1c")} title="розмова від 10 с, нова угода чи рух угоди, замовлення, коментар, контакт або оплата у Виписці — нічого">роботи немає за {L.works.windowDays} дн.</span>}
           </td>
-          <td style={{ ...S.td, minWidth: 220 }}>
+          <td style={{ ...S.td, minWidth: 170 }}>
             <RowComment clientKey={c.clientKey} value={c.lastComment} canWrite onSaved={load} />
           </td>
-          <td style={{ ...S.td, minWidth: 240 }}>
+          <td style={{ ...S.td, minWidth: 200 }}>
             {c.lastTalk ? (
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <span>{dm(c.lastTalk)}.{c.lastTalk.slice(2, 4)}{c.lastTalkSec != null ? ` · ${Math.floor(c.lastTalkSec / 60)}:${String(c.lastTalkSec % 60).padStart(2, "0")}` : ""}</span>
