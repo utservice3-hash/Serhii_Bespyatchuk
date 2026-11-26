@@ -8,6 +8,7 @@ import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { monthsLabel } from "./ClientSeasonBlock";
 import { readLeadNav, leadNavSearch, backTarget, backIsHistoryBack, type LeadNav } from "../clientLeadNav";
+import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, DEFAULT_LEAD_FILTER, type LeadGroup, type LeadFilter } from "../clientLeadView";
 
 /**
  * 🚦 «З КИМ З ПОСТІЙНИХ ГОВОРИТИ» — ПРОСТИЙ ЕКРАН ТІМЛІДА (ТЗ Юлі 28.10.2026, етап 2; задача 7360).
@@ -31,8 +32,8 @@ const COLOR = {
   // ⚠️ Задача 8350: з ними неможливо працювати — видно окремо, у лічильники менеджера не йдуть.
   problem: { dot: "⚠️", title: "Проблемні", sub: "з ними неможливо працювати — не рахуються в лічильниках менеджера, «Немає роботи» і «передати»", bg: "#fff7ed", fg: "#b45309", line: "#fdba74" },
 } as const;
-/** Група рядка: діюча позначка «Проблемний» (8350) переважає колір. */
-const groupOf = (r: Row): keyof typeof COLOR => (r.lead.problem ? "problem" : r.lead.color);
+/** Група рядка — з `clientLeadView` (діюча позначка «Проблемний» переважає колір). */
+const groupOf = leadGroupOf;
 /** «ще 1 клієнт / 2 клієнти / 5 клієнтів» — спільний номер останньої розмови (задача 9061). */
 function sharedLabel(n: number): string {
   // Позначка стоїть лише на розмові через спільний номер (≤5 клієнтів), але відмінювання — повне, про запас.
@@ -68,19 +69,43 @@ function stats(rows: Row[]) {
   return s;
 }
 
-function Counters({ rows, month }: { rows: Row[]; month: string }) {
+/**
+ * 🎯 Кнопка-колір (11227): клік показує клієнтів цього кольору в поточному охопленні (компанія, команда, менеджер);
+ * повторний клік знімає вибір. Число — те саме, що й було, лише тепер на нього можна натиснути.
+ */
+function ColorPick({ color, n, pick, onPick }: { color: LeadGroup; n: number; pick: LeadGroup | null; onPick: (c: LeadGroup) => void }) {
+  const m = COLOR[color], on = pick === color;
+  return (
+    <button type="button" onClick={(e) => { e.stopPropagation(); onPick(color); }} aria-pressed={on}
+      title={on ? "показано цих клієнтів — натисніть, щоб зняти вибір" : `показати клієнтів: ${m.title.toLowerCase()}`}
+      style={{ border: `1px solid ${on ? m.fg : m.line}`, background: on ? m.fg : m.bg, color: on ? "#fff" : m.fg, borderRadius: 999,
+        padding: "2px 9px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+      {m.dot} {n}
+    </button>
+  );
+}
+
+function Counters({ rows, month, pick, onPick }: { rows: Row[]; month: string; pick: LeadGroup | null; onPick: (c: LeadGroup) => void }) {
   const s = stats(rows);
   const src = (["leadgen", "ad", "manager"] as const).filter((k) => s.bySource[k] > 0).map((k) => `${SOURCE[k]} ${s.bySource[k]}`).join(" · ");
-  const box = (value: number, label: string, sub?: string, tone?: string) => (
+  const box = (value: number, label: string, sub?: React.ReactNode, tone?: string) => (
     <div style={{ ...S.card, minWidth: 170 }}>
       <div style={{ fontSize: 24, fontWeight: 800, color: tone ?? "#111827", lineHeight: 1.1 }}>{value}</div>
       <div style={{ fontSize: 13, marginTop: 3 }}>{label}</div>
       {sub && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>{sub}</div>}
     </div>
   );
+  const colors = (
+    <span style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 2 }}>
+      <ColorPick color="green" n={s.green} pick={pick} onPick={onPick} />
+      <ColorPick color="yellow" n={s.yellow} pick={pick} onPick={onPick} />
+      <ColorPick color="red" n={s.red} pick={pick} onPick={onPick} />
+      {s.problem > 0 && <ColorPick color="problem" n={s.problem} pick={pick} onPick={onPick} />}
+    </span>
+  );
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
-      {box(s.all, "постійних", `🟢 ${s.green} · 🟡 ${s.yellow} · 🔴 ${s.red}${s.problem ? ` · ⚠️ ${s.problem}` : ""}`)}
+      {box(s.all, "постійних · натисніть колір", colors)}
       {box(s.newRepeat, `нових постійних за ${monthName(month)}`, src ? `звідки: ${src}` : "друга оплата припала на цей місяць", "#166534")}
       {box(s.lost, `втратили за ${monthName(month)}`, "цього місяця минуло 180 днів без замовлення", s.lost ? "#b91c1c" : undefined)}
       {box(s.handOver, "передати іншому менеджеру", "дедлайн задачі минув, розмови не було", s.handOver ? "#b91c1c" : undefined)}
@@ -89,7 +114,19 @@ function Counters({ rows, month }: { rows: Row[]; month: string }) {
 }
 
 /** Рядок рівня «команда» або «менеджер»: кольори, скільки з жовтих і червоних у роботі, скільки передати. */
-function LevelTable({ title, groups, onPick }: { title: string; groups: { id: number; name: string; rows: Row[] }[]; onPick: (id: number) => void }) {
+function LevelTable({ title, groups, onPick, onPickColor }: {
+  title: string; groups: { id: number; name: string; rows: Row[] }[]; onPick: (id: number) => void;
+  /** 🎯 11227: клік по числу кольору в рядку — клієнти цього кольору цієї команди / менеджера. */
+  onPickColor: (id: number, color: LeadGroup) => void;
+}) {
+  const num = (id: number, color: LeadGroup, n: number, bold: boolean) => (
+    <td style={{ ...S.td, textAlign: "right" }}>
+      {n > 0
+        ? <button type="button" onClick={(e) => { e.stopPropagation(); onPickColor(id, color); }} title={`показати клієнтів: ${COLOR[color].title.toLowerCase()}`}
+            style={{ border: "none", background: "none", padding: "0 2px", cursor: "pointer", fontSize: 13, fontWeight: bold ? 700 : 500, color: COLOR[color].fg, textDecoration: "underline" }}>{n}</button>
+        : <span style={{ color: "#9ca3af" }}>0</span>}
+    </td>
+  );
   return (
     <div style={{ ...S.card, padding: 0, overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -107,10 +144,10 @@ function LevelTable({ title, groups, onPick }: { title: string; groups: { id: nu
               <tr key={g.id} onClick={() => onPick(g.id)} style={{ cursor: "pointer" }}>
                 <td style={{ ...S.td, fontWeight: 700, color: "#1d4ed8" }}>{g.name} ›</td>
                 <td style={{ ...S.td, textAlign: "right" }}>{s.all}</td>
-                <td style={{ ...S.td, textAlign: "right", color: COLOR.green.fg }}>{s.green}</td>
-                <td style={{ ...S.td, textAlign: "right", color: COLOR.yellow.fg, fontWeight: 700 }}>{s.yellow}</td>
-                <td style={{ ...S.td, textAlign: "right", color: COLOR.red.fg, fontWeight: 700 }}>{s.red}</td>
-                <td style={{ ...S.td, textAlign: "right", color: s.problem ? COLOR.problem.fg : "#9ca3af" }}>{s.problem}</td>
+                {num(g.id, "green", s.green, false)}
+                {num(g.id, "yellow", s.yellow, true)}
+                {num(g.id, "red", s.red, true)}
+                {num(g.id, "problem", s.problem, false)}
                 <td style={{ ...S.td, textAlign: "right" }}>{s.working} з {s.yellow + s.red}</td>
                 <td style={{ ...S.td, textAlign: "right", color: s.handOver ? "#b91c1c" : "#9ca3af", fontWeight: s.handOver ? 700 : 400 }}>{s.handOver}</td>
               </tr>
@@ -131,6 +168,9 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   const [mgr, setMgr] = useState<number | null>(() => readLeadNav(window.location.search, auth.role, auth.teamId).mgr);
   const [open, setOpen] = useState<string | null>(null);
   const [showGreen, setShowGreen] = useState(false);
+  // 🎯 11227: обраний колір (клієнти цього кольору в поточному охопленні) і фільтр списку. Перехід між рівнями їх не скидає.
+  const [pick, setPick] = useState<LeadGroup | null>(null);
+  const [filter, setFilter] = useState<LeadFilter>(DEFAULT_LEAD_FILTER);
   const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [actErr, setActErr] = useState<string | null>(null);
@@ -191,6 +231,11 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
     <button type="button" onClick={() => go(back.nav, true)} style={{ ...S.btn(true), fontSize: 14, padding: "8px 16px" }}>{back.label}</button>
   );
   const scopeRows = mgrRows ?? teamRows;
+  const togglePick = (c: LeadGroup) => { setOpen(null); setPick((p) => (p === c ? null : c)); };
+  /** Клієнти, які зараз у списку: обраний колір — у всьому охопленні; без кольору — клієнти обраного менеджера. */
+  const baseRows = pick != null ? pickRows(scopeRows, pick) : mgrRows ?? [];
+  const listRows = applyLeadFilter(baseRows, filter);
+  const scopeLabel = mgrEff != null ? mgrName ?? "менеджер" : teamEff != null ? teamName ?? "команда" : isManager ? "мої клієнти" : "уся компанія";
 
   const crumb = (
     <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, flexWrap: "wrap" }}>
@@ -225,7 +270,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
               {L.offSeason && <span style={S.chip("#eef2ff", "#4338ca")} title={`сезонний клієнт: возить ${monthsLabel(c.seasonMonths)} — зараз не сезон, дзвонити не треба`}>🌙 не сезон</span>}
               {L.newRepeat && <span style={S.chip("#dcfce7", "#166534")} title={`друга оплата — цього місяця · звідки: ${SOURCE[L.source]}`}>новий постійний</span>}
             </div>
-            {!mgrRows && <div style={grey}>{c.managerName}</div>}
+            {!mgrRows && <div style={grey}>{c.managerName}{teamEff == null && c.teamName ? ` · ${c.teamName}` : ""}</div>}
           </td>
           <td style={S.td}>
             <div>{L.orderDays == null ? "замовлень не було" : L.orderDays === 0 ? "замовив сьогодні" : `не замовляв ${L.orderDays} дн.`}</div>
@@ -288,14 +333,15 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   const group = (color: keyof typeof COLOR, rows: Row[]) => {
     const m = COLOR[color];
     const sorted = [...rows].sort((a, b) => Number(b.lead.handOver) - Number(a.lead.handOver) || b.lifetimeRevenue - a.lifetimeRevenue);
-    const hidden = color === "green" && !showGreen;
+    // Зелені згорнуті, поки їх не просили: обраний колір або увімкнений фільтр — це і є прохання.
+    const hidden = color === "green" && !showGreen && pick == null && !leadFilterActive(filter);
     return (
       <div key={color} style={{ ...S.card, padding: 0, overflowX: "auto", borderColor: m.line }}>
         <div style={{ padding: "10px 14px", background: m.bg, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <b style={{ color: m.fg, fontSize: 15 }}>{m.dot} {m.title} · {rows.length}</b>
           <span style={{ fontSize: 12, color: "#6b7280" }}>{m.sub}</span>
           {color !== "green" && color !== "problem" && <span style={{ fontSize: 12, color: "#374151" }}>· працюють: {rows.filter((r) => r.lead.works.yes).length} з {rows.length}</span>}
-          {color === "green" && rows.length > 0 && (
+          {color === "green" && rows.length > 0 && pick == null && !leadFilterActive(filter) && (
             <button type="button" onClick={() => setShowGreen((v) => !v)} style={{ ...S.btn(), marginLeft: "auto" }}>{showGreen ? "Сховати" : "Показати"}</button>
           )}
         </div>
@@ -313,7 +359,44 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
     );
   };
 
-  const showClients = isManager || mgrEff != null;
+  const showClients = isManager || mgrEff != null || pick != null;
+  const ws = workSplit(baseRows);
+  const fchip = (on: boolean, label: string, onClick: () => void, title?: string) => (
+    <button type="button" onClick={onClick} aria-pressed={on} title={title}
+      style={{ ...S.btn(on), padding: "3px 10px", borderRadius: 999 }}>{label}</button>
+  );
+  /** 🎯 11227: панель над списком — що показано, скільки з них у роботі, і вибір команди / менеджера без повернення нагору. */
+  const listBar = showClients && (
+    <div style={{ ...S.card, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
+      {pick != null && (
+        <b style={{ color: COLOR[pick].fg }}>{COLOR[pick].dot} {COLOR[pick].title} · {scopeLabel} · {baseRows.length}</b>
+      )}
+      {pick != null && fchip(false, "✕ усі кольори", () => { setPick(null); setOpen(null); }, "зняти вибір кольору")}
+      {pick != null && !isManager && auth.role !== "team_lead" && (
+        <label style={{ fontSize: 12, color: "#6b7280" }}>Команда{" "}
+          <select value={teamEff ?? ""} onChange={(e) => go({ team: e.target.value === "" ? null : Number(e.target.value), mgr: null })} style={{ fontSize: 12 }}>
+            <option value="">усі</option>
+            {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </label>
+      )}
+      {pick != null && !isManager && teamEff != null && (
+        <label style={{ fontSize: 12, color: "#6b7280" }}>Менеджер{" "}
+          <select value={mgrEff ?? ""} onChange={(e) => go({ team: teamEff, mgr: e.target.value === "" ? null : Number(e.target.value) })} style={{ fontSize: 12 }}>
+            <option value="">усі</option>
+            {managers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+      )}
+      <span style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "#6b7280" }} title="робота за ритм сегмента: розмова від 10 с, рух угоди, коментар, контакт, оплата у Виписці">Робота:</span>
+        {fchip(filter.work === "all", `усі ${ws.all}`, () => setFilter((f) => ({ ...f, work: "all" })))}
+        {fchip(filter.work === "yes", `працюють ${ws.yes}`, () => setFilter((f) => ({ ...f, work: "yes" })))}
+        {fchip(filter.work === "no", `роботи немає ${ws.no}`, () => setFilter((f) => ({ ...f, work: "no" })))}
+      </span>
+      {leadFilterActive(filter) && <span style={{ fontSize: 12, color: "#6b7280" }}>у списку {listRows.length} з {baseRows.length}</span>}
+    </div>
+  );
   return (
     <div ref={topRef} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div>
@@ -325,14 +408,18 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
       </div>
       {/* 🔙 9225: помітна кнопка «назад» поруч із ланцюжком — ланцюжок на кнопку не схожий, тімлід його не впізнав. */}
       {!isManager && <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>{backBtn}{crumb}</div>}
-      <Counters rows={scopeRows} month={month} />
+      <Counters rows={scopeRows} month={month} pick={pick} onPick={togglePick} />
       {actErr && <div role="alert" style={{ ...S.card, color: "#b91c1c", fontWeight: 600 }}>⚠️ {actErr}</div>}
-      {!isManager && teamEff == null && <LevelTable title="Команда" groups={teams} onPick={(id) => go({ team: id, mgr: null })} />}
-      {!isManager && teamEff != null && mgrEff == null && <LevelTable title="Менеджер" groups={managers} onPick={(id) => go({ team: teamEff, mgr: id })} />}
+      {/* 🎯 11227: з обраним кольором таблицю рівня не показуємо — на її місці список клієнтів цього кольору. */}
+      {!isManager && pick == null && teamEff == null && <LevelTable title="Команда" groups={teams} onPick={(id) => go({ team: id, mgr: null })}
+        onPickColor={(id, color) => { setPick(color); go({ team: id, mgr: null }); }} />}
+      {!isManager && pick == null && teamEff != null && mgrEff == null && <LevelTable title="Менеджер" groups={managers} onPick={(id) => go({ team: teamEff, mgr: id })}
+        onPickColor={(id, color) => { setPick(color); go({ team: teamEff, mgr: id }); }} />}
+      {listBar}
       {/* ⚠️ «Проблемні» (8350) — між червоними й зеленими, і лише коли вони є (порожня група нічого не каже). */}
       {showClients && (["yellow", "red", "problem", "green"] as const)
-        .filter((k) => k !== "problem" || (mgrRows ?? []).some((c) => groupOf(c) === "problem"))
-        .map((k) => group(k, (mgrRows ?? []).filter((c) => (k === "problem" ? c.lead.problem != null : !c.lead.problem && c.lead.color === k))))}
+        .filter((k) => (pick != null ? k === pick : k !== "problem" || listRows.some((c) => groupOf(c) === "problem")))
+        .map((k) => group(k, listRows.filter((c) => (k === "problem" ? c.lead.problem != null : !c.lead.problem && c.lead.color === k))))}
       {/* Список клієнтів довгий: після прокрутки верхньої кнопки вже не видно — та сама кнопка внизу. */}
       {showClients && backBtn && <div>{backBtn}</div>}
       {creating && (
