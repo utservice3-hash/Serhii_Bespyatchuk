@@ -104,6 +104,8 @@ const READERS: Record<string, "fx" | "uah" | "none"> = {
   "jobs/buildPaymentFile.ts": "fx", "routes/dashboard.ts": "fx",
   // 💰 обхідний лист п. 1: лише ключі клієнта за назвою для переприв'язки відповідального — сум не читає
   "payroll/service.ts": "none",
+  // 💰 9934: разове прибирання задач «Отримати оплату» — лише назви й ключі клієнтів, сум не читає
+  "tools/cleanupReceivableTasks.ts": "none",
 };
 
 /**

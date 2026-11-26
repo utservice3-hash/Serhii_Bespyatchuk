@@ -8659,3 +8659,12 @@ VALUES ('staff', 'Співробітник', false, 'own',
     "nominations":false,"receivables":false,"missed-calls":false,"carrier-calls":false,"manager-report":false}'::jsonb,
   '{}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
+
+-- 💰 КЛЮЧ БОРГУ НА ЗАДАЧІ «ОТРИМАТИ ОПЛАТУ» (задача 9934, 26.11.2026). Джоба `receivableDeadlineTasks` ставила нову
+-- задачу на кожен перенесений дедлайн і не закривала старих: 26.11 на проді 164 відкриті, з них 98 дублів. Тепер на
+-- один борг одна відкрита задача: `inv:<client_key>:<№ рахунку>` або `cli:<client_key>` (`core/receivableTasks.ts`).
+-- NULL — будь-яка інша задача, і задачі до 9934 (їх розбирає `tools/cleanupReceivableTasks.ts`).
+-- Відкат даних: колонку можна обнулити або видалити — джоба тоді знову ставитиме задачі без ключа, як до 9934.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS receivable_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_tasks_receivable_open ON tasks(receivable_key)
+  WHERE receivable_key IS NOT NULL AND status <> 'done';
