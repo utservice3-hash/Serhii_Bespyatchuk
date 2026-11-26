@@ -8,7 +8,7 @@ import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { monthsLabel } from "./ClientSeasonBlock";
 import { readLeadNav, leadNavSearch, backTarget, backIsHistoryBack, type LeadNav } from "../clientLeadNav";
-import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, overRhythm, talkMatches, sortLead, TALK_AGE_DAYS, DEFAULT_LEAD_FILTER, type LeadSort, type LeadGroup, type LeadFilter } from "../clientLeadView";
+import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, overRhythm, noPhone, talkMatches, sortLead, TALK_AGE_DAYS, DEFAULT_LEAD_FILTER, type LeadSort, type LeadGroup, type LeadFilter } from "../clientLeadView";
 
 /**
  * 🚦 «З КИМ З ПОСТІЙНИХ ГОВОРИТИ» — ПРОСТИЙ ЕКРАН ТІМЛІДА (ТЗ Юлі 28.10.2026, етап 2; задача 7360).
@@ -371,6 +371,11 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
                 {c.lastTalkBy && <span style={grey}>{c.lastTalkBy}</span>}
               </div>
             ) : <span style={S.chip("#fef2f2", "#b91c1c")}>розмов не було</span>}
+            {noPhone(c) && (
+              <div style={{ marginTop: 4 }}>
+                <span style={S.chip("#fffbeb", "#b45309")} title="у контактах клієнта в Kommo немає жодного номера — дзвінки до нього не привʼязуються. Додайте номер у контакт або компанію в Kommo">📵 нема номера</span>
+              </div>
+            )}
             {c.lastTalk && (c.lastTalkSharedWith ?? 0) > 0 && (
               <div style={{ marginTop: 4 }}>
                 <span style={S.chip("#eff6ff", "#1d4ed8")}
@@ -482,6 +487,8 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
       </label>
       {fchip(filter.overRhythm, `⏰ пропустили ритм ${baseRows.filter(overRhythm).length}`, () => setFilter((f) => ({ ...f, overRhythm: !f.overRhythm })),
         "днів без замовлення більше, ніж звичайний інтервал клієнта")}
+      {fchip(filter.noPhone, `📵 без номера ${baseRows.filter(noPhone).length}`, () => setFilter((f) => ({ ...f, noPhone: !f.noPhone })),
+        "у контактах клієнта в Kommo немає жодного номера — розмови з ним не привʼязуються")}
       {leadFilterActive(filter) && fchip(false, "✕ скинути фільтри", () => setFilter(DEFAULT_LEAD_FILTER))}
       {leadFilterActive(filter) && <span style={{ fontSize: 12, color: "#6b7280" }}>у списку {listRows.length} з {baseRows.length}</span>}
     </div>

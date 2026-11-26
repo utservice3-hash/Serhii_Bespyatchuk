@@ -18,6 +18,8 @@ export interface LeadViewRow {
   lead: { color: "green" | "yellow" | "red"; problem?: unknown; works: { yes: boolean }; rhythm?: { over: boolean }; handOver?: boolean; orderDays?: number | null };
   /** 📞 Остання розмова (11224): київська дата і скільки днів тому; обидва `null` — розмов не було. */
   lastTalk?: string | null; lastTalkDays?: number | null;
+  /** 📵 11226: стан номера з сервера (`phoneState`); `"none"` — у контактах клієнта в Kommo немає жодного номера. */
+  phone?: "has" | "none";
   lifetimeRevenue?: number;
 }
 
@@ -50,12 +52,14 @@ export interface LeadFilter {
   talk: TalkFilter;
   /** ⏱ 11228: лише ті, хто пропустив свій звичний ритм замовлень (ознака з сервера — `lead.rhythm.over`). */
   overRhythm: boolean;
+  /** 📵 11226: лише клієнти без жодного номера в Kommo — розмову з ними телефонія привʼязати не може. */
+  noPhone: boolean;
 }
-export const DEFAULT_LEAD_FILTER: LeadFilter = { work: "all", talk: "all", overRhythm: false };
+export const DEFAULT_LEAD_FILTER: LeadFilter = { work: "all", talk: "all", overRhythm: false, noPhone: false };
 
 /** Чи фільтр щось звужує — щоб показати «скинути» і не ховати зелених мовчки. */
 export function leadFilterActive(f: LeadFilter): boolean {
-  return f.work !== "all" || f.talk !== "all" || f.overRhythm;
+  return f.work !== "all" || f.talk !== "all" || f.overRhythm || f.noPhone;
 }
 
 /** Звуження списку. Кожна умова — «і»; вимкнена умова нічого не відсікає. */
@@ -65,6 +69,7 @@ export function applyLeadFilter<T extends LeadViewRow>(rows: readonly T[], f: Le
     if (f.work === "no" && r.lead.works.yes) return false;
     if (!talkMatches(r, f.talk)) return false;
     if (f.overRhythm && !overRhythm(r)) return false;
+    if (f.noPhone && !noPhone(r)) return false;
     return true;
   });
 }
@@ -72,6 +77,14 @@ export function applyLeadFilter<T extends LeadViewRow>(rows: readonly T[], f: Le
 /** ⏱ Пропустив свій ритм (11228). Рядок без ознаки (старий сервер) — ні: невідоме не видаємо за сигнал. */
 export function overRhythm(r: LeadViewRow): boolean {
   return r.lead.rhythm?.over === true;
+}
+
+/**
+ * 📵 Без номера (11226; зустріч 25.11.2026: «клієнти без номера — в окремий список»). Ознака з сервера; рядок без неї
+ * (старий сервер) — ні: «невідомо» не видаємо за «номера немає».
+ */
+export function noPhone(r: LeadViewRow): boolean {
+  return r.phone === "none";
 }
 
 /** «Працюють X з N» для набору рядків: сума двох частин завжди дорівнює набору. */

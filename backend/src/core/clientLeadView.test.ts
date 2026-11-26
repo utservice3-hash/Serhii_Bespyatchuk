@@ -23,6 +23,7 @@ interface View {
   talkMatches: (r: Row, t: "all" | "none" | number) => boolean;
   sortLead: (rows: readonly Row[], by: "money" | "talk" | "order") => Row[];
   TALK_AGE_DAYS: readonly number[];
+  noPhone: (r: Row) => boolean;
 }
 async function loadView(): Promise<View> {
   const ts = (await import("typescript")).default;
@@ -246,4 +247,39 @@ test("#11224 🪞 ОСТАННЯ РОЗМОВА: «понад N днів» по 
   assert.match(lead, /baseRows\.filter\(\(r\) => talkMatches\(r, "none"\)\)\.length/, "🔴 число «розмов не було» — не з правила відбору");
   assert.match(lead, /\{c\.lastTalkDays === 0 \? "сьогодні" : `\$\{c\.lastTalkDays\} дн\. тому`\}/, "🔴 у рядку немає давності останньої розмови");
   assert.match(lead, /<select value=\{sortBy\} onChange=\{\(e\) => setSortBy\(e\.target\.value as LeadSort\)\}/, "🔴 перемикача порядку списку немає");
+});
+
+/**
+ * #11226 🪞 — КЛІЄНТИ БЕЗ НОМЕРА: ОЗНАКА В РЯДКУ Й ОКРЕМИЙ СПИСОК (зустріч 25.11.2026: «без номера — в окремий список,
+ * тімлід проводить аудит»). Ознаку дає сервер (`phoneState`: нуль номерів у контактах Kommo → `"none"`); екран лише
+ * показує її й відбирає. Рядок без ознаки — НЕ «без номера»: невідоме не видаємо за прогалину в CRM.
+ * 🧨 Червоніє, якщо в «без номера» потрапить клієнт із номером чи з невідомим станом, або клієнт без номера зникне зі списку.
+ */
+test("#11226 🪞 БЕЗ НОМЕРА: у списку рівно ті, у кого сервер сказав «номера немає»; невідомий стан — ні; фільтр перетинається з рештою", async () => {
+  const v = await loadView();
+  const rows: Row[] = [
+    row("has", "green", true, { phone: "has" }),
+    row("none1", "red", false, { phone: "none" }),
+    row("none2", "yellow", true, { phone: "none" }),
+    row("unknown", "red", false),
+  ];
+  assert.equal(ids(rows.filter(v.noPhone)), "none1,none2", "🔴 «без номера» — не рівно ті, кому сервер сказав none");
+  assert.equal(v.noPhone(rows[3]), false, "🔴 рядок без ознаки номера пораховано як «номера немає»");
+  assert.equal(ids(v.applyLeadFilter(rows, { ...v.DEFAULT_LEAD_FILTER, noPhone: true })), "none1,none2", "🔴 фільтр «без номера» показує не тих");
+  assert.equal(ids(v.applyLeadFilter(rows, v.DEFAULT_LEAD_FILTER)), "has,none1,none2,unknown", "🔴 вимкнений фільтр номера щось відсікає");
+  assert.equal(ids(v.applyLeadFilter(rows, { ...v.DEFAULT_LEAD_FILTER, noPhone: true, work: "no" })), "none1", "🔴 «без номера» не перетинається з «роботи немає»");
+  assert.equal(v.leadFilterActive({ ...v.DEFAULT_LEAD_FILTER, noPhone: true }), true, "🔴 фільтр номера не рахується активним — «скинути» не зʼявиться");
+  assert.equal(v.leadFilterActive(v.DEFAULT_LEAD_FILTER), false, "🔴 порожній фільтр рахується активним");
+
+  // Сервер: стан номера — з того самого правила, що в картці; екран: ознака в рядку й число на кнопці з правила відбору.
+  const { phoneState } = await import("./clientNextStep.js");
+  assert.equal(phoneState(0), "none"); assert.equal(phoneState(1), "has");
+  const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+  const dash = codeOnly(readFileSync(`${ROOT}backend/src/routes/dashboard.ts`, "utf8"));
+  const plans = dash.slice(dash.indexOf('dashboardRouter.get("/client-plans"'), dash.indexOf('dashboardRouter.post("/client-plans/submit"'));
+  assert.match(plans, /phone: phoneState\(phonesByKey\.get\(c\.client_key\) \?\? 0\),/, "🔴 рядок клієнта не несе стан номера");
+  const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
+  assert.match(lead, /\{noPhone\(c\) && \(/, "🔴 у рядку не видно, що в клієнта немає номера");
+  assert.match(lead, /📵 нема номера/, "🔴 підпис «нема номера» зник із рядка");
+  assert.match(lead, /fchip\(filter\.noPhone, `📵 без номера \$\{baseRows\.filter\(noPhone\)\.length\}`/, "🔴 кнопки «без номера» немає або число на ній не з правила відбору");
 });
