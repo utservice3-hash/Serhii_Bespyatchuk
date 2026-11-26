@@ -467,6 +467,7 @@ function EmployeeDrawer({ row, tab, status, toast, photo, photoErr, onTab, onClo
               {row.status !== "active" && (row.dismiss_date_unknown
                 ? <span className="emp-pill warn" title="Поза розрахунком плинності">дата звільнення невідома</span>
                 : row.status === "dismissed" && row.dismissed_at ? <span className="emp-pill mute">звільнено {d(row.dismissed_at)}</span> : null)}
+              {row.status !== "active" && row.churn_excluded && <span className="emp-pill warn" title="Не відпрацював(ла) жодного дня — поза розрахунком плинності">не в плинності</span>}
               {row.status !== "active" && <button className="hr-btn xs" onClick={() => setDateEdit(true)}>Змінити дату звільнення</button>}
               <TeamPill row={row} />
               {row.user_id != null ? <span className="emp-pill ok">акаунт: {row.account_name}</span> : <span className="emp-pill warn">без акаунта в дашборді</span>}
@@ -861,6 +862,7 @@ function Birthdays({ rows, onOpen }: { rows: EmployeeRow[]; onOpen: (id: number)
 function DismissDateDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: () => void; onDone: (msg: string) => void }) {
   const [date, setDate] = useState(row.dismissed_at ?? "");
   const [unknown, setUnknown] = useState(!!row.dismiss_date_unknown);
+  const [excluded, setExcluded] = useState(!!row.churn_excluded);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -869,8 +871,8 @@ function DismissDateDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose
     if (!comment.trim()) { setErr("Коментар обовʼязковий"); return; }
     setBusy(true); setErr(null);
     try {
-      await setDismissDate(row.id, unknown ? { unknown: true, comment: comment.trim() } : { date, comment: comment.trim() });
-      onDone(`${row.full_name}: ${unknown ? "дата звільнення невідома — у плинності не рахується" : `дата звільнення ${d(date)}`}`);
+      await setDismissDate(row.id, unknown ? { unknown: true, excluded: false, comment: comment.trim() } : { date, excluded, comment: comment.trim() });
+      onDone(`${row.full_name}: ${unknown ? "дата звільнення невідома — у плинності не рахується" : `дата звільнення ${d(date)}${excluded ? " · не відпрацював(ла) жодного дня — у плинності не рахується" : ""}`}`);
     } catch (e) { setErr(hiringError(e)); setBusy(false); }
   };
   return (
@@ -881,8 +883,13 @@ function DismissDateDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose
         <div className="emp-form" style={{ marginTop: 0 }}>
           <label><span>Фактична дата звільнення</span><input className="hr-inp" type="date" value={date} disabled={unknown} onChange={(e) => setDate(e.target.value)} /></label>
           <label className="wide" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="checkbox" checked={unknown} onChange={(e) => setUnknown(e.target.checked)} />
+            <input type="checkbox" checked={unknown} onChange={(e) => { setUnknown(e.target.checked); if (e.target.checked) setExcluded(false); }} />
             <span>Дата невідома — не рахувати в плинності</span>
+          </label>
+          {/* 🚪 26.11.2026: дата відома, але людина не відпрацювала жодного дня. Окрема причина — разом із «дата невідома» не ставиться. */}
+          <label className="wide" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={excluded} disabled={unknown} onChange={(e) => setExcluded(e.target.checked)} />
+            <span>Не відпрацював(ла) жодного дня — не рахувати в плинності</span>
           </label>
           <label className="wide"><span>Коментар *</span><input className="hr-inp" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="напр.: актуалізація бази — пішов ще у 2025" /></label>
         </div>
