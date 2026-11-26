@@ -8,6 +8,7 @@ import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { monthsLabel } from "./ClientSeasonBlock";
 import { readLeadNav, leadNavSearch, backTarget, backIsHistoryBack, type LeadNav } from "../clientLeadNav";
+import { HelpTip } from "./HelpTip";
 import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, overRhythm, noPhone, profileOpen, talkMatches, sortLead, TALK_AGE_DAYS, DEFAULT_LEAD_FILTER, type LeadSort, type LeadGroup, type LeadFilter } from "../clientLeadView";
 
 /**
@@ -502,11 +503,13 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
   return (
     <div ref={topRef} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div>
-        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>З ким з постійних говорити</h2>
-        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-          Колір — лише від замовлення (рахунок або оплата в CRM) і звичного ритму клієнта: ВІП 14 днів, регулярний 30, епізодичний і без історії 60; червоний — 180.
-          «Працюють» — розмова від 10 с, рух угоди, коментар, контакт або оплата у Виписці за ритм сегмента; колір від цього не змінюється.
-        </div>
+        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}>
+          З ким з постійних говорити
+          <HelpTip label="Як рахується колір і «працюють»">
+            <b>Колір</b> — лише від замовлення (рахунок або оплата в CRM) і звичного ритму клієнта: ВІП 14 днів, регулярний 30, епізодичний і без історії 60; червоний — 180.
+            <br /><b>«Працюють»</b> — розмова від 10 с, рух угоди, коментар, контакт або оплата у Виписці за ритм сегмента; колір від цього не змінюється.
+          </HelpTip>
+        </h2>
       </div>
       {/* 🔙 9225: помітна кнопка «назад» поруч із ланцюжком — ланцюжок на кнопку не схожий, тімлід його не впізнав. */}
       {!isManager && <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>{backBtn}{crumb}</div>}

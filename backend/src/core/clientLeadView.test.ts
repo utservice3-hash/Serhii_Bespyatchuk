@@ -340,3 +340,38 @@ test("#11221 🪞 АНКЕТА КЛІЄНТА: рівно пʼять питан�
   assert.match(lead, /fchip\(filter\.profileOpen, `📋 анкета не заповнена \$\{baseRows\.filter\(profileOpen\)\.length\}`/, "🔴 кнопки «анкета не заповнена» немає або число на ній не з правила відбору");
   assert.match(lead, /📋 анкета \{c\.profile\.filled\}\/\{c\.profile\.total\}/, "🔴 у рядку не видно, скільки питань анкети мають відповідь");
 });
+
+/**
+ * #11222 🪞 — ДОВГІ ПОЯСНЕННЯ СТОЯТЬ ПІД «?», А НЕ НА ЕКРАНІ (зустріч 25.11.2026: «купа тексту… знак питання, наводиш —
+ * і все»). Дзеркало важливіше за заборону: текст НЕ ЗНИК — правило кольору, підпис якорів картки, наслідки архіву,
+ * «Проблемного» й «В нічийні» і далі доступні, лише за наведенням / кліком / фокусом.
+ * 🧨 Червоніє, якщо пояснення повернеться постійним текстом, або зникне зовсім (заборона без дзеркала це пропустила б).
+ */
+test("#11222 🪞 ПОЯСНЕННЯ ПІД «?»: довгий текст на «З ким говорити» і в картці — лише всередині підказки, і жоден не зник", () => {
+  const HELP = /<HelpTip\b[^>]*>([\s\S]*?)<\/HelpTip>/g;
+  const split = (file: string) => {
+    const src = codeOnly(readFileSync(FE(`sections/${file}`), "utf8"));
+    const inside = [...src.matchAll(HELP)].map((m) => m[1]).join("\n");
+    return { inside, outside: src.replace(HELP, "") };
+  };
+  const MOVED: [string, string[]][] = [
+    ["ClientLeadSection.tsx", ["Колір</b> — лише від замовлення", "колір від цього не змінюється"]],
+    ["ClientCardPanel.tsx", ["{card.anchorNote}", "Угоди та гроші не змінюються", "Примітка обовʼязкова", "щойно зʼявиться оплата пізніша за дату архівації", "Скидання поверне клієнта"]],
+    ["ClientProblemBlock.tsx", ["Знімається сама, якщо клієнт знову замовить", "Стане звичайним сам, якщо знову замовить"]],
+    ["ClientReleaseBlock.tsx", ["клієнт піде лідгенам"]],
+  ];
+  for (const [file, phrases] of MOVED) {
+    const { inside, outside } = split(file);
+    assert.ok(inside.length > 0, `🔴 ${file}: перевіряти нічого — жодної підказки «?»`);
+    for (const ph of phrases) {
+      assert.ok(inside.includes(ph), `🔴 ${file}: пояснення «${ph}» зникло зовсім — його мало бути видно під «?»`);
+      assert.ok(!outside.includes(ph), `🔴 ${file}: пояснення «${ph}» знову стоїть постійним текстом`);
+    }
+  }
+  // Підказка справді схована, доки її не відкрили, і відкривається мишею, кліком і з клавіатури.
+  const tip = codeOnly(readFileSync(FE("sections/HelpTip.tsx"), "utf8"));
+  assert.match(tip, /\{open && \(\s*<span role="tooltip"/, "🔴 текст підказки показано завжди, а не за відкриттям");
+  assert.match(tip, /onMouseEnter=\{\(\) => setOpen\(true\)\}/, "🔴 підказка не відкривається наведенням");
+  assert.match(tip, /onFocus=\{\(\) => setOpen\(true\)\}/, "🔴 підказка не відкривається з клавіатури");
+  assert.match(tip, /aria-label=\{label\} aria-expanded=\{open\}/, "🔴 кнопка «?» без назви для читача екрана");
+});

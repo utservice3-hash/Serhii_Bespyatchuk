@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { releaseOrphanClient, unreleaseOrphanClient, type ClientCard } from "../../../api";
 import { useToast } from "../../../components/Toasts";
+import { HelpTip } from "./HelpTip";
 
 /**
  * 🧭 «В НІЧИЙНІ» — КНОПКА В КАРТЦІ КЛІЄНТА (задача 8135; ТЗ Юлі «Нові правила лідогенерації», розділ 2 «Постійні
@@ -75,9 +76,9 @@ export function ClientReleaseBlock({ card, onSaved }: { card: ClientCard; onSave
       {!open ? (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button type="button" style={btn("#c2410c")} onClick={() => { setOpen(true); setErr(null); }}>🧭 В нічийні</button>
-          <span style={{ fontSize: 11, color: "#6b7280" }}>
+          <HelpTip label="Що означає «В нічийні»">
             Не спрацювались із клієнтом — віддайте: усі менеджери отримають сповіщення, хто хоче — візьме; за робочий день ніхто не взяв — клієнт піде лідгенам.
-          </span>
+          </HelpTip>
         </div>
       ) : (
         <div style={{ border: "1px solid #fed7aa", borderRadius: 8, padding: 10, background: "#fff7ed", display: "flex", flexDirection: "column", gap: 8 }}>
