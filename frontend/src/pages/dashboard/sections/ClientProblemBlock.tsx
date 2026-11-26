@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { setClientProblem, clearClientProblem, type ClientCard } from "../../../api";
 import { useToast } from "../../../components/Toasts";
+import { HelpTip } from "./HelpTip";
 
 /**
  * ⚠️ «ПРОБЛЕМНИЙ КЛІЄНТ» — У КАРТЦІ (задача 8350; макет погоджено, Роман 11.11.2026 «викочуй»).
@@ -44,9 +45,9 @@ export function ClientProblemBlock({ card, onSaved }: { card: ClientCard; onSave
           <span style={chip}>⚠️ Проблемний</span><b style={{ fontSize: 12 }}>{p.label}</b>
           <span style={{ fontSize: 12 }}>«{p.note}»</span>
           <span style={{ fontSize: 11, color: "#6b7280" }}>· {p.byName ?? "—"}, {ddmm(p.day)}</span>
+          <HelpTip label="Що означає «Проблемний»">Не рахується в «Немає роботи», «Без задачі», сплячих і реактивації. Знімається сама, якщо клієнт знову замовить.</HelpTip>
           <button type="button" disabled={busy} style={{ ...btn("#fff", "#374151", "1px solid #d1d5db"), marginLeft: "auto" }} onClick={() => void unmark()}>↩ зняти позначку</button>
         </div>
-        <span style={{ fontSize: 11, color: "#6b7280" }}>Не рахується в «Немає роботи», «Без задачі», сплячих і реактивації. Знімається сама, якщо клієнт знову замовить.</span>
         {err && <div role="alert" style={{ fontSize: 12, color: "#b91c1c" }}>⚠️ {err}</div>}
       </div>
     );
@@ -66,10 +67,10 @@ export function ClientProblemBlock({ card, onSaved }: { card: ClientCard; onSave
         <button type="button" disabled={busy || !ok} style={{ ...btn("#b45309"), ...(ok ? {} : { opacity: 0.45, cursor: "not-allowed" }) }} onClick={() => void mark()}>
           ⚠️ проблемний клієнт
         </button>
+        <HelpTip label="Що означає «проблемний клієнт»" align="right">
+          З ним неможливо працювати: лишається на екрані окремою групою, але не рахується в «Немає роботи», «Без задачі», сплячих і реактивації. Стане звичайним сам, якщо знову замовить.
+        </HelpTip>
       </div>
-      <span style={{ fontSize: 11, color: "#6b7280" }}>
-        З ним неможливо працювати: лишається на екрані окремою групою, але не рахується в «Немає роботи», «Без задачі», сплячих і реактивації. Стане звичайним сам, якщо знову замовить.
-      </span>
       {err && <div role="alert" style={{ fontSize: 12, color: "#b91c1c" }}>⚠️ {err}</div>}
     </div>
   );

@@ -226,7 +226,8 @@ test("#1850c ФАКТ + ОЧІКУВАННЯ В ТАБЛИЦІ КОМАНД: ш�
   assert.ok(head.indexOf(">Очікуємо") < head.indexOf(">Факт + очік.") && head.indexOf(">Факт + очік.") < head.indexOf(">Конв."), "🔴 «Факт + очік.» не одразу після «Очікуємо»");
   assert.match(table, /мин \{fmtMoney\(t\.expectedPastMonths\)\}<\/div>\}<\/td>\s*<WithExpCell on=\{oneMonth\} plan=\{t\.plan\} fact=\{t\.revenue\} expected=\{t\.expectedThisMonth\} \/>\s*<td style=\{\{ textAlign: "right" \}\} title=\{`Лайфтайм/,
     "🔴 у рядку команди «Факт + очік.» не між «Очікуємо» і «Конв.» або не з revenue + expectedThisMonth");
-  assert.match(table, /<td colSpan=\{2\}><\/td>\s*<WithExpCell on=\{oneMonth\} bold plan=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.plan, 0\)\} fact=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.revenue, 0\)\}\s*expected=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.expectedThisMonth, 0\)\} \/>\s*<td><\/td>/,
+  // 11217 (зустріч 25.11.2026): перед «Факт + очік.» у Σ тепер стоїть клітинка «Очікуємо» з сумами — її тримає `#11217`.
+  assert.match(table, /<\/div>\}<\/td>\s*<WithExpCell on=\{oneMonth\} bold plan=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.plan, 0\)\} fact=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.revenue, 0\)\}\s*expected=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.expectedThisMonth, 0\)\} \/>\s*<td><\/td>/,
     "🔴 Σ Відділ: «Факт + очік.» не з суми тих самих рядків або колонки зсунуті");
   assert.ok(!/colSpan=\{6 \+/.test(src), "🔴 розкриття команди / тижня має стару ширину — на колонку вужче за таблицю");
   assert.equal(src.split("colSpan={7 + ").length - 1, 2, "🔴 не обидва розкриття (менеджери, тиждень) на всю ширину");
@@ -248,5 +249,37 @@ test("#1850c ФАКТ + ОЧІКУВАННЯ В ТАБЛИЦІ КОМАНД: ш�
   assert.match(chip, /const s = weekCloseStatus\(plan, fact, expected\);/, "🔴 «Закриємо?» не тим правилом");
   assert.match(chip, /\{CLOSE_LABEL\[s\.kind\]\}<\/span>/, "🔴 статус показано лише кольором, без слова");
   assert.match(src, /<WeekCell key=\{w\.idx\} mode=\{weekMode\} w=\{w\} prev=\{rep\.deptWeeks\.find/, "🔴 Σ Відділ без тижневих клітинок — без «Закриємо?» відділу");
+});
+
+/**
+ * #11217 — Σ ВІДДІЛ ПОКАЗУЄ СУМИ «ОЧІКУЄМО» (задача 11217; зустріч 25.11.2026: «у Звіті КВП внизу немає сум очікувань»).
+ * У рядку «Σ Відділ» клітинка «Очікуємо» стояла порожньою (`colSpan={2}` разом із «Вик. %»). Тепер у ній ті самі три
+ * числа, що в рядку команди — цей місяць, «наст», «мин» — сумою по командах таблиці, тим самим виразом, що «План» і
+ * «Факт» у цьому ж рядку. Сталих клітинок у Σ — стільки ж, скільки колонок у шапці, інакше тижні зʼїдуть під чужі підписи.
+ * 🧨 Червоніє, якщо клітинку знову спорожнити, взяти не ті поля, показати «мин» при нулі, або зсунути колонки.
+ */
+test("#11217 Σ ВІДДІЛ: «Очікуємо» — сума команд (цей місяць, наст, мин) між «Вик. %» і «Факт + очік.»; клітинок стільки ж, як у шапці", () => {
+  const src = FE_SRC("pages/dashboard/sections/KvpReportSection.tsx");
+  const i = src.indexOf("<td style={clip}>Σ Відділ</td>"), j = src.indexOf("{rep.deptWeeks.map((w) => (", i);
+  assert.ok(i > 0 && j > i, "🔴 перевіряти нічого: рядка «Σ Відділ» у таблиці команд немає");
+  const row = src.slice(i, j);
+  const table = src.slice(src.indexOf("🏅 Команди — план / факт"), i);
+  const head = table.slice(table.indexOf("<thead>"), table.indexOf("{rep.weekBlocks.map((w) => <th"));
+  const nTh = head.split(/<th[\s>]/).length - 1;
+  assert.ok(nTh > 0, "🔴 перевіряти нічого: шапки таблиці команд не знайдено");
+  assert.doesNotMatch(row, /colSpan=/, "🔴 у Σ Відділ знову обʼєднана порожня клітинка — сум «Очікуємо» немає");
+  assert.equal(row.split(/<td[\s>]/).length - 1 + (row.split("<WithExpCell ").length - 1), nTh, "🔴 у Σ Відділ не стільки сталих клітинок, скільки колонок у шапці — тижні зʼїдуть під чужі підписи");
+  const sum = (f: string) => `rep.teams.reduce((s, t) => s + t.${f}, 0)`;
+  const cell = row.slice(row.indexOf("<td></td>"), row.indexOf("<WithExpCell "));
+  assert.ok(cell.startsWith("<td></td>"), "🔴 «Вик. %» у Σ більше не окрема порожня клітинка — «Очікуємо» стоїть не під своїм підписом");
+  assert.ok(cell.includes(`>{fmtMoney(${sum("expectedThisMonth")})}<div`), "🔴 Σ «Очікуємо»: головне число — не сума очікувань цього місяця по командах");
+  assert.ok(cell.includes(`наст {fmtMoney(${sum("expectedNextMonth")})}</div>`), "🔴 Σ «Очікуємо»: немає «наст» — суми наступного місяця");
+  assert.ok(cell.includes(`{${sum("expectedPastMonths")} !== 0 && <div`) && cell.includes(`мин {fmtMoney(${sum("expectedPastMonths")})}</div>}</td>`),
+    "🔴 Σ «Очікуємо»: «мин» не сума минулих місяців або показується і при нулі");
+  // 🪞 Той самий вираз, що сусідні «План» і «Факт» цього рядка, і ті самі три поля, що рядок команди.
+  assert.ok(row.includes(`{fmtMoney(${sum("plan")})}`) && row.includes(`{fmtMoney(${sum("revenue")})}`), "🔴 «План» і «Факт» у Σ рахуються іншим виразом, ніж «Очікуємо»");
+  for (const f of ["expectedThisMonth", "expectedNextMonth", "expectedPastMonths"]) {
+    assert.ok(table.includes(`fmtMoney(t.${f})`), `🔴 рядок команди не показує ${f} — Σ підсумовує те, чого в рядках немає`);
+  }
 });
 

@@ -9,6 +9,8 @@ import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { ClientSeasonBlock } from "./ClientSeasonBlock";
 import { ClientReleaseBlock } from "./ClientReleaseBlock";
 import { ClientProblemBlock } from "./ClientProblemBlock";
+import { ClientProfileBlock } from "./ClientProfileBlock";
+import { HelpTip } from "./HelpTip";
 import { formatAmountFull } from "../format";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 
@@ -95,7 +97,10 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 13 }}>📊 Надходження за 12 міс. · «успішно реалізовано» ①</div>
+        <div style={{ fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+          📊 Надходження за 12 міс. · «успішно реалізовано» ①
+          <HelpTip label="Як рахуються стовпчики і список угод">{card.anchorNote}</HelpTip>
+        </div>
         <div style={{ fontSize: 11, color: "#6b7280" }}>
           за 12 міс: <b style={{ color: "#111827" }}>{formatAmountFull(card.monthsTotal)}</b>
           {" · "}lifetime: {formatAmountFull(card.lifetimeRevenue)} / {card.orders} опл
@@ -117,6 +122,9 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
           </div>
         </div>
       )}
+
+      {/* 📋 Анкета клієнта (задача 11221, зустріч 25.11.2026): пʼять питань, одна на клієнта; питання дає сервер. */}
+      <ClientProfileBlock card={card} onSaved={() => { load(); onChanged?.(); }} />
 
       {/* 🛠 ДІЇ КЕРУВАННЯ КЛІЄНТОМ — САМЕ ТУТ, поруч із гістограмою й угодами,
           бо це і є підстава для рішення (рішення власника 04.08.2026, підтверджене
@@ -153,9 +161,9 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                       finally { setBusy(false); }
                     }}>↩ повернути з архіву</button>
                   <span style={{ fontSize: 11, color: "#6b7280" }}>
-                    Зараз в архіві{card.archiveReason ? ` · причина: ${card.archiveReasons.find((r) => r.key === card.archiveReason)?.label ?? card.archiveReason}` : ""}.
-                    Повернеться <b>сам</b>, щойно зʼявиться оплата пізніша за дату архівації.
+                    Зараз в архіві{card.archiveReason ? ` · причина: ${card.archiveReasons.find((r) => r.key === card.archiveReason)?.label ?? card.archiveReason}` : ""}
                   </span>
+                  <HelpTip label="Що означає архів">Повернеться <b>сам</b>, щойно зʼявиться оплата пізніша за дату архівації.</HelpTip>
                 </>
               ) : (
                 <>
@@ -171,10 +179,10 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                       try { await archiveClient({ clientKey, reason }); setReason(""); load(); onChanged?.(); }
                       finally { setBusy(false); }
                     }}>🗄 в архів</button>
-                  <span style={{ fontSize: 11, color: "#6b7280" }}>
+                  <HelpTip label="Що робить архів">
                     Прибирає з планування й реактивації. Причина обовʼязкова — інакше через місяць
                     ніхто не згадає, чому клієнта немає. Угоди та гроші не змінюються.
-                  </span>
+                  </HelpTip>
                 </>
               )}
             </div>
@@ -199,9 +207,9 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                       finally { setBusy(false); }
                     }}>↩ скинути ручну правку</button>
                   <span style={{ fontSize: 11, color: "#6b7280" }}>
-                    ⭐ <b>Включений вручну</b> попри правило{card.forceNote ? <> · «{card.forceNote}»</> : null}.
-                    Скидання поверне його під загальне правило кваліфікації.
+                    ⭐ <b>Включений вручну</b> попри правило{card.forceNote ? <> · «{card.forceNote}»</> : null}
                   </span>
+                  <HelpTip label="Що зробить скидання">Скидання поверне клієнта під загальне правило кваліфікації.</HelpTip>
                 </>
               ) : (
                 <>
@@ -214,10 +222,10 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                       try { await saveLoyaltyOverride({ clientKey, forceRegular: true, note: forceNote.trim() }); setForceNote(""); load(); onChanged?.(); }
                       finally { setBusy(false); }
                     }}>⭐ вважати постійним</button>
-                  <span style={{ fontSize: 11, color: "#6b7280" }}>
+                  <HelpTip label="Що означає «вважати постійним»">
                     Клієнт потрапить у планування й реактивацію, навіть якщо не проходить
                     кваліфікацію. Примітка обовʼязкова — вона буде видна в списках.
-                  </span>
+                  </HelpTip>
                 </>
               )}
             </div>
@@ -518,7 +526,6 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
           </table>
         </div>
       )}
-      <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6, lineHeight: 1.5 }}>{card.anchorNote}</div>
     </div>
   );
 }

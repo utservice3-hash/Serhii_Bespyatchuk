@@ -294,7 +294,8 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                       <td style={clip}>Σ Відділ</td>
                       <td style={{ textAlign: "right" }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.plan, 0))}</td>
                       <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.revenue, 0))}</td>
-                      <td colSpan={2}></td>
+                      <td></td>
+                      <td style={{ textAlign: "right", color: MUTED }} title="Σ очікувань команд із цієї таблиці за ПЛАНОВОЮ датою оплати: цей місяць · наступний · з минулих місяців (у прогноз не входить).">{fmtMoney(rep.teams.reduce((s, t) => s + t.expectedThisMonth, 0))}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(rep.teams.reduce((s, t) => s + t.expectedNextMonth, 0))}</div>{rep.teams.reduce((s, t) => s + t.expectedPastMonths, 0) !== 0 && <div style={{ fontSize: 9.5, color: RED }}>мин {fmtMoney(rep.teams.reduce((s, t) => s + t.expectedPastMonths, 0))}</div>}</td>
                       <WithExpCell on={oneMonth} bold plan={rep.teams.reduce((s, t) => s + t.plan, 0)} fact={rep.teams.reduce((s, t) => s + t.revenue, 0)}
                         expected={rep.teams.reduce((s, t) => s + t.expectedThisMonth, 0)} />
                       <td></td>

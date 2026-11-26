@@ -449,6 +449,8 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       // 11.11.2026 крок `test` падав саме тут, хоча нова версія вже збиралась легко (#3822).
       sh("node", [`${c.be}/scripts/transpileBuild.mjs`, beBase], c.be);
       sh("node", [`${c.be}/scripts/copyAssets.mjs`, beBase], c.be);
+      // 🔒 11232: база теж лежить на диску хостингу; права — тим самим скриптом, що й у `npm run build`.
+      sh("node", [`${c.be}/scripts/lockDist.mjs`, beBase], c.be);
       sh("node", ["scripts/writeVersion.mjs"], beBase);
 
       // ⚠️ `npm test` віддає ненульовий код за будь-якого падіння — це НОРМА тут,
@@ -814,7 +816,10 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   deliver: (c) => run("deliver", () => {
     sh("rm", ["-rf", c.prodBe + "/dist"]);
     sh("cp", ["-r", c.be + "/dist", c.prodBe + "/dist"]);
-  }, "dist стенда → backend докрута"),
+    // 🔒 11232: докрут роздається вебом, і nginx віддає `*.js` напряму, повз логін. Права стенда `cp -r` переносить, але
+    // покладатись на це мовчки не можна — закриваємо доставлене явно.
+    sh("chmod", ["700", c.prodBe + "/dist"]);
+  }, "dist стенда → backend докрута, лише власнику (700)"),
   distNotEmpty: (c) => {
     const n = sh("bash", ["-lc", `ls ${c.fe}/dist/assets 2>/dev/null | wc -l`]);
     return { id: "distNotEmpty", ok: Number(n) > 0, detail: Number(n) > 0 ? `${n} асетів` : "🔴 dist/assets порожній — СТОП, інакше index.html лишиться старим при новому бекенді" };

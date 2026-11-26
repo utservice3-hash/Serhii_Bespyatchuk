@@ -8564,6 +8564,8 @@ ON CONFLICT (type) DO NOTHING;
 -- подає дату поїздки й обовʼязковий коментар (№ рахунку, як оплачено): дата рахується замовленням ЛИШЕ для кольору й
 -- циклу реактивації, у гроші не йде. Рядки не видаляються: «зняти» = `revoked_at`, тож видно, хто, коли і що подав.
 -- ⚠️ revert коду таблицю не прибирає, але без коду її ніхто не читає.
+-- 🪦 З 26.11.2026 (задача 11220, рішення зустрічі 25.11.2026: «поїздку поза CRM» прибрати повністю) код таблицю НЕ читає
+-- і НЕ пише: кнопки, роутів і впливу на колір більше немає. Таблиця лишається як історія поданого (хто, коли, що).
 CREATE TABLE IF NOT EXISTS client_trip_confirms (
   id          SERIAL PRIMARY KEY,
   client_key  TEXT NOT NULL,
@@ -8664,6 +8666,22 @@ VALUES ('staff', 'Співробітник', false, 'own',
     "nominations":false,"receivables":false,"missed-calls":false,"carrier-calls":false,"manager-report":false}'::jsonb,
   '{}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
+
+-- 📋 АНКЕТА КЛІЄНТА (задача 11221; зустріч по дашборду 25.11.2026) — див. core/clientProfile.ts.
+-- Одна на клієнта (канонічний client_key), пʼять відповідей текстом: чим займається; як часто і який обʼєм возить;
+-- яку частку возимо ми і чому не 100%; міжнародні; авіа / море. Зберігається цілою — часткового оновлення немає.
+-- Нова таблиця, порожня; бекфілу немає. Відкат даних: таблицю можна видалити цілком — код без неї не стартує з анкетою,
+-- тож спершу revert коду. Revert коду таблицю й відповіді НЕ прибирає.
+CREATE TABLE IF NOT EXISTS client_profiles (
+  client_key    TEXT PRIMARY KEY,
+  business      TEXT NOT NULL DEFAULT '',
+  volume        TEXT NOT NULL DEFAULT '',
+  share         TEXT NOT NULL DEFAULT '',
+  international TEXT NOT NULL DEFAULT '',
+  air_sea       TEXT NOT NULL DEFAULT '',
+  updated_by    INTEGER REFERENCES users(id),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- 💰 КЛЮЧ БОРГУ НА ЗАДАЧІ «ОТРИМАТИ ОПЛАТУ» (задача 9934, 26.11.2026). Джоба `receivableDeadlineTasks` ставила нову
 -- задачу на кожен перенесений дедлайн і не закривала старих: 26.11 на проді 164 відкриті, з них 98 дублів. Тепер на

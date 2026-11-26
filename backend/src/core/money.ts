@@ -456,6 +456,39 @@ export async function successIncomeByClientKey(keys: readonly string[]): Promise
   return out;
 }
 /**
+ * 📅 ① ЗА ПЕРІОД ПО КЛІЄНТУ: ДОХІД (маржа) І ОБОРОТ (сума рахунку) ТИХ САМИХ УГОД (задача 11219, зустріч 25.11.2026:
+ * «оборот і дохід клієнта за цей рік» у рядку «З ким говорити»). Та сама success-каса й анкер `closed_at`, що
+ * `successByClientKey` (дохід) і `successIncomeByClientKey` (оборот); додано лише межі періоду — за Києвом, обидва
+ * кінці включно. Обидва числа з ОДНОГО запиту, тож множина угод у них одна за побудовою.
+ * 🔴 Без звуження за менеджером чи командою: скоуп вирішує, ПРО КОГО відповідати (перелік ключів), а не НАД ЧИМ рахувати.
+ * Угоди без фінансових полів не мовчать: їх число — `missing` (оборот тоді неповний, дохід — повний).
+ */
+export interface ClientPeriodMoney { revenue: number; income: number; missing: number; deals: number }
+export async function successPeriodByClientKey(
+  keys: readonly string[], from: string, to: string,
+): Promise<Map<string, ClientPeriodMoney>> {
+  const out = new Map<string, ClientPeriodMoney>();
+  if (!keys.length) return out;
+  const p: unknown[] = [];
+  const src = sourceSql("success", p);
+  p.push([...keys]); const keyArg = `$${p.length}`;
+  p.push(from); const fromArg = `$${p.length}`;
+  p.push(to); const toArg = `$${p.length}`;
+  const rows = (await pool.query<{ k: string; revenue: string; income: string; missing: string; deals: string }>(
+    `SELECT dd.client_key AS k, COALESCE(SUM(src.price),0) AS revenue, COALESCE(SUM(f.income),0) AS income,
+            COUNT(*) FILTER (WHERE f.income IS NULL) AS missing, COUNT(*) AS deals
+       FROM (${src}) src
+       JOIN managers m ON m.id = src.manager_id
+       JOIN deals dd ON dd.kommo_id = src.kommo_id
+       LEFT JOIN deal_fin_fields f ON f.kommo_id = src.kommo_id
+      WHERE dd.client_key = ANY(${keyArg}::text[])
+        AND ${ANCHOR_DAY} BETWEEN ${fromArg}::date AND ${toArg}::date
+      GROUP BY 1`, p)).rows;
+  for (const x of rows) out.set(x.k, { revenue: Number(x.revenue), income: Number(x.income), missing: Number(x.missing), deals: Number(x.deals) });
+  return out;
+}
+
+/**
  * ⏱ ① «УСПІШНО РЕАЛІЗОВАНО» ДЛЯ УГОД ЗІ ЗАДАНИХ ДЖЕРЕЛ (`client_source`) — середній чек рекламної угоди для
  * «суми втрат» вікна «Час опрацювання заявки» (ТЗ 24.09.2026: «середній чек дашборд бере сам — по рекламних
  * угодах за вибраний період»). Та сама success-каса й анкер `closed_at`, що `successMoney`; інше лише звуження

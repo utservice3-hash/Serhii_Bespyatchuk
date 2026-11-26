@@ -4919,6 +4919,11 @@ export interface ClientLead {
   /** Колір — лише від замовлення (рахунок або оплата) і ритму сегмента: 🟢 у ритмі · 🟡 мав замовити · 🔴 180+ днів. */
   color: "green" | "yellow" | "red";
   lastOrder: string | null; orderDays: number | null;
+  /**
+   * ⏱ 11228: звичайний інтервал клієнта (медіана між оплатами; `null` — історії замало), чи пропустив він свій ритм
+   * (те саме правило, що робить клієнта жовтим) і на скільки днів довше за звичайний інтервал.
+   */
+  rhythm?: { usualDays: number | null; over: boolean; overDays: number | null };
   /** Чи працюють із клієнтом за вікно сегмента і чим це підтверджено (найсвіжіший доказ). */
   works: { yes: boolean; by: "talk" | "stage" | "deal" | "order" | "comment" | "contact" | "payment" | "season" | null; at: string | null; windowDays: number };
   /** Остання розмова від 10 с і суть останньої розмови, яку розібрав AI. */
@@ -4932,11 +4937,7 @@ export interface ClientLead {
   offSeason: boolean;
   /** ⚠️ Діюча позначка «Проблемний клієнт» (8350); `null` — звичайний клієнт. */
   problem?: ProblemMark | null;
-  /** 🧾 Поїздка поза CRM, яку підтвердив тімлід (9045); `null` — немає. Рахується замовленням для кольору. */
-  trip?: TripConfirm | null;
 }
-/** 🧾 Підтверджена поїздка поза CRM (9045): день поїздки, коментар, хто подав і коли. */
-export interface TripConfirm { day: string; note: string; byName: string | null; at: string }
 
 export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
@@ -4947,6 +4948,13 @@ export interface ClientPlanRow {
   periodDays: number | null;
   /** 🧾 Гроші «з рахунку» по 6 місяцях (останній — місяць екрана) і середнє за 3 повні місяці перед ним (макет 5609). */
   historyInv: number[]; avg3: number;
+  /** 📊 11218: кількість замовлень «з рахунку» по тих самих 6 місяцях, що `historyInv` — періодичність у рядку «З ким говорити». */
+  historyInvDeals?: number[];
+  /**
+   * 📅 11219: ① за цей календарний рік — дохід (маржа) і оборот (сума рахунку тих самих успішних угод), число угод;
+   * `missing` — у скількох угод суми рахунку немає (оборот тоді неповний).
+   */
+  yearMoney?: { year: number; revenue: number; income: number; deals: number; missing: number };
   /** Без роботи (30 днів без контакту й без кроку з датою) · без задачі · задача прострочена — з сервера (`core/repeatScreenRules.ts`). */
   work: { noWork: boolean; noTask: boolean; overdue: boolean };
   /** 🧾 Чим підтверджено роботу за період (задача 6455): угода «від рахунку» і / або оплата у Виписці; обидва `null` — «без роботи». */
@@ -5015,6 +5023,8 @@ export interface ClientPlanRow {
   /** 📌 Наступний крок з датою і станом; `phone: "none"` — у клієнта немає жодного номера. */
   nextStep?: { text: string; due: string | null; state: "none" | "planned" | "today" | "overdue" | "done" } | null;
   phone?: "has" | "none";
+  /** 📋 Анкета клієнта (11221): скільки питань із `total` мають відповідь; самі відповіді — у картці. */
+  profile?: { filled: number; total: number };
   /** 💰 Σ price (= маржа) оплат за 6 міс; null — оплат не було. 🛑 debtHold — є прострочена дебіторка. */
   margin6m?: number | null;
   debtHold?: boolean;
@@ -5039,8 +5049,6 @@ export interface ClientPlansResp {
   tabGroupRank: Record<"regular" | "yellow" | "react", number>;
   /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
   leadgenPool?: { canSee: boolean; canTake: boolean };
-  /** 🧾 Чи може поточний користувач подати / зняти поїздку поза CRM (9045) — лише тімлід. */
-  canConfirmTrip?: boolean;
   /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
   reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number;
     /** Чи ввімкнена передача лідгенам (`LEADGEN_POOL_ENABLED`); з 06.11.2026 — ні. */
@@ -5245,6 +5253,9 @@ export interface ClientCard {
     kommo?: { state: "done"; url: string } | { state: "waiting"; error: string | null } } | null;
   phone?: "has" | "none";
   phonesCount?: number;
+  /** 📋 Анкета клієнта (11221): питання й межу довжини дає сервер; `answers: null` — анкети ще немає. */
+  profile?: { fields: { key: string; label: string; hint: string }[]; max: number; total: number; filled: number;
+    answers: Record<string, string> | null; updatedDay: string | null; updatedBy: string | null };
   lastCall?: { at: string; manager: string | null; billsec: number; direction: "in" | "out" } | null;
   /** 📌 Місяць обґрунтування (екрана, з якого відкрили картку) і поточне закріплення. */
   basisMonth?: string;
@@ -5521,12 +5532,10 @@ export async function setClientProblem(clientKey: string, reason: string, note: 
 export async function clearClientProblem(clientKey: string): Promise<void> {
   await api.post("/dashboard/client-problem/clear", { clientKey });
 }
-/** 🧾 «Поїздка була (поза CRM)» (9045): дата `YYYY-MM-DD` і коментар (№ рахунку, як оплачено). Лише тімлід. */
-export async function confirmClientTrip(clientKey: string, day: string, note: string): Promise<void> {
-  await api.post("/dashboard/client-trip-confirm", { clientKey, day, note });
-}
-export async function clearClientTrip(clientKey: string): Promise<void> {
-  await api.post("/dashboard/client-trip-confirm/clear", { clientKey });
+/** 📋 Анкета клієнта (11221): пʼять відповідей одним записом; повертає, скільки питань мають відповідь. */
+export async function saveClientProfile(clientKey: string, answers: Record<string, string>): Promise<{ filled: number; total: number }> {
+  const { data } = await api.post<{ filled: number; total: number }>("/dashboard/client-profile", { clientKey, answers });
+  return data;
 }
 /** 🧭 «В нічийні» (8135): коментар обовʼязковий; 409 — уже в нічийних / у пулі / в архіві. */
 export async function releaseOrphanClient(clientKey: string, note: string): Promise<{ deadline: string; notified: number }> {
