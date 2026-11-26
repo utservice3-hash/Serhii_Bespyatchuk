@@ -195,14 +195,54 @@ test("#11227e ЕКРАН: три плитки — кнопки; число пл�
   assert.match(lead, /if \(inTile\(r, "handOver"\)\) s\.handOver\+\+;/, "🔴 число «передати» рахується не тим предикатом, що список");
   assert.match(lead, /if \(inTile\(r, "newRepeat"\)\) \{ s\.newRepeat\+\+;/, "🔴 число «нових постійних» рахується не тим предикатом, що список");
   assert.match(lead, /if \(inTile\(r, "lost"\)\) s\.lost\+\+;/, "🔴 число «втратили» рахується не тим предикатом, що список");
-  assert.match(lead, /const baseRows = tile != null \? tileRows\(scopeRows, tile\) : /, "🔴 список за плиткою не з усього охоплення (scopeRows)");
+  assert.match(lead, /const baseRows = [^;]*\btile != null \? tileRows\(scopeRows, tile\) : /, "🔴 список за плиткою не з усього охоплення (scopeRows)");
   assert.match(lead, /const togglePick = \(c: LeadGroup\) => \{[^}]*setTile\(null\);/, "🔴 вибір кольору не знімає плитку — на екрані два вибори одразу");
   assert.match(lead, /const toggleTile = \(t: LeadTile\) => \{[^}]*setPick\(null\);/, "🔴 вибір плитки не знімає колір — на екрані два вибори одразу");
-  assert.match(lead, /onPick=\{togglePick\} tile=\{tile\} onTile=\{toggleTile\} \/>/, "🔴 лічильник не вміє обирати плитку");
-  assert.match(lead, /const showClients = isManager \|\| mgrEff != null \|\| pick != null \|\| tile != null;/, "🔴 з обраною плиткою на рівні компанії чи команди списку немає");
+  assert.match(lead, /onPick=\{togglePick\} tile=\{tile\} onTile=\{toggleTile\} /, "🔴 лічильник не вміє обирати плитку");
+  assert.match(lead, /const showClients = isManager \|\| mgrEff != null \|\| pick != null \|\| tile != null\b/, "🔴 з обраною плиткою на рівні компанії чи команди списку немає");
   assert.equal((lead.match(/\{!isManager && pick == null && tile == null && teamEff /g) ?? []).length, 2, "🔴 з обраною плиткою таблиця команд / менеджерів лишається на місці списку");
   assert.match(lead, /const hidden = color === "green" && !showGreen && pick == null && tile == null && /, "🔴 зелені згорнуті й під обраною плиткою — нових постійних не видно");
   assert.match(lead, /tile != null \? listRows\.some\(\(c\) => groupOf\(c\) === k\) : /, "🔴 під плиткою показуються порожні групи кольору");
+});
+
+/**
+ * #11227f 🪞 — ПЛИТКА «ПОСТІЙНИХ» = СПИСОК УСІХ КЛІЄНТІВ ОХОПЛЕННЯ (Роман 26.11.2026: «коли нажимаєш на цю плитку тобі показує
+ * всіх клієнтів… саме на білу частину»; зустріч 25.11: «розкрити клієнтів всієї команди або взагалі всіх»).
+ * Число на плитці (`s.all`) і список беруть ОДИН набір — `scopeRows` як є, разом із проблемними (вони входять у це число).
+ * Список ділиться на чотири групи без залишку; зелені під «усі» розгорнуті — просили саме всіх. «Усі», колір і плитка —
+ * один вибір: кожне знімає два інші. Кольори в плитці лишаються власними кнопками. Менеджеру плитка не кнопка: його список і так увесь.
+ * 🧨 Червоніє, якщо «усі» брати лише з клієнтів одного менеджера, відсіювати з них проблемних, лишити зелених згорнутими,
+ * лишити таблицю команд на місці списку, або вибір «усі» перестане знімати колір чи плитку (і навпаки).
+ */
+test("#11227f 🪞 ПЛИТКА «ПОСТІЙНИХ» — КНОПКА «УСІ»: список = усе охоплення з проблемними, число плитки = довжині списку; «усі», колір і плитка — один вибір", async () => {
+  const v = await loadView();
+  // Правило: чотири групи ділять набір без залишку, проблемний — серед «усіх» (у число плитки він входить).
+  const groups = ["yellow", "red", "problem", "green"].map((g) => v.pickRows(FIXTURE, g));
+  assert.equal(groups.reduce((a, g) => a + g.length, 0), FIXTURE.length, "🔴 Σ груп ≠ усі клієнти — під «усі» рядок загубиться або подвоїться");
+  assert.equal(groups[2].length, 1, "🔴 фікстура без проблемного — перевіряти «разом із проблемними» нічим");
+  assert.equal(ids(v.applyLeadFilter(FIXTURE, v.DEFAULT_LEAD_FILTER)), ids(FIXTURE), "🔴 типовий фільтр відсікає когось з «усіх»");
+  assert.equal(ids(v.applyLeadFilter(FIXTURE, { ...v.DEFAULT_LEAD_FILTER, work: "no" })), "g2,y2,y3,r2,p1", "🔴 фільтр поверх «усіх» показує не тих");
+
+  const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
+  // Число й список — один набір: плитка рахує `rows.length` від `scopeRows`, список під «усі» — `scopeRows` як є.
+  assert.match(lead, /const s = \{ all: rows\.length, /, "🔴 число на плитці «постійних» — уже не довжина набору");
+  assert.match(lead, /<Counters rows=\{scopeRows\} /, "🔴 плитка «постійних» рахує не охоплення (scopeRows)");
+  assert.match(lead, /const baseRows = showAll \? scopeRows : /, "🔴 список «усі» — не охоплення як є (scopeRows): число на плитці й довжина списку розійдуться");
+  // Плитка — кнопка на всю білу частину; кольори лишаються власними кнопками поверх неї.
+  assert.match(lead, /<button type="button" aria-pressed=\{all\} onClick=\{onAll\} [^>]*style=\{\{ position: "absolute", inset: 0, /, "🔴 біла частина плитки «постійних» не натискається");
+  assert.match(lead, /zIndex: 1, pointerEvents: "none" \}\}>\s*<ColorPick color="green"/, "🔴 кольори не лежать поверх кнопки плитки — клік по кольору відкриє всіх");
+  assert.match(lead, /cursor: "pointer", whiteSpace: "nowrap", pointerEvents: "auto" \}\}>\s*\{m\.dot\} \{n\}/, "🔴 кнопка кольору не ловить клік");
+  assert.match(lead, / all=\{showAll\} onAll=\{isManager \? undefined : toggleAll\} \/>/, "🔴 лічильник не вміє обирати «усі» (або менеджеру плитка стала кнопкою без змісту)");
+  // Один вибір із трьох.
+  assert.match(lead, /const toggleAll = \(\) => \{[^}]*setPick\(null\);[^}]*setTile\(null\);[^}]*setShowAll\(/, "🔴 вибір «усі» не знімає колір чи плитку");
+  assert.match(lead, /const togglePick = \(c: LeadGroup\) => \{[^}]*setShowAll\(false\);/, "🔴 вибір кольору не знімає «усі»");
+  assert.match(lead, /const toggleTile = \(t: LeadTile\) => \{[^}]*setShowAll\(false\);/, "🔴 вибір плитки не знімає «усі»");
+  assert.match(lead, /const clearShown = \(\) => \{[^}]*setShowAll\(false\);/, "🔴 «зняти вибір» не знімає «усі»");
+  // Список на місці таблиці рівня, зелені розгорнуті, панель із вибором команди й менеджера.
+  assert.match(lead, /const showClients = [^;]*\|\| showAll;/, "🔴 з обраним «усі» на рівні компанії чи команди списку немає");
+  assert.equal((lead.match(/&& !showAll && <LevelTable /g) ?? []).length, 2, "🔴 під «усі» таблиця команд / менеджерів лишається на місці списку");
+  assert.match(lead, /const hidden = color === "green" && [^;]*&& !showAll && /, "🔴 зелені згорнуті й під «усі» — показано не всіх");
+  assert.match(lead, /const chosen = [^;]*\|\| showAll;/, "🔴 під «усі» немає «зняти вибір» і вибору команди / менеджера");
 });
 
 test("#11218 🪞 ПЕРІОДИЧНІСТЬ ЗА 6 МІС: замовлення й гроші з одних кошиків; поза вікном і поза списком — ні; дірка — нуль", async () => {
