@@ -18,7 +18,7 @@
  *    решта — менеджер.
  *  • ВТРАТИЛИ ЗА МІСЯЦЬ = клієнт став червоним цього місяця: 180-й день без замовлення припав на цей місяць.
  */
-import { SEGMENT_SLEEPING_DAYS, LOST_DAYS, stateOf, type ClientSegment } from "./reactivationRules.js";
+import { SEGMENT_SLEEPING_DAYS, LOST_DAYS, stateOf, pastOwnRhythm, type ClientSegment } from "./reactivationRules.js";
 
 export type LeadColor = "green" | "yellow" | "red";
 export type WorkBy = "talk" | "stage" | "comment" | "contact" | "payment" | "order" | "deal" | "season";
@@ -54,6 +54,23 @@ export function colorOf(segment: ClientSegment, orderDays: number | null, median
   if (orderDays == null) return "red";
   const st = stateOf(orderDays, segment, medianGapDays);
   return st === "active" ? "green" : st === "sleeping" ? "yellow" : "red";
+}
+
+/**
+ * ⏱ РИТМ КЛІЄНТА В РЯДКУ (задача 11228; зустріч по дашборду 25.11.2026: поруч «скільки днів не замовляв» і «як часто
+ * замовляє зазвичай», щоб одразу було видно, хто пропустив свій ритм).
+ *  · `usualDays` — звичайний інтервал клієнта: медіана між оплатами, та сама, що визначає сегмент і особистий ритм
+ *    (8348). `null` — історії замало, інтервал невідомий.
+ *  · `over` — пропустив свій ритм: ТЕ САМЕ правило `pastOwnRhythm`, яке робить клієнта жовтим (днів без замовлення
+ *    більше за звичайний інтервал, але не раніше мінімуму). Другої копії правила немає.
+ *  · `overDays` — на скільки днів довше за звичайний інтервал; `null`, коли ритм не пропущено.
+ * Сезонний не в сезоні ритму не пропускає: дзвонити йому не треба.
+ */
+export interface Rhythm { usualDays: number | null; over: boolean; overDays: number | null }
+export function rhythmOf(orderDays: number | null, medianGapDays: number | null | undefined, offSeason: boolean): Rhythm {
+  const usualDays = medianGapDays ?? null;
+  const over = !offSeason && orderDays != null && pastOwnRhythm(orderDays, medianGapDays);
+  return { usualDays, over, overDays: over && orderDays != null && usualDays != null ? orderDays - usualDays : null };
 }
 
 /** Вікно, за яке шукаємо роботу з клієнтом, — ритм його сегмента. */

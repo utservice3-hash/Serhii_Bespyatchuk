@@ -6965,6 +6965,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     const manualAt = manualByKey.get(c.client_key)?.at ?? null;
     return {
       color, lastOrder, orderDays,
+      // ⏱ 11228: звичайний інтервал клієнта і чи пропустив він свій ритм — тим самим правилом, що колір.
+      rhythm: clientLeadRules.rhythmOf(orderDays, factsFor(seg, c.client_key).medianGapDays, off),
       works: off ? { yes: true, by: "season" as const, at: null, windowDays: clientLeadRules.workWindowDays(segment) } : clientLeadRules.workVerdict({
         talk10: f?.talk10 ?? null, stage: f?.stage ?? null,
         comment: lastWorkComment.get(c.client_key)?.createdAt ?? null,

@@ -15,7 +15,7 @@ export type LeadGroup = "green" | "yellow" | "red" | "problem";
 
 /** Мінімум рядка, який читає цей модуль (структурно сумісний із `ClientPlanRow`). */
 export interface LeadViewRow {
-  lead: { color: "green" | "yellow" | "red"; problem?: unknown; works: { yes: boolean } };
+  lead: { color: "green" | "yellow" | "red"; problem?: unknown; works: { yes: boolean }; rhythm?: { over: boolean } };
 }
 
 /** Група рядка: діюча позначка «Проблемний» (8350) переважає колір. */
@@ -29,12 +29,16 @@ export function pickRows<T extends LeadViewRow>(rows: readonly T[], pick: LeadGr
 }
 
 export type WorkFilter = "all" | "yes" | "no";
-export interface LeadFilter { work: WorkFilter }
-export const DEFAULT_LEAD_FILTER: LeadFilter = { work: "all" };
+export interface LeadFilter {
+  work: WorkFilter;
+  /** ⏱ 11228: лише ті, хто пропустив свій звичний ритм замовлень (ознака з сервера — `lead.rhythm.over`). */
+  overRhythm: boolean;
+}
+export const DEFAULT_LEAD_FILTER: LeadFilter = { work: "all", overRhythm: false };
 
 /** Чи фільтр щось звужує — щоб показати «скинути» і не ховати зелених мовчки. */
 export function leadFilterActive(f: LeadFilter): boolean {
-  return f.work !== "all";
+  return f.work !== "all" || f.overRhythm;
 }
 
 /** Звуження списку. Кожна умова — «і»; вимкнена умова нічого не відсікає. */
@@ -42,8 +46,14 @@ export function applyLeadFilter<T extends LeadViewRow>(rows: readonly T[], f: Le
   return rows.filter((r) => {
     if (f.work === "yes" && !r.lead.works.yes) return false;
     if (f.work === "no" && r.lead.works.yes) return false;
+    if (f.overRhythm && !overRhythm(r)) return false;
     return true;
   });
+}
+
+/** ⏱ Пропустив свій ритм (11228). Рядок без ознаки (старий сервер) — ні: невідоме не видаємо за сигнал. */
+export function overRhythm(r: LeadViewRow): boolean {
+  return r.lead.rhythm?.over === true;
 }
 
 /** «Працюють X з N» для набору рядків: сума двох частин завжди дорівнює набору. */

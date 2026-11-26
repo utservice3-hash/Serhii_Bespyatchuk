@@ -4919,6 +4919,11 @@ export interface ClientLead {
   /** Колір — лише від замовлення (рахунок або оплата) і ритму сегмента: 🟢 у ритмі · 🟡 мав замовити · 🔴 180+ днів. */
   color: "green" | "yellow" | "red";
   lastOrder: string | null; orderDays: number | null;
+  /**
+   * ⏱ 11228: звичайний інтервал клієнта (медіана між оплатами; `null` — історії замало), чи пропустив він свій ритм
+   * (те саме правило, що робить клієнта жовтим) і на скільки днів довше за звичайний інтервал.
+   */
+  rhythm?: { usualDays: number | null; over: boolean; overDays: number | null };
   /** Чи працюють із клієнтом за вікно сегмента і чим це підтверджено (найсвіжіший доказ). */
   works: { yes: boolean; by: "talk" | "stage" | "deal" | "order" | "comment" | "contact" | "payment" | "season" | null; at: string | null; windowDays: number };
   /** Остання розмова від 10 с і суть останньої розмови, яку розібрав AI. */

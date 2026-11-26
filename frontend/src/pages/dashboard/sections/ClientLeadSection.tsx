@@ -8,7 +8,7 @@ import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { monthsLabel } from "./ClientSeasonBlock";
 import { readLeadNav, leadNavSearch, backTarget, backIsHistoryBack, type LeadNav } from "../clientLeadNav";
-import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, DEFAULT_LEAD_FILTER, type LeadGroup, type LeadFilter } from "../clientLeadView";
+import { leadGroupOf, pickRows, applyLeadFilter, workSplit, leadFilterActive, overRhythm, DEFAULT_LEAD_FILTER, type LeadGroup, type LeadFilter } from "../clientLeadView";
 
 /**
  * 🚦 «З КИМ З ПОСТІЙНИХ ГОВОРИТИ» — ПРОСТИЙ ЕКРАН ТІМЛІДА (ТЗ Юлі 28.10.2026, етап 2; задача 7360).
@@ -78,6 +78,27 @@ function OrderSpark({ counts, money, months }: { counts: number[]; money: number
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * ⏱ РИТМ КЛІЄНТА ПОРУЧ ІЗ «НЕ ЗАМОВЛЯВ N ДН.» (11228; зустріч 25.11.2026). Звичайний інтервал і ознака «пропустив свій
+ * ритм» приходять із сервера (`lead.rhythm`, те саме правило, що колір) — тут лише підпис.
+ */
+function RhythmLine({ r }: { r: NonNullable<Row["lead"]["rhythm"]> }) {
+  if (r.usualDays == null) {
+    return <div style={{ fontSize: 11, color: "#9ca3af" }} title="звичайний інтервал рахується від другої оплати — у клієнта їх ще замало">звичайний ритм невідомий — замало оплат</div>;
+  }
+  const usual = r.usualDays < 1 ? "зазвичай замовляє щодня" : `зазвичай раз на ~${Math.round(r.usualDays)} дн.`;
+  return (
+    <div style={{ fontSize: 11, color: "#6b7280" }} title="звичайний інтервал клієнта — медіана між його оплатами (та сама, що визначає сегмент)">
+      {usual}
+      {r.over && (
+        <span style={{ ...S.chip("#fee2e2", "#b91c1c"), marginLeft: 6 }} title="днів без замовлення більше, ніж звичайний інтервал клієнта — те саме правило, що робить його жовтим">
+          ⏰ пропустив ритм{r.overDays != null ? ` на ${Math.round(r.overDays)} дн.` : ""}
+        </span>
+      )}
     </div>
   );
 }
@@ -320,6 +341,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
           <td style={S.td}>
             <div>{L.orderDays == null ? "замовлень не було" : L.orderDays === 0 ? "замовив сьогодні" : `не замовляв ${L.orderDays} дн.`}</div>
             <div style={grey} title="замовлення = рахунок («Виставлення рахунку» і далі) або оплата в CRM — що свіжіше">{L.lastOrder ? `останнє ${dm(L.lastOrder)}.${L.lastOrder.slice(2, 4)}` : ""}</div>
+            {L.rhythm && <RhythmLine r={L.rhythm} />}
             {c.historyInvDeals && <OrderSpark counts={c.historyInvDeals} money={c.historyInv} months={data.historyMonths} />}
             {c.yearMoney && <YearMoney y={c.yearMoney} />}
           </td>
@@ -441,6 +463,9 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
         {fchip(filter.work === "yes", `працюють ${ws.yes}`, () => setFilter((f) => ({ ...f, work: "yes" })))}
         {fchip(filter.work === "no", `роботи немає ${ws.no}`, () => setFilter((f) => ({ ...f, work: "no" })))}
       </span>
+      {fchip(filter.overRhythm, `⏰ пропустили ритм ${baseRows.filter(overRhythm).length}`, () => setFilter((f) => ({ ...f, overRhythm: !f.overRhythm })),
+        "днів без замовлення більше, ніж звичайний інтервал клієнта")}
+      {leadFilterActive(filter) && fchip(false, "✕ скинути фільтри", () => setFilter(DEFAULT_LEAD_FILTER))}
       {leadFilterActive(filter) && <span style={{ fontSize: 12, color: "#6b7280" }}>у списку {listRows.length} з {baseRows.length}</span>}
     </div>
   );

@@ -144,3 +144,47 @@ test("#11218 🪞 ПЕРІОДИЧНІСТЬ ЗА 6 МІС: замовлення
   assert.match(lead, /\{c\.historyInvDeals && <OrderSpark counts=\{c\.historyInvDeals\} money=\{c\.historyInv\} months=\{data\.historyMonths\} \/>\}/,
     "🔴 у рядку «З ким говорити» немає графіка періодичності або він не з місяців сервера");
 });
+
+/**
+ * #11228 🪞 — РИТМ КЛІЄНТА В РЯДКУ: «не замовляв N дн.» поруч зі «зазвичай раз на ~X дн.», і хто пропустив свій ритм —
+ * видно й відбирається (зустріч 25.11.2026). Правило те саме, що колір (`pastOwnRhythm`): 31-й день при інтервалі 30 —
+ * пропустив на 1 день, 30-й — ще ні; ВІП з інтервалом 0 — лише після мінімуму 14 днів; без історії інтервал невідомий
+ * і сигналу немає; сезонний не в сезоні ритму не пропускає. Хто «пропустив ритм» — той ніколи не зелений.
+ * 🧨 Червоніє, якщо межа зʼїде на день, невідомий ритм дасть сигнал, або ознака розійдеться з кольором.
+ */
+test("#11228 🪞 РИТМ У РЯДКУ: межа інтервалу по обидва боки, мінімум 14 днів, невідомий ритм без сигналу; пропустив ритм — не зелений; фільтр", async () => {
+  const { rhythmOf, colorOf } = await import("./clientLeadRules.js");
+  assert.deepEqual(rhythmOf(31, 30, false), { usualDays: 30, over: true, overDays: 1 }, "🔴 31-й день при інтервалі 30 — не «пропустив на 1 день»");
+  assert.deepEqual(rhythmOf(30, 30, false), { usualDays: 30, over: false, overDays: null }, "🔴 рівно на інтервалі — уже «пропустив»");
+  assert.deepEqual(rhythmOf(15, 0, false), { usualDays: 0, over: true, overDays: 15 }, "🔴 ВІП з інтервалом 0: 15-й день не «пропустив»");
+  assert.deepEqual(rhythmOf(14, 0, false), { usualDays: 0, over: false, overDays: null }, "🔴 мінімум 14 днів не діє — ВІП «пропускає ритм» одразу");
+  assert.deepEqual(rhythmOf(200, null, false), { usualDays: null, over: false, overDays: null }, "🔴 невідомий ритм дає сигнал");
+  assert.deepEqual(rhythmOf(200, undefined, false), { usualDays: null, over: false, overDays: null });
+  assert.deepEqual(rhythmOf(null, 30, false), { usualDays: 30, over: false, overDays: null }, "🔴 клієнт без замовлень «пропустив ритм»");
+  assert.deepEqual(rhythmOf(90, 30, true), { usualDays: 30, over: false, overDays: null }, "🔴 сезонний не в сезоні «пропустив ритм»");
+  // 🪞 Узгодженість із кольором на сітці: пропустив ритм → не зелений, для кожного сегмента.
+  for (const seg of ["vip", "regular", "episodic", "unknown"] as const) {
+    for (const median of [0, 7, 14, 21, 30, 45, 90]) {
+      for (let d = 0; d <= 200; d += 1) {
+        if (rhythmOf(d, median, false).over) assert.notEqual(colorOf(seg, d, median), "green", `🔴 ${seg}, інтервал ${String(median)}, ${String(d)} дн.: «пропустив ритм», а клієнт зелений`);
+      }
+    }
+  }
+
+  const v = await loadView();
+  const rows: Row[] = [
+    row("over", "yellow", false, { lead: { rhythm: { over: true } } }),
+    row("ok", "green", true, { lead: { rhythm: { over: false } } }),
+    row("old", "red", false),   // рядок без ознаки (старий сервер) — невідоме не сигнал
+  ];
+  assert.equal(ids(v.applyLeadFilter(rows, { ...v.DEFAULT_LEAD_FILTER, overRhythm: true })), "over", "🔴 фільтр «пропустили ритм» показує не тих");
+  assert.equal(ids(v.applyLeadFilter(rows, v.DEFAULT_LEAD_FILTER)), "over,ok,old", "🔴 вимкнений фільтр ритму щось відсікає");
+  assert.equal(v.leadFilterActive({ ...v.DEFAULT_LEAD_FILTER, overRhythm: true }), true);
+
+  const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+  const dash = codeOnly(readFileSync(`${ROOT}backend/src/routes/dashboard.ts`, "utf8"));
+  assert.match(dash, /rhythm: clientLeadRules\.rhythmOf\(orderDays, factsFor\(seg, c\.client_key\)\.medianGapDays, off\),/, "🔴 рядок не несе ритм або рахує його не з тієї медіани, що колір");
+  const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
+  assert.match(lead, /\{L\.rhythm && <RhythmLine r=\{L\.rhythm\} \/>\}/, "🔴 у клітинці «Замовлення» немає звичайного інтервалу клієнта");
+  assert.match(lead, /baseRows\.filter\(overRhythm\)\.length/, "🔴 число на кнопці «пропустили ритм» — не з правила відбору");
+});
