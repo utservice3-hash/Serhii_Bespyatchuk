@@ -169,6 +169,7 @@ import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
 import * as repeatScreenRules from "../core/repeatScreenRules.js";
 import * as clientWorkProof from "../core/clientWorkProof.js";
+import * as clientOrderHistory from "../core/clientOrderHistory.js";
 import * as clientLeadRules from "../core/clientLeadRules.js";
 import * as clientLeadFacts from "../core/clientLeadFacts.js";
 import * as reactCycle from "../core/reactCycle.js";
@@ -6834,15 +6835,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     arr[idx] += h.revenue;
     histByKey.set(h.clientKey, arr);
   }
-  const histInvByKey = new Map<string, number[]>();
-  for (const h of histInv) {
-    if (!keySet.has(h.clientKey)) continue;
-    const idx = histMonths.indexOf(h.bucket.slice(0, 7));
-    if (idx < 0) continue;
-    const arr = histInvByKey.get(h.clientKey) ?? histMonths.map(() => 0);
-    arr[idx] += h.revenue;
-    histInvByKey.set(h.clientKey, arr);
-  }
+  // 📊 11218 (зустріч 25.11.2026): гроші «з рахунку» і число ЗАМОВЛЕНЬ у тих самих 6 місяцях — одним проходом по тих
+  // самих кошиках ядра (`core/clientOrderHistory.ts`), тож стовпчик і сума місяця не розходяться.
+  const { money: histInvByKey, deals: histInvDealsByKey } = clientOrderHistory.foldOrderHistory(histInv, histMonths, (k) => keySet.has(k));
   const planByKey = new Map(plansRes.rows.map((p) => [p.client_key, p]));
   const commentsByKey = new Map(commentsRes.rows.map((c) => [c.client_key, Number(c.n)]));
 
@@ -7086,6 +7081,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       periodDays: factsFor(seg, c.client_key).medianGapDays,
       /** 🧾 Гроші «з рахунку» по місяцях (останній — місяць екрана) і середнє за 3 повні місяці перед ним (макет 5609). */
       historyInv: histInvByKey.get(c.client_key) ?? histMonths.map(() => 0),
+      /** 📊 11218: кількість замовлень «з рахунку» по тих самих місяцях — міні-графік періодичності в рядку. */
+      historyInvDeals: histInvDealsByKey.get(c.client_key) ?? histMonths.map(() => 0),
       avg3: (() => { const a = histInvByKey.get(c.client_key); return a ? Math.round((a[2] + a[3] + a[4]) / 3) : 0; })(),
       // 🧾 Задача 8333: «Немає роботи» = немає жодної роботи за ритм сегмента (той самий вердикт, що «працюють») і немає
       // відкритої задачі чи кроку. Докази 6455 (угода від рахунку, оплата у Виписці) лишились у рядку для показу.

@@ -101,3 +101,46 @@ test("#11227b ЕКРАН: колір — кнопка в лічильнику й
   assert.match(lead, /\{!mgrRows && <div style=\{grey\}>\{c\.managerName\}/, "🔴 у рядку зведеного списку не видно менеджера");
   assert.doesNotMatch(lead, /onChange=\{\(e\) => set(Team|Mgr)\(/, "🔴 вибір команди / менеджера міняє рівень повз go — без запису в адресу");
 });
+
+/**
+ * #11218 🪞 — ПЕРІОДИЧНІСТЬ ЗАМОВЛЕНЬ ЗА 6 МІСЯЦІВ У РЯДКУ (зустріч 25.11.2026). Число замовлень і гроші «з рахунку»
+ * розкладаються по вікну місяців одним проходом по тих самих кошиках ядра: два кошики одного місяця складаються, кошик
+ * поза вікном і клієнт поза списком не рахуються, порожній місяць — нуль (дірка в ритмі), а Σ стовпчиків = числу угод у вікні.
+ * 🧨 Червоніє, якщо місяць зʼїде на сусідній, кошик поза вікном потрапить у графік, або кількість і гроші розійдуться.
+ */
+test("#11218 🪞 ПЕРІОДИЧНІСТЬ ЗА 6 МІС: замовлення й гроші з одних кошиків; поза вікном і поза списком — ні; дірка — нуль", async () => {
+  const { foldOrderHistory } = await import("./clientOrderHistory.js");
+  const months = ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"];
+  const rows = [
+    { clientKey: "a", bucket: "2026-06-01", revenue: 1000, deals: 2 },   // перший місяць вікна — межа зліва, у вікні
+    { clientKey: "a", bucket: "2026-05-01", revenue: 9999, deals: 9 },   // місяць перед вікном — поза вікном
+    { clientKey: "a", bucket: "2026-09-01", revenue: 500, deals: 1 },
+    { clientKey: "a", bucket: "2026-09-01", revenue: 300, deals: 2 },    // другий кошик того самого місяця — складається
+    { clientKey: "a", bucket: "2026-11-01", revenue: -200, deals: 1 },   // останній місяць вікна; сторно — як є
+    { clientKey: "a", bucket: "2026-12-01", revenue: 7777, deals: 7 },   // місяць після вікна — поза вікном
+    { clientKey: "b", bucket: "2026-10-01", revenue: 40, deals: 4 },
+    { clientKey: "чужий", bucket: "2026-10-01", revenue: 1, deals: 1 },  // не в списку екрана
+  ];
+  const h = foldOrderHistory(rows, months, (k) => k !== "чужий");
+  assert.deepEqual(h.deals.get("a"), [2, 0, 0, 3, 0, 1], "🔴 замовлення клієнта по місяцях не ті: зсув, кошик поза вікном або не складено");
+  assert.deepEqual(h.money.get("a"), [1000, 0, 0, 800, 0, -200], "🔴 гроші по місяцях не з тих самих кошиків, що замовлення");
+  assert.deepEqual(h.deals.get("b"), [0, 0, 0, 0, 4, 0]);
+  assert.equal(h.deals.has("чужий"), false, "🔴 клієнт поза списком екрана потрапив в історію");
+  assert.equal(h.money.has("чужий"), false);
+  // Σ стовпчиків = Σ угод кошиків У ВІКНІ для клієнтів списку — нічого не загублено й не додано.
+  const inWin = rows.filter((r) => r.clientKey !== "чужий" && months.includes(r.bucket.slice(0, 7)));
+  const sum = (m: Map<string, number[]>) => [...m.values()].flat().reduce((a, b) => a + b, 0);
+  assert.equal(sum(h.deals), inWin.reduce((a, r) => a + r.deals, 0), "🔴 Σ стовпчиків ≠ числу угод у вікні");
+  assert.equal(sum(h.money), inWin.reduce((a, r) => a + r.revenue, 0), "🔴 Σ грошей ≠ сумі кошиків у вікні");
+  assert.deepEqual([...foldOrderHistory([], months, () => true).deals.keys()], [], "🔴 з порожнього входу зʼявилась історія");
+
+  // Проводка: рядок несе обидва масиви з одного виклику ядра «з рахунку», а екран малює графік із них.
+  const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+  const dash = codeOnly(readFileSync(`${ROOT}backend/src/routes/dashboard.ts`, "utf8"));
+  assert.match(dash, /const \{ money: histInvByKey, deals: histInvDealsByKey \} = clientOrderHistory\.foldOrderHistory\(histInv, histMonths, \(k\) => keySet\.has\(k\)\);/,
+    "🔴 гроші й кількість у рядку — не з одного розкладання кошиків «з рахунку»");
+  assert.match(dash, /historyInvDeals: histInvDealsByKey\.get\(c\.client_key\) \?\? histMonths\.map\(\(\) => 0\),/, "🔴 рядок не несе кількість замовлень по місяцях");
+  const lead = codeOnly(readFileSync(FE("sections/ClientLeadSection.tsx"), "utf8"));
+  assert.match(lead, /\{c\.historyInvDeals && <OrderSpark counts=\{c\.historyInvDeals\} money=\{c\.historyInv\} months=\{data\.historyMonths\} \/>\}/,
+    "🔴 у рядку «З ким говорити» немає графіка періодичності або він не з місяців сервера");
+});

@@ -53,6 +53,35 @@ const S = {
     border: primary ? "none" : "1px solid #d1d5db", background: primary ? "#111827" : "#fff", color: primary ? "#fff" : "#374151" } as const),
 };
 
+/**
+ * 📊 ПЕРІОДИЧНІСТЬ ЗАМОВЛЕНЬ ЗА 6 МІСЯЦІВ — ПРЯМО В РЯДКУ (11218; зустріч 25.11.2026). Стовпчик = скільки замовлень
+ * (угод «з рахунку») було в місяці; число над стовпчиком, місяць під ним. Порожній місяць — крапка, а не пропуск:
+ * саме дірки й показують, що клієнт збився з ритму. Гроші того ж місяця — у підказці.
+ */
+function OrderSpark({ counts, money, months }: { counts: number[]; money: number[]; months: string[] }) {
+  const mx = Math.max(1, ...counts);
+  const mon = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString("uk-UA", { month: "short", timeZone: "UTC" }).replace(".", "");
+  const total = counts.reduce((a, b) => a + b, 0);
+  return (
+    <div style={{ marginTop: 5 }} title={`замовлень «з рахунку» за 6 міс: ${total}\n${months.map((m, i) => `${mon(m)}: ${counts[i] ?? 0} · ${Math.round(money[i] ?? 0).toLocaleString("uk-UA")} ₴`).join("\n")}`}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 3 }}>
+        {months.map((m, i) => {
+          const n = counts[i] ?? 0, last = i === months.length - 1;
+          return (
+            <div key={m} style={{ width: 20, textAlign: "center" }}>
+              <div style={{ fontSize: 9, lineHeight: "10px", color: n ? "#111827" : "#9ca3af", fontWeight: n ? 700 : 400 }}>{n || "·"}</div>
+              <div style={{ height: 22, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+                <i style={{ display: "block", width: 12, height: n ? Math.max(3, Math.round((n / mx) * 22)) : 1, background: n ? (last ? "#1d4ed8" : "#93c5fd") : "#d1d5db", borderRadius: 1 }} />
+              </div>
+              <div style={{ fontSize: 9, lineHeight: "11px", color: last ? "#1d4ed8" : "#6b7280" }}>{mon(m)}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** Підсумок набору рядків — одне місце для команди, менеджера й шапки. */
 function stats(rows: Row[]) {
   const s = { all: rows.length, green: 0, yellow: 0, red: 0, problem: 0, working: 0, handOver: 0, newRepeat: 0, lost: 0,
@@ -275,6 +304,7 @@ export function ClientLeadSection({ auth }: { auth: AuthPayload }) {
           <td style={S.td}>
             <div>{L.orderDays == null ? "замовлень не було" : L.orderDays === 0 ? "замовив сьогодні" : `не замовляв ${L.orderDays} дн.`}</div>
             <div style={grey} title="замовлення = рахунок («Виставлення рахунку» і далі) або оплата в CRM — що свіжіше">{L.lastOrder ? `останнє ${dm(L.lastOrder)}.${L.lastOrder.slice(2, 4)}` : ""}</div>
+            {c.historyInvDeals && <OrderSpark counts={c.historyInvDeals} money={c.historyInv} months={data.historyMonths} />}
           </td>
           <td style={S.td}>
             {L.problem
