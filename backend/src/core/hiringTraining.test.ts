@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  CANDIDATE_ACCESS, accessDeadline, accessToClose, trainingDay, trainingHealth, promoteVerdict, canDecideTraining,
+  CANDIDATE_ACCESS, accessDeadline, accessToClose, courseComplete, trainingDay, trainingHealth, promoteVerdict, canDecideTraining,
   inviteState, newInviteToken, hashInviteToken, looksLikeInviteToken, candidateLogin, passwordProblem, kyivMidnightAfter,
 } from "./hiringTrainingRules.js";
 
@@ -26,7 +26,8 @@ const at = (s: string) => new Date(s);
  */
 test("#530 СТРОК: 48 год без входу, три київські дні від першого входу, продовження — рівно доба", () => {
   const created = at("2026-09-15T09:00:00Z");
-  const base = { accountCreatedAt: created, firstLoginAt: null, extendedDays: 0, closedAt: null };
+  // Курс НЕ пройдено (0 із 30): строк діє. Пройдений курс строком не закривається — це окремо, #11060.
+  const base = { accountCreatedAt: created, firstLoginAt: null, extendedDays: 0, closedAt: null, done: 0, total: 30 };
   assert.equal(accessToClose({ ...base, now: new Date(created.getTime() + 48 * H - 60_000) }), null, "🔴 закрито раніше 48 год");
   assert.equal(accessToClose({ ...base, now: new Date(created.getTime() + 48 * H + 60_000) }), "no_login", "🔴 без входу доступ не закрився");
   assert.equal(accessToClose({ ...base, extendedDays: 1, now: new Date(created.getTime() + 48 * H + 60_000) }), null, "🔴 продовження не подіяло");
@@ -48,6 +49,24 @@ test("#530 СТРОК: 48 год без входу, три київські дн
   assert.equal(trainingDay({ firstLoginAt: late.firstLoginAt, extendedDays: 0, now: at("2026-09-15T20:40:00Z") }), 1);
   assert.equal(trainingDay({ firstLoginAt: late.firstLoginAt, extendedDays: 0, now: at("2026-09-16T08:00:00Z") }), 2, "🔴 другий київський день рахується як перший");
   assert.equal(trainingDay({ firstLoginAt: late.firstLoginAt, extendedDays: 0, now: at("2026-09-17T12:00:00Z") }), 3);
+});
+
+/**
+ * #11060 — ПРОЙДЕНИЙ КУРС СТРОКОМ НЕ ЗАКРИВАЄТЬСЯ (рішення Романа 26.11.2026). Строк є, щоб кандидат ПРОЙШОВ навчання;
+ * хто пройшов усе, той чекає рішення тімліда скільки треба. Межа по обидва боки: 30 із 30 після строку — відкрито,
+ * 29 із 30 — «expired». Порожній курс (0 із 0) — НЕ пройдений: інакше без опублікованого курсу не закривався б ніхто.
+ * 📐 Випадок: Застьола (30 із 30) закрився 25.11 «не завершено вчасно» і зник із дошки разом із кнопкою
+ * «Перевести в менеджери»; так само застрягли Швецов, Попов, Хлєбнікова, Маловик.
+ * 🧨 Червоніє, якщо джоба знову закриває пройдений курс, перестає закривати недопройдений або рахує 0 із 0 пройденим.
+ */
+test("#11060 СТРОК: пройдений курс (усі обовʼязкові кроки) доступ не закриває; недопройдений і порожній — закривається", () => {
+  const late = { accountCreatedAt: at("2026-11-21T09:00:00Z"), firstLoginAt: at("2026-11-21T10:00:00Z"), extendedDays: 0, closedAt: null };
+  const after = at("2026-11-25T22:10:00Z"); // момент, коли джоба закрила Застьолу
+  assert.equal(accessToClose({ ...late, now: after, done: 30, total: 30 }), null, "🔴 пройдений курс закрито строком");
+  assert.equal(accessToClose({ ...late, now: after, done: 29, total: 30 }), "expired", "🔴 недопройдений курс після строку не закрився");
+  assert.equal(accessToClose({ ...late, now: after, done: 0, total: 0 }), "expired", "🔴 порожній курс зараховано як пройдений");
+  assert.equal(accessToClose({ ...late, now: at("2026-12-25T00:00:00Z"), done: 30, total: 30 }), null, "🔴 пройдений курс закрився через місяць");
+  assert.deepEqual([courseComplete({ done: 30, total: 30 }), courseComplete({ done: 29, total: 30 }), courseComplete({ done: 0, total: 0 })], [true, false, false]);
 });
 
 /**
@@ -192,6 +211,36 @@ test("#533 ЖИВИЙ SQL: акаунт при «кандидат + команд
     await h.refuseCandidate(s.db, null, id, { reasonId: reason, note: "не впорався" }, "lead", 1);
     const refused = (await s.c.query(`SELECT c.access_closed_reason, u.is_active FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
     assert.deepEqual([refused.access_closed_reason, refused.is_active], ["refused", false], "🔴 відмова лишила доступ до навчання відкритим");
+  } finally { await s.done(); }
+});
+
+/**
+ * #11060b — ЖИВИЙ SQL: ДЖОБА НЕ ЗАКРИВАЄ ТОГО, ХТО ПРОЙШОВ КУРС, І ВІН ЛИШАЄТЬСЯ ПЕРЕВОДИМИМ. Чиста функція (#11060)
+ * сама не доводить, що джоба передає їй прогрес: саме в джобі й сиділа діра. Два кандидати з тим самим строком:
+ * пройшов 2 із 2 → не закрито, на дошці «done», «Перевести в менеджери» спрацьовує; 1 із 2 → закрито «expired».
+ * 🧨 Червоніє, якщо джоба не рахує прогрес (передає 0), бере прогрес чужого акаунта або закриває обох.
+ */
+test("#11060b ЖИВИЙ SQL: джоба строку не закриває пройдений курс — кандидат лишається на дошці й переводиться в менеджери", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const tr = await import("./hiringTraining.js");
+  try {
+    const course = (await s.c.query("INSERT INTO training_courses (title, audience, published) VALUES ('Старт кандидата','candidate',true) RETURNING id")).rows[0].id;
+    await s.c.query("UPDATE training_courses SET published = false WHERE id <> $1", [course]);
+    const mod = (await s.c.query("INSERT INTO training_folders (name, course_id) VALUES ('День 1', $1) RETURNING id", [course])).rows[0].id;
+    const [m1, m2] = (await s.c.query("INSERT INTO training_materials (folder_id, title, kind, position) VALUES ($1,'Продукт UTS','text',1),($1,'Скрипт першого дзвінка','text',2) RETURNING id", [mod])).rows.map((r) => r.id as number);
+    const passed = await toCandidate(s.db, "Застьола Тест", "0990000301");
+    const halfway = await toCandidate(s.db, "Лесь Тест", "0990000302");
+    const uid = async (id: number) => (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id as number;
+    const [up, uh] = [await uid(passed), await uid(halfway)];
+    for (const u of [up, uh]) await tr.noteCandidateLogin(s.db, u);
+    await s.c.query("INSERT INTO training_progress (user_id, material_id, status, finished_at) VALUES ($1,$3,'done',now()),($1,$4,'done',now()),($2,$3,'done',now())", [up, uh, m1, m2]);
+
+    assert.deepEqual(await tr.closeExpiredAccess(s.db, new Date(Date.now() + 5 * 24 * H)), { checked: 2, closed: 1 }, "🔴 джоба закрила не рівно одного з двох");
+    const st = (await s.c.query("SELECT id, access_closed_reason FROM hiring_candidates WHERE id = ANY($1::int[]) ORDER BY id", [[passed, halfway]])).rows;
+    assert.deepEqual(st.map((r) => [r.id, r.access_closed_reason]), [[passed, null], [halfway, "expired"]], "🔴 закрито не того: пройдений мусить лишитись відкритим, недопройдений — закритись");
+    assert.equal((await tr.trainingBoard(s.db, "lead", 1)).find((r) => r.id === passed)?.health, "done", "🔴 пройдений курс не на дошці як «чекає рішення»");
+    await tr.promoteCandidate(s.db, null, passed, "пройшов курс", true, "lead", 1);
+    assert.equal((await s.c.query("SELECT status FROM hiring_candidates WHERE id=$1", [passed])).rows[0].status, "manager", "🔴 пройдений курс після строку не переводиться в менеджери");
   } finally { await s.done(); }
 });
 

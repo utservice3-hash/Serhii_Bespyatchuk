@@ -5,7 +5,7 @@ import { closeExpiredAccess } from "../core/hiringTraining.js";
 /**
  * 🎓 НАЙМ, прохід 2a: закрити прострочений доступ кандидатів до навчання.
  * Правило строку — `core/hiringTrainingRules.ts` (48 год без входу; три київські дні від першого входу;
- * + продовження). Кожен кандидат — окрема транзакція: одна зламана картка не тримає решту відкритими.
+ * + продовження; пройдений курс строком не закривається — #11060). Кожен кандидат — окрема транзакція: одна зламана картка не тримає решту відкритими.
  */
 export async function closeExpiredCandidateAccess(): Promise<{ checked: number; closed: number }> {
   const client = await pool.connect();

@@ -71,9 +71,21 @@ export function cleanCandidateEmail(v: unknown): { ok: true; email: string | nul
   return { ok: true, email: e };
 }
 
-/** Що зробити з доступом ЗАРАЗ. `null` — нічого. Закритий доступ джоба не чіпає. */
-export function accessToClose(p: AccessInput & { closedAt: Date | null; now: Date }): CloseReason | null {
+/**
+ * Курс пройдено: усі обовʼязкові кроки зроблено. Порожній курс (0 із 0) — НЕ пройдений, так само як у
+ * `trainingHealth` і `promoteVerdict`: рахувати нема з чого.
+ */
+export const courseComplete = (p: { done: number; total: number }): boolean => p.total > 0 && p.done >= p.total;
+
+/**
+ * Що зробити з доступом ЗАРАЗ. `null` — нічого. Закритий доступ джоба не чіпає.
+ * 🎓 Пройдений курс строком НЕ закривається (рішення Романа 26.11.2026): строк — щоб кандидат ПРОЙШОВ навчання, а
+ * той, хто пройшов, чекає рішення тімліда скільки треба. Було: Застьола (30 із 30) закрився «не завершено вчасно»
+ * і зник із дошки разом із кнопкою «Перевести в менеджери»; так застрягли пʼятеро. Тримає #11060.
+ */
+export function accessToClose(p: AccessInput & { closedAt: Date | null; now: Date; done: number; total: number }): CloseReason | null {
   if (p.closedAt) return null;
+  if (courseComplete(p)) return null;
   if (p.now.getTime() < accessDeadline(p).getTime()) return null;
   return p.firstLoginAt ? "expired" : "no_login";
 }

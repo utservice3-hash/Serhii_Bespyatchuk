@@ -489,9 +489,15 @@ export async function closeExpiredAccess(db: Db, now = new Date()): Promise<{ ch
     `SELECT ${ACCOUNT_COLS} FROM hiring_candidates c
       WHERE c.user_id IS NOT NULL AND c.access_closed_at IS NULL AND c.status IN ('candidate','training')`)).rows;
   let closed = 0;
+  if (!rows.length) return { checked: 0, closed };
+  // Прогрес — тим самим `progressOf`, що й дошка: «пройдено» тут і «Пройшли все навчання» там не розійдуться.
+  const course = await candidateCourse(db);
+  const prog = (await db.query<{ user_id: number; material_id: number; status: "opened" | "done" }>(
+    `SELECT user_id, material_id, status FROM training_progress WHERE user_id = ANY($1::int[])`, [rows.map((c) => c.user_id)])).rows;
   for (const c of rows) {
+    const pr = progressOf(course, new Map(prog.filter((p) => p.user_id === c.user_id).map((p) => [p.material_id, p.status])));
     const reason = accessToClose({ accountCreatedAt: new Date(c.account_created_at!), firstLoginAt: d(c.first_login_at),
-      extendedDays: c.access_extended_days, closedAt: null, now });
+      extendedDays: c.access_extended_days, closedAt: null, now, done: pr.done, total: pr.total });
     if (reason && await closeCandidateAccess(db, c.id, reason, null)) closed++;
   }
   return { checked: rows.length, closed };
