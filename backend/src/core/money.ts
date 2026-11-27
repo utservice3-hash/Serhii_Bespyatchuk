@@ -7,7 +7,7 @@ import { adDealSql } from "./metrics.js";
 import { adCampaignTagSql, dealCampaignSql, LEAD_PARENT_JOIN } from "./adCampaign.js";
 import { ELOGIST_CHANNEL } from "./elogist.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
-import { managerDealClass, moneyCameIn, splitInvoicesOf, splitIsEachCar, type DealState, type ClientSuccess, type PendDay, type ExtraCar } from "./leadgenHandoffRules.js";
+import { managerDealClass, moneyCameIn, replacedDealOf, splitInvoicesOf, splitIsEachCar, type DealState, type ClientSuccess, type PendDay, type ExtraCar } from "./leadgenHandoffRules.js";
 // 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
 // «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
 // поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
@@ -1558,7 +1558,8 @@ export interface HandoffDealState extends DealState { pipelineId: number; status
 
 export async function handoffDealStates(dealIds: readonly number[]): Promise<Map<number, HandoffDealState>> {
   const out = new Map<number, HandoffDealState>();
-  const ids = [...new Set(dealIds)];
+  // 🔁 Замінена угода (`HANDOFF_DEAL_REPLACED`): стан і суму беремо із заміни, ключ лишається запитаним id.
+  const ids = [...new Set(dealIds.map(replacedDealOf))];
   if (!ids.length) return out;
   const r = await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; price: string | null;
     is_minus: boolean | null; closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null;
@@ -1618,19 +1619,24 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
       extraCar.set(id, { dealId: id, loadDay: x.load_day, moneyCame: moneyCameIn(c) });
     }
   }
+  const bySrc = new Map<number, HandoffDealState>();
   for (const x of r.rows) {
     const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
     const extras = splitInvoicesOf(Number(x.kommo_id));
     const extra = extras.reduce((s, id) => s + (extraPrice.get(id) ?? 0), 0);
     const extraCars = splitIsEachCar(Number(x.kommo_id))
       ? extras.map((id) => extraCar.get(id)).filter((c): c is ExtraCar => c != null) : [];
-    out.set(Number(x.kommo_id), {
+    bySrc.set(Number(x.kommo_id), {
       pipelineId, statusId,
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
       price: Math.round(Number(x.price ?? 0)) + extra, minus: x.is_minus === true,
       closedDay: x.closed_day, autoDay: x.auto_day, loadDay: x.load_day, extraCars,
       pendDays: (pend.get(Number(x.kommo_id)) ?? []).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
     });
+  }
+  for (const id of new Set(dealIds)) {
+    const st = bySrc.get(replacedDealOf(id));
+    if (st) out.set(id, st);
   }
   return out;
 }
