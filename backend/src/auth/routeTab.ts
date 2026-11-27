@@ -140,6 +140,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // 🎧 «Перший дотик · AI» (28.09.2026). Один гейт на всі підроути: список, стан конвеєра, картка.
     { test: pre("/api/dashboard/ai-calls"), tabs: ["ai-calls"] },
     { test: pre("/api/dashboard/carrier-calls"), tabs: ["carrier-calls"] },
+    // 🛡 «Безпека» (задача 11231, Роман 27.11.2026): лише адміністратор і операційний директор — сид у schema.sql.
+    { test: pre("/api/dashboard/security"), tabs: ["security"] },
     { test: pre("/api/dashboard/regular-clients"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/manager-report"), tabs: ["manager-report"] },
     // ⚠️ РЕШТА /api/dashboard/* ЛИШАЄТЬСЯ БЕЗ TAB-ГЕЙТА — і це ВІДОМА ДІРА, а не задум.

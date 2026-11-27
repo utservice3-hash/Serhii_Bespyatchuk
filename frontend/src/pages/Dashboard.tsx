@@ -74,6 +74,7 @@ import PayrollSection from "../payroll/PayrollSection";
 import { regTabsFor } from "../minusRegistry/client/regTabs";
 import { ProzorroSection } from "./dashboard/sections/ProzorroSection";
 import { LinkedinSection } from "./dashboard/sections/LinkedinSection";
+import { SecuritySection } from "./dashboard/sections/SecuritySection";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
 import { RatesAndCargoSection } from "./dashboard/sections/RatesAndCargoSection";
@@ -1150,6 +1151,8 @@ export function Dashboard() {
       {/* 🏛 «Тендери Prozorro» (#5299): статичний імпорт — гейт #225; доступ вирішує сервер (вкладка prozorro). */}
       {section === "prozorro" && <ProzorroSection roleKey={auth?.roleKey ?? null} />}
       {section === "linkedin" && <LinkedinSection />}
+      {/* 🛡 «Безпека» (11231): статичний імпорт — гейт #225; доступ вирішує сервер (вкладка security: адміністратор і ОД). */}
+      {section === "security" && <SecuritySection />}
 
       {section === "ba" && (
         /**

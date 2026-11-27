@@ -121,6 +121,82 @@ test("#1283d ЖИВИЙ SQL: синк 1С — заміна цілком, пор�
 });
 
 /**
+ * #11250 — ЖИВИЙ SQL: ЗНІМОК «БЕЗ УГОДИ» ПИШЕТЬСЯ ПІСЛЯ УГОД ОКРЕМОЮ ТРАНЗАКЦІЄЮ (задача 11231, 27.11.2026). Добрий прохід:
+ * угоди й знімок записано, старіші 2026 і без дати пораховано у стані, а не показано; звіт ядра з тих самих рядків
+ * (плитка = Σ списку, валюта окремо), неоплачений рахунок без угоди — у своєму списку, з угодою — ні. Збій знімка: угоди
+ * ВСЕ ОДНО записано, попередній знімок цілий, причина — у стані й у підсумку проходу. Відмова угод знімка не чіпає.
+ * 🧨 Червоніє, якщо писати знімок в одній транзакції з угодами чи без захисту (збій вкладки зупинив би «Результат місяця»),
+ * показати рядки до 2026 року чи без дати, або пустити в список неоплачений рахунок з угодою.
+ */
+test("#11250 ЖИВИЙ SQL: знімок «без угоди» — окремою транзакцією після угод; його збій не зупиняє запис угод і лишає причину", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const { writeOnec } = await import("./onecSync.js");
+  const { loadNoDeal } = await import("./securityNoDeal.js");
+  const db = c as unknown as import("./finance.js").Db;
+  // Одне зʼєднання в ролі пула: транзакції йдуть одна за одною, як у синку.
+  const pool = { query: db.query.bind(db), connect: async () => ({ query: db.query.bind(db), release: () => undefined }) } as unknown as import("./onecSync.js").DbPool;
+  const nd = (kind: "invoice" | "payment", number: string, docOn: string | null, sum: number, kontragent = "ТОВ Приклад", currency = "грн") =>
+    ({ kind, number, organization: "О", kontragent, edrpou: null, docOn, sum, currency, dealRaw: "", manager: null, comment: "к" });
+  const pay = (n: number) => Array.from({ length: n }, (_, i) => ({ deal: 62700000 + i, organization: "О", kontragent: "К", paidOn: "2026-10-01", sum: 100, currency: "грн" }));
+  const inv = (n: number) => Array.from({ length: n }, (_, i) => inv1(62700000 + i, 1000 + i));
+  const counts = async () => (await c.query(`SELECT (SELECT count(*) FROM onec_deal_invoices)::int AS i, (SELECT count(*) FROM onec_deal_payments)::int AS p,
+    (SELECT count(*) FROM onec_no_deal_rows)::int AS n`)).rows[0];
+  try {
+    const good = [nd("payment", "1", "2026-01-01", 1000), nd("payment", "2", "2026-03-05", 500.5, ""), nd("payment", "3", "2026-03-06", 950, "ФОП Зразок", "EUR"),
+      nd("invoice", "4", "2026-11-20", 700), nd("payment", "5", "2025-12-31", 9000), nd("payment", "6", null, 8000)];
+    assert.deepEqual(await writeOnec(pool, inv(10), pay(10), good), { invoices: 10, payments: 10, noDeal: 4 }, "🔴 добрий прохід");
+    assert.deepEqual(await counts(), { i: 10, p: 10, n: 4 }, "🔴 записано не те: рядки до 2026 чи без дати потрапили у знімок, або знімок порожній");
+    await c.query(`INSERT INTO onec_unpaid_invoices (uid, number, invoice_date, organization, contractor, currency, invoice_sum, paid_sum, remaining, realized, partially_paid, deal_id)
+      VALUES ('u1', '10', '2026-02-01', 'О', 'ТОВ Приклад', 'UAH', 500, 100, 400, false, true, NULL), ('u2', '11', '2026-02-02', 'О', 'ТОВ Приклад', 'UAH', 900, 0, 900, false, false, 62700001)`);
+    const r = await loadNoDeal(db);
+    assert.deepEqual([r.snapshot.older, r.snapshot.undated, r.snapshot.error, r.snapshot.syncedAt != null], [1, 1, null, true], "🔴 старіші й без дати не пораховано у стані");
+    const p = r.lists.payment;
+    assert.deepEqual([p.totals.docs, p.totals.uah, p.totals.fx, p.totals.unnamed, p.totals.kontragents],
+      [3, 1500.5, [{ currency: "EUR", sum: 950, docs: 1 }], { docs: 1, uah: 500.5 }, 2], "🔴 підсумок оплат");
+    assert.equal(p.totals.uah, p.docs.filter((d) => d.currency === "грн").reduce((a, d) => a + d.sum, 0), "🔴 плитка ≠ Σ гривневих рядків списку");
+    assert.deepEqual([r.lists.invoice.totals.docs, r.lists.invoice.totals.uah, r.lists.invoice.docs[0].dealRaw], [1, 700, ""], "🔴 реалізації змішано з оплатами");
+    assert.deepEqual(r.lists.unpaid.docs.map((d) => [d.number, d.sum, d.dealRaw]), [["10", 400, null]], "🔴 неоплачені: у списку рахунок з угодою або не залишок");
+
+    // збій знімка (дата, якої не буває) — угоди оновлено, попередній знімок цілий, причина названа
+    const bad = await writeOnec(pool, inv(10), pay(11), [nd("payment", "7", "2026-13-45", 1)]);
+    assert.deepEqual([bad.invoices, bad.payments, bad.noDeal, typeof bad.noDealError], [10, 11, null, "string"], "🔴 збій знімка зупинив прохід або не названий у підсумку");
+    assert.deepEqual(await counts(), { i: 10, p: 11, n: 4 }, "🔴 збій знімка відкотив запис угод або стер попередній знімок");
+    const st = (await c.query(`SELECT rows, error IS NOT NULL AS err, synced_at IS NOT NULL AS ok FROM onec_no_deal_state`)).rows[0];
+    assert.deepEqual(st, { rows: 4, err: true, ok: true }, "🔴 причина збою знімка не лишилась у стані");
+    // відмова угод (порожня відповідь 1С) — знімок не чіпаємо взагалі
+    await assert.rejects(writeOnec(pool, [], pay(11), []), /не віддав жодного рядка/, "🔴 порожня відповідь прийнята");
+    assert.deepEqual(await counts(), { i: 10, p: 11, n: 4 }, "🔴 відмова угод стерла знімок");
+    // наступний добрий прохід знімає помилку
+    assert.equal((await writeOnec(pool, inv(10), pay(11), good.slice(0, 2))).noDeal, 2, "🔴 знімок не замінюється цілком");
+    assert.equal((await c.query(`SELECT error FROM onec_no_deal_state`)).rows[0].error, null, "🔴 успішний запис не зняв помилку знімка");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #11251 — ЖИВА СХЕМА: ПІСЛЯ ДВОХ ПРОГОНІВ ВКЛАДКА «БЕЗПЕКА» РІВНО В АДМІНІСТРАТОРА Й ОПЕРАЦІЙНОГО ДИРЕКТОРА. Синки схеми
+ * копіюють екрани адміна гендиректору, КВП і фінансисту, тож протікання видно лише з ДРУГОГО прогону (так протекла
+ * `ai-calls`, #794). Тумблер адміна для кастомної ролі повторний прогін не відкочує.
+ * 🧨 Червоніє, якщо прибрати зняття в будь-якої з трьох ролей або знімати «в усіх, крім двох».
+ */
+test("#11251 ЖИВА СХЕМА: після двох прогонів вкладка «Безпека» рівно в адміністратора й ОД; тумблер кастомної ролі не відкочується", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  const who = async () => (await c.query(`SELECT key FROM roles WHERE (screen_access->>'security')::boolean ORDER BY key`)).rows.map((r: { key: string }) => r.key);
+  try {
+    assert.deepEqual(await who(), ["admin", "opdir"], "🔴 схема з нуля: вкладку security має не той склад");
+    await c.query(schema);
+    assert.deepEqual(await who(), ["admin", "opdir"], "🔴 другий прогін схеми роздав security через синк «екрани = екрани адміна»");
+    await c.query(`INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions) VALUES ('proba_bezpeky', 'Проба', false, 'company', '{"security":true}'::jsonb, '{}'::jsonb)`);
+    await c.query(schema);
+    assert.deepEqual(await who(), ["admin", "opdir", "proba_bezpeky"], "🔴 прогін схеми відкотив тумблер адміна в кастомної ролі або роздав вкладку ще комусь");
+  } finally { await s.dispose(); }
+});
+
+/**
  * #1283e — ЖИВИЙ SQL: «РЕЗУЛЬТАТ МІСЯЦЯ» З 1С. Угода з реалізацією 1С отримує блок 1С, оплати клієнта, плановий PNL; бюджет
  * 1С ≠ Kommo — на перевірку з обома числами; рівний — без перевірки; валютна реалізація — перевірка «у валюті», у гривневі
  * колонки не йде; без 1С — блок порожній і ця перевірка мовчить; «станом на» — з часу синку.

@@ -30,6 +30,7 @@ export const MANIFEST_FILES: string[] = [
   "core/forecast.test.js",
   "core/forecastRange.test.js",
   "core/clientCard.test.js",
+  "core/clientKommoLinks.test.js",
   "kommo/leadChildLink.test.js",
   "versionStale.test.js",
   "clientStale.test.js",
@@ -219,6 +220,7 @@ export const MANIFEST_FILES: string[] = [
   "core/hiringTraining.test.js",
   "core/candidateTraining.test.js",
   "core/secrets.test.js",
+  "core/securityNoDeal.test.js",
   "core/teamVault.test.js",
   "core/employees.test.js",
   "core/hiringFunnel.test.js",
@@ -474,7 +476,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "fin_plan_parts", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "fin_recurring", "fin_recurring_paid", "fin_recurring_planned", "fin_plan_parts", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state", "onec_unpaid_invoices", "onec_unpaid_state", "onec_no_deal_rows", "onec_no_deal_state", "payment_request_marks", "deal_fin_fields", "deal_fin_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "bank_out_breakdown", "bank_out_breakdown_events", "cp_checks", "cp_requests", "cp_events", "cp_files", "cp_owner_counts", "client_limits", "client_limit_members", "client_limit_events", "cl_court_seen", "cl_monitor_runs", "cargo_vehicles", "cargo_pallets", "cargo_calculations", "bank_ident_settings", "bank_tx_ident", "bank_tx_ident_events", "bank_tx_comments",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
@@ -988,6 +990,8 @@ export const MANIFEST_TESTS: string[] = [
   // testRunGate.test.ts — підтести скіпнутих батьків
   "#12g ДІТИ СКІПНУТОГО БАТЬКА не валять прогін (але лише коли батько СПРАВДІ скіпнувся)",
   "#12h ДЗЕРКАЛО: батько ВІДПРАЦЮВАВ — діти зобовʼязані зʼявитись",
+  "#11243 РЕЄСТР ДІТЕЙ СКІПНУТИХ БАТЬКІВ ЗБІГАЄТЬСЯ З ДЖЕРЕЛАМИ: жодної незаписаної дитини і жодного мертвого запису",
+  "#11244 КАРТКА КЛІЄНТА → KOMMO: усі компанії клієнта (решта числом), інакше контакт, інакше угода; роут і картка проведені",
   // core/stageNames.test.ts — підпис стадії за СТАТУСОМ, а не за кошиком
   "#28 ПІДПИС СТАДІЇ — ЗА СТАТУСОМ, а не за кошиком funnel_stage",
   "#28b НЕ ПЕРЕЙМЕНОВАНО ТЕ, ЩО НАЗВАНО ПРАВИЛЬНО (інакше друга брехня)",
@@ -1696,7 +1700,7 @@ export const MANIFEST_TESTS: string[] = [
   "#914 ОДНА ШАПКА: скелет і екран вставляють ту саму шапку, період завжди окремим рядком",
   "#866 ПОЗА ТЕЛЕФОНІЄЮ · ЖИВА СХЕМА: позначка приймається, список і картка — kept_offline, зняття повертає «немає дзвінка»",
   // core/carrierCalls.test.ts — перевізники за розмовою, прохід 1 (29.09.2026)
-  "#950 ВИБІРКА · ЖИВА СХЕМА: лише угоди з відповіді Kommo, старші за 15 хв, із номером у назві",
+  "#11245 ВИБІРКА · ЖИВА СХЕМА: лише угоди з відповіді Kommo, старші за 2 хв, із номером у назві",
   "#950b KOMMO: фільтр воронки й етапу, сторінки до неповної, понад межу — помилка",
   "#951 РОЗМОВА · ЖИВА СХЕМА: ≥10 с із записом у вікні доби; без розмови — чекаємо, потім пропускаємо",
   "#952 НОМЕР 30 ДНІВ · ЖИВА СХЕМА: повтор без оплати в межах 30 днів, на 31-й — слухаємо знову",
@@ -1706,7 +1710,7 @@ export const MANIFEST_TESTS: string[] = [
   "#957 СТЕЛЯ МОБІЛЬНИХ · ЖИВА СХЕМА: стоять лише мобільні, Telegram один раз на місяць",
   "#957b СТЕЛЯ МОБІЛЬНИХ · ЖИВА СХЕМА: під самою стелею дзвінок, що її перевищить, не оплачується",
   "#958 ТЕКСТ 12 МІСЯЦІВ · ЖИВА СХЕМА: старший за рік видалено, вердикт лишився; молодший і чужий — ні",
-  "#959 ПРОВОДКА: крон щоп'ять хвилин на :04…:59, під наглядом, таблиці в блоці AI й під забороною",
+  "#11246 ПРОВОДКА: крон що дві хвилини на непарних, поріг нагляду покриває найдовший тік, таблиці в блоці AI й під забороною",
   "#961 КАРТКА · ЖИВА СХЕМА: лише дзвінки мобільних, текст — за правом; «Перший дотик» мобільний не відкриває",
   "#964 СТАН МОБІЛЬНИХ · ЖИВА СХЕМА: черга й витрати — лише мобільних, стеля $15",
   "#970 КАНДИДАТИ · ЖИВА СХЕМА: лише впевнений перевізник, що досі на етапі; клієнт, поріг, чужа цитата — ні",
@@ -2841,6 +2845,12 @@ export const MANIFEST_TESTS: string[] = [
   "#1283d ЖИВИЙ SQL: синк 1С — заміна цілком, порожньо й понад −10% — відмова без змін, причина в стані",
   "#1283e ЖИВИЙ SQL: угода з 1С — блоки, плановий PNL, Kommo ≠ 1С і валюта на перевірку, без 1С — мовчить",
   "#1283f ПРОВОДКА: синк 1С :45 під наглядом, адреса з сервісу дебіторки, AI закрито, Excel і фронт — блоки як у «Сделки»",
+  "#11250 ЖИВИЙ SQL: знімок «без угоди» — окремою транзакцією після угод; його збій не зупиняє запис угод і лишає причину",
+  "#11251 ЖИВА СХЕМА: після двох прогонів вкладка «Безпека» рівно в адміністратора й ОД; тумблер кастомної ролі не відкочується",
+  // core/securityNoDeal.test.ts — «Безпека»: операції 1С без угоди (задача 11231, 27.11.2026)
+  "#11247 РОЗБІР «БЕЗ УГОДИ»: рядок із сумою йде або в угоди, або у «без угоди», ніколи в обидва; без суми — нікуди",
+  "#11248 ПІДСУМОК ПЛИТКИ = СУМА РЯДКІВ: валюта окремо й у гривню не йде, документи без назви контрагента — окремим числом",
+  "#11249 «БЕЗПЕКА» ЛИШЕ АДМІНУ Й ОД: сид двом ролям, зняття після синків екранів, межа роута, зліпок і екран проведені",
   // core/unpaidInvoices.test.ts — валютна дебіторка з сервісу неоплачених рахунків 1С, лише 2026 рік (Роман 26.10.2026).
   "#1286 РОЗБІР НЕОПЛАЧЕНИХ: state false — помилка, лише 2026 рік із залишком, угода — 8 цифр, підсумок за валютою, без курсу — окремо",
   "#1286b ЖИВИЙ SQL: список і журнал однією транзакцією, нуль рахунків — відмова без змін, період — свій підсумок, застаре — порожньо",
@@ -4002,6 +4012,12 @@ export interface RetiredGate {
 }
 
 export const RETIRED_GATES: RetiredGate[] = [
+  { name: "#950 ВИБІРКА · ЖИВА СХЕМА: лише угоди з відповіді Kommo, старші за 15 хв, із номером у назві", since: "2026-11-27",
+    decidedBy: "Роман 27.11.2026 — «надто довго так… раз в 2 хвилини хай буде» (пауза відсіву перевізників)",
+    reason: "змінилось твердження: пауза перед відсівом 15 хв → 2 хв, фільтра CRM більше не чекаємо. А ДЕ ЦЕ ТЕПЕР: `#11245` (той самий тест із порогом 2 хв і дзеркалом «10 хв уже беремо»)." },
+  { name: "#959 ПРОВОДКА: крон щоп'ять хвилин на :04…:59, під наглядом, таблиці в блоці AI й під забороною", since: "2026-11-27",
+    decidedBy: "Роман 27.11.2026 — «раз в 2 хвилини хай буде» (джоба відсіву перевізників)",
+    reason: "змінилось твердження: крон раз на 5 хв (:04…:59) → раз на 2 хв на непарних хвилинах; нагляд більше не «== крону», а «поріг покриває найдовший тік». А ДЕ ЦЕ ТЕПЕР: `#11246`." },
   { name: "#9045 🪞 ПОЇЗДКА ПОЗА CRM: колір у межах ритму в обидва боки, реактивація, дата, коментар, роль",
     since: "2026-11-26", decidedBy: "зустріч по дашборду 25.11.2026 (Сергій, Юля, Саша, Роман): «поїздку поза CRM» прибрати повністю; Роман 26.11: «виконати всі задачі» (задача 11220)",
     reason: "функцію прибрано: поїздки поза CRM більше не існує, тож стверджувати про неї нічого. А ДЕ ЦЕ ТЕПЕР: `#11220` — колір від оплати й рахунку з CRM у межах ритму в обидва боки, і третьої дати правило не приймає." },

@@ -131,6 +131,48 @@ test("#12h ДЗЕРКАЛО: батько ВІДПРАЦЮВАВ — діти з
 });
 
 /**
+ * #11243 — РЕЄСТР ДІТЕЙ ЗБІГАЄТЬСЯ З ДЖЕРЕЛАМИ В ОБИДВА БОКИ (27.11.2026).
+ *
+ * 🔴 ПРИВІД: PR #70 додав чотири підтести (`#11242b`…`#11242e`) усередину тестів, що на проді скіпаються разом зі
+ * scratch-кластером, і не вніс їх у `PROD_SKIP_CHILDREN`. Локально все зелене (батьки працюють), а приймання викату
+ * 2f77cab двічі сказало «ПРОГІН НЕ ЗАРАХОВАНО: 2570 із 2574» — і не назвало, яких тестів бракує.
+ * 🧨 Червоніє, якщо прибрати дитину з реєстру, додати підтест під скіпаним батьком без запису або лишити в реєстрі
+ * дитину, якої в джерелах уже немає.
+ */
+test("#11243 РЕЄСТР ДІТЕЙ СКІПНУТИХ БАТЬКІВ ЗБІГАЄТЬСЯ З ДЖЕРЕЛАМИ: жодної незаписаної дитини і жодного мертвого запису", async () => {
+  const { skipChildrenDrift, nestedTestsOf, PROD_SKIP_CHILDREN } = await import("./testRunGate.js");
+  // 🪞 Фікстура по обидва боки: записана дитина мовчить, незаписана названа, мертвий запис названий; чужий батько не цікавить.
+  // Слово збирається з двох половин: сканер маніфесту читає скомпільовані файли й інакше порахував би фікстуру тестами.
+  const kw = ["te", "st"].join("");
+  const SRC = [
+    `${kw}("#A батько, що скіпається", async (t) => {`,
+    `  await t.${kw}("#A1 записана дитина", async () => {});`,
+    `    await t.${kw}("#A2 незаписана дитина", async () => {});`,
+    "});",
+    `${kw}("#B батько, що не скіпається", async (t) => {`,
+    `  await t.${kw}("#B1 дитина не під реєстром", () => {});`,
+    "});",
+  ].join("\n");
+  assert.deepEqual([...nestedTestsOf(SRC)], [["#A батько, що скіпається", ["#A1 записана дитина", "#A2 незаписана дитина"]],
+    ["#B батько, що не скіпається", ["#B1 дитина не під реєстром"]]]);
+  const fx = skipChildrenDrift([SRC], new Set(["#A батько, що скіпається"]), { "#A батько, що скіпається": ["#A1 записана дитина", "#A9 зникла дитина"] });
+  assert.deepEqual(fx, { unregistered: ["#A батько, що скіпається → #A2 незаписана дитина"], stale: ["#A батько, що скіпається → #A9 зникла дитина"], nested: 2 });
+  // Живі джерела: усі *.test.ts набору.
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const root = path.join(import.meta.dirname, "..", "src");
+  const files = (readdirSync(root, { recursive: true }) as string[]).filter((f) => f.endsWith(".test.ts"));
+  assert.ok(files.length >= 300, `🔴 знайдено лише ${files.length} тест-файлів — перевірка дивиться не туди`);
+  const live = skipChildrenDrift(files.map((f) => readFileSync(path.join(root, f), "utf8")), new Set(ALLOWED_PROD_SKIPS.map((s) => s.name)));
+  const kidsInRegistry = Object.values(PROD_SKIP_CHILDREN).flat().length;
+  assert.ok(live.nested >= 30 && kidsInRegistry >= 30, `🔴 підтестів під скіпаними батьками ${live.nested}, у реєстрі ${kidsInRegistry} — звірка вироджена`);
+  assert.deepEqual(live.unregistered, [],
+    "🔴 ПІДТЕСТ УСЕРЕДИНІ ТЕСТУ, ЩО НА ПРОДІ СКІПАЄТЬСЯ, НЕ ЗАПИСАНО В PROD_SKIP_CHILDREN — приймання скаже «недобір»:\n  " + live.unregistered.join("\n  "));
+  assert.deepEqual(live.stale, [],
+    "🔴 У PROD_SKIP_CHILDREN Є ДИТИНА, ЯКОЇ В ДЖЕРЕЛАХ ПІД ЦИМ БАТЬКОМ НЕМАЄ — лічильник отримує зайву знижку:\n  " + live.stale.join("\n  "));
+});
+
+/**
  * 🈳 #236–#236d — ПОРОЖНІЙ ПЕРІОД: ГУЧНИЙ СКІП ЗАМІСТЬ ПАДІННЯ.
  *
  * 🔴 ПРИВІД, ЗАМІРЯНИЙ ДВІЧІ 01.09.2026: із 17-18 падінь приймання **одинадцять**

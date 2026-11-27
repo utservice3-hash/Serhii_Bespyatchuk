@@ -4,12 +4,14 @@
  * `RECEIVABLES_1C_URL`). Це рівно те, що в таблиці Тетяни робить кнопка «Оновити витрати 1С» і вкладка «1С», — тепер
  * без кнопки. Відмова (немає відповіді, порожньо, масове зникнення) нічого не міняє: екран показує останні добрі дані,
  * причина — у стані; мовчання понад 2 тіки піднімає тривогу (`MONITORED_JOBS`). Лише ЧИТАЄ 1С (~20 с на сервіс).
+ * 🛡 З 27.11.2026 тим самим проходом пишеться знімок рядків БЕЗ номера угоди (вкладка «Безпека»): окремою транзакцією
+ * після угод, тож його збій запис угод не зупиняє (`writeOnec`).
  * ⏱ Прапорець «уже працює» має СТЕЛЮ (правило зони jobs-sync: завислий проміс не виконує `finally`).
  */
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { parseInvoices, parsePayments } from "../core/dealLedger.js";
-import { replaceOnec, saveOnecError } from "../core/onecSync.js";
+import { parseInvoices, parsePayments, parseNoDeal } from "../core/dealLedger.js";
+import { writeOnec, saveOnecError, type DbPool } from "../core/onecSync.js";
 import { jobSkip } from "./jobRuns.js";
 import { warmMonthResults } from "./monthResultData.js";
 import type { Db } from "../core/finance.js";
@@ -25,17 +27,15 @@ async function getJson(name: "costinvoice" | "paydata"): Promise<unknown> {
   return res.json();
 }
 
-async function once(): Promise<{ invoices: number; payments: number }> {
+async function once(): Promise<{ invoices: number; payments: number; noDeal: number | null; noDealError?: string }> {
   try {
-    const inv = parseInvoices(await getJson("costinvoice"));
-    const pay = parsePayments(await getJson("paydata"));
-    const c = await pool.connect();
-    try {
-      await c.query("BEGIN");
-      const out = await replaceOnec(c as unknown as Db, inv, pay);
-      await c.query("COMMIT");
-      return out;
-    } catch (e) { await c.query("ROLLBACK").catch(() => undefined); throw e; } finally { c.release(); }
+    const invJson = await getJson("costinvoice");
+    const payJson = await getJson("paydata");
+    // 🛡 Ті самі дві відповіді 1С, без третього запиту: рядки без номера угоди — у знімок «Безпеки» (задача 11231).
+    const noDeal = [...parseNoDeal("invoice", invJson), ...parseNoDeal("payment", payJson)];
+    const out = await writeOnec(pool as unknown as DbPool, parseInvoices(invJson), parsePayments(payJson), noDeal);
+    if (out.noDealError) console.error(`syncOnecDeals: знімок «без угоди» не записано — ${out.noDealError}`);
+    return out;
   } catch (e) {
     await saveOnecError(pool as unknown as Db, (e as Error).message).catch(() => undefined);
     throw e;

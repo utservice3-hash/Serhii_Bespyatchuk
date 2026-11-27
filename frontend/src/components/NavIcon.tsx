@@ -36,6 +36,7 @@ const P: Record<string, React.ReactNode> = {
   // Будівля з колонами — державна закупівля (Prozorro).
   prozorro: <><path d="M3 21h18" /><path d="M5 21v-9" /><path d="M9.7 21v-9" /><path d="M14.3 21v-9" /><path d="M19 21v-9" /><path d="M2 10l10-6 10 6z" /></>,
   // Ланка — LinkedIn (черга заявок, задача 7361).
+  security: <><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z" /><path d="M9 12l2 2 4-4" /></>,
   linkedin: <><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1" /><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" /></>,
   // Робота
   tasks: <><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M8 12l3 3 5-6" /></>,

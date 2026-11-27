@@ -8,7 +8,7 @@ import type { Db } from "./adCallFacts.js";
 import type { HttpDeps } from "./callAiHttp.js";
 import type { TickPrices } from "./callAiTick.js";
 import { ELEVENLABS_STT_URL } from "./callAiProviders.js";
-import { carrierBucket, checkCarrierQuote, interpretCarrier, oldEnough, type CarrierResult } from "./carrierCallRules.js";
+import { CARRIER_RULE, carrierBucket, checkCarrierQuote, interpretCarrier, oldEnough, type CarrierResult } from "./carrierCallRules.js";
 import type { StageLead } from "./carrierCalls.js";
 
 /**
@@ -139,21 +139,25 @@ const row = async (c: Raw, id: number) => (await c.raw.query<{ state: string; un
   "SELECT state, uniqueid, talk_no, reused_from::text, first_uniqueid FROM carrier_call_deals WHERE kommo_id = $1", [id])).rows[0];
 
 /**
- * #950 — ВИБІРКА = ВІДПОВІДЬ KOMMO «зараз на етапі», старша за 15 хв, із номером у назві.
+ * #11245 (до 27.11.2026 — #950 із порогом 15 хв) — ВИБІРКА = ВІДПОВІДЬ KOMMO «зараз на етапі», старша за 2 хв, із
+ * номером у назві. Поріг — рішення Романа 27.11.2026 («раз в 2 хвилини хай буде»): фільтра CRM більше не чекаємо.
  * Угода, яку наша `deals` вважає «на етапі», але якої Kommo вже не віддав (фільтр прибрав), — не береться;
  * і навпаки, Kommo — джерело правди, навіть якщо `deals` ще не синкнулась. Повтор нічого не дублює.
- * 🧨 Червоніє, якщо брати статус із `deals`, прибрати поріг віку чи прийняти назву без номера.
+ * 🧨 Червоніє, якщо повернути 15 хв (угода віком 2–15 хв знову чекатиме), прибрати поріг віку, брати статус із
+ * `deals` чи прийняти назву без номера.
  */
-test("#950 ВИБІРКА · ЖИВА СХЕМА: лише угоди з відповіді Kommo, старші за 15 хв, із номером у назві", async (t) => {
-  assert.equal(oldEnough(sec(min(14.5)), NOW), false, "🔴 угоду молодшу за 15 хв узято — фільтр CRM міг ще не пройти");
-  assert.equal(oldEnough(sec(min(15)), NOW), true, "дзеркало: рівно 15 хв — уже беремо");
+test("#11245 ВИБІРКА · ЖИВА СХЕМА: лише угоди з відповіді Kommo, старші за 2 хв, із номером у назві", async (t) => {
+  assert.equal(CARRIER_RULE.minAgeMin, 2, "🔴 пауза перед відсівом — не 2 хв (рішення Романа 27.11.2026)");
+  assert.equal(oldEnough(sec(min(1.5)), NOW), false, "🔴 угоду молодшу за 2 хв узято");
+  assert.equal(oldEnough(sec(min(2)), NOW), true, "дзеркало: рівно 2 хв — уже беремо");
+  assert.equal(oldEnough(sec(min(10)), NOW), true, "🔴 угода віком 10 хв досі чекає — стара пауза 15 хв повернулась");
   const c = await ctx(t); if (!c) return;
   const { recordStageDeals } = await import("./carrierCalls.js");
   await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo) VALUES
     (93004,'380500000004',8921928,70419108,$1), (93005,'380500000005',8921928,143,$1)`, [min(60).toISOString()]);
   const leads: StageLead[] = [
     { id: 93001, name: "380500000001", created_at: sec(min(20)), responsible_user_id: 7 },
-    { id: 93002, name: "380500000002", created_at: sec(min(10)), responsible_user_id: 7 },
+    { id: 93002, name: "380500000002", created_at: sec(min(1)), responsible_user_id: 7 },
     { id: 93003, name: "ТОВ Ромашка", created_at: sec(min(30)), responsible_user_id: 7 },
     { id: 93005, name: "380500000005", created_at: sec(min(60)), responsible_user_id: 7 },
   ];
@@ -423,11 +427,14 @@ test("#958 ТЕКСТ 12 МІСЯЦІВ · ЖИВА СХЕМА: старший �
 });
 
 /**
- * #959 — ПРОВОДКА: крон раз на 5 хв, за 2 хв після свіжих дзвінків, не на :00/:30; під наглядом із тією самою
- * частотою; таблиці — у блоці AI-аналізу (там їх бере `#759`) і в `FORBIDDEN_TABLES`.
- * 🧨 Червоніє, якщо зняти джобу з нагляду, поставити на :00/:30 чи вийти з блоку.
+ * #11246 (до 27.11.2026 — #959 із кроном раз на 5 хв) — ПРОВОДКА: крон раз на 2 хв на непарних хвилинах (не на
+ * :00/:30 `syncKommo`); під наглядом, і поріг тривоги (2 × everyMin) не менший за найдовший законний проміжок між
+ * успіхами: стеля тіку (STT + LLM) плюс два кроки крону, які довгий тік зʼїдає через охоронця від накладання.
+ * Таблиці — у блоці AI-аналізу (там їх бере `#759`) і в `FORBIDDEN_TABLES`.
+ * 🧨 Червоніє, якщо повернути крон раз на 5 хв, поставити на :00/:30, зняти джобу з нагляду, опустити поріг
+ * нагляду до «2× крону» (4 хв — тривога на здоровій джобі) чи вийти з блоку.
  */
-test("#959 ПРОВОДКА: крон щоп'ять хвилин на :04…:59, під наглядом, таблиці в блоці AI й під забороною", async () => {
+test("#11246 ПРОВОДКА: крон що дві хвилини на непарних, поріг нагляду покриває найдовший тік, таблиці в блоці AI й під забороною", async () => {
   const root = path.join(import.meta.dirname, "..", "..", "src");
   const src = readFileSync(path.join(root, "index.ts"), "utf8");
   const at = src.indexOf('runJob("carrierCallJob"');
@@ -435,10 +442,15 @@ test("#959 ПРОВОДКА: крон щоп'ять хвилин на :04…:59,
   const spec = [...src.slice(0, at).matchAll(/cron\.schedule\("([^"]+)"/g)].pop()?.[1];
   assert.ok(spec, "🔴 не знайдено cron.schedule перед carrierCallJob");
   const mins = spec.split(" ")[0].split(",").map(Number);
-  assert.equal(mins.length, 12, "🔴 не щоп'ять хвилин");
-  assert.ok(mins.every((m) => m % 5 === 4), `🔴 хвилини не :04…:59 (після свіжих дзвінків): ${spec}`);
+  assert.equal(mins.length, 30, `🔴 не раз на 2 хв: ${spec}`);
+  assert.ok(mins.every((m, i) => m === 2 * i + 1), `🔴 хвилини не непарні поспіль (:01…:59), тобто крок не 2 хв або зачепили :00/:30: ${spec}`);
   const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
-  assert.equal(MONITORED_JOBS.find((x) => x.name === "carrierCallJob")?.everyMin, 5, "🔴 джоба не під наглядом із частотою крону");
+  const { CARRIER_STT_BUDGET_MS, CARRIER_LLM_BUDGET_MS } = await import("./carrierCalls.js");
+  const every = MONITORED_JOBS.find((x) => x.name === "carrierCallJob")?.everyMin;
+  assert.ok(every != null, "🔴 джоба не під наглядом");
+  const worstGapMs = CARRIER_STT_BUDGET_MS + CARRIER_LLM_BUDGET_MS + 2 * 2 * 60_000;
+  assert.ok(every * 2 * 60_000 >= worstGapMs, `🔴 поріг нагляду ${String(every * 2)} хв менший за найдовший законний проміжок ${String(Math.round(worstGapMs / 60_000))} хв — тривога на здоровій джобі`);
+  assert.ok(every * 2 <= 10, `🔴 поріг нагляду ${String(every * 2)} хв — мовчання джоби помітять пізніше, ніж до зміни крону (10 хв)`);
   const schema = readFileSync(path.join(root, "db", "schema.sql"), "utf8");
   const block = schema.slice(schema.indexOf("-- ▼ AI-АНАЛІЗ ДЗВІНКІВ"), schema.indexOf("-- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲"));
   for (const tbl of ["carrier_call_deals", "ai_cap_alerts"]) {
