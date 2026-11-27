@@ -16,6 +16,10 @@
 //                                                у списку адміністратора (охоплення гарантовано непорожнє).
 //                                                Друкує лише id і кількість.
 //   … --brief                                  — без таблиць окремих читань: рядок на прохід і підсумок.
+//   … --pairs  (разом із --against)            — ще й РЯДОК У РЯДОК: чотири функції ядра, чиї запити змінив прохід 2
+//                                                (стан реактивації в обох режимах, факти розмов, оплата-доказ),
+//                                                з обох збірок на тих самих даних; час кожної поодинці.
+//                                                Друкує лише кількості, час і вердикт; при розбіжності — місце без значень.
 //   node cp.mjs [YYYY-MM] --explain[=N]        — після проходів показує план бази (EXPLAIN ANALYZE, BUFFERS) для N
 //                                                найважчих читань (типово 5). Кожне з них виконується ще раз.
 //
@@ -106,7 +110,46 @@ async function load(dir, name) {
   if (!layer) { console.log(`🔴 ${name}: роуту /client-plans у dist немає`); await pool.end(); process.exit(4); }
   let cache = null;
   if (existsSync(path.join(dir, "dist", "core", "scopeCache.js"))) cache = (await import(dist("core/scopeCache.js"))).clientPlansCache ?? null;
-  return { name, pool, rawQuery, st, layer, cache };
+  return { name, dir, pool, rawQuery, st, layer, cache };
+}
+
+/**
+ * РЯДОК У РЯДОК: ті самі функції ядра з обох збірок на тих самих даних — результат цілком, не лише те, що дійшло до
+ * відповіді списку (напр. сума «повернено» в рядок списку не йде, лише прапорець). Заразом час кожної поодинці.
+ * Порядок рядків не порівнюється (його визначає план бази, а не правило): рядки впорядковуються за ключем клієнта.
+ */
+async function pairs(mine, other, body) {
+  const keys = [...new Set((body?.clients ?? []).map((c) => c.clientKey).filter((k) => typeof k === "string"))];
+  if (!keys.length) { console.log("\n🔴 РЯДОК У РЯДОК: у списку немає клієнтів — порівнювати нема на чому"); process.exitCode = 1; return; }
+  const mod = (b, rel) => import(pathToFileURL(path.join(b.dir, "dist", rel)).href);
+  const rowsOf = (v) => (v instanceof Map ? [...v.entries()].map(([k, x]) => [String(k), x]) : (v ?? []).map((x) => [String(x.clientKey), x]))
+    .sort((a, c) => (a[0] < c[0] ? -1 : a[0] > c[0] ? 1 : 0));
+  const CASES = [
+    ["стан реактивації, усі клієнти", "core/reactivation.js", (m) => m.clientStates({}, { includeActive: true })],
+    ["стан реактивації, лише вкладка", "core/reactivation.js", (m) => m.clientStates({})],
+    [`факти розмов і угод, ${keys.length} клієнтів`, "core/clientLeadFacts.js", (m, b) => m.leadFactsFor(b.pool, keys)],
+    [`оплата-доказ за 30 днів, ${keys.length} клієнтів`, "core/clientWorkProof.js", (m, b) => m.paymentProofByClientKey(b.pool, keys, 30)],
+  ];
+  console.log("\nРЯДОК У РЯДОК (функції ядра з обох збірок, ті самі дані; час кожної поодинці, найкращий із двох):");
+  for (const [title, rel, call] of CASES) {
+    const run = async (b) => { const m = await mod(b, rel); const t = performance.now(); const v = await call(m, b); return { ms: performance.now() - t, rows: rowsOf(v) }; };
+    const o1 = await run(other), m1 = await run(mine), o2 = await run(other), m2 = await run(mine);
+    const js = (r) => JSON.stringify(r.rows);
+    const stable = js(o1) === js(o2), same = js(m2) === js(o2) || js(m1) === js(o1);
+    console.log(`  ${title}: інша ${o2.rows.length} рядків, ${Math.round(Math.min(o1.ms, o2.ms))} мс · ця ${m2.rows.length} рядків, ${Math.round(Math.min(m1.ms, m2.ms))} мс · `
+      + (same ? "ОДНАКОВІ" : stable ? "🔴 РІЗНІ" : "дані зрушили під час заміру (інша ≠ інша), повторити"));
+    if (!o2.rows.length) { console.log("    🔴 рядків нуль — порівняння нічого не доводить"); process.exitCode = 1; }
+    if (!same && stable) {
+      process.exitCode = 1;
+      const a = new Map(o2.rows), b = new Map(m2.rows);
+      let shown = 0;
+      for (const k of new Set([...a.keys(), ...b.keys()])) {
+        if (JSON.stringify(a.get(k)) === JSON.stringify(b.get(k))) continue;
+        if (shown++ >= 5) break;
+        for (const d of diffPaths(a.get(k) ?? null, b.get(k) ?? null, 4)) console.log(`    ≠ клієнт №${[...a.keys()].indexOf(k) + 1}: ${d}`);
+      }
+    }
+  }
 }
 
 /** Один виклик обробника. `fresh` — перед викликом скинути пам'ять відповіді, щоб міряти саме збирання. */
@@ -225,6 +268,7 @@ try {
       console.log(`  дані за час заміру ${stable ? "не зрушили (інша == інша)" : "ЗРУШИЛИ (інша ≠ інша) — порівняння відповідей ненадійне, повторити"}`);
       console.log(`  відповідь ${same ? "ТА САМА (відбитки збіглись)" : "🔴 РІЗНА"}: інша ${o1.hash} / ${o2.hash} · ця ${m1.hash} / ${m2.hash}`);
       if (!same) for (const d of diffPaths(o2.body, m2.body)) console.log("    ≠ " + d);
+      if (flag("pairs") != null) await pairs(mine, other, m2.body);
       if (explainN) await explain(mine, m2.recs, explainN);
       console.log("\nНічого не записано.");
     }
