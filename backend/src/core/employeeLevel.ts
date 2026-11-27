@@ -94,6 +94,9 @@ export async function promoteToPro(db: Db, actorId: number, id: number, body: { 
     `INSERT INTO employee_levels (employee_id, level, from_month, note, created_by) VALUES ($1, 'pro', $2, $3, $4) RETURNING id`,
     [id, month, note, actorId])).rows[0].id;
   await audit(db, actorId, id, e.full_name, "employees.level", { to: "pro", from_month: month, comment: note, levelId: lid });
+  // відкрита заявка менеджера на «Профі» (кабінет «Зарплати», задача 10723) — погоджена цим переводом
+  await db.query(`UPDATE payroll_level_requests SET decided_at = now(), decided_by = $2, decision = 'approved', note = $3
+                   WHERE decided_at IS NULL AND user_id = (SELECT user_id FROM employees WHERE id = $1)`, [id, actorId, note]);
   return { level: "pro" as const, from: month };
 }
 

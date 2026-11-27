@@ -8756,3 +8756,25 @@ SELECT 'ba', min(u.id) FROM users u
  WHERE u.is_active AND (u.full_name ILIKE '%Протас%' OR e2.full_name ILIKE '%Протас%')
 HAVING count(*) = 1
 ON CONFLICT (role_key) DO NOTHING;
+
+-- 🎚 ЗАЯВКА МЕНЕДЖЕРА НА «ПРОФІ» (задача 10723, варіант В1, «роби» Романа 27.11.2026). Кнопка в кабінеті більше не міняє рівень
+-- сама: вона подає заявку, а рішення за керівництвом («Найм» головний). Погоджують Сергій (ОД), рекрутер і адміни — право
+-- `payroll_level_approve`. Погодження = «Перевести на «Профі»» у картці «Найму» (закриває заявку); далі фінансист підтверджує
+-- рівень у «Змінах з «Найму»», як і раніше. Відкрита заявка на людину — одна.
+CREATE TABLE IF NOT EXISTS payroll_level_requests (
+  id           SERIAL PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  level        TEXT NOT NULL DEFAULT 'profi' CHECK (level IN ('profi')),
+  from_month   DATE NOT NULL,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at   TIMESTAMPTZ,
+  decided_by   INTEGER REFERENCES users(id),
+  decision     TEXT CHECK (decision IN ('approved', 'rejected')),
+  note         TEXT,
+  CHECK ((decided_at IS NULL) = (decision IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_level_requests_open ON payroll_level_requests (user_id) WHERE decided_at IS NULL;
+UPDATE roles SET permissions = permissions || '{"payroll_level_approve":true}'::jsonb WHERE key IN ('admin', 'opdir', 'hr');
+UPDATE roles SET permissions = permissions - 'payroll_level_approve' WHERE key NOT IN ('admin', 'opdir', 'hr');
+-- 🔒 Не для AI-запитів, як і решта зарплатних таблиць. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON payroll_responsibles, payroll_level_requests FROM ai_readonly;

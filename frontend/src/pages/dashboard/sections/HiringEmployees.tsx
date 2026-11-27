@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
   startDismissal, dismissNeedsConfirm, finishDismissal, revertDismissal, setDismissDate, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
-  fetchPeoplePhotos, EMP_CATEGORIES, empCategoryLabel, EMP_LEVEL_LABEL, promoteEmployeeLevel, cancelEmployeeLevel, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles, setEmployeeTeam,
+  fetchPeoplePhotos, EMP_CATEGORIES, empCategoryLabel, EMP_LEVEL_LABEL, promoteEmployeeLevel, cancelEmployeeLevel, rejectLevelRequest, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles, setEmployeeTeam,
   type EmployeeAccount, type EmployeeAccountCan, type RoleDef,
   type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
@@ -378,6 +378,13 @@ function LevelField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast; o
     catch (e) { setErr(hiringError(e)); }
     setBusy(false);
   };
+  const reject = async () => {
+    if (!row.user_id) return;
+    setBusy(true);
+    try { await rejectLevelRequest(Number(row.user_id), comment.trim()); toast(`${row.full_name}: заявку на «Профі» відхилено`); setComment(""); onSaved(); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
   const cancel = async () => {
     setBusy(true);
     try { await cancelEmployeeLevel(row.id); toast(`${row.full_name}: перехід скасовано`); onSaved(); }
@@ -393,6 +400,16 @@ function LevelField({ row, toast, onSaved }: { row: EmployeeRow; toast: Toast; o
         {row.level === "start" && !open && <button className="hr-btn xs p" disabled={busy} onClick={() => setOpen(true)}>Перевести на «Профі»</button>}
         {row.level === "pro" && <span className="hr-muted" style={{ fontSize: 12.5 }}>«Профі» назад на «Старт» не переводять</span>}
       </div>
+      {row.level_request && row.level === "start" && (
+        <div className="emp-level-req">
+          <b>Менеджер просить «Профі» з {monthName(`${row.level_request.from}-01`)}</b> (заявка з кабінету «Зарплати», {row.level_request.at.slice(0, 10).split("-").reverse().join(".")}).
+          {" "}Погодити — «Перевести на «Профі»» вище. Відхилити:
+          <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+            <input className="hr-inp" style={{ flex: 1, minWidth: 220 }} value={comment} disabled={open} onChange={(e) => setComment(e.target.value)} placeholder="коментар менеджеру (необовʼязково)" />
+            <button className="hr-btn" disabled={busy || open} onClick={() => void reject()}>Відхилити заявку</button>
+          </div>
+        </div>
+      )}
       {open && (
         <div className="emp-level-form">
           <label><span>З якого місяця</span>

@@ -89,6 +89,7 @@ export const MANIFEST_FILES: string[] = [
   "payroll/clearanceHr.test.js",
   "payroll/dismissed.test.js",
   "payroll/accrualsTable.test.js",
+  "payroll/levelRequest.test.js",
   "core/receivablesFxSql.test.js",
   "core/dealFinFields.test.js",
   "core/taskVisibility.test.js",
@@ -498,6 +499,8 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "payroll_advances", "payroll_advance_lines", "payroll_ttn_seen", "payroll_ttn_legacy", "payroll_archive", "payroll_offer_docs",
   "payroll_clearances", "payroll_clearance_signatures", "payroll_clearance_drafts", "payroll_clearance_files", "payroll_history",
   "notify_rules", "notifications", "notification_recipients", "payroll_reminders", "payroll_client_rates", "payroll_adjustments", "payroll_dept_map",
+  // 🎚 27.11.2026: відповідальні «Зарплати» і заявки «Старт → Профі» (задача 10723)
+  "payroll_responsibles", "payroll_level_requests",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -2932,6 +2935,11 @@ export const MANIFEST_TESTS: string[] = [
   "#11330 ТІМЛІД: маржа команди — база відсотка, власна маржа — окремим полем, у % не йде",
   "#11331 ГРУПИ «НАРАХУВАНЬ»: кожен рівно раз, тімлід першим, без команди — внизу",
   "#11332 ЕКРАН «НАРАХУВАНЬ»: тімлід — власна окремо «у % не йде», маржа команди з міткою; сума % у гривнях; групи",
+  // payroll/levelRequest.test.ts — «Старт → Профі» лише через керівництво: кнопка кабінету = заявка (Роман 27.11)
+  "#11340 КНОПКА «ПРОФІ» В КАБІНЕТІ — ЗАЯВКА: рівень не пишеться; підтвердження фінансиста з «Найму» — пише",
+  "#11341 СПОВІЩЕННЯ ЗАЯВКИ: тим, хто погоджує, → картка «Найму»; закривається рішенням; відмова — менеджеру",
+  "#11342 ПОГОДЖЕННЯ: право — адмін, ОД, HR; «Перевести на «Профі»» у «Наймі» закриває заявку; одна відкрита; не для AI",
+  "#11343 ЕКРАНИ: кабінет — «Подати заявку» і «чекає рішення»; картка «Найму» — заявка й «Відхилити заявку»",
   // payroll/dismissed.test.ts — звільнені з «Найму» і «0 угод у місяці звільнення → 0» (Тетяна 25.11, «роби» Романа 27.11)
   "#11320 ЗВІЛЬНЕНИЙ БЕЗ УГОД: 0 зараз і при плані — без ставки, ДН і постійного бонусу; виплату не блокує",
   "#11321 ЗВІЛЬНЕНИЙ З УГОДОЮ: лише відсоток, без ставки; виплата чекає обхідного",

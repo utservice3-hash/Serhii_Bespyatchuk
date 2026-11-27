@@ -178,6 +178,9 @@ export async function cabinet(db: Db, v: Viewer) {
     clearance: clearanceOut(e, id, id),
     cards: await cardsOf(db, v.userId), cardsAvailable: cardsAvailable(), payouts: paidMonths, advances, offers,
     levelChangeInfo: await levelChangeInfoOf(db, v.userId, live),
+    // заявка на «Профі» (В1, 27.11.2026): відкрита або остання вирішена — без того, хто вирішував
+    levelRequest: (() => { const q = (e.state.levelRequests ?? {})[id] as Record<string, unknown> | undefined;
+      return q ? { from: q.from, requestedAt: q.requestedAt, decidedAt: q.decidedAt, decision: q.decision, note: q.note } : null; })(),
     // блок «Дні народження · місяць» прибрано з кабінету (задача 10723, Тетяна 23.11.2026: «від нього нічого не залежить»)
     advanceRemind: (await db.query(`SELECT 1 FROM payroll_reminders WHERE user_id = $1 AND month = $2::date AND kind = 'advance' AND sent_at IS NULL`, [v.userId, monthStart(live)])).rowCount! > 0,
   };
@@ -370,21 +373,37 @@ async function setLevel(c: PoolClient, empId: number, level: "start" | "profi", 
   await c.query(`INSERT INTO payroll_terms (user_id, valid_from, level, reason, changed_by, auto) VALUES ($1, $2::date, $3, $4, $5, $6)`, [empId, monthStart(fromMk), level, reason, by, auto]);
   await c.query(`UPDATE payroll_offer_docs SET void_at = now() WHERE user_id = $1 AND signed_at IS NULL AND void_at IS NULL`, [empId]);
 }
+/**
+ * Кнопка «Профі» в кабінеті — ЗАЯВКА, а не перехід (задача 10723, варіант В1, «роби» Романа 27.11.2026: «на Профі не можна
+ * перейти без керівництва»). Рівень у «Зарплаті» не міняється: заявку отримують ОД, рекрутер і адміни (`payroll_level_approve`),
+ * рішення — у картці «Найму» («Перевести на «Профі»» закриває заявку як погоджену), далі фінансист підтверджує рівень у
+ * «Змінах з «Найму»», як і раніше. Відкрита заявка — одна (унікальний індекс).
+ */
 export async function chooseProfi(pool: Pool, v: Viewer) {
-  const id = String(v.userId); let task: Record<string, unknown> | null = null;
+  const id = String(v.userId);
   await tx(pool, async (c) => {
     const e = await engine(c, { fresh: true }); const p = e.zp.person(id);
     if (!p || p.role !== "manager") fail(403, "Рівень обирає лише менеджер з продажу.");
     if (e.zp.offerCode(p) !== "std") fail(409, "Офер команди Лілії: «Профі» — автоматично, коли маржа понад поріг два місяці поспіль.");
+    if (p.leave) fail(409, "Звільнення оформлено — заявку на «Профі» подати не можна.");
     const live = e.zp.liveMonth, nm = nextMonth(live);
     if (e.zp.levelOf(p, live) === "profi") fail(409, "Ви вже на «Профі».");
     if (e.zp.levelChangeAfter(p, live)) fail(409, "Зміну рівня з наступного місяця вже заплановано.");
-    await setLevel(c, v.userId, "profi", nm, "вибір менеджера", v.userId, false);
-    const d = await c.query<{ id: string }>(`INSERT INTO payroll_offer_docs (user_id, offer_title, level, valid_from, why) VALUES ($1, $2, 'profi', $3::date, 'вибір менеджера') RETURNING id::text`, [v.userId, OFFER_TITLES.profi, monthStart(nm)]);
-    await history(c, v.userId, v.userId, `Рівень: «Профі» з ${nm}`, "вибір менеджера");
-    task = { id: Number(d.rows[0].id), level: "profi", from: monthStart(nm), due: `${nm}-05`, why: "вибір менеджера", created: kyivNow() };
+    await c.query(`INSERT INTO payroll_level_requests (user_id, level, from_month) VALUES ($1, 'profi', $2::date)`, [v.userId, monthStart(nm)])
+      .catch((err: { code?: string }) => { if (err.code === "23505") fail(409, "Заявку на «Профі» вже подано — чекає рішення керівництва."); throw err; });
+    await history(c, v.userId, v.userId, `Заявка на «Профі» з ${nm}`, "вибір менеджера; чекає рішення керівництва");
   });
-  await after(pool, (e) => e.nt.build.offerTask(id, task));
+  await after(pool, (e) => e.nt.build.levelRequested(id));
+  return { ok: true, requested: true };
+}
+/** Відхилити заявку на «Профі» (ОД, рекрутер, адміни). Погодження — «Перевести на «Профі»» у картці «Найму». */
+export async function rejectLevelRequest(pool: Pool, v: Viewer, uid: number, body: Record<string, unknown>) {
+  const note = String(body.note ?? "").trim().slice(0, 300) || null;
+  const r = await pool.query(`UPDATE payroll_level_requests SET decided_at = now(), decided_by = $2, decision = 'rejected', note = $3
+                               WHERE user_id = $1 AND decided_at IS NULL RETURNING id`, [uid, v.userId, note]);
+  if (!r.rowCount) fail(409, "Відкритої заявки немає — її вже вирішили.");
+  await history(pool, v.userId, uid, "Заявку на «Профі» відхилено", note);
+  await after(pool, (e) => e.nt.build.levelRejected(String(uid)));
   return { ok: true };
 }
 

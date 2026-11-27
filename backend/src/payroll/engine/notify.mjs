@@ -23,6 +23,8 @@ export const NOTIFICATION_TYPES = Object.freeze({
   'ttn.fix': ['ТТН', false, 'ТТН закрито — утримання знято', 'менеджер'],
   'bday': ['Дні народження', false, 'Місяць дня народження', 'іменинник; фінансисти — до відома'],
   'lvl': ['Рівень', false, 'Перехід на «Профі», новий офер', 'менеджер; фінансисти — до відома'],
+  // заявка менеджера на «Профі» (задача 10723, В1, «роби» Романа 27.11.2026): рішення — у картці «Найму»
+  'lvl.req': ['Рівень', true, 'Заявка менеджера на «Профі»', 'ОД, рекрутер, адміни — погодити чи відхилити в «Наймі»'],
   'offer': ['Документи', true, 'Новий офер — перепідписати', 'рекрутер — задача'],
 });
 
@@ -164,6 +166,18 @@ export function createNotifier(zp, state) {
         make('lvl', task.created, [p.id], { empId: p.id, title: `З ${ddy(task.from)} — ${task.level === 'profi' ? '«Профі»' : '«Старт»'}`, text: `Новий офер — у ваших документах; рекрутер ${R.hr.name} зв’яжеться для підпису.`, go: inCab('terms') }),
       ];
     },
+    /** Заявка на «Профі» (state.levelRequests[empId]) — тим, хто погоджує (state.levelApprovers); закривається рішенням */
+    levelRequested(empId) {
+      const p = P(empId), q = state.levelRequests[empId];
+      return [make('lvl.req', q.requestedAt, state.levelApprovers || [], { empId: p.id, cta: 'До картки в «Наймі»', title: `Заявка на «Профі» — ${p.name}`,
+        text: `Просить «Профі» з ${ddy(`${q.from}-01`)}. Погодити — «Перевести на «Профі»» у картці «Найму», відхилити — там само.`,
+        go: { section: 'hiring', query: q.employeeId ? `?tab=emp&employee=${q.employeeId}` : '?tab=emp' }, done: { kind: 'lvl.decided', empId: p.id, reqId: q.id } })];
+    },
+    /** Заявку на «Профі» відхилено — менеджеру */
+    levelRejected(empId) {
+      const q = state.levelRequests[empId];
+      return [make('lvl', q.decidedAt, [empId], { empId, title: 'Заявку на «Профі» відхилено', text: q.note ? `Коментар: ${q.note}` : 'Лишаєтесь на «Старті». Питання — до керівника.', go: inCab('terms') })];
+    },
     offerSigned(empId, task, at) {
       return [make('lvl', at, [empId], { empId, title: 'Новий офер підписано', text: `${OFFER_TITLES[task.level]} — діє з ${ddy(task.from)}.`, go: inCab('terms') })];
     },
@@ -190,6 +204,7 @@ export function createNotifier(zp, state) {
     switch (r.kind) {
       case 'clr.items': { if (!clr) return null; const ats = r.keys.map(k => clr.signatures[k] && clr.signatures[k].at); return ats.every(Boolean) ? ats.sort().pop() : null; }
       case 'clr.shots': return clr && clr.shots ? clr.shots.at : null;
+      case 'lvl.decided': { const q = (state.levelRequests || {})[r.empId]; return !q ? null : q.id !== r.reqId ? true : q.decidedAt; }
       case 'clr.final': return clr && clr.signatures.pay ? clr.signatures.pay.at : null;
       case 'month.verified': return zp.employees.some(x => { const y = zp.record(x.id, r.month); return y && y.status === 'review'; }) ? null : true;
       case 'rec.answered': { const x = zp.record(r.empId, r.month); if (!x) return null; if (['agreed', 'submitted', 'paid'].includes(x.status)) return x.agreedAt || true; return x.status === 'disputed' && x.dispute && x.dispute.at >= r.since ? x.dispute.at : null; }

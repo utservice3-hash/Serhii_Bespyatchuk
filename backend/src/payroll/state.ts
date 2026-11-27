@@ -306,6 +306,18 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       // строк підпису — 5-те число місяця, з якого діє офер (як у задачі, що створює service)
       return { id: Number(t.id), empId: String(t.user_id), title: t.offer_title, level: t.level, from, due: `${from.slice(0, 7)}-05`, why: t.why, createdAt: kyivIso(t.created_at), signedAt: kyivIso(t.signed_at), doneAt: kyivIso(t.signed_at), voidAt: kyivIso(t.void_at) }; });
 
+  // ---------- заявки менеджерів на «Профі» (задача 10723, В1, «роби» Романа 27.11): остання заявка людини; хто погоджує ----------
+  const levelRequests: Record<string, unknown> = {};
+  for (const r of (await db.query<{ id: string; user_id: number; level: string; from_month: string; requested_at: Date; decided_at: Date | null; decision: string | null; note: string | null; employee_id: number | null }>(
+    `SELECT DISTINCT ON (q.user_id) q.id::text, q.user_id, q.level, to_char(q.from_month, 'YYYY-MM') AS from_month, q.requested_at, q.decided_at, q.decision, q.note,
+            (SELECT max(e.id) FROM employees e WHERE e.user_id = q.user_id) AS employee_id
+       FROM payroll_level_requests q ORDER BY q.user_id, q.id DESC`)).rows)
+    levelRequests[String(r.user_id)] = { id: Number(r.id), level: r.level, from: r.from_month, requestedAt: kyivIso(r.requested_at), decidedAt: kyivIso(r.decided_at), decision: r.decision, note: r.note,
+      employeeId: r.employee_id };
+  const levelApprovers = (await db.query<{ id: number }>(
+    `SELECT u.id FROM users u JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
+      WHERE u.is_active AND (r.permissions ->> 'payroll_level_approve') = 'true' ORDER BY u.id`)).rows.map((r) => String(r.id));
+
   const settings = { ...(setQ.rows[0]?.settings ?? {}) } as Record<string, unknown>;
   settings.kpi = { ...(settings.kpi as object ?? {}), ...OFFER_KPI };   // умови оферу — не налаштування: їх не перекриває версія з БД
   settings.birthday = { ...(settings.birthday as object ?? {}), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — теж не налаштування
@@ -313,7 +325,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   return {
     now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, payWording: "approved", ttnLegacy, dismissZero: true,
     records, advances, archive, clientHistory: {}, clearances, responsibles: await loadResponsibles(db), tasks, holidays: [],
-    meta: { managerOf },
+    levelRequests, levelApprovers, meta: { managerOf },
   };
 }
 
