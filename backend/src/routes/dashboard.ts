@@ -36,7 +36,7 @@ import { kommoLeadUrl, kommoCompanyUrl, kommoContactUrl } from "../core/kommoLin
 import { clientKommoTargets } from "../core/clientKommoLinks.js";
 import { clientPhoneBook, PHONE_BOOK_DAYS } from "../core/clientPhoneBook.js";
 import { clientCodeGroups } from "../core/clientCodes.js";
-import { loadNoDeal } from "../core/securityNoDeal.js";
+import { loadNoDeal, parseNoDealFilter } from "../core/securityNoDeal.js";
 import type { Db as LedgerDb } from "../core/finance.js";
 import { adClientLinks, type AdClientKommoTarget } from "../core/adClientLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
@@ -12757,6 +12757,9 @@ dashboardRouter.get("/missed-calls/no-deal/list", async (req, res) => {
  * тут ні SQL, ні підсумків. Межа — вкладка `security` (`routeTab`): адміністратор і операційний директор, решта 403
  * ще до обробника. Скоупу немає свідомо: це документи компанії, а не чиїсь угоди.
  */
-dashboardRouter.get("/security/no-deal", async (_req, res) => {
-  res.json(await loadNoDeal(pool as unknown as LedgerDb));
+dashboardRouter.get("/security/no-deal", async (req, res) => {
+  // 🔎 Фільтр екрана (період, організація; вид завжди «клієнтські», рішення Романа 27.11.2026) розбирає й застосовує ядро; тут лише відмова на нерозбірливе.
+  const parsed = parseNoDealFilter(req.query as Record<string, unknown>);
+  if ("error" in parsed) return res.status(400).json({ error: parsed.error });
+  res.json(await loadNoDeal(pool as unknown as LedgerDb, parsed.filter));
 });

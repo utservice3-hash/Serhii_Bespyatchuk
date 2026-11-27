@@ -6690,13 +6690,34 @@ export interface SecurityNoDealDoc {
   dealRaw: string | null; manager: string | null; comment: string | null;
 }
 export interface SecurityNoDealTotals { docs: number; uah: number; fx: { currency: string; sum: number; docs: number }[]; kontragents: number; unnamed: { docs: number; uah: number } }
+/** Вид документів. Екран завжди отримує `client` (є платник, організація не внутрішня, сума не нуль, платник не тестовий): рішення Романа 27.11.2026. */
+export type SecurityNoDealScope = "client" | "other" | "all";
+export type SecurityNoDealReason = "test" | "zero" | "internal" | "unnamed";
+export interface SecurityNoDealFilter { from: string | null; to: string | null; orgs: string[] | null; scope: SecurityNoDealScope }
+export interface SecurityNoDealCount { docs: number; uah: number }
+/**
+ * Список під фільтром. Переліки варіантів сервер рахує БЕЗ власного фільтра: `orgs` без організації, `months` без періоду —
+ * тому вибраний варіант не прибирає решту з екрана. `scopes.other` і `reasons` — лише ЧИСЛА відсіяних (не клієнтських)
+ * документів за той самий період і організацію; самих документів у відповіді немає.
+ */
+export interface SecurityNoDealView {
+  totals: SecurityNoDealTotals; docs: SecurityNoDealDoc[];
+  orgs: ({ name: string } & SecurityNoDealCount)[]; months: ({ ym: string } & SecurityNoDealCount)[];
+  scopes: Record<"client" | "other", SecurityNoDealCount>; reasons: ({ reason: SecurityNoDealReason } & SecurityNoDealCount)[]; all: number;
+}
 export interface SecurityNoDeal {
   from: string;
+  filter: SecurityNoDealFilter;
   snapshot: { syncedAt: string | null; error: string | null; older: number | null; undated: number | null };
   unpaidState: { syncedAt: string | null; error: string | null };
-  lists: Record<SecurityNoDealList, { totals: SecurityNoDealTotals; docs: SecurityNoDealDoc[] }>;
+  lists: Record<SecurityNoDealList, SecurityNoDealView>;
 }
-export const fetchSecurityNoDeal = async () => (await api.get<SecurityNoDeal>("/dashboard/security/no-deal")).data;
+export const fetchSecurityNoDeal = async (f: { from?: string; to?: string; orgs?: readonly string[] }) =>
+  (await api.get<SecurityNoDeal>("/dashboard/security/no-deal", {
+    params: { ...(f.from ? { from: f.from } : {}), ...(f.to ? { to: f.to } : {}), ...(f.orgs?.length ? { org: [...f.orgs] } : {}) },
+    // `org=А&org=Б`, без дужок: так сервер читає і один вибір, і кілька.
+    paramsSerializer: { indexes: null },
+  })).data;
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
 export const runCarrierPayments = async () => (await api.post<{ ok: boolean; result: unknown }>("/finance/payments/run")).data;
 /** ✋ «Погоджено» / «Скасувати» і коментар до запиту (26.10.2026). Не передане поле лишається як було. */

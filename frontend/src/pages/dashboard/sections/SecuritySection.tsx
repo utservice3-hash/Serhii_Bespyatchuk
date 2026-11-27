@@ -1,22 +1,32 @@
-import { useEffect, useMemo, useState } from "react";
-import { fetchSecurityNoDeal, hiringError, type SecurityNoDeal, type SecurityNoDealDoc, type SecurityNoDealList } from "../../../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchSecurityNoDeal, hiringError, type SecurityNoDeal, type SecurityNoDealDoc, type SecurityNoDealList, type SecurityNoDealReason } from "../../../api";
+import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
+import { HelpTip } from "./HelpTip";
 
 /**
- * 🛡 «БЕЗПЕКА» · ОПЕРАЦІЇ 1С БЕЗ УГОДИ (задача 11231; Роман 27.11.2026: «давай додамо вкладку безпека тільки для адмінів і оп
- * дира, де будемо це рахувати, роби, зроби гарний інтерфейс»).
+ * 🛡 «БЕЗПЕКА» · ДОКУМЕНТИ 1С БЕЗ УГОДИ (задача 11231; Роман 27.11.2026: «давай додамо вкладку безпека тільки для адмінів і оп
+ * дира»; того ж дня: «таку саму шапку, як і у звіті… забери зайвий текст, додай знаки питання» і «нам потрібно бачити
+ * рахунки, які не підкріплені до угоди, які міг виставити менеджер або бухгалтерія»).
  *
- * Три плитки = три списки документів 1С, у яких не вказано угоду CRM: реалізації, оплати клієнтів, неоплачені рахунки.
- * Числа плиток рахує сервер із тих самих рядків, що лежать у списку (`core/securityNoDeal.ts`, гейт `#11248`); тут — лише
- * вигляд: згортання за контрагентом, місяць, пошук. Фільтр звужує СПИСОК і рядок «показано», плитка лишається повною —
- * інакше головне число екрана змінювалось би від пошуку.
+ * Три плитки = три списки документів 1С без угоди CRM: реалізації, оплати, неоплачені рахунки. Період і організацію
+ * застосовує СЕРВЕР (`core/securityNoDeal.ts`): плитка рахується з тих самих рядків, що лежать у списку, тож під будь-яким
+ * фільтром плитка = сума списку (гейти `#11248`, `#11260`). Тут — лише вигляд: згортання за контрагентом, сортування,
+ * пошук. Пошук звужує список і рядок «показано», плитку не чіпає.
+ * 🔴 На вкладці ЛИШЕ КЛІЄНТСЬКІ документи (рішення Романа 27.11.2026, картка «Лише клієнтські»): внутрішні організації,
+ * надходження без платника, нульові й тестові сервер сюди не віддає. Перемикача «показати все» немає свідомо; під «?»
+ * стоїть лише число відсіяних із причинами, щоб нова хвиля таких документів не лишилась непоміченою.
  * ⚠️ Валюта ніде не додається до гривні: у валютного документа сума стоїть зі своєю валютою, у підсумках — окремим рядком.
  * ⚠️ Порожній список до першого синку — це «ще не знаємо», і екран каже саме так (знімок пишеться щогодини о :45).
+ * Пояснення живуть під «?» (`HelpTip`), а не абзацами на екрані.
  */
 const LISTS: { key: SecurityNoDealList; title: string; doc: string; hint: string }[] = [
-  { key: "invoice", title: "Реалізації без угоди", doc: "Реалізація", hint: "Документи реалізації 1С, де не вказано угоду CRM" },
-  { key: "payment", title: "Оплати без угоди", doc: "Оплата", hint: "Надходження грошей у 1С, де не вказано угоду CRM" },
-  { key: "unpaid", title: "Неоплачені рахунки без угоди", doc: "Рахунок", hint: "Виставлені й досі не оплачені рахунки 1С без угоди CRM; сума — залишок до оплати" },
+  { key: "invoice", title: "Реалізації без угоди", doc: "Реалізація", hint: "Документи реалізації 1С, де не вказано угоду CRM. Сума документа." },
+  { key: "payment", title: "Оплати без угоди", doc: "Оплата", hint: "Надходження грошей у 1С, де не вказано угоду CRM. Ті самі клієнти можуть стояти і в реалізаціях: плитки не додавайте." },
+  { key: "unpaid", title: "Неоплачені рахунки без угоди", doc: "Рахунок", hint: "Виставлені й досі не оплачені рахунки 1С без угоди CRM. Сума тут це залишок до оплати." },
 ];
+const REASONS: Record<SecurityNoDealReason, string> = {
+  internal: "внутрішні організації", unnamed: "без платника", zero: "із сумою 0", test: "тестові (перевірка інтеграції)",
+};
 const UNNAMED = "(без назви контрагента)";
 const MONTHS = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"];
 const MONTHS_FULL = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
@@ -93,86 +103,161 @@ function MoreRow({ hidden, onClick }: { hidden: number; onClick: () => void }) {
   );
 }
 
+type SortBy = "sum" | "date";
+interface Sort { by: SortBy; desc: boolean }
+/** Заголовок колонки, за якою можна сортувати: клік по іншій колонці ставить її «більші / новіші зверху», повторний клік перевертає. */
+function SortTh({ label, by, sort, onSort, right }: { label: string; by: SortBy; sort: Sort; onSort: (s: Sort) => void; right?: boolean }) {
+  const on = sort.by === by;
+  return (
+    <th style={{ ...th, textAlign: right ? "right" : "left" }} aria-sort={on ? (sort.desc ? "descending" : "ascending") : "none"}>
+      <button type="button" onClick={() => onSort({ by, desc: on ? !sort.desc : true })} title="Сортувати"
+        style={{ font: "inherit", letterSpacing: "inherit", textTransform: "inherit", border: 0, background: "none", padding: 0, cursor: "pointer", color: on ? "var(--text)" : "var(--text-muted)" }}>
+        {label} <span aria-hidden>{on ? (sort.desc ? "▼" : "▲") : "↕"}</span>
+      </button>
+    </th>
+  );
+}
+const monthEnd = (ym: string) => { const [y, m] = ym.split("-").map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; };
+
 export function SecuritySection() {
   const [data, setData] = useState<SecurityNoDeal | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [list, setList] = useState<SecurityNoDealList>("payment");
+  // Шапка як у Звіті: швидкі періоди + довільний. «Весь час» тут = з початку року, з якого 1С віддає документи.
+  const [range, setRange] = useState<{ from: string; to: string }>({ from: "", to: "" });
+  const [preset, setPreset] = useState<string | null>("alltime");
+  const [orgs, setOrgs] = useState<readonly string[]>([]);
   const [grouped, setGrouped] = useState(true);
-  const [onlyUnnamed, setOnlyUnnamed] = useState(false);
-  const [month, setMonth] = useState<string | null>(null);
+  const [sort, setSort] = useState<Sort>({ by: "sum", desc: true });
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  // Довгий список (199 оплат без назви контрагента) розгортаємо порцією: решта — кнопкою, і кнопка називає, скільки сховано.
+  // Довгий список розгортаємо порцією: решта — кнопкою, і кнопка називає, скільки сховано.
   const [full, setFull] = useState<ReadonlySet<string>>(new Set());
+  const seq = useRef(0);
 
-  useEffect(() => { fetchSecurityNoDeal().then((d) => { setData(d); setErr(null); }).catch((e) => setErr(hiringError(e))); }, []);
-  // Інший список — інші контрагенти й місяці: розгорнуті групи й місяць попереднього списку тут нічого не означають.
-  useEffect(() => { setOpen(new Set()); setFull(new Set()); setMonth(null); }, [list]);
+  useEffect(() => {
+    // Відповідь на старіший запит не має перекрити новішу: швидкі кліки по періодах приходять не за порядком.
+    const mine = ++seq.current;
+    setBusy(true);
+    fetchSecurityNoDeal({ from: range.from, to: range.to, orgs })
+      .then((d) => { if (mine === seq.current) { setData(d); setErr(null); } })
+      .catch((e) => { if (mine === seq.current) setErr(hiringError(e)); })
+      .finally(() => { if (mine === seq.current) setBusy(false); });
+  }, [range.from, range.to, orgs]);
+  // Інший список чи інший фільтр — інші контрагенти: розгорнуті групи попереднього набору тут нічого не означають.
+  useEffect(() => { setOpen(new Set()); setFull(new Set()); }, [list, range.from, range.to, orgs]);
 
   const meta = LISTS.find((l) => l.key === list)!;
-  const all = data?.lists[list].docs ?? [];
+  const view = data?.lists[list];
+  const all = view?.docs ?? [];
   const needle = q.trim().toLowerCase();
-  // Місяць НЕ входить у базу стовпчиків: стовпчики показують увесь список, а вибраний місяць лише підсвічено.
-  const base = useMemo(() => all.filter((d) => (!onlyUnnamed || !d.kontragent)
-    && (!needle || [d.kontragent, d.comment, d.number, d.organization, d.edrpou, d.dealRaw, d.manager].some((v) => v?.toLowerCase().includes(needle)))),
-  [all, onlyUnnamed, needle]);
-  const shown = useMemo(() => (month ? base.filter((d) => d.date?.slice(0, 7) === month) : base), [base, month]);
+  const shown = useMemo(() => {
+    const rows = needle ? all.filter((d) => [d.kontragent, d.comment, d.number, d.organization, d.edrpou, d.dealRaw, d.manager].some((v) => v?.toLowerCase().includes(needle))) : [...all];
+    const dir = sort.desc ? -1 : 1;
+    // Валютний документ у порядку за сумою йде після гривневих: його сума в іншій валюті, і ставити її в один ряд із гривнею не можна.
+    const key = (d: SecurityNoDealDoc) => (isUah(d.currency) ? d.sum : -1);
+    return rows.sort((a, b) => (sort.by === "sum" ? (key(a) - key(b)) * dir : (a.date ?? "").localeCompare(b.date ?? "") * dir) || (b.date ?? "").localeCompare(a.date ?? ""));
+  }, [all, needle, sort]);
 
   const bars = useMemo(() => {
-    if (!data) return [];
+    if (!data || !view) return [];
     const now = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7);
-    const last = base.reduce((m, d) => (d.date && d.date.slice(0, 7) > m ? d.date.slice(0, 7) : m), now);
+    const last = view.months.reduce((m, b) => (b.ym > m ? b.ym : m), now);
+    const by = new Map(view.months.map((b) => [b.ym, b]));
     const out: { ym: string; sum: number; docs: number }[] = [];
     for (let ym = data.from.slice(0, 7); ym <= last && out.length < 36;) {
-      out.push({ ym, sum: 0, docs: 0 });
+      out.push({ ym, sum: by.get(ym)?.uah ?? 0, docs: by.get(ym)?.docs ?? 0 });
       const [y, m] = ym.split("-").map(Number);
       ym = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
     }
-    const by = new Map(out.map((b) => [b.ym, b]));
-    for (const d of base) { const b = d.date ? by.get(d.date.slice(0, 7)) : undefined; if (b) { b.docs++; if (isUah(d.currency)) b.sum += d.sum; } }
     return out;
-  }, [base, data]);
+  }, [data, view]);
   const barMax = Math.max(1, ...bars.map((b) => b.sum));
 
   const groups = useMemo(() => {
     const m = new Map<string, SecurityNoDealDoc[]>();
     for (const d of shown) { const k = d.kontragent || UNNAMED; const g = m.get(k); if (g) g.push(d); else m.set(k, [d]); }
+    const dir = sort.desc ? -1 : 1;
     return [...m].map(([name, docs]) => {
       const dates = docs.map((d) => d.date).filter((x): x is string => !!x).sort();
       return { name, docs, sum: sumUah(docs), fx: fxLine(docs), from: dates[0] ?? null, to: dates[dates.length - 1] ?? null };
-    }).sort((a, b) => b.sum - a.sum || b.docs.length - a.docs.length);
-  }, [shown]);
-  const groupsAll = useMemo(() => new Set(all.map((d) => d.kontragent || UNNAMED)).size, [all]);
+    }).sort((a, b) => (sort.by === "sum" ? (a.sum - b.sum) * dir : ((sort.desc ? a.to : a.from) ?? "").localeCompare((sort.desc ? b.to : b.from) ?? "") * dir) || b.docs.length - a.docs.length);
+  }, [shown, sort]);
 
-  if (err) return <div style={{ ...card, color: "var(--danger)" }}>Не вдалося відкрити «Безпеку»: {err}</div>;
-  if (!data) return <div style={{ ...card, color: "var(--text-muted)" }}>Завантаження…</div>;
+  if (err && !data) return <div style={{ ...card, color: "var(--danger)" }}>Не вдалося відкрити «Безпеку»: {err}</div>;
+  if (!data || !view) return <div style={{ ...card, color: "var(--text-muted)" }}>Завантаження…</div>;
 
   const state = list === "unpaid" ? data.unpaidState : data.snapshot;
   const year = data.from.slice(0, 4);
-  const filtered = shown.length !== all.length;
   const showAll = (name: string) => setFull((f) => new Set(f).add(name));
   const toggle = (name: string) => setOpen((s) => { const n = new Set(s); if (n.has(name)) n.delete(name); else n.add(name); return n; });
-  const monthLabel = month ? `${MONTHS_FULL[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}` : null;
   const shownFx = fxLine(shown);
+  const inRange = (ym: string) => (range.from || range.to) && (!range.from || monthEnd(ym) >= range.from) && (!range.to || `${ym}-01` <= range.to);
+  const pickMonth = (ym: string) => {
+    const one = range.from === `${ym}-01` && range.to === monthEnd(ym);
+    setRange(one ? { from: "", to: "" } : { from: `${ym}-01`, to: monthEnd(ym) }); setPreset(one ? "alltime" : null);
+  };
+  // Вибрана організація лишається серед чипів, навіть коли в цьому списку її документів немає: інакше її не було б чим зняти.
+  const orgChips = [...view.orgs, ...orgs.filter((o) => !view.orgs.some((x) => x.name === o)).map((name) => ({ name, docs: 0, uah: 0 }))];
+  const toggleOrg = (name: string) => setOrgs((cur) => (cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name]));
 
   return (
-    <div>
-      <h2 style={{ margin: "0 0 6px", fontSize: 22 }}>🛡 Безпека · операції 1С без угоди</h2>
-      <p style={{ margin: "0 0 16px", color: "var(--text-muted)", maxWidth: 900, lineHeight: 1.5 }}>
-        Документи 1С з {dmy(data.from)}, у яких не вказано угоду CRM. Гроші за ними не привʼязані до жодної угоди, тому їх не видно у звітах менеджерів.
-        {data.snapshot.syncedAt ? ` Дані з 1С, оновлено ${at(data.snapshot.syncedAt)}.` : ""} Бачать лише адміністратор і операційний директор.
-      </p>
+    <div data-security>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+        <h2 style={{ margin: 0, fontSize: 22, display: "flex", alignItems: "center", gap: 8 }}>
+          🛡 Безпека · документи 1С без угоди
+          <HelpTip label="Що показує вкладка">
+            Документи 1С з {dmy(data.from)}, у яких не вказано 8-значний номер угоди CRM. У звіти й показники вони не входять.
+            Документ зникне звідси після наступного оновлення (щогодини о 45-й хвилині), щойно в 1С йому вкажуть угоду.
+            Бачать лише адміністратор і операційний директор.
+            {((data.snapshot.older ?? 0) > 0 || (data.snapshot.undated ?? 0) > 0) && (
+              <> Поза екраном лишились документи без угоди: до {year} року {(data.snapshot.older ?? 0).toLocaleString("uk-UA")}, без дати {(data.snapshot.undated ?? 0).toLocaleString("uk-UA")}.</>
+            )}
+          </HelpTip>
+        </h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 12.5, color: "var(--text-muted)" }} data-security-synced>
+            {busy ? "оновлюю…" : state.syncedAt ? `дані 1С на ${at(state.syncedAt)}` : "даних з 1С ще не було"}
+          </span>
+          <DateRangeFilter value={range} onChange={(r) => { setRange(r); setPreset(null); }} />
+        </div>
+      </div>
+      <QuickPeriods active={preset} onSelect={(id, r) => { setPreset(id); setRange(r); }} />
+
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 12 }} data-security-filters>
+        <span style={{ fontSize: 13, color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: 6 }} data-security-rule>
+          Лише клієнтські документи
+          <HelpTip label="Які документи тут показано">
+            Є платник, організація не внутрішня («Облік сейфу», «Підрядник»), сума не нуль, платник не тестовий. Це рахунки й оплати клієнтів,
+            які менеджер або бухгалтерія провели без угоди.
+            {view.reasons.length > 0
+              ? <> Не показано за цей період у списку «{meta.title}»: {view.scopes.other.docs.toLocaleString("uk-UA")} на {uah(view.scopes.other.uah)} ({view.reasons.map((r) => `${REASONS[r.reason]} ${r.docs.toLocaleString("uk-UA")} на ${uah(r.uah)}`).join("; ")}).</>
+              : <> Відсіяних документів за цей період у списку «{meta.title}» немає.</>}
+          </HelpTip>
+        </span>
+        <span aria-hidden style={{ width: 1, height: 22, background: "var(--border-strong)", margin: "0 4px" }} />
+        <button type="button" style={chip(orgs.length === 0)} onClick={() => { if (orgs.length) setOrgs([]); }} aria-pressed={orgs.length === 0}>Усі організації</button>
+        {orgChips.map((o) => (
+          <button key={o.name} type="button" style={chip(orgs.includes(o.name))} onClick={() => toggleOrg(o.name)} aria-pressed={orgs.includes(o.name)}
+            title={`${docsWord(o.docs)}, ${uah(o.uah)}`}>
+            {o.name || "організацію не вказано"} · {o.docs.toLocaleString("uk-UA")}
+          </button>
+        ))}
+      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginBottom: 14 }}>
         {LISTS.map((l) => {
           const t = data.lists[l.key].totals, on = l.key === list;
           const fxDocs = t.fx.reduce((n, f) => n + f.docs, 0);
           return (
-            <button key={l.key} type="button" onClick={() => setList(l.key)} title={l.hint} aria-pressed={on}
-              style={{ font: "inherit", textAlign: "left", cursor: "pointer", padding: "16px 18px", borderRadius: 14, background: "var(--card-bg)", color: "var(--text)",
+            <div key={l.key} role="button" tabIndex={0} aria-pressed={on} data-security-tile={l.key} onClick={() => setList(l.key)}
+              onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setList(l.key); } }}
+              style={{ textAlign: "left", cursor: "pointer", padding: "16px 18px", borderRadius: 14, background: "var(--card-bg)", color: "var(--text)",
                 border: `1.5px solid ${on ? "var(--brand)" : "var(--border)"}`, boxShadow: on ? "0 0 0 3px rgba(197,20,28,0.10)" : "none" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
-                <span>{l.title}</span><span style={{ whiteSpace: "nowrap" }}>{t.docs.toLocaleString("uk-UA")} док.</span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>{l.title}<HelpTip label={l.title}>{l.hint}</HelpTip></span>
+                <span style={{ whiteSpace: "nowrap" }}>{t.docs.toLocaleString("uk-UA")} док.</span>
               </div>
               <div style={{ fontSize: 28, fontWeight: 800, margin: "6px 0 4px", fontVariantNumeric: "tabular-nums" }}>{uah(t.uah)}</div>
               <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
@@ -181,11 +266,12 @@ export function SecuritySection() {
                   : kontrWord(t.kontragents)}
                 {fxDocs > 0 ? ` · ще ${fxDocs} у валюті` : ""}
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
 
+      {err && <div style={{ ...card, marginBottom: 12, color: "var(--danger)" }}>Не вдалося оновити список: {err}. На екрані попередня відповідь.</div>}
       {state.error && (
         <div style={{ ...card, marginBottom: 12, background: "var(--warn-bg)", color: "var(--warn)" }}>
           Останній запис із 1С не вдався: {state.error}. Нижче останні вдалі дані{state.syncedAt ? ` (${at(state.syncedAt)})` : ""}.
@@ -196,18 +282,16 @@ export function SecuritySection() {
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 14 }}>
           <button type="button" style={chip(grouped)} onClick={() => setGrouped(true)}>За контрагентом</button>
           <button type="button" style={chip(!grouped)} onClick={() => setGrouped(false)}>Усі документи</button>
-          <button type="button" style={chip(onlyUnnamed)} onClick={() => setOnlyUnnamed((v) => !v)} aria-pressed={onlyUnnamed}>Лише без контрагента</button>
-          <button type="button" style={chip(month == null)} onClick={() => setMonth(null)}>{monthLabel ? `${monthLabel} ✕` : `Увесь період з ${year}`}</button>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Пошук: контрагент, коментар, номер…" aria-label="Пошук у списку"
             style={{ font: "inherit", fontSize: 13, marginLeft: "auto", minWidth: 300, padding: "7px 12px", borderRadius: 10, border: "1px solid var(--border-strong)", background: "var(--card-bg)", color: "var(--text)" }} />
         </div>
 
-        {bars.length > 0 && all.length > 0 && (
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 86, marginBottom: 14 }} aria-label="Сума документів за місяцями, натисніть місяць, щоб відфільтрувати">
+        {bars.length > 0 && view.all > 0 && (
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 86, marginBottom: 14 }} aria-label="Сума документів за місяцями, натисніть місяць, щоб поставити його періодом">
             {bars.map((b) => {
-              const on = b.ym === month, mi = Number(b.ym.slice(5, 7)) - 1;
+              const on = !!inRange(b.ym), mi = Number(b.ym.slice(5, 7)) - 1;
               return (
-                <button key={b.ym} type="button" onClick={() => setMonth(on ? null : b.ym)} aria-pressed={on}
+                <button key={b.ym} type="button" onClick={() => pickMonth(b.ym)} aria-pressed={on}
                   title={`${MONTHS_FULL[mi]} ${b.ym.slice(0, 4)}: ${docsWord(b.docs)}, ${uah(b.sum)}`}
                   style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 4, padding: 0, border: 0, background: "none", cursor: "pointer", font: "inherit" }}>
                   <span style={{ display: "block", borderRadius: 4, height: b.sum > 0 ? `${Math.max(4, Math.round((b.sum / barMax) * 64))}px` : b.docs > 0 ? "3px" : "1px",
@@ -222,8 +306,8 @@ export function SecuritySection() {
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
-              <th style={th}>Контрагент / документ</th><th style={th}>Дата</th><th style={th}>Організація</th><th style={th}>У полі «угода»</th>
-              <th style={th}>Коментар 1С</th><th style={{ ...th, textAlign: "right" }}>{list === "unpaid" ? "Залишок" : "Сума"}</th>
+              <th style={th}>Контрагент / документ</th><SortTh label="Дата" by="date" sort={sort} onSort={setSort} /><th style={th}>Організація</th><th style={th}>У полі «угода»</th>
+              <th style={th}>Коментар 1С</th><SortTh label={list === "unpaid" ? "Залишок" : "Сума"} by="sum" sort={sort} onSort={setSort} right />
             </tr></thead>
             <tbody>
               {grouped && groups.map((g) => {
@@ -250,9 +334,10 @@ export function SecuritySection() {
               {!grouped && (full.has(FLAT) ? shown : shown.slice(0, PAGE)).map((d, i) => <DocRow key={i} d={d} label={meta.doc} nested={false} />)}
               {!grouped && !full.has(FLAT) && shown.length > PAGE && <MoreRow hidden={shown.length - PAGE} onClick={() => showAll(FLAT)} />}
               {shown.length === 0 && (
-                <tr><td colSpan={6} style={{ ...td, color: "var(--text-muted)", padding: "22px 10px" }}>
-                  {all.length > 0 ? "За цим фільтром документів немає."
-                    : state.syncedAt ? `Документів без угоди з ${dmy(data.from)} немає.`
+                <tr><td colSpan={6} style={{ ...td, color: "var(--text-muted)", padding: "22px 10px" }} data-security-empty>
+                  {view.all > 0
+                    ? "За цим фільтром клієнтських документів без угоди немає."
+                    : state.syncedAt ? `Клієнтських документів без угоди з ${dmy(data.from)} немає.`
                       : "Дані ще не надходили: список зʼявиться після першого запису з 1С (щогодини о :45). Порожньо зараз не означає, що таких документів немає."}
                 </td></tr>
               )}
@@ -261,14 +346,10 @@ export function SecuritySection() {
         </div>
 
         {all.length > 0 && (
-          <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.6 }}>
-            Показано {grouped ? `${kontrWord(groups.length)} з ${groupsAll.toLocaleString("uk-UA")}` : `${docsWord(shown.length)} з ${all.length.toLocaleString("uk-UA")}`}
-            {" · "}Σ = {uah(sumUah(shown))}{filtered ? " (за фільтром)" : " (як на плитці)"}
+          <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--text-muted)" }} data-security-shown>
+            Показано {docsWord(shown.length)} з {all.length.toLocaleString("uk-UA")}{grouped ? `, ${kontrWord(groups.length)}` : ""}
+            {" · "}Σ = {uah(sumUah(shown))}{needle ? " (за пошуком)" : " (як на плитці)"}
             {shownFx ? ` · у валюті окремо: ${shownFx}` : ""}
-            {list !== "unpaid" && ((data.snapshot.older ?? 0) > 0 || (data.snapshot.undated ?? 0) > 0) && (
-              <div>Поза екраном лишились документи без угоди: до {year} року {(data.snapshot.older ?? 0).toLocaleString("uk-UA")}, без дати {(data.snapshot.undated ?? 0).toLocaleString("uk-UA")}.</div>
-            )}
-            <div>У звіти й показники ці документи не входять. Документ зникне звідси після наступного оновлення, щойно в 1С йому вкажуть угоду.</div>
           </div>
         )}
       </div>
