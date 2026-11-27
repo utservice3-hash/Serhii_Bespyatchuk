@@ -124,8 +124,10 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   const empQ = await db.query<{
     user_id: number; role: string; title: string; dept_code: string; team_code: string | null; leads_team_code: string | null; offer_code: string | null;
     start_date: Date; birthday_md: string | null; is_finance: boolean; name: string; manager_id: number | null;
-    leave_date: Date | null; leave_type: string | null;
-  }>(`SELECT pe.*, ${NAME_SQL} AS name, u.manager_id, l.leave_date, l.leave_type
+    leave_date: Date | null; leave_type: string | null; naim_dismissed: string | null;
+  }>(`SELECT pe.*, ${NAME_SQL} AS name, u.manager_id, l.leave_date, l.leave_type,
+             (SELECT CASE WHEN x.status = 'dismissed' THEN to_char(x.dismissed_at, 'YYYY-MM-DD') END FROM employees x WHERE x.user_id = pe.user_id
+               ORDER BY x.id DESC LIMIT 1) AS naim_dismissed
         FROM payroll_employees pe JOIN users u ON u.id = pe.user_id ${NAME_JOIN}
         LEFT JOIN payroll_leaves l ON l.user_id = pe.user_id ORDER BY pe.user_id`);
   const termsQ = await db.query<{ user_id: number; valid_from: Date; level: string | null; rate: string | null; pct_base: string | null; pct_value: string | null; pct_clear: boolean }>(
@@ -157,7 +159,10 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       startDate: dateOnly(r.start_date), birthday: r.birthday_md, terms, official,
       clientRates: crQ.rows.filter((c) => c.user_id === r.user_id).map((c) => ({ id: Number(c.id), client: c.client_key, name: c.client_name, pct: Number(c.pct), from: c.mk })),
       adjustments: adjQ.rows.filter((x) => x.user_id === r.user_id).map((x) => ({ id: Number(x.id), kind: x.kind, amount: Number(x.amount), note: x.note, from: x.f, to: x.t })),
-      leave: r.leave_date ? { date: dateOnly(r.leave_date), type: r.leave_type } : null, isFinance: r.is_finance,
+      // звільнення: оформлене в «Зарплаті» (обхідний, тип за п. 11) — інакше дата з «Найму» з типом `naim` (без ставки й бонусу)
+      // (задача 10723, Тетяна 25.11, «роби» Романа 27.11). Найновіший запис «Найму» на акаунт, як `NAME_JOIN`; у БД нічого не пишемо.
+      leave: r.leave_date ? { date: dateOnly(r.leave_date), type: r.leave_type }
+        : r.naim_dismissed && r.naim_dismissed >= dateOnly(r.start_date) ? { date: r.naim_dismissed, type: "naim" } : null, isFinance: r.is_finance,
     };
   });
   const byManager = new Map<number, string>();
@@ -306,7 +311,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   settings.birthday = { ...(settings.birthday as object ?? {}), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — теж не налаштування
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };
   return {
-    now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, payWording: "approved", ttnLegacy,
+    now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, payWording: "approved", ttnLegacy, dismissZero: true,
     records, advances, archive, clientHistory: {}, clearances, responsibles: await loadResponsibles(db), tasks, holidays: [],
     meta: { managerOf },
   };

@@ -349,7 +349,7 @@ function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel, onMove, names }: { 
               <td><b>{r.name}</b><div className="zp-hint">{r.position || "посада не вказана в «Наймі»"}</div></td>
               <td>
                 <span className={`zps-tag ${NAIM_TAG[r.kind]?.[1] ?? ""}`}>{r.kind === "dismissed" ? `у «Наймі» звільнений${r.date ? ` ${ddy(r.date)}` : ", дату не вказано"}` : r.kind === "level" ? `${lvl(r.naimLevel)} у «Наймі»` : NAIM_TAG[r.kind]?.[0]}</span>
-                <div className="zp-hint">{r.kind === "dismissed" ? "У «Зарплаті» досі працює: рахуємо ставку і збір на дні народження, поки немає обхідного листа."
+                <div className="zp-hint">{r.kind === "dismissed" ? "У «Зарплаті» рахуємо до дати з «Найму»: лише відсоток, без ставки. Без угод у місяці звільнення — 0. Тип звільнення й обхідний оформлює HR."
                   : r.kind === "new" ? "У «Зарплаті» немає."
                   : r.kind === "move" ? moveText(r, names)
                   : `У «Зарплаті» — ${lvl(r.payrollLevel)}. Рівні ведуться окремо; гроші рахуються за «Зарплатою».`}</div>
@@ -441,7 +441,7 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave
                     <td>{p.official ? <><b>{money(p.official.amount)}</b><div className="zp-hint">{p.official.deduct ? "вираховується з загальної" : "окремо, не вираховується"}</div></> : <span className="zp-hint">немає</span>}</td>
                     <td><OfferDocCell d={p.offerDoc as Obj | null} /></td>
                     <td>{bday(p.birthday)}</td>
-                    <td>{ddy(p.startDate)}{p.leave && <div className="zp-tone--danger zp-hint">звільнення {ddy(p.leave.date)}</div>}</td>
+                    <td>{ddy(p.startDate)}{p.leave && <div className="zp-tone--danger zp-hint">звільнення {ddy(p.leave.date)}{p.leave.type === "naim" ? " (з «Найму», обхідного ще немає)" : ""}</div>}</td>
                   </tr>
                 ))}
               </tbody>

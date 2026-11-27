@@ -90,6 +90,7 @@ export default function AccrualsTab({ ctx }: { ctx: PayrollCtx }) {
                   return (
                     <tr key={x.userId} className={live ? "" : "is-click"} onClick={live ? undefined : () => ctx.go("verify", { userId: x.userId })}>
                       <td className="zf-who"><b>{x.name}</b><div className="zp-hint">{shortRole({ role: x.role, level: c.level, title: x.title })}{x.teamName ? ` · ${x.teamName}` : ""}{x.official ? " · офіційно" : ""}</div>
+                        {c.dismissZero && <div className="zp-hint zp-tone--danger">звільнення без угод — 0</div>}
                         {x.role === "manager" && c.level === "profi" && <LevelTag level="profi" />}</td>
                       <td className="r">{flat(x) ? "—" : money(c.margin)}{x.role === "manager" && c.plan ? <div className="zp-hint">план {num(c.plan)}</div> : null}</td>
                       <td className="r">{c.now.rate ? money(c.now.rate) : "—"}</td>

@@ -675,14 +675,15 @@ export async function advancesXlsx(pool: Pool, v: Viewer, mk: string) {
 export async function leaveCandidates(db: Db) {
   const e = await engine(db);
   const naim = new Map((await loadNaim(db)).filter((n) => n.userId && n.dismissedAt).map((n) => [String(n.userId), n.dismissedAt as string]));
-  return (e.zp.employees as Array<Record<string, unknown>>).filter((p) => !p.leave)
+  // звільнення з «Найму» (тип `naim`) — ще не оформлене: HR оформлює саме його (задача 10723, «роби» Романа 27.11)
+  return (e.zp.employees as Array<Record<string, unknown>>).filter((p) => !p.leave || (p.leave as { type?: string }).type === "naim")
     .map((p) => ({ userId: String(p.id), name: String(p.name), title: String(p.title ?? ""), naimDismissedAt: naim.get(String(p.id)) ?? null }))
     .sort((a, b) => Number(!a.naimDismissedAt) - Number(!b.naimDismissedAt) || a.name.localeCompare(b.name, "uk"));
 }
 export async function createLeave(pool: Pool, v: Viewer, uid: number, body: Record<string, unknown>) {
   const id = String(uid);
   const date = String(body.date ?? ""); if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) fail(422, "Дата звільнення — РРРР-ММ-ДД.", "date");
-  const type = String(body.type ?? ""); if (!(type in LEAVE_TYPES)) fail(422, "Тип звільнення — за п. 11 оферу.", "type");
+  const type = String(body.type ?? ""); if (!(type in LEAVE_TYPES) || type === "naim") fail(422, "Тип звільнення — за п. 11 оферу.", "type");
   const reason = String(body.reason ?? "").trim(); if (!reason) fail(422, "Вкажіть причину.", "reason");
   await tx(pool, async (c) => {
     if (!(await c.query(`SELECT 1 FROM payroll_employees WHERE user_id = $1`, [uid])).rowCount) fail(404, "Людини немає в зарплаті.");
@@ -960,7 +961,8 @@ export async function employeesView(db: Db) {
   const units = org.units.map((u) => ({ id: u.id, parentId: u.parentId, name: u.name, dept: u.dept, teamKey: u.teamKey }));
   const place = naimPlacement(units, org.people, dmap, teams.map((t) => ({ code: t.code, kommoTeamId: t.kommo_team_id })), known);
   const naim = naimChanges(people.map((p) => ({ userId: String(p.userId), name: String(p.name), role: String(p.role), level: (p.level ?? null) as Level | null,
-    levelChange: (p.levelChange ?? null) as { level: Level } | null, leave: p.leave ?? null,
+    // звільнення лише з «Найму» (`naim`) не оформлене: рядок «у «Наймі» звільнений» з кнопкою обхідного лишається
+    levelChange: (p.levelChange ?? null) as { level: Level } | null, leave: p.leave && (p.leave as { type?: string }).type !== "naim" ? p.leave : null,
     dept: (p.dept ?? null) as string | null, team: (p.team ?? null) as string | null, leadsTeam: (p.leadsTeam ?? null) as string | null })), await loadNaim(db), place);
   return { month: live, people, naim, offerTeams: offerTeamList, candidates: candidates.map((c) => { const pl = c.employee_id != null ? place.get(c.employee_id) : undefined; return { userId: String(c.id), name: c.name, roleKey: c.role, startDate: c.hired_at, birthday: c.birth,
     // «Додати в зарплату» підставляє відділ і команду з «Найму»; без блоку — команда за командою Kommo, як було

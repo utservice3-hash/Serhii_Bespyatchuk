@@ -229,6 +229,8 @@ function TodoBlock({ me, go, onChanged }: { me: Obj; go: Go; onChanged: () => Pr
 function partsOf(me: Obj, c: Obj, plan: boolean): Array<{ k: string; s: string; v: number; color: string }> {
   const S = me.settings as Obj, e = me.employee as Obj, x = plan ? c.atPlan : c.now, out: Array<{ k: string; s: string; v: number; color: string }> = [];
   const dy = c.days as Obj, ls = e.offer === "ls";
+  // звільнення без жодної угоди в місяці звільнення — 0, правило сильніше за п. 11 оферу (задача 10723, «роби» Романа 27.11)
+  if (c.dismissZero) return [{ k: "Звільнення без угод", s: "у місяці звільнення немає жодної угоди — нічого не нараховується: ні ставки, ні бонусу", v: 0, color: "var(--text-muted)" }];
   if (c.kind !== "manager" || c.level === "start")
     out.push({ k: c.kind === "manager" ? `Ставка «Старт»${ls ? " · офер Лілії" : ""}` : c.kind === "lead" ? "Ставка тім-ліда" : "Ставка",
       s: !x.rate ? (e.leave && e.leave.date?.slice(0, 7) === c.month ? "звільнення: ставка не нараховується (п. 11 оферу)" : "—") : dy.total < dy.full ? `пропорційно: ${dy.total} з ${dy.full} робочих днів` : "за повний місяць", v: x.rate, color: "var(--text-muted)" });

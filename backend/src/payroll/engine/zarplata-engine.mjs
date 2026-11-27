@@ -13,7 +13,7 @@
 
 /** @typedef {'start'|'profi'} Level */
 /** @typedef {'manager'|'lead'|'staff'} Role */
-/** @typedef {'own'|'ownNow'|'probation'|'company'|'gross'} LeaveType */
+/** @typedef {'own'|'ownNow'|'probation'|'company'|'gross'|'naim'} LeaveType */
 /**
  * @typedef {Object} Employee
  * @property {string} id                 id користувача дашборда
@@ -118,6 +118,9 @@ export const LEAVE_TYPES = Object.freeze({
   probation: ['під час / після випробувального', 'ставка за перший місяць не нараховується; відсоток і бонус — за відпрацьований період'],
   company: ['з ініціативи компанії', 'ставка — пропорційно відпрацьованим дням'],
   gross: ['грубе порушення', 'лише відсоток від маржі'],
+  // дата прийшла з «Найму», обхідного ще немає (задача 10723, Тетяна 25.11, «роби» Романа 27.11): тип невідомий — без ставки й бонусу.
+  // Обирати цей тип руками не можна: його ставить лише стан (state.ts), коли звільнення в «Зарплаті» ще не оформлене.
+  naim: ['звільнений у «Наймі», тип ще не обрано', 'лише відсоток від маржі; ставка — коли HR оформить обхідний лист і обере тип'],
 });
 
 /** Обхідний лист — бланк компанії: 8 пунктів підписують відповідальні; 9-й — ОД, лише після всіх */
@@ -283,6 +286,9 @@ export function createPayroll(state) {
   const verifiedMargin = (id, mk) => { const r = record(id, mk); return r && r.status !== 'review' && r.overrides && r.overrides.margin !== undefined ? r.overrides.margin : null; };
 
   // ---------- розрахунок: «зараз» і «при виконанні плану» (маржа = max(факт, план)) ----------
+  const zeroPart = () => ({ rate: 0, pct: 0, pctAmount: 0, bonus: 0, birthday: 0, total: 0 });
+  /** Звільнений менеджер без жодної угоди в місяці звільнення (ті самі угоди, з яких рахується маржа), дата звільнення вже настала */
+  const dismissZeroOf = (e, mk, used) => !!state.dismissZero && !!leaveIn(e, mk) && e.leave.date <= today && used.length === 0;
   function calcManager(e, mk) {
     const live = isLive(mk), lv = levelOf(e, mk), dy = days(e, mk), of = offerOf(e);
     const all = dealsOf(e.id, mk), used = all.filter(counts), held = all.filter(d => !counts(d));
@@ -299,7 +305,7 @@ export function createPayroll(state) {
       const successCalls = k.successCalls || 0, successOk = !strict || successCalls >= S.kpi.minSuccessCalls;
       const reach = k.normDays + dy.left >= need && (successOk || dy.left > 0);   // КПІ ще можна виконати
       const done = k.normDays >= need && successOk;
-      const noBonus = lt === 'own' || lt === 'ownNow' || lt === 'gross';
+      const noBonus = lt === 'own' || lt === 'ownNow' || lt === 'gross' || lt === 'naim';
       const amt = step ? step[1] : 0, ok = m => (!strict && m >= S.kpi.waiveFrom) || reach;
       // за офером бонус стає доступним лише після виконання КПІ: до того — «умовний» (pending), у «зараз» не входить
       const bonusNow = noBonus ? 0 : strict ? (done ? amt : 0) : ok(margin) ? amt : 0;
@@ -313,6 +319,10 @@ export function createPayroll(state) {
     const nowP = { rate, pct: pctNow, pctAmount: (margin - special.margin) * pctNow / 100 + special.amount, bonus: kpi ? kpi.bonusNow : 0, birthday: bday };
     const planP = { rate, pct: pctPlan, pctAmount: (marginPlan - special.margin) * pctPlan / 100 + special.amount, bonus: kpi ? kpi.bonusPlan : 0, birthday: bday };
     nowP.total = nowP.rate + nowP.pctAmount + nowP.bonus + bday; planP.total = planP.rate + planP.pctAmount + planP.bonus + bday;
+    // 0 угод у місяці звільнення → 0 (задача 10723, Тетяна 25.11, «роби» Романа 27.11): правило сильніше за п. 11 оферу — ні ставки,
+    // ні бонусу, ні ДН, ні постійних бонусів. Лише менеджери з продажу; лише коли дата звільнення вже настала. Вмикає state.dismissZero.
+    if (dismissZeroOf(e, mk, used)) return { kind: 'manager', empId: e.id, month: mk, live, level: lv, offer: offerCode(e), days: dy, deals: all, held, margin, marginPlan, plan, planDone: false,
+      kpi: kpi && { ...kpi, bonusNow: 0, bonusPending: 0, bonusPlan: 0 }, special, birthdays: [], dismissZero: true, now: zeroPart(), atPlan: zeroPart() };
     return { kind: 'manager', empId: e.id, month: mk, live, level: lv, offer: offerCode(e), days: dy, deals: all, held, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, kpi, special, birthdays, now: nowP, atPlan: planP };
   }
   function calcLead(e, mk) {
@@ -349,7 +359,7 @@ export function createPayroll(state) {
   /** Бонус додається до нарахованого; корекція зменшує, але не нижче нуля: виплата від неї мінусовою не стає (Тетяна 24.11) */
   const corrCap = (pre, B, C) => Math.min(C, Math.max(0, pre + B));
   function withAdj(c, e, mk) {
-    const { list, B, C } = adjSums(e, mk);
+    const { list, B, C } = c.dismissZero ? { list: [], B: 0, C: 0 } : adjSums(e, mk);
     for (const P of [c.now, c.atPlan]) { P.adjBonus = B; P.adjCorr = corrCap(P.total, B, C); P.total = P.total + B - P.adjCorr; }
     c.adjustments = list; return c;
   }
@@ -487,7 +497,9 @@ export function createPayroll(state) {
   }
   const clearanceCanSign = (e, k, userId) => { const x = CLEARANCE_ITEMS.find(i => i.k === k); return !!x && clearanceResponsible(e, x.role).id === userId; };
   const isFinal = (e, mk) => !!(e.leave && e.leave.date.slice(0, 7) === mk);        // місяць звільнення — фінальний розрахунок
-  const payBlocked = (e, mk) => { const s = isFinal(e, mk) ? clearanceState(e) : null; return !!(s && !s.ok); };   // форма — після 8 підписів
+  // форма — після 8 підписів. З state.dismissZero: обхідного ще немає (дата з «Найму») — теж закрито, якщо є що платити
+  const payBlocked = (e, mk) => { if (!isFinal(e, mk)) return false; const s = clearanceState(e);
+    return s ? !s.ok : !!state.dismissZero && !calcE(e, mk).dismissZero; };
   const payNeedsOd = (e, mk) => { const s = isFinal(e, mk) ? clearanceState(e) : null; return !!(s && !s.final); }; // виплата — після погодження ОД
 
   // ---------- прогноз для ОД: фонд, готівка, ризики, команди ----------
