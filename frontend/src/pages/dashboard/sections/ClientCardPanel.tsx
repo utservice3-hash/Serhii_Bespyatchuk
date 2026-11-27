@@ -10,6 +10,7 @@ import { ClientSeasonBlock } from "./ClientSeasonBlock";
 import { ClientReleaseBlock } from "./ClientReleaseBlock";
 import { ClientProblemBlock } from "./ClientProblemBlock";
 import { ClientProfileBlock } from "./ClientProfileBlock";
+import { ClientKommoBlock } from "./ClientKommoBlock";
 import { HelpTip } from "./HelpTip";
 import { formatAmountFull } from "../format";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
@@ -96,6 +97,8 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
 
   return (
     <div>
+      {/* 🔗 Перехід на картку клієнта в Kommo (Роман 27.11.2026) — першим рядком, до будь-яких цифр. */}
+      <ClientKommoBlock card={card} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
           📊 Надходження за 12 міс. · «успішно реалізовано» ①

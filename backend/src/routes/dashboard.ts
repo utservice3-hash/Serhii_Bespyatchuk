@@ -33,6 +33,7 @@ import { limiter, limitedDb, early } from "../core/limitAll.js";
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, linkedinCount: 0, prozorroCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl, kommoCompanyUrl, kommoContactUrl } from "../core/kommoLinks.js";
+import { clientKommoTargets } from "../core/clientKommoLinks.js";
 import { adClientLinks, type AdClientKommoTarget } from "../core/adClientLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
 import { canCloseDeal } from "../core/firstTouchClose.js";
@@ -8210,9 +8211,19 @@ dashboardRouter.get("/client-card", async (req, res) => {
   const cardReactInv = cardLastInvoice;
   const cardCycles = await reactCycle.cyclesFor(pool, [clientKey]);
 
+  // 🔗 Картка клієнта в Kommo (Роман 27.11.2026): усі компанії клієнта, інакше контакт чи угода (`core/clientKommoLinks.ts`, `#11244`).
+  const kommoTargets = await clientKommoTargets(clientKey);
+
   res.json({
     clientKey,
     clientName: h?.client_name ?? clientKey,
+    kommo: {
+      more: kommoTargets.more,
+      links: kommoTargets.targets.map((t) => ({
+        kind: t.kind, name: t.name, deals: t.deals,
+        url: t.kind === "company" ? kommoCompanyUrl(t.id) : t.kind === "contact" ? kommoContactUrl(t.id) : kommoLeadUrl(t.id),
+      })),
+    },
     lastInvoice: cardLastInvoice,
     reactCycle: reactCycleRules.inReact(cardReactInv, today.slice(0, 7))
       ? reactCycle.cycleView(cardReactInv, cardCycles.get(clientKey), today) : null,

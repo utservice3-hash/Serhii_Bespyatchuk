@@ -30,6 +30,7 @@ export const MANIFEST_FILES: string[] = [
   "core/forecast.test.js",
   "core/forecastRange.test.js",
   "core/clientCard.test.js",
+  "core/clientKommoLinks.test.js",
   "kommo/leadChildLink.test.js",
   "versionStale.test.js",
   "clientStale.test.js",
@@ -989,6 +990,7 @@ export const MANIFEST_TESTS: string[] = [
   "#12g ДІТИ СКІПНУТОГО БАТЬКА не валять прогін (але лише коли батько СПРАВДІ скіпнувся)",
   "#12h ДЗЕРКАЛО: батько ВІДПРАЦЮВАВ — діти зобовʼязані зʼявитись",
   "#11243 РЕЄСТР ДІТЕЙ СКІПНУТИХ БАТЬКІВ ЗБІГАЄТЬСЯ З ДЖЕРЕЛАМИ: жодної незаписаної дитини і жодного мертвого запису",
+  "#11244 КАРТКА КЛІЄНТА → KOMMO: усі компанії клієнта (решта числом), інакше контакт, інакше угода; роут і картка проведені",
   // core/stageNames.test.ts — підпис стадії за СТАТУСОМ, а не за кошиком
   "#28 ПІДПИС СТАДІЇ — ЗА СТАТУСОМ, а не за кошиком funnel_stage",
   "#28b НЕ ПЕРЕЙМЕНОВАНО ТЕ, ЩО НАЗВАНО ПРАВИЛЬНО (інакше друга брехня)",

@@ -5251,6 +5251,8 @@ export async function takeFromLeadgenPool(clientKey: string): Promise<void> {
 }
 
 export interface ClientCard {
+  /** 🔗 Куди вести в Kommo (27.11.2026): компанії клієнта (свіжа перша), інакше контакт або угода; `more` — скільки компаній не показано. */
+  kommo?: { more: number; links: { kind: "company" | "contact" | "deal"; name: string | null; deals: number | null; url: string }[] };
   /** 🔁 Цикл реактивації — те саме, що в рядку списку; `null` — клієнт не в реактивації. */
   reactCycle?: ReactCycleView | null;
   lastInvoice?: string | null;
