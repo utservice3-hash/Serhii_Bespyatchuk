@@ -318,6 +318,102 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       assert.equal(noTalk.attempts, 1, "🔴 без жодної розмови спроби мають рахуватись усі");
     });
 
+    /**
+     * #11242d — ХТО ГОВОРИВ І «ПОВЕРНЕНО» ПІСЛЯ ПЕРЕПИСАНИХ ПІДЗАПИТІВ (27.11.2026, прохід 2 швидкості списку клієнтів).
+     * Ім'я того, хто говорив, тепер шукається ПІСЛЯ вибору останньої розмови (було: для кожної розмови клієнта), а
+     * оплати після задачі — по угодах клієнта (було: переглядом усіх оплат). Відповіді мусять лишитись тими самими:
+     *  • говорив менеджер із довідника → його ім'я, навіть якщо в дзвінку записано ще й ПІБ оператора;
+     *  • менеджера в дзвінку немає → ПІБ із дзвінка; розмов немає → порожньо;
+     *  • ім'я — з ОСТАННЬОЇ розмови, а не з давнішої (її вів інший менеджер) і не з недодзвону після неї;
+     *  • «повернено» рахує лише ОПЛАЧЕНІ угоди після задачі: програна угода після задачі суму не рухає.
+     * 🧨 Червоніє, якщо ім'я братиметься не з останньої розмови, ПІБ оператора переб'є менеджера з довідника, або у
+     * «повернено» потраплять неоплачені угоди чи оплати до задачі (останнє стереже ще й #25c).
+     */
+    await t.test("#11242d ХТО ГОВОРИВ — З ОСТАННЬОЇ РОЗМОВИ; «повернено» — лише оплачені угоди після задачі", async () => {
+      const D = (n: string) => `(CURRENT_DATE - ${n}::int) + interval '12 hours'`;
+      try {
+        await c.query(`UPDATE ringostat_calls SET manager_id = 20, employee_fio = 'Оператор Перший' WHERE uniqueid = 'c2'`);
+        await c.query(`UPDATE ringostat_calls SET manager_id = 10, employee_fio = 'Оператор Недодзвін' WHERE uniqueid = 'c1'`);
+        await c.query(`UPDATE ringostat_calls SET employee_fio = 'Оператор Рінгостат' WHERE uniqueid = 'c5'`);
+        await c.query(
+          `INSERT INTO ringostat_calls (uniqueid, calldate, call_type, disposition, billsec, duration, client_key, manager_id, employee_fio)
+           VALUES ('c7',${D("$1")},'out','ANSWERED',44,50,'сплячий',10,'Оператор Давній')`, [60]);
+        // Програна угода ПІСЛЯ задачі (задача 100 днів тому): не оплата, у «повернено» не йде. Її етап Є в довіднику етапів
+        // (інакше угоду відсіяв би сам JOIN, і умова «лише оплачені» лишилась би неперевіреною).
+        await c.query(`INSERT INTO pipeline_stage_map (pipeline_id,status_id,funnel_stage) VALUES (8921932,143,'approved')`);
+        await c.query(
+          `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo)
+           VALUES (9101,'d',10,8921932,143,777,'сплячий','сплячий','ТОВ Сплячий',${D("$1")})`, [3]);
+        const by = new Map((await R.clientStates({})).map((r) => [r.clientKey, r]));
+        const sleep = by.get("сплячий")!;
+        assert.equal(sleep.lastTalkDays, 40, "фікстура: остання розмова та сама, що в #25d");
+        assert.equal(sleep.lastTalkBy, "Менеджер Б",
+          "🔴 «хто говорив» — не менеджер ОСТАННЬОЇ розмови (взято давнішу розмову, недодзвін або ПІБ оператора замість довідника)");
+        assert.equal(by.get("межа60")?.lastTalkBy, "Оператор Рінгостат", "🔴 без менеджера в дзвінку ПІБ із дзвінка загубилось");
+        assert.equal(by.get("втрачений")?.lastTalkBy, null, "🔴 розмов немає, а «хто говорив» заповнено");
+        assert.equal(sleep.attempts, 2, "🔴 спроби після останньої розмови зрушили");
+        assert.equal(sleep.returnedRevenue, 9000, "🔴 у «повернено» потрапила неоплачена угода або оплата до задачі");
+        assert.equal(sleep.returned, true);
+        assert.equal(by.get("втрачений")?.returnedRevenue, 0, "🔴 клієнт без задачі отримав суму «повернено»");
+      } finally {
+        await c.query(`DELETE FROM deals WHERE kommo_id = 9101`);
+        await c.query(`DELETE FROM pipeline_stage_map WHERE pipeline_id = 8921932 AND status_id = 143`);
+        await c.query(`DELETE FROM ringostat_calls WHERE uniqueid = 'c7'`);
+        await c.query(`UPDATE ringostat_calls SET manager_id = NULL, employee_fio = NULL WHERE uniqueid IN ('c1','c2','c5')`);
+      }
+    });
+
+    /**
+     * #11242e — «ПОВЕРНУТО ЗА МІСЯЦЬ» НА ЖИВОМУ ОБРОБНИКУ СПИСКУ (27.11.2026, прохід 2). Остання оплата до місяця тепер
+     * рахується одним проходом на всіх клієнтів (було підзапитом на кожного). Додаємо трьох клієнтів і дивимось, на
+     * скільки зрушили плитки — приростом, одним і тим самим обробником до і після, тож календар на гейт не впливає:
+     *  • перша оплата місяця після паузи 300 днів → повернутий, його оплати місяця йдуть у суму;
+     *  • остання оплата до місяця 10 днів тому (а найперша — 200) → НЕ повернутий: береться ОСТАННЯ оплата до місяця;
+     *  • оплати лише цього місяця → не повернутий, а новий.
+     * Заразом це єдине місце, де весь список постійних клієнтів збирається на тестовій базі в `npm test`: помилка в будь-якому
+     * з його читань дає тут червоне, а не 500 на проді.
+     * 🧨 Червоніє, якщо «остання до місяця» стане найпершою (MIN), межу «до місяця» буде знято, або оплати місяця
+     * перестануть складатись у суму.
+     */
+    await t.test("#11242e «ПОВЕРНУТО ЗА МІСЯЦЬ»: остання оплата ДО місяця — одна на клієнта; приріст плиток рівно на повернутого", async () => {
+      const { dashboardRouter } = await import("../routes/dashboard.js");
+      const { clientPlansCache } = await import("./scopeCache.js");
+      const layer = (dashboardRouter as unknown as { stack: { route?: { path: string; methods: Record<string, boolean>;
+        stack: { handle: (req: unknown, res: unknown, next: (e?: unknown) => void) => unknown }[] } }[] })
+        .stack.find((l) => l.route?.path === "/client-plans" && l.route.methods.get);
+      assert.ok(layer?.route, "🔴 роут /client-plans не знайдено — гейт втратив предмет");
+      const handle = layer!.route!.stack[layer!.route!.stack.length - 1].handle;
+      type Body = { clients: { clientKey: string }[]; totals: { react: { returnedMonth: number; returnedMargin: number } } };
+      const open = (): Promise<Body> => new Promise((done, fail) => {
+        clientPlansCache.invalidate();
+        Promise.resolve(handle({ auth: { role: "admin", roleKey: "admin", managerId: null, teamId: null, userId: 0 }, query: {}, params: {} },
+          { json(b: Body) { done(b); return this; }, status() { return this; }, setHeader() { return this; } },
+          (e?: unknown) => fail(e ?? new Error("роут пішов у next() без відповіді")))).catch(fail);
+      });
+      const M = (shift: string) => `((date_trunc('month', now() AT TIME ZONE 'Europe/Kyiv') + interval '${shift}') AT TIME ZONE 'Europe/Kyiv')`;
+      const pay = (id: number, ck: string, shift: string, price: number) => c.query(
+        `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo)
+         VALUES ($1,'d',10,8921932,142,$2,$3,$3,$4,${M(shift)})`, [id, price, ck, `ТОВ ${ck}`]);
+      try {
+        const before = await open();
+        assert.ok(before.clients.length > 0, "🔴 список порожній — міряти приріст нема на чому");
+        await pay(9201, "повернувсям", "-400 days", 1); await pay(9202, "повернувсям", "-300 days", 1);
+        await pay(9203, "повернувсям", "2 hours", 4321); await pay(9204, "повернувсям", "3 hours", 79);
+        await pay(9211, "постійнийм", "-200 days", 1); await pay(9212, "постійнийм", "-10 days", 1); await pay(9213, "постійнийм", "2 hours", 999);
+        await pay(9221, "новийм", "2 hours", 555); await pay(9222, "новийм", "3 hours", 5);
+        const after = await open();
+        const keys = new Set(after.clients.map((x) => x.clientKey));
+        for (const k of ["повернувсям", "постійнийм", "новийм"]) assert.ok(keys.has(k), `фікстура: клієнт «${k}» мусить бути у списку, інакше приріст нічого не доводить`);
+        assert.equal(after.totals.react.returnedMonth - before.totals.react.returnedMonth, 1,
+          "🔴 «повернуто за місяць» зросло не на одного: остання оплата ДО місяця рахується не так, як рахувалась");
+        assert.equal(after.totals.react.returnedMargin - before.totals.react.returnedMargin, 4400,
+          "🔴 сума повернутого — не оплати повернутого клієнта за цей місяць (4321 + 79)");
+      } finally {
+        await c.query(`DELETE FROM deals WHERE kommo_id BETWEEN 9201 AND 9222`);
+        clientPlansCache.invalidate();
+      }
+    });
+
     await t.test("#25f СЕГМЕНТИ: поріг залежить від частоти, <3 оплат — НЕ вгадуємо", async () => {
       // 🔴 ГОЛОВНЕ, ЩО ТУТ ПЕРЕВІРЯЄТЬСЯ: правило сегментів доїжджає до рядка
       // екрана ЦІЛИМ — від оплат у `deals` до `segment`/`state` у видачі ядра.

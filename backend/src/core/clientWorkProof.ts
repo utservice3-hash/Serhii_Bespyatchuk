@@ -78,14 +78,20 @@ export async function paymentProofByClientKey(db: Db, keys: readonly string[], d
      cm AS (
        SELECT k.company_id, c.code FROM codes c JOIN kommo_companies k ON k.edrpou IN (c.code, lpad(c.code, 8, '0'))
        UNION
-       SELECT k.company_id, c.code FROM codes c JOIN kommo_companies k ON k.ipn IN (c.code, lpad(c.code, 10, '0')))
-     SELECT DISTINCT ON (d.client_key) d.client_key AS ck, pc.booked_on AS at, pc.amount::text AS amount
-       FROM pc
-       JOIN cm ON cm.code = pc.code
-       JOIN deal_companies dc ON dc.company_id = cm.company_id
-       JOIN deals d ON d.kommo_id = dc.deal_kommo_id
-      WHERE d.client_key = ANY($1::text[])
-      ORDER BY d.client_key, pc.booked_on DESC, pc.amount DESC`,
+       SELECT k.company_id, c.code FROM codes c JOIN kommo_companies k ON k.ipn IN (c.code, lpad(c.code, 10, '0'))),
+       -- ⏱ Пари «клієнт — код платника» БЕЗ ПОВТОРІВ, і лише потім оплати (27.11.2026). Було: кожна оплата множилась на кожну
+       -- угоду клієнта з цією компанією, і база сортувала 203 тис. рядків заради 139 відповідей (план із прода, 0,27 с).
+       -- Відповідь та сама: найсвіжіша оплата клієнта не залежить від того, скільки разів повторився її рядок.
+       ck_code AS (
+         SELECT DISTINCT d.client_key AS ck, cm.code
+           FROM cm
+           JOIN deal_companies dc ON dc.company_id = cm.company_id
+           JOIN deals d ON d.kommo_id = dc.deal_kommo_id
+          WHERE d.client_key = ANY($1::text[]))
+     SELECT DISTINCT ON (cc.ck) cc.ck, pc.booked_on AS at, pc.amount::text AS amount
+       FROM ck_code cc
+       JOIN pc ON pc.code = cc.code
+      ORDER BY cc.ck, pc.booked_on DESC, pc.amount DESC`,
     [keys, String(days)]);
   return new Map(r.rows.map((x) => [x.ck, { at: x.at, amount: Math.round(Number(x.amount) * 100) / 100 }]));
 }

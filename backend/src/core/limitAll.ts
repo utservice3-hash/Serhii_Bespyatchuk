@@ -8,6 +8,8 @@
  *
  * 🔑 ДВІ ЧЕРГИ. `urgent` стає ПОПЕРЕД звичайних: найдовший ланцюжок екрана (вид клієнта → ростер → факти розмов)
  * визначає час відповіді, і якщо він чекатиме позаду двадцяти коротких читань, стеля з'їсть увесь виграш.
+ * Термінові між собою стартують У ПОРЯДКУ НАДХОДЖЕННЯ (27.11.2026). Було навпаки: кожне нове ставало першим, тож із шести
+ * читань фактів розмов два найважчі, названі першими, стартували останніми (замір на проді: на 0,2-0,3 с пізніше за решту).
  *
  * ⚠️ ОБГОРТАТИ ЛИШЕ ЛИСТЯ. Завдання, яке тримає місце і саме чекає місця для вкладеного читання, зависне, щойно всі
  * місця зайняті такими самими. Тому або функції дають обмежену базу (`limitedDb`) і її НЕ обгортають, або її
@@ -30,10 +32,14 @@ export function limiter(max: number): Limiter {
   let flying = 0;
   let top = 0;
   const queue: (() => void)[] = [];
+  /** Скільки термінових чекає: вони стоять у голові черги, тож це ще й місце, куди стає наступне термінове. */
+  let urgentWaiting = 0;
   const next = () => {
     if (flying >= max) return;
     const start = queue.shift();
-    if (start) start();
+    if (!start) return;
+    if (urgentWaiting > 0) urgentWaiting--;
+    start();
   };
   const add = <T>(fn: Task<T>, first: boolean): Promise<T> => new Promise<T>((resolve, reject) => {
     const start = () => {
@@ -44,7 +50,7 @@ export function limiter(max: number): Limiter {
       try { p = fn(); } catch (e) { p = Promise.reject(e); }
       p.then(resolve, reject).finally(() => { flying--; next(); });
     };
-    if (first) queue.unshift(start); else queue.push(start);
+    if (first) queue.splice(urgentWaiting++, 0, start); else queue.push(start);
     next();
   });
   return { run: (fn) => add(fn, false), urgent: (fn) => add(fn, true), peak: () => top };

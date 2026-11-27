@@ -6826,10 +6826,13 @@ async function buildClientPlans(monthStr: string, managerId: number | null, team
          FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
         WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1)),
      m AS (SELECT client_key, to_char(MIN(dt), 'YYYY-MM-DD') AS first_m, SUM(price) AS margin
-             FROM paid WHERE dt >= date_trunc('month', $2::date)::date AND dt < (date_trunc('month', $2::date) + INTERVAL '1 month')::date GROUP BY 1)
-     SELECT m.client_key, m.first_m, m.margin,
-            to_char((SELECT MAX(p.dt) FROM paid p WHERE p.client_key = m.client_key AND p.dt < date_trunc('month', $2::date)::date), 'YYYY-MM-DD') AS last_before
-       FROM m`, [clientKeys, monthStart]));
+             FROM paid WHERE dt >= date_trunc('month', $2::date)::date AND dt < (date_trunc('month', $2::date) + INTERVAL '1 month')::date GROUP BY 1),
+     -- ⏱ Остання оплата ДО місяця — одним проходом по paid на всіх клієнтів (27.11.2026). Було підзапитом на кожного
+     -- клієнта місяця: 126 повних переглядів 15 тис. рядків, 0,10 с із 0,12 с (план із прода). Клієнт без оплат до місяця
+     -- лишається з порожньою датою, як і був.
+     lb AS (SELECT client_key, MAX(dt) AS d FROM paid WHERE dt < date_trunc('month', $2::date)::date GROUP BY 1)
+     SELECT m.client_key, m.first_m, m.margin, to_char(lb.d, 'YYYY-MM-DD') AS last_before
+       FROM m LEFT JOIN lb ON lb.client_key = m.client_key`, [clientKeys, monthStart]));
 
   // ⏩ ③ РОСТЕР — щойно є вид клієнта й плани; факти розмов стартують одразу за ним, не чекаючи решти читань.
   const [kindByKey, plansRes] = await Promise.all([kindsP, plansP]);
