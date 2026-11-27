@@ -503,6 +503,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/carrier-calls/:uniqueid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
+  /* 🛡 «БЕЗПЕКА» · операції 1С без угоди (задача 11231; Роман 27.11.2026: «вкладку безпека тільки для адмінів і оп дира»).
+     Межа — вкладка `security` (routeTab), сид — admin і opdir. Гендиректор, КВП і фінансист копіюють екрани адміна
+     синками схеми, тому зняття в них стоїть після синків (#11249) — тут вони у відмові. */
+  { method: "GET", path: "/api/dashboard/security/no-deal", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   /* 🙋 Черга «На перевірці» і запис розмови — ролі вкладки, кожен у своєму скоупі (чужий дзвінок — 404 від обробника).
      Рішення й повернення — запис у БД/Kommo, тож проба лише на відмову; фінансиста тримає межа вкладки (#11b). */
   { method: "GET", path: "/api/dashboard/carrier-calls/pending", cls: "GET",

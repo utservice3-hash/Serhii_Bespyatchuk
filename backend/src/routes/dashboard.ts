@@ -34,6 +34,8 @@ import { limiter, limitedDb, early } from "../core/limitAll.js";
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, linkedinCount: 0, prozorroCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl, kommoCompanyUrl, kommoContactUrl } from "../core/kommoLinks.js";
 import { clientKommoTargets } from "../core/clientKommoLinks.js";
+import { loadNoDeal } from "../core/securityNoDeal.js";
+import type { Db as LedgerDb } from "../core/finance.js";
 import { adClientLinks, type AdClientKommoTarget } from "../core/adClientLinks.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
 import { canCloseDeal } from "../core/firstTouchClose.js";
@@ -12723,4 +12725,13 @@ dashboardRouter.get("/missed-calls/no-deal/list", async (req, res) => {
       dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId),
     })),
   });
+});
+
+/**
+ * 🛡 «БЕЗПЕКА» · операції 1С без угоди (задача 11231, Роман 27.11.2026). Лише читання; рахує ядро (`core/securityNoDeal.ts`),
+ * тут ні SQL, ні підсумків. Межа — вкладка `security` (`routeTab`): адміністратор і операційний директор, решта 403
+ * ще до обробника. Скоупу немає свідомо: це документи компанії, а не чиїсь угоди.
+ */
+dashboardRouter.get("/security/no-deal", async (_req, res) => {
+  res.json(await loadNoDeal(pool as unknown as LedgerDb));
 });

@@ -6659,6 +6659,24 @@ export interface FxUnpaidRow {
 }
 export interface FxUnpaid { syncedAt: string | null; error: string | null; from: string; rowsAll: number | null; kommoBase: string; invoices: FxUnpaidRow[] }
 export const fetchFxUnpaid = async () => (await api.get<FxUnpaid>("/finance/fx-unpaid")).data;
+/**
+ * 🛡 «Безпека» · операції 1С без угоди (задача 11231, 27.11.2026). Підсумки (`totals`) сервер рахує з тих самих рядків, що
+ * лежать у `docs`; валюта — окремо від гривні. `dealRaw`: рядок із поля «угода» 1С (порожній — поле порожнє) або `null`,
+ * коли джерело цього поля не зберігає (неоплачені рахунки).
+ */
+export type SecurityNoDealList = "invoice" | "payment" | "unpaid";
+export interface SecurityNoDealDoc {
+  number: string | null; organization: string | null; kontragent: string; edrpou: string | null; date: string | null; sum: number; currency: string;
+  dealRaw: string | null; manager: string | null; comment: string | null;
+}
+export interface SecurityNoDealTotals { docs: number; uah: number; fx: { currency: string; sum: number; docs: number }[]; kontragents: number; unnamed: { docs: number; uah: number } }
+export interface SecurityNoDeal {
+  from: string;
+  snapshot: { syncedAt: string | null; error: string | null; older: number | null; undated: number | null };
+  unpaidState: { syncedAt: string | null; error: string | null };
+  lists: Record<SecurityNoDealList, { totals: SecurityNoDealTotals; docs: SecurityNoDealDoc[] }>;
+}
+export const fetchSecurityNoDeal = async () => (await api.get<SecurityNoDeal>("/dashboard/security/no-deal")).data;
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
 export const runCarrierPayments = async () => (await api.post<{ ok: boolean; result: unknown }>("/finance/payments/run")).data;
 /** ✋ «Погоджено» / «Скасувати» і коментар до запиту (26.10.2026). Не передане поле лишається як було. */

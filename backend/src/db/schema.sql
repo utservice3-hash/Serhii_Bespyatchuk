@@ -6691,6 +6691,34 @@ REVOKE ALL ON onec_deal_invoices FROM ai_readonly;
 REVOKE ALL ON onec_deal_payments FROM ai_readonly;
 REVOKE ALL ON onec_deals_state FROM ai_readonly;
 
+-- 🛡 «БЕЗПЕКА»: ОПЕРАЦІЇ 1С БЕЗ УГОДИ (задача 11231, рішення Романа 27.11.2026: «давай додамо вкладку безпека тільки для
+-- адмінів і оп дира, де будемо це рахувати»). Знімок рядків `costinvoice` (kind = invoice) і `paydata` (kind = payment), у
+-- яких є сума, але немає 8-значного номера угоди Kommo, — саме тих, що синк вище відкидає. Пише лише `syncOnecDeals`
+-- (щогодини о :45, заміна цілком, окремою транзакцією після угод); показуємо документи з 2026 року, старіші й без дати
+-- лише рахуємо у стані (`older`, `undated`). У звіти й метрики ці рядки НЕ входять і далі.
+-- ⚠️ Знімок історії не має: документ, якому в 1С дописали угоду, зникає звідси наступного синку.
+-- ⚠️ revert коду таблиці й ключ вкладки не прибирає: таблиці лишаються без писаря (шкоди не несуть), ключ знімається
+-- тумблером у Налаштуваннях.
+CREATE TABLE IF NOT EXISTS onec_no_deal_rows (
+  kind TEXT NOT NULL CHECK (kind IN ('invoice', 'payment')), number TEXT, organization TEXT, kontragent TEXT, edrpou TEXT,
+  doc_on DATE NOT NULL, sum NUMERIC(14,2) NOT NULL, currency TEXT NOT NULL, deal_raw TEXT, manager TEXT, comment TEXT
+);
+CREATE TABLE IF NOT EXISTS onec_no_deal_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), synced_at TIMESTAMPTZ, rows INTEGER, older INTEGER, undated INTEGER, error TEXT, error_at TIMESTAMPTZ
+);
+REVOKE ALL ON onec_no_deal_rows FROM ai_readonly;
+REVOKE ALL ON onec_no_deal_state FROM ai_readonly;
+-- Вкладку бачать ЛИШЕ адміністратор і операційний директор (Роман 27.11.2026). Ідемпотентно й не перетирає рішень
+-- адміна: чіпаємо лише ролі, де ключа ще немає. 🔴 Зняття стоїть ПІСЛЯ ТРЬОХ синків «екрани = екрани адміна»
+-- (ceo/opdir · kvp · financier, вище): вони щоміграції копіюють набір адміна цілком, тож на ДРУГОМУ прогоні схеми
+-- гендиректор, КВП і фінансист отримали б вкладку від адміна (той самий механізм, що протік `ai-calls`, #794).
+-- Знімаємо поіменно в трьох вбудованих ролей, а не «в усіх, крім двох»: кастомну роль адмін веде тумблером сам.
+UPDATE roles SET screen_access = screen_access || '{"security":true}'::jsonb
+  WHERE key IN ('admin', 'opdir')
+    AND NOT (screen_access ? 'security');
+UPDATE roles SET screen_access = screen_access - 'security'
+ WHERE key IN ('ceo', 'kvp', 'financier');
+
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 -- 🤝 «Реєстри та узгодження» + «Ліміти клієнтів» — пакет Сергія 23–24.10.2026 (migrations/003, 004 без BEGIN/COMMIT; idempotent).
 -- Стик із дашбордом — `counterparty/mount.ts`; перенос лімітів дебіторки й дзеркало назад — `counterparty/legacyLimits.ts`.

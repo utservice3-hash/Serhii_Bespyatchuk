@@ -50,7 +50,7 @@ export function onecDate(v: unknown): string | null {
   return iso === "2001-01-01" ? null : iso;
 }
 const dealOf = (v: unknown): number | null => { const s = String(v ?? "").trim(); return /^\d{8}$/.test(s) ? Number(s) : null; };
-const isUah = (c: unknown) => /^(грн|uah)?$/i.test(String(c ?? "").trim());
+export const isUah = (c: unknown) => /^(грн|uah)?$/i.test(String(c ?? "").trim());
 
 /** Рядок реалізації 1С (`costinvoice`) з номером угоди; розходи — уже за типами, зі знаком мінус. */
 export interface OnecInvoice { deal: number; number: string; organization: string; kontragent: string; docOn: string | null; actOn: string | null; sum: number; currency: string; out: Flows["out"] }
@@ -84,6 +84,31 @@ export function parsePayments(json: unknown): OnecPayment[] {
     if (deal == null || sum == null) continue;
     out.push({ deal, organization: String(x.Organization ?? "").trim(), kontragent: String(x.Kontragent ?? "").trim(), paidOn: onecDate(x.Data),
       sum, currency: String(x.Currency ?? "").trim() || "грн" });
+  }
+  return out;
+}
+
+/**
+ * 🛡 РЯДОК 1С БЕЗ НОМЕРА УГОДИ — для вкладки «Безпека» (задача 11231, Роман 27.11.2026). Це рівно ті рядки, які
+ * `parseInvoices` / `parsePayments` вище ВІДКИДАЮТЬ: сума є, а в полі «Deal» немає 8-значного номера (порожньо, текст чи
+ * число іншої довжини). До 27.11.2026 їх не бачив ніхто: у звітах вони не беруть участі, бо не привʼязані до угоди.
+ * Умова стоїть на тому самому `dealOf`, що й у парсерів, — тож рядок із сумою йде або туди, або сюди, і ніколи в обидва.
+ * Тут, на відміну від `OnecPayment`, беремо і коментар, і менеджера: екран бачать лише адміністратор і операційний
+ * директор, а без коментаря документ не знайти в 1С. Рядок без суми не беремо (рахувати нічого) — як і парсери.
+ */
+export type NoDealKind = "invoice" | "payment";
+export interface OnecNoDealRow { kind: NoDealKind; number: string; organization: string; kontragent: string; edrpou: string | null; docOn: string | null;
+  sum: number; currency: string; dealRaw: string; manager: string | null; comment: string | null }
+const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s || null; };
+export function parseNoDeal(kind: NoDealKind, json: unknown): OnecNoDealRow[] {
+  const rows = Array.isArray(json) ? json : [json];
+  const out: OnecNoDealRow[] = [];
+  for (const x of rows as Record<string, unknown>[]) {
+    const sum = num(x?.Sum);
+    if (sum == null || dealOf(x?.Deal) != null) continue;
+    out.push({ kind, number: String(x.Number ?? x.ID ?? "").trim(), organization: String(x.Organization ?? "").trim(), kontragent: String(x.Kontragent ?? "").trim(),
+      edrpou: txt(x.ERPOU), docOn: onecDate(x.Data), sum, currency: String(x.Currency ?? "").trim() || "грн", dealRaw: String(x.Deal ?? "").trim(),
+      manager: txt(x.Manager), comment: txt(x.Koment ?? x.Comment) });
   }
   return out;
 }

@@ -123,6 +123,9 @@ export const NAV_GROUPS = [
   {
     label: "Система",
     items: [
+      // 🛡 «Безпека» (задача 11231, Роман 27.11.2026): операції 1С без угоди. Лише адміністратор і операційний директор —
+      // видимість вирішує `screen_access.security` із токена (сид у schema.sql); `roles` — запас для старих токенів.
+      { key: "security", label: "Безпека", icon: "🛡", roles: ["admin"] },
       { key: "dataquality", label: "Якість даних", icon: "🔍", roles: ["admin", "team_lead"] },
       { key: "feedback", label: "Зворотний звʼязок", icon: "🐞" },
       { key: "aiwork", label: "Робота з АІ", icon: "🤖", roles: ["admin"] },
