@@ -249,8 +249,10 @@ test("#2409 🪞 ЛІМІТИ НАСКРІЗНО: наш вхід і ролі, �
     // ---------- вхід, вкладки, ролі ----------
     assert.equal((await call(null, "GET", "/client-limits/by-debtor")).s, 401, "без входу пускає");
     assert.equal((await call("hr", "GET", "/client-limits/by-debtor")).s, 403, "HR бачить ліміти дебіторки");
-    let r = await call("hr", "GET", "/counterparty/checks");
-    assert.equal(r.s, 200, `HR не відкриває «Перевірку контрагента»: ${JSON.stringify(r.j)}`); assert.equal(r.j.me.role, "staff");
+    // 27.11.2026, рішення Романа: «Реєстри та узгодження» в HR забрано разом із «Перевіркою контрагента» (міграція hrRegistriesRevoked).
+    assert.equal((await call("hr", "GET", "/counterparty/checks")).s, 403, "HR досі відкриває «Перевірку контрагента»");
+    let r = await call("marina", "GET", "/counterparty/checks");
+    assert.equal(r.s, 200, `менеджер не відкриває «Перевірку контрагента»: ${JSON.stringify(r.j)}`);
     assert.equal((await call("hr", "POST", "/counterparty/lookup", { code: "41234567" })).s, 403, "HR подає запит на узгодження");
 
     // ---------- перенос лімітів дебіторки: один раз ----------
