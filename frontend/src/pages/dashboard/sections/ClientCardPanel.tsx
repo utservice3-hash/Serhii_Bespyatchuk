@@ -64,6 +64,8 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
   const [fileId, setFileId] = useState<number | null>(null);
   /** 👤 Форма передачі відкрита прямо з картки (ТЗ 22.09, п.3.2) — клієнт уже підставлений. */
   const [assigning, setAssigning] = useState(false);
+  /** ⚙️ «Дії з клієнтом» розгорнуті? `null` — людина ще не тиснула: тоді відкрито лише коли якась дія вже діє. */
+  const [actionsToggle, setActionsToggle] = useState<boolean | null>(null);
   const load = useCallback(() => {
     setCard(null); setErr(null);
     fetchClientCard(clientKey, month).then(setCard)
@@ -95,6 +97,18 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
   }));
   const maxIdx = data.reduce((best, r, i) => (r.revenue > data[best].revenue ? i : best), 0);
   const empty = card.monthsTotal === 0;
+  /* ⚙️ ДІЇ З КЛІЄНТОМ ЗГОРНУТІ (Роман 27.11.2026). Перелік на кнопці — лише те, що ця людина може зробити (права дає
+     сервер). Дія, що ВЖЕ діє (архів, проблемний, віддали в нічийні, сезонний, «постійний вручну»), розкриває блок сама:
+     згорнутий стан не має ховати те, що з клієнтом уже щось зробили. */
+  const actionNames = [
+    card.canRelease && "в нічийні", card.canProblem && "проблемний клієнт", card.canArchive && (card.archived ? "повернути з архіву" : "в архів"),
+    card.canForceRegular && "вважати постійним", card.canSeason && "сезонний", card.canMerge && "обʼєднання",
+  ].filter((x): x is string => typeof x === "string");
+  const actionsActive = !!(card.released || card.inLeadgenPool || card.problem || card.archived || card.forcedRegular || card.seasonal);
+  const actionsOpen = actionsToggle ?? actionsActive;
+  const canManage = !!(card.canArchive || card.canMerge || card.canAssign);
+  const actionsShown = actionNames.length > 0 || actionsActive || canManage;
+  const actionsInline = !actionsOpen && !card.reactCycle;
 
   return (
     <div>
@@ -112,6 +126,36 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
         </div>
       </div>
 
+      {/* 🧹 ПОРЯДОК БЛОКІВ (Роман 27.11.2026: «під ним дуже багато інфи, спрости цей вигляд»). Графік стоїть одразу під
+          своїм заголовком; далі те, з чим працюють щодня (останній дзвінок і наступний крок), анкета й дії. Форми
+          анкети й дій згорнуті, доки їх не відкрили; дія, що вже діє (архів, проблемний, сезонний…), видна одразу. */}
+      {empty ? (
+        // Порожньо — це відповідь, а не помилка: клієнт не платив 12 міс.
+        <div style={{ marginTop: 8, background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 8,
+                      padding: "12px 14px", fontSize: 12, color: "#64748b" }}>
+          За останні 12 місяців оплат ①  немає. Остання оплата: {card.lastPaid ?? "—"}.
+        </div>
+      ) : (
+        <div style={{ height: 190, marginTop: 8 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`} width={44} />
+              <Tooltip
+                formatter={(v, _n, p) => [`${formatAmountFull(Number(v))} · ${(p?.payload as { deals: number })?.deals ?? 0} угод`, "Успішно реалізовано"]}
+                labelFormatter={(l) => `Місяць ${l}`} />
+              <Bar dataKey="revenue" radius={[4, 4, 0, 0]}>
+                {data.map((r, i) => (
+                  // Найбільший місяць виділено, останній — акцентом: це форма, не шкала.
+                  <Cell key={r.month} fill={i === data.length - 1 ? "#c5141c" : i === maxIdx ? "#2563eb" : "#93c5fd"} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
       {/* 🔗 ХТО ОБʼЄДНАНИЙ У ЦЬОГО КЛІЄНТА (ТЗ 22.09, п.2.3). План, задача й факт уже одні на
           весь рядок; тут видно, з яких записів CRM він складається і скільки в кожного оплат. */}
       {card.merged && card.merged.length > 0 && (
@@ -126,6 +170,53 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
           </div>
         </div>
       )}
+
+      {/* 📌 ТЗ РЕАКТИВАЦІЇ (23.09.2026, п.1–2): наступний крок з датою, «нема номера» станом,
+          останній дзвінок — дата, хто, скільки. Крок один живий; «виконано» закриває його. */}
+      <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fff" }}>
+        <div style={{ fontSize: 11, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 6 }}>Останній дзвінок · наступний крок</div>
+        <div style={{ fontSize: 12.5, marginBottom: 6 }}>
+          {card.phone === "none" ? (
+            <span style={{ color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</span>
+          ) : card.lastCall ? (
+            <span>📞 {card.lastCall.at.slice(0, 10).split("-").reverse().join(".")} · {card.lastCall.direction === "out" ? "вихідний" : "вхідний"} · {card.lastCall.manager ?? "менеджер невідомий"} · {Math.round(card.lastCall.billsec / 60)} хв {card.lastCall.billsec % 60} с</span>
+          ) : (
+            <span style={{ color: "#9ca3af" }}>розмов не було{card.phonesCount ? ` · номерів: ${card.phonesCount}` : ""}</span>
+          )}
+        </div>
+        {card.nextStep && !stepEdit ? (
+          <div style={{ fontSize: 12.5, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600, color: card.nextStep.state === "overdue" ? "#b91c1c" : card.nextStep.state === "today" ? "#b45309" : "#111827" }}>
+              {card.nextStep.state === "overdue" ? "⚠️ прострочено" : card.nextStep.state === "today" ? "сьогодні" : card.nextStep.due ? card.nextStep.due.split("-").reverse().join(".") : "без дати"}
+            </span>
+            <span>{card.nextStep.text}</span>
+            {card.nextStep.author && <span style={{ color: "#6b7280" }}>· {card.nextStep.author}</span>}
+            {card.nextStep.kommo?.state === "done" && (
+              <a href={card.nextStep.kommo.url} target="_blank" rel="noreferrer" title="Задача стоїть в угоді Kommo — працюйте з нею там"
+                style={{ fontSize: 12 }}>в Kommo ↗</a>
+            )}
+            {card.nextStep.kommo?.state === "waiting" && (
+              <span title={card.nextStep.kommo.error ?? "Задача ще передається в Kommo — зазвичай до 10 хвилин"}
+                style={{ fontSize: 12, color: card.nextStep.kommo.error ? "#b91c1c" : "#6b7280" }}>
+                {card.nextStep.kommo.error ? "⚠️ у Kommo не передано" : "передається в Kommo…"}
+              </span>
+            )}
+            <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
+              onClick={async () => { setBusy(true); try { await doneClientNextStep(clientKey); load(); onChanged?.(); } finally { setBusy(false); } }}>✓ виконано</button>
+            <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
+              onClick={() => { setStepText(card.nextStep!.text); setStepDue(card.nextStep!.due ?? ""); setStepEdit(true); }}>змінити</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <input value={stepText} onChange={(e) => setStepText(e.target.value)} placeholder="наступний крок: що зробити" maxLength={300}
+              style={{ flex: 1, minWidth: 180, fontSize: 12.5, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+            <input type="date" value={stepDue} onChange={(e) => setStepDue(e.target.value)} style={{ fontSize: 12.5, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+            <button disabled={busy || !stepText.trim()} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "none", background: "#c5141c", color: "#fff", cursor: "pointer" }}
+              onClick={async () => { setBusy(true); try { await saveClientNextStep({ clientKey, text: stepText.trim(), due: stepDue || null }); setStepText(""); setStepDue(""); setStepEdit(false); load(); onChanged?.(); } finally { setBusy(false); } }}>зберегти</button>
+            {stepEdit && <button style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }} onClick={() => setStepEdit(false)}>скасувати</button>}
+          </div>
+        )}
+      </div>
 
       {/* 📋 Анкета клієнта (задача 11221, зустріч 25.11.2026): пʼять питань, одна на клієнта; питання дає сервер. */}
       <ClientProfileBlock card={card} onSaved={() => { load(); onChanged?.(); }} />
@@ -144,15 +235,34 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
           функціями, що гейтять роути: кнопка не може розійтись із дозволом. */}
       {/* 🧭 «В нічийні» (задача 8135) — окремо від «Керування клієнтом»: кнопку тисне МЕНЕДЖЕР свого клієнта, а блок
           керування менеджеру не показується. Право й стан — із сервера (`canRelease`, `released`, `inLeadgenPool`). */}
-      <ClientReleaseBlock card={card} onSaved={() => { load(); onChanged?.(); }} />
+      {/* У згорнутому стані «Передати клієнта» і кнопка решти дій стоять одним рядком; розгорнули — блоками. */}
+      <div style={actionsInline ? { display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" } : {}}>
+      {actionsShown && (
+        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", order: actionsInline ? 2 : 0 }}>
+          <button type="button" data-client-actions aria-expanded={actionsOpen} onClick={() => setActionsToggle(!actionsOpen)}
+            style={{ fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, cursor: "pointer", border: "1px solid #d1d5db", background: "#fff", color: "#374151" }}>
+            ⚙️ Дії з клієнтом {actionsOpen ? "▾" : "▸"}
+          </button>
+          {!actionsOpen && actionNames.length > 0 && <span style={{ fontSize: 11, color: "#6b7280" }}>{actionNames.join(" · ")}</span>}
+        </div>
+      )}
+      {actionsOpen && <ClientReleaseBlock card={card} onSaved={() => { load(); onChanged?.(); }} />}
       {/* ⚠️ «Проблемний клієнт» (задача 8350) — та сама межа, що «В нічийні»: ставить менеджер свого клієнта. */}
-      <ClientProblemBlock card={card} onSaved={() => { load(); onChanged?.(); }} />
-      {(card.canArchive || card.canMerge || card.canAssign) && (
-        <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fafafa" }}>
-          <div style={{ fontSize: 11, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 8 }}>
-            Керування клієнтом
-          </div>
+      {actionsOpen && <ClientProblemBlock card={card} onSaved={() => { load(); onChanged?.(); }} />}
+      {/* Передача й цикл реактивації видні й у згорнутому стані: передача — окрема кнопка за ТЗ 22.09, п.3.2,
+          а цикл реактивації — це стан клієнта, не форма. */}
+      {canManage && (actionsOpen || card.canAssign || card.reactCycle) && (
+        <div style={actionsOpen
+          ? { marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fafafa" }
+          : {}}>
+          {actionsOpen && (
+            <div style={{ fontSize: 11, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 8 }}>
+              Керування клієнтом
+            </div>
+          )}
 
+          {/* Форми — лише в розгорнутому стані. Умови прав лишились як були: `card.can… &&` дає сервер. */}
+          {actionsOpen && (<>
           {card.canArchive && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               {card.archived ? (
@@ -240,6 +350,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
             <ClientSeasonBlock clientKey={clientKey} seasonal={card.seasonal} months={card.seasonMonths} note={card.seasonNote}
               offSeason={card.offSeason} onSaved={() => { load(); onChanged?.(); }} />
           )}
+          </>)}
 
           {/* 👤 ПЕРЕДАЧА — ОКРЕМОЮ КНОПКОЮ, А НЕ В ЗГОРНУТОМУ БЛОЦІ (ТЗ 22.09, п.3.2). Доти вона ховалась
               у «Обʼєднання · роз'єднання · передача» і вимагала заново шукати клієнта, чия картка вже
@@ -274,7 +385,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
               )}
             </div>
           )}
-          {card.canMerge && (
+          {actionsOpen && card.canMerge && (
             <details style={{ marginTop: 10 }}>
               <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#374151" }}>
                 🔗 Обʼєднання · роз'єднання
@@ -287,82 +398,10 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
         </div>
       )}
 
-      {empty ? (
-        // Порожньо — це відповідь, а не помилка: клієнт не платив 12 міс.
-        <div style={{ marginTop: 8, background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 8,
-                      padding: "12px 14px", fontSize: 12, color: "#64748b" }}>
-          За останні 12 місяців оплат ①  немає. Остання оплата: {card.lastPaid ?? "—"}.
-        </div>
-      ) : (
-        <div style={{ height: 190, marginTop: 8 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`} width={44} />
-              <Tooltip
-                formatter={(v, _n, p) => [`${formatAmountFull(Number(v))} · ${(p?.payload as { deals: number })?.deals ?? 0} угод`, "Успішно реалізовано"]}
-                labelFormatter={(l) => `Місяць ${l}`} />
-              <Bar dataKey="revenue" radius={[4, 4, 0, 0]}>
-                {data.map((r, i) => (
-                  // Найбільший місяць виділено, останній — акцентом: це форма, не шкала.
-                  <Cell key={r.month} fill={i === data.length - 1 ? "#c5141c" : i === maxIdx ? "#2563eb" : "#93c5fd"} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
+      </div>
 
       {/* ☎️ 11223: усі номери клієнта — звідки вони й скільки розмов зараховано (сервер вирішує, що показати). */}
       <ClientPhonesBlock card={card} />
-
-      {/* 📌 ТЗ РЕАКТИВАЦІЇ (23.09.2026, п.1–2): наступний крок з датою, «нема номера» станом,
-          останній дзвінок — дата, хто, скільки. Крок один живий; «виконано» закриває його. */}
-      <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fff" }}>
-        <div style={{ fontSize: 11, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 6 }}>Останній дзвінок · наступний крок</div>
-        <div style={{ fontSize: 12.5, marginBottom: 6 }}>
-          {card.phone === "none" ? (
-            <span style={{ color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</span>
-          ) : card.lastCall ? (
-            <span>📞 {card.lastCall.at.slice(0, 10).split("-").reverse().join(".")} · {card.lastCall.direction === "out" ? "вихідний" : "вхідний"} · {card.lastCall.manager ?? "менеджер невідомий"} · {Math.round(card.lastCall.billsec / 60)} хв {card.lastCall.billsec % 60} с</span>
-          ) : (
-            <span style={{ color: "#9ca3af" }}>розмов не було{card.phonesCount ? ` · номерів: ${card.phonesCount}` : ""}</span>
-          )}
-        </div>
-        {card.nextStep && !stepEdit ? (
-          <div style={{ fontSize: 12.5, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, color: card.nextStep.state === "overdue" ? "#b91c1c" : card.nextStep.state === "today" ? "#b45309" : "#111827" }}>
-              {card.nextStep.state === "overdue" ? "⚠️ прострочено" : card.nextStep.state === "today" ? "сьогодні" : card.nextStep.due ? card.nextStep.due.split("-").reverse().join(".") : "без дати"}
-            </span>
-            <span>{card.nextStep.text}</span>
-            {card.nextStep.author && <span style={{ color: "#6b7280" }}>· {card.nextStep.author}</span>}
-            {card.nextStep.kommo?.state === "done" && (
-              <a href={card.nextStep.kommo.url} target="_blank" rel="noreferrer" title="Задача стоїть в угоді Kommo — працюйте з нею там"
-                style={{ fontSize: 12 }}>в Kommo ↗</a>
-            )}
-            {card.nextStep.kommo?.state === "waiting" && (
-              <span title={card.nextStep.kommo.error ?? "Задача ще передається в Kommo — зазвичай до 10 хвилин"}
-                style={{ fontSize: 12, color: card.nextStep.kommo.error ? "#b91c1c" : "#6b7280" }}>
-                {card.nextStep.kommo.error ? "⚠️ у Kommo не передано" : "передається в Kommo…"}
-              </span>
-            )}
-            <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
-              onClick={async () => { setBusy(true); try { await doneClientNextStep(clientKey); load(); onChanged?.(); } finally { setBusy(false); } }}>✓ виконано</button>
-            <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
-              onClick={() => { setStepText(card.nextStep!.text); setStepDue(card.nextStep!.due ?? ""); setStepEdit(true); }}>змінити</button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            <input value={stepText} onChange={(e) => setStepText(e.target.value)} placeholder="наступний крок: що зробити" maxLength={300}
-              style={{ flex: 1, minWidth: 180, fontSize: 12.5, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
-            <input type="date" value={stepDue} onChange={(e) => setStepDue(e.target.value)} style={{ fontSize: 12.5, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
-            <button disabled={busy || !stepText.trim()} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "none", background: "#c5141c", color: "#fff", cursor: "pointer" }}
-              onClick={async () => { setBusy(true); try { await saveClientNextStep({ clientKey, text: stepText.trim(), due: stepDue || null }); setStepText(""); setStepDue(""); setStepEdit(false); load(); onChanged?.(); } finally { setBusy(false); } }}>зберегти</button>
-            {stepEdit && <button style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }} onClick={() => setStepEdit(false)}>скасувати</button>}
-          </div>
-        )}
-      </div>
 
       {/* 📌 Поточне обґрунтування плану на місяць екрана — одним рядком, зі «зняти» (парна дія). */}
       {card.planBasis && (
