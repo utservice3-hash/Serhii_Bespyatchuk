@@ -334,9 +334,14 @@ export function createPayroll(state) {
     const birthdays = birthdayLines(e, mk), bday = sum(birthdays.map(b => b.amount));
     const nowP = { rate, pct: pctFor(margin), pctAmount: margin * pctFor(margin) / 100, bonus: 0, birthday: bday };
     const planP = { rate, pct: pctFor(marginPlan), pctAmount: marginPlan * pctFor(marginPlan) / 100, bonus: 0, birthday: bday };
-    nowP.total = nowP.rate + nowP.pctAmount + bday; planP.total = planP.rate + planP.pctAmount + bday;
-    // ownMargin — власні угоди тімліда: у відсоток не йдуть, лише ліміт авансу; «Нарахування» показує їх окремо від маржі команди (27.11)
-    return { kind: 'lead', empId: e.id, month: mk, live, days: dy, members, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, ownMargin: ownMargin(e, mk), birthdays, now: nowP, atPlan: planP };
+    // 🧭 Власний результат тімліда (Тетяна 27.11: «його зп рахується згідно оферу як у менеджера (старт або профі) + % від команди»;
+    // Роман: «додати до викату»): % від ВЛАСНОЇ маржі за шкалою рівня тімліда (Старт 10/20 %, Профі 25/30/35 %), особистого плану
+    // немає — тож «Старт» 10 %, «Профі» 25 % / 30 % від порогу. Ставка тімліда лишається. Вмикає `state.leadOwn`; без нього — як у пакеті.
+    const own = ownMargin(e, mk), lv = levelOf(e, mk) || 'start';
+    const ownPct = state.leadOwn ? managerPct(lv, 0, own) : 0, ownAmount = own * ownPct / 100;
+    nowP.ownPct = ownPct; nowP.ownAmount = ownAmount; planP.ownPct = ownPct; planP.ownAmount = ownAmount;
+    nowP.total = nowP.rate + nowP.pctAmount + ownAmount + bday; planP.total = planP.rate + planP.pctAmount + ownAmount + bday;
+    return { kind: 'lead', empId: e.id, month: mk, live, days: dy, members, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, ownMargin: own, level: state.leadOwn ? lv : null, birthdays, now: nowP, atPlan: planP };
   }
   /** Маржа компанії = сума маржі менеджерів (у закритому місяці — перевірена фінансистом) */
   function companyMargin(mk) {
@@ -454,13 +459,14 @@ export function createPayroll(state) {
     const extras = sum(r.extras.map(x => EXTRA_KINDS[x.kind][1] * x.amount)), bday = c.now.birthday;
     // свої клієнти з окремим відсотком: їхня маржа — поза шкалою (фінансист правив загальну маржу — правка лягає на решту)
     const sp = c.kind === 'manager' && c.special ? c.special : { margin: 0, amount: 0 };
-    const pctAmount = (v.margin - sp.margin) * v.pct / 100 + sp.amount;
-    const pre = v.rate + pctAmount + v.bonus + bday + extras, autoPre = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + auto.bonus + bday;
+    const leadOwn = c.kind === 'lead' ? c.now.ownAmount || 0 : 0;   // % власних угод тімліда — поверх відсотка команди (правки маржі — про команду)
+    const pctAmount = (v.margin - sp.margin) * v.pct / 100 + sp.amount + leadOwn;
+    const pre = v.rate + pctAmount + v.bonus + bday + extras, autoPre = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + leadOwn + auto.bonus + bday;
     const { B: adjBonus, C } = adjSums(e, mk), adjCorr = corrCap(pre, adjBonus, C);   // постійні бонус/корекція — поверх правок фінансиста
     const total = pre + adjBonus - adjCorr, autoTotal = autoPre + adjBonus - corrCap(autoPre, adjBonus, C);
     const advance = advancePaid(e.id, mk) + fmSum(e.id, mk, ['paid']), official = officialOf(e, mk), officialDeducted = official && official.deduct ? official.amount : 0;
     const tl = ttnLines(e, mk), ttn = sum(tl.map(x => x.amount));
-    return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, adjBonus, adjCorr, adjustments: c.adjustments, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn,
+    return { calc: c, record: r0, auto, values: v, pctAmount, leadOwn, birthday: bday, extras, adjBonus, adjCorr, adjustments: c.adjustments, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn,
       // «До виплати» не нижче 0 (Роман 27.11, разом із форс-мажором): аванси понад ЗП місяця в мінус не йдуть; без `fmAdvances` — як у пакеті
       pay: state.fmAdvances === undefined ? total - advance - officialDeducted + ttn : Math.max(0, total - advance - officialDeducted + ttn) };
   }

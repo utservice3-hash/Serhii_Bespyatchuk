@@ -38,7 +38,10 @@ function OfferBlock({ me }: { me: Obj }) {
   ];
   else if (e.role === "lead") cells = [
     ["Ставка", money(e.rate), "за повний місяць"],
-    ["Відсоток від маржі команди", `${S.lead.pctLow} → ${S.lead.pctHigh} %`, `${S.lead.pctHigh} % — виконано план команди; без ваших власних угод`],
+    ["Відсоток від маржі команди", `${S.lead.pctLow} → ${S.lead.pctHigh} %`, `${S.lead.pctHigh} % — виконано план команди`],
+    // власні угоди тімліда — за шкалою його рівня, як у менеджера, без особистого плану (Тетяна 27.11)
+    ["Відсоток від власних угод", lv === "profi" ? `${S.profi.pct1} → ${S.profi.pct2} %` : `${S.start.pctLow} %`,
+      lv === "profi" ? `шкала «Профі»: ${S.profi.pct2} % — від ${nf(S.profi.threshold)} ₴ вашої маржі` : "шкала «Старт», без особистого плану"],
     ["План команди", money(c?.plan ?? 0), "сума планів менеджерів з «Планів»"],
   ];
   else cells = [
@@ -167,7 +170,7 @@ function LevelBlock({ me, onChanged }: { me: Obj; onChanged: () => Promise<void>
 function RulesBlock({ me }: { me: Obj }) {
   const S = me.settings as Obj, e = me.employee as Obj, o = e.official as Obj | null;
   const comp = e.role === "lead" ? S.birthday.lead : S.birthday.company;
-  const advRule = e.role === "manager" ? `до ${S.advance.managerPct} % маржі «Успішно реалізовано»` : e.role === "lead" ? `до ${S.advance.leadPct} % маржі команди` : `до ${S.advance.staffPct} % ставки`;
+  const advRule = e.role === "manager" ? `до ${S.advance.managerPct} % маржі «Успішно реалізовано»` : e.role === "lead" ? `до ${S.advance.leadPct} % вашої маржі` : `до ${S.advance.staffPct} % ставки`;
   const R: Array<[string, string] | null> = [
     ["Аванс", `з ${S.advance.fromDay} числа, ${advRule}, не більше нарахованого; на одну чи кілька карт або готівкою. Вираховується при закритті місяця.`],
     e.role === "manager" ? ["ТТН", `якщо в закритому місяці ТТН є менш ніж у ${S.ttn.minPct} % угод — ${money(S.ttn.hold)} утримуємо з виплати. Закрили ТТН до виплати — сума в цій виплаті; після виплати — у наступному місяці.`] : null,

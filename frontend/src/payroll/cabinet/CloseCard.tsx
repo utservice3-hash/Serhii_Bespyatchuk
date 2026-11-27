@@ -23,9 +23,10 @@ function Slip({ f, kind, lines = [] }: { f: Obj; kind: string; lines?: Obj[] }) 
   const rows: Array<{ k: string; v: string; cls?: string; was?: string }> = [];
   if (kind !== "staff" || c.pctRule) {
     const wm = was("margin"), wp = was("pct");
-    rows.push({ k: `Відсоток · ${pc(v.pct)} від ${of} ${money(v.margin)}`, v: money(f.pctAmount),
+    rows.push({ k: `Відсоток · ${pc(v.pct)} від ${of} ${money(v.margin)}`, v: money(Number(f.pctAmount) - Number(f.leadOwn ?? 0)),
       was: wm !== null || wp !== null ? `у кабінеті було: ${[wm !== null ? `маржа ${money(wm)}` : "", wp !== null ? pc(wp) : ""].filter(Boolean).join(", ")} — пояснення у фінансиста` : undefined });
   }
+  if (Number(f.leadOwn ?? 0) > 0) rows.push({ k: `Відсоток · ${pc(c.now?.ownPct)} від власної маржі ${money(c.ownMargin ?? 0)}`, v: money(f.leadOwn) });
   if (v.rate || a.rate) { const w = was("rate"); rows.push({ k: "Ставка", v: money(v.rate), was: w !== null ? `у кабінеті було ${money(w)}` : undefined }); }
   if (kind === "manager" && c.kpi) { const w = was("bonus"); rows.push({ k: "Бонус за КПІ", v: money(v.bonus), was: w !== null ? `у кабінеті було ${money(w)}` : undefined }); }
   if (gift) rows.push({ k: `Ваш день народження · ${dd(gift.date)}`, v: money(gift.amount, { sign: true }), cls: "zp-tone--ok" });

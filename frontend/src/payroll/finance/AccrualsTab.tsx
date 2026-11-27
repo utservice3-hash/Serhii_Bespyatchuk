@@ -133,7 +133,7 @@ function AccrualsRule({ S }: { S?: Obj }) {
   return (
     <div className="zf-acc__rule">
       <p><span className="zf-acc__chip zf-acc__chip--own">власна маржа</span> Менеджер отримує відсоток від своїх угод за офером. Стандартний: «Старт» {st.pctLow ?? 10} % ({st.pctHigh ?? 20} % при плані), «Профі» {pr.pct1 ?? 25} / {pr.pct2 ?? 30} / {pr.pct3 ?? 35} %.</p>
-      <p><span className="zf-acc__chip zf-acc__chip--team">маржа команди</span> Тімлід отримує {ld.pctLow ?? 3} % від суми маржі своїх менеджерів, {ld.pctHigh ?? 6} % якщо команда виконала план. Його власні угоди у відсоток не йдуть, лише в ліміт авансу.</p>
+      <p><span className="zf-acc__chip zf-acc__chip--team">маржа команди</span> Тімлід отримує {ld.pctLow ?? 3} % від суми маржі своїх менеджерів, {ld.pctHigh ?? 6} % якщо команда виконала план. Плюс відсоток від власних угод за шкалою свого рівня, як у менеджера, але без особистого плану: «Старт» {st.pctLow ?? 10} %, «Профі» {pr.pct1 ?? 25} / {pr.pct2 ?? 30} %.</p>
     </div>
   );
 }
@@ -168,14 +168,14 @@ function AccrualRow({ x, live, S, q, member, onOpen }: { x: Obj; live: boolean; 
       <td className="zf-who"><b>{x.name}{lead && <span className="zf-acc__lvl">тімлід</span>}</b>
         <div className="zp-hint">{lead ? `${(c.members as Obj[] | undefined)?.length ?? 0} у команді` : shortRole({ role: x.role, level: c.level, title: x.title })}{x.official ? " · офіційно" : ""}{mgr && c.plan ? ` · план ${num(c.plan)}` : ""}</div>
         {c.dismissZero && <div className="zp-hint zp-tone--danger">звільнення без угод — 0</div>}</td>
-      <td className="r zf-acc__sep">{mgr ? <b>{money(c.margin)}</b> : lead ? <span className="zp-muted">{money(c.ownMargin ?? 0)}<div className="zp-hint">у % не йде</div></span> : <span className="zp-muted">—</span>}</td>
+      <td className="r zf-acc__sep">{mgr ? <b>{money(c.margin)}</b> : lead ? <span>{money(c.ownMargin ?? 0)}<div className="zp-hint">{Number(c.now.ownPct ?? 0) > 0 ? `${pct(c.now.ownPct)} = ${money(c.now.ownAmount)}` : "% власних — 0"}</div></span> : <span className="zp-muted">—</span>}</td>
       <td className="r">{lead ? <b>{money(c.margin)}</b> : member ? <span className="zp-hint">у команду</span> : <span className="zp-muted">—</span>}</td>
-      <td className="zf-acc__sep zf-acc__pz">{lead ? <span className="zf-acc__chip zf-acc__chip--team">маржа команди</span>
+      <td className="zf-acc__sep zf-acc__pz">{lead ? <><span className="zf-acc__chip zf-acc__chip--team">маржа команди</span>{Number(c.now.ownPct ?? 0) > 0 ? <div><span className="zf-acc__chip zf-acc__chip--own">+ власна маржа</span></div> : null}</>
         : mgr ? <><span className="zf-acc__chip zf-acc__chip--own">власна маржа</span>{c.special?.lines?.length ? <div className="zp-hint">+ свої клієнти</div> : null}</>
         : c.pctRule ? <><span className="zf-acc__chip zf-acc__chip--co">маржа компанії</span><div className="zp-hint">{money(c.margin)}</div></>
         : <span className="zf-acc__chip">лише оклад</span>}</td>
-      <td className="r zf-acc__pz">{flat(x) || c.dismissZero ? <span className="zp-muted">—</span> : <><b>{pct(c.now.pct)}</b>{live && atPlanPct !== Number(c.now.pct) ? <div className="zp-hint">{pct(atPlanPct)} при плані</div> : null}</>}</td>
-      <td className="r zf-acc__pz">{flat(x) || c.dismissZero ? <span className="zp-muted">—</span> : <b>{money(c.now.pctAmount)}</b>}</td>
+      <td className="r zf-acc__pz">{flat(x) || c.dismissZero ? <span className="zp-muted">—</span> : <><b>{pct(c.now.pct)}</b>{lead && Number(c.now.ownPct ?? 0) > 0 ? <div className="zp-hint">+ {pct(c.now.ownPct)} власних</div> : null}{live && atPlanPct !== Number(c.now.pct) ? <div className="zp-hint">{pct(atPlanPct)} при плані</div> : null}</>}</td>
+      <td className="r zf-acc__pz">{flat(x) || c.dismissZero ? <span className="zp-muted">—</span> : <><b>{money(Number(c.now.pctAmount) + Number(c.now.ownAmount ?? 0))}</b>{lead && Number(c.now.ownAmount ?? 0) > 0 ? <div className="zp-hint">команда {money(c.now.pctAmount)} + власні {money(c.now.ownAmount)}</div> : null}</>}</td>
       <td className="r zf-acc__sep">{c.now.rate ? money(c.now.rate) : <span className="zp-muted">—</span>}</td>
       <td className="r">{c.now.bonus ? money(c.now.bonus) : c.kpi?.bonusPending ? <span className="zp-hint" title="бонус за офером — лише після виконання КПІ; у «Зараз» не входить">умовно {money(c.kpi.bonusPending)}</span> : <span className="zp-muted">—</span>}</td>
       <td className={`r zp-tone--${signTone(c.now.birthday) ?? "muted"}`}>{signed(c.now.birthday)}</td>

@@ -340,7 +340,7 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   settings.birthday = { ...(settings.birthday as object ?? {}), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — теж не налаштування
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };
   return {
-    now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, payWording: "approved", ttnLegacy, dismissZero: true,
+    now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, payWording: "approved", ttnLegacy, dismissZero: true, leadOwn: true,
     records, advances, fmAdvances, archive, clientHistory: {}, clearances, responsibles: await loadResponsibles(db), tasks, holidays: [],
     levelRequests, levelApprovers, fmApprovers, meta: { managerOf },
   };

@@ -6,7 +6,7 @@ import path from "node:path";
 /**
  * 💰 «Нарахування»: власна маржа, маржа команди й відсоток окремо (Тетяна прочитала 339 422 ₴ маржі команди в рядку тімліда як
  * його маржу; макет 27.11.2026, «роби» Романа). Тімлід отримує % від маржі команди, його власні угоди — лише ліміт авансу.
- * Гейти `#11330`–`#11332`.
+ * Гейти `#11331`, `#11333`, `#11334`.
  */
 const FE = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "payroll", "finance");
 
@@ -19,10 +19,10 @@ async function loadGroups() {
 }
 
 /**
- * #11330 — РУШІЙ: у тімліда `margin` = маржа команди (з неї 3 %), `ownMargin` = його власні угоди, і вони різні числа.
+ * #11334 — РУШІЙ (стан без `leadOwn`, як у пакеті): у тімліда `margin` = маржа команди (з неї 3 %), `ownMargin` = його власні угоди, і вони різні числа.
  * 🧨 Червоніє, якщо віддати власну маржу замість командної або прибрати `ownMargin`.
  */
-test("#11330 ТІМЛІД: маржа команди — база відсотка, власна маржа — окремим полем, у % не йде", async () => {
+test("#11334 ТІМЛІД: маржа команди — база відсотка команди, власна маржа — окремим полем", async () => {
   const { createPayroll } = await import("./engine/zarplata-engine.mjs");
   const base = { dept: "sales", startDate: "2024-01-01", birthday: null, official: [], leave: null, clientRates: [], adjustments: [] };
   const state = {
@@ -68,15 +68,17 @@ test("#11331 ГРУПИ «НАРАХУВАНЬ»: кожен рівно раз, 
 });
 
 /**
- * #11332 — ЕКРАН: у рядку тімліда «Власна» = `ownMargin` з підписом «у % не йде», «Команди» = `margin`, мітка «маржа команди»;
- * сума відсотка в гривнях показана; таблицю ділять групи. 🧨 Червоніє, якщо поміняти колонки місцями або прибрати суму %.
+ * #11333 — ЕКРАН: у рядку тімліда «Власна» = `ownMargin` і під нею «% = сума» власних угод (Тетяна 27.11: тімлід отримує % від
+ * свого результату за шкалою рівня), «Команди» = `margin`, мітки «маржа команди» і «+ власна маржа»; сума відсотка — команда + власні.
+ * 🧨 Червоніє, якщо поміняти колонки місцями, повернути «у % не йде» або показати суму без власних.
  */
-test("#11332 ЕКРАН «НАРАХУВАНЬ»: тімлід — власна окремо «у % не йде», маржа команди з міткою; сума % у гривнях; групи", () => {
+test("#11333 ЕКРАН «НАРАХУВАНЬ»: тімлід — власна маржа з % і сумою, маржа команди з міткою; сума % = команда + власні; групи", () => {
   const s = readFileSync(path.join(FE, "AccrualsTab.tsx"), "utf8");
-  assert.match(s, /lead \? <span className="zp-muted">\{money\(c\.ownMargin \?\? 0\)\}<div className="zp-hint">у % не йде<\/div>/, "🔴 «Власна» тімліда — ownMargin з підписом «у % не йде»");
-  assert.match(s, /<td className="r">\{lead \? <b>\{money\(c\.margin\)\}<\/b>/, "🔴 «Команди» тімліда — margin (база відсотка)");
-  assert.match(s, /lead \? <span className="zf-acc__chip zf-acc__chip--team">маржа команди<\/span>/, "🔴 мітка бази тімліда — «маржа команди»");
-  assert.match(s, /<b>\{money\(c\.now\.pctAmount\)\}<\/b>/, "🔴 сума відсотка в гривнях");
+  assert.match(s, /lead \? <span>\{money\(c\.ownMargin \?\? 0\)\}<div className="zp-hint">\{Number\(c\.now\.ownPct \?\? 0\) > 0 \? `\$\{pct\(c\.now\.ownPct\)\} = \$\{money\(c\.now\.ownAmount\)\}`/, "🔴 «Власна» тімліда — ownMargin з % і сумою");
+  assert.doesNotMatch(s, /у % не йде/, "🔴 власні угоди тімліда тепер ідуть у %");
+  assert.match(s, /<td className="r">\{lead \? <b>\{money\(c\.margin\)\}<\/b>/, "🔴 «Команди» тімліда — margin (база відсотка команди)");
+  assert.match(s, /lead \? <><span className="zf-acc__chip zf-acc__chip--team">маржа команди<\/span>/, "🔴 мітка бази тімліда — «маржа команди»");
+  assert.match(s, /<b>\{money\(Number\(c\.now\.pctAmount\) \+ Number\(c\.now\.ownAmount \?\? 0\)\)\}<\/b>/, "🔴 сума відсотка — команда + власні");
   assert.match(s, /\{accrualGroups\(list\)\.map\(/, "🔴 рядки згруповані за командами");
   assert.match(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "payroll", "service.ts"), "utf8"), /leadsTeam: lt, leadsTeamName:/, "🔴 рядок несе команду, яку веде тімлід");
 });

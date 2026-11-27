@@ -175,7 +175,8 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
     if (bd === "bad") { setErr("День народження — ДД.ММ."); return; }
     if ((bd ?? null) !== (p.birthday ?? null)) body.birthday = bd ?? "";
     if (f.isFinance !== !!p.isFinance) body.isFinance = f.isFinance;
-    if (p.role === "manager" && f.level !== p.level) body.level = f.level;
+    // рівень тімліда — шкала % його власних угод (Тетяна 27.11); офера не перепідписуємо — це лише для менеджерів
+    if ((p.role === "manager" || p.role === "lead") && f.level !== (p.level ?? "start")) body.level = f.level;
     if (p.role !== "manager") {
       const r = toNum(f.rate); if (Number.isNaN(r)) { setErr("Ставка — число."); return; }
       if (r !== null && r !== Number(p.rate ?? 0)) body.rate = r;
@@ -198,7 +199,7 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
       // Спільні сповіщення дашборда (`components/Toasts`): «змін немає» — інформаційне, вікно лишається відкритим.
       if (r.saved === 0) { toast(`Це вже записано з місяця «${monthTitle(mk)}».`, { head: "Змін немає", tone: "info" }); return; }
       const when = money ? `Ставка, рівень, % і офіційна ЗП діють з місяця «${monthTitle(mk)}»${mk !== live ? ` — у відомості «${monthTitle(live)}» їх не буде` : ""}.` : "";
-      const offer = body.level ? "Новий офер — у документах, рекрутер отримав задачу." : "";
+      const offer = body.level && p.role === "manager" ? "Новий офер — у документах, рекрутер отримав задачу." : "";
       toast([when, offer].filter(Boolean).join(" ") || p.name, { head: "Умови збережено" }); onDone();
     }
     catch (e) { setErr(errText(e)); } finally { setBusy(false); }
@@ -210,11 +211,16 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
     <Modal title={`Умови · ${p.name}`} onClose={onClose} wide
       foot={<><button className="zp-btn zp-btn--primary" disabled={busy} onClick={() => void save()}>Зберегти</button><button className="zp-btn" onClick={onClose}>Скасувати</button></>}>
       <div className="zp-hint">{p.title} · {ROLE_NAMES[p.role] ?? p.role}{p.role === "manager" ? ` · ${OFFER_NAMES[p.offer] ?? p.offer}` : ""}</div>
-      {p.role === "manager" && (
-        <Field label="Рівень">
+      {(p.role === "manager" || p.role === "lead") && (
+        <Field label={p.role === "lead" ? "Рівень — шкала % власних угод" : "Рівень"}>
           <select className="zp-select" value={f.level} onChange={(e) => set("level", e.target.value)}>
-            <option value="start">«Старт» — ставка + {S.start?.pctLow} / {S.start?.pctHigh} %</option>
-            <option value="profi">«Профі» — {S.profi?.pct1} / {S.profi?.pct2} / {S.profi?.pct3} % від маржі</option>
+            {p.role === "lead" ? <>
+              <option value="start">«Старт» — {S.start?.pctLow} % від власних угод</option>
+              <option value="profi">«Профі» — {S.profi?.pct1} / {S.profi?.pct2} % від власних угод</option>
+            </> : <>
+              <option value="start">«Старт» — ставка + {S.start?.pctLow} / {S.start?.pctHigh} %</option>
+              <option value="profi">«Профі» — {S.profi?.pct1} / {S.profi?.pct2} / {S.profi?.pct3} % від маржі</option>
+            </>}
           </select>
         </Field>
       )}
@@ -434,7 +440,7 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave
                     <td><b>{p.name}</b><div className="zp-hint">{p.title}{p.team ? ` · ${teamName[p.team] ?? p.team}` : ""}{p.isFinance ? " · фінансист" : ""}{p.simple ? " · простий кабінет" : ""}</div></td>
                     <td>
                       {p.role === "manager" ? <><LevelTag level={p.level} />{p.levelChange && <span className="zp-hint"> → {LEVEL_NAMES[p.levelChange.level] ?? p.levelChange.level} з {String(p.levelChange.from).slice(5, 7)}.{String(p.levelChange.from).slice(0, 4)}</span>}
-                        {p.offer === "ls" && <div className="zp-hint">офер Лілії Шаврової</div>}</> : "—"}
+                        {p.offer === "ls" && <div className="zp-hint">офер Лілії Шаврової</div>}</> : p.role === "lead" ? <><LevelTag level={p.level ?? "start"} /><div className="zp-hint">шкала власних угод</div></> : "—"}
                     </td>
                     <td className="r">{p.role === "manager" ? (p.level === "start" ? money(p.offer === "ls" ? S.offers?.ls?.startRate : S.start?.rate) : "—") : money(p.rate)}</td>
                     <td>{p.role === "manager" ? <>за рівнем{(p.clientRates ?? []).length ? <div className="zp-hint">+ окремий % за {(p.clientRates ?? []).length} {(p.clientRates ?? []).length === 1 ? "клієнтом" : "клієнтами"}</div> : null}</> : p.role === "lead" ? `${S.lead?.pctLow} / ${S.lead?.pctHigh} % маржі команди` : p.pctRule ? `${pct(p.pctRule.value, 1)} маржі компанії` : "—"}</td>
