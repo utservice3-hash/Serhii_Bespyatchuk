@@ -178,6 +178,7 @@ import * as repeatScreenRules from "../core/repeatScreenRules.js";
 import * as clientWorkProof from "../core/clientWorkProof.js";
 import * as clientOrderHistory from "../core/clientOrderHistory.js";
 import * as clientLeadRules from "../core/clientLeadRules.js";
+import type { RhythmRow } from "../core/rhythmTaskRules.js";
 import * as clientLeadFacts from "../core/clientLeadFacts.js";
 import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
@@ -6610,6 +6611,15 @@ dashboardRouter.get("/client-plans", async (req, res) => {
 
 /** Стільки читань одного відкриття списку летить одночасно: пул має 15 з'єднань на весь процес (`db/pool.ts`). */
 const CLIENT_PLANS_PARALLEL = 6;
+
+/**
+ * ⏱ 11229: рядки «З ким говорити» на сьогодні по всій компанії — для ранкової задачі тімліду (`jobs/rhythmTaskSweep.ts`).
+ * Той самий збирач, що відповідає екрану адміна, тож «пропустив ритм» і «Немає роботи» в задачі й на екрані — одне число.
+ * Тип результату — `RhythmRow`: перейменуй поле в рядку екрана, і це місце перестане збиратись.
+ */
+export async function rhythmRowsNow(): Promise<RhythmRow[]> {
+  return (await buildClientPlans(kyivToday().slice(0, 7), null, null, true, { canSee: false, canTake: false })).clients;
+}
 
 /**
  * 🧱 ЗБИРАЧ ВІДПОВІДІ `/client-plans` — усе, що раніше стояло в обробнику, без `req` / `res` / `auth`.
