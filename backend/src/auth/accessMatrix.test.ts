@@ -45,6 +45,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/hunt/candidates/:id/stage": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
   "POST /api/hunt/candidates/:id/comments": "поіменний список `hunt_access` (Іван, Сергій, Олександр — рішення Романа 15.11.2026): роль не дає «Хантингу» нічого, навіть адмінська; проба від userId 0 у списку не буває",
   // 💰 «Зарплата» (ТЗ §2): дії — лише з правом-ключем payroll_* (фінансист, ОД; рішення по незгоді — лише ОД); адмін сум не бачить.
+  "POST /api/payroll/advances/:id/fm-approve": "право payroll_fm_approve (лише ОД — Роман 27.11.2026: «Тільки Сергій погоджує»): адмін, ceo, kvp його не мають, перевірка в обробнику ДО читання тіла",
+  "POST /api/payroll/advances/:id/fm-reject": "право payroll_fm_approve (лише ОД — Роман 27.11.2026: «Тільки Сергій погоджує»): адмін, ceo, kvp його не мають, перевірка в обробнику ДО читання тіла",
   "POST /api/payroll/level-requests/:userId/reject": "право payroll_level_approve (адмін, ОД, HR — Роман 27.11.2026): ceo/kvp його не мають, перевірка в обробнику ДО читання тіла",
   "PATCH /api/payroll/records/:month/:userId": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",
   "POST /api/payroll/records/:month/:userId/extras": "право-ключ «Зарплати» (ТЗ §2): payroll_edit / payroll_settings / payroll_final_word / payroll_offer_tasks / notify_rules — у обробнику ДО читання тіла",

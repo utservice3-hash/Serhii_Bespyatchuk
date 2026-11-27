@@ -374,6 +374,13 @@ export function createPayroll(state) {
   const advanceStatus = a => (!a ? null : a.rejectedAt && seen(a.rejectedAt) ? 'rejected' : a.paidAt && seen(a.paidAt) ? 'paid' : 'requested');
   const advancePaid = (id, mk) => { const a = advanceOf(id, mk); return a && advanceStatus(a) === 'paid' ? a.amount : 0; };
   const advanceWindowOpen = mk => isLive(mk) && +today.slice(8, 10) >= S.advance.fromDay;
+  // «Аванс форс-мажор» (задача 10723, Тетяна 27.11; Роман: «ліміти такі самі, як і звичайного авансу. Тільки Сергій погоджує»):
+  // будь-коли в живому місяці, кілька на місяць; `state.fmAdvances[mk][id]` — масив заявок. Стани: pending (чекає ОД) →
+  // requested (погоджено, чекає виплати) → paid; rejected. Без `fmAdvances` у стані — як у пакеті (нулі).
+  const fmOf = (id, mk) => ((((state.fmAdvances || {})[mk] || {})[id]) || []).filter(a => seen(a.requestedAt) && !(a.cancelledAt && seen(a.cancelledAt)));
+  const fmStatus = a => (a.rejectedAt && seen(a.rejectedAt) ? 'rejected' : a.paidAt && seen(a.paidAt) ? 'paid' : a.approvedAt && seen(a.approvedAt) ? 'requested' : 'pending');
+  const fmSum = (id, mk, sts) => sum(fmOf(id, mk).filter(a => sts.includes(fmStatus(a))).map(a => a.amount));
+  const FM_HELD = ['pending', 'requested', 'paid'];
   /** Ліміт: менеджер — % своєї маржі «Успішно реалізовано», тім-лід — % своєї маржі (ownDeals), ставка — % ставки; не більше нарахованого */
   function advanceLimit(e, mk) {
     const c = calcE(e, mk);
@@ -383,7 +390,11 @@ export function createPayroll(state) {
     const [base, pct, basis] = c.kind === 'manager' ? [c.margin, S.advance.managerPct, 'margin'] : own ? [ownMargin(e, mk), S.advance.leadPct, 'ownMargin'] : c.kind === 'lead' ? [c.margin, S.advance.leadPct, 'teamMargin'] : [c.now.rate, S.advance.staffPct, 'rate'];
     // бонус — лише до ЗП, не до авансу (Тетяна 24.11): стеля авансу — нараховане без постійного бонусу
     const byRule = Math.max(0, Math.floor(base * pct / 100)), cap = Math.max(0, Math.floor(c.now.total - (c.now.adjBonus || 0)));
-    return { basis, base, pct, byRule, cap, amount: Math.min(byRule, cap), capped: cap < byRule, calc: c };
+    const out = { basis, base, pct, byRule, cap, amount: Math.min(byRule, cap), capped: cap < byRule, calc: c };
+    if (state.fmAdvances === undefined) return out;
+    // один ліміт на обидва види: форс-мажор (поданий, погоджений, виплачений) зменшує звичайний, звичайний — форс-мажор
+    const a = advanceOf(e.id, mk), reg = a && advanceStatus(a) !== 'rejected' ? a.amount : 0, fm = fmSum(e.id, mk, FM_HELD);
+    return { ...out, amount: Math.max(0, out.amount - fm), fmHeld: fm, fm: Math.max(0, out.amount - fm - reg) };
   }
 
   // ---------- ТТН: частка угод місяця з ТТН («Бізнес-асистент → ТТН моніторинг») ----------
@@ -447,9 +458,11 @@ export function createPayroll(state) {
     const pre = v.rate + pctAmount + v.bonus + bday + extras, autoPre = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + auto.bonus + bday;
     const { B: adjBonus, C } = adjSums(e, mk), adjCorr = corrCap(pre, adjBonus, C);   // постійні бонус/корекція — поверх правок фінансиста
     const total = pre + adjBonus - adjCorr, autoTotal = autoPre + adjBonus - corrCap(autoPre, adjBonus, C);
-    const advance = advancePaid(e.id, mk), official = officialOf(e, mk), officialDeducted = official && official.deduct ? official.amount : 0;
+    const advance = advancePaid(e.id, mk) + fmSum(e.id, mk, ['paid']), official = officialOf(e, mk), officialDeducted = official && official.deduct ? official.amount : 0;
     const tl = ttnLines(e, mk), ttn = sum(tl.map(x => x.amount));
-    return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, adjBonus, adjCorr, adjustments: c.adjustments, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn, pay: total - advance - officialDeducted + ttn };
+    return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, adjBonus, adjCorr, adjustments: c.adjustments, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn,
+      // «До виплати» не нижче 0 (Роман 27.11, разом із форс-мажором): аванси понад ЗП місяця в мінус не йдуть; без `fmAdvances` — як у пакеті
+      pay: state.fmAdvances === undefined ? total - advance - officialDeducted + ttn : Math.max(0, total - advance - officialDeducted + ttn) };
   }
   /** Форма на виплату: готівка + карти разом мають дорівнювати «До виплати»; нова карта (isNew) — номер за Луном і власник */
   function checkPayoutForm(e, mk, form) {
@@ -507,7 +520,8 @@ export function createPayroll(state) {
   function forecast(mk) {
     const rows = E.filter(e => employedIn(e, mk)).map(e => { const a = advanceOf(e.id, mk); return { e, c: calcE(e, mk), a, as: advanceStatus(a), o: officialOf(e, mk), t: e.role === 'manager' ? ttnStats(e, mk) : null, L: advanceLimit(e, mk) }; });
     const fundNow = sum(rows.map(x => x.c.now.total)), fundPlan = sum(rows.map(x => x.c.atPlan.total));
-    const advPaid = sum(rows.filter(x => x.as === 'paid').map(x => x.a.amount)), advRequested = sum(rows.filter(x => x.as === 'requested').map(x => x.a.amount));
+    const advPaid = sum(rows.filter(x => x.as === 'paid').map(x => x.a.amount)) + sum(rows.map(x => fmSum(x.e.id, mk, ['paid']))),
+      advRequested = sum(rows.filter(x => x.as === 'requested').map(x => x.a.amount)) + sum(rows.map(x => fmSum(x.e.id, mk, ['requested'])));
     const advLeft = sum(rows.filter(x => !x.a || x.as === 'rejected').map(x => x.L.amount));
     const officialDeducted = sum(rows.map(x => (x.o && x.o.deduct ? x.o.amount : 0))), officialSeparate = sum(rows.map(x => (x.o && !x.o.deduct ? x.o.amount : 0)));
     const late = x => x.t && !ttnOk(x.t) && x.t.missing.some(d => addDays(d.date, 7) < today);
@@ -637,7 +651,7 @@ export function createPayroll(state) {
     // розрахунок
     record, verifiedMargin, companyMargin, companyPlan, calc: W(calcE), adjustmentsOf: W(adjustmentsOf),
     // офіційна ЗП, аванс
-    officialOf: W(officialOf), officialSeparateOf: W(officialSeparateOf), advanceOf, advanceStatus, advancePaid, advanceWindowOpen, advanceLimit: W(advanceLimit),
+    officialOf: W(officialOf), officialSeparateOf: W(officialSeparateOf), advanceOf, advanceStatus, advancePaid, advanceWindowOpen, fmOf, fmStatus, advanceLimit: W(advanceLimit),
     // ТТН
     ttnDate, ttnStats: W(ttnStats), ttnOk, ttnFixedAt: W(ttnFixedAt), ttnPrev: W(ttnPrev), ttnLines: W(ttnLines),
     // рівень (офер Лілії), закриття, виплата

@@ -48,9 +48,12 @@ test("#2600 РУШІЙ ЗАРПЛАТИ: 63 тести пакета (40 золо
   // ✏️ 27.11.2026 утретє (задача 10723, Роман: «на Профі не можна перейти без керівництва»): сповіщення `lvl.req` / `lvl`
   // (заявка на «Профі» тим, хто погоджує, і відмова менеджеру) та правило закриття `lvl.decided`; без `levelRequests` у стані
   // — як у пакеті. notify.mjs було 16cc293f…; стережуть #11341.
+  // ✏️ 27.11.2026 учетверте («Аванс форс-мажор», Роман: «ліміти такі самі… Тільки Сергій погоджує»): `state.fmAdvances` — кілька
+  // авансів на місяць; відомість віднімає всі виплачені, ліміт спільний, «До виплати» ≥ 0; сповіщення `adv.fm` і правила
+  // `fm.decided` / `fm.closed`. Без `fmAdvances` — як у пакеті. Рушій було eaa7e51f…, notify.mjs — 5dd39b1a…; стережуть #11350–#11352.
   const PKG: Record<string, string> = {
-    "zarplata-engine.mjs": "eaa7e51f7cb9fc957a8de31720fcf443a361c4d6b1cd8505de69660b6e1b39ea",
-    "notify.mjs": "5dd39b1af5e2688ef23fbf7af63006f6005b506711ff1f681fa46f0b479973c3",
+    "zarplata-engine.mjs": "298fe1f4433ca763cf30bfc66b89cd4f6e729aba4e5e956e5f62cfad303890ef",
+    "notify.mjs": "78be03eceff34e381aa818493e0b6210dcbc22f2b29ca5a7b9aaf65ba867f7fb",
     "format.mjs": "c22786b4978d87e582b076e6712eb1986b1d9f0ed61aa32de875eca3e6b6d7d2",
     "test/golden.test.mjs": "c18e2fbcd0e4f61da8c6a631d04377521981450b39f4bcf714717ac1d7128ef2",
     "test/rules.test.mjs": "1b153325de8ad5849aab7cdec38a8dc902ca497b20c41595367b814f6188fdbd",

@@ -25,6 +25,8 @@ export const NOTIFICATION_TYPES = Object.freeze({
   'lvl': ['Рівень', false, 'Перехід на «Профі», новий офер', 'менеджер; фінансисти — до відома'],
   // заявка менеджера на «Профі» (задача 10723, В1, «роби» Романа 27.11.2026): рішення — у картці «Найму»
   'lvl.req': ['Рівень', true, 'Заявка менеджера на «Профі»', 'ОД, рекрутер, адміни — погодити чи відхилити в «Наймі»'],
+  // «Аванс форс-мажор» (задача 10723, Тетяна 27.11; Роман: «Тільки Сергій погоджує»): погоджує ОД, далі — як звичайний аванс
+  'adv.fm': ['Аванс', true, 'Заявка на аванс форс-мажор', 'ОД — погодити чи відхилити; після погодження — фінансисти (виплатити)'],
   'offer': ['Документи', true, 'Новий офер — перепідписати', 'рекрутер — задача'],
 });
 
@@ -47,6 +49,8 @@ const inCab = (tab, focus) => ({ tab: 'cab', mz: focus ? { tab, focus } : { tab 
 export function createNotifier(zp, state) {
   const R = state.responsibles, FIN = R.finance, S = zp.settings;
   const P = id => zp.person(id);
+  /** Заявка «Аванс форс-мажор» за id (скасовану стан не несе — тоді null) */
+  const fmFind = (mk, empId, advId) => ((((state.fmAdvances || {})[mk] || {})[empId]) || []).find(a => a.id === advId) || null;
   const make = (type, at, to, o) => ({ type, at, to: [...new Set(to)].filter(Boolean), act: NOTIFICATION_TYPES[type][1], ...o });
   const leaveText = p => `${ddy(p.leave.date)} — ${LEAVE_TYPES[p.leave.type][0]}`;
   const TASKS = CLEARANCE_ITEMS.filter(x => !x.final);
@@ -132,6 +136,29 @@ export function createNotifier(zp, state) {
       const p = P(empId), a = state.advances[mk][empId];
       return [make('adv.res', a.rejectedAt, [p.id], { empId: p.id, title: `Заявку на аванс ${uah(a.amount)} відхилено`, text: `${a.reason || ''} Можна подати нову.`, go: inCab('pay', '#adv') })];
     },
+    /** «Аванс форс-мажор» подано — тим, хто погоджує (state.fmApprovers); закривається рішенням або скасуванням */
+    fmRequested(empId, mk, advId) {
+      const p = P(empId), a = fmFind(mk, empId, advId);
+      return [make('adv.fm', a.requestedAt, state.fmApprovers || [], { empId: p.id, cta: 'Погодити чи відхилити', title: `Аванс форс-мажор — ${p.name}`,
+        text: `${uah(a.amount)}: ${payHow(a)}. Причина: ${a.note || '—'}`, go: { tab: 'adv' }, done: { kind: 'fm.decided', empId: p.id, month: mk, advId } })];
+    },
+    /** Погоджено — фінансистам «виплатити» (як звичайна заявка) і працівнику до відома */
+    fmApproved(empId, mk, advId) {
+      const p = P(empId), a = fmFind(mk, empId, advId);
+      return [
+        make('adv.req', a.approvedAt, FIN, { empId: p.id, cta: 'До авансів', title: `Аванс форс-мажор погоджено — ${p.name}`, text: `${uah(a.amount)}: ${payHow(a)}. Причина: ${a.note || '—'}`, go: { tab: 'adv' },
+          done: { kind: 'fm.closed', empId: p.id, month: mk, advId } }),
+        make('adv.res', a.approvedAt, [p.id], { empId: p.id, title: `Аванс форс-мажор ${uah(a.amount)} погоджено`, text: 'Фінансист виплатить найближчим часом.', go: inCab('pay', '#adv') }),
+      ];
+    },
+    fmPaid(empId, mk, advId) {
+      const p = P(empId), a = fmFind(mk, empId, advId);
+      return [make('adv.res', a.paidAt, [p.id], { empId: p.id, title: `Аванс форс-мажор ${uah(a.amount)} ${approved ? 'схвалено' : 'виплачено'}`, text: `${capFirst(payHow(a))}.${approved ? BANK : ''} Вирахуємо із ЗП за ${monthLow(mk)} при закритті місяця.`, go: inCab('pay', '#adv') })];
+    },
+    fmRejected(empId, mk, advId) {
+      const p = P(empId), a = fmFind(mk, empId, advId);
+      return [make('adv.res', a.rejectedAt, [p.id], { empId: p.id, title: `Аванс форс-мажор ${uah(a.amount)} відхилено`, text: a.reason || '', go: inCab('pay', '#adv') })];
+    },
     ttnHold(empId, mk, at) {
       const p = P(empId), t = zp.ttnStats(p.id, mk, at), need = Math.max(1, ceilE(S.ttn.minPct * t.total / 100) - t.done), live = !t.legacy;   // місяць до запуску — виплата вже пішла
       return [
@@ -210,6 +237,8 @@ export function createNotifier(zp, state) {
       case 'rec.answered': { const x = zp.record(r.empId, r.month); if (!x) return null; if (['agreed', 'submitted', 'paid'].includes(x.status)) return x.agreedAt || true; return x.status === 'disputed' && x.dispute && x.dispute.at >= r.since ? x.dispute.at : null; }
       case 'rec.resolved': { const x = zp.record(r.empId, r.month); return x && x.status !== 'disputed' ? x.verifiedAt || true : null; }
       case 'rec.paid': { const x = zp.record(r.empId, r.month); return x && x.status === 'paid' ? x.paidAt : null; }
+      case 'fm.decided': { const a = fmFind(r.month, r.empId, r.advId); return !a ? true : a.rejectedAt && zp.seen(a.rejectedAt) ? a.rejectedAt : a.approvedAt && zp.seen(a.approvedAt) ? a.approvedAt : null; }
+      case 'fm.closed': { const a = fmFind(r.month, r.empId, r.advId); return !a ? true : a.rejectedAt && zp.seen(a.rejectedAt) ? a.rejectedAt : a.paidAt && zp.seen(a.paidAt) ? a.paidAt : null; }
       case 'adv.closed': { const a = (state.advances || {})[r.month] && state.advances[r.month][r.empId]; if (!a) return null; return a.cancelledAt && zp.seen(a.cancelledAt) ? a.cancelledAt : a.rejectedAt && zp.seen(a.rejectedAt) ? a.rejectedAt : a.paidAt && zp.seen(a.paidAt) ? a.paidAt : null; }
       case 'ttn.fixed': return zp.ttnOk(zp.ttnStats(r.empId, r.month)) ? zp.ttnFixedAt(r.empId, r.month) || true : null;
       case 'task.closed': { const t = (state.tasks || []).find(x => x.id === r.taskId); if (!t) return null; return t.voidAt && zp.seen(t.voidAt) ? t.voidAt : t.doneAt && zp.seen(t.doneAt) ? t.doneAt : null; }

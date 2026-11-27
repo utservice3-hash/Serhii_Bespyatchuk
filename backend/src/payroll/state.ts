@@ -260,12 +260,25 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   // ---------- аванси: на місяць — остання не скасована заявка ----------
   const advances: Record<string, Record<string, unknown>> = {};
   const advQ = await db.query<{ id: string; mk: string; user_id: number; amount: string; cash: string; status: string; requested_at: Date; paid_at: Date | null; paid_by: number | null;
-    rejected_at: Date | null; rejected_by: number | null; reason: string | null; cancelled_at: Date | null; lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
-    `SELECT a.id::text, to_char(a.month, 'YYYY-MM') AS mk, a.user_id, a.amount, a.cash, a.status, a.requested_at, a.paid_at, a.paid_by, a.rejected_at, a.rejected_by, a.reason, a.cancelled_at,
+    rejected_at: Date | null; rejected_by: number | null; reason: string | null; cancelled_at: Date | null; kind: string; note: string | null; approved_at: Date | null; approved_by: number | null; lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
+    `SELECT a.id::text, to_char(a.month, 'YYYY-MM') AS mk, a.user_id, a.amount, a.cash, a.status, a.requested_at, a.paid_at, a.paid_by, a.rejected_at, a.rejected_by, a.reason, a.cancelled_at, a.kind, a.note, a.approved_at, a.approved_by,
             (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'bank', c.bank, 'amount', l.amount) ORDER BY l.id)
                FROM payroll_advance_lines l JOIN payroll_cards c ON c.id = l.card_id WHERE l.advance_id = a.id) AS lines
        FROM payroll_advances a WHERE a.month >= $1::date AND a.status <> 'cancelled' ORDER BY a.requested_at, a.id`, [monthStart(fromMonth)]);
+  // «Аванс форс-мажор» (задача 10723): кілька на місяць — окремим масивом, щоб `advances` лишився «один звичайний на місяць»
+  const fmAdvances: Record<string, Record<string, unknown[]>> = {};
   for (const a of advQ.rows) {
+    if (a.kind === "fm") {
+      ((fmAdvances[a.mk] ??= {})[String(a.user_id)] ??= []).push({
+        id: Number(a.id), amount: Number(a.amount), cash: Number(a.cash), note: a.note,
+        cards: (a.lines ?? []).map((l) => ({ no: `${l.cardId}-${l.last4}`, cardId: l.cardId, who: l.holder, bank: l.bank, amount: Number(l.amount) })),
+        requestedAt: kyivIso(a.requested_at),
+        ...(a.approved_at ? { approvedAt: kyivIso(a.approved_at), approvedBy: String(a.approved_by) } : {}),
+        ...(a.paid_at ? { paidAt: kyivIso(a.paid_at), paidBy: String(a.paid_by) } : {}),
+        ...(a.rejected_at ? { rejectedAt: kyivIso(a.rejected_at), rejectedBy: String(a.rejected_by), reason: a.reason } : {}),
+      });
+      continue;
+    }
     (advances[a.mk] ??= {})[String(a.user_id)] = {
       id: Number(a.id), amount: Number(a.amount), cash: Number(a.cash),
       cards: (a.lines ?? []).map((l) => ({ no: `${l.cardId}-${l.last4}`, cardId: l.cardId, who: l.holder, bank: l.bank, amount: Number(l.amount) })),
@@ -317,6 +330,10 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   const levelApprovers = (await db.query<{ id: number }>(
     `SELECT u.id FROM users u JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
       WHERE u.is_active AND (r.permissions ->> 'payroll_level_approve') = 'true' ORDER BY u.id`)).rows.map((r) => String(r.id));
+  // хто погоджує «Аванс форс-мажор» — право `payroll_fm_approve` (Роман 27.11: «Тільки Сергій погоджує» — роль ОД)
+  const fmApprovers = (await db.query<{ id: number }>(
+    `SELECT u.id FROM users u JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
+      WHERE u.is_active AND (r.permissions ->> 'payroll_fm_approve') = 'true' ORDER BY u.id`)).rows.map((r) => String(r.id));
 
   const settings = { ...(setQ.rows[0]?.settings ?? {}) } as Record<string, unknown>;
   settings.kpi = { ...(settings.kpi as object ?? {}), ...OFFER_KPI };   // умови оферу — не налаштування: їх не перекриває версія з БД
@@ -324,8 +341,8 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };
   return {
     now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, payWording: "approved", ttnLegacy, dismissZero: true,
-    records, advances, archive, clientHistory: {}, clearances, responsibles: await loadResponsibles(db), tasks, holidays: [],
-    levelRequests, levelApprovers, meta: { managerOf },
+    records, advances, fmAdvances, archive, clientHistory: {}, clearances, responsibles: await loadResponsibles(db), tasks, holidays: [],
+    levelRequests, levelApprovers, fmApprovers, meta: { managerOf },
   };
 }
 

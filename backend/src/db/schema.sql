@@ -8023,7 +8023,24 @@ CREATE TABLE IF NOT EXISTS payroll_advances (
   CHECK (status <> 'rejected' OR (reason IS NOT NULL AND length(btrim(reason)) > 0)),
   CHECK (status <> 'paid' OR paid_at IS NOT NULL)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS payroll_advances_one_active ON payroll_advances (month, user_id) WHERE status IN ('requested', 'paid');
+-- 🆘 «АВАНС ФОРС-МАЖОР» (задача 10723, Тетяна 27.11.2026; Роман: «ліміти такі самі, як і звичайного авансу. Тільки Сергій
+-- погоджує»). Вид `fm`: будь-коли, кілька на місяць, обовʼязкова причина; спершу `pending` (чекає ОД), погоджено → `requested`
+-- (далі як звичайний: «Виплатити»). «Один на місяць» тепер лише для звичайних. Наявні рядки → `regular`, суми не міняються.
+-- ⚠️ revert коду не прибирає `fm`-рядків: старий код відніме з ЗП лише ОДИН аванс місяця — перед відкатом перевірити, чи є `fm`.
+ALTER TABLE payroll_advances ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'regular';
+ALTER TABLE payroll_advances ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE payroll_advances ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+ALTER TABLE payroll_advances ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCES users(id);
+ALTER TABLE payroll_advances DROP CONSTRAINT IF EXISTS payroll_advances_status_check;
+ALTER TABLE payroll_advances ADD CONSTRAINT payroll_advances_status_check CHECK (status IN ('pending', 'requested', 'paid', 'rejected', 'cancelled'));
+ALTER TABLE payroll_advances DROP CONSTRAINT IF EXISTS payroll_advances_fm_chk;
+ALTER TABLE payroll_advances ADD CONSTRAINT payroll_advances_fm_chk CHECK (
+  kind IN ('regular', 'fm')
+  AND (status <> 'pending' OR kind = 'fm')
+  AND (kind <> 'fm' OR (note IS NOT NULL AND length(btrim(note)) > 0))
+  AND (kind <> 'fm' OR status NOT IN ('requested', 'paid') OR approved_at IS NOT NULL));
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_advances_one_regular ON payroll_advances (month, user_id) WHERE kind = 'regular' AND status IN ('requested', 'paid');
+DROP INDEX IF EXISTS payroll_advances_one_active;
 CREATE TABLE IF NOT EXISTS payroll_advance_lines (
   id         BIGSERIAL PRIMARY KEY,
   advance_id BIGINT NOT NULL REFERENCES payroll_advances(id),
@@ -8778,3 +8795,12 @@ UPDATE roles SET permissions = permissions || '{"payroll_level_approve":true}'::
 UPDATE roles SET permissions = permissions - 'payroll_level_approve' WHERE key NOT IN ('admin', 'opdir', 'hr');
 -- 🔒 Не для AI-запитів, як і решта зарплатних таблиць. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON payroll_responsibles, payroll_level_requests FROM ai_readonly;
+-- 🔔 Типи центру сповіщень без рядка в `notify_rules` мовчки НЕ надсилаються (`emitAll` пропускає невідомий тип), тож кожен
+-- новий тип рушія — рядок тут. Стереже #11353 (кожен ключ NOTIFICATION_TYPES має свій рядок).
+INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
+ ('lvl.req', 'Рівень', true, 'Заявка менеджера на «Профі»', 'ОД, рекрутер, адміни — погодити чи відхилити в «Наймі»'),
+ ('adv.fm',  'Аванс',  true, 'Заявка на аванс форс-мажор', 'ОД — погодити чи відхилити; після погодження — фінансисти (виплатити)')
+ON CONFLICT (type) DO NOTHING;
+-- 🆘 Погодити «Аванс форс-мажор» — лише ОД (Роман 27.11.2026: «Тільки Сергій погоджує»). Фінансист виплачує вже погоджене.
+UPDATE roles SET permissions = permissions || '{"payroll_fm_approve":true}'::jsonb WHERE key IN ('opdir');
+UPDATE roles SET permissions = permissions - 'payroll_fm_approve' WHERE key NOT IN ('opdir');

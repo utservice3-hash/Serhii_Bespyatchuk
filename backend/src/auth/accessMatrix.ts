@@ -2368,6 +2368,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["candidate"] },
   { method: "POST", path: "/api/payroll/me/advances", cls: "deny-only",
     allow: [], deny: ["candidate"] },
+  { method: "POST", path: "/api/payroll/me/advances/fm", cls: "deny-only",
+    allow: [], deny: ["candidate"] },
   { method: "POST", path: "/api/payroll/me/advances/:id/cancel", cls: "deny-only",
     allow: [], deny: ["candidate"] },
   { method: "POST", path: "/api/payroll/me/advance-remind", cls: "deny-only",
@@ -2422,6 +2424,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
   { method: "POST", path: "/api/payroll/advances/:id/reject", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
+  // «Аванс форс-мажор» погоджує / відхиляє лише ОД (`payroll_fm_approve`, Роман 27.11.2026: «Тільки Сергій погоджує»)
+  { method: "POST", path: "/api/payroll/advances/:id/fm-approve", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "kvp", "financier", "hr", "team_lead", "manager", "candidate"] },
+  { method: "POST", path: "/api/payroll/advances/:id/fm-reject", cls: "deny-only",
+    allow: [], deny: ["admin", "ceo", "kvp", "financier", "hr", "team_lead", "manager", "candidate"] },
   { method: "POST", path: "/api/payroll/employees/:userId/leave", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "kvp", "financier", "team_lead", "manager", "candidate"] },
   // заявку на «Профі» відхиляють ОД, рекрутер і адміни (`payroll_level_approve`, Роман 27.11.2026); решті — 403

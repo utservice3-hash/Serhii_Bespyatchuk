@@ -156,9 +156,9 @@ export async function cabinet(db: Db, v: Viewer) {
   const paidMonths = (await db.query<{ mk: string; snap: Record<string, unknown>; paid_at: Date }>(
     `SELECT to_char(month, 'YYYY-MM') AS mk, paid_snapshot AS snap, paid_at FROM payroll_records WHERE user_id = $1 AND status = 'paid' ORDER BY month DESC LIMIT 12`, [v.userId])).rows
     .map((r) => ({ month: r.mk, pay: (r.snap as Record<string, unknown>).pay, total: (r.snap as Record<string, unknown>).total, paidAt: r.paid_at.toISOString(), how: (r.snap as Record<string, unknown>).how ?? null }));
-  const advances = (await db.query<{ id: string; mk: string; amount: string; status: string; reason: string | null; requested_at: Date; paid_at: Date | null }>(
-    `SELECT id::text, to_char(month, 'YYYY-MM') AS mk, amount, status, reason, requested_at, paid_at FROM payroll_advances WHERE user_id = $1 ORDER BY requested_at DESC LIMIT 12`, [v.userId])).rows
-    .map((a) => ({ id: Number(a.id), month: a.mk, amount: Number(a.amount), status: a.status, reason: a.reason, requestedAt: a.requested_at.toISOString(), paidAt: a.paid_at?.toISOString() ?? null }));
+  const advances = (await db.query<{ id: string; mk: string; amount: string; status: string; reason: string | null; requested_at: Date; paid_at: Date | null; kind: string }>(
+    `SELECT id::text, to_char(month, 'YYYY-MM') AS mk, amount, status, reason, requested_at, paid_at, kind FROM payroll_advances WHERE user_id = $1 ORDER BY requested_at DESC LIMIT 12`, [v.userId])).rows
+    .map((a) => ({ id: Number(a.id), month: a.mk, amount: Number(a.amount), status: a.status, reason: a.reason, requestedAt: a.requested_at.toISOString(), paidAt: a.paid_at?.toISOString() ?? null, kind: a.kind }));
   const offers = (e.state.tasks as Array<Record<string, unknown>>).filter((t) => t.empId === id).map((t) => ({ title: t.title, level: t.level, from: t.from, createdAt: t.createdAt, signedAt: t.signedAt, voidAt: t.voidAt }));
   const S = e.zp.settings;
   return {
@@ -171,7 +171,10 @@ export async function cabinet(db: Db, v: Viewer) {
       month: live, calc: calcOut(e, calc), ttn: p.role === "manager" ? ttnOut(e, p, live) : null,
       ttnPrev: e.zp.ttnPrev(p, live),
       advance: { open: e.zp.advanceWindowOpen(live), fromDay: S.advance.fromDay, limit: L ? { amount: L.amount, byRule: L.byRule, cap: L.cap, capped: L.capped, basis: L.basis, pct: L.pct, base: L.base } : null,
-        request: adv ? { ...adv, status: e.zp.advanceStatus(adv) } : null },
+        request: adv ? { ...adv, status: e.zp.advanceStatus(adv) } : null,
+        // «Аванс форс-мажор»: будь-коли, ліміт спільний зі звичайним; звільненим — ні (Роман 27.11)
+        fm: { allowed: !p.leave, limit: L ? (L as { fm?: number }).fm ?? 0 : 0,
+          list: (e.zp.fmOf(id, live) as Array<Record<string, unknown>>).map((a) => ({ ...a, status: e.zp.fmStatus(a) })) } },
       birthdayGift: e.zp.birthdayGift(p, live), autoProfi: p.role === "manager" ? e.zp.marginOfMonth(p, prevMonth(live)) : null,
     } : null,
     closed: closed ? recordOut(e, id, closed, true) : null,
@@ -307,6 +310,52 @@ export async function requestAdvance(pool: Pool, v: Viewer, body: Record<string,
   await after(pool, (e) => e.nt.build.advanceRequested(id, mk));
   return { ok: true };
 }
+/**
+ * 🆘 «Аванс форс-мажор» (задача 10723, Тетяна 27.11; Роман: «ліміти такі самі, як і звичайного авансу. Тільки Сергій погоджує»).
+ * Будь-коли в живому місяці, кілька на місяць, причина обовʼязкова; ліміт спільний зі звичайним авансом (`advanceLimit().fm`).
+ * Звільненим — ні. Заявка чекає ОД (`pending`), далі — як звичайна: фінансист «Виплатити».
+ */
+export async function requestFmAdvance(pool: Pool, v: Viewer, body: Record<string, unknown>) {
+  const id = String(v.userId); let mk = "", advId = 0;
+  await tx(pool, async (c) => {
+    const e = await engine(c, { fresh: true }); const p = e.zp.person(id);
+    if (!p) fail(403, "Вас немає в зарплаті — зверніться до фінансиста.");
+    if (p.leave) fail(409, "Після звільнення аванс форс-мажор не подається — розрахунок іде через обхідний лист.");
+    mk = e.zp.liveMonth;
+    if (!e.zp.employedIn(p, mk)) fail(409, "Цього місяця ви не працюєте — аванс недоступний.");
+    const note = String(body.note ?? "").trim(); if (note.length < 3) fail(422, "Напишіть причину — її побачить ОД.", "note");
+    const L = e.zp.advanceLimit(p, mk) as { fm: number };
+    const cash = money(body.cash ?? 0); if (!(cash >= 0)) fail(422, "Готівка — не менше нуля.", "cash");
+    const lines = await resolveLines(c, v.userId, body.lines, v.userId);
+    const amount = Math.round((cash + lines.reduce((s, l) => s + l.amount, 0)) * 100) / 100;
+    if (!(amount > 0)) fail(422, "Вкажіть суму авансу.", "amount");
+    if (amount > L.fm) fail(422, `Більше ліміту на сьогодні: можна до ${uahTxt(L.fm)} (ліміт спільний зі звичайним авансом).`, "amount");
+    const a = await c.query<{ id: string }>(`INSERT INTO payroll_advances (month, user_id, amount, cash, limit_at_request, kind, status, note) VALUES ($1::date,$2,$3,$4,$5,'fm','pending',$6) RETURNING id::text`,
+      [monthStart(mk), v.userId, amount, cash, L.fm, note]);
+    advId = Number(a.rows[0].id);
+    for (const l of lines) await c.query(`INSERT INTO payroll_advance_lines (advance_id, card_id, amount) VALUES ($1,$2,$3)`, [advId, l.cardId, l.amount]);
+    await history(c, v.userId, v.userId, `${mk} — заявка на аванс форс-мажор ${uahTxt(amount)}`, note, { month: mk, advance: advId });
+  });
+  await after(pool, (e) => e.nt.build.fmRequested(id, mk, advId));
+  return { ok: true };
+}
+export async function approveFmAdvance(pool: Pool, v: Viewer, advId: number) {
+  const a = (await pool.query<{ user_id: number; mk: string; amount: string }>(
+    `UPDATE payroll_advances SET status = 'requested', approved_at = now(), approved_by = $2 WHERE id = $1 AND kind = 'fm' AND status = 'pending' RETURNING user_id, to_char(month, 'YYYY-MM') AS mk, amount`, [advId, v.userId])).rows[0];
+  if (!a) fail(409, "Погодити можна лише заявку форс-мажор, що чекає рішення.");
+  await history(pool, v.userId, a.user_id, `${a.mk} — аванс форс-мажор погоджено: ${uahTxt(Number(a.amount))}`, null, { advance: advId });
+  await after(pool, (e) => e.nt.build.fmApproved(String(a.user_id), a.mk, advId));
+  return { ok: true };
+}
+export async function rejectFmAdvance(pool: Pool, v: Viewer, advId: number, reason: unknown) {
+  const why = String(reason ?? "").trim(); if (why.length < 3) fail(422, "Напишіть причину — працівник її побачить.", "reason");
+  const a = (await pool.query<{ user_id: number; mk: string; amount: string }>(
+    `UPDATE payroll_advances SET status = 'rejected', rejected_at = now(), rejected_by = $2, reason = $3 WHERE id = $1 AND kind = 'fm' AND status = 'pending' RETURNING user_id, to_char(month, 'YYYY-MM') AS mk, amount`, [advId, v.userId, why])).rows[0];
+  if (!a) fail(409, "Відхилити можна лише заявку форс-мажор, що чекає рішення.");
+  await history(pool, v.userId, a.user_id, `${a.mk} — аванс форс-мажор відхилено: ${uahTxt(Number(a.amount))}`, why, { advance: advId });
+  await after(pool, (e) => e.nt.build.fmRejected(String(a.user_id), a.mk, advId));
+  return { ok: true };
+}
 /** «Нагадати» в кабінеті: сповіщення в день, коли відкриються заявки на аванс (джоба `payrollReminders`). Повторне — скасовує. */
 export async function toggleAdvanceReminder(pool: Pool, v: Viewer) {
   const e = await engine(pool); const p = e.zp.person(String(v.userId));
@@ -333,7 +382,7 @@ export async function remindersTick(pool: Pool): Promise<number> {
   return due.length;
 }
 export async function cancelAdvance(pool: Pool, v: Viewer, advId: number) {
-  const r = await pool.query(`UPDATE payroll_advances SET status = 'cancelled', cancelled_at = now() WHERE id = $1 AND user_id = $2 AND status = 'requested'`, [advId, v.userId]);
+  const r = await pool.query(`UPDATE payroll_advances SET status = 'cancelled', cancelled_at = now() WHERE id = $1 AND user_id = $2 AND status IN ('requested', 'pending')`, [advId, v.userId]);
   if (!r.rowCount) fail(409, "Скасувати можна лише свою заявку, яку ще не виплатили.");
   await history(pool, v.userId, v.userId, "Заявку на аванс скасовано", null, { advance: advId });
   await after(pool);
@@ -640,50 +689,55 @@ export async function markPaid(pool: Pool, v: Viewer, mk: string, ids: number[])
 export async function advancesView(db: Db, mk: string) {
   const e = await engine(db);
   const reqs = (await db.query<{ id: string; user_id: number; amount: string; cash: string; status: string; reason: string | null; limit_at_request: string; requested_at: Date; paid_at: Date | null; rejected_at: Date | null;
-    lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
-    `SELECT a.id::text, a.user_id, a.amount, a.cash, a.status, a.reason, a.limit_at_request, a.requested_at, a.paid_at, a.rejected_at,
+    kind: string; note: string | null; approved_at: Date | null; lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
+    `SELECT a.id::text, a.user_id, a.amount, a.cash, a.status, a.reason, a.limit_at_request, a.requested_at, a.paid_at, a.rejected_at, a.kind, a.note, a.approved_at,
             (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'bank', c.bank, 'amount', l.amount) ORDER BY l.id)
                FROM payroll_advance_lines l JOIN payroll_cards c ON c.id = l.card_id WHERE l.advance_id = a.id) AS lines
        FROM payroll_advances a WHERE a.month = $1::date AND a.status <> 'cancelled' ORDER BY a.requested_at`, [monthStart(mk)])).rows;
   const N = nameMap(e);
   const requests = reqs.map((a) => ({ id: Number(a.id), userId: String(a.user_id), name: N[String(a.user_id)] ?? "", amount: Number(a.amount), cash: Number(a.cash), status: a.status, reason: a.reason,
     limit: Number(a.limit_at_request), requestedAt: a.requested_at.toISOString(), paidAt: a.paid_at?.toISOString() ?? null, rejectedAt: a.rejected_at?.toISOString() ?? null,
+    kind: a.kind, note: a.note, approvedAt: a.approved_at?.toISOString() ?? null,
     lines: (a.lines ?? []).map((l) => ({ cardId: l.cardId, last4: l.last4, holder: l.holder, bank: l.bank, amount: Number(l.amount) })) }));
-  const active = new Set(requests.filter((r) => r.status !== "rejected").map((r) => r.userId));
+  const active = new Set(requests.filter((r) => r.status !== "rejected" && r.kind === "regular").map((r) => r.userId));   // форс-мажор звичайну заявку не заміняє
   const notYet = e.zp.isLive(mk) ? (e.zp.employees as Array<Record<string, unknown>>).filter((p) => e.zp.employedIn(p, mk) && !active.has(p.id as string))
     .map((p) => ({ userId: p.id, name: p.name, title: p.title, limit: e.zp.advanceLimit(p, mk).amount })) : [];
   return { month: mk, open: e.zp.advanceWindowOpen(mk), fromDay: e.zp.settings.advance.fromDay, requests, notYet };
 }
 export async function payAdvance(pool: Pool, v: Viewer, advId: number) {
   const a = (await pool.query<{ user_id: number; mk: string; amount: string }>(
-    `UPDATE payroll_advances SET status = 'paid', paid_at = now(), paid_by = $2 WHERE id = $1 AND status = 'requested' RETURNING user_id, to_char(month, 'YYYY-MM') AS mk, amount`, [advId, v.userId])).rows[0];
+    `UPDATE payroll_advances SET status = 'paid', paid_at = now(), paid_by = $2 WHERE id = $1 AND status = 'requested' RETURNING user_id, to_char(month, 'YYYY-MM') AS mk, amount, kind`, [advId, v.userId])).rows[0];
   if (!a) fail(409, "Виплатити можна лише подану заявку.");
-  await history(pool, v.userId, a.user_id, `${a.mk} — аванс виплачено: ${uahTxt(Number(a.amount))}`, null, { advance: advId });
-  await after(pool, (e) => e.nt.build.advancePaid(String(a.user_id), a.mk));
+  const fm = (a as { kind?: string }).kind === "fm";
+  await history(pool, v.userId, a.user_id, `${a.mk} — ${fm ? "аванс форс-мажор" : "аванс"} виплачено: ${uahTxt(Number(a.amount))}`, null, { advance: advId });
+  await after(pool, (e) => (fm ? e.nt.build.fmPaid(String(a.user_id), a.mk, advId) : e.nt.build.advancePaid(String(a.user_id), a.mk)));
   return { ok: true };
 }
 export async function rejectAdvance(pool: Pool, v: Viewer, advId: number, reason: unknown) {
   const why = String(reason ?? "").trim(); if (why.length < 3) fail(422, "Напишіть причину — працівник її побачить.", "reason");
   const a = (await pool.query<{ user_id: number; mk: string; amount: string }>(
-    `UPDATE payroll_advances SET status = 'rejected', rejected_at = now(), rejected_by = $2, reason = $3 WHERE id = $1 AND status = 'requested' RETURNING user_id, to_char(month, 'YYYY-MM') AS mk, amount`, [advId, v.userId, why])).rows[0];
+    `UPDATE payroll_advances SET status = 'rejected', rejected_at = now(), rejected_by = $2, reason = $3 WHERE id = $1 AND status = 'requested' RETURNING user_id, to_char(month, 'YYYY-MM') AS mk, amount, kind`, [advId, v.userId, why])).rows[0];
   if (!a) fail(409, "Відхилити можна лише подану заявку.");
-  await history(pool, v.userId, a.user_id, `${a.mk} — аванс відхилено: ${uahTxt(Number(a.amount))}`, why, { advance: advId });
-  await after(pool, (e) => e.nt.build.advanceRejected(String(a.user_id), a.mk));
+  const fm = (a as { kind?: string }).kind === "fm";
+  await history(pool, v.userId, a.user_id, `${a.mk} — ${fm ? "аванс форс-мажор" : "аванс"} відхилено: ${uahTxt(Number(a.amount))}`, why, { advance: advId });
+  await after(pool, (e) => (fm ? e.nt.build.fmRejected(String(a.user_id), a.mk, advId) : e.nt.build.advanceRejected(String(a.user_id), a.mk)));
   return { ok: true };
 }
 export async function advancesXlsx(pool: Pool, v: Viewer, mk: string) {
   const { buildXlsx } = await import("../core/xlsxWrite.js");
   const e = await engine(pool); const N = nameMap(e);
-  const rows = (await pool.query<{ user_id: number; amount: string; cash: string; status: string; line_amount: string | null; number_enc: Buffer | null; last4: string | null; holder: string | null; bank: string | null }>(
-    `SELECT a.user_id, a.amount, a.cash, a.status, l.amount AS line_amount, c.number_enc, c.last4, c.holder, c.bank
+  const rows = (await pool.query<{ id: string; kind: string; user_id: number; amount: string; cash: string; status: string; line_amount: string | null; number_enc: Buffer | null; last4: string | null; holder: string | null; bank: string | null }>(
+    `SELECT a.id::text, a.kind, a.user_id, a.amount, a.cash, a.status, l.amount AS line_amount, c.number_enc, c.last4, c.holder, c.bank
        FROM payroll_advances a LEFT JOIN payroll_advance_lines l ON l.advance_id = a.id LEFT JOIN payroll_cards c ON c.id = l.card_id
       WHERE a.month = $1::date AND a.status IN ('requested', 'paid') ORDER BY a.requested_at, l.id`, [monthStart(mk)])).rows;
   const out: (string | number | null)[][] = [["ПІБ", "Сума", "Спосіб", "Номер карти", "Банк", "Отримувач", "Стан"]];
-  const seenCash = new Set<number>();
+  // готівка — один рядок на ЗАЯВКУ (у людини може бути звичайний аванс і форс-мажор у тому ж місяці)
+  const seenCash = new Set<string>();
+  const fmTag = (r: { kind: string }) => (r.kind === "fm" ? " · форс-мажор" : "");
   for (const r of rows) {
-    if (Number(r.cash) > 0 && !seenCash.has(r.user_id)) { seenCash.add(r.user_id); out.push([N[String(r.user_id)] ?? "", Number(r.cash), "готівка", "", "", "", r.status === "paid" ? "виплачено" : "заявка"]); }
+    if (Number(r.cash) > 0 && !seenCash.has(r.id)) { seenCash.add(r.id); out.push([N[String(r.user_id)] ?? "", Number(r.cash), "готівка", "", "", "", r.status === "paid" ? `виплачено${fmTag(r)}` : `заявка${fmTag(r)}`]); }
     if (r.line_amount) { let no = ""; try { no = r.number_enc ? decryptCard(r.number_enc) : ""; } catch { no = r.last4 ? `•••• ${r.last4}` : ""; }
-      out.push([N[String(r.user_id)] ?? "", Number(r.line_amount), "карта", no, r.bank ?? "не вказано", r.holder, r.status === "paid" ? "виплачено" : "заявка"]); }
+      out.push([N[String(r.user_id)] ?? "", Number(r.line_amount), "карта", no, r.bank ?? "не вказано", r.holder, r.status === "paid" ? `виплачено${fmTag(r)}` : `заявка${fmTag(r)}`]); }
   }
   await history(pool, v.userId, null, `Аванси ${mk} — вивантажено Excel`, `${out.length - 1} рядків`);
   return buildXlsx([{ name: `Аванси ${mk}`, rows: out }]);
