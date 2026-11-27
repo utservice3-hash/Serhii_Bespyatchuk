@@ -244,7 +244,7 @@ export default function SettingsTab({ ctx }: { ctx: PayrollCtx }) {
       </Card>
       <Offers S={S} teams={(data.emp.offerTeams ?? []) as Obj[]} />
       <PeopleSettings emp={data.emp} org={data.cur} settings={S} canEdit={canEdit} onChanged={() => { void reload(); }}
-        onLeave={(userId, date) => ctx.go("clearances", { leaveFor: userId, date })} />
+        onLeave={ctx.perms.has("payroll_leave") ? (userId, date) => ctx.go("clearances", { leaveFor: userId, date }) : null} />
       <OrgSettings org={data.cur} people={(data.emp.people ?? []) as Obj[]} deptMap={(data.emp.deptMap ?? []) as Obj[]} canEdit={canSet} onChanged={() => { void reload(); }} />
       {canNotify && <NotifyRules />}
       <Card title="Історія змін" aside="умови, шкали, офіційна ЗП, перевірки, аванси, згоди, виплати">

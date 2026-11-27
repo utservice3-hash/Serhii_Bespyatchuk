@@ -10,7 +10,7 @@ import { roleHasPerm } from "../auth/rbac.js";
 import * as P from "../payroll/service.js";
 import { CardKeyMissing } from "../payroll/cards.js";
 
-export const PAYROLL_PERMS = ["payroll_view_all", "payroll_edit", "payroll_settings", "payroll_final_word", "payroll_export_cards", "payroll_clearance", "payroll_offer_tasks", "notify_rules"] as const;
+export const PAYROLL_PERMS = ["payroll_view_all", "payroll_edit", "payroll_settings", "payroll_final_word", "payroll_export_cards", "payroll_clearance", "payroll_offer_tasks", "payroll_leave", "notify_rules"] as const;
 const viewer = (req: Request): P.Viewer => {
   const a = req.auth!;
   return { userId: a.userId, roleKey: a.roleKey, perms: new Set(PAYROLL_PERMS.filter((k) => roleHasPerm(a.roleKey, k))) };
@@ -84,7 +84,8 @@ payrollRouter.post("/advances/:id/reject", h(EDIT, (req, _r, v) => P.rejectAdvan
 payrollRouter.get("/advances/export", h(["payroll_export_cards"], async (req, res, v) => { const m = mk(req); sendXlsx(res, await P.advancesXlsx(pool, v, m), `Avans_${m}.xlsx`); return undefined; }));
 
 // ---------------- обхідний лист ----------------
-payrollRouter.post("/employees/:userId/leave", h(EDIT, async (req, res, v) => { const r = await P.createLeave(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
+payrollRouter.get("/leave-candidates", h(["payroll_leave"], () => P.leaveCandidates(pool)));
+payrollRouter.post("/employees/:userId/leave", h(["payroll_leave"], async (req, res, v) => { const r = await P.createLeave(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
 payrollRouter.get("/clearances", h(null, (_q, _r, v) => P.clearancesList(pool, v)));
 payrollRouter.get("/clearances/:userId", h(null, (req, _r, v) => P.clearanceView(pool, v, intP(req.params.userId))));
 payrollRouter.put("/clearances/:userId/items/:key/draft", h(null, (req, _r, v) => P.draftClearance(pool, v, intP(req.params.userId), String(req.params.key), body(req).data ?? req.body)));

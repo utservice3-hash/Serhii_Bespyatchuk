@@ -45,7 +45,15 @@ export async function loadResponsibles(db: Db): Promise<Responsibles> {
        FROM users u ${NAME_JOIN}
       WHERE u.is_active AND COALESCE(u.role_override, u.role) IN ('business_assistant', '____________', 'hr', 'financier', 'opdir')
       ORDER BY u.id`);
-  const first = (k: string, label: string) => { const r = q.rows.find((x) => x.key === k); return r ? { id: String(r.id), name: r.name } : { id: "", name: label }; };
+  // Поіменно (`payroll_responsibles`, Роман 27.11.2026: «бізнес асистент це даря протас») — сильніше за пошук за роллю.
+  const named = new Map((await db.query<{ role_key: string; id: number; name: string }>(
+    `SELECT r.role_key, u.id, ${NAME_SQL} AS name FROM payroll_responsibles r JOIN users u ON u.id = r.user_id ${NAME_JOIN} WHERE u.is_active`)).rows
+    .map((r) => [r.role_key, { id: String(r.id), name: r.name }] as const));
+  const ROLE_OF: Record<string, string> = { business_assistant: "ba", "____________": "acc", hr: "hr" };
+  const first = (k: string, label: string) => {
+    const n = named.get(ROLE_OF[k]); if (n) return n;
+    const r = q.rows.find((x) => x.key === k); return r ? { id: String(r.id), name: r.name } : { id: "", name: label };
+  };
   const odId = String(process.env.PAYROLL_OD_USER_ID || "1");
   const od = await db.query<{ name: string }>(`SELECT ${NAME_SQL} AS name FROM users u ${NAME_JOIN} WHERE u.id = $1`, [Number(odId)]);
   return {

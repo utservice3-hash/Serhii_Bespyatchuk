@@ -148,6 +148,8 @@ const ORPHAN_ALL_MGRS = "Роман 11.11.2026 (задача 8135, п.1 план
   + "прапорцем; без прапорця менеджер у `/claim` проходить межу, тож проба з порожнім тілом дає 400. Стереже #3803";
 const SEASON_KVP = "Юля, задача 8351 (06.11.2026): «я (КВП) можу вручну змінити сегмент… Тімлід просить зміну через мене»; "
   + "Роман 10.11.2026 — «роби» на план зі звуженням права. До цього позначку «сезонний» міг ставити й тімлід (`isAdminOrLead`)";
+const HR_LEAVE = "Сергій, TOP Weekly 26.11.2026 (задачі 11191/11193), Роман 27.11 «давай робити»: звільнення й обхідний лист "
+  + "оформлює HR (рекрутер), а не фінансист. Право `payroll_leave` — HR і ОД; фінансист отримує 403. Стереже #11310";
 const FIN_TABS = "Роман 27.11.2026 (файл Тетяни, вкладки з галочкою): «це для всієї ролі фінансиста». Фінансист бачить лише 13 вкладок "
   + "(Плани, Фінанси, Дебіторська, Задачник, Календар, Виписка, Реєстри, Зарплата, Новини, Найм, Опитування, Регламенти, Орг "
   + "структура) — білий список у schema.sql після синку «financier = екрани адміна». Роути решти вкладок дають 403. Стереже #11301";
@@ -155,6 +157,8 @@ const TEAM_NAMES = "Роман 27.11.2026, той самий прохід: на�
   + "«Задачнику», «Календарі», а вкладки `teams` у фінансиста більше немає. Роут переведено під ці вкладки — список назв "
   + "тепер бачать і HR та менеджер (у них є «Задачник»)";
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  { method: "POST", path: "/api/payroll/employees/:userId/leave", role: "hr", to: "dropped", decidedOn: "2026-11-27", decidedBy: "Сергій і Роман", why: HR_LEAVE },
+  { method: "POST", path: "/api/payroll/employees/:userId/leave", role: "financier", to: "deny", decidedOn: "2026-11-27", decidedBy: "Сергій і Роман", why: HR_LEAVE },
   { method: "GET", path: "/api/ai-work", role: "financier", to: "deny", decidedOn: "2026-11-27", decidedBy: "Роман", why: FIN_TABS },
   { method: "GET", path: "/api/training/candidate/me", role: "financier", to: "deny", decidedOn: "2026-11-27", decidedBy: "Роман", why: FIN_TABS },
   { method: "GET", path: "/api/training/material/:id", role: "financier", to: "deny", decidedOn: "2026-11-27", decidedBy: "Роман", why: FIN_TABS },
@@ -2419,7 +2423,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/payroll/advances/:id/reject", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
   { method: "POST", path: "/api/payroll/employees/:userId/leave", cls: "deny-only",
-    allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
+    allow: [], deny: ["admin", "ceo", "kvp", "financier", "team_lead", "manager", "candidate"] },
+  { method: "GET", path: "/api/payroll/leave-candidates", cls: "GET",
+    allow: ["opdir", "hr"], deny: ["admin", "ceo", "kvp", "financier", "team_lead", "manager", "candidate"] },
   { method: "POST", path: "/api/payroll/employees", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "kvp", "hr", "team_lead", "manager", "candidate"] },
   { method: "PATCH", path: "/api/payroll/employees/:userId", cls: "deny-only",

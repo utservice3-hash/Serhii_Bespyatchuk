@@ -668,6 +668,17 @@ export async function advancesXlsx(pool: Pool, v: Viewer, mk: string) {
 }
 
 // ===================================================================== обхідний лист
+/**
+ * Кого HR може звільнити (рішення Сергія 26.11.2026: оформлює HR, а не фінансист). Без сум: лише ПІБ, посада і дата
+ * звільнення з «Найму», щоб HR не вводив її вдруге. Звільнені в «Наймі» — першими.
+ */
+export async function leaveCandidates(db: Db) {
+  const e = await engine(db);
+  const naim = new Map((await loadNaim(db)).filter((n) => n.userId && n.dismissedAt).map((n) => [String(n.userId), n.dismissedAt as string]));
+  return (e.zp.employees as Array<Record<string, unknown>>).filter((p) => !p.leave)
+    .map((p) => ({ userId: String(p.id), name: String(p.name), title: String(p.title ?? ""), naimDismissedAt: naim.get(String(p.id)) ?? null }))
+    .sort((a, b) => Number(!a.naimDismissedAt) - Number(!b.naimDismissedAt) || a.name.localeCompare(b.name, "uk"));
+}
 export async function createLeave(pool: Pool, v: Viewer, uid: number, body: Record<string, unknown>) {
   const id = String(uid);
   const date = String(body.date ?? ""); if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) fail(422, "Дата звільнення — РРРР-ММ-ДД.", "date");

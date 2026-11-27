@@ -333,7 +333,7 @@ function moveText(r: Obj, names: { dept: Record<string, string>; team: Record<st
   if (r.naimTeam !== r.payrollTeam) parts.push(`команда: ${t(r.payrollTeam)} → ${t(r.naimTeam)}`);
   return `У «Наймі» — блок «${r.unit}». ${parts.join("; ")}. Зміна команди міняє офер, тому переводимо кнопкою.`;
 }
-function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel, onMove, names }: { rows: Obj[]; canEdit: boolean; onLeave: (r: Obj) => void; onAdd: (r: Obj) => void; onLevel: (r: Obj) => void;
+function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel, onMove, names }: { rows: Obj[]; canEdit: boolean; onLeave: ((r: Obj) => void) | null; onAdd: (r: Obj) => void; onLevel: (r: Obj) => void;
   onMove: (r: Obj) => void; names: { dept: Record<string, string>; team: Record<string, string> } }) {
   const [openNo, setOpenNo] = useState(false);
   const main = rows.filter((r) => r.kind !== "noAccount"), noAcc = rows.filter((r) => r.kind === "noAccount");
@@ -354,8 +354,8 @@ function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel, onMove, names }: { 
                   : r.kind === "move" ? moveText(r, names)
                   : `У «Зарплаті» — ${lvl(r.payrollLevel)}. Рівні ведуться окремо; гроші рахуються за «Зарплатою».`}</div>
               </td>
-              <td className="r">{canEdit && (r.kind === "dismissed" ? <button className="zp-btn zp-btn--sm" onClick={() => onLeave(r)}>Оформити обхідний лист</button>
-                : r.kind === "new" ? <button className="zp-btn zp-btn--sm" onClick={() => onAdd(r)}>Додати в зарплату</button>
+              <td className="r">{r.kind === "dismissed" ? (onLeave ? <button className="zp-btn zp-btn--sm" onClick={() => onLeave(r)}>Оформити обхідний лист</button> : <span className="zp-hint">оформлює HR</span>) : canEdit && (
+                r.kind === "new" ? <button className="zp-btn zp-btn--sm" onClick={() => onAdd(r)}>Додати в зарплату</button>
                 : r.kind === "move" ? <button className="zp-btn zp-btn--sm" onClick={() => onMove(r)}>Перевести</button>
                 : <button className="zp-btn zp-btn--sm" onClick={() => onLevel(r)}>Змінити рівень</button>)}</td>
             </tr>
@@ -402,7 +402,7 @@ function MoveModal({ r, person, names, onClose, onDone }: { r: Obj; person: Obj 
   );
 }
 
-export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave }: { emp: Obj; org: Obj; settings: Obj; canEdit: boolean; onChanged: () => void; onLeave: (userId: string, date: string | null) => void }) {
+export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave }: { emp: Obj; org: Obj; settings: Obj; canEdit: boolean; onChanged: () => void; onLeave: ((userId: string, date: string | null) => void) | null }) {
   const [edit, setEdit] = useState<Obj | null>(null);
   const [add, setAdd] = useState<false | { uid: string | null }>(false);
   const [move, setMove] = useState<Obj | null>(null);
@@ -418,7 +418,7 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave
     <Card title="Працівники й умови" aside={canEdit ? "клік — змінити умови: рівень, ставка, %, офіційна ЗП, день народження" : "лише перегляд"}>
       <div className="zp-grid" style={{ gap: 10 }}>
         <NaimBlock rows={(emp.naim ?? []) as Obj[]} canEdit={canEdit}
-          onLeave={(r) => onLeave(String(r.userId), r.date ?? null)}
+          onLeave={onLeave ? (r) => onLeave(String(r.userId), r.date ?? null) : null}
           onAdd={(r) => setAdd({ uid: String(r.userId) })}
           onLevel={(r) => { const p = all.find((x) => String(x.userId) === String(r.userId)); if (p) setEdit(p); }}
           onMove={(r) => setMove(r)} names={names} />

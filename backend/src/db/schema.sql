@@ -2084,8 +2084,9 @@ UPDATE roles SET screen_access = screen_access || '{"ads":true}'::jsonb
 -- 🟢 `manager` У ПЕРЕЛІКУ СВІДОМО: екран показує менеджеру ВЛАСНІ пропущені (кламп у
 -- роуті), а не роботу колег. Саме тому він ширший за сусідній `ads`.
 -- ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+-- 🔴 `financier` прибрано 27.11.2026 (Роман: фінансисту лише вкладки зі списку, задача 10723); білий список у кінці файла.
 UPDATE roles SET screen_access = screen_access || '{"missed-calls":true}'::jsonb
-  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead', 'financier', 'manager')
+  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead', 'manager')
     AND NOT (screen_access ? 'missed-calls');
 
 -- Баланси рахунків: останній залишок з банк-API (mono client-info / privat closing-balance),
@@ -8276,6 +8277,10 @@ UPDATE roles SET permissions = permissions || '{"payroll_export_cards":true}'::j
 UPDATE roles SET permissions = permissions - 'payroll_export_cards' WHERE key NOT IN ('financier', 'opdir');
 UPDATE roles SET permissions = permissions || '{"payroll_clearance":true}'::jsonb WHERE key IN ('____________', 'business_assistant');
 UPDATE roles SET permissions = permissions - 'payroll_clearance' WHERE key NOT IN ('____________', 'business_assistant');
+-- Обхідний лист оформлює HR (рішення Сергія з TOP Weekly 26.11.2026, задачі 11191/11193; Роман 27.11 «давай робити»):
+-- окреме право «оформити звільнення» без сум. ОД — запасний. Фінансист більше не оформлює (`payroll_edit` цього не дає).
+UPDATE roles SET permissions = permissions || '{"payroll_leave":true}'::jsonb WHERE key IN ('hr', 'opdir');
+UPDATE roles SET permissions = permissions - 'payroll_leave' WHERE key NOT IN ('hr', 'opdir');
 UPDATE roles SET permissions = permissions || '{"payroll_offer_tasks":true}'::jsonb WHERE key IN ('hr');
 UPDATE roles SET permissions = permissions - 'payroll_offer_tasks' WHERE key NOT IN ('hr');
 UPDATE roles SET permissions = permissions || '{"notify_rules":true}'::jsonb WHERE key IN ('opdir', 'admin');
@@ -8735,3 +8740,19 @@ UPDATE roles SET screen_access = (
    WHERE e.k IN ('plans', 'finance', 'receivables', 'tasks', 'duty', 'bank', 'registries', 'payroll', 'news', 'hiring',
                  'surveys', 'documents', 'org'))
  WHERE key = 'financier';
+
+-- 🧾 ВІДПОВІДАЛЬНІ ЗА ПУНКТИ ОБХІДНОГО ЛИСТА ПОІМЕННО (задача 10723; Роман 27.11.2026: «бізнес асистент це даря протас»).
+-- Ролі «Бізнес-асистент» на проді немає ні в кого (Дарʼя — адмін), тож пп. 2, 6, 7 не міг підписати ніхто. Рядок тут сильніший
+-- за пошук за роллю (`state.ts` `loadResponsibles`). Сід — лише коли рядка ще немає і збіг за прізвищем РІВНО один.
+-- Відкат даних: рядок можна видалити — тоді знову перший активний користувач з роллю.
+CREATE TABLE IF NOT EXISTS payroll_responsibles (
+  role_key   TEXT PRIMARY KEY CHECK (role_key IN ('ba', 'acc', 'hr')),
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO payroll_responsibles (role_key, user_id)
+SELECT 'ba', min(u.id) FROM users u
+  LEFT JOIN LATERAL (SELECT full_name FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1) e2 ON true
+ WHERE u.is_active AND (u.full_name ILIKE '%Протас%' OR e2.full_name ILIKE '%Протас%')
+HAVING count(*) = 1
+ON CONFLICT (role_key) DO NOTHING;

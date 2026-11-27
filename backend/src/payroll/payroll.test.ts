@@ -291,7 +291,9 @@ test("#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, за
     assert.ok((await c.query(`SELECT 1 FROM notifications WHERE type = 'adv.req' AND done_at IS NOT NULL`)).rowCount, "🔴 «Заявка на аванс» не закрилась після виплати");
 
     // ---------- звільнення й обхідний лист ----------
-    r = await call("fin", "POST", "/payroll/employees/3/leave", { date: `${live}-28`, type: "own", reason: "за власним бажанням" });
+    // оформлює HR (рішення Сергія 26.11.2026); фінансист — 403
+    assert.equal((await call("fin", "POST", "/payroll/employees/3/leave", { date: `${live}-28`, type: "own", reason: "за власним бажанням" })).s, 403, "🔴 фінансист і далі оформлює звільнення");
+    r = await call("hr", "POST", "/payroll/employees/3/leave", { date: `${live}-28`, type: "own", reason: "за власним бажанням" });
     assert.equal(r.s, 201, JSON.stringify(r.j));
     const signN = await c.query(`SELECT r.user_id FROM notifications n JOIN notification_recipients r ON r.notification_id = n.id WHERE n.type = 'clr.sign' ORDER BY r.user_id`);
     assert.deepEqual(signN.rows.map((x) => x.user_id), [4, 5, 6, 7], "відповідальні за пункти: тім-лід, HR, БА, бухгалтерія — кожному одне сповіщення");

@@ -66,6 +66,7 @@ export const payrollApi = {
   // ---------- обхідний лист ----------
   createLeave: (userId: string | number, body: { date: string; type: string; reason?: string }) => p(`/payroll/employees/${userId}/leave`, body),
   clearances: () => g<Obj[]>("/payroll/clearances"),
+  leaveCandidates: () => g<Obj[]>("/payroll/leave-candidates"),
   clearance: (userId: string | number) => g(`/payroll/clearances/${userId}`),
   draftClearance: async (userId: string | number, key: string, data: unknown) => (await api.put(`/payroll/clearances/${userId}/items/${key}/draft`, { data })).data,
   signClearance: (userId: string | number, key: string, data: unknown) => p(`/payroll/clearances/${userId}/items/${key}/sign`, { data }),
