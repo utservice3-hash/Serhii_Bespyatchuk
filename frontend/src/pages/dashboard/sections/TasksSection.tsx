@@ -113,6 +113,7 @@ import type { TaskForm } from "../taskForm";
 import { TasksFocusView } from "./TasksFocusView";
 import { TaskCreateDialog } from "./TaskCreateDialog";
 import { CloseTaskDialog } from "./ReactivationBits";
+import { RhythmPackRows } from "./RhythmPackRows";
 import { needsCloseReason } from "../reactCloseRule";
 import { browserStorage, isSetByMe, kyivDate, readDesign, readOwnerGroupBy, writeDesign, writeOwnerGroupBy, type OwnerGroupBy, type TasksDesign } from "../tasksFocus";
 import { createFitBatch, fitHeights, type FitBatch } from "../fitBatch";
@@ -1639,6 +1640,13 @@ export function TasksSection({
                           </div>
                         );
                       })()}
+                      {/* ⏱ 11229: задача тімліду «пропустили ритм, роботи немає» — клієнти рядками, як у пачці вище. */}
+                      {task.taskType === "rhythm_pack" && (
+                        <div style={{ paddingLeft: 22 }}>
+                          <RhythmPackRows pack={task} kids={childrenOf(task.id)}
+                            onToggle={(k, next) => { patchTaskLocal(k.id, { status: next }); commitTask(k.id, { status: next }); }} />
+                        </div>
+                      )}
                       {/* 🏷 ПРИЧИНА ЗАКРИТТЯ — ВИДИМА. Поле заповнювали з першого дня
                           (`POST /reactivation-task/close` пише «ключ: пояснення»), а
                           видача задач його не віддавала ЗОВСІМ: людина обирала причину
@@ -2006,6 +2014,15 @@ export function TasksSection({
                   </tbody>
                 </table>
                 <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>Факт підтягується автоматично з CRM після завершення дня. Задача закривається сама, коли всі показники виконані.</p>
+              </div>
+            )}
+
+            {/* ⏱ 11229: у новому вигляді списку рядків-дітей не видно, тож клієнти задачі тімліда — тут, у картці. */}
+            {openTask.taskType === "rhythm_pack" && (
+              <div style={{ marginTop: 18 }}>
+                <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>⏱ Клієнти</h3>
+                <RhythmPackRows pack={openTask} kids={tasks.filter((t) => t.parentId === openTask.id)}
+                  onToggle={(k, next) => { patchTaskLocal(k.id, { status: next }); commitTask(k.id, { status: next }); }} />
               </div>
             )}
 

@@ -3752,7 +3752,8 @@ export interface Task {
   priority: TaskPriority;
   comments: string | null;
   department: string | null;
-  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation" | "reactivation_client" | "oneonone" | "strategic";
+  // `rhythm_pack` / `rhythm_client` — задача тімліду «пропустили ритм, роботи немає» і її рядки-клієнти (11229).
+  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation" | "reactivation_client" | "oneonone" | "strategic" | "rhythm_pack" | "rhythm_client";
   metric: "ads_count" | "avg_check" | "conversion" | null;
   targetValue: number | null;
   actualValue: number | null;

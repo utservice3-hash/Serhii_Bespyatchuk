@@ -15,7 +15,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "./config.js";
 import { authRouter } from "./routes/auth.js";
-import { dashboardRouter } from "./routes/dashboard.js";
+import { dashboardRouter, rhythmRowsNow } from "./routes/dashboard.js";
 import { plansRouter } from "./routes/plans.js";
 import { teamsRouter } from "./routes/teams.js";
 import { tasksRouter } from "./routes/tasks.js";
@@ -104,6 +104,7 @@ import { warmStatsSeries, statsSeriesCacheStatus } from "./routes/statisticsSeri
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
+import { runRhythmTaskSweep } from "./jobs/rhythmTaskSweep.js";
 import { runOrphanToLeadgen } from "./jobs/orphanToLeadgen.js";
 import { syncKommoScreens } from "./jobs/syncKommoScreens.js";
 import { syncQuoteRatings } from "./jobs/syncQuoteRatings.js";
@@ -518,6 +519,15 @@ cron.schedule("40 0 * * *", () => {
 }, { timezone: "Europe/Kyiv" });
 cron.schedule("0 8 * * 1", () => {
   void runJob("reactCycleSweep", () => runReactCycleSweep());
+}, { timezone: "Europe/Kyiv" });
+/**
+ * ⏱ 11229: щодня о 08:12 за Києвом — задача тімліду «пропустили ритм, роботи немає 3 дні» (одна на менеджера, клієнти
+ * рядками); рядки, де з клієнтом попрацювали, закриваються самі. Рядки клієнтів — зі збирача екрана «З ким говорити»
+ * (`rhythmRowsNow`), тож задача й екран рахують одним кодом. :12 — поза :00/:30 і поза щогодинним :10. everyMin == 1440
+ * у нагляді.
+ */
+cron.schedule("12 8 * * *", () => {
+  void runJob("rhythmTaskSweep", () => runRhythmTaskSweep(rhythmRowsNow));
 }, { timezone: "Europe/Kyiv" });
 /**
  * 🧭 «Нічийні» → пул лідгенів (задача 8135): щогодини о :10 за Києвом — хто з відданих менеджерами чекає довше за
@@ -1189,6 +1199,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["rebuildCarrierPhones", () => rebuildCarrierPhones()],
   ["hiringAccess", () => closeExpiredCandidateAccess()],
   ["reactCycleSweep", () => runReactCycleSweep()],
+  ["rhythmTaskSweep", () => runRhythmTaskSweep(rhythmRowsNow)],
   ["orphanToLeadgen", () => runOrphanToLeadgen()],
   ["syncReceivables", () => syncReceivables()],
   ["syncLeadgenRegistry", () => syncLeadgenRegistry()],
