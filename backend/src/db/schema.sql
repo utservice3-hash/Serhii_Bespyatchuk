@@ -8719,3 +8719,19 @@ CREATE TABLE IF NOT EXISTS client_profiles (
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS receivable_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_tasks_receivable_open ON tasks(receivable_key)
   WHERE receivable_key IS NOT NULL AND status <> 'done';
+
+-- 🧾 ФІНАНСИСТ БАЧИТЬ ЛИШЕ СВОЇ 13 ВКЛАДОК (задача 10723, файл Тетяни 27.11.2026; Роман 27.11: «це для всієї ролі
+-- фінансиста»). Тетяна позначила галочками: Плани, Фінанси, Дебіторська, Задачник, Календар команди, Виписка, Реєстри,
+-- Зарплата, Новини, Найм, Опитування, Регламенти, Орг структура. Решту екранів (Звіт, КВП, Статистики, Клієнти,
+-- Навчання, Конструктор, Налаштування…) роль втрачає. Це БІЛИЙ список, а не чорний: синк «financier = екрани адміна»
+-- вище копіює кожен новий екран адміна, і чорний список пропускав би нові вкладки мовчки (так уже було з «Наймом»,
+-- «БА», Prozorro). Білий бере зі зліпка адміна лише ці ключі, тож вкладка, якої в адміна немає, теж не зʼявиться.
+-- 🔴 СТОЇТЬ ОСТАННІМ серед `UPDATE roles SET screen_access` у файлі: будь-яка видача «усім ролям» нижче повернула б
+-- фінансисту екран до наступного викату. Тримає #11300 (порядок) і #11301 (дві міграції на scratch).
+-- Права (`permissions`) не чіпаємо: межа тут — вкладки. Revert коду поверне екрани адміна наступним викатом.
+UPDATE roles SET screen_access = (
+  SELECT COALESCE(jsonb_object_agg(e.k, e.v), '{}'::jsonb)
+    FROM jsonb_each((SELECT screen_access FROM roles WHERE key = 'admin')) AS e(k, v)
+   WHERE e.k IN ('plans', 'finance', 'receivables', 'tasks', 'duty', 'bank', 'registries', 'payroll', 'news', 'hiring',
+                 'surveys', 'documents', 'org'))
+ WHERE key = 'financier';

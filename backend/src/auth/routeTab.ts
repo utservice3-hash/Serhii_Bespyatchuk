@@ -160,7 +160,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // рейтинг команд: менеджер вкладки `teams` не має і мати не мусить (TAB_MATRIX
     // не змінюється), але виконавця обирати мусить. Стоїть ПЕРЕД префіксом `/api/teams`.
     { test: pre("/api/teams/managers"), tabs: ["tasks", "teams"] },
-    { test: pre("/api/teams"), tabs: ["teams"] },
+    // 🧾 Назви команд (id, name) — для фільтра команди на «Планах», «Дебіторці», «Задачнику», «Календарі». Без цього
+    // фінансист із білим списком вкладок (27.11.2026) отримав би порожній фільтр: вкладки `teams` у нього більше немає.
+    { test: pre("/api/teams"), tabs: ["teams", "plans", "receivables", "tasks", "duty"] },
     { test: pre("/api/tasks"), tabs: ["tasks"] },
     { test: pre("/api/goals"), tabs: ["goals"] },
     { test: pre("/api/settings"), tabs: ["settings"] },
