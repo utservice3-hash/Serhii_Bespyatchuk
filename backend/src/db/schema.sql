@@ -6908,6 +6908,12 @@ UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
  WHERE key IN ('hr', 'business_assistant')
    AND NOT COALESCE((SELECT (data->>'cpCheckTabGranted')::boolean FROM app_settings WHERE id = 1), false);
 UPDATE app_settings SET data = data || '{"cpCheckTabGranted":true}'::jsonb WHERE id = 1 AND NOT (data ? 'cpCheckTabGranted');
+-- 🚫 27.11.2026, рішення Романа: «Реєстри та узгодження» (тобто й «Перевірку контрагента») у HR забрати — скасовує рядок вище
+-- для HR. ОДИН раз (позначка `hrRegistriesRevoked`): далі вкладкою керує адмін. Кодом, а не з «Ролей»: роль HR має права,
+-- яких немає в адміна (`view_all_1x1`), і `validateGrant` не дає зберегти її з інтерфейсу. Бізнес-асистента не чіпаємо.
+UPDATE roles SET screen_access = screen_access || '{"registries":false}'::jsonb
+ WHERE key = 'hr' AND NOT COALESCE((SELECT (data->>'hrRegistriesRevoked')::boolean FROM app_settings WHERE id = 1), false);
+UPDATE app_settings SET data = data || '{"hrRegistriesRevoked":true}'::jsonb WHERE id = 1 AND NOT (data ? 'hrRegistriesRevoked');
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🏦 ТОВ «ЄЛОГІСТ» У «ВИПИСЦІ» (задача 6458; Сергій 22.10.2026: «повністю все аналогічно ЮТС, включно з API банків»;
