@@ -35,6 +35,7 @@ const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, li
 import { kommoLeadUrl, kommoCompanyUrl, kommoContactUrl } from "../core/kommoLinks.js";
 import { clientKommoTargets } from "../core/clientKommoLinks.js";
 import { clientPhoneBook, PHONE_BOOK_DAYS } from "../core/clientPhoneBook.js";
+import { clientCodeGroups } from "../core/clientCodes.js";
 import { loadNoDeal } from "../core/securityNoDeal.js";
 import type { Db as LedgerDb } from "../core/finance.js";
 import { adClientLinks, type AdClientKommoTarget } from "../core/adClientLinks.js";
@@ -9230,6 +9231,20 @@ dashboardRouter.get("/client-merge/journal", async (req, res) => {
     aliasKey: x.alias_key, canonicalKey: x.canonical_key, reason: x.reason,
     createdAt: x.created_at, revokedAt: x.revoked_at, approvedBy: x.approved,
   })));
+});
+
+/**
+ * 🧾 КАНДИДАТИ НА ОБʼЄДНАННЯ ЗА КОДОМ ЄДРПОУ (задача 11225, прохід 1; план затверджено Романом 27.11.2026).
+ * Лише читання: три списки з `core/clientCodes.ts` (чисті дублі, кілька юросіб, збірні імена). Нічого не зливає.
+ * Межа — право `merge_clients`, те саме, що в обʼєднання «будь-якої пари»: список показує клієнтів УСІХ команд, тож
+ * тімлід (у нього обʼєднання лише у своїй команді) сюди не входить. Розширювати — рішення власника, не правка тут.
+ * `?all=1` — оплати 1С за весь час; без нього з `CODE_GROUPS_FROM` (2026 рік, як у замірі 27.11.2026).
+ */
+dashboardRouter.get("/client-code-groups", async (req, res) => {
+  const auth = req.auth!;
+  // 🔴 Гейт ПЕРШИМ оператором: 403 = спрацювала межа (той самий порядок, що в `/client-merge`).
+  if (!roleHasPerm(auth.roleKey, "merge_clients")) return res.status(403).json({ error: "Forbidden" });
+  res.json(await clientCodeGroups(pool as unknown as LedgerDb, String(req.query.all ?? "") === "1"));
 });
 
 // ───────────────────────── ВІДПОВІДАЛЬНИЙ МЕНЕДЖЕР ─────────────────────────

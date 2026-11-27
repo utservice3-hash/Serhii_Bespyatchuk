@@ -6686,6 +6686,12 @@ CREATE TABLE IF NOT EXISTS onec_deal_payments (
   deal_id BIGINT NOT NULL, organization TEXT NOT NULL, kontragent TEXT, paid_on DATE, sum NUMERIC(14,2) NOT NULL, currency TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS onec_deal_payments_deal ON onec_deal_payments (deal_id);
+-- 🧾 КОД ПЛАТНИКА З ОПЛАТИ 1С (задача 11225, рішення Романа 27.11.2026: «давай робити як ідентифікатор - код єдрпоу»).
+-- Сире поле `ERPOU` з `paydata`, яке синк до 27.11.2026 викидав. Ключ клієнта на код НЕ міняється: код лише ДОКАЗ, що дві
+-- назви в дашборді — одна фірма (список кандидатів `GET /dashboard/client-code-groups`, читач `core/clientCodes.ts`).
+-- NULL = 1С коду не дала (готівка, фізособи) або рядок записано до цієї колонки (до першого синку після викату).
+-- ⚠️ revert коду колонку не прибирає: вона лишається без читача й без писаря, шкоди не несе.
+ALTER TABLE onec_deal_payments ADD COLUMN IF NOT EXISTS edrpou TEXT;
 CREATE TABLE IF NOT EXISTS onec_deals_state (
   id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), synced_at TIMESTAMPTZ, invoices INTEGER, payments INTEGER, error TEXT, error_at TIMESTAMPTZ
 );

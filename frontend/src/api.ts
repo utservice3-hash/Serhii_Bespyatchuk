@@ -5465,6 +5465,20 @@ export async function fetchMergeJournal(): Promise<MergeJournalRow[]> {
   const { data } = await api.get<MergeJournalRow[]>("/dashboard/client-merge/journal");
   return data;
 }
+/** 🧾 Кандидати на обʼєднання за кодом ЄДРПОУ з оплат 1С (задача 11225, прохід 1): лише список, нічого не зливає. */
+export interface CodeGroupCode { code: string; kind: "edrpou" | "ipn" | "other"; kontragent: string | null }
+export interface CodeGroupKey { key: string; name: string | null; paidDeals: number; payments: number; lastPaid: string | null; phoneKey: boolean }
+export interface CodeGroup { kind: "clean" | "multi"; codes: CodeGroupCode[]; keys: CodeGroupKey[]; paidDeals: number }
+export interface CollectiveCodeEntry { key: string; name: string | null; paidDeals: number; codes: number; shared: number; sample: CodeGroupCode[] }
+export interface ClientCodeGroups {
+  from: string | null; clients: number; withCode: number; payments: number; codedPayments: number;
+  otherCodes: number; otherPayments: number; minusClean: number;
+  clean: CodeGroup[]; multi: CodeGroup[]; collective: CollectiveCodeEntry[];
+}
+export async function fetchClientCodeGroups(all = false): Promise<ClientCodeGroups> {
+  const { data } = await api.get<ClientCodeGroups>("/dashboard/client-code-groups", { params: all ? { all: 1 } : {} });
+  return data;
+}
 /** 📝 Задача новому менеджеру при передачі клієнта (08.10.2026): при «передачі» обовʼязкова, при «виправленні» — за бажанням. */
 export interface TransferTaskBody { text: string; deadline: string; priority: "low" | "medium" | "high"; details: string }
 export async function assignClientManager(body: { clientKey: string; managerId: number; reason: string; kind: "fix" | "transfer"; task?: TransferTaskBody }): Promise<{ effectiveFrom: string; kind: "fix" | "transfer"; note: string; taskId: number | null }> {

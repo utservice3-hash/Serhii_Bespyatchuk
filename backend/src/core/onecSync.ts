@@ -34,9 +34,11 @@ export async function replaceOnec(db: Db, inv: readonly OnecInvoice[], pay: read
   await db.query(`DELETE FROM onec_deal_payments`);
   for (let i = 0; i < pay.length; i += 2000) {
     const p = pay.slice(i, i + 2000);
-    await db.query(`INSERT INTO onec_deal_payments (deal_id, organization, kontragent, paid_on, sum, currency)
-      SELECT * FROM unnest($1::bigint[], $2::text[], $3::text[], $4::date[], $5::numeric[], $6::text[])`,
-    [p.map((x) => x.deal), p.map((x) => x.organization), p.map((x) => x.kontragent), p.map((x) => x.paidOn), p.map((x) => x.sum), p.map((x) => x.currency)]);
+    // `edrpou` (задача 11225) — сирий код платника; `?? null`, бо рядок без коду — звичайна річ (готівка), а не помилка.
+    await db.query(`INSERT INTO onec_deal_payments (deal_id, organization, kontragent, paid_on, sum, currency, edrpou)
+      SELECT * FROM unnest($1::bigint[], $2::text[], $3::text[], $4::date[], $5::numeric[], $6::text[], $7::text[])`,
+    [p.map((x) => x.deal), p.map((x) => x.organization), p.map((x) => x.kontragent), p.map((x) => x.paidOn), p.map((x) => x.sum), p.map((x) => x.currency),
+      p.map((x) => x.edrpou ?? null)]);
   }
   await db.query(`INSERT INTO onec_deals_state (id, synced_at, invoices, payments, error, error_at) VALUES (1, now(), $1, $2, NULL, NULL)
     ON CONFLICT (id) DO UPDATE SET synced_at = now(), invoices = EXCLUDED.invoices, payments = EXCLUDED.payments`, [inv.length, pay.length]);
