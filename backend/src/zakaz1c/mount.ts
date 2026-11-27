@@ -37,7 +37,7 @@ import {
   actDatePatch, addFileNote, addLeadNote, attachPdfToLead, kommoUserName, loadLead, patchLeads, withNetRetry, type LeadForInvoice,
 } from "./kommoApi.js";
 import { noteInvoice } from "./notes.js";
-import { WIDGET_TAG, claimPatch, dealOwner, type DealOwner } from "./owner.js";
+import { claimPatch, dealOwner, type DealOwner } from "./owner.js";
 import {
   actAttached, applyPaymentEvent, dealInvoicesPay, invoiceForReattach, invoiceOfLead, lastWritten, listInvoices, markActAttached, markEvent,
   markInvoiceAttached, onecNumbersOfDeal, saveDealFieldsSent,
@@ -350,10 +350,7 @@ export function buildZakaz1cRouter(): Router {
       // Поля угоди («Номер заказа», тег) — не PDF: їхня помилка йде в попередження, а не в attach_error,
       // інакше плитка каже «PDF у файлах угоди немає», хоча PDF лежить (№9696, 17.11.2026).
       if (patch) await patchLeads([patch]).catch((e) => { warnings.push(`поля угоди не записались: ${(e as Error).message.slice(0, 200)}`); });
-      if (!lead.tags.includes(WIDGET_TAG)) {
-        await addLeadNote(leadId, `${testMark(mode)}Угоду веде віджет «Рахунок 1С». Рахунки в цій угоді виставляйте там, Genesis не використовуйте.`)
-          .catch(() => undefined);
-      }
+      // Примітку «угоду веде віджет, Genesis не використовуйте» більше не пишемо (Роман, 27.11.2026: Genesis упав, «Заказ 1С» з угод прибрати).
     }
     await saveInvoice(pool, { leadId, inv: { ...inv, warnings }, form: inv.existed ? null : form, mode: mode === "live" ? "live" : "test",
       kommoUserId: caller.userId, fileUuid: att.fileUuid, attachError });
