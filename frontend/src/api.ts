@@ -5266,6 +5266,10 @@ export interface ClientCard {
     kommo?: { state: "done"; url: string } | { state: "waiting"; error: string | null } } | null;
   phone?: "has" | "none";
   phonesCount?: number;
+  /** ☎️ Номери клієнта (11223): звідки номер, розмови за `days` днів і скільки з них привʼязано до клієнта; `more` — не показано. */
+  phones?: { days: number; total: number; more: number; list: { phone: string; source: "contact" | "company" | "key"; company: string | null;
+    talks: number; linked: number; lastDay: string | null; carrier: { lardi: boolean; history: boolean } | null; sharedWith: number;
+    state: "linked" | "unlinked" | "carrier"; url: string | null }[] };
   /** 📋 Анкета клієнта (11221): питання й межу довжини дає сервер; `answers: null` — анкети ще немає. */
   profile?: { fields: { key: string; label: string; hint: string }[]; max: number; total: number; filled: number;
     answers: Record<string, string> | null; updatedDay: string | null; updatedBy: string | null };

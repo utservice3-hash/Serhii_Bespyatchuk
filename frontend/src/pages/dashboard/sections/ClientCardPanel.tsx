@@ -11,6 +11,7 @@ import { ClientReleaseBlock } from "./ClientReleaseBlock";
 import { ClientProblemBlock } from "./ClientProblemBlock";
 import { ClientProfileBlock } from "./ClientProfileBlock";
 import { ClientKommoBlock } from "./ClientKommoBlock";
+import { ClientPhonesBlock } from "./ClientPhonesBlock";
 import { HelpTip } from "./HelpTip";
 import { formatAmountFull } from "../format";
 import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
@@ -312,6 +313,9 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
           </ResponsiveContainer>
         </div>
       )}
+
+      {/* ☎️ 11223: усі номери клієнта — звідки вони й скільки розмов зараховано (сервер вирішує, що показати). */}
+      <ClientPhonesBlock card={card} />
 
       {/* 📌 ТЗ РЕАКТИВАЦІЇ (23.09.2026, п.1–2): наступний крок з датою, «нема номера» станом,
           останній дзвінок — дата, хто, скільки. Крок один живий; «виконано» закриває його. */}

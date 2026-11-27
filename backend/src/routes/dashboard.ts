@@ -34,6 +34,7 @@ import { limiter, limitedDb, early } from "../core/limitAll.js";
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, elogistCount: 0, linkedinCount: 0, prozorroCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl, kommoCompanyUrl, kommoContactUrl } from "../core/kommoLinks.js";
 import { clientKommoTargets } from "../core/clientKommoLinks.js";
+import { clientPhoneBook, PHONE_BOOK_DAYS } from "../core/clientPhoneBook.js";
 import { loadNoDeal } from "../core/securityNoDeal.js";
 import type { Db as LedgerDb } from "../core/finance.js";
 import { adClientLinks, type AdClientKommoTarget } from "../core/adClientLinks.js";
@@ -8215,6 +8216,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
 
   // 🔗 Картка клієнта в Kommo (Роман 27.11.2026): усі компанії клієнта, інакше контакт чи угода (`core/clientKommoLinks.ts`, `#11244`).
   const kommoTargets = await clientKommoTargets(clientKey);
+  // ☎️ Номери клієнта (11223): усі номери, звідки вони і скільки розмов привʼязано (`core/clientPhoneBook.ts`, `#11252`).
+  const phoneBook = await clientPhoneBook(pool as unknown as LedgerDb, clientKey);
 
   res.json({
     clientKey,
@@ -8288,6 +8291,13 @@ dashboardRouter.get("/client-card", async (req, res) => {
       answers: cardProfile?.answers ?? null, updatedDay: cardProfile?.updatedDay ?? null, updatedBy: cardProfile?.updatedBy ?? null },
     phone: phoneState(Number(cardPhones.rows[0]?.n ?? 0)),
     phonesCount: Number(cardPhones.rows[0]?.n ?? 0),
+    phones: {
+      days: PHONE_BOOK_DAYS, total: phoneBook.total, more: phoneBook.more,
+      list: phoneBook.phones.map((p) => ({ phone: p.phone, source: p.source, company: p.company, talks: p.talks, linked: p.linked,
+        lastDay: p.lastDay, carrier: p.carrier, sharedWith: p.sharedWith, state: p.state,
+        url: p.source === "company" ? (p.companyId != null ? kommoCompanyUrl(p.companyId) : null)
+          : p.contactId != null ? kommoContactUrl(p.contactId) : null })),
+    },
     lastCall: cardLastCall.rows[0]
       ? { at: cardLastCall.rows[0].at, manager: cardLastCall.rows[0].manager, billsec: Number(cardLastCall.rows[0].billsec),
           direction: String(cardLastCall.rows[0].call_type).includes("out") ? "out" : "in" }
