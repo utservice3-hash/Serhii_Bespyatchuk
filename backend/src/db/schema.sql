@@ -2084,8 +2084,9 @@ UPDATE roles SET screen_access = screen_access || '{"ads":true}'::jsonb
 -- 🟢 `manager` У ПЕРЕЛІКУ СВІДОМО: екран показує менеджеру ВЛАСНІ пропущені (кламп у
 -- роуті), а не роботу колег. Саме тому він ширший за сусідній `ads`.
 -- ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+-- 🔴 `financier` прибрано 27.11.2026 (Роман: фінансисту лише вкладки зі списку, задача 10723); білий список у кінці файла.
 UPDATE roles SET screen_access = screen_access || '{"missed-calls":true}'::jsonb
-  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead', 'financier', 'manager')
+  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead', 'manager')
     AND NOT (screen_access ? 'missed-calls');
 
 -- Баланси рахунків: останній залишок з банк-API (mono client-info / privat closing-balance),
@@ -8036,7 +8037,24 @@ CREATE TABLE IF NOT EXISTS payroll_advances (
   CHECK (status <> 'rejected' OR (reason IS NOT NULL AND length(btrim(reason)) > 0)),
   CHECK (status <> 'paid' OR paid_at IS NOT NULL)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS payroll_advances_one_active ON payroll_advances (month, user_id) WHERE status IN ('requested', 'paid');
+-- 🆘 «АВАНС ФОРС-МАЖОР» (задача 10723, Тетяна 27.11.2026; Роман: «ліміти такі самі, як і звичайного авансу. Тільки Сергій
+-- погоджує»). Вид `fm`: будь-коли, кілька на місяць, обовʼязкова причина; спершу `pending` (чекає ОД), погоджено → `requested`
+-- (далі як звичайний: «Виплатити»). «Один на місяць» тепер лише для звичайних. Наявні рядки → `regular`, суми не міняються.
+-- ⚠️ revert коду не прибирає `fm`-рядків: старий код відніме з ЗП лише ОДИН аванс місяця — перед відкатом перевірити, чи є `fm`.
+ALTER TABLE payroll_advances ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'regular';
+ALTER TABLE payroll_advances ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE payroll_advances ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+ALTER TABLE payroll_advances ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCES users(id);
+ALTER TABLE payroll_advances DROP CONSTRAINT IF EXISTS payroll_advances_status_check;
+ALTER TABLE payroll_advances ADD CONSTRAINT payroll_advances_status_check CHECK (status IN ('pending', 'requested', 'paid', 'rejected', 'cancelled'));
+ALTER TABLE payroll_advances DROP CONSTRAINT IF EXISTS payroll_advances_fm_chk;
+ALTER TABLE payroll_advances ADD CONSTRAINT payroll_advances_fm_chk CHECK (
+  kind IN ('regular', 'fm')
+  AND (status <> 'pending' OR kind = 'fm')
+  AND (kind <> 'fm' OR (note IS NOT NULL AND length(btrim(note)) > 0))
+  AND (kind <> 'fm' OR status NOT IN ('requested', 'paid') OR approved_at IS NOT NULL));
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_advances_one_regular ON payroll_advances (month, user_id) WHERE kind = 'regular' AND status IN ('requested', 'paid');
+DROP INDEX IF EXISTS payroll_advances_one_active;
 CREATE TABLE IF NOT EXISTS payroll_advance_lines (
   id         BIGSERIAL PRIMARY KEY,
   advance_id BIGINT NOT NULL REFERENCES payroll_advances(id),
@@ -8290,6 +8308,10 @@ UPDATE roles SET permissions = permissions || '{"payroll_export_cards":true}'::j
 UPDATE roles SET permissions = permissions - 'payroll_export_cards' WHERE key NOT IN ('financier', 'opdir');
 UPDATE roles SET permissions = permissions || '{"payroll_clearance":true}'::jsonb WHERE key IN ('____________', 'business_assistant');
 UPDATE roles SET permissions = permissions - 'payroll_clearance' WHERE key NOT IN ('____________', 'business_assistant');
+-- Обхідний лист оформлює HR (рішення Сергія з TOP Weekly 26.11.2026, задачі 11191/11193; Роман 27.11 «давай робити»):
+-- окреме право «оформити звільнення» без сум. ОД — запасний. Фінансист більше не оформлює (`payroll_edit` цього не дає).
+UPDATE roles SET permissions = permissions || '{"payroll_leave":true}'::jsonb WHERE key IN ('hr', 'opdir');
+UPDATE roles SET permissions = permissions - 'payroll_leave' WHERE key NOT IN ('hr', 'opdir');
 UPDATE roles SET permissions = permissions || '{"payroll_offer_tasks":true}'::jsonb WHERE key IN ('hr');
 UPDATE roles SET permissions = permissions - 'payroll_offer_tasks' WHERE key NOT IN ('hr');
 UPDATE roles SET permissions = permissions || '{"notify_rules":true}'::jsonb WHERE key IN ('opdir', 'admin');
@@ -8733,3 +8755,66 @@ CREATE TABLE IF NOT EXISTS client_profiles (
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS receivable_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_tasks_receivable_open ON tasks(receivable_key)
   WHERE receivable_key IS NOT NULL AND status <> 'done';
+
+-- 🧾 ФІНАНСИСТ БАЧИТЬ ЛИШЕ СВОЇ 13 ВКЛАДОК (задача 10723, файл Тетяни 27.11.2026; Роман 27.11: «це для всієї ролі
+-- фінансиста»). Тетяна позначила галочками: Плани, Фінанси, Дебіторська, Задачник, Календар команди, Виписка, Реєстри,
+-- Зарплата, Новини, Найм, Опитування, Регламенти, Орг структура. Решту екранів (Звіт, КВП, Статистики, Клієнти,
+-- Навчання, Конструктор, Налаштування…) роль втрачає. Це БІЛИЙ список, а не чорний: синк «financier = екрани адміна»
+-- вище копіює кожен новий екран адміна, і чорний список пропускав би нові вкладки мовчки (так уже було з «Наймом»,
+-- «БА», Prozorro). Білий бере зі зліпка адміна лише ці ключі, тож вкладка, якої в адміна немає, теж не зʼявиться.
+-- 🔴 СТОЇТЬ ОСТАННІМ серед `UPDATE roles SET screen_access` у файлі: будь-яка видача «усім ролям» нижче повернула б
+-- фінансисту екран до наступного викату. Тримає #11300 (порядок) і #11301 (дві міграції на scratch).
+-- Права (`permissions`) не чіпаємо: межа тут — вкладки. Revert коду поверне екрани адміна наступним викатом.
+UPDATE roles SET screen_access = (
+  SELECT COALESCE(jsonb_object_agg(e.k, e.v), '{}'::jsonb)
+    FROM jsonb_each((SELECT screen_access FROM roles WHERE key = 'admin')) AS e(k, v)
+   WHERE e.k IN ('plans', 'finance', 'receivables', 'tasks', 'duty', 'bank', 'registries', 'payroll', 'news', 'hiring',
+                 'surveys', 'documents', 'org'))
+ WHERE key = 'financier';
+
+-- 🧾 ВІДПОВІДАЛЬНІ ЗА ПУНКТИ ОБХІДНОГО ЛИСТА ПОІМЕННО (задача 10723; Роман 27.11.2026: «бізнес асистент це даря протас»).
+-- Ролі «Бізнес-асистент» на проді немає ні в кого (Дарʼя — адмін), тож пп. 2, 6, 7 не міг підписати ніхто. Рядок тут сильніший
+-- за пошук за роллю (`state.ts` `loadResponsibles`). Сід — лише коли рядка ще немає і збіг за прізвищем РІВНО один.
+-- Відкат даних: рядок можна видалити — тоді знову перший активний користувач з роллю.
+CREATE TABLE IF NOT EXISTS payroll_responsibles (
+  role_key   TEXT PRIMARY KEY CHECK (role_key IN ('ba', 'acc', 'hr')),
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO payroll_responsibles (role_key, user_id)
+SELECT 'ba', min(u.id) FROM users u
+  LEFT JOIN LATERAL (SELECT full_name FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1) e2 ON true
+ WHERE u.is_active AND (u.full_name ILIKE '%Протас%' OR e2.full_name ILIKE '%Протас%')
+HAVING count(*) = 1
+ON CONFLICT (role_key) DO NOTHING;
+
+-- 🎚 ЗАЯВКА МЕНЕДЖЕРА НА «ПРОФІ» (задача 10723, варіант В1, «роби» Романа 27.11.2026). Кнопка в кабінеті більше не міняє рівень
+-- сама: вона подає заявку, а рішення за керівництвом («Найм» головний). Погоджують Сергій (ОД), рекрутер і адміни — право
+-- `payroll_level_approve`. Погодження = «Перевести на «Профі»» у картці «Найму» (закриває заявку); далі фінансист підтверджує
+-- рівень у «Змінах з «Найму»», як і раніше. Відкрита заявка на людину — одна.
+CREATE TABLE IF NOT EXISTS payroll_level_requests (
+  id           SERIAL PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  level        TEXT NOT NULL DEFAULT 'profi' CHECK (level IN ('profi')),
+  from_month   DATE NOT NULL,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at   TIMESTAMPTZ,
+  decided_by   INTEGER REFERENCES users(id),
+  decision     TEXT CHECK (decision IN ('approved', 'rejected')),
+  note         TEXT,
+  CHECK ((decided_at IS NULL) = (decision IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_level_requests_open ON payroll_level_requests (user_id) WHERE decided_at IS NULL;
+UPDATE roles SET permissions = permissions || '{"payroll_level_approve":true}'::jsonb WHERE key IN ('admin', 'opdir', 'hr');
+UPDATE roles SET permissions = permissions - 'payroll_level_approve' WHERE key NOT IN ('admin', 'opdir', 'hr');
+-- 🔒 Не для AI-запитів, як і решта зарплатних таблиць. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON payroll_responsibles, payroll_level_requests FROM ai_readonly;
+-- 🔔 Типи центру сповіщень без рядка в `notify_rules` мовчки НЕ надсилаються (`emitAll` пропускає невідомий тип), тож кожен
+-- новий тип рушія — рядок тут. Стереже #11353 (кожен ключ NOTIFICATION_TYPES має свій рядок).
+INSERT INTO notify_rules (type, module, act, event, recipients) VALUES
+ ('lvl.req', 'Рівень', true, 'Заявка менеджера на «Профі»', 'ОД, рекрутер, адміни — погодити чи відхилити в «Наймі»'),
+ ('adv.fm',  'Аванс',  true, 'Заявка на аванс форс-мажор', 'ОД — погодити чи відхилити; після погодження — фінансисти (виплатити)')
+ON CONFLICT (type) DO NOTHING;
+-- 🆘 Погодити «Аванс форс-мажор» — лише ОД (Роман 27.11.2026: «Тільки Сергій погоджує»). Фінансист виплачує вже погоджене.
+UPDATE roles SET permissions = permissions || '{"payroll_fm_approve":true}'::jsonb WHERE key IN ('opdir');
+UPDATE roles SET permissions = permissions - 'payroll_fm_approve' WHERE key NOT IN ('opdir');

@@ -13,7 +13,7 @@
 
 /** @typedef {'start'|'profi'} Level */
 /** @typedef {'manager'|'lead'|'staff'} Role */
-/** @typedef {'own'|'ownNow'|'probation'|'company'|'gross'} LeaveType */
+/** @typedef {'own'|'ownNow'|'probation'|'company'|'gross'|'naim'} LeaveType */
 /**
  * @typedef {Object} Employee
  * @property {string} id                 id користувача дашборда
@@ -118,6 +118,9 @@ export const LEAVE_TYPES = Object.freeze({
   probation: ['під час / після випробувального', 'ставка за перший місяць не нараховується; відсоток і бонус — за відпрацьований період'],
   company: ['з ініціативи компанії', 'ставка — пропорційно відпрацьованим дням'],
   gross: ['грубе порушення', 'лише відсоток від маржі'],
+  // дата прийшла з «Найму», обхідного ще немає (задача 10723, Тетяна 25.11, «роби» Романа 27.11): тип невідомий — без ставки й бонусу.
+  // Обирати цей тип руками не можна: його ставить лише стан (state.ts), коли звільнення в «Зарплаті» ще не оформлене.
+  naim: ['звільнений у «Наймі», тип ще не обрано', 'лише відсоток від маржі; ставка — коли HR оформить обхідний лист і обере тип'],
 });
 
 /** Обхідний лист — бланк компанії: 8 пунктів підписують відповідальні; 9-й — ОД, лише після всіх */
@@ -283,6 +286,9 @@ export function createPayroll(state) {
   const verifiedMargin = (id, mk) => { const r = record(id, mk); return r && r.status !== 'review' && r.overrides && r.overrides.margin !== undefined ? r.overrides.margin : null; };
 
   // ---------- розрахунок: «зараз» і «при виконанні плану» (маржа = max(факт, план)) ----------
+  const zeroPart = () => ({ rate: 0, pct: 0, pctAmount: 0, bonus: 0, birthday: 0, total: 0 });
+  /** Звільнений менеджер без жодної угоди в місяці звільнення (ті самі угоди, з яких рахується маржа), дата звільнення вже настала */
+  const dismissZeroOf = (e, mk, used) => !!state.dismissZero && !!leaveIn(e, mk) && e.leave.date <= today && used.length === 0;
   function calcManager(e, mk) {
     const live = isLive(mk), lv = levelOf(e, mk), dy = days(e, mk), of = offerOf(e);
     const all = dealsOf(e.id, mk), used = all.filter(counts), held = all.filter(d => !counts(d));
@@ -299,7 +305,7 @@ export function createPayroll(state) {
       const successCalls = k.successCalls || 0, successOk = !strict || successCalls >= S.kpi.minSuccessCalls;
       const reach = k.normDays + dy.left >= need && (successOk || dy.left > 0);   // КПІ ще можна виконати
       const done = k.normDays >= need && successOk;
-      const noBonus = lt === 'own' || lt === 'ownNow' || lt === 'gross';
+      const noBonus = lt === 'own' || lt === 'ownNow' || lt === 'gross' || lt === 'naim';
       const amt = step ? step[1] : 0, ok = m => (!strict && m >= S.kpi.waiveFrom) || reach;
       // за офером бонус стає доступним лише після виконання КПІ: до того — «умовний» (pending), у «зараз» не входить
       const bonusNow = noBonus ? 0 : strict ? (done ? amt : 0) : ok(margin) ? amt : 0;
@@ -313,6 +319,10 @@ export function createPayroll(state) {
     const nowP = { rate, pct: pctNow, pctAmount: (margin - special.margin) * pctNow / 100 + special.amount, bonus: kpi ? kpi.bonusNow : 0, birthday: bday };
     const planP = { rate, pct: pctPlan, pctAmount: (marginPlan - special.margin) * pctPlan / 100 + special.amount, bonus: kpi ? kpi.bonusPlan : 0, birthday: bday };
     nowP.total = nowP.rate + nowP.pctAmount + nowP.bonus + bday; planP.total = planP.rate + planP.pctAmount + planP.bonus + bday;
+    // 0 угод у місяці звільнення → 0 (задача 10723, Тетяна 25.11, «роби» Романа 27.11): правило сильніше за п. 11 оферу — ні ставки,
+    // ні бонусу, ні ДН, ні постійних бонусів. Лише менеджери з продажу; лише коли дата звільнення вже настала. Вмикає state.dismissZero.
+    if (dismissZeroOf(e, mk, used)) return { kind: 'manager', empId: e.id, month: mk, live, level: lv, offer: offerCode(e), days: dy, deals: all, held, margin, marginPlan, plan, planDone: false,
+      kpi: kpi && { ...kpi, bonusNow: 0, bonusPending: 0, bonusPlan: 0 }, special, birthdays: [], dismissZero: true, now: zeroPart(), atPlan: zeroPart() };
     return { kind: 'manager', empId: e.id, month: mk, live, level: lv, offer: offerCode(e), days: dy, deals: all, held, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, kpi, special, birthdays, now: nowP, atPlan: planP };
   }
   function calcLead(e, mk) {
@@ -324,8 +334,14 @@ export function createPayroll(state) {
     const birthdays = birthdayLines(e, mk), bday = sum(birthdays.map(b => b.amount));
     const nowP = { rate, pct: pctFor(margin), pctAmount: margin * pctFor(margin) / 100, bonus: 0, birthday: bday };
     const planP = { rate, pct: pctFor(marginPlan), pctAmount: marginPlan * pctFor(marginPlan) / 100, bonus: 0, birthday: bday };
-    nowP.total = nowP.rate + nowP.pctAmount + bday; planP.total = planP.rate + planP.pctAmount + bday;
-    return { kind: 'lead', empId: e.id, month: mk, live, days: dy, members, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, birthdays, now: nowP, atPlan: planP };
+    // 🧭 Власний результат тімліда (Тетяна 27.11: «його зп рахується згідно оферу як у менеджера (старт або профі) + % від команди»;
+    // Роман: «додати до викату»): % від ВЛАСНОЇ маржі за шкалою рівня тімліда (Старт 10/20 %, Профі 25/30/35 %), особистого плану
+    // немає — тож «Старт» 10 %, «Профі» 25 % / 30 % від порогу. Ставка тімліда лишається. Вмикає `state.leadOwn`; без нього — як у пакеті.
+    const own = ownMargin(e, mk), lv = levelOf(e, mk) || 'start';
+    const ownPct = state.leadOwn ? managerPct(lv, 0, own) : 0, ownAmount = own * ownPct / 100;
+    nowP.ownPct = ownPct; nowP.ownAmount = ownAmount; planP.ownPct = ownPct; planP.ownAmount = ownAmount;
+    nowP.total = nowP.rate + nowP.pctAmount + ownAmount + bday; planP.total = planP.rate + planP.pctAmount + ownAmount + bday;
+    return { kind: 'lead', empId: e.id, month: mk, live, days: dy, members, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, ownMargin: own, level: state.leadOwn ? lv : null, birthdays, now: nowP, atPlan: planP };
   }
   /** Маржа компанії = сума маржі менеджерів (у закритому місяці — перевірена фінансистом) */
   function companyMargin(mk) {
@@ -349,7 +365,7 @@ export function createPayroll(state) {
   /** Бонус додається до нарахованого; корекція зменшує, але не нижче нуля: виплата від неї мінусовою не стає (Тетяна 24.11) */
   const corrCap = (pre, B, C) => Math.min(C, Math.max(0, pre + B));
   function withAdj(c, e, mk) {
-    const { list, B, C } = adjSums(e, mk);
+    const { list, B, C } = c.dismissZero ? { list: [], B: 0, C: 0 } : adjSums(e, mk);
     for (const P of [c.now, c.atPlan]) { P.adjBonus = B; P.adjCorr = corrCap(P.total, B, C); P.total = P.total + B - P.adjCorr; }
     c.adjustments = list; return c;
   }
@@ -363,6 +379,13 @@ export function createPayroll(state) {
   const advanceStatus = a => (!a ? null : a.rejectedAt && seen(a.rejectedAt) ? 'rejected' : a.paidAt && seen(a.paidAt) ? 'paid' : 'requested');
   const advancePaid = (id, mk) => { const a = advanceOf(id, mk); return a && advanceStatus(a) === 'paid' ? a.amount : 0; };
   const advanceWindowOpen = mk => isLive(mk) && +today.slice(8, 10) >= S.advance.fromDay;
+  // «Аванс форс-мажор» (задача 10723, Тетяна 27.11; Роман: «ліміти такі самі, як і звичайного авансу. Тільки Сергій погоджує»):
+  // будь-коли в живому місяці, кілька на місяць; `state.fmAdvances[mk][id]` — масив заявок. Стани: pending (чекає ОД) →
+  // requested (погоджено, чекає виплати) → paid; rejected. Без `fmAdvances` у стані — як у пакеті (нулі).
+  const fmOf = (id, mk) => ((((state.fmAdvances || {})[mk] || {})[id]) || []).filter(a => seen(a.requestedAt) && !(a.cancelledAt && seen(a.cancelledAt)));
+  const fmStatus = a => (a.rejectedAt && seen(a.rejectedAt) ? 'rejected' : a.paidAt && seen(a.paidAt) ? 'paid' : a.approvedAt && seen(a.approvedAt) ? 'requested' : 'pending');
+  const fmSum = (id, mk, sts) => sum(fmOf(id, mk).filter(a => sts.includes(fmStatus(a))).map(a => a.amount));
+  const FM_HELD = ['pending', 'requested', 'paid'];
   /** Ліміт: менеджер — % своєї маржі «Успішно реалізовано», тім-лід — % своєї маржі (ownDeals), ставка — % ставки; не більше нарахованого */
   function advanceLimit(e, mk) {
     const c = calcE(e, mk);
@@ -372,7 +395,11 @@ export function createPayroll(state) {
     const [base, pct, basis] = c.kind === 'manager' ? [c.margin, S.advance.managerPct, 'margin'] : own ? [ownMargin(e, mk), S.advance.leadPct, 'ownMargin'] : c.kind === 'lead' ? [c.margin, S.advance.leadPct, 'teamMargin'] : [c.now.rate, S.advance.staffPct, 'rate'];
     // бонус — лише до ЗП, не до авансу (Тетяна 24.11): стеля авансу — нараховане без постійного бонусу
     const byRule = Math.max(0, Math.floor(base * pct / 100)), cap = Math.max(0, Math.floor(c.now.total - (c.now.adjBonus || 0)));
-    return { basis, base, pct, byRule, cap, amount: Math.min(byRule, cap), capped: cap < byRule, calc: c };
+    const out = { basis, base, pct, byRule, cap, amount: Math.min(byRule, cap), capped: cap < byRule, calc: c };
+    if (state.fmAdvances === undefined) return out;
+    // один ліміт на обидва види: форс-мажор (поданий, погоджений, виплачений) зменшує звичайний, звичайний — форс-мажор
+    const a = advanceOf(e.id, mk), reg = a && advanceStatus(a) !== 'rejected' ? a.amount : 0, fm = fmSum(e.id, mk, FM_HELD);
+    return { ...out, amount: Math.max(0, out.amount - fm), fmHeld: fm, fm: Math.max(0, out.amount - fm - reg) };
   }
 
   // ---------- ТТН: частка угод місяця з ТТН («Бізнес-асистент → ТТН моніторинг») ----------
@@ -432,13 +459,16 @@ export function createPayroll(state) {
     const extras = sum(r.extras.map(x => EXTRA_KINDS[x.kind][1] * x.amount)), bday = c.now.birthday;
     // свої клієнти з окремим відсотком: їхня маржа — поза шкалою (фінансист правив загальну маржу — правка лягає на решту)
     const sp = c.kind === 'manager' && c.special ? c.special : { margin: 0, amount: 0 };
-    const pctAmount = (v.margin - sp.margin) * v.pct / 100 + sp.amount;
-    const pre = v.rate + pctAmount + v.bonus + bday + extras, autoPre = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + auto.bonus + bday;
+    const leadOwn = c.kind === 'lead' ? c.now.ownAmount || 0 : 0;   // % власних угод тімліда — поверх відсотка команди (правки маржі — про команду)
+    const pctAmount = (v.margin - sp.margin) * v.pct / 100 + sp.amount + leadOwn;
+    const pre = v.rate + pctAmount + v.bonus + bday + extras, autoPre = auto.rate + (auto.margin - sp.margin) * auto.pct / 100 + sp.amount + leadOwn + auto.bonus + bday;
     const { B: adjBonus, C } = adjSums(e, mk), adjCorr = corrCap(pre, adjBonus, C);   // постійні бонус/корекція — поверх правок фінансиста
     const total = pre + adjBonus - adjCorr, autoTotal = autoPre + adjBonus - corrCap(autoPre, adjBonus, C);
-    const advance = advancePaid(e.id, mk), official = officialOf(e, mk), officialDeducted = official && official.deduct ? official.amount : 0;
+    const advance = advancePaid(e.id, mk) + fmSum(e.id, mk, ['paid']), official = officialOf(e, mk), officialDeducted = official && official.deduct ? official.amount : 0;
     const tl = ttnLines(e, mk), ttn = sum(tl.map(x => x.amount));
-    return { calc: c, record: r0, auto, values: v, pctAmount, birthday: bday, extras, adjBonus, adjCorr, adjustments: c.adjustments, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn, pay: total - advance - officialDeducted + ttn };
+    return { calc: c, record: r0, auto, values: v, pctAmount, leadOwn, birthday: bday, extras, adjBonus, adjCorr, adjustments: c.adjustments, total, autoTotal, advance, official, officialDeducted, ttnLines: tl, ttn,
+      // «До виплати» не нижче 0 (Роман 27.11, разом із форс-мажором): аванси понад ЗП місяця в мінус не йдуть; без `fmAdvances` — як у пакеті
+      pay: state.fmAdvances === undefined ? total - advance - officialDeducted + ttn : Math.max(0, total - advance - officialDeducted + ttn) };
   }
   /** Форма на виплату: готівка + карти разом мають дорівнювати «До виплати»; нова карта (isNew) — номер за Луном і власник */
   function checkPayoutForm(e, mk, form) {
@@ -487,14 +517,17 @@ export function createPayroll(state) {
   }
   const clearanceCanSign = (e, k, userId) => { const x = CLEARANCE_ITEMS.find(i => i.k === k); return !!x && clearanceResponsible(e, x.role).id === userId; };
   const isFinal = (e, mk) => !!(e.leave && e.leave.date.slice(0, 7) === mk);        // місяць звільнення — фінальний розрахунок
-  const payBlocked = (e, mk) => { const s = isFinal(e, mk) ? clearanceState(e) : null; return !!(s && !s.ok); };   // форма — після 8 підписів
+  // форма — після 8 підписів. З state.dismissZero: обхідного ще немає (дата з «Найму») — теж закрито, якщо є що платити
+  const payBlocked = (e, mk) => { if (!isFinal(e, mk)) return false; const s = clearanceState(e);
+    return s ? !s.ok : !!state.dismissZero && !calcE(e, mk).dismissZero; };
   const payNeedsOd = (e, mk) => { const s = isFinal(e, mk) ? clearanceState(e) : null; return !!(s && !s.final); }; // виплата — після погодження ОД
 
   // ---------- прогноз для ОД: фонд, готівка, ризики, команди ----------
   function forecast(mk) {
     const rows = E.filter(e => employedIn(e, mk)).map(e => { const a = advanceOf(e.id, mk); return { e, c: calcE(e, mk), a, as: advanceStatus(a), o: officialOf(e, mk), t: e.role === 'manager' ? ttnStats(e, mk) : null, L: advanceLimit(e, mk) }; });
     const fundNow = sum(rows.map(x => x.c.now.total)), fundPlan = sum(rows.map(x => x.c.atPlan.total));
-    const advPaid = sum(rows.filter(x => x.as === 'paid').map(x => x.a.amount)), advRequested = sum(rows.filter(x => x.as === 'requested').map(x => x.a.amount));
+    const advPaid = sum(rows.filter(x => x.as === 'paid').map(x => x.a.amount)) + sum(rows.map(x => fmSum(x.e.id, mk, ['paid']))),
+      advRequested = sum(rows.filter(x => x.as === 'requested').map(x => x.a.amount)) + sum(rows.map(x => fmSum(x.e.id, mk, ['requested'])));
     const advLeft = sum(rows.filter(x => !x.a || x.as === 'rejected').map(x => x.L.amount));
     const officialDeducted = sum(rows.map(x => (x.o && x.o.deduct ? x.o.amount : 0))), officialSeparate = sum(rows.map(x => (x.o && !x.o.deduct ? x.o.amount : 0)));
     const late = x => x.t && !ttnOk(x.t) && x.t.missing.some(d => addDays(d.date, 7) < today);
@@ -624,7 +657,7 @@ export function createPayroll(state) {
     // розрахунок
     record, verifiedMargin, companyMargin, companyPlan, calc: W(calcE), adjustmentsOf: W(adjustmentsOf),
     // офіційна ЗП, аванс
-    officialOf: W(officialOf), officialSeparateOf: W(officialSeparateOf), advanceOf, advanceStatus, advancePaid, advanceWindowOpen, advanceLimit: W(advanceLimit),
+    officialOf: W(officialOf), officialSeparateOf: W(officialSeparateOf), advanceOf, advanceStatus, advancePaid, advanceWindowOpen, fmOf, fmStatus, advanceLimit: W(advanceLimit),
     // ТТН
     ttnDate, ttnStats: W(ttnStats), ttnOk, ttnFixedAt: W(ttnFixedAt), ttnPrev: W(ttnPrev), ttnLines: W(ttnLines),
     // рівень (офер Лілії), закриття, виплата

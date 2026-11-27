@@ -120,7 +120,14 @@ test("#231f МІГРАЦІЯ ДВІЧІ: КВП і адмін дістають 1
   }
 });
 
-test("#4153 МІГРАЦІЯ ДВІЧІ: фінансист бачить «Найм» (перегляд), але не «Номінації»; «Навчання» лишається", async (t) => {
+/**
+ * #11301 — ФІНАНСИСТ БАЧИТЬ РІВНО 13 ВКЛАДОК ТЕТЯНИ (Роман 27.11.2026: «це для всієї ролі фінансиста»). Заміняє #4153
+ * (той стверджував «Навчання лишається», рішення 27.11 його знімає). Дві міграції, бо синк «financier = екрани адміна»
+ * повертає екрани саме на повторному прогоні. Дзеркало: адмін ці екрани має, інакше «фінансист не бачить» — порожня правда.
+ * 🧨 Червоніє, якщо білий список прибрати, переставити вище за синк або додати/забрати ключ.
+ */
+const FINANCIER_TABS = ["bank", "documents", "duty", "finance", "hiring", "news", "org", "payroll", "plans", "receivables", "registries", "surveys", "tasks"];
+test("#11301 МІГРАЦІЯ ДВІЧІ: фінансист бачить рівно 13 вкладок Тетяни, адмін — і їх, і решту", async (t) => {
   const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));
@@ -129,24 +136,30 @@ test("#4153 МІГРАЦІЯ ДВІЧІ: фінансист бачить «На�
   const client = new pg.Client({ connectionString: scratch.url });
   try {
     await client.connect();
-    // 🔴 ДВІЧІ, як у #231f: синк «financier = екрани адміна» повертає екрани саме на повторному прогоні —
-    // так 24.09.2026 і сталося на проді: міграція тихо відкрила фінансисту те, що власник закрив напередодні.
     await client.query(schema);
     await client.query(schema);
     const rows = (await client.query<{ key: string; screen_access: Record<string, unknown> }>(
       "SELECT key, screen_access FROM roles")).rows;
-    const sees = (k: string, s: string) => rows.find((r) => r.key === k)?.screen_access?.[s] === true;
+    const on = (k: string) => Object.entries(rows.find((r) => r.key === k)?.screen_access ?? {}).filter(([, v]) => v === true).map(([x]) => x).sort();
     assert.ok(rows.some((r) => r.key === "financier"), "🔴 у scratch-базі немає ролі фінансиста — перевіряти нема чого");
-    // дзеркало: екрани існують і в адміна є — інакше «фінансист не бачить» було б порожньою правдою
-    assert.ok(sees("admin", "hiring") && sees("admin", "nominations"), "🔴 адмін не бачить «Найм»/«Номінації» — перевірка втратила сенс");
-    // 👁 20.11.2026 рішення Романа: «Найм» фінансисту — лише перегляд (`hiringAccess` → «view»). Було #741 («НІ»).
-    assert.ok(sees("financier", "hiring"), "🔴 фінансист НЕ бачить «Найм» після ДРУГОЇ міграції — рішення 20.11 не застосувалось");
-    assert.ok(!sees("financier", "nominations"), "🔴 фінансист бачить «Номінації» після ДРУГОЇ міграції");
-    assert.ok(sees("financier", "training"), "🔴 фінансист утратив «Навчання» — зняття забрало більше, ніж вирішено");
+    assert.deepEqual(on("financier"), FINANCIER_TABS, "🔴 вкладки фінансиста після ДРУГОЇ міграції не ті, що позначила Тетяна 27.11");
+    for (const s of [...FINANCIER_TABS, "report", "training", "settings", "nominations"])
+      assert.ok(on("admin").includes(s), `🔴 адмін не бачить «${s}» — перевірка втратила дзеркало`);
   } finally {
     await client.end().catch(() => {});
     scratch.dispose();
   }
+});
+
+/** #11300 — білий список фінансиста стоїть ОСТАННІМ серед правок `screen_access`: видача «усім ролям» нижче повернула б екран. */
+test("#11300 білий список вкладок фінансиста — останній `UPDATE roles SET screen_access` у схемі", () => {
+  const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
+  const white = schema.indexOf("jsonb_each((SELECT screen_access FROM roles WHERE key = 'admin'))");
+  const last = schema.lastIndexOf("UPDATE roles SET screen_access");
+  const sync = schema.indexOf("screen_access = (SELECT screen_access FROM roles WHERE key='admin')");
+  assert.ok(white > 0 && sync > 0, "🔴 білого списку або синку немає в схемі — гейт міряє не те");
+  assert.ok(white > sync, "🔴 білий список стоїть перед синком — синк перекриє його тим самим прогоном");
+  assert.ok(schema.lastIndexOf("UPDATE roles SET screen_access", white) === last, "🔴 після білого списку фінансиста є ще правка screen_access — вона може повернути вкладку");
 });
 
 /**

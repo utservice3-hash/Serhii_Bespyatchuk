@@ -32,6 +32,7 @@ export const payrollApi = {
   /** lines: [{ cardId, amount }] або [{ newCard: { number, holder, bank }, amount }]; cash — готівкою. */
   submitForm: (month: string, body: { cash: number; lines: Obj[] }) => p(`/payroll/me/records/${month}/payout-form`, body),
   requestAdvance: (body: { cash?: number; lines?: Obj[] }) => p("/payroll/me/advances", body),
+  requestFmAdvance: (body: { cash?: number; lines?: Obj[]; note: string }) => p("/payroll/me/advances/fm", body),
   cancelAdvance: (id: number) => p(`/payroll/me/advances/${id}/cancel`),
   myCards: () => g<Obj[]>("/payroll/me/cards"),
   addCard: (number: string, holder: string, bank: string) => p("/payroll/me/cards", { number, holder, bank }),
@@ -61,11 +62,14 @@ export const payrollApi = {
   advances: (month?: string) => g("/payroll/advances", month ? { month } : undefined),
   payAdvance: (id: number) => p(`/payroll/advances/${id}/pay`),
   rejectAdvance: (id: number, reason: string) => p(`/payroll/advances/${id}/reject`, { reason }),
+  approveFmAdvance: (id: number) => p(`/payroll/advances/${id}/fm-approve`),
+  rejectFmAdvance: (id: number, reason: string) => p(`/payroll/advances/${id}/fm-reject`, { reason }),
   advancesXlsx: (month: string) => blob("/payroll/advances/export", { month }),
 
   // ---------- обхідний лист ----------
   createLeave: (userId: string | number, body: { date: string; type: string; reason?: string }) => p(`/payroll/employees/${userId}/leave`, body),
   clearances: () => g<Obj[]>("/payroll/clearances"),
+  leaveCandidates: () => g<Obj[]>("/payroll/leave-candidates"),
   clearance: (userId: string | number) => g(`/payroll/clearances/${userId}`),
   draftClearance: async (userId: string | number, key: string, data: unknown) => (await api.put(`/payroll/clearances/${userId}/items/${key}/draft`, { data })).data,
   signClearance: (userId: string | number, key: string, data: unknown) => p(`/payroll/clearances/${userId}/items/${key}/sign`, { data }),

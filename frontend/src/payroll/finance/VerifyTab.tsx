@@ -152,9 +152,10 @@ function VerifyWindow({ mk, userId, S, ctx, onSaved, prev, next, onGo }: {
   const rate = fields.includes("rate") ? p("rate") : Number(cur.rate ?? 0), bonus = fields.includes("bonus") ? p("bonus") : Number(cur.bonus ?? 0);
   // постійний бонус / корекція (задача 10723) — поверх правок, корекція не нижче нуля, як у рушії (corrCap)
   const adjs = (f.adjustments ?? []) as Obj[], adjB = Number(f.adjBonus ?? 0), adjC = adjs.filter((x) => x.kind === "correction").reduce((s, x) => s + Number(x.amount), 0);
-  const pre = rate + margin * pctV / 100 + bonus + Number(f.birthday ?? 0) + Number(f.extras ?? 0), adjCorr = Math.min(adjC, Math.max(0, pre + adjB));
+  const leadOwn = Number(f.leadOwn ?? 0);   // % власних угод тімліда — правки маржі його не міняють
+  const pre = rate + margin * pctV / 100 + leadOwn + bonus + Number(f.birthday ?? 0) + Number(f.extras ?? 0), adjCorr = Math.min(adjC, Math.max(0, pre + adjB));
   const total = pre + adjB - adjCorr;
-  const pay = total - Number(f.advance ?? 0) - Number(f.officialDeducted ?? 0) + Number(f.ttn ?? 0);
+  const pay = Math.max(0, total - Number(f.advance ?? 0) - Number(f.officialDeducted ?? 0) + Number(f.ttn ?? 0));   // як у рушії: не нижче 0
   const changed = fields.filter((k) => touched[k] && Math.round(p(k) * 100) !== Math.round(Number(cur[k] ?? 0) * 100));
   const dirty = changed.length > 0;
 
@@ -400,7 +401,8 @@ function VerifyWindow({ mk, userId, S, ctx, onSaved, prev, next, onGo }: {
             <div className="zf-preview__sum">{money(pay)}</div>
             <div className="zf-box">
               {(kind === "manager" || kind === "lead" || c.pctRule) && <Line label={kind === "lead" ? "Маржа команди" : kind === "staff" ? "Маржа компанії" : "Маржа"} value={money(margin)} />}
-              {(kind !== "staff" || c.pctRule) && <Line label="Відсоток" value={`${pct(pctV)} = ${money(margin * pctV / 100)}`} />}
+              {(kind !== "staff" || c.pctRule) && <Line label={kind === "lead" ? "Відсоток команди" : "Відсоток"} value={`${pct(pctV)} = ${money(margin * pctV / 100)}`} />}
+              {leadOwn ? <Line label={`Власні угоди · ${pct(c.now?.ownPct)}`} value={`${money(c.ownMargin ?? 0)} → ${money(leadOwn)}`} /> : null}
               {rate ? <Line label="Ставка" value={money(rate)} /> : null}
               {bonus ? <Line label="Бонус за КПІ" value={money(bonus)} /> : null}
               {bdays.map((b, i) => <Line key={i} label={b.kind === "gift" ? "День народження" : b.kind === "fund" ? "Фонд днів народження" : `ДН колеги: ${b.who?.name || "колега"}`} value={signed(b.amount)} tone={signTone(b.amount)} />)}

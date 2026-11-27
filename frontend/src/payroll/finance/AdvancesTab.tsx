@@ -21,10 +21,13 @@ export default function AdvancesTab({ ctx }: { ctx: PayrollCtx }) {
   const [rej, setRej] = useState<{ id: number; reason: string } | null>(null);
   const [payAsk, setPayAsk] = useState<number | null>(null);
   const canEdit = ctx.perms.has("payroll_edit"), canXlsx = ctx.perms.has("payroll_export_cards");
+  // «Аванс форс-мажор» погоджує лише ОД (`payroll_fm_approve`, Роман 27.11.2026: «Тільки Сергій погоджує»)
+  const canFm = ctx.perms.has("payroll_fm_approve");
+  const [fmRej, setFmRej] = useState<{ id: number; reason: string } | null>(null);
 
   if (!data) return <Loading err={err} onRetry={reload} />;
   const reqs = (data.requests ?? []) as Obj[], notYet = (data.notYet ?? []) as Obj[];
-  const waiting = reqs.filter((r) => r.status === "requested"), paid = reqs.filter((r) => r.status === "paid");
+  const waiting = reqs.filter((r) => r.status === "requested"), paid = reqs.filter((r) => r.status === "paid"), pending = reqs.filter((r) => r.status === "pending");
   const sum = (xs: Obj[], k = "amount") => xs.reduce((s, x) => s + Number(x[k] ?? 0), 0);
 
   async function pay(id: number) {
@@ -38,6 +41,20 @@ export default function AdvancesTab({ ctx }: { ctx: PayrollCtx }) {
     if (rej.reason.trim().length < 3) { toast("Напишіть причину — працівник її побачить.", { error: true }); return; }
     setBusy(rej.id);
     try { await payrollApi.rejectAdvance(rej.id, rej.reason.trim()); setRej(null); toast("Заявку відхилено — працівник побачить причину й зможе подати нову."); await reload(); }
+    catch (e) { toast(errText(e), { error: true }); }
+    finally { setBusy(null); }
+  }
+  async function fmApprove(id: number) {
+    setBusy(id);
+    try { await payrollApi.approveFmAdvance(id); toast("Аванс форс-мажор погоджено — фінансист отримає сповіщення «виплатити»."); await reload(); }
+    catch (e) { toast(errText(e), { error: true }); }
+    finally { setBusy(null); }
+  }
+  async function fmReject() {
+    if (!fmRej) return;
+    if (fmRej.reason.trim().length < 3) { toast("Напишіть причину — працівник її побачить.", { error: true }); return; }
+    setBusy(fmRej.id);
+    try { await payrollApi.rejectFmAdvance(fmRej.id, fmRej.reason.trim()); setFmRej(null); toast("Заявку форс-мажор відхилено — працівник побачить причину."); await reload(); }
     catch (e) { toast(errText(e), { error: true }); }
     finally { setBusy(null); }
   }
@@ -58,6 +75,7 @@ export default function AdvancesTab({ ctx }: { ctx: PayrollCtx }) {
       </div>
 
       <div className="zp-grid zp-grid--stats">
+        {pending.length > 0 && <Stat label="Форс-мажор: чекає ОД" value={money(sum(pending))} sub={`${pending.length} заявок`} tone="warn" />}
         <Stat label="Чекають виплати" value={money(sum(waiting))} sub={`${waiting.length} заявок`} tone={waiting.length ? "warn" : undefined} />
         <Stat label="Виплачено" value={money(sum(paid))} sub={`${paid.length} заявок`} />
         {mk === ctx.liveMonth && <Stat label="Ще можуть взяти" value={money(sum(notYet, "limit"))} sub={`${notYet.length} людей · ліміти на сьогодні`} />}
@@ -67,23 +85,39 @@ export default function AdvancesTab({ ctx }: { ctx: PayrollCtx }) {
         {!reqs.length ? <Empty>Заявок немає.{mk === ctx.liveMonth && !data.open ? ` Працівники подають їх у кабінеті з ${data.fromDay}-го числа.` : ""}</Empty> : (
           <div className="zp-table-wrap">
             <table className="zp-table zf-table">
-              <thead><tr><th>Працівник</th><th className="r">Сума</th><th>Куди</th><th className="r">Ліміт на день заявки</th><th>Подано</th><th>Стан</th>{canEdit && <th />}</tr></thead>
+              <thead><tr><th>Працівник</th><th className="r">Сума</th><th>Куди</th><th className="r">Ліміт на день заявки</th><th>Подано</th><th>Стан</th>{(canEdit || canFm) && <th />}</tr></thead>
               <tbody>
                 {reqs.map((r) => {
                   const [label, tone] = ADV_STATUS[r.status] ?? [r.status, "muted" as const];
                   return (
                     <tr key={r.id}>
-                      <td className="zf-who"><b>{r.name || "—"}</b></td>
+                      <td className="zf-who"><b>{r.name || "—"}</b>
+                        {r.kind === "fm" && <div><Pill tone="danger">форс-мажор</Pill> <span className="zp-hint">{r.note}</span></div>}</td>
                       <td className="r"><b>{money(r.amount)}</b></td>
                       <td className="zf-cards">{how(r)}</td>
                       <td className="r zp-muted">{money(r.limit)}</td>
                       <td>{dt(r.requestedAt)}</td>
                       <td><Pill tone={tone}>{label}</Pill>
                         {r.status === "paid" && r.paidAt && <div className="zp-hint">{dt(r.paidAt)}</div>}
-                        {r.status === "rejected" && <div className="zp-hint">{r.reason}</div>}</td>
-                      {canEdit && (
+                        {r.status === "rejected" && <div className="zp-hint">{r.reason}</div>}
+                        {r.kind === "fm" && r.approvedAt && <div className="zp-hint">погоджено ОД {dt(r.approvedAt)}</div>}</td>
+                      {(canEdit || canFm) && (
                         <td style={{ minWidth: 220 }}>
-                          {r.status === "requested" && rej?.id !== r.id && (
+                          {r.status === "pending" && canFm && fmRej?.id !== r.id && (
+                            <div className="zp-row">
+                              <button type="button" className="zp-btn zp-btn--sm zp-btn--primary" disabled={busy === r.id} onClick={() => void fmApprove(r.id)}>Погодити</button>
+                              <button type="button" className="zp-btn zp-btn--sm zp-btn--danger" disabled={busy === r.id} onClick={() => setFmRej({ id: r.id, reason: "" })}>Відхилити</button>
+                            </div>
+                          )}
+                          {r.status === "pending" && !canFm && <span className="zp-hint">погоджує ОД</span>}
+                          {fmRej?.id === r.id && (
+                            <div className="zf-reject">
+                              <input className="zp-input" autoFocus placeholder="Причина — працівник її побачить" value={fmRej?.reason ?? ""} onChange={(e) => setFmRej({ id: r.id, reason: e.target.value })} />
+                              <button type="button" className="zp-btn zp-btn--sm zp-btn--danger" disabled={busy === r.id} onClick={() => void fmReject()}>Відхилити</button>
+                              <button type="button" className="zp-btn zp-btn--sm zp-btn--ghost" onClick={() => setFmRej(null)}>Скасувати</button>
+                            </div>
+                          )}
+                          {canEdit && r.status === "requested" && rej?.id !== r.id && (
                             payAsk === r.id
                               ? <span className="zf-confirm">Виплачено {money(r.amount)}?<button type="button" className="zp-btn zp-btn--sm zp-btn--primary" disabled={busy === r.id} onClick={() => void pay(r.id)}>Так</button><button type="button" className="zp-btn zp-btn--sm zp-btn--ghost" onClick={() => setPayAsk(null)}>Ні</button></span>
                               : <div className="zp-row">

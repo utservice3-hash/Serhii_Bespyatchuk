@@ -113,7 +113,7 @@ function ItemRow({ it, sheet, onSigned }: { it: Item; sheet: Obj; onSigned: (s: 
       <div className="rs"><span>{it.roleLabel}</span><b>{it.responsible?.name ?? "не призначено"}</b></div>
       <div className="sg">
         {sig ? (<><span className="zp-tone--ok">підписано {dt(sig.at)}</span><span className="zp-muted">{sig.name}</span></>)
-          : mine ? (<><button className={`zp-btn zp-btn--sm ${ok ? "zp-btn--primary" : ""}`} disabled={!ok || busy} onClick={() => void sign()}>{it.final ? "Погодити розрахунок" : "Підписати"}</button>{!ok && <span className="zp-hint">{why}</span>}</>)
+          : mine ? (<><button className={`zp-btn zp-btn--sm ${ok ? "zp-btn--primary" : ""}`} disabled={!ok || busy} onClick={() => void sign()}>{signLabel(it)}</button>{!ok && <span className="zp-hint">{why}</span>}</>)
           : <span className="zp-tone--warn">{lock ? "після всіх підписів" : "чекає підпису"}</span>}
       </div>
     </li>
@@ -162,8 +162,9 @@ function Sheet({ userId, focus }: { userId: string; focus: boolean }) {
 /** `initial` — з блоку «Зміни з «Найму»» у «Налаштуваннях»: людина й дата звільнення з «Найму» вже підставлені (задача 10723). */
 function LeaveModal({ initial, onClose, onDone }: { initial?: { userId: string; date: string | null } | null; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
-  const { data } = useLoad(() => payrollApi.employees(), []);
-  const people = useMemo(() => ((data?.people ?? []) as Obj[]).filter((p) => !p.leave), [data]);
+  // Без сум: ПІБ, посада, дата звільнення з «Найму» (оформлює HR — рішення Сергія 26.11.2026)
+  const { data } = useLoad(() => payrollApi.leaveCandidates(), []);
+  const people = useMemo(() => (data ?? []) as Obj[], [data]);
   const [userId, setUserId] = useState(initial?.userId ?? "");
   const [date, setDate] = useState(initial?.date ?? kyivToday());
   const [type, setType] = useState("own");
@@ -181,9 +182,9 @@ function LeaveModal({ initial, onClose, onDone }: { initial?: { userId: string; 
     <Modal title="Оформити звільнення" onClose={onClose}
       foot={<><button className="zp-btn zp-btn--primary" disabled={busy} onClick={() => void save()}>Створити обхідний лист</button><button className="zp-btn" onClick={onClose}>Скасувати</button></>}>
       <Field label="Працівник" req>
-        <select className="zp-select" value={userId} onChange={(e) => setUserId(e.target.value)}>
+        <select className="zp-select" value={userId} onChange={(e) => { const id = e.target.value; setUserId(id); const n = people.find((p) => String(p.userId) === id)?.naimDismissedAt; if (n) setDate(String(n)); }}>
           <option value="">оберіть…</option>
-          {people.map((p) => <option key={p.userId} value={p.userId}>{p.name} · {p.title}</option>)}
+          {people.map((p) => <option key={String(p.userId)} value={String(p.userId)}>{String(p.name)} · {String(p.title)}{p.naimDismissedAt ? ` · у «Наймі» звільнений ${ddy(String(p.naimDismissedAt))}` : ""}</option>)}
         </select>
       </Field>
       <div className="zps-g2">
@@ -200,10 +201,14 @@ function LeaveModal({ initial, onClose, onDone }: { initial?: { userId: string; 
   );
 }
 
+/** Кнопка пункту (рішення Сергія 26.11.2026: без ручного підпису — «Підписано»; бухгалтерія — «Підписано, боргів немає»). */
+const signLabel = (it: { key: string; final?: boolean }): string =>
+  it.final ? "Погодити розрахунок" : it.key === "reconcile" ? "Підписано, боргів немає" : "Підписано";
+
 export default function ClearancesTab({ ctx }: { ctx: PayrollCtx }) {
   const { data, err, reload } = useLoad(() => payrollApi.clearances(), []);
   const leaveFor = ctx.goExtra?.leaveFor ? { userId: String(ctx.goExtra.leaveFor), date: ctx.goExtra.date ? String(ctx.goExtra.date) : null } : null;
-  const [leave, setLeave] = useState(!!leaveFor && ctx.perms.has("payroll_edit"));
+  const [leave, setLeave] = useState(!!leaveFor && ctx.perms.has("payroll_leave"));
   const focusId = ctx.goExtra?.userId ? String(ctx.goExtra.userId) : null;
   if (!data) return <Loading err={err} onRetry={reload} />;
   const list = data as Obj[];
@@ -212,11 +217,11 @@ export default function ClearancesTab({ ctx }: { ctx: PayrollCtx }) {
       <Card title="Обхідні листи" aside="електронний бланк компанії: кожен відповідальний підписує свої пункти">
         <div className="zp-grid" style={{ gap: 10 }}>
           <div className="zp-note">
-            Створюється, щойно у фінансиста оформлено звільнення. Тім-лід, бізнес-асистент, бухгалтерія й HR підписують свої пункти (1–8);
+            Створюється, щойно HR оформив звільнення. Тім-лід, бізнес-асистент, бухгалтерія й HR підписують свої пункти (1–8);
             форма на виплату — після всіх восьми підписів. Пункт 9 «Розрахунок та видача заробітної плати» погоджує ОД — і фінансист виплачує.
             Кожен відповідальний отримує сповіщення про свої пункти.
           </div>
-          {ctx.perms.has("payroll_edit") && <div><button className="zp-btn" onClick={() => setLeave(true)}>Оформити звільнення</button></div>}
+          {ctx.perms.has("payroll_leave") && <div><button className="zp-btn" onClick={() => setLeave(true)}>Оформити звільнення</button></div>}
         </div>
       </Card>
       {list.length ? list.map((c) => <Sheet key={c.userId} userId={String(c.userId)} focus={focusId === String(c.userId)} />)

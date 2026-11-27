@@ -237,7 +237,9 @@ test("#1123b ЖИВИЙ SQL: версії 1→2, без № — відмова, 
 
     const roles = (await c.query(`SELECT key, (screen_access->>'constructor')::bool AS tab, permissions ? 'view_all_constructor_docs' AS pool FROM roles`)).rows as { key: string; tab: boolean | null; pool: boolean }[];
     const of = (k: string) => roles.find((r) => r.key === k);
-    for (const k of ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"]) assert.equal(of(k)?.tab, true, `🔴 ${k} без вкладки конструктора`);
+    for (const k of ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"]) assert.equal(of(k)?.tab, true, `🔴 ${k} без вкладки конструктора`);
+    // Роман 27.11.2026: фінансист бачить лише 13 вкладок Тетяни, «Конструктора» серед них немає (#11301).
+    assert.notEqual(of("financier")?.tab, true, "🔴 фінансист дістав вкладку конструктора — білий список 27.11 не спрацював");
     assert.notEqual(of("hr")?.tab, true, "🔴 HR дістав вкладку конструктора");
     assert.deepEqual(roles.filter((r) => r.pool).map((r) => r.key).sort(), ["admin", "ceo", "opdir"],
       "🔴 пул розтікся за межі керівництва (після другого прогону — синк фінансиста)");

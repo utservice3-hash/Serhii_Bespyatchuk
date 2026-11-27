@@ -66,7 +66,7 @@ export function payHow(f: Obj | null | undefined): string {
 }
 
 export const ADV_STATUS: Record<string, [string, Tone]> = {
-  requested: ["Подано", "warn"], paid: ["Схвалено", "ok"], rejected: ["Відхилено", "danger"], cancelled: ["Скасовано", "muted"],
+  pending: ["Чекає погодження ОД", "warn"], requested: ["Подано", "warn"], paid: ["Схвалено", "ok"], rejected: ["Відхилено", "danger"], cancelled: ["Скасовано", "muted"],
 };
 
 /** «15 % від маржі «Успішно реалізовано» 33 400 ₴» — правило ліміту авансу. */

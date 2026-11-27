@@ -104,7 +104,7 @@ function AdvancesHistory({ me }: { me: Obj }) {
             <span className="zc-hist__m">{monthTitle(a.month)}</span>
             <Pill tone={ADV_STATUS[a.status]?.[1] ?? "muted"}>{ADV_STATUS[a.status]?.[0] ?? a.status}</Pill>
             <b className="zp-num">{money(a.amount)}</b>
-            <small>подано {dd(a.requestedAt)}{a.paidAt ? ` · схвалено ${dd(a.paidAt)}` : ""}{a.reason ? ` · ${a.reason}` : ""}</small>
+            <small>{a.kind === "fm" ? "форс-мажор · " : ""}подано {dd(a.requestedAt)}{a.paidAt ? ` · схвалено ${dd(a.paidAt)}` : ""}{a.reason ? ` · ${a.reason}` : ""}</small>
           </li>
         ))}
       </ul>

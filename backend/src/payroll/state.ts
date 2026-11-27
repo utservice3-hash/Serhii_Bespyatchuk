@@ -45,7 +45,15 @@ export async function loadResponsibles(db: Db): Promise<Responsibles> {
        FROM users u ${NAME_JOIN}
       WHERE u.is_active AND COALESCE(u.role_override, u.role) IN ('business_assistant', '____________', 'hr', 'financier', 'opdir')
       ORDER BY u.id`);
-  const first = (k: string, label: string) => { const r = q.rows.find((x) => x.key === k); return r ? { id: String(r.id), name: r.name } : { id: "", name: label }; };
+  // Поіменно (`payroll_responsibles`, Роман 27.11.2026: «бізнес асистент це даря протас») — сильніше за пошук за роллю.
+  const named = new Map((await db.query<{ role_key: string; id: number; name: string }>(
+    `SELECT r.role_key, u.id, ${NAME_SQL} AS name FROM payroll_responsibles r JOIN users u ON u.id = r.user_id ${NAME_JOIN} WHERE u.is_active`)).rows
+    .map((r) => [r.role_key, { id: String(r.id), name: r.name }] as const));
+  const ROLE_OF: Record<string, string> = { business_assistant: "ba", "____________": "acc", hr: "hr" };
+  const first = (k: string, label: string) => {
+    const n = named.get(ROLE_OF[k]); if (n) return n;
+    const r = q.rows.find((x) => x.key === k); return r ? { id: String(r.id), name: r.name } : { id: "", name: label };
+  };
   const odId = String(process.env.PAYROLL_OD_USER_ID || "1");
   const od = await db.query<{ name: string }>(`SELECT ${NAME_SQL} AS name FROM users u ${NAME_JOIN} WHERE u.id = $1`, [Number(odId)]);
   return {
@@ -116,8 +124,10 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   const empQ = await db.query<{
     user_id: number; role: string; title: string; dept_code: string; team_code: string | null; leads_team_code: string | null; offer_code: string | null;
     start_date: Date; birthday_md: string | null; is_finance: boolean; name: string; manager_id: number | null;
-    leave_date: Date | null; leave_type: string | null;
-  }>(`SELECT pe.*, ${NAME_SQL} AS name, u.manager_id, l.leave_date, l.leave_type
+    leave_date: Date | null; leave_type: string | null; naim_dismissed: string | null;
+  }>(`SELECT pe.*, ${NAME_SQL} AS name, u.manager_id, l.leave_date, l.leave_type,
+             (SELECT CASE WHEN x.status = 'dismissed' THEN to_char(x.dismissed_at, 'YYYY-MM-DD') END FROM employees x WHERE x.user_id = pe.user_id
+               ORDER BY x.id DESC LIMIT 1) AS naim_dismissed
         FROM payroll_employees pe JOIN users u ON u.id = pe.user_id ${NAME_JOIN}
         LEFT JOIN payroll_leaves l ON l.user_id = pe.user_id ORDER BY pe.user_id`);
   const termsQ = await db.query<{ user_id: number; valid_from: Date; level: string | null; rate: string | null; pct_base: string | null; pct_value: string | null; pct_clear: boolean }>(
@@ -149,7 +159,10 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       startDate: dateOnly(r.start_date), birthday: r.birthday_md, terms, official,
       clientRates: crQ.rows.filter((c) => c.user_id === r.user_id).map((c) => ({ id: Number(c.id), client: c.client_key, name: c.client_name, pct: Number(c.pct), from: c.mk })),
       adjustments: adjQ.rows.filter((x) => x.user_id === r.user_id).map((x) => ({ id: Number(x.id), kind: x.kind, amount: Number(x.amount), note: x.note, from: x.f, to: x.t })),
-      leave: r.leave_date ? { date: dateOnly(r.leave_date), type: r.leave_type } : null, isFinance: r.is_finance,
+      // звільнення: оформлене в «Зарплаті» (обхідний, тип за п. 11) — інакше дата з «Найму» з типом `naim` (без ставки й бонусу)
+      // (задача 10723, Тетяна 25.11, «роби» Романа 27.11). Найновіший запис «Найму» на акаунт, як `NAME_JOIN`; у БД нічого не пишемо.
+      leave: r.leave_date ? { date: dateOnly(r.leave_date), type: r.leave_type }
+        : r.naim_dismissed && r.naim_dismissed >= dateOnly(r.start_date) ? { date: r.naim_dismissed, type: "naim" } : null, isFinance: r.is_finance,
     };
   });
   const byManager = new Map<number, string>();
@@ -247,12 +260,25 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
   // ---------- аванси: на місяць — остання не скасована заявка ----------
   const advances: Record<string, Record<string, unknown>> = {};
   const advQ = await db.query<{ id: string; mk: string; user_id: number; amount: string; cash: string; status: string; requested_at: Date; paid_at: Date | null; paid_by: number | null;
-    rejected_at: Date | null; rejected_by: number | null; reason: string | null; cancelled_at: Date | null; lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
-    `SELECT a.id::text, to_char(a.month, 'YYYY-MM') AS mk, a.user_id, a.amount, a.cash, a.status, a.requested_at, a.paid_at, a.paid_by, a.rejected_at, a.rejected_by, a.reason, a.cancelled_at,
+    rejected_at: Date | null; rejected_by: number | null; reason: string | null; cancelled_at: Date | null; kind: string; note: string | null; approved_at: Date | null; approved_by: number | null; lines: Array<{ cardId: number; last4: string; holder: string; bank: string | null; amount: string }> | null }>(
+    `SELECT a.id::text, to_char(a.month, 'YYYY-MM') AS mk, a.user_id, a.amount, a.cash, a.status, a.requested_at, a.paid_at, a.paid_by, a.rejected_at, a.rejected_by, a.reason, a.cancelled_at, a.kind, a.note, a.approved_at, a.approved_by,
             (SELECT json_agg(json_build_object('cardId', l.card_id, 'last4', c.last4, 'holder', c.holder, 'bank', c.bank, 'amount', l.amount) ORDER BY l.id)
                FROM payroll_advance_lines l JOIN payroll_cards c ON c.id = l.card_id WHERE l.advance_id = a.id) AS lines
        FROM payroll_advances a WHERE a.month >= $1::date AND a.status <> 'cancelled' ORDER BY a.requested_at, a.id`, [monthStart(fromMonth)]);
+  // «Аванс форс-мажор» (задача 10723): кілька на місяць — окремим масивом, щоб `advances` лишився «один звичайний на місяць»
+  const fmAdvances: Record<string, Record<string, unknown[]>> = {};
   for (const a of advQ.rows) {
+    if (a.kind === "fm") {
+      ((fmAdvances[a.mk] ??= {})[String(a.user_id)] ??= []).push({
+        id: Number(a.id), amount: Number(a.amount), cash: Number(a.cash), note: a.note,
+        cards: (a.lines ?? []).map((l) => ({ no: `${l.cardId}-${l.last4}`, cardId: l.cardId, who: l.holder, bank: l.bank, amount: Number(l.amount) })),
+        requestedAt: kyivIso(a.requested_at),
+        ...(a.approved_at ? { approvedAt: kyivIso(a.approved_at), approvedBy: String(a.approved_by) } : {}),
+        ...(a.paid_at ? { paidAt: kyivIso(a.paid_at), paidBy: String(a.paid_by) } : {}),
+        ...(a.rejected_at ? { rejectedAt: kyivIso(a.rejected_at), rejectedBy: String(a.rejected_by), reason: a.reason } : {}),
+      });
+      continue;
+    }
     (advances[a.mk] ??= {})[String(a.user_id)] = {
       id: Number(a.id), amount: Number(a.amount), cash: Number(a.cash),
       cards: (a.lines ?? []).map((l) => ({ no: `${l.cardId}-${l.last4}`, cardId: l.cardId, who: l.holder, bank: l.bank, amount: Number(l.amount) })),
@@ -293,14 +319,30 @@ export async function loadState(db: Db, opts: StateOptions = {}): Promise<Payrol
       // строк підпису — 5-те число місяця, з якого діє офер (як у задачі, що створює service)
       return { id: Number(t.id), empId: String(t.user_id), title: t.offer_title, level: t.level, from, due: `${from.slice(0, 7)}-05`, why: t.why, createdAt: kyivIso(t.created_at), signedAt: kyivIso(t.signed_at), doneAt: kyivIso(t.signed_at), voidAt: kyivIso(t.void_at) }; });
 
+  // ---------- заявки менеджерів на «Профі» (задача 10723, В1, «роби» Романа 27.11): остання заявка людини; хто погоджує ----------
+  const levelRequests: Record<string, unknown> = {};
+  for (const r of (await db.query<{ id: string; user_id: number; level: string; from_month: string; requested_at: Date; decided_at: Date | null; decision: string | null; note: string | null; employee_id: number | null }>(
+    `SELECT DISTINCT ON (q.user_id) q.id::text, q.user_id, q.level, to_char(q.from_month, 'YYYY-MM') AS from_month, q.requested_at, q.decided_at, q.decision, q.note,
+            (SELECT max(e.id) FROM employees e WHERE e.user_id = q.user_id) AS employee_id
+       FROM payroll_level_requests q ORDER BY q.user_id, q.id DESC`)).rows)
+    levelRequests[String(r.user_id)] = { id: Number(r.id), level: r.level, from: r.from_month, requestedAt: kyivIso(r.requested_at), decidedAt: kyivIso(r.decided_at), decision: r.decision, note: r.note,
+      employeeId: r.employee_id };
+  const levelApprovers = (await db.query<{ id: number }>(
+    `SELECT u.id FROM users u JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
+      WHERE u.is_active AND (r.permissions ->> 'payroll_level_approve') = 'true' ORDER BY u.id`)).rows.map((r) => String(r.id));
+  // хто погоджує «Аванс форс-мажор» — право `payroll_fm_approve` (Роман 27.11: «Тільки Сергій погоджує» — роль ОД)
+  const fmApprovers = (await db.query<{ id: number }>(
+    `SELECT u.id FROM users u JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
+      WHERE u.is_active AND (r.permissions ->> 'payroll_fm_approve') = 'true' ORDER BY u.id`)).rows.map((r) => String(r.id));
+
   const settings = { ...(setQ.rows[0]?.settings ?? {}) } as Record<string, unknown>;
   settings.kpi = { ...(settings.kpi as object ?? {}), ...OFFER_KPI };   // умови оферу — не налаштування: їх не перекриває версія з БД
   settings.birthday = { ...(settings.birthday as object ?? {}), v2From: BIRTHDAY_V2_FROM };   // правило ДН з листопада — теж не налаштування
   if (Object.keys(teamOffers).length) settings.teamOffers = { ...(settings.teamOffers as object ?? {}), ...teamOffers };
   return {
-    now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, payWording: "approved", ttnLegacy,
-    records, advances, archive, clientHistory: {}, clearances, responsibles: await loadResponsibles(db), tasks, holidays: [],
-    meta: { managerOf },
+    now, liveMonth: live, closedMonth, settings, employees, departments, teams, plans, deals, ownDeals, kpi, ttnAt, payWording: "approved", ttnLegacy, dismissZero: true, leadOwn: true,
+    records, advances, fmAdvances, archive, clientHistory: {}, clearances, responsibles: await loadResponsibles(db), tasks, holidays: [],
+    levelRequests, levelApprovers, fmApprovers, meta: { managerOf },
   };
 }
 

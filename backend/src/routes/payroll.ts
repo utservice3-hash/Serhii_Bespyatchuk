@@ -10,7 +10,7 @@ import { roleHasPerm } from "../auth/rbac.js";
 import * as P from "../payroll/service.js";
 import { CardKeyMissing } from "../payroll/cards.js";
 
-export const PAYROLL_PERMS = ["payroll_view_all", "payroll_edit", "payroll_settings", "payroll_final_word", "payroll_export_cards", "payroll_clearance", "payroll_offer_tasks", "notify_rules"] as const;
+export const PAYROLL_PERMS = ["payroll_view_all", "payroll_edit", "payroll_settings", "payroll_final_word", "payroll_export_cards", "payroll_clearance", "payroll_offer_tasks", "payroll_leave", "payroll_level_approve", "payroll_fm_approve", "notify_rules"] as const;
 const viewer = (req: Request): P.Viewer => {
   const a = req.auth!;
   return { userId: a.userId, roleKey: a.roleKey, perms: new Set(PAYROLL_PERMS.filter((k) => roleHasPerm(a.roleKey, k))) };
@@ -51,6 +51,7 @@ payrollRouter.post("/me/records/:month/dispute", h(null, (req, _r, v) => P.dispu
 payrollRouter.post("/me/records/:month/payout-form", h(null, (req, _r, v) => P.submitForm(pool, v, mk(req), body(req))));
 payrollRouter.post("/me/advances", h(null, async (req, res, v) => { const r = await P.requestAdvance(pool, v, body(req)); res.status(201); return r; }));
 payrollRouter.post("/me/advance-remind", h(null, (_q, _r, v) => P.toggleAdvanceReminder(pool, v)));
+payrollRouter.post("/me/advances/fm", h(null, async (req, res, v) => { const r = await P.requestFmAdvance(pool, v, body(req)); res.status(201); return r; }));
 payrollRouter.post("/me/advances/:id/cancel", h(null, (req, _r, v) => P.cancelAdvance(pool, v, intP(req.params.id))));
 payrollRouter.get("/me/cards", h(null, (_q, _r, v) => P.myCards(pool, v)));
 payrollRouter.post("/me/cards", h(null, async (req, res, v) => { const r = await P.addCard(pool, v, body(req)); res.status(201); return r; }));
@@ -81,10 +82,14 @@ payrollRouter.post("/statement/mark-paid", h(EDIT, (req, _r, v) => {
 payrollRouter.get("/advances", h(VIEW, async (req) => P.advancesView(pool, req.query.month ? mk(req) : (await P.engine(pool)).zp.liveMonth)));
 payrollRouter.post("/advances/:id/pay", h(EDIT, (req, _r, v) => P.payAdvance(pool, v, intP(req.params.id))));
 payrollRouter.post("/advances/:id/reject", h(EDIT, (req, _r, v) => P.rejectAdvance(pool, v, intP(req.params.id), body(req).reason)));
+payrollRouter.post("/advances/:id/fm-approve", h(["payroll_fm_approve"], (req, _r, v) => P.approveFmAdvance(pool, v, intP(req.params.id))));
+payrollRouter.post("/advances/:id/fm-reject", h(["payroll_fm_approve"], (req, _r, v) => P.rejectFmAdvance(pool, v, intP(req.params.id), body(req).reason)));
 payrollRouter.get("/advances/export", h(["payroll_export_cards"], async (req, res, v) => { const m = mk(req); sendXlsx(res, await P.advancesXlsx(pool, v, m), `Avans_${m}.xlsx`); return undefined; }));
 
 // ---------------- обхідний лист ----------------
-payrollRouter.post("/employees/:userId/leave", h(EDIT, async (req, res, v) => { const r = await P.createLeave(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
+payrollRouter.post("/level-requests/:userId/reject", h(["payroll_level_approve"], (req, _r, v) => P.rejectLevelRequest(pool, v, intP(req.params.userId), body(req))));
+payrollRouter.get("/leave-candidates", h(["payroll_leave"], () => P.leaveCandidates(pool)));
+payrollRouter.post("/employees/:userId/leave", h(["payroll_leave"], async (req, res, v) => { const r = await P.createLeave(pool, v, intP(req.params.userId), body(req)); res.status(201); return r; }));
 payrollRouter.get("/clearances", h(null, (_q, _r, v) => P.clearancesList(pool, v)));
 payrollRouter.get("/clearances/:userId", h(null, (req, _r, v) => P.clearanceView(pool, v, intP(req.params.userId))));
 payrollRouter.put("/clearances/:userId/items/:key/draft", h(null, (req, _r, v) => P.draftClearance(pool, v, intP(req.params.userId), String(req.params.key), body(req).data ?? req.body)));

@@ -44,7 +44,7 @@ export const signed = (v: unknown): string => (Number(v) ? money(Number(v), { si
 export const signTone = (v: unknown): Tone | undefined => (Number(v) < 0 ? "danger" : Number(v) > 0 ? "ok" : undefined);
 
 /** Стан заявки на аванс → підпис і тон. */
-export const ADV_STATUS: Record<string, [string, Tone]> = { requested: ["заявка", "warn"], paid: ["виплачено", "ok"], rejected: ["відхилено", "danger"] };
+export const ADV_STATUS: Record<string, [string, Tone]> = { pending: ["чекає погодження ОД", "warn"], requested: ["заявка", "warn"], paid: ["виплачено", "ok"], rejected: ["відхилено", "danger"] };
 
 /** Число з поля (пробіли, кома, ₴, %). null — порожньо; NaN — помилка. */
 export function parseNum(s: string): number | null {

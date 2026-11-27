@@ -38,7 +38,10 @@ function OfferBlock({ me }: { me: Obj }) {
   ];
   else if (e.role === "lead") cells = [
     ["Ставка", money(e.rate), "за повний місяць"],
-    ["Відсоток від маржі команди", `${S.lead.pctLow} → ${S.lead.pctHigh} %`, `${S.lead.pctHigh} % — виконано план команди; без ваших власних угод`],
+    ["Відсоток від маржі команди", `${S.lead.pctLow} → ${S.lead.pctHigh} %`, `${S.lead.pctHigh} % — виконано план команди`],
+    // власні угоди тімліда — за шкалою його рівня, як у менеджера, без особистого плану (Тетяна 27.11)
+    ["Відсоток від власних угод", lv === "profi" ? `${S.profi.pct1} → ${S.profi.pct2} %` : `${S.start.pctLow} %`,
+      lv === "profi" ? `шкала «Профі»: ${S.profi.pct2} % — від ${nf(S.profi.threshold)} ₴ вашої маржі` : "шкала «Старт», без особистого плану"],
     ["План команди", money(c?.plan ?? 0), "сума планів менеджерів з «Планів»"],
   ];
   else cells = [
@@ -102,9 +105,10 @@ function LevelBlock({ me, onChanged }: { me: Obj; onChanged: () => Promise<void>
   const mk = (lv?.month ?? me.liveMonth) as string, nx = nextMonth(mk), ls = e.offer === "ls", level = e.level as string | null;
   const ln = e.levelChange as Obj | null;
   const doc = ((me.offers ?? []) as Obj[]).find((d) => !d.voidAt && d.level === "profi");
+  const lr = me.levelRequest as Obj | null;   // заявка на «Профі» (В1, 27.11.2026): рішення за керівництвом
   async function choose() {
     setBusy(true);
-    try { await payrollApi.chooseProfi(); toast(`«Профі» з 1 ${monthGen(nx)}. Новий офер — у документах, рекрутер зв’яжеться для підпису.`); setAsk(false); await onChanged(); }
+    try { await payrollApi.chooseProfi(); toast("Заявку на «Профі» подано. Рішення — за керівництвом, вам прийде сповіщення."); setAsk(false); await onChanged(); }
     catch (x) { toast(errText(x), { error: true }); }
     finally { setBusy(false); }
   }
@@ -142,17 +146,21 @@ function LevelBlock({ me, onChanged }: { me: Obj; onChanged: () => Promise<void>
     const mP = Number(c?.marginPlan ?? 0), prof = mP >= S.profi.threshold ? S.profi.pct2 : S.profi.pct1;
     body = (
       <>
-        <p className="zc-p">«Профі» — без ставки й бонусу, зате {S.profi.pct1}–{S.profi.pct3} % від маржі і дохід без стелі. Перейти можна з наступного місяця — рішення ваше або керівництва; назад не повертаємось.</p>
+        <p className="zc-p">«Профі» — без ставки й бонусу, зате {S.profi.pct1}–{S.profi.pct3} % від маржі і дохід без стелі. Перейти можна з наступного місяця: ви подаєте заявку, рішення за керівництвом; назад не повертаємось.</p>
         {c && <p className="zp-hint">При виконанні плану (маржа {money(mP)}) на «Профі» було б {pc(prof)} = <b>{money(mP * prof / 100)}</b>; на «Старті» — {money(c.atPlan.total - c.atPlan.birthday)}. {S.profi.pct3} % — з індивідуальним планом керівника.</p>}
         {ask ? (
           <div className="zp-note zp-note--warn">
-            <b>Перейти на «Профі» з 1 {monthGen(nx)}?</b> Ставки не буде, відсоток {S.profi.pct1}–{S.profi.pct3} %. Назад на «Старт» не повертаємось. Новий офер з’явиться у ваших документах, рекрутер зв’яжеться для підпису.
+            <b>Подати заявку на «Профі» з 1 {monthGen(nx)}?</b> Рішення приймає керівництво. Якщо погодять: ставки не буде, відсоток {S.profi.pct1}–{S.profi.pct3} %, назад на «Старт» не повертаємось, новий офер з’явиться у ваших документах.
             <div className="zp-row" style={{ marginTop: 8 }}>
-              <button type="button" className="zp-btn zp-btn--dark" disabled={busy} onClick={() => void choose()}>Так, з 1 {monthGen(nx)}</button>
+              <button type="button" className="zp-btn zp-btn--dark" disabled={busy} onClick={() => void choose()}>Подати заявку</button>
               <button type="button" className="zp-btn" disabled={busy} onClick={() => setAsk(false)}>Ні, лишаюсь на «Старті»</button>
             </div>
           </div>
-        ) : <div className="zp-row"><button type="button" className="zp-btn" onClick={() => setAsk(true)}>Перейти на «Профі» з 1 {monthGen(nx)}</button></div>}
+        ) : lr && !lr.decidedAt ? <p className="zp-note"><b>Заявку на «Профі» подано {dd(lr.requestedAt)}.</b> Чекає рішення керівництва, вам прийде сповіщення.</p>
+          : <>
+            {lr?.decision === "rejected" && <p className="zp-note zp-note--warn">Заявку на «Профі» відхилено {dd(lr.decidedAt)}.{lr.note ? ` Коментар: ${lr.note}` : ""}</p>}
+            <div className="zp-row"><button type="button" className="zp-btn" onClick={() => setAsk(true)}>Подати заявку на «Профі» з 1 {monthGen(nx)}</button></div>
+          </>}
       </>
     );
   }
@@ -162,7 +170,7 @@ function LevelBlock({ me, onChanged }: { me: Obj; onChanged: () => Promise<void>
 function RulesBlock({ me }: { me: Obj }) {
   const S = me.settings as Obj, e = me.employee as Obj, o = e.official as Obj | null;
   const comp = e.role === "lead" ? S.birthday.lead : S.birthday.company;
-  const advRule = e.role === "manager" ? `до ${S.advance.managerPct} % маржі «Успішно реалізовано»` : e.role === "lead" ? `до ${S.advance.leadPct} % маржі команди` : `до ${S.advance.staffPct} % ставки`;
+  const advRule = e.role === "manager" ? `до ${S.advance.managerPct} % маржі «Успішно реалізовано»` : e.role === "lead" ? `до ${S.advance.leadPct} % вашої маржі` : `до ${S.advance.staffPct} % ставки`;
   const R: Array<[string, string] | null> = [
     ["Аванс", `з ${S.advance.fromDay} числа, ${advRule}, не більше нарахованого; на одну чи кілька карт або готівкою. Вираховується при закритті місяця.`],
     e.role === "manager" ? ["ТТН", `якщо в закритому місяці ТТН є менш ніж у ${S.ttn.minPct} % угод — ${money(S.ttn.hold)} утримуємо з виплати. Закрили ТТН до виплати — сума в цій виплаті; після виплати — у наступному місяці.`] : null,

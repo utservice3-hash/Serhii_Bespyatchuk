@@ -229,12 +229,16 @@ function TodoBlock({ me, go, onChanged }: { me: Obj; go: Go; onChanged: () => Pr
 function partsOf(me: Obj, c: Obj, plan: boolean): Array<{ k: string; s: string; v: number; color: string }> {
   const S = me.settings as Obj, e = me.employee as Obj, x = plan ? c.atPlan : c.now, out: Array<{ k: string; s: string; v: number; color: string }> = [];
   const dy = c.days as Obj, ls = e.offer === "ls";
+  // звільнення без жодної угоди в місяці звільнення — 0, правило сильніше за п. 11 оферу (задача 10723, «роби» Романа 27.11)
+  if (c.dismissZero) return [{ k: "Звільнення без угод", s: "у місяці звільнення немає жодної угоди — нічого не нараховується: ні ставки, ні бонусу", v: 0, color: "var(--text-muted)" }];
   if (c.kind !== "manager" || c.level === "start")
     out.push({ k: c.kind === "manager" ? `Ставка «Старт»${ls ? " · офер Лілії" : ""}` : c.kind === "lead" ? "Ставка тім-ліда" : "Ставка",
       s: !x.rate ? (e.leave && e.leave.date?.slice(0, 7) === c.month ? "звільнення: ставка не нараховується (п. 11 оферу)" : "—") : dy.total < dy.full ? `пропорційно: ${dy.total} з ${dy.full} робочих днів` : "за повний місяць", v: x.rate, color: "var(--text-muted)" });
   // свої клієнти з окремим відсотком — окремими рядками; основний відсоток — від решти маржі
   const sp = (c.kind === "manager" && c.special ? c.special : { margin: 0, amount: 0, lines: [] }) as Obj;
   if (c.kind !== "staff" || c.pctRule) out.push({ k: `Відсоток · ${pc(x.pct)}`, s: `від ${c.kind === "lead" ? "маржі команди" : c.kind === "staff" ? "маржі компанії" : sp.lines.length ? "решти маржі" : "маржі"} ${money((plan ? c.marginPlan : c.margin) - sp.margin)}`, v: x.pctAmount - sp.amount, color: "var(--brand)" });
+  // тімлід: % від власних угод за шкалою свого рівня — окремим рядком (Тетяна 27.11: «як у менеджера (старт або профі) + % від команди»)
+  if (c.kind === "lead" && Number(x.ownPct ?? 0) > 0) out.push({ k: `Відсоток · ${pc(x.ownPct)} · власні угоди`, s: `від вашої маржі ${money(c.ownMargin ?? 0)} — шкала «${c.level === "profi" ? "Профі" : "Старт"}»`, v: Number(x.ownAmount ?? 0), color: "var(--brand)" });
   for (const l of sp.lines as Obj[]) out.push({ k: `Свої клієнти · ${pc(l.pct)}`, s: `${l.name}: маржа ${money(l.margin)}`, v: Number(l.amount), color: "var(--brand)" });
   if (c.kind === "manager" && c.kpi) { const k = c.kpi as Obj; out.push({ k: "Бонус за КПІ", s: k.noBonus ? "звільнення — без бонусу" : k.fewLeads ? `цільових звернень ${k.leads} з ${k.minLeads} — конверсія ще не рахується` : k.step ? `конверсія ${pc(k.conv)} → сходинка ${k.step[0]} %${x.bonus ? "" : k.strict ? (k.bonusPending && !plan ? ` · умовно ${money(k.bonusPending)} — після виконання КПІ` : " · КПІ не виконано — 0") : " · без норми дзвінків — 0"}` : `конверсія ${pc(k.conv)} — нижче ${S.kpi.ladder?.[0]?.[0]} %`, v: x.bonus, color: "var(--info)" }); }
   const bl = (c.birthdays ?? []) as Obj[], g = bl.find((b) => b.kind === "gift"), gv = bl.filter((b) => b.kind === "give"), fd = bl.filter((b) => b.kind === "fund");

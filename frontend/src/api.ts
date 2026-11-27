@@ -6143,6 +6143,8 @@ export interface EmployeeRow {
   is_office: boolean;
   /** 🎚 Рівень «Старт / Профі» (03.11.2026, #2970): лише менеджерам з продажу (null — не стосується); статус, не гроші. */
   level: EmpLevel | null; level_from: string | null; level_history: EmpLevelEntry[];
+  /** відкрита заявка менеджера на «Профі» з кабінету «Зарплати» (27.11.2026): з якого місяця просить, коли подав */
+  level_request?: { from: string; at: string } | null;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
   /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
@@ -6218,6 +6220,9 @@ export const EMP_LEVEL_LABEL: Record<EmpLevel, string> = { start: "Старт", 
 /** 🎚 «Перевести на Профі» (місяць «РРРР-ММ» + коментар) і «Скасувати» помилковий перехід (#2970). */
 export const promoteEmployeeLevel = async (id: number, b: { month: string; comment: string }) =>
   (await api.post<{ level: EmpLevel; from: string }>(`/secrets/employees/${id}/level`, b)).data;
+/** Відхилити заявку менеджера на «Профі» (право `payroll_level_approve`: ОД, рекрутер, адміни). Погодити — «Перевести на «Профі»». */
+export const rejectLevelRequest = async (userId: number, note: string) =>
+  (await api.post<{ ok: true }>(`/payroll/level-requests/${userId}/reject`, { note })).data;
 export const cancelEmployeeLevel = async (id: number) =>
   (await api.post<{ level: EmpLevel; from: string | null }>(`/secrets/employees/${id}/level/cancel`)).data;
 /** 📉 «Змінити дату звільнення» / «дата невідома» (#2100); `excluded` — «не відпрацював жодного дня» (26.11.2026). */

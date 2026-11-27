@@ -333,6 +333,9 @@ export async function listEmployees(db: Db) {
             e.manager_id, km.name AS kommo_name, o.stage AS offboarding, o.last_day::text AS last_day, ${DOC_COUNTS_SQL},
             (SELECT count(*)::int FROM employee_secrets s WHERE (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
             e.updated_at, e.category, e.is_office,
+            -- 🎚 відкрита заявка менеджера на «Профі» з кабінету «Зарплати» (задача 10723, 27.11.2026): погодити — «Перевести на «Профі»»
+            (SELECT json_build_object('from', to_char(q.from_month, 'YYYY-MM'), 'at', q.requested_at) FROM payroll_level_requests q
+              WHERE q.user_id = e.user_id AND q.decided_at IS NULL) AS level_request,
             -- 👥 Справжня команда (27.10.2026, \`core/teams.ts\`): з Kommo — заблокована; інакше — вибрана в картці (\`team_ref\`).
             COALESCE((SELECT name FROM teams WHERE id = COALESCE(tm1.team_id, tm2.team_id, e.team_id, tdt.kommo_team_id)), tdt.name) AS team_name,
             (COALESCE(tm1.team_id, tm2.team_id) IS NOT NULL) AS team_locked,

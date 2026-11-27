@@ -42,9 +42,21 @@ test("#2600 РУШІЙ ЗАРПЛАТИ: 63 тести пакета (40 золо
   // (`state.ownDeals`), а не від маржі команди. Без ownDeals — як у пакеті. Було f4f59e00…; стережуть #10965–#10968.
   // ✏️ 25.11.2026 учетверте (задача 10723, Дар'я): сповіщення працівнику «Аванс … схвалено» / «ЗП … схвалено до виплати» замість
   // «виплачено» — коли стан несе `payWording: 'approved'`. Без нього — як у пакеті. notify.mjs було 29a85ca5…; стережуть #10970–#10972.
+  // ✏️ 27.11.2026 (задача 10723, «роби» Романа): звільнення з «Найму» (тип `naim` — без ставки й бонусу) і «0 угод у місяці
+  // звільнення → 0», коли стан несе `dismissZero: true`; без нього — як у пакеті. Рушій було bfeb7df0…; стережуть #11320–#11324.
+  // ✏️ 27.11.2026 удруге: `calcLead` віддає `ownMargin` (власні угоди тімліда — лише показ у «Нарахуваннях»); було 9d187a91…; #11330.
+  // ✏️ 27.11.2026 утретє (задача 10723, Роман: «на Профі не можна перейти без керівництва»): сповіщення `lvl.req` / `lvl`
+  // (заявка на «Профі» тим, хто погоджує, і відмова менеджеру) та правило закриття `lvl.decided`; без `levelRequests` у стані
+  // — як у пакеті. notify.mjs було 16cc293f…; стережуть #11341.
+  // ✏️ 27.11.2026 учетверте («Аванс форс-мажор», Роман: «ліміти такі самі… Тільки Сергій погоджує»): `state.fmAdvances` — кілька
+  // авансів на місяць; відомість віднімає всі виплачені, ліміт спільний, «До виплати» ≥ 0; сповіщення `adv.fm` і правила
+  // `fm.decided` / `fm.closed`. Без `fmAdvances` — як у пакеті. Рушій було eaa7e51f…, notify.mjs — 5dd39b1a…; стережуть #11350–#11352.
+  // ✏️ 27.11.2026 уп'яте (Тетяна: «тім-лід має свій результат… як у менеджера (старт або профі) + % від команди»; Роман: «додати
+  // до викату»): тімліду — % власних угод за шкалою рівня поверх ставки й 3/6 % команди, коли стан несе `leadOwn: true`; без нього —
+  // як у пакеті. Рушій було 298fe1f4…; стережуть #11360–#11361.
   const PKG: Record<string, string> = {
-    "zarplata-engine.mjs": "bfeb7df0eeb69952a62ddc3b7f4a79ef7bb5c415aae63fe80465e9872a6ee18c",
-    "notify.mjs": "16cc293f10d11fdf75a6cc07bb61c0001e8e273da070ff938c0be8a8cfd671f9",
+    "zarplata-engine.mjs": "2c9fff738d5e5240b622c2206f6fa3bcb80e57bbc2480bf6caadbc3d98b95eaf",
+    "notify.mjs": "78be03eceff34e381aa818493e0b6210dcbc22f2b29ca5a7b9aaf65ba867f7fb",
     "format.mjs": "c22786b4978d87e582b076e6712eb1986b1d9f0ed61aa32de875eca3e6b6d7d2",
     "test/golden.test.mjs": "c18e2fbcd0e4f61da8c6a631d04377521981450b39f4bcf714717ac1d7128ef2",
     "test/rules.test.mjs": "1b153325de8ad5849aab7cdec38a8dc902ca497b20c41595367b814f6188fdbd",
@@ -291,7 +303,9 @@ test("#2602 🪞 ЗАРПЛАТА НАСКРІЗНО: вхід і ролі, за
     assert.ok((await c.query(`SELECT 1 FROM notifications WHERE type = 'adv.req' AND done_at IS NOT NULL`)).rowCount, "🔴 «Заявка на аванс» не закрилась після виплати");
 
     // ---------- звільнення й обхідний лист ----------
-    r = await call("fin", "POST", "/payroll/employees/3/leave", { date: `${live}-28`, type: "own", reason: "за власним бажанням" });
+    // оформлює HR (рішення Сергія 26.11.2026); фінансист — 403
+    assert.equal((await call("fin", "POST", "/payroll/employees/3/leave", { date: `${live}-28`, type: "own", reason: "за власним бажанням" })).s, 403, "🔴 фінансист і далі оформлює звільнення");
+    r = await call("hr", "POST", "/payroll/employees/3/leave", { date: `${live}-28`, type: "own", reason: "за власним бажанням" });
     assert.equal(r.s, 201, JSON.stringify(r.j));
     const signN = await c.query(`SELECT r.user_id FROM notifications n JOIN notification_recipients r ON r.notification_id = n.id WHERE n.type = 'clr.sign' ORDER BY r.user_id`);
     assert.deepEqual(signN.rows.map((x) => x.user_id), [4, 5, 6, 7], "відповідальні за пункти: тім-лід, HR, БА, бухгалтерія — кожному одне сповіщення");

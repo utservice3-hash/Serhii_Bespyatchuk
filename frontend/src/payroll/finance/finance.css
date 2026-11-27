@@ -63,3 +63,33 @@
 .zf-filter .zp-tab .zp-muted { font-weight: 500; }
 .zf-reject { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; margin-top: 8px; }
 @media (max-width: 640px) { .zf-reject { grid-template-columns: 1fr; } }
+
+/* ---------- «Нарахування»: команди, власна маржа / маржа команди, блок «Відсоток» (макет 27.11.2026) ---------- */
+.zf-acc__rule { display: flex; flex-wrap: wrap; gap: 8px 28px; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.zf-acc__rule p { margin: 0; max-width: 62ch; }
+.zf-acc__chip { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 650; white-space: nowrap; background: var(--zp-soft); color: var(--text-muted); margin-right: 4px; }
+.zf-acc__chip--own { background: var(--info-bg); color: var(--info); }
+.zf-acc__chip--team { background: color-mix(in srgb, var(--zp-ls) 13%, var(--card-bg)); color: var(--zp-ls); }
+.zf-acc__chip--co { background: var(--zp-violet-bg); color: var(--zp-violet); }
+.zf-acc thead .zf-acc__grp th { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 650; padding: 12px 12px 2px; border-bottom: 0; }
+.zf-acc thead .zf-acc__grp th span { display: block; border-bottom: 2px solid var(--border); padding-bottom: 4px; }
+.zf-acc thead .zf-acc__grp th.zf-acc__pct span { border-bottom-color: var(--zp-lane); }
+.zf-acc thead .zf-acc__col th { text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 600; border-bottom-color: var(--border-strong); }
+.zf-acc .zf-acc__op { font-style: normal; font-weight: 700; color: color-mix(in srgb, var(--zp-lane) 70%, var(--text)); margin-right: 3px; }
+.zf-acc .zf-acc__sep { border-left: 1px solid var(--border); }
+.zf-acc .zf-acc__pz { background: color-mix(in srgb, var(--zp-lane) 9%, var(--card-bg)); }
+.zf-acc tr.zf-acc__band td { background: var(--zp-asphalt); color: var(--zp-on-a); padding: 11px 12px; cursor: pointer; border-bottom: 0; }
+.zf-acc tr.zf-acc__band:focus-within td, .zf-acc tr.zf-acc__band:hover td { background: var(--zp-asphalt-2); }
+.zf-acc__bandin { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; }
+.zf-acc__chev { width: 12px; color: var(--zp-on-a2); }
+.zf-acc__team { font-size: 15px; }
+.zf-acc__meta { color: var(--zp-on-a2); font-size: 13px; } .zf-acc__meta b { color: var(--zp-on-a); font-weight: 650; }
+.zf-acc__road { position: relative; width: 200px; height: 8px; border-radius: 999px; background: var(--zp-asphalt-2); overflow: hidden; }
+.zf-acc__road i { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--zp-lane); }
+.zf-acc__sum { margin-left: auto; color: var(--zp-on-a2); font-size: 13px; } .zf-acc__sum b { color: var(--zp-on-a); font-size: 15px; }
+.zf-acc tr.zf-acc__lead td { background: color-mix(in srgb, var(--zp-ls) 5%, var(--card-bg)); }
+.zf-acc tr.zf-acc__lead td:first-child { box-shadow: inset 3px 0 0 var(--zp-ls); }
+.zf-acc tr.zf-acc__mem td:first-child { padding-left: 28px; }
+.zf-acc__lvl { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 700; background: var(--zp-asphalt); color: var(--zp-lane); vertical-align: 1px; }
+.zf-acc tr.zf-acc__other td { background: var(--zp-soft); font-weight: 650; font-size: 13px; color: var(--text-muted); padding: 8px 12px; }
+.zf-acc td.zf-who { min-width: 200px; } .zf-acc td.zf-who b { white-space: nowrap; }

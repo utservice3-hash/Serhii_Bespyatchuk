@@ -175,7 +175,8 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
     if (bd === "bad") { setErr("День народження — ДД.ММ."); return; }
     if ((bd ?? null) !== (p.birthday ?? null)) body.birthday = bd ?? "";
     if (f.isFinance !== !!p.isFinance) body.isFinance = f.isFinance;
-    if (p.role === "manager" && f.level !== p.level) body.level = f.level;
+    // рівень тімліда — шкала % його власних угод (Тетяна 27.11); офера не перепідписуємо — це лише для менеджерів
+    if ((p.role === "manager" || p.role === "lead") && f.level !== (p.level ?? "start")) body.level = f.level;
     if (p.role !== "manager") {
       const r = toNum(f.rate); if (Number.isNaN(r)) { setErr("Ставка — число."); return; }
       if (r !== null && r !== Number(p.rate ?? 0)) body.rate = r;
@@ -198,7 +199,7 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
       // Спільні сповіщення дашборда (`components/Toasts`): «змін немає» — інформаційне, вікно лишається відкритим.
       if (r.saved === 0) { toast(`Це вже записано з місяця «${monthTitle(mk)}».`, { head: "Змін немає", tone: "info" }); return; }
       const when = money ? `Ставка, рівень, % і офіційна ЗП діють з місяця «${monthTitle(mk)}»${mk !== live ? ` — у відомості «${monthTitle(live)}» їх не буде` : ""}.` : "";
-      const offer = body.level ? "Новий офер — у документах, рекрутер отримав задачу." : "";
+      const offer = body.level && p.role === "manager" ? "Новий офер — у документах, рекрутер отримав задачу." : "";
       toast([when, offer].filter(Boolean).join(" ") || p.name, { head: "Умови збережено" }); onDone();
     }
     catch (e) { setErr(errText(e)); } finally { setBusy(false); }
@@ -210,11 +211,16 @@ function PersonModal({ p, org, live, settings, onClose, onDone }: { p: Obj; org:
     <Modal title={`Умови · ${p.name}`} onClose={onClose} wide
       foot={<><button className="zp-btn zp-btn--primary" disabled={busy} onClick={() => void save()}>Зберегти</button><button className="zp-btn" onClick={onClose}>Скасувати</button></>}>
       <div className="zp-hint">{p.title} · {ROLE_NAMES[p.role] ?? p.role}{p.role === "manager" ? ` · ${OFFER_NAMES[p.offer] ?? p.offer}` : ""}</div>
-      {p.role === "manager" && (
-        <Field label="Рівень">
+      {(p.role === "manager" || p.role === "lead") && (
+        <Field label={p.role === "lead" ? "Рівень — шкала % власних угод" : "Рівень"}>
           <select className="zp-select" value={f.level} onChange={(e) => set("level", e.target.value)}>
-            <option value="start">«Старт» — ставка + {S.start?.pctLow} / {S.start?.pctHigh} %</option>
-            <option value="profi">«Профі» — {S.profi?.pct1} / {S.profi?.pct2} / {S.profi?.pct3} % від маржі</option>
+            {p.role === "lead" ? <>
+              <option value="start">«Старт» — {S.start?.pctLow} % від власних угод</option>
+              <option value="profi">«Профі» — {S.profi?.pct1} / {S.profi?.pct2} % від власних угод</option>
+            </> : <>
+              <option value="start">«Старт» — ставка + {S.start?.pctLow} / {S.start?.pctHigh} %</option>
+              <option value="profi">«Профі» — {S.profi?.pct1} / {S.profi?.pct2} / {S.profi?.pct3} % від маржі</option>
+            </>}
           </select>
         </Field>
       )}
@@ -333,7 +339,7 @@ function moveText(r: Obj, names: { dept: Record<string, string>; team: Record<st
   if (r.naimTeam !== r.payrollTeam) parts.push(`команда: ${t(r.payrollTeam)} → ${t(r.naimTeam)}`);
   return `У «Наймі» — блок «${r.unit}». ${parts.join("; ")}. Зміна команди міняє офер, тому переводимо кнопкою.`;
 }
-function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel, onMove, names }: { rows: Obj[]; canEdit: boolean; onLeave: (r: Obj) => void; onAdd: (r: Obj) => void; onLevel: (r: Obj) => void;
+function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel, onMove, names }: { rows: Obj[]; canEdit: boolean; onLeave: ((r: Obj) => void) | null; onAdd: (r: Obj) => void; onLevel: (r: Obj) => void;
   onMove: (r: Obj) => void; names: { dept: Record<string, string>; team: Record<string, string> } }) {
   const [openNo, setOpenNo] = useState(false);
   const main = rows.filter((r) => r.kind !== "noAccount"), noAcc = rows.filter((r) => r.kind === "noAccount");
@@ -349,13 +355,13 @@ function NaimBlock({ rows, canEdit, onLeave, onAdd, onLevel, onMove, names }: { 
               <td><b>{r.name}</b><div className="zp-hint">{r.position || "посада не вказана в «Наймі»"}</div></td>
               <td>
                 <span className={`zps-tag ${NAIM_TAG[r.kind]?.[1] ?? ""}`}>{r.kind === "dismissed" ? `у «Наймі» звільнений${r.date ? ` ${ddy(r.date)}` : ", дату не вказано"}` : r.kind === "level" ? `${lvl(r.naimLevel)} у «Наймі»` : NAIM_TAG[r.kind]?.[0]}</span>
-                <div className="zp-hint">{r.kind === "dismissed" ? "У «Зарплаті» досі працює: рахуємо ставку і збір на дні народження, поки немає обхідного листа."
+                <div className="zp-hint">{r.kind === "dismissed" ? "У «Зарплаті» рахуємо до дати з «Найму»: лише відсоток, без ставки. Без угод у місяці звільнення — 0. Тип звільнення й обхідний оформлює HR."
                   : r.kind === "new" ? "У «Зарплаті» немає."
                   : r.kind === "move" ? moveText(r, names)
                   : `У «Зарплаті» — ${lvl(r.payrollLevel)}. Рівні ведуться окремо; гроші рахуються за «Зарплатою».`}</div>
               </td>
-              <td className="r">{canEdit && (r.kind === "dismissed" ? <button className="zp-btn zp-btn--sm" onClick={() => onLeave(r)}>Оформити обхідний лист</button>
-                : r.kind === "new" ? <button className="zp-btn zp-btn--sm" onClick={() => onAdd(r)}>Додати в зарплату</button>
+              <td className="r">{r.kind === "dismissed" ? (onLeave ? <button className="zp-btn zp-btn--sm" onClick={() => onLeave(r)}>Оформити обхідний лист</button> : <span className="zp-hint">оформлює HR</span>) : canEdit && (
+                r.kind === "new" ? <button className="zp-btn zp-btn--sm" onClick={() => onAdd(r)}>Додати в зарплату</button>
                 : r.kind === "move" ? <button className="zp-btn zp-btn--sm" onClick={() => onMove(r)}>Перевести</button>
                 : <button className="zp-btn zp-btn--sm" onClick={() => onLevel(r)}>Змінити рівень</button>)}</td>
             </tr>
@@ -402,7 +408,7 @@ function MoveModal({ r, person, names, onClose, onDone }: { r: Obj; person: Obj 
   );
 }
 
-export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave }: { emp: Obj; org: Obj; settings: Obj; canEdit: boolean; onChanged: () => void; onLeave: (userId: string, date: string | null) => void }) {
+export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave }: { emp: Obj; org: Obj; settings: Obj; canEdit: boolean; onChanged: () => void; onLeave: ((userId: string, date: string | null) => void) | null }) {
   const [edit, setEdit] = useState<Obj | null>(null);
   const [add, setAdd] = useState<false | { uid: string | null }>(false);
   const [move, setMove] = useState<Obj | null>(null);
@@ -418,7 +424,7 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave
     <Card title="Працівники й умови" aside={canEdit ? "клік — змінити умови: рівень, ставка, %, офіційна ЗП, день народження" : "лише перегляд"}>
       <div className="zp-grid" style={{ gap: 10 }}>
         <NaimBlock rows={(emp.naim ?? []) as Obj[]} canEdit={canEdit}
-          onLeave={(r) => onLeave(String(r.userId), r.date ?? null)}
+          onLeave={onLeave ? (r) => onLeave(String(r.userId), r.date ?? null) : null}
           onAdd={(r) => setAdd({ uid: String(r.userId) })}
           onLevel={(r) => { const p = all.find((x) => String(x.userId) === String(r.userId)); if (p) setEdit(p); }}
           onMove={(r) => setMove(r)} names={names} />
@@ -434,14 +440,14 @@ export function PeopleSettings({ emp, org, settings, canEdit, onChanged, onLeave
                     <td><b>{p.name}</b><div className="zp-hint">{p.title}{p.team ? ` · ${teamName[p.team] ?? p.team}` : ""}{p.isFinance ? " · фінансист" : ""}{p.simple ? " · простий кабінет" : ""}</div></td>
                     <td>
                       {p.role === "manager" ? <><LevelTag level={p.level} />{p.levelChange && <span className="zp-hint"> → {LEVEL_NAMES[p.levelChange.level] ?? p.levelChange.level} з {String(p.levelChange.from).slice(5, 7)}.{String(p.levelChange.from).slice(0, 4)}</span>}
-                        {p.offer === "ls" && <div className="zp-hint">офер Лілії Шаврової</div>}</> : "—"}
+                        {p.offer === "ls" && <div className="zp-hint">офер Лілії Шаврової</div>}</> : p.role === "lead" ? <><LevelTag level={p.level ?? "start"} /><div className="zp-hint">шкала власних угод</div></> : "—"}
                     </td>
                     <td className="r">{p.role === "manager" ? (p.level === "start" ? money(p.offer === "ls" ? S.offers?.ls?.startRate : S.start?.rate) : "—") : money(p.rate)}</td>
                     <td>{p.role === "manager" ? <>за рівнем{(p.clientRates ?? []).length ? <div className="zp-hint">+ окремий % за {(p.clientRates ?? []).length} {(p.clientRates ?? []).length === 1 ? "клієнтом" : "клієнтами"}</div> : null}</> : p.role === "lead" ? `${S.lead?.pctLow} / ${S.lead?.pctHigh} % маржі команди` : p.pctRule ? `${pct(p.pctRule.value, 1)} маржі компанії` : "—"}</td>
                     <td>{p.official ? <><b>{money(p.official.amount)}</b><div className="zp-hint">{p.official.deduct ? "вираховується з загальної" : "окремо, не вираховується"}</div></> : <span className="zp-hint">немає</span>}</td>
                     <td><OfferDocCell d={p.offerDoc as Obj | null} /></td>
                     <td>{bday(p.birthday)}</td>
-                    <td>{ddy(p.startDate)}{p.leave && <div className="zp-tone--danger zp-hint">звільнення {ddy(p.leave.date)}</div>}</td>
+                    <td>{ddy(p.startDate)}{p.leave && <div className="zp-tone--danger zp-hint">звільнення {ddy(p.leave.date)}{p.leave.type === "naim" ? " (з «Найму», обхідного ще немає)" : ""}</div>}</td>
                   </tr>
                 ))}
               </tbody>
