@@ -293,3 +293,49 @@ test("#3597 НОМЕР З КАРТКИ КОМПАНІЇ — НОМЕР КЛІЄ�
   const unread = await c.query<{ n: number }>(CLIENTS_WITH_UNREAD_COMPANY_SQL, [["компанія3597", "лишекомпанія3597"]]);
   assert.equal(unread.rows[0].n, 1, "🔴 клієнт із непрочитаною карткою компанії не названий — «немає номера» виглядало б певним");
 });
+
+/**
+ * #11253 — «НОМЕРИ КЛІЄНТА» В КАРТЦІ, ЖИВИЙ SQL (задача 11223). Розмови рахуються по НОМЕРУ, а «зараховано клієнту» —
+ * лише ті, що лежать на цьому клієнті: номер із картки компанії має розмови (їх привʼязано до іншого ключа чи ні до кого),
+ * але клієнту з них не зараховано жодної. Недодзвін розмовою не є, дзвінок поза вікном не рахується, чужий номер у
+ * список не потрапляє, спільний і перевізницький номери підписані.
+ * 🧨 Червоніє, якщо рахувати «зараховано» по номеру (CO дасть 2), брати недодзвони, розширити вікно чи загубити
+ * картку компанії як джерело.
+ */
+test("#11253 ЖИВИЙ SQL «НОМЕРИ КЛІЄНТА»: розмови по номеру, зараховано — лише цього клієнта; вікно, недодзвін, спільний, перевізник, чужий номер", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const KEY = "довідник11253", CON = "380671125301", CO = "380671125302", CAR = "380671125303", ALIEN = "380671125304";
+  await lardi(c, 112531, "lorry", CAR);
+  await deal(c, 112531, "Угода", 8921932, 143, { key: KEY }); await contact(c, 112531, 112531, CON); await contact(c, 112531, 112532, CAR);
+  await deal(c, 112532, "Угода", 8921932, 143, { key: "чужий11253" }); await contact(c, 112532, 112533, ALIEN);
+  await c.query("INSERT INTO kommo_companies (company_id, name, phones) VALUES (112531, 'ТОВ Приклад', $1)", [[CO, CON]]);
+  await c.query("INSERT INTO deal_companies (deal_kommo_id, company_id) VALUES (112531, 112531)");
+  await c.query("INSERT INTO shared_phone_clients (client_key, phone, n) VALUES ($1, $2, 3)", [KEY, CON]);
+  await rebuild(c);
+  const ins = (id: string, phone: string, sec: number, key: string | null, ago = "2 days") => c.query(
+    `INSERT INTO ringostat_calls(uniqueid,calldate,call_type,billsec,client_phone,client_key) VALUES ($1, now() - $5::interval,'out',$2,$3,$4)`,
+    [id, sec, phone, key, ago]);
+  await ins("r11253a", CON, 60, KEY); await ins("r11253b", CON, 30, KEY, "10 days"); await ins("r11253c", CON, 0, KEY);   // недодзвін
+  await ins("r11253d", CON, 50, KEY, "120 days");                                                                    // поза вікном
+  await ins("r11253e", CO, 40, null); await ins("r11253f", CO, 20, "чужий11253");                                    // картка компанії: не цього клієнта
+  await ins("r11253g", CAR, 70, KEY);
+  await ins("r11253h", ALIEN, 90, "чужий11253");
+  const { clientPhoneBook, PHONE_BOOK_DAYS } = await import("../core/clientPhoneBook.js");
+  assert.equal(PHONE_BOOK_DAYS, 90, "фікстура «120 днів тому» стоїть за межею саме 90-денного вікна");
+  const book = await clientPhoneBook(c, KEY);
+  const by = new Map(book.phones.map((p) => [p.phone, p]));
+  assert.deepEqual([...by.keys()].sort(), [CON, CO, CAR].sort(), "🔴 у список потрапив чужий номер або загубився номер клієнта");
+  const con = by.get(CON)!, co = by.get(CO)!, car = by.get(CAR)!;
+  assert.deepEqual({ source: con.source, state: con.state, talks: con.talks, linked: con.linked, sharedWith: con.sharedWith, company: con.company },
+    { source: "contact", state: "linked", talks: 2, linked: 2, sharedWith: 2, company: "ТОВ Приклад" },
+    "🔴 номер контакту: недодзвін чи дзвінок поза вікном пораховано розмовою, або спільність/довідка компанії загубились");
+  assert.ok(con.lastDay && /^\d{4}-\d{2}-\d{2}$/.test(con.lastDay), "дата останньої розмови не дійшла");
+  assert.deepEqual({ source: co.source, state: co.state, talks: co.talks, linked: co.linked, companyId: co.companyId },
+    { source: "company", state: "unlinked", talks: 2, linked: 0, companyId: 112531 },
+    "🔴 номер лише з картки компанії: розмови на ньому зараховано клієнту, хоча привʼязки немає");
+  assert.deepEqual({ state: car.state, lardi: car.carrier?.lardi, talks: car.talks }, { state: "carrier", lardi: true, talks: 1 }, "🔴 номер перевізника не підписаний");
+  assert.deepEqual((await clientPhoneBook(c, "немаєтакого11253")), { phones: [], more: 0, total: 0 }, "клієнт без номерів — порожньо, а не падіння");
+  const phys = await clientPhoneBook(c, ALIEN);
+  assert.deepEqual(phys.phones.map((p) => [p.phone, p.source]), [[ALIEN, "key"]], "🔴 ключ-телефон фізособи не став її номером");
+});
+
