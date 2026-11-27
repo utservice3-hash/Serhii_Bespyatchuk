@@ -57,7 +57,7 @@ export const dutyNoteText = (name: string, day: string): string =>
 
 /**
  * Один прохід. `onStage` — угоди, що ЗАРАЗ на етапі за відповіддю Kommo цього проходу; беремо лише ті, що вже записані
- * автоматикою (минули 15 хв фільтра CRM) і досі на службовому акаунті.
+ * автоматикою (старші за `CARRIER_RULE.minAgeMin`; з 27.11.2026 це 2 хв, фільтра CRM не чекаємо) і досі на службовому акаунті.
  */
 export async function runDutyAssign(db: Db, now: Date, mode: CloseMode, onStage: ReadonlySet<number>, kommo: DutyKommo | null): Promise<AssignReport> {
   const rep: AssignReport = { mode, candidates: 0, noDuty: 0, logged: 0, assigned: 0, failed: 0, error: null };
