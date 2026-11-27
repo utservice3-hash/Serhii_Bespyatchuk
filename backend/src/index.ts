@@ -97,6 +97,7 @@ import { syncGa4Ads } from "./jobs/syncGa4Ads.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { overviewCache, OVERVIEW_TTL_MS } from "./core/lazyCache.js";
+import { clientPlansCache, invalidateOnWrite } from "./core/scopeCache.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
 import { warmStatsSeries, statsSeriesCacheStatus } from "./routes/statisticsSeries.js";
@@ -191,6 +192,12 @@ app.use((req, res, next) => {
 });
 
 app.use("/api/files", express.static(UPLOAD_DIR));
+
+// 🧹 Успішний запис через API скидає пам'ять списку постійних клієнтів (`core/scopeCache.ts`): користувач, що
+// поставив план, коментар чи задачу, наступним читанням бачить свою зміну, а не відповідь хвилинної давності.
+// Стоїть ПЕРЕД усіма роутерами — на рядок списку впливають записи з різних роутерів, не лише з `/api/dashboard`.
+// Винятки названі поіменно (`MACHINE_WRITE_PREFIXES`): серцебиття трекера часу і «я онлайн» месенджера.
+app.use("/api", invalidateOnWrite(clientPlansCache));
 
 app.use("/api/auth", authRouter);
 app.use("/api/dashboard", dashboardRouter);

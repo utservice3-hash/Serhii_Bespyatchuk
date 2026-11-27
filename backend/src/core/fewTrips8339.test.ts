@@ -45,7 +45,9 @@ test("#3826 ПРОВОДКА: місток і список реактиваці�
   const sleepBlock = plans.slice(plans.indexOf('if (f.state === "sleeping" || f.state === "lost") {'));
   const iGen = sleepBlock.indexOf("bridge.skippedGeneric++"), iFew = sleepBlock.indexOf("bridge.skippedFewTrips++"), iSleep = sleepBlock.indexOf("bridge.sleeping++");
   assert.ok(iGen > 0 && iFew > iGen && iSleep > iFew, "🔴 фізособи <3 поїздок прибираються не серед сплячих/втрачених або після лічильників сну");
-  assert.match(plans, /clientKindFacts\.kindsFor\(pool, clientsRes\.rows\.map\(\(c\) => c\.client_key\)\)/, "🔴 вид клієнта не для всього списку");
+  // 26.11.2026 (швидкість екрана): читання стартує наперед і через чергу збирача; «для всього списку» — ключі всіх рядків списку.
+  assert.match(plans, /const clientKeys = clientsRes\.rows\.map\(\(c\) => c\.client_key\);/, "🔴 ключі клієнтів — не з усього списку");
+  assert.match(plans, /clientKindFacts\.kindsFor\(udb, clientKeys\)/, "🔴 вид клієнта не для всього списку");
   assert.match(plans, /skippedFewTrips: bridge\.skippedFewTrips,/, "🔴 прибраних не названо числом");
   const react = dash.slice(dash.indexOf('dashboardRouter.get("/reactivation-list"'));
   assert.match(react, /!\(c\.state !== "active" && reactivationRules\.fewTripsPerson\(\{ kind: kindR\.get\(c\.clientKey\) \?\? "legal", orders: c\.orders \}\)\)/,

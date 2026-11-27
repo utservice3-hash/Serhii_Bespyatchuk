@@ -39,20 +39,27 @@ const KYIV_DAY = (col: string) => `to_char(${col} AT TIME ZONE 'Europe/Kyiv', 'Y
 export async function leadFactsFor(db: Db, keys: string[], stageSinceDays = 200): Promise<Map<string, LeadFacts>> {
   const out = new Map<string, LeadFacts>();
   if (!keys.length) return out;
-  const [talk, summ, stage, paid, lg, fresh] = await Promise.all([
-    db.query<{ client_key: string; d: string }>(
-      `SELECT DISTINCT ON (rc.ck) rc.ck AS client_key, ${KYIV_DAY("rc.calldate")} AS d
-         FROM ${clientCallsSql("= ANY($1)")} rc
-        WHERE rc.billsec >= $2 AND ${notCarrierCallSql("rc")}
-        ORDER BY rc.ck, rc.calldate DESC`, [keys, TALK_MIN_SEC]),
-    db.query<{ client_key: string; d: string; text: string }>(
-      `SELECT DISTINCT ON (rc.ck) rc.ck AS client_key, ${KYIV_DAY("rc.calldate")} AS d, ca.result->>'summary' AS text
-         FROM ${clientCallsSql("= ANY($1)")} rc
-         JOIN call_transcripts ct ON ct.uniqueid = rc.uniqueid
-         JOIN call_analyses ca ON ca.transcript_id = ct.id AND ca.status = 'done'
-        WHERE rc.billsec >= $2 AND ${notCarrierCallSql("rc")}
-          AND COALESCE(btrim(ca.result->>'summary'), '') <> ''
-        ORDER BY rc.ck, rc.calldate DESC, ca.id DESC`, [keys, TALK_MIN_SEC]),
+  // 📞 РОЗМОВИ — ОДНИМ ЧИТАННЯМ (27.11.2026). Було два: «остання розмова від 10 с» і «суть останньої розібраної розмови».
+  // Обидва спершу збирали ТІ САМІ розмови клієнтів (прямі й через спільні номери, без перевізників) — це й була майже
+  // вся їхня ціна (план бази з прода: 0,19 с із 0,24 с кожного). Тепер розмови збираються раз (`calls`), а з них беруться
+  // обидві відповіді: `t` — дата останньої розмови, `s` — остання розмова, яку розібрав AI. Правила ті самі, рядок у рядок.
+  const [calls, stage, paid, lg, fresh] = await Promise.all([
+    db.query<{ kind: "t" | "s"; client_key: string; d: string; text: string | null }>(
+      `WITH calls AS MATERIALIZED (
+         SELECT rc.ck, rc.calldate, rc.uniqueid
+           FROM ${clientCallsSql("= ANY($1)")} rc
+          WHERE rc.billsec >= $2 AND ${notCarrierCallSql("rc")})
+       SELECT 't' AS kind, t.ck AS client_key, t.d, NULL::text AS text
+         FROM (SELECT DISTINCT ON (c.ck) c.ck, ${KYIV_DAY("c.calldate")} AS d
+                 FROM calls c ORDER BY c.ck, c.calldate DESC) t
+       UNION ALL
+       SELECT 's' AS kind, s.ck AS client_key, s.d, s.text
+         FROM (SELECT DISTINCT ON (c.ck) c.ck, ${KYIV_DAY("c.calldate")} AS d, ca.result->>'summary' AS text
+                 FROM calls c
+                 JOIN call_transcripts ct ON ct.uniqueid = c.uniqueid
+                 JOIN call_analyses ca ON ca.transcript_id = ct.id AND ca.status = 'done'
+                WHERE COALESCE(btrim(ca.result->>'summary'), '') <> ''
+                ORDER BY c.ck, c.calldate DESC, ca.id DESC) s`, [keys, TALK_MIN_SEC]),
     db.query<{ client_key: string; d: string }>(
       `SELECT d.client_key, ${KYIV_DAY("max(e.changed_at)")} AS d
          FROM deal_stage_events e JOIN deals d ON d.kommo_id = e.kommo_id
@@ -78,8 +85,9 @@ export async function leadFactsFor(db: Db, keys: string[], stageSinceDays = 200)
     if (!f) { f = { talk10: null, summary: null, stage: null, dealNew: null, secondPaid: null, firstPaidChannel: null, leadgen: false }; out.set(k, f); }
     return f;
   };
-  for (const r of talk.rows) get(r.client_key).talk10 = r.d;
-  for (const r of summ.rows) get(r.client_key).summary = { at: r.d, text: r.text.trim() };
+  // Спершу всі дати розмов, потім суті — у тому ж порядку, в якому ці два читання розкладались раніше.
+  for (const r of calls.rows) if (r.kind === "t") get(r.client_key).talk10 = r.d;
+  for (const r of calls.rows) if (r.kind === "s") get(r.client_key).summary = { at: r.d, text: (r.text ?? "").trim() };
   for (const r of stage.rows) get(r.client_key).stage = r.d;
   for (const r of paid.rows) {
     if (Number(r.rn) === 1) get(r.client_key).firstPaidChannel = r.ch;

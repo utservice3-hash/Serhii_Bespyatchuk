@@ -92,8 +92,10 @@ test("#3450 ПРОВОДКА: «Немає роботи» з вердикту «
   assert.match(h, /lastOrderDays: leadByKey\.get\(c\.client_key\)!\.orderDays,/, "🔴 «днів тому» — не від свіжішого з рахунку й оплати");
   assert.match(h, /clientTabs\.clientTabGroup\(inReactNow\(c\.client_key\), leadByKey\.get\(c\.client_key\)!\.orderDays\)/, "🔴 «жовті» рахуються від іншої дати, ніж «днів тому»");
   assert.match(h, /lead: leadByKey\.get\(c\.client_key\)!,/, "🔴 екран «З ким говорити» отримує інший вердикт, ніж «Немає роботи»");
-  assert.match(h, /const noWorkDays = \(await getSettings\(\)\)\.noWorkDays;/);
-  assert.match(h, /clientWorkProof\.invoiceProofByClientKey\(pool, clientKeys, repeatScreenRules\.noWorkFrom\(todayKyiv, noWorkDays\), todayKyiv\)/);
+  // 26.11.2026 (швидкість екрана): налаштування читаються наперед, докази йдуть через чергу збирача; період той самий.
+  assert.match(h, /const settingsP = early\(lim\.urgent\(\(\) => getSettings\(\)\)\);/);
+  assert.match(h, /const noWorkDays = settingsNow\.noWorkDays;/);
+  assert.match(h, /clientWorkProof\.invoiceProofByClientKey\(ldb, clientKeys, repeatScreenRules\.noWorkFrom\(todayKyiv, noWorkDays\), todayKyiv\)/);
   assert.match(h, /workProof: \(\(\) => \{/, "🔴 у рядку немає доказу роботи");
   const scr = FE_SRC("pages/dashboard/sections/ClientPlansSection.tsx");
   assert.doesNotMatch(scr, /днів без угоди з рахунком і без оплати|немає ні угоди на «Виставленні рахунку» чи далі, ні оплати від клієнта у Виписці/, "🔴 на екрані лишився підпис правила 6455");
@@ -174,14 +176,16 @@ test("#1710e СЕРВЕР: вікна, середнє й позначки — з
   const start = dash.indexOf('dashboardRouter.get("/client-plans"');
   const body = dash.slice(start, dash.indexOf("\ndashboardRouter.", start + 10));
   assert.match(body, /const win = repeatScreenRules\.sameWindows\(monthStr, kyivToday\(\)\);/, "🔴 вікна порівняння рахуються не правилом ядра");
-  assert.match(body, /win\.prev\.map\(\(w\) => money\.fromInvoiceByClientKey\(winScope\(w\)\)\)/, "🔴 середнє — не «з рахунку» або не по трьох вікнах");
+  // 26.11.2026 (швидкість екрана): читання вікон стартують наперед через чергу збирача; вид грошей і вікна ті самі.
+  assert.match(body, /win\.prev\.map\(\(w\) => lim\.run\(\(\) => money\.fromInvoiceByClientKey\(winScope\(w\)\)\)\)/, "🔴 середнє — не «з рахунку» або не по трьох вікнах");
   assert.match(body, /money\.fromInvoiceByClientKey\(winScope\(win\.before\)\)/, "🔴 «замовляли раніше» не з тих самих грошей");
   assert.match(body, /managerId: managerId \?\? undefined, teamId: teamId \?\? undefined \}\);/, "🔴 вікна поза скоупом перегляду — менеджер побачив би чужі гроші");
   assert.match(body, /repeatScreenRules\.deltaVsAvg\(fact, prevByKey\.map/, "🔴 різниця з середнім рахується не правилом ядра");
   assert.match(body, /work: repeatScreenRules\.workFlags\(\{/, "🔴 «Без роботи» рахується не правилом ядра");
   assert.match(body, /orderedThisMonth: \(ordersThisMonth\.get\(c\.client_key\) \?\? 0\) > 0,/, "🔴 «замовляв цього місяця» — не за угодами з рахунку");
   // Історія за 6 міс і «середнє/міс» (макет: «гроші з рахунку по місяцях») — той самий вид грошей і скоуп, що й факт.
-  assert.match(body, /const histInv = await money\.fromInvoiceByClientBucket\(histScope, "month"\);/, "🔴 історія в рядку — не «з рахунку»");
+  assert.match(body, /const histInvP = early\(lim\.run\(\(\) => money\.fromInvoiceByClientBucket\(histScope, "month"\)\)\);/, "🔴 історія в рядку — не «з рахунку»");
+  assert.match(body, /const histInv = await histInvP;/, "🔴 історія в рядку — не з того читання, що стартувало як «з рахунку»");
   assert.match(body, /avg3: \(\(\) => \{ const a = histInvByKey\.get\(c\.client_key\); return a \? Math\.round\(\(a\[2\] \+ a\[3\] \+ a\[4\]\) \/ 3\) : 0; \}\)\(\),/,
     "🔴 «середнє/міс» — не за три повні місяці перед місяцем екрана");
 });

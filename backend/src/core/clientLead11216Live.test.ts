@@ -48,7 +48,8 @@ test("#11219 «ЗА ЦЕЙ РІК»: вікно від 1 січня до сьо�
   const dash = codeOnly(read("backend/src/routes/dashboard.ts"));
   const plans = dash.slice(dash.indexOf('dashboardRouter.get("/client-plans"'), dash.indexOf('dashboardRouter.post("/client-plans/submit"'));
   assert.match(plans, /const yearWin = clientOrderHistory\.thisYearWindow\(todayKyiv\);/, "🔴 рік рахується не від київського «сьогодні»");
-  assert.match(plans, /money\.successPeriodByClientKey\(clientKeys, yearWin\.from, yearWin\.to\),/, "🔴 оборот і дохід за рік — не ядром грошей або не по всіх клієнтах списку");
+  // 26.11.2026 (швидкість екрана): читання року стартує наперед через чергу збирача; виклик ядра один і той самий.
+  assert.match(plans, /const yearMoneyP = early\(lim\.run\(\(\) => money\.successPeriodByClientKey\(clientKeys, yearWin\.from, yearWin\.to\)\)\);/, "🔴 оборот і дохід за рік — не ядром грошей або не по всіх клієнтах списку");
   assert.match(plans, /return \{ year: yearWin\.year, revenue: Math\.round\(y\?\.revenue \?\? 0\), income: Math\.round\(y\?\.income \?\? 0\), deals: y\?\.deals \?\? 0, missing: y\?\.missing \?\? 0 \};/,
     "🔴 рядок не несе рік, дохід, оборот, число угод і число угод без суми рахунку");
   const core = codeOnly(read("backend/src/core/money.ts"));

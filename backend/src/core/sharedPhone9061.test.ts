@@ -131,7 +131,9 @@ test("#9061c ПРОВОДКА: читачі через clientCallsSql; табл�
   assert.match(at, /FROM \$\{clientCallsSql\("= a\.client_key"\)\} rc\b/, "🔴 «спроби» не бачать спільних номерів");
   assert.match(react, /lastTalkSharedWith: othersOnPhone\(r\.last_talk_shared_n\)/);
   const facts = codeOnly(read("backend/src/core/clientLeadFacts.ts"));
-  assert.equal((facts.match(/FROM \$\{clientCallsSql\("= ANY\(\$1\)"\)\} rc\b/g) ?? []).length, 2, "🔴 розмова від 10 с або суть — не через clientCallsSql");
+  // З 27.11.2026 розмови збираються ОДНИМ читанням (`calls`), а «розмова від 10 с» і «суть» беруться з нього обидві.
+  assert.equal((facts.match(/FROM \$\{clientCallsSql\("= ANY\(\$1\)"\)\} rc\b/g) ?? []).length, 1, "🔴 розмова від 10 с або суть — не через clientCallsSql");
+  assert.equal((facts.match(/\bFROM calls c\b/g) ?? []).length, 2, "🔴 розмова від 10 с або суть — не зі спільного добору розмов");
   assert.doesNotMatch(facts, /FROM ringostat_calls\b/, "🔴 clientLeadFacts знову читає ringostat_calls напряму");
   const calls = codeOnly(read("backend/src/core/clientCalls.ts"));
   assert.match(calls, /FROM \$\{clientCallsSql\("= ANY\(\$1\)"\)\} rc\b/, "🔴 «дзвінків за місяць» не бачить спільних номерів");

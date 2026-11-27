@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+interface PlanNode { "Node Type": string; "Parent Relationship"?: string; "Actual Rows": number; "Actual Loops"?: number; Plans?: PlanNode[] }
+function findNode(n: PlanNode, pred: (x: PlanNode) => boolean): PlanNode | null {
+  if (pred(n)) return n;
+  for (const k of n.Plans ?? []) { const f = findNode(k, pred); if (f) return f; }
+  return null;
+}
+
 /**
  * #1900b — ЖИВИЙ SQL «ЧИМ ПІДТВЕРДЖЕНО РОБОТУ» (задача 6455) на схемі з нуля, по обидва боки кожної межі.
  * Угода: увійшла в етап «від рахунку» за період — так; стала «Успішною» за період — так; зараз у роботі після рахунку
@@ -71,5 +78,45 @@ test("#1900b ЖИВИЙ SQL ДОКАЗІВ РОБОТИ: угода від ра�
     assert.deepEqual([...p.keys()], ["платник"], "🔴 оплату приписано не тому клієнту (Сейф, комісія, старий платіж чи чужий код)");
     assert.equal(p.get("платник")?.amount, 5000, "🔴 доказ — комісія замість оплати");
     assert.equal((await paymentProofByClientKey(db, ["мовчун"], 45)).get("мовчун")?.amount, 8000, "🔴 довший період не бачить старішого платежу");
+
+    /**
+     * #11242c — ОПЛАТА-ДОКАЗ БЕЗ ПОВТОРІВ (27.11.2026, прохід 2). Клієнт із чотирма угодами на одну компанію і трьома
+     * оплатами від неї: відповідь — найсвіжіша оплата (у той самий день — більша), і база перебирає оплати РАЗ на пару
+     * «клієнт — код платника», а не раз на кожну угоду. На проді стара форма сортувала 203 тис. рядків заради 139.
+     * Дзеркала: другий клієнт тієї самої компанії отримує той самий доказ; оплата за ІПН другої компанії клієнта теж
+     * його оплата, але старіша — не вона відповідь.
+     * 🧨 Червоніє, якщо відповіддю стане не найсвіжіша / не найбільша оплата, спільна компанія дасть доказ лише одному
+     * клієнту, або оплати знову множитимуться на угоди (рядків перед відбором стане 16 замість 7).
+     */
+    await t.test("#11242c ОПЛАТА-ДОКАЗ БЕЗ ПОВТОРІВ: найсвіжіша оплата клієнта та сама, а оплати не множаться на його угоди", async () => {
+      await c.query(`INSERT INTO kommo_companies (company_id, name, edrpou) VALUES (73, 'ТОВ Багато Угод', '11112222')`);
+      await c.query(`INSERT INTO kommo_companies (company_id, name, ipn) VALUES (74, 'ФОП Друга', '3333344444')`);
+      for (const id of [30, 31, 32, 33]) {
+        await deal(id, "багатоугод", 8921932, 69693672);
+        await c.query(`INSERT INTO deal_companies (deal_kommo_id, company_id) VALUES ($1, 73)`, [id]);
+      }
+      await deal(34, "багатоугод", 8921932, 69693672); await c.query(`INSERT INTO deal_companies (deal_kommo_id, company_id) VALUES (34, 74)`);
+      await deal(35, "сусід", 8921932, 69693672); await c.query(`INSERT INTO deal_companies (deal_kommo_id, company_id) VALUES (35, 73)`);
+      await pay(901, "11112222", 3, 700);
+      await pay(901, "11112222", 1, 300);
+      await pay(901, "11112222", 1, 900);
+      await pay(901, "3333344444", 2, 5000);
+      const captured: { sql: string; params: unknown[] }[] = [];
+      const spy = { query: (sql: string, params?: unknown[]) => { captured.push({ sql, params: params ?? [] }); return c.query(sql, params); } };
+      const proof = await paymentProofByClientKey(spy as unknown as typeof db, ["багатоугод", "сусід", "мовчун"], 30);
+      const dayAgo = (await c.query<{ d: string }>(`SELECT to_char((now() - interval '1 day') AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
+      assert.deepEqual(proof.get("багатоугод"), { at: dayAgo, amount: 900 }, "🔴 доказ — не найсвіжіша оплата (або не більша з двох у той самий день)");
+      assert.deepEqual(proof.get("сусід"), { at: dayAgo, amount: 900 }, "🔴 оплата компанії, спільної для двох клієнтів, підтвердила роботу лише з одним");
+      assert.equal(proof.has("мовчун"), false, "🔴 клієнт без оплат за період отримав доказ");
+      // Скільки рядків база перебрала перед відбором «по одному на клієнта»: 3 + 1 (багатоугод: дві пари) + 3 (сусід) = 7.
+      assert.equal(captured.length, 1, "фікстура: доказ оплатою — одне читання");
+      const plan = (await c.query<{ "QUERY PLAN": { Plan: PlanNode }[] }>(`EXPLAIN (ANALYZE, FORMAT JSON) ${captured[0].sql}`, captured[0].params)).rows[0]["QUERY PLAN"][0].Plan;
+      const unique = findNode(plan, (n) => n["Node Type"] === "Unique");
+      // Вхід відбору — дитина «Outer»; решта дітей вузла — це CTE запиту (оплати, коди), а не його вхід.
+      const input = unique?.Plans?.find((k) => k["Parent Relationship"] === "Outer");
+      assert.ok(input, "🔴 у плані немає відбору «по одному на клієнта» — гейт втратив предмет");
+      assert.equal(input["Actual Rows"] * (input["Actual Loops"] ?? 1), 7,
+        "🔴 перед відбором не 7 рядків: оплати знову множаться на угоди клієнта (стара форма дала б 16)");
+    });
   } finally { await c.end(); scratch.dispose(); }
 });

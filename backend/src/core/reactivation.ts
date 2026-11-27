@@ -187,7 +187,15 @@ const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
  */
 export async function clientStates(
   s: ReactivationScope,
-  opts: { includeActive?: boolean } = {}
+  opts: {
+    includeActive?: boolean;
+    /**
+     * Уже завантажені сегменти (або читання, що вже летить) — той самий результат `loadClientSegments()`.
+     * `/client-plans` вантажить їх сам для ростера; без цього параметра вони рахувались би двічі за одне
+     * відкриття екрана (заміряно 26.11.2026: друге читання — 0,19 с). Не передано — функція читає сама, як досі.
+     */
+    segments?: Awaited<ReturnType<typeof loadClientSegments>> | ReturnType<typeof loadClientSegments>;
+  } = {}
 ): Promise<ReactivationClient[]> {
   const taskMap = await reactivationTasksByClient();
   const taskKeys = [...taskMap.keys()];
@@ -211,7 +219,9 @@ export async function clientStates(
     attempts: string | null; last_attempt: string | null; last_attempt_days: string | null;
   }>(
     `WITH ${LAST_PAID_CTE},
-     paid AS (
+     -- MATERIALIZED названо явно (27.11.2026): paid тепер читає лише per_cm, і без цього слова база вбудувала б його
+     -- в запит і могла б обрати інший план для всього списку. Так він рахується раз, як і рахувався.
+     paid AS MATERIALIZED (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
          FROM deals d ${PAID_DEAL_JOIN}
         WHERE ${PAID_DEAL_WHERE}
@@ -230,15 +240,21 @@ export async function clientStates(
             ${effectiveManagerSql("lo", "pm")} AS manager_id, mm.name AS manager_name,
             mm.team_id, tm.name AS team_name,
             lo.pinned_manager_id, lo.seasonal, lo.seasonal_note,
-            (SELECT COALESCE(SUM(p2.price),0) FROM paid p2
-              WHERE p2.client_key = a.client_key AND tk.created_at IS NOT NULL
-                AND p2.closed_at_kommo > tk.created_at) AS revenue_after_task,
+            -- ⏱ Оплати ПІСЛЯ постановки задачі — по індексу угод клієнта (27.11.2026). Було переглядом усього paid
+            -- (22 тис. рядків) на кожного клієнта із задачею: 0,25 с із 0,82 с усього запиту (план із прода). Умови ті
+            -- самі, що в paid: оплачена угода клієнта; дженерик-ключів серед agg немає за побудовою agg_raw.
+            (SELECT COALESCE(SUM(d.price),0) FROM deals d ${PAID_DEAL_JOIN}
+              WHERE ${PAID_DEAL_WHERE} AND d.client_key = a.client_key AND tk.created_at IS NOT NULL
+                AND d.closed_at_kommo > tk.created_at) AS revenue_after_task,
             to_char(lt.calldate ${KYIV}, 'YYYY-MM-DD') AS last_talk,
             (CURRENT_DATE - (lt.calldate ${KYIV})::date)::int AS last_talk_days,
             lt.call_type AS last_talk_type,
             lt.recording AS last_talk_recording,
             lt.billsec AS last_talk_sec,
-            lt.talk_by AS last_talk_by,
+            -- ⏱ Ім'я того, хто говорив, — ПІСЛЯ вибору останньої розмови, одне на клієнта (27.11.2026). Було всередині
+            -- латералу: менеджера шукали для КОЖНОЇ розмови клієнта (28 тис. пошуків заради 1 151 рядка, план із прода).
+            -- Підзапитом у переліку колонок, а не ще одним JOIN: зайвий JOIN міг би змінити порядок з'єднань усього запиту.
+            COALESCE((SELECT mt.name FROM managers mt WHERE mt.id = lt.manager_id), lt.employee_fio) AS last_talk_by,
             lt.shared_n AS last_talk_shared_n,
             at.n AS attempts,
             to_char(at.last_at ${KYIV}, 'YYYY-MM-DD') AS last_attempt,
@@ -268,9 +284,8 @@ export async function clientStates(
        -- 📵 Розмова на номер ПЕРЕВІЗНИКА — не розмова з клієнтом (задача 7359): той самий фільтр у спробах нижче.
        -- 📞 Дзвінки клієнта — разом зі спільними номерами в межах стелі (задача 9061, core/sharedPhoneCalls.ts).
        LEFT JOIN LATERAL (
-         SELECT rc.calldate, rc.call_type, rc.recording, rc.billsec,
-                COALESCE(mt.name, rc.employee_fio) AS talk_by, rc.shared_n
-           FROM ${clientCallsSql("= a.client_key")} rc LEFT JOIN managers mt ON mt.id = rc.manager_id
+         SELECT rc.calldate, rc.call_type, rc.recording, rc.billsec, rc.manager_id, rc.employee_fio, rc.shared_n
+           FROM ${clientCallsSql("= a.client_key")} rc
           WHERE rc.billsec > 0 AND ${notCarrierCallSql("rc")}
           ORDER BY rc.calldate DESC LIMIT 1
        ) lt ON true
@@ -293,7 +308,7 @@ export async function clientStates(
   // живить екран планування. Окремим запитом, а не CTE всередині цього: підстановка
   // фрагмента сюди коштувала 10.5 с замість 0.7 с (замір 05.08.2026, деталі у
   // шапці `clientSegments.ts`).
-  const seg = await loadClientSegments();
+  const seg = await (opts.segments ?? loadClientSegments());
 
   // 🎯 РАЗОВІ СЮДИ НЕ ПОТРАПЛЯЮТЬ (двошляхова кваліфікація, рішення власника
   // 05.08.2026): реактивувати того, хто ніколи не був постійним, нема сенсу —
