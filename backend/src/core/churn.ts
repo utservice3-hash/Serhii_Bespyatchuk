@@ -13,7 +13,7 @@ import type { Db } from "./secrets.js";
 
 export class ChurnError extends Error { constructor(public status: number, message: string) { super(message); } }
 
-export interface ChurnPerson { hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null; position: string | null; team_label: string | null; dismiss_date_unknown?: boolean; churn_excluded?: boolean }
+export interface ChurnPerson { hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null; position: string | null; team_label: string | null; dismiss_date_unknown?: boolean; churn_excluded?: boolean; via_hiring?: boolean; churn_force_count?: boolean }
 export interface ChurnMonth { month: string; headcount: number; hired: number; dismissed: number; turnover: number | null; early: number; noHireDate: number }
 
 const lastDay = (ym: string) => { const [y, m] = ym.split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
@@ -23,6 +23,19 @@ export const monthsBetween = (from: string, to: string) => {
   return out;
 };
 const daysBetween = (a: string, b: string) => (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000;
+
+/**
+ * 🚪 АВТО «НЕ В ПЛИННОСТІ» (27.11.2026, рішення Романа за запитом Івана): хто прийшов через «Найм» (картка з
+ * кандидата) і звільнився не пізніше ніж через `AUTO_CHURN_DAYS` днів після переведення в менеджери, плинність не
+ * псує — це ще відсів навчання, а не плинність. HR може повернути людину в розрахунок (`churn_force_count`).
+ * Хто прийшов НЕ через «Найм», за коротким стажем не виключається (#11401). Тримає #11070, #11071.
+ */
+export const AUTO_CHURN_DAYS = 5;
+export function autoChurnExcluded(p: Pick<ChurnPerson, "hired_at" | "dismissed_at" | "via_hiring" | "churn_force_count">): boolean {
+  if (!p.via_hiring || p.churn_force_count || p.hired_at == null || p.dismissed_at == null) return false;
+  const d = daysBetween(p.hired_at, p.dismissed_at);
+  return d >= 0 && d <= AUTO_CHURN_DAYS;
+}
 
 /** Один місяць. «Ранні» — звільнені в перші 90 днів після прийому (для навчання й найму це головний сигнал). */
 export function monthRow(ppl: ChurnPerson[], ym: string): ChurnMonth {
@@ -63,7 +76,7 @@ export async function churnReport(db: Db, from: unknown, to: unknown, category?:
   if (cat === undefined) throw new ChurnError(400, "Невідома категорія");
   const all = (await db.query<ChurnRegistryRow>(
     `SELECT id, full_name, hired_at::text AS hired_at, dismissed_at::text AS dismissed_at, dismiss_reason, position, team_label,
-            dismiss_date_unknown, churn_excluded, category FROM employees`)).rows;
+            dismiss_date_unknown, churn_excluded, category, candidate_id IS NOT NULL AS via_hiring, churn_force_count FROM employees`)).rows;
   return churnFromPeople(all, dFrom, dTo, cat);
 }
 
@@ -83,7 +96,8 @@ export function churnFromPeople(all: ChurnRegistryRow[], dFrom: string, dTo: str
   // коментарем (`setDismissDate`). Такий звільнений поза розрахунком ЦІЛКОМ: ні в «звільнено», ні в «працювало»,
   // ні в стажі, але лишається у списку з прапорцем і окремим числом `excludedManual` — цифра відтворюється поіменно.
   // Діє лише на звільненого: позначка, що пережила повернення на роботу, не має права вийняти працюючого з «працювало».
-  const excludedOf = (p: ChurnPerson) => !!p.churn_excluded && p.dismissed_at != null;
+  const manualOf = (p: ChurnPerson) => !!p.churn_excluded && p.dismissed_at != null;
+  const excludedOf = (p: ChurnPerson) => manualOf(p) || autoChurnExcluded(p);
   const known = withDate.filter((p) => !excludedOf(p));
   const inScope = <T extends { cat: string | null }>(xs: T[]) => (cat == null ? xs : xs.filter((p) => (p.cat ?? "none") === cat));
   const ppl = inScope(known);
@@ -94,7 +108,8 @@ export function churnFromPeople(all: ChurnRegistryRow[], dFrom: string, dTo: str
   const inRange = ppl.filter(left);
   const tenure = (p: ChurnPerson) => (p.hired_at == null ? null : daysBetween(p.hired_at, p.dismissed_at!));
   const row = (excluded: boolean) => (p: (typeof withDate)[number]) => ({ id: p.id, full_name: p.full_name, category: p.cat, position: p.position,
-    hired_at: p.hired_at, dismissed_at: p.dismissed_at!, tenure_days: tenure(p), excluded });
+    hired_at: p.hired_at, dismissed_at: p.dismissed_at!, tenure_days: tenure(p), excluded,
+    excludedWhy: !excluded ? null : manualOf(p) ? ("manual" as const) : ("auto" as const) });
   const counted = inRange.map(row(false));
   const people = [...counted, ...excludedIn.map(row(true))]
     .sort((a, b) => b.dismissed_at.localeCompare(a.dismissed_at) || a.full_name.localeCompare(b.full_name, "uk"));
@@ -113,7 +128,8 @@ export function churnFromPeople(all: ChurnRegistryRow[], dFrom: string, dTo: str
       noHireDate: counted.length - tenures.length,
       active: ppl.filter((p) => p.dismissed_at == null).length,
       unknownDate: all.length - withDate.length,
-      excludedManual: excludedIn.length,
+      excludedManual: excludedIn.filter(manualOf).length,
+      excludedAuto: excludedIn.filter((p) => !manualOf(p)).length,
     },
     reasons: top(inRange.map((p) => p.dismiss_reason), "причину не вказано"),
     positions: top(inRange.map((p) => p.position), "посада не вказана"),

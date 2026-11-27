@@ -119,6 +119,8 @@ const CEO_MERGE = "власник: CEO веде обʼєднання клієн�
   + "менеджера. Джерело зміни — ec0d12f (01.09.2026), «розʼєднання злитих клієнтів»";
 const MGR_LIMIT = "власник: менеджер подає заявку на кредитний ліміт і ставить задачу по "
   + "ліміту сам. Джерело зміни — ec0d12f (01.09.2026)";
+const HR_NO_REGISTRIES = "Роман 27.11.2026: «Реєстри та узгодження» в HR забрати — разом із «Перевіркою контрагента», яку "
+  + "HR дали за ТЗ пакета Сергія §3 (24.10). Міграція hrRegistriesRevoked у schema.sql";
 const NO_ENPS = "власник: eNPS і бали ванʼту-ванів — не для фінансиста й тімліда. Джерело "
   + "зміни — be6d453 (27.08.2026), «біле сито прав»";
 
@@ -367,6 +369,16 @@ export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
     decidedOn: "2026-09-02", decidedBy: "власник", why: NO_ENPS },
   { method: "GET", path: "/api/one-on-ones/stats/scores", role: "financier", to: "deny",
     decidedOn: "2026-09-02", decidedBy: "власник", why: NO_ENPS },
+  { method: "GET", path: "/api/counterparty/requests/counter", role: "hr", to: "deny",
+    decidedOn: "2026-11-27", decidedBy: "Роман (власник)", why: HR_NO_REGISTRIES },
+  { method: "GET", path: "/api/counterparty/checks", role: "hr", to: "deny",
+    decidedOn: "2026-11-27", decidedBy: "Роман (власник)", why: HR_NO_REGISTRIES },
+  { method: "GET", path: "/api/counterparty/checks/:id", role: "hr", to: "deny",
+    decidedOn: "2026-11-27", decidedBy: "Роман (власник)", why: HR_NO_REGISTRIES },
+  { method: "GET", path: "/api/counterparty/checks/:id/pdf", role: "hr", to: "deny",
+    decidedOn: "2026-11-27", decidedBy: "Роман (власник)", why: HR_NO_REGISTRIES },
+  { method: "GET", path: "/api/counterparty/files/:id", role: "hr", to: "deny",
+    decidedOn: "2026-11-27", decidedBy: "Роман (власник)", why: HR_NO_REGISTRIES },
   { method: "PUT", path: "/api/dashboard/receivables/note", role: "manager", to: "dropped",
     decidedOn: "2026-10-09", decidedBy: "Юля (ТЗ 4631) через Романа",
     why: "задача 4631: менеджер сам ставить дату домовленості й посилання на розмову по СВОЇХ клієнтах; "
@@ -1096,6 +1108,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // фільтр усередині роута), решта — 403.
   { method: "GET", path: "/api/dashboard/client-merge/journal", cls: "GET",
     allow: ["admin", "kvp", "opdir", "team_lead", "ceo"], deny: ["hr", "manager", "financier"] },
+  /* 🧾 Кандидати на обʼєднання за кодом ЄДРПОУ (задача 11225, прохід 1; план затверджено Романом 27.11.2026: «КВП, ОД і
+     адмін — те саме право, що обʼєднання»). Межа — право `merge_clients`, тож гендиректор проходить так само, як у
+     журналі й передпоказі. Тімлід у відмові СВІДОМО: список показує клієнтів усіх команд, а його обʼєднання — у своїй. */
+  { method: "GET", path: "/api/dashboard/client-code-groups", cls: "GET",
+    allow: ["admin", "kvp", "opdir", "ceo"], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "POST", path: "/api/dashboard/client-merge", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "POST", path: "/api/dashboard/client-merge/revoke", cls: "deny-only",
@@ -2166,17 +2183,17 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/counterparty/requests", cls: "GET",
     allow: ["admin", "ceo", "opdir", "financier", "team_lead", "manager"], deny: ["kvp", "hr"] },
   { method: "GET", path: "/api/counterparty/requests/counter", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/counterparty/checks", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/counterparty/checks/:id", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/counterparty/checks/:id/pdf", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/counterparty/budget", cls: "GET",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"] },
   { method: "GET", path: "/api/counterparty/files/:id", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager", "hr"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/counterparty/lookup", cls: "deny-only",
     allow: [], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr"] },
   { method: "POST", path: "/api/counterparty/requests", cls: "deny-only",

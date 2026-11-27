@@ -972,3 +972,12 @@ test("#7150 «РАСХОД 1» ОБОВ'ЯЗКОВИЙ ДЛЯ НОВОГО РА�
     assert.doesNotMatch(src.slice(i, src.indexOf("\n  r.", i + 10)), /expenseAllowed/, route);
   }
 });
+
+test("#7151 БЕЗ «ЗАКАЗ 1С» В УГОДАХ: тег угоди віджета — «Рахунок 1С»; примітки «Угоду веде віджет… Genesis не використовуйте» більше немає", () => {
+  assert.equal(WIDGET_TAG, "Рахунок 1С");
+  assert.deepEqual(claimPatch(5, { orderNo: "", tags: [] }, "000009100")?.tags_to_add, [{ name: "Рахунок 1С" }]);
+  assert.equal(claimPatch(5, { orderNo: "000009100", tags: ["Рахунок 1С"] }, "000009100"), null, "тег додано вдруге");
+  const src = MOUNT();
+  assert.doesNotMatch(src, /Угоду веде віджет/);
+  assert.doesNotMatch(src, /Заказ 1С: новий віджет/);
+});

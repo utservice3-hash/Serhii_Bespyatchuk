@@ -229,6 +229,20 @@ export const splitInvoicesOf = (dealId: number | null | undefined): readonly num
 export const splitIsEachCar = (dealId: number | null | undefined): boolean =>
   dealId != null && HANDOFF_SPLIT_INVOICES.find((x) => x.mainDealId === dealId)?.eachCar === true;
 
+/**
+ * 🔁 УГОДА МЕНЕДЖЕРА, ЗАМІНЕНА НОВОЮ — рішення поштучно, не правило. Менеджер закрив угоду з передачі й тієї ж
+ * миті завів нову на те саме перевезення (інший клієнт у картці — контакт став компанією). Нова створена не з угоди
+ * Продзвону, тож до передачі не привʼязується. Для угод зі списку стан, сума й дати передачі — ЗАМІНИ
+ * (`money.handoffDealStates`). Повторні замовлення клієнта сюди не потрапляють; загальне правило не змінено.
+ */
+export const HANDOFF_DEAL_REPLACED: readonly { fromDealId: number; toDealId: number; decided: string; reason: string }[] = [
+  { fromDealId: 62688459, toDealId: 62820371, decided: "Роман, 27.11.2026",
+    reason: "Юрко, Василівка – Львів (0986547732): 62688459 закрита неуспішно 30.10 13:29:49, через 2 с створено 62820371 на ТОВ «МАНЗАНА ФРУТ» — успіх 24.11, 1 900 ₴" },
+];
+/** Чим замінено угоду менеджера (немає запису — нею самою). */
+export const replacedDealOf = (dealId: number): number =>
+  HANDOFF_DEAL_REPLACED.find((x) => x.fromDealId === dealId)?.toDealId ?? dealId;
+
 export const leadgenPrice = (st: Pick<DealState, "price" | "minus">): number => (st.minus ? 0 : st.price);
 
 /**

@@ -86,6 +86,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // з реєстру». Вкладка `loyalty` — груба межа (HR не має її взагалі), точну
     // тримає `mergePairAllowed`, і саме її сторожать #30h/#30i та #31.
     { test: pre("/api/dashboard/client-merge"), tabs: ["loyalty"] },
+    // 🧾 Кандидати на обʼєднання за кодом ЄДРПОУ (11225) — окремий рядок: `pre("…/client-merge")` дефісного сусіда не
+    // накриває. Вкладка — груба межа; точну тримає право `merge_clients` першим оператором обробника.
+    { test: pre("/api/dashboard/client-code-groups"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-override"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-archive"), tabs: ["loyalty"] },
