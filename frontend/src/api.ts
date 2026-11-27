@@ -6165,11 +6165,13 @@ export type EmpCategory = (typeof EMP_CATEGORIES)[number][0];
 export const empCategoryLabel = (k: string | null) => EMP_CATEGORIES.find(([c]) => c === k)?.[1] ?? "Без категорії";
 export interface ChurnPersonRow { id: number; full_name: string; category: EmpCategory | null; position: string | null; hired_at: string | null; dismissed_at: string; tenure_days: number | null;
   /** 🚪 «Не відпрацював жодного дня» — у списку видно, у цифрах немає (26.11.2026). */
-  excluded?: boolean }
+  excluded?: boolean;
+  /** 27.11.2026: чому поза плинністю — позначено вручну чи авто «≤5 днів після переведення з Найму». */
+  excludedWhy?: "manual" | "auto" | null }
 export interface ChurnReport {
   from: string; to: string; wholeMonths: boolean;
   months: ChurnMonthRow[];
-  total: { dismissed: number; hired: number; early: number; avgTurnover: number | null; avgTenureDays: number | null; noHireDate: number; active: number; unknownDate?: number; excludedManual?: number };
+  total: { dismissed: number; hired: number; early: number; avgTurnover: number | null; avgTenureDays: number | null; noHireDate: number; active: number; unknownDate?: number; excludedManual?: number; excludedAuto?: number };
   people: ChurnPersonRow[]; byCategory: Record<string, number>;
   reasons: { label: string; n: number }[]; positions: { label: string; n: number }[];
 }

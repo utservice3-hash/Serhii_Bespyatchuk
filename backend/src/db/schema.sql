@@ -4246,6 +4246,8 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS dismiss_date_unknown BOOLEAN NOT 
 -- списку лишається з позначкою. Ставиться лише з коментарем (`setDismissDate`), повернення на роботу знімає.
 -- Додається порожньою (false усім), бекфілу немає. ⚠️ revert коду колонку не прибирає.
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS churn_excluded BOOLEAN NOT NULL DEFAULT false;
+-- 27.11.2026: HR повернув у плинність людину, яку правило «≤5 днів після переведення з Найму» виключило б (core/churn.ts, #11072).
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS churn_force_count BOOLEAN NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
 
 -- 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1): один живий крок на клієнта,
