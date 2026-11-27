@@ -44,8 +44,9 @@ test("#2600 РУШІЙ ЗАРПЛАТИ: 63 тести пакета (40 золо
   // «виплачено» — коли стан несе `payWording: 'approved'`. Без нього — як у пакеті. notify.mjs було 29a85ca5…; стережуть #10970–#10972.
   // ✏️ 27.11.2026 (задача 10723, «роби» Романа): звільнення з «Найму» (тип `naim` — без ставки й бонусу) і «0 угод у місяці
   // звільнення → 0», коли стан несе `dismissZero: true`; без нього — як у пакеті. Рушій було bfeb7df0…; стережуть #11320–#11324.
+  // ✏️ 27.11.2026 удруге: `calcLead` віддає `ownMargin` (власні угоди тімліда — лише показ у «Нарахуваннях»); було 9d187a91…; #11330.
   const PKG: Record<string, string> = {
-    "zarplata-engine.mjs": "9d187a9117127b3e528f7fd4a48c60ce197673d2e4d3dfa5b5f990280ea95562",
+    "zarplata-engine.mjs": "eaa7e51f7cb9fc957a8de31720fcf443a361c4d6b1cd8505de69660b6e1b39ea",
     "notify.mjs": "16cc293f10d11fdf75a6cc07bb61c0001e8e273da070ff938c0be8a8cfd671f9",
     "format.mjs": "c22786b4978d87e582b076e6712eb1986b1d9f0ed61aa32de875eca3e6b6d7d2",
     "test/golden.test.mjs": "c18e2fbcd0e4f61da8c6a631d04377521981450b39f4bcf714717ac1d7128ef2",

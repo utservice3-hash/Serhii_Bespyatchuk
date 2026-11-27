@@ -409,7 +409,10 @@ export async function sendShots(pool: Pool, v: Viewer, body: Record<string, unkn
 // ===================================================================== фінансист: нарахування, перевірка
 function accrualRow(e: Engine, p: Record<string, unknown>, mk: string) {
   const id = p.id as string, a = e.zp.advanceOf(id, mk);
+  // leadsTeam — команда, яку веде тімлід: «Нарахування» групують людей за командою, тімлід першим (27.11.2026)
+  const lt = p.role === "lead" ? (p.leadsTeam ?? p.team) as string | null : null;
   return { userId: id, name: p.name, title: p.title, role: p.role, team: p.team, teamName: p.team ? e.state.teams[p.team as string]?.name ?? p.team : null, dept: p.dept, isFinance: !!p.isFinance,
+    leadsTeam: lt, leadsTeamName: lt ? e.state.teams[lt]?.name ?? lt : null,
     calc: calcOut(e, e.zp.calc(id, mk), { withMembersPay: true }), advance: a ? { ...a, status: e.zp.advanceStatus(a) } : null,
     official: e.zp.officialOf(id, mk), ttn: p.role === "manager" ? e.zp.ttnStats(id, mk) : null, limit: e.zp.isLive(mk) ? e.zp.advanceLimit(id, mk).amount : null,
     record: e.zp.record(id, mk) ? { status: e.zp.record(id, mk).status, total: e.zp.settlement(id, mk).total, pay: e.zp.settlement(id, mk).pay } : null };

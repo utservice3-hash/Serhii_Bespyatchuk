@@ -335,7 +335,8 @@ export function createPayroll(state) {
     const nowP = { rate, pct: pctFor(margin), pctAmount: margin * pctFor(margin) / 100, bonus: 0, birthday: bday };
     const planP = { rate, pct: pctFor(marginPlan), pctAmount: marginPlan * pctFor(marginPlan) / 100, bonus: 0, birthday: bday };
     nowP.total = nowP.rate + nowP.pctAmount + bday; planP.total = planP.rate + planP.pctAmount + bday;
-    return { kind: 'lead', empId: e.id, month: mk, live, days: dy, members, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, birthdays, now: nowP, atPlan: planP };
+    // ownMargin — власні угоди тімліда: у відсоток не йдуть, лише ліміт авансу; «Нарахування» показує їх окремо від маржі команди (27.11)
+    return { kind: 'lead', empId: e.id, month: mk, live, days: dy, members, margin, marginPlan, plan, planDone: plan > 0 && margin >= plan, ownMargin: ownMargin(e, mk), birthdays, now: nowP, atPlan: planP };
   }
   /** Маржа компанії = сума маржі менеджерів (у закритому місяці — перевірена фінансистом) */
   function companyMargin(mk) {
