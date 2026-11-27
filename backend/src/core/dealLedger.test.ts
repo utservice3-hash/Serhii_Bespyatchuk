@@ -50,7 +50,7 @@ test("#1283b РОЗБІР 1С: лише угоди, сентинел 01.01.2001 
   assert.deepEqual([inv[0].deal, inv[0].docOn, inv[0].actOn, inv[0].sum, inv[0].out], [61328055, "2025-09-01", null, 29400, { vat: -24000, novat: 0, unload: -152783.4, cash: 0 }], "🔴 розбір реалізації");
   assert.equal(onecDate("23.10.2026 11:49:24"), "2026-10-23", "🔴 дата з часом");
   const pay = parsePayments([{ Organization: "О", Kontragent: "К", ERPOU: "1", Data: "21.10.2026 0:00:00", Sum: 16000, Currency: "грн", Deal: "62767427", Manager: "Менеджер, +380000000000" }, { Sum: 1, Deal: "" }]);
-  assert.deepEqual(pay, [{ deal: 62767427, organization: "О", kontragent: "К", paidOn: "2026-10-21", sum: 16000, currency: "грн" }], "🔴 оплата клієнта чи менеджер у даних");
+  assert.deepEqual(pay, [{ deal: 62767427, organization: "О", kontragent: "К", paidOn: "2026-10-21", sum: 16000, currency: "грн", edrpou: "1" }], "🔴 оплата клієнта чи менеджер у даних");
 });
 
 /**
@@ -107,7 +107,7 @@ test("#1283d ЖИВИЙ SQL: синк 1С — заміна цілком, пор�
   const count = async () => (await c.query(`SELECT (SELECT count(*) FROM onec_deal_invoices)::int AS i, (SELECT count(*) FROM onec_deal_payments)::int AS p`)).rows[0];
   try {
     const inv = Array.from({ length: 10 }, (_, i) => inv1(62700000 + i, 1000 + i));
-    const pay = Array.from({ length: 10 }, (_, i) => ({ deal: 62700000 + i, organization: "О", kontragent: "К", paidOn: "2026-10-01", sum: 100, currency: "грн" }));
+    const pay = Array.from({ length: 10 }, (_, i) => ({ deal: 62700000 + i, organization: "О", kontragent: "К", paidOn: "2026-10-01", sum: 100, currency: "грн", edrpou: null }));
     assert.deepEqual(await replaceOnec(db, inv, pay), { invoices: 10, payments: 10 }, "🔴 перший запис");
     assert.deepEqual(await count(), { i: 10, p: 10 }, "🔴 записано не все");
     await assert.rejects(replaceOnec(db, [], pay), /не віддав жодного рядка/, "🔴 порожня відповідь прийнята");
@@ -139,7 +139,7 @@ test("#11250 ЖИВИЙ SQL: знімок «без угоди» — окремо
   const pool = { query: db.query.bind(db), connect: async () => ({ query: db.query.bind(db), release: () => undefined }) } as unknown as import("./onecSync.js").DbPool;
   const nd = (kind: "invoice" | "payment", number: string, docOn: string | null, sum: number, kontragent = "ТОВ Приклад", currency = "грн") =>
     ({ kind, number, organization: "О", kontragent, edrpou: null, docOn, sum, currency, dealRaw: "", manager: null, comment: "к" });
-  const pay = (n: number) => Array.from({ length: n }, (_, i) => ({ deal: 62700000 + i, organization: "О", kontragent: "К", paidOn: "2026-10-01", sum: 100, currency: "грн" }));
+  const pay = (n: number) => Array.from({ length: n }, (_, i) => ({ deal: 62700000 + i, organization: "О", kontragent: "К", paidOn: "2026-10-01", sum: 100, currency: "грн", edrpou: null }));
   const inv = (n: number) => Array.from({ length: n }, (_, i) => inv1(62700000 + i, 1000 + i));
   const counts = async () => (await c.query(`SELECT (SELECT count(*) FROM onec_deal_invoices)::int AS i, (SELECT count(*) FROM onec_deal_payments)::int AS p,
     (SELECT count(*) FROM onec_no_deal_rows)::int AS n`)).rows[0];
@@ -197,6 +197,76 @@ test("#11251 ЖИВА СХЕМА: після двох прогонів вкла�
 });
 
 /**
+ * #11259 — ЖИВИЙ SQL: КОД ПЛАТНИКА ДОХОДИТЬ ДО БАЗИ, А ПАРИ «ЗАПИС КЛІЄНТА, КОД» БЕРУТЬСЯ ЛИШЕ З ОПЛАЧЕНИХ УГОД І З ПЕРІОДУ
+ * (задача 11225, 27.11.2026). Синк пише `edrpou` у `onec_deal_payments`; запит ядра (`CLIENT_CODE_PAIRS_SQL`) дає пару лише
+ * для угоди в оплаченому етапі; оплата 31.12.2025 у список «з 2026» не входить, 01.01.2026 входить, «за весь час» — обидві;
+ * запис без коду лишається рядком із `code_raw = NULL` (інакше покриття було б 100%); «оплачених угод» рахується за весь
+ * час, а не за період. Наскрізно: три записи з одним кодом — один чистий дубль, збірне імʼя з тим самим кодом у нього не входить.
+ * 🧨 Червоніє, якщо не писати код, брати неоплачені угоди, різати період по `<` замість `<=` з іншого боку чи викинути
+ * записи без коду.
+ */
+test("#11259 ЖИВИЙ SQL «КОД КЛІЄНТА»: синк пише код; пари лише з оплачених угод; межа 2026 з обох боків; без коду — рядок, а не пропуск", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const { replaceOnec } = await import("./onecSync.js");
+  const { CLIENT_CODE_PAIRS_SQL, CODE_GROUPS_FROM, clientCodeGroups } = await import("./clientCodes.js");
+  const db = c as unknown as import("./finance.js").Db;
+  try {
+    await c.query(`INSERT INTO managers (id, name, kommo_user_id, is_active) VALUES (1, 'М', 777, true)`);
+    await c.query("INSERT INTO pipeline_stage_map (pipeline_id, status_id, funnel_stage) VALUES (8921932, 142, 'paid') ON CONFLICT DO NOTHING");
+    // Неоплачений етап теж має рядок мапи: без нього JOIN сам викидав би угоду, і умова `funnel_stage = 'paid'` у запиті
+    // лишалась би неперевіреною (саботаж 27.11.2026 «пари з будь-якого етапу» був зеленим саме через це).
+    await c.query("INSERT INTO pipeline_stage_map (pipeline_id, status_id, funnel_stage) VALUES (8921932, 1, 'invoiced') ON CONFLICT DO NOTHING");
+    // [угода, ключ, назва, status_id]: 142 — оплачений етап, 1 — ні
+    const deals: [number, string, string, number][] = [
+      [62700001, "прикладтов", "ТОВ Приклад", 142], [62700002, "прикладтов", "ТОВ Приклад", 142], [62700003, "прикладтов", "ТОВ Приклад", 142],
+      [62700004, "прикладкиїв", "Приклад (Київ)", 142], [62700005, "380670000000", "Олена", 142],
+      [62700006, "названиенеуказано", "Название не указано", 142], [62700007, "готівка", "Готівка", 142],
+      [62700008, "неоплачений", "Не оплачено", 1], [62700009, "старий", "Старий", 142],
+      // «готівка» має ще й НЕоплачену угоду з кодом: без фільтра етапу цей запис приклеївся б до чистого дубля
+      [62700010, "готівка", "Готівка", 1],
+    ];
+    for (const [id, key, name, status] of deals)
+      await c.query(`INSERT INTO deals (kommo_id, name, manager_id, price, pipeline_id, status_id, closed_at_kommo, client_key, client_name)
+        VALUES ($1, 'У', 1, 1000, 8921932, $2, '2026-03-10T10:00:00Z', $3, $4)`, [id, status, key, name]);
+    const pay = (deal: number, paidOn: string, edrpou: string | null, kontragent = "ПРИКЛАД ТОВ") => ({ deal, organization: "О", kontragent, paidOn, sum: 100, currency: "грн", edrpou });
+    const inv = deals.map(([id]) => inv1(id, 1000));
+    await replaceOnec(db, inv, [
+      pay(62700001, "2026-01-01", "10000001"), pay(62700002, "2026-06-01", " 10000001 "), pay(62700003, "2025-12-31", "10000001", "Приклад (стара назва)"),
+      pay(62700004, "2026-02-01", "10000001"), pay(62700005, "2026-02-02", "10000001"),
+      pay(62700006, "2026-02-03", "10000001"), pay(62700006, "2026-02-04", "20000002", "ФОП Зразок"),
+      pay(62700007, "2026-02-05", null), pay(62700008, "2026-02-06", "10000001"), pay(62700009, "2025-12-31", "30000003"),
+      pay(62700010, "2026-02-07", "10000001"),
+    ]);
+    assert.deepEqual((await c.query(`SELECT count(*)::int AS n, count(edrpou)::int AS coded FROM onec_deal_payments`)).rows[0], { n: 11, coded: 10 }, "🔴 синк не записав код платника (або вигадав його там, де 1С не дала)");
+
+    const rows = async (from: string | null) => (await c.query(CLIENT_CODE_PAIRS_SQL, [from])).rows as { key: string; code_raw: string | null; payments: number; last_paid: string; paid_deals: number; name: string }[];
+    const y = await rows(CODE_GROUPS_FROM);
+    const of = (rs: typeof y, key: string) => rs.filter((r) => r.key === key).map((r) => [r.code_raw, r.payments, r.last_paid, r.paid_deals]);
+    assert.deepEqual(of(y, "прикладтов"), [["10000001", 2, "2026-06-01", 3]],
+      "🔴 межа періоду: оплата 01.01.2026 мусить увійти, 31.12.2025 — ні; код із пробілами — той самий код; «оплачених угод» — за весь час (3), а не за період");
+    assert.deepEqual(of(y, "готівка"), [[null, 1, "2026-02-05", 1]], "🔴 запис без коду зник: покриття «код відомий у N з M» стало б 100%");
+    assert.deepEqual(of(y, "неоплачений"), [], "🔴 пара з угоди, яка не в оплаченому етапі");
+    assert.deepEqual(of(y, "старий"), [], "🔴 оплата 2025 року у списку «з 2026»");
+    assert.equal(y.find((r) => r.key === "прикладтов")?.name, "ТОВ Приклад");
+    const all = await rows(null);
+    assert.deepEqual(of(all, "прикладтов"), [["10000001", 3, "2026-06-01", 3]], "🔴 «за весь час» не взяло оплату 2025 року");
+    assert.deepEqual(of(all, "старий"), [["30000003", 1, "2025-12-31", 1]]);
+
+    // наскрізно: правило поверх живого запиту
+    const g = await clientCodeGroups(db);
+    assert.equal(g.from, CODE_GROUPS_FROM);
+    assert.deepEqual([g.clean.length, g.multi.length], [1, 0], "🔴 три записи з одним кодом — рівно один чистий дубль");
+    assert.deepEqual(g.clean[0].keys.map((k) => [k.key, k.paidDeals, k.phoneKey]), [["прикладтов", 3, false], ["380670000000", 1, true], ["прикладкиїв", 1, false]]);
+    assert.deepEqual(g.collective.map((e) => [e.key, e.codes, e.shared]), [["названиенеуказано", 2, 3]], "🔴 збірне імʼя потрапило в групу або не показане окремо");
+    assert.deepEqual({ clients: g.clients, withCode: g.withCode, payments: g.payments, codedPayments: g.codedPayments, minusClean: g.minusClean },
+      { clients: 5, withCode: 4, payments: 7, codedPayments: 6, minusClean: 2 }, "🔴 покриття чи «стане менше» на живому запиті");
+    assert.deepEqual([(await clientCodeGroups(db, true)).from, (await clientCodeGroups(db, true)).clients], [null, 6]);
+  } finally { await s.dispose(); }
+});
+
+/**
  * #1283e — ЖИВИЙ SQL: «РЕЗУЛЬТАТ МІСЯЦЯ» З 1С. Угода з реалізацією 1С отримує блок 1С, оплати клієнта, плановий PNL; бюджет
  * 1С ≠ Kommo — на перевірку з обома числами; рівний — без перевірки; валютна реалізація — перевірка «у валюті», у гривневі
  * колонки не йде; без 1С — блок порожній і ця перевірка мовчить; «станом на» — з часу синку.
@@ -214,7 +284,7 @@ test("#1283e ЖИВИЙ SQL: угода з 1С — блоки, плановий 
     for (const [id, price] of [[201, 5320], [202, 3000], [203, 1000], [204, 900]])
       await c.query(`INSERT INTO deals (kommo_id, name, manager_id, price, pipeline_id, status_id, closed_at_kommo, payment_type) VALUES ($1, 'У', 1, $2, 8921932, 142, '2026-09-10T10:00:00Z', 'Безнал с НДС')`, [id, price]);
     const ex = (deal: number, sum: number, outVat: number, currency = "грн") => ({ deal, number: "1", organization: 'ТОВ "ЮНАЙТЕД ТРАНСПОРТ СЕРВІС"', kontragent: "К", docOn: "2026-09-10", actOn: null, sum, currency, out: { vat: outVat, novat: 0, unload: 0, cash: 0 } });
-    await replaceOnec(db, [ex(201, 65000, -58000), ex(202, 65000, -58000), ex(203, 950, 0, "EUR")], [{ deal: 201, organization: 'ТОВ "ЮНАЙТЕД ТРАНСПОРТ СЕРВІС"', kontragent: "К", paidOn: "2026-09-20", sum: 65000, currency: "грн" }]);
+    await replaceOnec(db, [ex(201, 65000, -58000), ex(202, 65000, -58000), ex(203, 950, 0, "EUR")], [{ deal: 201, organization: 'ТОВ "ЮНАЙТЕД ТРАНСПОРТ СЕРВІС"', kontragent: "К", paidOn: "2026-09-20", sum: 65000, currency: "грн", edrpou: null }]);
     const live = async (ids: number[]) => new Map(ids.map((id) => [id, { orderNo: "1", paid1c: true, income: null, cashExpense: null }]));
     const r = await loadMonthResult(db, "2026-09-01", { live, bankPaid: async () => new Set<number>(), kommoBase: "https://k.test" });
     const d = (id: number) => r.deals.find((x) => x.id === id)!;

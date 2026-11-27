@@ -365,3 +365,64 @@ test("#11403 ЖИВИЙ SQL: «не відпрацював» — з комент
     assert.equal(await flag(), false, "🔴 повернення на роботу не зняло позначку");
   } finally { await s.done(); }
 });
+
+/**
+ * 🚪 АВТО «НЕ В ПЛИННОСТІ» (27.11.2026, рішення Романа за запитом Івана) — гейти `#11070`–`#11072`. Хто прийшов через
+ * «Найм» і звільнився ≤5 днів після переведення в менеджери — поза плинністю без галочки; HR може повернути.
+ */
+const VIA = (id: number, name: string, hired: string, dismissed: string | null, extra: Partial<ChurnRegistryRow> = {}) =>
+  R(id, name, hired, dismissed, { via_hiring: true, ...extra });
+
+/**
+ * #11070 — межа по обидва боки: з «Найму» 5 днів — поза плинністю (авто), 6 днів — рахується; повернений HR
+ * (`churn_force_count`) — рахується; не з «Найму» 0 днів — рахується (#11401 не ламається); авто окремим числом.
+ * 🧨 Червоніє, якщо зсунути поріг, виключати не з «Найму» або ігнорувати `churn_force_count`.
+ */
+test("#11070 АВТО: з «Найму» ≤5 днів після переведення — поза плинністю; 6 днів, повернений HR і не з Найму — рахуються", () => {
+  const r = churnFromPeople([R(1, "А Працює", "2025-03-01", null),
+    VIA(2, "Б П'ять", "2026-11-20", "2026-11-25"), VIA(3, "В Шість", "2026-11-19", "2026-11-25"),
+    VIA(4, "Г Повернений", "2026-11-25", "2026-11-25", { churn_force_count: true }), R(5, "Д Не з Найму", "2026-11-25", "2026-11-25")],
+  "2026-11-01", "2026-11-30", null);
+  const why = Object.fromEntries(r.people.map((p) => [p.full_name, p.excluded ? p.excludedWhy : "рахується"]));
+  assert.deepEqual(why, { "Б П'ять": "auto", "В Шість": "рахується", "Г Повернений": "рахується", "Д Не з Найму": "рахується" }, "🔴 не той поділ: " + JSON.stringify(why));
+  assert.deepEqual([r.total.dismissed, r.total.excludedAuto, r.total.excludedManual, r.months[0].headcount], [3, 1, 0, 4], "🔴 авто не поза цифрами: " + JSON.stringify(r.total));
+});
+
+/**
+ * #11071 🪞 — ручна позначка лишається «manual» і на людині з «Найму»; працюючий з «Найму» (без звільнення) у
+ * «працювало», хоч стаж короткий: правило діє лише на звільненого.
+ * 🧨 Червоніє, якщо авто перекриє ручну причину або вийме працюючого.
+ */
+test("#11071 АВТО 🪞: ручна позначка — «manual» навіть у людини з Найму; працюючий з Найму не виймається", () => {
+  const r = churnFromPeople([VIA(1, "А Ручна", "2026-11-24", "2026-11-25", { churn_excluded: true }), VIA(2, "Б Працює", "2026-11-24", null)],
+    "2026-11-01", "2026-11-30", null);
+  assert.deepEqual(r.people.map((p) => [p.full_name, p.excludedWhy]), [["А Ручна", "manual"]], "🔴 причина виключення не ручна");
+  assert.deepEqual([r.months[0].headcount, r.total.active, r.total.excludedManual, r.total.excludedAuto], [1, 1, 1, 0], "🔴 працюючого з Найму вийнято: " + JSON.stringify(r.total));
+});
+
+/**
+ * #11072 ЖИВИЙ SQL — `churnReport` бачить «з Найму» за `candidate_id`; зняв галочку з авто-виключеного → `churn_force_count`
+ * і людина рахується; знову поставив → ручна позначка, `churn_force_count` знято; правка без `excluded` нічого не міняє.
+ * 🧨 Червоніє, якщо не читати `candidate_id`, не ставити `churn_force_count` при знятті галочки або скидати його мовчки.
+ */
+test("#11072 ЖИВИЙ SQL: авто за candidate_id; зняти галочку — рахується (force); поставити — вручну; без excluded — як було", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const off = await import("./offboarding.js");
+  const ch = await import("./churn.js");
+  try {
+    const cid = (await s.c.query(`INSERT INTO hiring_candidates (full_name) VALUES ('Грицик Тест') RETURNING id`)).rows[0].id as number;
+    const id = (await s.c.query(`INSERT INTO employees (full_name, import_key, status, position, hired_at, dismissed_at, candidate_id)
+      VALUES ('Грицик Тест','g','dismissed','віддалений менеджер','2026-11-25','2026-11-25',$1) RETURNING id`, [cid])).rows[0].id as number;
+    const rep = async () => { const r = await ch.churnReport(s.db, "2026-11", "2026-11"); return [r.total.dismissed, r.total.excludedAuto, r.total.excludedManual]; };
+    assert.deepEqual(await rep(), [0, 1, 0], "🔴 churnReport не бачить «з Найму»");
+    await off.setDismissDate(s.db, s.hr, id, { date: "2026-11-25", excluded: false, comment: "рахувати: працювала" });
+    const flags = async () => (await s.c.query(`SELECT churn_excluded AS x, churn_force_count AS f FROM employees WHERE id = $1`, [id])).rows[0];
+    assert.deepEqual(await flags(), { x: false, f: true }, "🔴 зняття галочки не поставило churn_force_count");
+    assert.deepEqual(await rep(), [1, 0, 0], "🔴 повернена людина не рахується");
+    await off.setDismissDate(s.db, s.hr, id, { date: "2026-11-25", comment: "лише дата" });
+    assert.deepEqual(await flags(), { x: false, f: true }, "🔴 правка без excluded скинула churn_force_count");
+    await off.setDismissDate(s.db, s.hr, id, { date: "2026-11-25", excluded: true, comment: "не рахувати" });
+    assert.deepEqual(await flags(), { x: true, f: false }, "🔴 галочка не стала ручною позначкою");
+    assert.deepEqual(await rep(), [0, 0, 1], "🔴 ручна позначка не видна окремо");
+  } finally { await s.done(); }
+});

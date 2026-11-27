@@ -19,6 +19,7 @@
  */
 import { parseDate, ImportError, nameKey, shortKey } from "./employeeImport.js";
 import type { Db } from "./secrets.js";
+import { autoChurnExcluded } from "./churn.js";
 
 type MwsRow = { state: string; since: string; note: string | null; set_by: number | null; set_at: string } | null;
 interface Prev {
@@ -39,8 +40,8 @@ async function audit(db: Db, actorId: number, id: number, label: string, action:
 /** Людина + її менеджери Kommo (привʼязка реєстру і картка акаунта — обидві, без повторів). */
 async function load(db: Db, id: number) {
   const e = (await db.query<{ id: number; full_name: string; status: string; dismissed_at: string | null; hired_at: string | null; dismiss_reason: string | null;
-    user_id: number | null; manager_id: number | null; user_manager_id: number | null; churn_excluded: boolean }>(
-    `SELECT e.id, e.full_name, e.status, e.dismissed_at::text AS dismissed_at, e.hired_at::text AS hired_at, e.dismiss_reason, e.user_id, e.manager_id, u.manager_id AS user_manager_id, e.churn_excluded
+    user_id: number | null; manager_id: number | null; user_manager_id: number | null; churn_excluded: boolean; via_hiring: boolean; churn_force_count: boolean }>(
+    `SELECT e.id, e.full_name, e.status, e.dismissed_at::text AS dismissed_at, e.hired_at::text AS hired_at, e.dismiss_reason, e.user_id, e.manager_id, u.manager_id AS user_manager_id, e.churn_excluded, e.candidate_id IS NOT NULL AS via_hiring, e.churn_force_count
        FROM employees e LEFT JOIN users u ON u.id = e.user_id WHERE e.id = $1 FOR UPDATE OF e`, [id])).rows[0];
   if (!e) throw new ImportError(404, "Співробітника не знайдено");
   const managers = [...new Set([e.manager_id, e.user_manager_id].filter((x): x is number => x != null))];
@@ -165,7 +166,7 @@ export async function revertDismissal(db: Db, actorId: number, id: number) {
   if (p.user) await db.query(`UPDATE users SET is_active = $2, deactivated_at = $3, deactivated_reason = $4 WHERE id = $1`,
     [p.user.id, p.user.is_active, p.user.deactivated_at, p.user.deactivated_reason]);
   // Повернення знімає обидві позначки «поза плинністю»: працюючий не може бути ні «дата невідома», ні «не відпрацював».
-  await db.query(`UPDATE employees SET status = $2, dismissed_at = $3, dismiss_reason = $4, dismiss_date_unknown = false, churn_excluded = false, updated_at = now() WHERE id = $1`,
+  await db.query(`UPDATE employees SET status = $2, dismissed_at = $3, dismiss_reason = $4, dismiss_date_unknown = false, churn_excluded = false, churn_force_count = false, updated_at = now() WHERE id = $1`,
     [id, p.status, p.dismissed_at, p.dismiss_reason]);
   await db.query(`DELETE FROM employee_offboarding WHERE employee_id = $1`, [id]);
   await audit(db, actorId, id, e.full_name, "employees.dismiss_revert", { from: off.stage });
@@ -198,11 +199,16 @@ export async function setDismissDate(db: Db, actorId: number, id: number, body: 
   const hiredAt = body.hiredAt === undefined ? undefined : typeof body.hiredAt === "string" && body.hiredAt.trim() ? parseDate(body.hiredAt) : null;
   if (body.hiredAt !== undefined && typeof body.hiredAt === "string" && body.hiredAt.trim() && !hiredAt) throw new ImportError(400, `Дата початку «${body.hiredAt}» не розпізнана`);
   if (hiredAt && date && hiredAt > date) throw new ImportError(400, "Дата початку пізніше за дату звільнення");
-  await db.query(`UPDATE employees SET dismissed_at = $2, dismiss_date_unknown = $3, churn_excluded = $4, updated_at = now() WHERE id = $1`, [id, date, unknown, excluded]);
+  // 27.11.2026: `excluded` — «не рахувати», як це бачить HR (вручну АБО авто «≤5 днів після переведення з Найму»).
+  // Зняв галочку, а правило за новими датами виключило б людину знову — ставимо `churn_force_count`. Тримає #11072.
+  const autoRaw = autoChurnExcluded({ hired_at: hiredAt === undefined ? e.hired_at : hiredAt, dismissed_at: date, via_hiring: e.via_hiring, churn_force_count: false });
+  const forceCount = body.excluded === undefined ? !!e.churn_force_count : body.excluded === true ? false : autoRaw;
+  await db.query(`UPDATE employees SET dismissed_at = $2, dismiss_date_unknown = $3, churn_excluded = $4, churn_force_count = $5, updated_at = now() WHERE id = $1`, [id, date, unknown, excluded, forceCount]);
   if (hiredAt !== undefined) await db.query(`UPDATE employees SET hired_at = $2 WHERE id = $1`, [id, hiredAt]);
   if (off && date) await db.query(`UPDATE employee_offboarding SET last_day = $2 WHERE employee_id = $1`, [id, date]);
   await audit(db, actorId, id, e.full_name, "employees.dismiss_date", { from: e.dismissed_at, to: unknown ? null : date, unknown, comment,
     ...(excluded !== !!e.churn_excluded ? { excludedFrom: !!e.churn_excluded, excludedTo: excluded } : {}),
+    ...(forceCount !== !!e.churn_force_count ? { forceCountFrom: !!e.churn_force_count, forceCountTo: forceCount } : {}),
     ...(hiredAt !== undefined ? { hiredFrom: e.hired_at ?? null, hiredTo: hiredAt } : {}) });
   return { dismissedAt: date, unknown, excluded };
 }

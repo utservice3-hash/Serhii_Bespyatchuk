@@ -7,6 +7,7 @@ import { OrphanPoolSection } from "./OrphanPoolSection";
 import { ArchiveSection } from "./ArchiveSection";
 import ClosedTasksSection from "./ClosedTasksSection";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
+import { ClientCodeGroupsPanel } from "./ClientCodeGroupsPanel";
 import { leadNavSearch } from "../clientLeadNav";
 
 /**
@@ -168,6 +169,9 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
               <MergePanel onDone={() => { /* списки перечитаються на наступному відкритті вкладки */ }}
                 teamOnly={auth?.role === "team_lead"} />
               {canAssignClients && <ManagerPanel clients={[]} onDone={() => { }} />}
+              {/* 🧾 Кандидати за кодом ЄДРПОУ (11225): список клієнтів усіх команд, тож тімліду не показуємо;
+                  межу тримає сервер (право `merge_clients`), на 403 блок сам ховається. */}
+              {auth?.role !== "team_lead" && <ClientCodeGroupsPanel />}
             </div>
           </div>
         </div>

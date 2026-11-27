@@ -37,6 +37,7 @@ const MANAGEMENT_ACTIONS: { route: string; helper: string; what: string }[] = [
   { route: "/dashboard/client-merge/revoke", helper: "revokeMerge", what: "роз'єднати" },
   { route: "/dashboard/client-merge/preview", helper: "fetchMergePreview", what: "передпоказ обʼєднання" },
   { route: "/dashboard/client-merge/journal", helper: "fetchMergeJournal", what: "журнал обʼєднань" },
+  { route: "/dashboard/client-code-groups", helper: "fetchClientCodeGroups", what: "кандидати на обʼєднання за кодом ЄДРПОУ" },
   { route: "/dashboard/client-manager", helper: "assignClientManager", what: "передати відповідального" },
   { route: "/dashboard/client-manager/history", helper: "fetchClientManagerHistory", what: "історія передач" },
   { route: "/dashboard/client-archive", helper: "archiveClient", what: "в архів / з архіву" },

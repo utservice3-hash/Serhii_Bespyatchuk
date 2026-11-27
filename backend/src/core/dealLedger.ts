@@ -73,8 +73,13 @@ export function parseInvoices(json: unknown): OnecInvoice[] {
   return out;
 }
 
-/** Оплата клієнта в 1С (`paydata`) з номером угоди. Менеджера (там телефони) і коментар не беремо. */
-export interface OnecPayment { deal: number; organization: string; kontragent: string; paidOn: string | null; sum: number; currency: string }
+/**
+ * Оплата клієнта в 1С (`paydata`) з номером угоди. Менеджера (там телефони) і коментар не беремо.
+ * З 27.11.2026 (задача 11225) беремо й код платника `ERPOU` — СИРИМ, як віддала 1С: чи це ЄДРПОУ, ІПН чи щось інше
+ * (VAT нерезидента), вирішує один читач — `core/clientCodes.ts`, а не парсер; інакше «код іншого вигляду» зник би ще тут.
+ */
+export interface OnecPayment { deal: number; organization: string; kontragent: string; paidOn: string | null; sum: number; currency: string; edrpou: string | null }
+const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s || null; };
 export function parsePayments(json: unknown): OnecPayment[] {
   const rows = Array.isArray(json) ? json : [json];
   const out: OnecPayment[] = [];
@@ -83,7 +88,7 @@ export function parsePayments(json: unknown): OnecPayment[] {
     const sum = num(x?.Sum);
     if (deal == null || sum == null) continue;
     out.push({ deal, organization: String(x.Organization ?? "").trim(), kontragent: String(x.Kontragent ?? "").trim(), paidOn: onecDate(x.Data),
-      sum, currency: String(x.Currency ?? "").trim() || "грн" });
+      sum, currency: String(x.Currency ?? "").trim() || "грн", edrpou: txt(x.ERPOU) });
   }
   return out;
 }
@@ -99,7 +104,6 @@ export function parsePayments(json: unknown): OnecPayment[] {
 export type NoDealKind = "invoice" | "payment";
 export interface OnecNoDealRow { kind: NoDealKind; number: string; organization: string; kontragent: string; edrpou: string | null; docOn: string | null;
   sum: number; currency: string; dealRaw: string; manager: string | null; comment: string | null }
-const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s || null; };
 export function parseNoDeal(kind: NoDealKind, json: unknown): OnecNoDealRow[] {
   const rows = Array.isArray(json) ? json : [json];
   const out: OnecNoDealRow[] = [];

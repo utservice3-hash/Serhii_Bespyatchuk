@@ -72,6 +72,9 @@ export function HiringChurnTab({ toast }: { toast: Toast }) {
   const max = Math.max(1, ...d.months.map((m) => m.turnover ?? 0));
   const noDate = d.months.at(-1)?.noHireDate ?? 0;
   const allN = Object.values(d.byCategory).reduce((a, n) => a + n, 0);
+  // 🚪 27.11.2026, запит Івана: хто поза плинністю (вручну або авто ≤5 днів після переведення), у списку звільнених
+  // не стоїть — лише в згорнутому блоці під ним, поіменно, щоб цифру можна було відтворити.
+  const counted = d.people.filter((p) => !p.excluded), outside = d.people.filter((p) => p.excluded);
   return (
     <>
       {head}
@@ -93,22 +96,20 @@ export function HiringChurnTab({ toast }: { toast: Toast }) {
           <div className="hr-muted">{d.wholeMonths ? (d.months.length > 1 ? "на місяць за період" : "звільнено ÷ працювало в місяці") : "для тижня не рахується — формула помісячна"}</div></div>
         <div className="kpi-card"><div className="kpi-label">Працює зараз</div><div className="kpi-value">{d.total.active}</div><div className="hr-muted">{noDate ? `без дати прийому: ${noDate}` : cat ? `у категорії «${empCategoryLabel(cat === "none" ? null : cat)}»` : "за реєстром"}</div></div>
       </div>
-      {((d.total.excludedManual ?? 0) > 0 || (d.total.unknownDate ?? 0) > 0) && (
+      {(d.total.unknownDate ?? 0) > 0 && (
         <div className="hr-muted" style={{ margin: "-6px 0 12px", fontSize: 12.5 }}>
-          Поза розрахунком:
-          {(d.total.excludedManual ?? 0) > 0 && <> {d.total.excludedManual} не відпрацювали жодного дня (позначено вручну, у списку нижче з позначкою «не в плинності»){(d.total.unknownDate ?? 0) > 0 ? ";" : "."}</>}
-          {(d.total.unknownDate ?? 0) > 0 && <> {d.total.unknownDate} звільнених із невідомою датою (позначено в картці людини — «дата невідома»).</>}
+          Поза розрахунком: {d.total.unknownDate} звільнених із невідомою датою (позначено в картці людини — «дата невідома»).
         </div>
       )}
       <div className="chart-card" style={{ marginBottom: 16 }}>
         <div className="chart-title">Хто звільнився · {r.label}</div>
-        {d.people.length === 0 ? <div className="hr-muted">За цей період звільнень немає{cat ? ` у категорії «${empCategoryLabel(cat === "none" ? null : cat)}»` : ""}.</div> : (
+        {counted.length === 0 ? <div className="hr-muted">За цей період звільнень немає{cat ? ` у категорії «${empCategoryLabel(cat === "none" ? null : cat)}»` : ""}.</div> : (
           <div className="hr-tw">
             <table className="data-table compact" style={{ width: "100%" }}>
               <thead><tr><th>Співробітник</th><th>Категорія</th><th>Посада</th><th>Почав</th><th>Звільнився</th><th className="num">Стаж</th><th /></tr></thead>
-              <tbody>{d.people.map((p) => (
-                <tr key={p.id} style={p.excluded ? { opacity: 0.6 } : undefined}>
-                  <td><b>{p.full_name}</b>{p.excluded && <span className="emp-pill warn" style={{ marginLeft: 6 }} title="Не відпрацював(ла) жодного дня — поза розрахунком плинності">не в плинності</span>}</td>
+              <tbody>{counted.map((p) => (
+                <tr key={p.id}>
+                  <td><b>{p.full_name}</b></td>
                   <td>{p.category ? empCategoryLabel(p.category) : <span className="hr-muted">без категорії</span>}</td>
                   <td className="hr-muted">{p.position ?? "—"}</td>
                   <td>{p.hired_at ? dmy(p.hired_at) : <span className="hr-muted">невідомо</span>}</td>
@@ -120,6 +121,29 @@ export function HiringChurnTab({ toast }: { toast: Toast }) {
           </div>
         )}
       </div>
+      {outside.length > 0 && (
+        <details className="chart-card" style={{ marginBottom: 16 }}>
+          <summary style={{ cursor: "pointer" }}><b>Поза плинністю · {outside.length}</b> <span className="hr-muted" style={{ fontSize: 12.5 }}>
+            {(d.total.excludedAuto ?? 0) > 0 && <>{d.total.excludedAuto} звільнились за ≤5 днів після переведення з «Найму» (авто)</>}
+            {(d.total.excludedAuto ?? 0) > 0 && (d.total.excludedManual ?? 0) > 0 && " · "}
+            {(d.total.excludedManual ?? 0) > 0 && <>{d.total.excludedManual} позначено вручну</>}
+          </span></summary>
+          <div className="hr-tw" style={{ marginTop: 10 }}>
+            <table className="data-table compact" style={{ width: "100%" }}>
+              <thead><tr><th>Співробітник</th><th>Почав</th><th>Звільнився</th><th className="num">Стаж</th><th>Чому поза плинністю</th><th /></tr></thead>
+              <tbody>{outside.map((p) => (
+                <tr key={p.id}>
+                  <td><b>{p.full_name}</b></td>
+                  <td>{p.hired_at ? dmy(p.hired_at) : <span className="hr-muted">невідомо</span>}</td>
+                  <td>{dmy(p.dismissed_at)}</td>
+                  <td className="num">{stazh(p.tenure_days) ?? <span className="hr-muted">—</span>}</td>
+                  <td className="hr-muted">{p.excludedWhy === "auto" ? "авто: ≤5 днів після переведення" : "позначено вручну"}</td>
+                  <td style={{ textAlign: "right" }}><button className="hr-btn xs" onClick={() => setEdit(p)}>Змінити</button></td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+        </details>
+      )}
       {d.months.length > 1 && (
         <div className="chart-card" style={{ marginBottom: 16 }}>
           <div className="chart-title">Плинність по місяцях</div>
@@ -168,7 +192,7 @@ function TenureDialog({ p, onClose, onDone }: { p: ChurnPersonRow; onClose: () =
     if (!comment.trim()) { setErr("Коментар обовʼязковий"); return; }
     setBusy(true); setErr(null);
     try {
-      await setDismissDate(p.id, { date: left, comment: comment.trim(), excluded, ...(hired !== (p.hired_at ?? "") ? { hiredAt: hired || null } : {}) });
+      await setDismissDate(p.id, { date: left, comment: comment.trim(), ...(excluded !== !!p.excluded ? { excluded } : {}), ...(hired !== (p.hired_at ?? "") ? { hiredAt: hired || null } : {}) });
       onDone(`${p.full_name}: ${dmy(hired || null)} – ${dmy(left)}${days != null && !bad ? `, стаж ${stazh(days)}` : ""}${excluded ? " · не в плинності" : ""}`);
     } catch (e) { setErr(hiringError(e)); setBusy(false); }
   };
@@ -186,7 +210,7 @@ function TenureDialog({ p, onClose, onDone }: { p: ChurnPersonRow; onClose: () =
           {/* 🚪 26.11.2026, запит HR: відмова в перший день навчання — людина у списку лишається, у цифрах її немає. */}
           <label className="wide" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
             <input type="checkbox" checked={excluded} onChange={(e) => setExcluded(e.target.checked)} style={{ marginTop: 3 }} />
-            <span style={{ color: "var(--text)" }}>Не відпрацював(ла) жодного дня — не рахувати в плинності
+            <span style={{ color: "var(--text)" }}>Не рахувати в плинності{p.excludedWhy === "auto" && <span className="hr-muted" style={{ display: "block", fontSize: 12.5 }}>зараз авто: звільнився(лась) за ≤5 днів після переведення з «Найму»; зніміть галочку, щоб рахувати</span>}
               <span className="hr-muted" style={{ display: "block", fontSize: 12.5 }}>напр.: відмовився в перший день навчання. Людина лишається у списку з позначкою.</span></span>
           </label>
           <label className="wide"><span>Коментар *</span><input className="hr-inp" value={comment} onChange={(e) => setComment(e.target.value)} placeholder={excluded ? "напр.: відмовилась у перший день навчання" : "напр.: вийшла на стажування раніше, ніж оформили"} /></label>

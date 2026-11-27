@@ -964,6 +964,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // фільтр усередині роута), решта — 403.
   { method: "GET", path: "/api/dashboard/client-merge/journal", cls: "GET",
     allow: ["admin", "kvp", "opdir", "team_lead", "ceo"], deny: ["hr", "manager", "financier"] },
+  /* 🧾 Кандидати на обʼєднання за кодом ЄДРПОУ (задача 11225, прохід 1; план затверджено Романом 27.11.2026: «КВП, ОД і
+     адмін — те саме право, що обʼєднання»). Межа — право `merge_clients`, тож гендиректор проходить так само, як у
+     журналі й передпоказі. Тімлід у відмові СВІДОМО: список показує клієнтів усіх команд, а його обʼєднання — у своїй. */
+  { method: "GET", path: "/api/dashboard/client-code-groups", cls: "GET",
+    allow: ["admin", "kvp", "opdir", "ceo"], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "POST", path: "/api/dashboard/client-merge", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "POST", path: "/api/dashboard/client-merge/revoke", cls: "deny-only",
